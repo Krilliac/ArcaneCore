@@ -36,8 +36,13 @@ public sealed class GatewayWardenVerdictReplayGuardTests
     private static ClusterWardenVerdict Verdict(ulong character, long generation, ushort checkId, ClusterWardenAction action = ClusterWardenAction.Kick) =>
         new(generation, OwnerEpoch, AccountId: 77, CharacterGuid: character, Reason: "MEM_CHECK failed", Action: action, CheckId: checkId);
 
+    private static readonly ClusterWardenVerdictSource GatewayA = new("gateway-a", Guid.NewGuid());
+
     private static bool Accept(GatewayWardenManifestVerifier verifier, ClusterWardenVerdict verdict, out string? reason) =>
-        verifier.TryAcceptVerdict(verdict, activeSessionGeneration: verdict.SessionGeneration, activeOwnerEpoch: OwnerEpoch, out reason);
+        Accept(verifier, GatewayA, verdict, out reason);
+
+    private static bool Accept(GatewayWardenManifestVerifier verifier, ClusterWardenVerdictSource source, ClusterWardenVerdict verdict, out string? reason) =>
+        verifier.TryAcceptVerdict(verdict, source, activeSessionGeneration: verdict.SessionGeneration, activeOwnerEpoch: OwnerEpoch, out reason);
 
     [Fact]
     public void ReplayGuard_StaysBounded_AcrossManySessionGenerationsOfOneCharacter()
@@ -94,7 +99,7 @@ public sealed class GatewayWardenVerdictReplayGuardTests
         Assert.True(Accept(verifier, gen6, out string? second), second);
 
         // Normal path: caller's active generation is 6, a generation-5 verdict is stale.
-        Assert.False(verifier.TryAcceptVerdict(gen5, activeSessionGeneration: 6, activeOwnerEpoch: OwnerEpoch, out string? stale));
+        Assert.False(verifier.TryAcceptVerdict(gen5, GatewayA, activeSessionGeneration: 6, activeOwnerEpoch: OwnerEpoch, out string? stale));
         Assert.Contains("stale session generation", stale, StringComparison.OrdinalIgnoreCase);
 
         // The pruned generation-5 key must not reopen generation 5: a replay, or a new check for that ended session,
@@ -205,6 +210,135 @@ public sealed class GatewayWardenVerdictReplayGuardTests
             ulong character = 5000UL + (ulong)c;
             Assert.False(Accept(verifier, Verdict(character, generations - 1, checkId: 0), out _));
             Assert.False(Accept(verifier, Verdict(character, generations, checkId: 0), out _));
+        }
+    }
+
+    [Fact]
+    public void ReplayGuard_ARestartedGatewayCountingFromOne_IsNotRefusedBecauseOfThePreviousIncarnation()
+    {
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        var before = new ClusterWardenVerdictSource("gateway-a", Guid.NewGuid());
+        var after = new ClusterWardenVerdictSource("gateway-a", Guid.NewGuid());
+
+        Assert.True(Accept(verifier, before, Verdict(1200UL, generation: 500, checkId: 243), out string? old), old);
+
+        // Same node id, new process: its counter restarted, so generation 3 is a fresh session and its kick must land.
+        ClusterWardenVerdict fresh = Verdict(1200UL, generation: 3, checkId: 243);
+        Assert.True(Accept(verifier, after, fresh, out string? accepted), accepted);
+
+        // Replay protection still holds inside the new incarnation.
+        Assert.False(Accept(verifier, after, fresh, out string? dup));
+        Assert.Contains("duplicate Warden verdict", dup, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Accept(verifier, after, Verdict(1200UL, generation: 4, checkId: 243), out string? next), next);
+        Assert.False(Accept(verifier, after, fresh, out string? superseded));
+        Assert.Contains("superseded session generation", superseded, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReplayGuard_TwoGatewaysInterleaved_EachKeepsItsOwnGenerationFloor()
+    {
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        var gw1 = new ClusterWardenVerdictSource("gateway-1", Guid.NewGuid());
+        var gw2 = new ClusterWardenVerdictSource("gateway-2", Guid.NewGuid());
+
+        // The character hops between gateways whose counters are far apart; every fresh session's verdict is accepted.
+        (ClusterWardenVerdictSource Source, long Generation)[] sessions =
+            [(gw1, 900), (gw2, 2), (gw1, 901), (gw2, 3), (gw1, 950), (gw2, 7)];
+        foreach ((ClusterWardenVerdictSource source, long generation) in sessions)
+        {
+            ClusterWardenVerdict verdict = Verdict(1200UL, generation, checkId: 243);
+            Assert.True(Accept(verifier, source, verdict, out string? accepted), $"{source.NodeId} gen {generation}: {accepted}");
+            Assert.False(Accept(verifier, source, verdict, out string? dup));
+            Assert.Contains("duplicate Warden verdict", dup, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Older generations stay closed per gateway.
+        Assert.False(Accept(verifier, gw1, Verdict(1200UL, generation: 901, checkId: 999), out string? gw1Old));
+        Assert.Contains("superseded session generation", gw1Old, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Accept(verifier, gw2, Verdict(1200UL, generation: 3, checkId: 999), out string? gw2Old));
+        Assert.Contains("superseded session generation", gw2Old, StringComparison.OrdinalIgnoreCase);
+
+        // One ledger per (gateway incarnation, character), each holding only its latest generation's key.
+        Assert.Equal(2, verifier.RetainedVerdictKeyCount);
+    }
+
+    [Fact]
+    public void ReplayGuard_RetiredSource_DropsItsState_AndRefusesItsLateVerdicts_WithoutTouchingOtherSources()
+    {
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        var live = new ClusterWardenVerdictSource("gateway-1", Guid.NewGuid());
+        Assert.True(Accept(verifier, live, Verdict(1200UL, generation: 5, checkId: 1), out string? liveAccepted), liveAccepted);
+
+        // Fifty gateway restarts: each incarnation is retired once its process is gone, so state does not pile up.
+        for (int restart = 0; restart < 50; restart++)
+        {
+            var incarnation = new ClusterWardenVerdictSource("gateway-2", Guid.NewGuid());
+            ClusterWardenVerdict last = Verdict(2000UL, generation: 1, checkId: 0);
+            for (ushort check = 0; check < 4; check++)
+            {
+                last = Verdict(2000UL, generation: 1, checkId: check);
+                Assert.True(Accept(verifier, incarnation, last, out string? accepted), $"restart {restart} check {check}: {accepted}");
+            }
+
+            Assert.Equal(1 + 4, verifier.RetainedVerdictKeyCount);
+            verifier.RetireSource(incarnation);
+            Assert.Equal(1, verifier.RetainedVerdictKeyCount);
+
+            // A late replay, or a late new check, from the retired process cannot reopen its ended sessions.
+            Assert.False(Accept(verifier, incarnation, last, out string? retired));
+            Assert.Contains("retired gateway incarnation", retired, StringComparison.OrdinalIgnoreCase);
+            Assert.False(Accept(verifier, incarnation, Verdict(2000UL, generation: 1, checkId: 77), out string? retiredNew));
+            Assert.Contains("retired gateway incarnation", retiredNew, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.False(Accept(verifier, live, Verdict(1200UL, generation: 5, checkId: 1), out string? liveDup));
+        Assert.Contains("duplicate Warden verdict", liveDup, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReplayGuard_RefusesToPoolVerdictsWithoutASourceIncarnation()
+    {
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        Assert.Throws<ArgumentException>(() =>
+            Accept(verifier, new ClusterWardenVerdictSource("gateway-1", Guid.Empty), Verdict(1200UL, 1, 243), out _));
+    }
+
+    [Fact]
+    public async Task ReplayGuard_ConcurrentGatewaysForOneCharacter_NeverAcceptTwice()
+    {
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        ClusterWardenVerdictSource[] sources =
+            [new("gateway-1", Guid.NewGuid()), new("gateway-2", Guid.NewGuid()), new("gateway-3", Guid.NewGuid())];
+        var acceptedCounts = new ConcurrentDictionary<(Guid Source, long Generation, ushort Check), int>();
+        using var start = new ManualResetEventSlim(false);
+
+        Task[] workers = Enumerable.Range(0, sources.Length * 4).Select(worker => Task.Run(() =>
+        {
+            ClusterWardenVerdictSource source = sources[worker % sources.Length];
+            start.Wait();
+            for (long generation = 1; generation <= 150; generation++)
+            {
+                for (ushort check = 0; check < 2; check++)
+                {
+                    if (Accept(verifier, source, Verdict(1200UL, generation, check), out _))
+                    {
+                        acceptedCounts.AddOrUpdate((source.NodeIncarnation, generation, check), 1, static (_, n) => n + 1);
+                    }
+                }
+            }
+        })).ToArray();
+
+        start.Set();
+        await Task.WhenAll(workers);
+
+        Assert.All(acceptedCounts, kv => Assert.Equal(1, kv.Value));
+        Assert.True(verifier.RetainedVerdictKeyCount <= sources.Length * 2, $"{verifier.RetainedVerdictKeyCount} keys");
+        foreach (ClusterWardenVerdictSource source in sources)
+        {
+            // Each gateway's last generation is reached by every racer, so one of them accepted it, exactly once.
+            Assert.Contains((source.NodeIncarnation, 150L, (ushort)0), acceptedCounts.Keys);
+            Assert.False(Accept(verifier, source, Verdict(1200UL, 150, 0), out _));
+            Assert.False(Accept(verifier, source, Verdict(1200UL, 149, 0), out _));
         }
     }
 }

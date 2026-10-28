@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
 
@@ -12,11 +11,18 @@ public sealed class GatewayWardenManifestVerifier
 {
     public const int RequiredRc4KeyLength = 16;
 
-    // Replay guard, one ledger per character: the highest session generation that had a verdict accepted, and the
-    // (check, action) pairs accepted in that generation. A newer generation replaces the older generation's keys, and a
-    // verdict for a generation below the ledger's is refused, so the guard holds O(characters x checks in one session)
-    // instead of growing with every session generation for the life of the node.
-    private readonly ConcurrentDictionary<ulong, CharacterVerdictLedger> _verdictLedgers = new();
+    // Replay guard. Session generations are only monotonic within one gateway process: GatewayServer counts from 1 per
+    // process and never persists the counter, and a realm may run several gateways. So replay state is kept per
+    // (generation source, character), where the source is the gateway node id plus its process incarnation. Each ledger
+    // holds the highest generation that had a verdict accepted and the (check, action) pairs accepted in it. A newer
+    // generation replaces the older generation's keys, and a lower generation from the SAME source is refused.
+    // A ledger is kept for good (one per character per live source, holding one session's keys) until its source is
+    // retired with RetireSource. Retired sources are remembered (one entry per gateway process ever retired) so a
+    // late verdict from a dead process cannot reopen its sessions. Verdicts are rare (failed scans only), so one lock
+    // guards all of it; that keeps retirement atomic with acceptance.
+    private readonly object _replayLock = new();
+    private readonly Dictionary<(ClusterWardenVerdictSource Source, ulong CharacterGuid), CharacterVerdictLedger> _verdictLedgers = [];
+    private readonly HashSet<ClusterWardenVerdictSource> _retiredSources = [];
 
     public GatewayWardenManifestVerifier(GatewayWardenManifest manifest)
     {
@@ -41,16 +47,16 @@ public sealed class GatewayWardenManifestVerifier
     {
         get
         {
-            int count = 0;
-            foreach (CharacterVerdictLedger ledger in _verdictLedgers.Values)
+            lock (_replayLock)
             {
-                lock (ledger)
+                int count = 0;
+                foreach (CharacterVerdictLedger ledger in _verdictLedgers.Values)
                 {
                     count += ledger.Accepted.Count;
                 }
-            }
 
-            return count;
+                return count;
+            }
         }
     }
 
@@ -178,18 +184,28 @@ public sealed class GatewayWardenManifestVerifier
     /// Discards stale-epoch, stale-generation, superseded-generation, or duplicate verdicts.
     /// </summary>
     /// <remarks>
-    /// Session generations come from the gateway's process-wide monotonic counter (<c>GatewayServer.NextGeneration</c>),
-    /// so a character's later session always has a higher generation than its earlier ones for the life of this verifier.
-    /// Once a character has an accepted verdict in generation G, any verdict for that character below G is refused even if
-    /// the caller's active-generation snapshot still names the older generation, so dropping the older keys never reopens
-    /// an ended session to replay.
+    /// <paramref name="source"/> names the generation counter the verdict came from: take it from the admitted link's peer
+    /// manifest (<c>NodeId</c>, <c>NodeIncarnation</c>), never from the verdict body. Generations are monotonic only
+    /// within one source (<c>GatewayServer.NextGeneration</c> is a per-process counter that starts again at 1 after a
+    /// restart, and each gateway has its own), so the generation floor applies per (source, character). Within a source,
+    /// once a character has an accepted verdict in generation G, any verdict for that character below G is refused even
+    /// if the caller's active-generation snapshot still names the older generation, so dropping the older keys never
+    /// reopens an ended session to replay. A verdict from a source passed to <see cref="RetireSource"/> is refused.
     /// </remarks>
+    /// <exception cref="ArgumentException"><paramref name="source"/> has no incarnation; pooling unidentified counters
+    /// would let one gateway's high generation suppress another's verdicts.</exception>
     public bool TryAcceptVerdict(
         ClusterWardenVerdict? verdict,
+        ClusterWardenVerdictSource source,
         long activeSessionGeneration,
         long activeOwnerEpoch,
         out string? discardReason)
     {
+        if (source.NodeIncarnation == Guid.Empty)
+        {
+            throw new ArgumentException("a Warden verdict source must carry the gateway's node incarnation", nameof(source));
+        }
+
         if (verdict is null)
         {
             discardReason = "verdict is null";
@@ -209,13 +225,25 @@ public sealed class GatewayWardenManifestVerifier
             return false;
         }
 
-        CharacterVerdictLedger ledger = _verdictLedgers.GetOrAdd(verdict.CharacterGuid, static _ => new CharacterVerdictLedger());
-        lock (ledger)
+        lock (_replayLock)
         {
+            if (_retiredSources.Contains(source))
+            {
+                discardReason = $"Warden verdict from a retired gateway incarnation ({source.NodeId} {source.NodeIncarnation})";
+                return false;
+            }
+
+            var key = (source, verdict.CharacterGuid);
+            if (!_verdictLedgers.TryGetValue(key, out CharacterVerdictLedger? ledger))
+            {
+                ledger = new CharacterVerdictLedger();
+                _verdictLedgers.Add(key, ledger);
+            }
+
             if (verdict.SessionGeneration < ledger.Generation)
             {
                 discardReason =
-                    $"superseded session generation on Warden verdict: verdict generation {verdict.SessionGeneration} < latest {ledger.Generation} for this character";
+                    $"superseded session generation on Warden verdict: verdict generation {verdict.SessionGeneration} < latest {ledger.Generation} for this character from {source.NodeId}";
                 return false;
             }
 
@@ -236,7 +264,41 @@ public sealed class GatewayWardenManifestVerifier
         return true;
     }
 
-    /// <summary>Per-character replay state. Guarded by locking the instance.</summary>
+    /// <summary>
+    /// Forgets the replay state of a gateway process that is gone for good (for example when a new incarnation of the
+    /// same node id is admitted) and refuses any later verdict from it, so its ended sessions cannot be replayed.
+    /// </summary>
+    public void RetireSource(ClusterWardenVerdictSource source)
+    {
+        if (source.NodeIncarnation == Guid.Empty)
+        {
+            throw new ArgumentException("a Warden verdict source must carry the gateway's node incarnation", nameof(source));
+        }
+
+        lock (_replayLock)
+        {
+            if (!_retiredSources.Add(source))
+            {
+                return;
+            }
+
+            List<(ClusterWardenVerdictSource, ulong)> dead = [];
+            foreach ((ClusterWardenVerdictSource Source, ulong CharacterGuid) key in _verdictLedgers.Keys)
+            {
+                if (key.Source == source)
+                {
+                    dead.Add(key);
+                }
+            }
+
+            foreach ((ClusterWardenVerdictSource, ulong) key in dead)
+            {
+                _verdictLedgers.Remove(key);
+            }
+        }
+    }
+
+    /// <summary>Replay state for one character from one generation source. Guarded by <c>_replayLock</c>.</summary>
     private sealed class CharacterVerdictLedger
     {
         public long Generation = long.MinValue;
