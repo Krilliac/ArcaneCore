@@ -750,17 +750,33 @@ internal static class PlayerbotMageService
     }
 
     /// <summary>
+    /// Whether the trade desk holds the bot, so no fee driver may touch a trade: the bot has an Agreed or Window deal with anyone, or the live trade
+    /// (<paramref name="trade"/>) is the desk's with its other side. Every fee site that initiates, sets gold on, accepts or cancels a trade checks this first.
+    /// </summary>
+    internal static bool DeskHolds(WorldSession session, Player player, TradeSession? trade)
+        => BotSocial.PlayerbotTradeDesk.HoldsDeal(session, player)
+            || (trade is not null && BotSocial.PlayerbotTradeDesk.OwnsWindow(session, player, trade.OtherSide(player).Player.Guid));
+
+    /// <summary>
     /// The fee by a real trade (EconomyHandlers): CMSG_INITIATE_TRADE to the mage, CMSG_SET_TRADE_GOLD with the fee once the mage opened the
     /// window, CMSG_ACCEPT_TRADE (again after a scam-prevention bounce); paid when the trade closed and the bot's money fell by the fee.
     /// </summary>
-    private static TravelLegStep Pay(WorldSession session, Player player, MageLeg leg, PortalRequest request, Player mage, uint now, out string? failure)
+    internal static TravelLegStep Pay(WorldSession session, Player player, MageLeg leg, PortalRequest request, Player mage, uint now, out string? failure)
     {
         failure = null;
         if (session.Services.GetService<EconomyFeature>() is not { Enabled: true } economy)
             return FailLeg(session, player, leg, "fee-trade-failed", "trading is off on this server", AnomalySeverity.Warning, out failure);
-        if (BotSocial.PlayerbotTradeDesk.OwnsWindow(session, player, mage.Guid))
-            return TravelLegStep.Traveling; // the trade desk's window or deal with the mage: no fee window beside it, nothing set, accepted or cancelled
         TradeSession? trade = economy.TradeOf(player);
+        if (DeskHolds(session, player, trade))
+        {
+            // The trade desk's deal or window comes first: no fee window beside it, and nothing set, accepted or cancelled on its trade. The leg waits and, if the
+            // desk still holds the bot when PayWaitMs is up, fails like an unpaid fee (without cancelling the desk's window; EndLeg applies the same guard).
+            return unchecked(now - leg.StageMs) > PayWaitMs
+                ? FailLeg(session, player, leg, "fee-trade-failed", $"the trade desk held the bot's trades for {PayWaitMs} ms; the {request.FeeCopper} copper fee to mage {mage.Name} was not tried",
+                    AnomalySeverity.Info, out failure)
+                : TravelLegStep.Traveling;
+        }
+
         if (trade is null && leg.MoneyBefore >= player.Money && leg.MoneyBefore - player.Money >= request.FeeCopper)
         {
             request.Paid = true;
@@ -875,8 +891,8 @@ internal static class PlayerbotMageService
         if (leg.Cast is { Stage: TravelCastStage.Casting }) PlayerbotTravelCast.CancelCast(session, player, leg.SpellId);
         if (leg.Means == TravelMeans.MagePortal)
         {
-            if (session.Services.GetService<EconomyFeature>()?.TradeOf(player) is { Settling: false } open
-                && !BotSocial.PlayerbotTradeDesk.OwnsWindow(session, player, open.OtherSide(player).Player.Guid)) session.TryManagedAction(WorldOpcode.CmsgCancelTrade, []);
+            if (session.Services.GetService<EconomyFeature>()?.TradeOf(player) is { Settling: false } open && !DeskHolds(session, player, open))
+                session.TryManagedAction(WorldOpcode.CmsgCancelTrade, []);
             if (PlayerbotPortalBoard.RequestOf(session, player.Guid.Value) is { IsLive: true } request) PlayerbotPortalBoard.Fail(session, request, why);
             LeaveJoinedGroup(session, player, leg);
         }
@@ -1103,7 +1119,7 @@ internal static class PlayerbotMageService
         if (unchecked(now - serve.StageMs) > PayWaitMs + 5_000)
             return ServeFail(session, player, serve, request, null, "the fee was not paid", AnomalySeverity.Info);
         if (session.Services.GetService<EconomyFeature>()?.TradeOf(player) is { Settling: false } trade && trade.Involves(requester)
-            && !BotSocial.PlayerbotTradeDesk.OwnsWindow(session, player, requester.Guid))
+            && !DeskHolds(session, player, trade))
         {
             if (!trade.Opened && ReferenceEquals(trade.Target.Player, player)) session.TryManagedAction(WorldOpcode.CmsgBeginTrade, []);
             else if (trade.Opened && trade.OtherSide(player) is { Accepted: true } theirs && theirs.Gold >= request.FeeCopper && !trade.SideOf(player).Accepted)

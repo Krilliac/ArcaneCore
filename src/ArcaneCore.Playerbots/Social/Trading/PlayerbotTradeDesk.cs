@@ -223,12 +223,15 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     }
 
     /// <summary>
-    /// Whether a live trade window with <paramref name="partner"/> is a desk window: the bot has an agreed deal with that partner (or is in its window).
-    /// The party AI then leaves the window to the desk (its gift rules never touch it).
+    /// Whether a live trade window with <paramref name="partner"/> is a desk window: the deal is in its Window, or it is Agreed and the desk started or claimed the
+    /// trade for it (<c>TradeStartMs</c>). The party AI then leaves the window to the desk (its gift rules never touch it). A window the desk did not open, even
+    /// beside an agreed deal with the same partner (the master's own "trade me"), is not the desk's and stays with the gift rules.
     /// </summary>
     internal bool Owns(Guid botId, ObjectGuid partner)
     {
-        lock (_gate) return _deals.TryGetValue(new DealKey(botId, partner.Value), out Deal? deal) && deal.State is PlayerbotDealState.Agreed or PlayerbotDealState.Window;
+        lock (_gate)
+            return _deals.TryGetValue(new DealKey(botId, partner.Value), out Deal? deal)
+                && (deal.State == PlayerbotDealState.Window || (deal.State == PlayerbotDealState.Agreed && deal.TradeStartMs != 0));
     }
 
     // --- quoting -----------------------------------------------------------------------------------------------------
@@ -731,6 +734,26 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     /// </summary>
     internal static bool OwnsWindow(WorldSession session, Player bot, ObjectGuid partner)
         => session.Services.GetService<ManagedPlayerbotFeature>()?.TradeDesk is { Count: > 0 } desk && desk.OwnsGuid(bot.Guid, partner);
+
+    /// <summary>
+    /// The guard the other trade drivers (the gratitude tip, the mage fee) use: whether the bot holds ANY Agreed or Window deal, with anyone. While it does, those drivers
+    /// start no window and set, accept or cancel nothing on a trade (a conservative rule: the desk's step order must not be disturbed).
+    /// </summary>
+    internal static bool HoldsDeal(WorldSession session, Player bot)
+        => session.Services.GetService<ManagedPlayerbotFeature>()?.TradeDesk is { Count: > 0 } desk && desk.HoldsGuid(bot.Guid);
+
+    /// <summary>The instance form of <see cref="HoldsDeal"/>.</summary>
+    internal bool HoldsGuid(ObjectGuid botGuid)
+    {
+        if (Count == 0) return false;
+        lock (_gate)
+        {
+            foreach (Deal deal in _deals.Values)
+                if (deal.State is PlayerbotDealState.Agreed or PlayerbotDealState.Window && deal.BotGuid == botGuid) return true;
+        }
+
+        return false;
+    }
 
     /// <summary>The instance form of <see cref="OwnsWindow"/>.</summary>
     internal bool OwnsGuid(ObjectGuid botGuid, ObjectGuid partner)

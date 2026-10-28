@@ -807,4 +807,159 @@ public sealed class PlayerbotTradeDeskTests
         Assert.Equal(1u, await scene.CountAsync(BotName, DealEntry));
         Assert.Equal(0u, await scene.CountAsync(CustomerName, DealEntry));
     }
+
+    // --- guards on the other trade drivers ------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The mage-fee leg's <c>Pay</c> run while a desk window is open (the bot's seller deal with the customer; the mage is somebody else) must not initiate, put gold in,
+    /// accept or cancel anything, before and after its PayWaitMs runs out (it then fails like an unpaid fee). Control: once the desk's deal is gone, the same call does
+    /// start the fee trade with the mage. Broken: the old Pay saw a trade that did not involve the mage and cancelled it, or put the fee into the desk's window.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_FeeLegPay_NeverTouchesADeskWindow()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        await scene.AddSecondCustomerAsync(); // plays the mage
+        await scene.GiveAsync(BotName, DealEntry);
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry)).Ok);
+        await scene.OpenWindowAsync(scene.Customer!);
+        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.BotItems == 1, "the bot to put the item in");
+        Assert.Equal(PlayerbotDealState.Window, scene.Desk.StateOf(scene.Bot, scene.CustomerGuid));
+        int cancels = scene.BotSent(WorldOpcode.CmsgCancelTrade), golds = scene.BotSent(WorldOpcode.CmsgSetTradeGold);
+        int accepts = scene.BotSent(WorldOpcode.CmsgAcceptTrade), initiates = scene.BotSent(WorldOpcode.CmsgInitiateTrade);
+
+        (TravelLegStep Step, string? Failure) Pay(uint now, uint stageMs) => scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            WorldSession session = PartyTestHost.Feature(scene.World.Host).FindSession(scene.Bot)!;
+            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, System.Numerics.Vector3.Zero), stageMs) { Stage = MageLegStage.Paying, MoneyBefore = bot.Money };
+            var request = new PortalRequest(bot.Guid.Value, BotName, bot.Team, 0, System.Numerics.Vector3.Zero, 0, 0, 100, stageMs);
+            TravelLegStep step = PlayerbotMageService.Pay(session, bot, leg, request, HelpTestKit.Online(scene.World, SecondCustomerName), now, out string? failure);
+            return (step, failure);
+        }).Result;
+
+        Assert.Equal(TravelLegStep.Traveling, Pay(2000, 1000).Step);
+        (TravelLegStep late, string? failure) = Pay(1000 + PlayerbotMageService.PayWaitMs + 1, 1000);
+        Assert.Equal(TravelLegStep.Failed, late);
+        Assert.NotNull(failure);
+        await Task.Delay(300);
+        Assert.True((await scene.TradeAsync()).Exists, "the fee leg cancelled the desk's window");
+        Assert.Equal(PlayerbotDealState.Window, scene.Desk.StateOf(scene.Bot, scene.CustomerGuid));
+        Assert.Equal(cancels, scene.BotSent(WorldOpcode.CmsgCancelTrade));
+        Assert.Equal(golds, scene.BotSent(WorldOpcode.CmsgSetTradeGold));
+        Assert.Equal(accepts, scene.BotSent(WorldOpcode.CmsgAcceptTrade));
+        Assert.Equal(initiates, scene.BotSent(WorldOpcode.CmsgInitiateTrade));
+
+        // Control: with the desk's deal gone the same call starts the fee trade with the mage.
+        await scene.Customer!.SendAsync(WorldOpcode.CmsgCancelTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.Desk.Count == 0 && !scene.TradeAsync().Result.Exists, "the desk deal to end");
+        Assert.Equal(TravelLegStep.Traveling, Pay(2000, 1000).Step);
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgInitiateTrade) > initiates, "the fee trade to be started");
+    }
+
+    /// <summary>
+    /// Starts a gratitude tip from the generous desk bot to the customer (the same setup as the pending-tip test) and returns the world time of the pass that started it.
+    /// </summary>
+    private static async Task<long> StartTipAsync(Scene scene)
+    {
+        int level = await scene.World.Host.PlayerStateAsync(BotName, p => (int)p.Level);
+        Assert.True(PlayerbotGratitude.TipCopper(50_000, level, scene.World.Options.Social.Gratitude.MaxTipCopper) > 0);
+        float generosity = PlayerbotTraits.For(scene.BotGuid.Value).Generosity;
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            PlayerbotSocialRecorder recorder = HelpTestKit.RecorderOf(scene.World);
+            for (int i = 0; i < 60 && !(recorder.Memory.TryGet(scene.Bot, scene.CustomerGuid.Value, out PlayerbotRelation r) && r.Affinity >= PlayerbotGratitude.FavourAffinity); i++)
+                recorder.NoteById(scene.Bot, scene.BotGuid, scene.CustomerGuid, PlayerbotSocialEvent.GroupSucceeded);
+            recorder.NoteHelp(HelpTestKit.Online(scene.World, CustomerName), HelpTestKit.Online(scene.World, BotName));
+        });
+        long now = HelpTestKit.NowWhere(t => PlayerbotGratitude.FavourOf(scene.BotGuid.Value, scene.CustomerGuid.Value, (uint)(t / 1000), generosity, 100, 1f, true, true, true) == PlayerbotFavour.Tip);
+        await scene.GratitudePassAsync(now);
+        Assert.Equal(1, scene.Gratitude.TipsStarted);
+        Assert.Equal(1, scene.Gratitude.TipsPending);
+        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.Exists, "the tip's trade request to reach the server");
+        return now;
+    }
+
+    /// <summary>
+    /// A tip already under way (its trade request is out) when the bot agrees a deal with the same customer: the next gratitude pass drops the tip and sends nothing to the
+    /// trade (no cancel, no gold, no accept); the trade stays. Broken: the tip step would carry on (still pending) or cancel the window the desk is about to use.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_TipStep_DropsWithoutCancelling_WhenTheBotHoldsADeal()
+    {
+        await using Scene scene = await Scene.StartAsync(generous: true);
+        await scene.AddCustomerAsync();
+        await scene.SetMoneyAsync(BotName, 50_000);
+        await scene.GiveAsync(BotName, DealEntry);
+        long now = await StartTipAsync(scene);
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry)).Ok);
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, (await scene.HearAsync("deal")).Kind);
+
+        await scene.GratitudePassAsync(now + 1000);
+        Assert.Equal(0, scene.Gratitude.TipsPending);
+        await Task.Delay(300);
+        Assert.Equal(0, scene.BotSent(WorldOpcode.CmsgCancelTrade));
+        Assert.Equal(0, scene.BotSent(WorldOpcode.CmsgSetTradeGold));
+        Assert.True((await scene.TradeAsync()).Exists, "the tip step cancelled the trade");
+    }
+
+    /// <summary>
+    /// The cancel paths of a tip (the lane switched off, the bot missing from a pass, trading off) share one helper: with the bot holding a desk deal it must not send
+    /// CMSG_CANCEL_TRADE. Here a tip's request is out, a deal is agreed with the same customer, and every tip is cancelled at once. Broken: the trade is cancelled.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_TipCancel_NeverCancelsATradeOfABotHoldingADeal()
+    {
+        await using Scene scene = await Scene.StartAsync(generous: true);
+        await scene.AddCustomerAsync();
+        await scene.SetMoneyAsync(BotName, 50_000);
+        await scene.GiveAsync(BotName, DealEntry);
+        await StartTipAsync(scene);
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry)).Ok);
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, (await scene.HearAsync("deal")).Kind);
+
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            scene.Gratitude.CancelAllTips();
+            return true;
+        });
+        await Task.Delay(300);
+        Assert.Equal(0, scene.BotSent(WorldOpcode.CmsgCancelTrade));
+        Assert.True((await scene.TradeAsync()).Exists, "CancelAllTips cancelled the trade");
+    }
+
+    /// <summary>
+    /// A window is the desk's only when the desk opened or claimed it. An agreed deal with a customer 30 yards away (the bot waits for the customer to come near) does not
+    /// own a window with that customer: the party AI's gift rules keep any such window (the master's own "trade me"). Once the customer is in reach the bot starts the
+    /// trade itself and the window is the desk's. Broken: an agreed deal alone would own the window and the gift rules would be shut out.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_AgreedDealOwnsNoWindowUntilTheDeskOpensOne()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        await scene.GiveAsync(BotName, DealEntry);
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName), customer = HelpTestKit.Online(scene.World, CustomerName);
+            customer.Relocate(bot.X + 30f, bot.Y, bot.Z, 0f, scene.World.Host.World.NowMs);
+            return true;
+        });
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry)).Ok);
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, (await scene.HearAsync("deal")).Kind);
+        await Task.Delay(500);
+        Assert.Equal(PlayerbotDealState.Agreed, scene.Desk.StateOf(scene.Bot, scene.CustomerGuid));
+        Assert.False(scene.Desk.Owns(scene.Bot, scene.CustomerGuid), "an agreed deal the desk has not opened a window for owns no window");
+        Assert.True(scene.Desk.HoldsGuid(scene.BotGuid), "the other drivers still keep off a bot that holds a deal");
+
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName), customer = HelpTestKit.Online(scene.World, CustomerName);
+            customer.Relocate(bot.X + 2f, bot.Y, bot.Z, 0f, scene.World.Host.World.NowMs);
+            return true;
+        });
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgInitiateTrade) > 0, "the bot to ask for the trade");
+        Assert.True(scene.Desk.Owns(scene.Bot, scene.CustomerGuid), "the window the desk started is the desk's");
+    }
 }

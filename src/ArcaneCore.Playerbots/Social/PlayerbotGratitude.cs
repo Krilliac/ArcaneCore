@@ -314,6 +314,7 @@ internal sealed class PlayerbotGratitudeLane
     // Close the bot's trade window if it is the tip's: a dropped tip never leaves the helper looking at a stalled window.
     private static void Cancel(Tip tip)
     {
+        if (PlayerbotTradeDesk.HoldsDeal(tip.Session, tip.Bot)) return; // a trade desk deal or window is never cancelled by a tip
         EconomyFeature? economy = tip.Session.Services.GetService<EconomyFeature>();
         if (economy?.TradeOf(tip.Bot) is { Settling: false } trade && trade.OtherSide(tip.Bot).Player.Guid == tip.Helper)
             PlayerbotSocialPackets.Send(tip.Session, WorldOpcode.CmsgCancelTrade, []);
@@ -322,6 +323,8 @@ internal sealed class PlayerbotGratitudeLane
     // True while the tip is still under way. Every other path cancels the window first.
     private bool Step(PlayerbotSocialPass pass, PlayerbotSocialRecorder recorder, Guid botId, Tip tip)
     {
+        // A bot the trade desk holds (an Agreed or Window deal) gets no tip step at all: the tip is dropped, nothing set, accepted or cancelled, no window started.
+        if (PlayerbotTradeDesk.HoldsDeal(tip.Session, tip.Bot)) return false;
         if (!pass.ByCharacter.TryGetValue(tip.Bot.Guid.Low, out PlayerbotSocialBot? bot) || bot.Id != botId || pass.World.FindOnlinePlayer(tip.Helper) is not { } helper)
         {
             Cancel(tip);
@@ -336,8 +339,6 @@ internal sealed class PlayerbotGratitudeLane
             return false;
         }
 
-        // A window (or a deal) of the trade desk with the helper is the desk's: the tip never touches it and starts none beside it.
-        if (PlayerbotTradeDesk.OwnsWindow(bot.Session, self, helper.Guid)) return false;
         TradeSession? trade = economy.TradeOf(self);
         if (trade is not null) tip.Seen = true;
         else if (tip.Seen)
