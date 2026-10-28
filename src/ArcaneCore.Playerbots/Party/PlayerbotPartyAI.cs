@@ -961,12 +961,14 @@ internal sealed class PlayerbotPartyAI
                 break;
             case 8:
                 UpdateEquipment(player);
-                Social?.NoteTradeDone(_botId);
+                // Decide desk ownership before the window is closed out: a desk sale is not a paid tip, so gratitude never sees it.
+                BotSocial.PlayerbotDealOutcome deskOutcome = TradeDesk?.WindowClosed(_botId, completed: true) ?? default;
+                if (deskOutcome.Kind == BotSocial.PlayerbotDealOutcomeKind.None) Social?.NoteTradeDone(_botId);
                 if (!_tradePartner.IsEmpty && _tradeCounts) Social?.NoteById(_botId, player.Guid, _tradePartner, BotSocial.PlayerbotSocialEvent.TradeCompleted,
                     _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;
-                if (TradeDesk?.WindowClosed(_botId, completed: true) is { Kind: BotSocial.PlayerbotDealOutcomeKind.Settled } settled) SpendPost(settled);
+                if (deskOutcome.Kind == BotSocial.PlayerbotDealOutcomeKind.Settled) SpendPost(deskOutcome);
                 break;
             case 0 or 3 or 5 or 6 or 9 or 10 or 11 or 12 or (>= 14 and <= 22):
                 // Every other terminal status ends the window without a completion: forget it, so a later window (the mage fee, a tip) is never credited to it.

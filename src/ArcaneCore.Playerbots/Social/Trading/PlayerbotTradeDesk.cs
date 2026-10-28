@@ -5,6 +5,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Playerbots.Party;
 
@@ -279,8 +280,8 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             var terms = new PlayerbotDealTerms(role, entry, count, price, vendorFloor, referenceValue);
             if (!PlayerbotDealRules.TermsAreSafe(terms)) return Refuse(PlayerbotDealRefusal.NoPrice, count);
             PlayerbotSocialTradingLimitsOptions limits = Trading.Limits;
-            if (_botTrades.Count(botId, now) >= limits.MaxTradesPerBotPerHour) return Refuse(PlayerbotDealRefusal.BotLimit, count);
-            if (_accountTrades.Count(partner.AccountId, now) >= limits.MaxTradesPerAccountPerHour) return Refuse(PlayerbotDealRefusal.AccountLimit, count);
+            if (_botTrades.Count(botId, now) + PendingTrades(botId, null, null) >= limits.MaxTradesPerBotPerHour) return Refuse(PlayerbotDealRefusal.BotLimit, count);
+            if (_accountTrades.Count(partner.AccountId, now) + PendingTrades(null, partner.AccountId, null) >= limits.MaxTradesPerAccountPerHour) return Refuse(PlayerbotDealRefusal.AccountLimit, count);
 
             var key = new DealKey(botId, other);
             bool carriedCounter = false;
@@ -411,8 +412,8 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         if (concurrent >= limits.MaxConcurrentTrades) return PlayerbotDealRefusal.Busy;
         if (recorder.Ledger?.IsScammer(deal.BotId, deal.Partner.Value) == true) return PlayerbotDealRefusal.Scammer;
         if (InCooldown(deal.BotId, deal.Partner.Value, now)) return PlayerbotDealRefusal.Cooldown;
-        if (_botTrades.Count(deal.BotId, now) >= limits.MaxTradesPerBotPerHour) return PlayerbotDealRefusal.BotLimit;
-        if (_accountTrades.Count(deal.PartnerAccount, now) >= limits.MaxTradesPerAccountPerHour) return PlayerbotDealRefusal.AccountLimit;
+        if (_botTrades.Count(deal.BotId, now) + PendingTrades(deal.BotId, null, deal) >= limits.MaxTradesPerBotPerHour) return PlayerbotDealRefusal.BotLimit;
+        if (_accountTrades.Count(deal.PartnerAccount, now) + PendingTrades(null, deal.PartnerAccount, deal) >= limits.MaxTradesPerAccountPerHour) return PlayerbotDealRefusal.AccountLimit;
         (int trust, _) = RelationOf(deal.BotId, deal.Partner.Value);
         if (deal.Price > PlayerbotDealRules.DealCap(deals.MaxDealCopper, trust, Trading.LowTrustPermille)) return PlayerbotDealRefusal.TooMuch;
         PlayerbotDealTerms terms = TermsOf(deal);
@@ -446,7 +447,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     /// <summary>
     /// The next client step for the bot's deal, at most one per call (the party AI calls it on every intake tick of a bot that has a deal, and again on a trade status).
     /// <paramref name="trade"/> is the bot's live trade (null when it has none), read by the caller in the same world-thread step. In order: drop expired deals; cancel and
-    /// fail when the desk is off, the bot or the partner is dead, in combat or gone, or the window is open longer than <c>Trading:TradeTimeoutSeconds</c>; initiate the trade
+    /// fail when the desk is off, the bot or the partner is dead, in combat or gone, or the window has been open (adopted as Window) longer than <c>Trading:TradeTimeoutSeconds</c>, counted from the moment it opened; initiate the trade
     /// when the deal is agreed, the partner is within <see cref="PlayerbotPartyAI.TradeReach"/> and the last request is 10 s old; when the live trade is the partner's and
     /// open, the deal is in its Window: the seller puts exactly the agreed stacks in (one SetTradeItem per call), the buyer puts the gold in once the partner side shows
     /// the agreed goods; a change of the partner side after the bot accepted is counted, and the second one cancels the deal as a scam attempt; the bot accepts only a
@@ -461,7 +462,8 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             long now = _clock();
             Deal? active = ActiveOf(botId);
             Player? liveOther = trade is null ? null : trade.OtherSide(bot).Player;
-            bool windowIsDeal = active is not null && liveOther is not null && liveOther.Guid == active.Partner;
+            // A live trade with the partner is the deal's only when the desk started or claimed it (TradeStartMs): any other window is left alone.
+            bool windowIsDeal = active is not null && liveOther is not null && liveOther.Guid == active.Partner && active.TradeStartMs != 0;
             if (!Enabled) return Disable(botId, active, windowIsDeal);
             DropExpiredQuoted(botId, now);
             if (active is null) return default;
@@ -469,7 +471,6 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             {
                 active.State = PlayerbotDealState.Window;
                 active.WindowMs = now;
-                if (active.TradeStartMs == 0) active.TradeStartMs = now;
             }
 
             if (active.State == PlayerbotDealState.Window && trade is null)
@@ -482,7 +483,8 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
 
             active.GoneSinceMs = 0;
             Player? partner = windowIsDeal ? liveOther : FindPlayer(bot, active.Partner);
-            bool timedOut = active.TradeStartMs != 0 && now - active.TradeStartMs > Trading.TradeTimeoutSeconds * 1000L && trade is not { Settling: true };
+            // TradeTimeoutSeconds counts from the moment the window opened (adopted as Window); an unanswered initiate is bounded by DealMinutes and the initiate gap.
+            bool timedOut = active.State == PlayerbotDealState.Window && now - active.WindowMs > Trading.TradeTimeoutSeconds * 1000L && trade is not { Settling: true };
             if (!bot.IsAlive || bot.Combat.IsInCombat || partner is null || !partner.IsAlive || partner.Combat.IsInCombat || timedOut)
                 return FailDeal(active, cancel: windowIsDeal, say: true, now);
             if (active.State == PlayerbotDealState.Agreed && now - active.AgreedMs >= DealLifeMs)
@@ -554,7 +556,12 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         if (deal.Role == PlayerbotDealRole.Seller)
         {
             List<Item>? plan = PlanStacks(bot, deal.Entry, deal.Count);
-            if (plan is null || mine.Gold != 0) return FailDeal(deal, cancel: true, say: true, now);
+            if (plan is null) return FailDeal(deal, cancel: true, say: true, now);
+            if (mine.Gold > 0)
+            {
+                deal.LastPutMs = now;
+                return new PlayerbotDealStep(PlayerbotDealStepKind.PutGold, deal.Partner, Gold: 0); // a seller never has gold on its side
+            }
             for (int slot = 0; slot < TradeRules.TradedSlotCount; slot++)
             {
                 ObjectGuid offered = mine[slot];
@@ -575,7 +582,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         {
             if (botGoods.Count > 0) return FailDeal(deal, cancel: true, say: true, now); // a buyer never offers items
             bool partnerOffers = PlayerbotDealRules.Matches(partnerGoods, terms);
-            if (partnerOffers && mine.Gold == 0)
+            if (partnerOffers && mine.Gold != deal.Price)
             {
                 if (bot.Money < deal.Price) return FailDeal(deal, cancel: true, say: true, now);
                 deal.LastPutMs = now;
@@ -656,7 +663,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     /// <summary>
     /// The bot's trade window closed (SMSG_TRADE_STATUS: <paramref name="completed"/> for 8, any other terminal status otherwise). A desk deal in its Window that
     /// completed is Settled: a fair deal is noted, the trade is counted (per bot and per partner account), the outflow joins the daily buckets, and the deal is
-    /// forgotten; the outcome names the goods so the caller spends the bot's board post. Not completed, a Window deal (or an Agreed one whose trade was started) is
+    /// forgotten; the outcome names the goods so the caller spends the bot's board post. Not completed, a deal in its Window (never an agreed one: an unrelated close leaves it alone) is
     /// Failed: pair cooldown. A bot with no such deal gets <see cref="PlayerbotDealOutcomeKind.None"/>.
     /// </summary>
     internal PlayerbotDealOutcome WindowClosed(Guid botId, bool completed)
@@ -690,7 +697,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
                 return new PlayerbotDealOutcome(PlayerbotDealOutcomeKind.Settled, deal.Role, deal.Entry, deal.Count);
             }
 
-            if (deal.State == PlayerbotDealState.Agreed && deal.TradeStartMs == 0) return default; // a window of the bot's own business, not this deal's
+            if (deal.State != PlayerbotDealState.Window) return default; // an unrelated close (a tip window, the partner bouncing the initiate) leaves an agreed deal alone
             SetCooldown(deal.BotId, deal.Partner.Value, now);
             RemoveDeal(deal);
             return new PlayerbotDealOutcome(PlayerbotDealOutcomeKind.Failed, deal.Role, deal.Entry, deal.Count);
@@ -707,6 +714,36 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     }
 
     private static PlayerbotDealTerms TermsOf(Deal deal) => new(deal.Role, deal.Entry, deal.Count, deal.Price, deal.VendorFloor, deal.ReferenceValue);
+
+    /// <summary>Agreed and open deals (not yet counted as settled) of one bot or one partner account, other than <paramref name="except"/>: they count against the hourly limits.</summary>
+    private int PendingTrades(Guid? botId, int? account, Deal? except)
+    {
+        int pending = 0;
+        foreach (Deal deal in _deals.Values)
+            if (deal.State is PlayerbotDealState.Agreed or PlayerbotDealState.Window && !ReferenceEquals(deal, except)
+                && (botId is null || deal.BotId == botId) && (account is null || deal.PartnerAccount == account)) pending++;
+        return pending;
+    }
+
+    /// <summary>
+    /// Whether the bot with this character guid has an Agreed or Window deal with <paramref name="partner"/>: the gratitude tip and the mage fee leave such a trade
+    /// alone and start none with that partner. Free when the desk holds no deals.
+    /// </summary>
+    internal static bool OwnsWindow(WorldSession session, Player bot, ObjectGuid partner)
+        => session.Services.GetService<ManagedPlayerbotFeature>()?.TradeDesk is { Count: > 0 } desk && desk.OwnsGuid(bot.Guid, partner);
+
+    /// <summary>The instance form of <see cref="OwnsWindow"/>.</summary>
+    internal bool OwnsGuid(ObjectGuid botGuid, ObjectGuid partner)
+    {
+        if (Count == 0) return false;
+        lock (_gate)
+        {
+            foreach (Deal deal in _deals.Values)
+                if (deal.State is PlayerbotDealState.Agreed or PlayerbotDealState.Window && deal.BotGuid == botGuid && deal.Partner == partner) return true;
+        }
+
+        return false;
+    }
 
     private Deal? ActiveOf(Guid botId)
     {
@@ -817,7 +854,14 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         {
             foreach (KeyValuePair<(Guid Bot, ulong Partner), long> entry in _cooldowns.ToArray())
                 if (entry.Value <= now) _cooldowns.Remove(entry.Key);
-            if (_cooldowns.Count >= MapCap) _cooldowns.Clear();
+            if (_cooldowns.Count >= MapCap)
+            {
+                (Guid Bot, ulong Partner) oldest = default;
+                long oldestUntil = long.MaxValue;
+                foreach (KeyValuePair<(Guid Bot, ulong Partner), long> entry in _cooldowns)
+                    if (entry.Value < oldestUntil) (oldest, oldestUntil) = (entry.Key, entry.Value);
+                _cooldowns.Remove(oldest);
+            }
         }
 
         _cooldowns[(botId, partner)] = now + (minutes * MinuteMs);
@@ -910,7 +954,16 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         {
             foreach (KeyValuePair<TKey, Queue<long>> entry in _map.ToArray())
                 if (entry.Value.Count == 0 || (now - entry.Value.Peek() >= HourMs && now - entry.Value.Last() >= HourMs)) _map.Remove(entry.Key);
-            if (_map.Count >= MapCap) _map.Clear();
+            if (_map.Count < MapCap) return;
+            TKey? oldest = default;
+            long oldestAt = long.MaxValue;
+            foreach (KeyValuePair<TKey, Queue<long>> entry in _map)
+            {
+                long at = entry.Value.Count == 0 ? long.MinValue : entry.Value.Last();
+                if (at < oldestAt) (oldest, oldestAt) = (entry.Key, at);
+            }
+
+            if (oldest is not null) _map.Remove(oldest); // the entry written longest ago goes; the counts of the others are kept
         }
     }
 
@@ -927,7 +980,14 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             {
                 foreach (KeyValuePair<TKey, (long Day, long Amount)> entry in _map.ToArray())
                     if (entry.Value.Day != day) _map.Remove(entry.Key);
-                if (_map.Count >= MapCap) _map.Clear();
+                if (_map.Count >= MapCap)
+                {
+                    TKey? oldest = default;
+                    long oldestDay = long.MaxValue;
+                    foreach (KeyValuePair<TKey, (long Day, long Amount)> entry in _map)
+                        if (entry.Value.Day < oldestDay) (oldest, oldestDay) = (entry.Key, entry.Value.Day);
+                    if (oldest is not null) _map.Remove(oldest);
+                }
             }
 
             _map[key] = (day, Get(key, day) + amount);

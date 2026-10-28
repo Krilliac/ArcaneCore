@@ -62,7 +62,7 @@ public sealed class PlayerbotTradeDeskTests
 
         public ObjectGuid CustomerGuid { get; private set; }
 
-        public static async Task<Scene> StartAsync(bool chat = false, bool frozen = true)
+        public static async Task<Scene> StartAsync(bool chat = false, bool frozen = true, bool generous = false)
         {
             var items = new ItemTestContent();
             items.Templates.Templates.AddRange([Template(DealEntry, "Deskitem Alpha"), Template(OtherEntry, "Deskitem Beta"), DiscountTemplate(DiscountEntry, "Deskitem Gamma"), DiscountTemplate(DiscountEntryTwo, "Deskitem Delta")]);
@@ -87,10 +87,37 @@ public sealed class PlayerbotTradeDeskTests
                     services: services => services.AddScoped<ArcaneCore.Kernel.Economy.IEconomyStore>(_ => new PlayerbotPartyTests.StubEconomyStore()));
             }
 
+            if (generous)
+            {
+                // Character guids are handed out one after another, and a bot's generosity is a function of its guid: park idle filler bots until the next guid is a generous one,
+                // so that the desk's bot is the kind that tips (the same selection the gratitude tests make by trying fourteen bots).
+                await world.Host.OnWorldAsync(() =>
+                {
+                    world.Options.Social.Gratitude.TipChance = 1f;
+                    world.Options.Social.Memory.MaxDailyAffinityGainPerPair = 0; // the daily cap would hold a pair under the tipping affinity
+                    return true;
+                });
+                await world.AddBotAsync("Deskfilla");
+                ObjectGuid last = await world.Host.PlayerStateAsync("Deskfilla", p => p.Guid);
+                for (int i = 1; i < 20 && PlayerbotTraits.For(ObjectGuid.Player(last.Low + 1).Value).Generosity < PlayerbotGratitude.GenerousAt; i++)
+                {
+                    string filler = "Deskfill" + (char)('a' + i);
+                    await world.AddBotAsync(filler);
+                    last = await world.Host.PlayerStateAsync(filler, p => p.Guid);
+                }
+            }
+
             Guid bot = await world.AddBotAsync(BotName, money: 50);
             ObjectGuid botGuid = await world.Host.PlayerStateAsync(BotName, p => p.Guid);
+            if (generous) Assert.True(PlayerbotTraits.For(botGuid.Value).Generosity >= PlayerbotGratitude.GenerousAt, "the desk bot is not a generous one");
             return new Scene(world, bot, botGuid);
         }
+
+        /// <summary>The gratitude lane's pass at a hand-chosen world time (what the social feature's pass would run).</summary>
+        public Task GratitudePassAsync(long nowMs)
+            => World.Host.OnWorldAsync(() => SocialTestKit.Feature(World.Host).Gratitude.Run(SocialTestKit.BotPass(World.Host, nowMs), SocialTestKit.Feature(World.Host).Help));
+
+        public PlayerbotGratitudeLane Gratitude => SocialTestKit.Feature(World.Host).Gratitude;
 
         public EconomyFeature Economy => World.Host.WorldServices.GetRequiredService<EconomyFeature>();
 
@@ -659,5 +686,125 @@ public sealed class PlayerbotTradeDeskTests
             Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DiscountEntryTwo, partner: SecondCustomerName)).Ok);
             Assert.Equal(PlayerbotDealHeardKind.CounterAgreed, (await scene.HearAsync("900c", partner: SecondCustomerName)).Kind);
         }
+    }
+
+    // --- other drivers beside the desk ---------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A pending gratitude tip from the bot to the deal partner must not touch the desk's window. The bot is a generous one that the partner just helped (its thanks roll a
+    /// tip) and it holds an agreed buyer deal with the same partner (price 1000; its tip would be a different, smaller sum). The gratitude pass runs while the deal waits for
+    /// its window and on every step of the window: the tip is dropped, the bot's only gold on the table is the price (exactly one SetTradeGold packet in all), it accepts
+    /// only the matching window, the sale completes at the price, and the desk sale is not counted as a paid tip. Broken: the tip lane would put its own gold in the desk
+    /// window and accept it, the desk and the tip would fight over the bot's gold, or the sale would be credited as a tip.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_PendingTipForTheSamePartner_DoesNotTouchTheDeskWindow()
+    {
+        await using Scene scene = await Scene.StartAsync(generous: true);
+        await scene.AddCustomerAsync();
+        await scene.SetMoneyAsync(BotName, 50_000);
+        byte[] item = await scene.GiveAsync(CustomerName, DealEntry);
+        PlayerbotDealQuote quote = await scene.QuoteAsync(PlayerbotDealRole.Buyer, DealEntry);
+        Assert.True(quote.Ok, quote.Refusal.ToString());
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, (await scene.HearAsync("deal")).Kind);
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgInitiateTrade) > 0, "the bot to ask for the trade");
+
+        // The customer has helped the bot: a thanks is queued and, at a world time where the roll says tip, the lane starts a tip.
+        int level = await scene.World.Host.PlayerStateAsync(BotName, p => (int)p.Level);
+        uint tipCopper = PlayerbotGratitude.TipCopper(50_000, level, scene.World.Options.Social.Gratitude.MaxTipCopper);
+        Assert.True(tipCopper > 0 && tipCopper != Price, $"the tip ({tipCopper}) must differ from the price");
+        float generosity = PlayerbotTraits.For(scene.BotGuid.Value).Generosity;
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            PlayerbotSocialRecorder recorder = HelpTestKit.RecorderOf(scene.World);
+            for (int i = 0; i < 60 && !(recorder.Memory.TryGet(scene.Bot, scene.CustomerGuid.Value, out PlayerbotRelation r) && r.Affinity >= PlayerbotGratitude.FavourAffinity); i++)
+                recorder.NoteById(scene.Bot, scene.BotGuid, scene.CustomerGuid, PlayerbotSocialEvent.GroupSucceeded);
+            recorder.NoteHelp(HelpTestKit.Online(scene.World, CustomerName), HelpTestKit.Online(scene.World, BotName));
+        });
+        long now = HelpTestKit.NowWhere(t => PlayerbotGratitude.FavourOf(scene.BotGuid.Value, scene.CustomerGuid.Value, (uint)(t / 1000), generosity, 100, 1f, true, true, true) == PlayerbotFavour.Tip);
+        await scene.GratitudePassAsync(now);
+        Assert.Equal(1, scene.Gratitude.TipsStarted); // control: the thanks did roll a tip
+        Assert.Equal(0, scene.Gratitude.TipsPending); // and the lane dropped it at once: the partner has a desk deal with the bot
+
+        await scene.Customer!.SendAsync(WorldOpcode.CmsgBeginTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.Opened, "the window to open");
+        await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeItem, item);
+        var botGold = new HashSet<uint>();
+        bool accepted = false;
+        for (int i = 0; i < 60 && !accepted; i++)
+        {
+            await scene.GratitudePassAsync(now += 1000);
+            Trade trade = await scene.TradeAsync();
+            botGold.Add(trade.BotGold);
+            accepted = trade.BotAccepted;
+            await Task.Delay(100);
+        }
+
+        Assert.True(accepted, "the bot never accepted the matching window");
+        Assert.Equal(Price, (await scene.TradeAsync()).BotGold);
+        await scene.AcceptAsync(scene.Customer);
+        for (int i = 0; i < 100 && (await scene.TradeAsync()).Exists; i++)
+        {
+            await scene.GratitudePassAsync(now += 1000);
+            botGold.Add((await scene.TradeAsync()).BotGold);
+            await Task.Delay(100);
+        }
+
+        Assert.False((await scene.TradeAsync()).Exists, "the window did not complete");
+        await HelpTestKit.UntilAsync(() => scene.Ledger(scene.CustomerGuid) is { FairDeals: > 0 }, "the sale to be recorded");
+        await scene.GratitudePassAsync(now += 1000);
+        Assert.True(botGold.IsSubsetOf(new HashSet<uint> { 0, Price }), "the bot's gold was " + string.Join(",", botGold));
+        Assert.Equal(1, scene.BotSent(WorldOpcode.CmsgSetTradeGold)); // only the desk put gold in
+        Assert.Equal(1, scene.BotSent(WorldOpcode.CmsgAcceptTrade));
+        Assert.Equal(50_000u - Price, await scene.MoneyAsync(BotName));
+        Assert.Equal(5000u + Price, await scene.MoneyAsync(CustomerName));
+        Assert.Equal(1u, await scene.CountAsync(BotName, DealEntry));
+        Assert.Equal(0u, await scene.CountAsync(CustomerName, DealEntry));
+        Assert.Equal(0, scene.Gratitude.TipsPaid);
+        Assert.Equal(0, scene.Gratitude.TipsPending);
+        Assert.False(await scene.World.Host.OnWorldAsync(() => HelpTestKit.RecorderOf(scene.World).TryTakeTradeDone(scene.Bot)), "the desk sale was left as a completed trade for the tip lane to count");
+    }
+
+    /// <summary>
+    /// A buyer puts exactly the agreed price and accepts only with exactly that gold. The test sets the bot's gold itself to a wrong sum right after the desk placed the
+    /// price (below it, then above it; both inside the window's 1.5 s hold, so the bot has not accepted yet): the bot corrects it to exactly the price, never has an accept
+    /// standing with any other gold, and the sale completes at the price. Broken: a gold below the price (still "at most the price") would be accepted and the bot would
+    /// pay less than it agreed or the partner would be shorted by a changed amount, and a gold above the price would never be corrected.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_Buyer_PutsExactlyThePrice()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        await scene.SetMoneyAsync(BotName, 5000);
+        byte[] item = await scene.GiveAsync(CustomerName, DealEntry);
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Buyer, DealEntry)).Ok);
+        await scene.OpenWindowAsync(scene.Customer!);
+        await scene.Customer!.SendAsync(WorldOpcode.CmsgSetTradeItem, item);
+        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.BotGold == Price, "the bot to put the price in");
+
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgSetTradeGold, Gold(Price - 600)));
+        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.BotGold == Price, "the bot to correct a gold below the price");
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgSetTradeGold, Gold(Price + 500)));
+        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.BotGold == Price, "the bot to correct a gold above the price");
+
+        bool accepted = false;
+        for (int waited = 0; waited < 8000 && !accepted; waited += 25)
+        {
+            Trade trade = await scene.TradeAsync();
+            Assert.True(!trade.BotAccepted || trade.BotGold == Price, $"the bot has an accept standing with gold {trade.BotGold}");
+            accepted = trade.BotAccepted;
+            if (!accepted) await Task.Delay(25);
+        }
+
+        Assert.True(accepted, "the bot never accepted the corrected window");
+        Assert.Equal(Price, (await scene.TradeAsync()).BotGold);
+        await scene.AcceptAsync(scene.Customer);
+        await HelpTestKit.UntilAsync(() => !scene.TradeAsync().Result.Exists, "the sale to complete");
+        Assert.Equal(1, scene.BotSent(WorldOpcode.CmsgAcceptTrade));
+        Assert.Equal(5000u - Price, await scene.MoneyAsync(BotName));
+        Assert.Equal(5000u + Price, await scene.MoneyAsync(CustomerName));
+        Assert.Equal(1u, await scene.CountAsync(BotName, DealEntry));
+        Assert.Equal(0u, await scene.CountAsync(CustomerName, DealEntry));
     }
 }

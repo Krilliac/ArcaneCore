@@ -336,6 +336,8 @@ internal sealed class PlayerbotGratitudeLane
             return false;
         }
 
+        // A window (or a deal) of the trade desk with the helper is the desk's: the tip never touches it and starts none beside it.
+        if (PlayerbotTradeDesk.OwnsWindow(bot.Session, self, helper.Guid)) return false;
         TradeSession? trade = economy.TradeOf(self);
         if (trade is not null) tip.Seen = true;
         else if (tip.Seen)
