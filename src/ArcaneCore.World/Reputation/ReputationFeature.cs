@@ -189,9 +189,9 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
 
     private void OnMapCreated(Map map)
     {
-        if (_combat.Add(map.Combat))
+        if (map.FindUpdater<MapCombat>() is { } combat && _combat.Add(combat))
         {
-            map.Combat.UnitKilled += OnUnitKilled;
+            combat.UnitKilled += OnUnitKilled;
         }
     }
 
@@ -211,9 +211,9 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
 
     private void OnMapUnloading(Map map)
     {
-        if (_combat.Remove(map.Combat))
+        if (map.FindUpdater<MapCombat>() is { } combat && _combat.Remove(combat))
         {
-            map.Combat.UnitKilled -= OnUnitKilled;
+            combat.UnitKilled -= OnUnitKilled;
         }
     }
 

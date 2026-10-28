@@ -274,16 +274,19 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
         map.AddUpdater(system);
         map.AddUpdater(loot.Rolls); // the need/greed roll timers of this map's loot (LootRollManager)
         _systems.Add(map, system);
-        map.Combat.DamageTaken += OnDamageTaken;
-        map.Combat.UnitKilled += OnUnitKilled;
+        if (map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combat.DamageTaken += OnDamageTaken;
+            combat.UnitKilled += OnUnitKilled;
+        }
     }
 
     private void OnMapUnloading(Map map)
     {
-        if (_systems.Remove(map))
+        if (_systems.Remove(map) && map.FindUpdater<MapCombat>() is { } combat)
         {
-            map.Combat.UnitKilled -= OnUnitKilled;
-            map.Combat.DamageTaken -= OnDamageTaken;
+            combat.UnitKilled -= OnUnitKilled;
+            combat.DamageTaken -= OnDamageTaken;
         }
     }
 
