@@ -23006,6 +23006,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Travel:AreaTriggers",
+      "section": "World:Playerbots",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Let bots walk into same-map teleport triggers as a leg (Teldrassil's Darnassus and Rut'theran portals; on by default).",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Travel:Boats",
       "section": "World:Playerbots",
       "type": "bool",

@@ -6,9 +6,11 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
@@ -161,6 +163,7 @@ internal sealed class TravelExclusions
     public HashSet<uint> Ships { get; } = [];
     public HashSet<ulong> Mages { get; } = [];
     public HashSet<uint> Teleports { get; } = [];
+    public HashSet<uint> Triggers { get; } = [];
     public bool Hearthstone { get; set; }
     public bool Flights { get; set; }
 }
@@ -339,6 +342,9 @@ internal sealed class JourneyWalk
 /// <item>A walk leg right before a boat, zeppelin or portal leg ends within <see cref="HandOffYards"/> of its end (that leg's driver walks the
 /// last yards to its dock or mage itself); a failure of such a walk within <see cref="PlayerbotShip.BeginReachYards"/> of its end hands off at
 /// once, and the next driver's failure is the leg's; farther out the failure is the walk's own.</item>
+/// <item>A same-map teleport trigger leg (<see cref="TravelMeans.AreaTrigger"/>) is no hand-off: the walk before it ends at the trigger, and the
+/// leg walks into the volume and is taken once the bot stands within <see cref="PortalArrivedYards"/> of the exit; a refusal by the trigger
+/// fails it.</item>
 /// <item>A failed leg (its driver reported it once) is replanned once from where the bot stands, leaving out the failed means or point on top
 /// of the drivers' backoffs (<see cref="TravelExclusions"/>); a second failure, or a replan with no route, fails the journey: reported once
 /// (anomaly area <see cref="AnomalyArea"/>, <c>leg-failed</c>). The journey is bounded (<see cref="DeadlineOf"/>, <c>overdue</c>). Nothing is
@@ -360,6 +366,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
     /// <summary>A walk before a boat, zeppelin or portal leg hands off this close to that leg's start.</summary>
     internal const float HandOffYards = 100f;
+
+    /// <summary>A same-map teleport trigger leg is taken once the bot stands this close to its exit (<see cref="PlayerbotRecovery.PortalArrivedYards"/>).</summary>
+    internal const float PortalArrivedYards = PlayerbotRecovery.PortalArrivedYards;
 
     /// <summary>On top of twice the planned seconds, the time a journey may take before it is overdue.</summary>
     internal const uint SlackMs = 600_000;
@@ -506,8 +515,12 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// Zeppelins switches), less a route one of whose docks is backed off for the bot (<see cref="PlayerbotShip.IsBackedOff"/>).</item>
     /// <item>Walkable: the same map, and, where the map's walking region graph answers (<see cref="NavMeshPathfinder.RegionGraph"/>, the check
     /// <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> makes for the bot), the same walkable component. A place the graph cannot place
-    /// (no navmesh, the graph not built yet, a tile not read yet, a point at sea such as a ship's port, or a small fragment) counts as joined:
-    /// the walk's own failure then replans. Memoised per place for this one set of facts.</item>
+    /// (no navmesh, the graph not built yet, a point at sea such as a ship's port, or a small fragment) counts as joined: the walk's own
+    /// failure then replans. The goal reads its tile at once (<see cref="BlockingLocates"/>), so a goal on a tile not read yet is placed.
+    /// Memoised per place for this one set of facts.</item>
+    /// <item>TriggerPortals: the same-map teleport triggers of the bot's map (<see cref="PlayerbotAreaTriggers.SameMapPortals"/>) that
+    /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> lets a bot take, less those the journey excluded and those whose entry requirements the bot
+    /// lacks (<see cref="MeetsRequirements"/>).</item>
     /// <item>Flight (with <see cref="PlayerbotTaxiOptions.Enabled"/> on): a known departure node within
     /// <see cref="PlayerbotTaxiOptions.MaxWalkToMasterYards"/> of the start of a stretch of at least <see cref="PlayerbotTaxiOptions.MinRouteYards"/>,
     /// not backed off, and a known landing node the fare to which fits the spend cap (<see cref="TaxiIndex.TryRoute"/>, the search
@@ -550,6 +563,22 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             ships.Add(route);
         }
 
+        var triggerPortals = new List<TriggerPortal>();
+        IReadOnlyList<(AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)> sameMap = options.Travel.AreaTriggers
+            ? PlayerbotAreaTriggers.SameMapPortals(WorldMaps.Of(session.World), player.MapId)
+            : [];
+        foreach ((AreaTriggerTemplate trigger, AreaTriggerTeleport teleport) in sameMap)
+        {
+            if (excluded?.Triggers.Contains(trigger.Id) == true
+                || !PlayerbotMapPolicy.AllowsTrigger(options.AllowedMaps, teleport.TargetMap, optedIn: false, leadsToCorpse: false)
+                || !MeetsRequirements(teleport, player.Level))
+                continue;
+            var entrance = new TravelPlace(player.MapId, new Vector3(trigger.X, trigger.Y, trigger.Z));
+            var exit = new TravelPlace(player.MapId, new Vector3(teleport.TargetX, teleport.TargetY, teleport.TargetZ));
+            if (!entrance.Position.IsFinite() || !exit.Position.IsFinite() || entrance.DistanceTo(exit) <= PortalArrivedYards) continue;
+            triggerPortals.Add(new TriggerPortal(trigger.Id, entrance, exit));
+        }
+
         return new TravelFacts
         {
             Alliance = alliance,
@@ -561,10 +590,20 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             OwnTeleports = teleports,
             Portals = portals,
             Ships = ships,
+            TriggerPortals = triggerPortals,
             Walkable = WalkableFor(player),
             Flight = options.Taxi.Enabled && excluded is not { Flights: true } ? FlightFor(session, player, options, cap, now) : null,
         };
     }
+
+    /// <summary>
+    /// Whether a bot of <paramref name="level"/> can pass the entry requirements of a same-map teleport (<c>areatrigger_teleport</c>): the level, and
+    /// no item, quest or condition requirement at all (a bot's own bags, quest log and conditions are not read here, so a trigger that names one
+    /// is left out of the plan rather than planned and refused).
+    /// </summary>
+    internal static bool MeetsRequirements(AreaTriggerTeleport teleport, int level)
+        => teleport.RequiredLevel <= level
+            && teleport.RequiredItem == 0 && teleport.RequiredItem2 == 0 && teleport.RequiredQuestDone == 0 && teleport.RequiredCondition == 0;
 
     private static readonly PathOptions WalkingLocate = new()
     {
@@ -576,18 +615,37 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         IncludeFlags = NavTerrain.Ground, ExcludeFlags = NavTerrain.SteepSlopes | NavTerrain.Water, LoadTiles = true, NonBlockingTiles = true,
     };
 
+    /// <summary><see cref="DryWalkingLocate"/> that reads a tile not resident yet at once (a place on an unread tile is not "joined" to everything).</summary>
+    private static readonly PathOptions BlockingDryWalkingLocate = DryWalkingLocate with { NonBlockingTiles = false };
+
+    /// <summary>
+    /// How many places one set of facts locates with a blocking tile read: the first place that is not the bot's own, which the planner asks
+    /// about right after the start, so the goal. A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
+    /// the walk never loaded was planned as one straight Walk leg (issue #1456, #1569: Teldrassil's upper level toward Ashenvale). Every
+    /// other place (ports, trigger ends) is located without waiting and counts as joined while its tile is pending: the walk's own failure
+    /// then replans, by which time the background read has finished. A blocking read is a synchronous world-thread cost (Teldrassil and
+    /// Kalimdor tiles are 1.1 to 3.4 MB; live Debug reads measured p50 22 ms, p90 31 ms, max 225 ms), so it is one per journey plan or
+    /// replan, never per tick, and never six.
+    /// </summary>
+    internal const int BlockingLocates = 1;
+
     /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
     private static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
     {
         if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId;
         var components = new Dictionary<TravelPlace, (int Component, bool Decides)>();
+        int blocking = 0;
+        var self = new TravelPlace(player.MapId, new Vector3(player.X, player.Y, player.Z));
         (int Component, bool Decides) Locate(TravelPlace place)
         {
             if (components.TryGetValue(place, out (int, bool) known)) return known;
             (int, bool) found = (-1, false);
             if (place.Position.IsFinite() && nav.RegionGraph(place.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph)
             {
-                int region = nav.RegionAt(graph, place.Position, DryWalkingLocate);
+                // The bot's own place is never the one to wait for (its tile is the one it stands on).
+                bool wait = place.MapId != self.MapId || place.DistanceTo(self) > 1f;
+                int region = nav.RegionAt(graph, place.Position, wait && blocking < BlockingLocates ? BlockingDryWalkingLocate : DryWalkingLocate);
+                if (wait) blocking++;
                 if (region < 0 && player.Map is { } map && map.MapId == place.MapId)
                 {
                     Vector3 resolved = PlayerbotShip.ResolveDockTarget(map, place.Position, new Vector3(player.X, player.Y, player.Z));
@@ -941,6 +999,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             case TravelMeans.FlightPath:
                 journey.LegStarted = true;
                 return Walk(session, player, options, journey, leg, elapsedMs, now, out why);
+            case TravelMeans.AreaTrigger:
+                journey.LegStarted = true;
+                return TriggerLeg(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.Boat:
             case TravelMeans.Zeppelin:
             {
@@ -1017,6 +1078,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
 
                 if (player.Combat.IsInCombat) return StepResult.Yield;
                 return Walk(session, player, options, journey, leg, elapsedMs, now, out why);
+            case TravelMeans.AreaTrigger:
+                if (player.Combat.IsInCombat) return StepResult.Yield;
+                return TriggerLeg(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.Boat:
             case TravelMeans.Zeppelin:
             {
@@ -1072,13 +1136,17 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         return StepResult.Yield;
     }
 
-    /// <summary>One step of a walk (or flight-path) leg; a hand-off walk ends near the next leg's start, and its failure there hands off too.</summary>
+    /// <summary>
+    /// One step of a walk (or flight-path) leg; a hand-off walk ends near the next leg's start, and its failure there hands off too. A walk
+    /// before a same-map trigger leg hands off like one before a boat: it stops up to <see cref="HandOffYards"/> short, and the trigger leg walks
+    /// the rest, so a refusal by a trigger volume the bot enters on the way is noted after that leg began (and not discarded as older than it).
+    /// </summary>
     private static StepResult Walk(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, TravelLeg leg, uint elapsedMs,
         uint now, out string? why)
     {
         why = null;
         bool handOff = journey.LegIndex + 1 < journey.Legs.Count
-            && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin or TravelMeans.MagePortal;
+            && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin or TravelMeans.MagePortal or TravelMeans.AreaTrigger;
         if (player.MapId != leg.To.MapId)
         {
             if (PlayerbotTram.IsTraveling(player) || (player.MapId == TramNetwork.TramMapId && leg.To.MapId != TramNetwork.TramMapId))
@@ -1097,6 +1165,12 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             why = $"walk: on map {player.MapId}, the leg's end on map {leg.To.MapId}";
             return StepResult.Failed;
         }
+
+        // A trigger volume larger than the walk's arrival radius fires while this walk is still under way: the bot already stands at the
+        // exit of the trigger leg that follows, which is then taken at once.
+        if (journey.LegIndex + 1 < journey.Legs.Count && journey.Legs[journey.LegIndex + 1] is { Means: TravelMeans.AreaTrigger } viaTrigger
+            && TravelPlace.Of(player).DistanceTo(viaTrigger.To) <= PortalArrivedYards)
+            return StepResult.Next;
 
         float left = TravelPlace.Of(player).DistanceTo(leg.To);
         if (left <= (handOff ? HandOffYards : ArriveYards) && !PlayerbotTaxi.IsActive(player) && !PlayerbotTram.IsTraveling(player)
@@ -1126,10 +1200,54 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         }
     }
 
+    /// <summary>
+    /// One step of a same-map teleport trigger leg: walk into the trigger's volume (the motion reports it,
+    /// <see cref="PlayerbotAreaTriggers"/>, and the server teleports the bot to the leg's end). Taken once the bot stands within
+    /// <see cref="PortalArrivedYards"/> of the end. Failed, and the trigger left out of the replan, when the trigger refused the bot (a
+    /// level or faction requirement, a policy block) or the walk to it failed. The refusal is read before the walk's own check, which
+    /// would count it as one more refused plan.
+    /// </summary>
+    private static StepResult TriggerLeg(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, TravelLeg leg,
+        uint elapsedMs, uint now, out string? why)
+    {
+        why = null;
+        if (player.MapId == leg.To.MapId && TravelPlace.Of(player).DistanceTo(leg.To) <= PortalArrivedYards)
+        {
+            PlayerbotMovementControl.Stop(session, player);
+            return StepResult.Next;
+        }
+
+        if (PlayerbotAreaTriggers.TryConsumeTeleportRefusal(player, leg.TriggerId, journey.LegBeganMs, out string refusal))
+        {
+            journey.Excluded.Triggers.Add(leg.TriggerId);
+            why = $"trigger {leg.TriggerId}: {refusal}";
+            return StepResult.Failed;
+        }
+
+        if (player.MapId != leg.From.MapId)
+        {
+            why = $"trigger {leg.TriggerId}: on map {player.MapId}, the trigger on map {leg.From.MapId}";
+            return StepResult.Failed;
+        }
+
+        switch (journey.Walk.Step(session, player, options, leg.From.Position, elapsedMs, now, journey.SpendLeft(options.Travel), out string? walkWhy))
+        {
+            case JourneyWalk.Outcome.Yield:
+                return StepResult.Yield;
+            case JourneyWalk.Outcome.Failed:
+                journey.Excluded.Triggers.Add(leg.TriggerId);
+                why = $"trigger {leg.TriggerId}: walk: {walkWhy}";
+                return StepResult.Failed;
+            default:
+                return StepResult.Traveling;
+        }
+    }
+
     /// <summary>Why the means of a leg may not be used now (its switch is off), or null.</summary>
     private static string? SwitchOf(TravelMeans means, PlayerbotOptions options) => means switch
     {
         TravelMeans.FlightPath when !options.Taxi.Enabled => "flight paths were switched off",
+        TravelMeans.AreaTrigger when !options.Travel.AreaTriggers => "same-map teleport triggers were switched off",
         TravelMeans.Boat when !options.Travel.Boats => "boats were switched off",
         TravelMeans.Zeppelin when !options.Travel.Zeppelins => "zeppelins were switched off",
         TravelMeans.Hearthstone when !options.Travel.Hearthstone => "the hearthstone was switched off",
@@ -1223,6 +1341,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             TravelMeans.Boat or TravelMeans.Zeppelin => string.Create(CultureInfo.InvariantCulture, $"{leg.Means} {leg.TransportEntry}"),
             TravelMeans.MageTeleport => string.Create(CultureInfo.InvariantCulture, $"MageTeleport {leg.SpellId}"),
             TravelMeans.MagePortal => string.Create(CultureInfo.InvariantCulture, $"MagePortal {leg.SpellId} by {leg.MageGuid:X}"),
+            TravelMeans.AreaTrigger => string.Create(CultureInfo.InvariantCulture, $"AreaTrigger {leg.TriggerId}"),
             _ => leg.Means.ToString(),
         };
         return string.Create(CultureInfo.InvariantCulture, $"{what} to {Describe(leg.To)} ({leg.Seconds:F0} s{(leg.Copper > 0 ? $", {leg.Copper} c" : string.Empty)})");

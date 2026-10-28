@@ -1766,7 +1766,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         }
 
         if (_travelHomeFailures > 0 && unchecked((int)(_travelHomeRetryAt - now)) > 0) return false;
-        if (travel.TryBegin(_session, player, home.MapId, home.Centre, out _))
+        // An attempt that began no journey (none could begin, or the bot already stands at the goal) waits too: each attempt builds the
+        // travel facts, which read up to PlayerbotTravel.BlockingLocates navmesh tiles synchronously on the world thread.
+        if (travel.TryBegin(_session, player, home.MapId, home.Centre, out _) && travel.IsTraveling(player))
         {
             _travelHomeJourney = PlayerbotTravel.JourneyOf(player) is { State: JourneyState.Active } begun ? begun : null;
             return true;
