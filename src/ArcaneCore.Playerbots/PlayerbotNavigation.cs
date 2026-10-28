@@ -436,18 +436,16 @@ internal static class PlayerbotNavigation
     /// <summary>
     /// Plans a blind exploration wander leg toward <paramref name="destination"/>, refusing navigated partial routes on walkable ground
     /// that stop more than <see cref="WanderMaxShortfallYards"/> short of <paramref name="destination"/> (into a wall or cliff).
+    /// The goal point is first put on the floor nearest the bot's own height (<see cref="FloorProbe"/>): a single probe from 20 yards
+    /// above the goal starts inside the roof rock in a cave or tunnel and finds the roof (or nothing), so every leg was planned onto
+    /// the roof or into rock and refused (Timbermaw Hold, issues #1442 and #1567).
     /// </summary>
     internal static PlanOutcome PlanWander(Player player, Vector3 destination, PlayerbotOptions options, ref TileWait wait, uint now,
         out PlayerbotRoute? route)
     {
         if (player.Map is { } wanderMap && destination.IsFinite())
         {
-            float surface = wanderMap.Collision.GetHeight(destination.X, destination.Y, destination.Z + 20f);
-            if (!InvalidHeight(surface)
-                && MathF.Abs(surface - destination.Z) > 2f && MathF.Abs(surface - destination.Z) <= 25f)
-            {
-                destination = destination with { Z = surface };
-            }
+            destination = new FloorProbe(wanderMap, PlayerbotMotion.CurrentPosition(player)).Near(destination);
         }
 
         PlanOutcome outcome = PlanToward(player, destination, options, ref wait, now, out route);
