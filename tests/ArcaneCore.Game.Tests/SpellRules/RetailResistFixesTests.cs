@@ -158,4 +158,59 @@ public sealed class RetailResistFixesTests
         Assert.Equal(400, mob.GetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Shadow));
         Assert.Equal(500, mob.GetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Arcane));
     }
+
+    private static SpellInfo SelfTick(uint id) =>
+        SpellTestKit.Spell(id, SpellTestKit.Effect(SpellEffectName.ApplyAura, 100, SpellImplicitTarget.UnitCaster, AuraType.PeriodicDamage, amplitude: 1000)) with
+        {
+            School = SpellSchool.Fire,
+            Duration = new SpellDuration(60_000, 0, 60_000),
+            SpellVisual = 1,
+            StartRecoveryCategory = 0,
+            StartRecoveryTime = 0,
+        };
+
+    private static uint HealthLostToSelfTicks(uint spellId)
+    {
+        using var kit = new SpellTestKit(SelfTick(spellId));
+        (Player warlock, _) = kit.AddPlayer(1);
+        warlock.Level = 60;
+        warlock.MaxHealth = 1_000_000;
+        warlock.Health = 1_000_000;
+        warlock.SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire, 300);
+        kit.System.CombatRules = new VanillaSpellCombatRules();
+        kit.System.Damage = new ArcaneCore.Game.Combat.MapCombatDamageSink();
+        kit.System.Random = new Random(11);
+        kit.System.CastSpell(warlock, spellId, SpellCastTargets.ForSelf(), triggered: true);
+        kit.Advance(40_500);
+        return 1_000_000 - warlock.Health;
+    }
+
+    [Fact]
+    public void HellfireTicksThroughTheRealPeriodicPath_AreNeverResisted()
+    {
+        uint hellfire = HealthLostToSelfTicks(1949);
+
+        Assert.Equal(0u, hellfire % 100u);
+        Assert.True(hellfire >= 3_900u, $"{hellfire}"); // every tick landed at full damage (about 40 of them)
+        Assert.True(HealthLostToSelfTicks(900_302) < hellfire); // control: the same self-tick under another id is resisted
+    }
+
+    [Fact]
+    public void AResistanceAuraOnACreature_SurvivesAReinitialisationWithANewTemplate_AndComesOffCleanly()
+    {
+        int fire = UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire;
+        Creature mob = SpawnCreature(t => t with { FireRes = 100 });
+        Assert.Equal(100, mob.GetInt32(fire));
+
+        mob.SetInt32(fire, mob.GetInt32(fire) - 75); // Curse of the Elements: the aura handler moves the field by its amount
+        CreatureTemplate next = mob.Template with { FireRes = 40 };
+        mob.ChangeTemplate(next);
+        mob.InitializeFields(); // UpdateEntry / a game event override re-initialise a live creature
+
+        Assert.Equal(40 - 75, mob.GetInt32(fire)); // the curse is still on top of the new template
+        Assert.Equal(40, mob.CreateResistance((int)SpellSchool.Fire));
+
+        mob.SetInt32(fire, mob.GetInt32(fire) + 75); // the curse expires
+        Assert.Equal(40, mob.GetInt32(fire));
+    }
 }

@@ -239,7 +239,9 @@ public sealed class PercentStatAuras : ISpellHandlerModule
         int current = unit.GetInt32(field);
         int pre = current - ledger.Applied(group);
         int baseValue = unit is Player player && ledger.BasePct(group) != 1.0f ? player.StatState.ItemResistance(school) : 0;
-        int value = Math.Max(0, Modified(ledger, group, pre, baseValue));
+        // The total cannot go below 0, except for a creature whose own (template) resistance is negative: that vulnerability is kept.
+        int floor = unit is ArcaneCore.Game.Creatures.Creature creature ? Math.Min(0, creature.CreateResistance(school)) : 0;
+        int value = Math.Max(floor, Modified(ledger, group, pre, baseValue));
         ledger.SetApplied(group, value - pre);
         if (value != current)
         {

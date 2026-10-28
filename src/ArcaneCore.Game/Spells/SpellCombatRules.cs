@@ -599,7 +599,7 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         int resistance = target.GetInt32(UpdateFields.UnitFieldResistances + (int)school);
         int levelDiff = target.EffectiveLevelAgainst(caster, options.WorldBossLevelDiff) - caster.EffectiveLevelAgainst(target, options.WorldBossLevelDiff);
         // Only the unit's own create resistance can make it vulnerable; a resistance aura alone cannot take the total below 0 (Patch 1.9.0).
-        int baseResistance = target is Creature creature ? creature.Template.ResistanceOf((int)school) : 0;
+        int baseResistance = target is Creature creature ? creature.CreateResistance((int)school) : 0;
         return SpellResistance.Chance(resistance, penetration, MeleeHitTable.SkillMaxForLevel(caster, target), caster.Level, levelDiff, innateResists && target is not Player, baseResistance);
     }
 
