@@ -323,6 +323,7 @@ public static partial class ContentImporterCli
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
         Count(CreatureEquipmentDataModule.EquipTemplateTable, relays.BuildReport().Equipment, relays.HasEquipTemplateTable);
+        Count(CreatureImmunityDataModule.ImmunityTable, relays.BuildReport().Immunities, relays.HasImmunityTable);
         Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
         Count("creature_ai_texts (script_texts, gossip_texts)", scriptDevTexts, scriptDevTexts > 0);
@@ -451,6 +452,17 @@ public static partial class ContentImporterCli
                     if (relays.HasEquipmentTemplateIdColumn)
                     {
                         counts["creature_template (EquipmentTemplateId)"] = equipLinks;
+                    }
+
+                    (int immunityRows, int immunityTemplates) = await relays.RefreshImmunitiesAsync(db, token).ConfigureAwait(false);
+                    if (relays.HasImmunityTable)
+                    {
+                        counts[CreatureImmunityDataModule.ImmunityTable] = immunityRows;
+                    }
+
+                    if (relays.HasImmunityMaskColumns)
+                    {
+                        counts["creature_template (MechanicImmuneMask, SchoolImmuneMask)"] = immunityTemplates;
                     }
 
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);

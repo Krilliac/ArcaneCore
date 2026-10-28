@@ -53,6 +53,18 @@ public sealed record CreatureTemplate
     /// </summary>
     public uint EquipmentTemplateId { get; init; }
 
+    /// <summary>
+    /// vmangos <c>mechanic_immune_mask</c> / cmangos <c>MechanicImmuneMask</c>: bit <c>mechanic - 1</c> set for every Spell.dbc mechanic the creature is
+    /// immune to (vmangos Creature::IsImmuneToSpell, Creature.cpp:2445). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 57).
+    /// </summary>
+    public uint MechanicImmuneMask { get; init; }
+
+    /// <summary>
+    /// vmangos <c>school_immune_mask</c> / cmangos <c>SchoolImmuneMask</c>: bit <c>school</c> set for every spell school the creature is immune to
+    /// (Creature.cpp:2448, :2460). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 57).
+    /// </summary>
+    public uint SchoolImmuneMask { get; init; }
+
     public uint UnitFlags { get; init; }
 
     public uint DynamicFlags { get; init; }
@@ -262,9 +274,11 @@ public sealed class CreatureDefinitions
         CreatureAiContent ai,
         Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> entryWaypoints,
         Dictionary<(uint Entry, uint PathId), IReadOnlyList<CreatureWaypoint>> scriptWaypoints,
-        Dictionary<uint, CreatureEquipment> equipment)
+        Dictionary<uint, CreatureEquipment> equipment,
+        Dictionary<(uint Entry, uint SetId), CreatureImmunitySet> immunitySets)
     {
         Equipment = equipment;
+        ImmunitySets = immunitySets;
         Templates = templates;
         Models = models;
         Addons = addons;
@@ -281,6 +295,8 @@ public sealed class CreatureDefinitions
     internal Dictionary<uint, CreatureAddon> Addons { get; }
 
     internal Dictionary<uint, CreatureEquipment> Equipment { get; }
+
+    internal Dictionary<(uint Entry, uint SetId), CreatureImmunitySet> ImmunitySets { get; }
 
     internal Dictionary<uint, IReadOnlyList<CreatureWaypoint>> Waypoints { get; }
 
@@ -324,7 +340,8 @@ public sealed class CreatureContent
         IEnumerable<(uint Entry, uint PathId, CreatureWaypoint Point)>? scriptWaypoints = null,
         IEnumerable<CreatureLink>? links = null,
         IEnumerable<CreatureTemplateLink>? templateLinks = null,
-        IEnumerable<CreatureEquipment>? equipment = null)
+        IEnumerable<CreatureEquipment>? equipment = null,
+        IEnumerable<CreatureImmunity>? immunities = null)
     {
         _definitions = new CreatureDefinitions(
             templates.ToDictionary(t => t.Entry),
@@ -340,7 +357,10 @@ public sealed class CreatureContent
             (scriptWaypoints ?? [])
                 .GroupBy(w => (w.Entry, w.PathId))
                 .ToDictionary(g => g.Key, g => (IReadOnlyList<CreatureWaypoint>)[.. g.Select(w => w.Point).OrderBy(p => p.Point)]),
-            (equipment ?? []).ToDictionary(e => e.Entry));
+            (equipment ?? []).ToDictionary(e => e.Entry),
+            (immunities ?? [])
+                .GroupBy(i => (i.Entry, i.SetId))
+                .ToDictionary(g => g.Key, g => new CreatureImmunitySet(g.Key.Entry, g.Key.SetId, [.. g])));
         _spawnEntries = (spawnEntries ?? [])
             .GroupBy(e => e.SpawnGuid)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<uint>)[.. g.Select(e => e.Entry).Distinct().Order()]);
@@ -396,6 +416,18 @@ public sealed class CreatureContent
 
     /// <summary>Number of <c>creature_equip_template</c> rows loaded.</summary>
     public int EquipmentCount => _definitions.Equipment.Count;
+
+    /// <summary>
+    /// The <c>creature_immunities</c> rows of one entry and set id, or null when the entry has none for that set (mangos-classic
+    /// ObjectMgr::GetCreatureImmunitySet, which the creature and EventAI set-switch consult).
+    /// </summary>
+    public CreatureImmunitySet? FindImmunitySet(uint entry, uint setId) => _definitions.ImmunitySets.GetValueOrDefault((entry, setId));
+
+    /// <summary>Number of (entry, set id) groups of <c>creature_immunities</c> loaded.</summary>
+    public int ImmunitySetCount => _definitions.ImmunitySets.Count;
+
+    /// <summary>Whether any <c>creature_immunities</c> row is loaded; the creature immunity lookups skip the dictionary when none is.</summary>
+    public bool HasImmunitySets => _definitions.ImmunitySets.Count != 0;
 
     public IReadOnlyList<CreatureWaypoint> GetWaypoints(uint spawnGuid) => _definitions.Waypoints.GetValueOrDefault(spawnGuid) ?? [];
 

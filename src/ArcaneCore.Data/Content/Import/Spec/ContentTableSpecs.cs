@@ -37,6 +37,8 @@ public static class ContentTableSpecs
         "VendorTemplateId", "vendor_id",
         // CreatureEquipmentDataModule (ClassicDB EquipmentTemplateId, vmangos equipment_id; ObjectMgr.cpp:1301)
         "EquipmentTemplateId", "equipment_id",
+        // CreatureImmunityDataModule (cmangos MechanicImmuneMask, SchoolImmuneMask; vmangos mechanic_immune_mask, school_immune_mask; ObjectMgr.cpp:1304)
+        "MechanicImmuneMask", "SchoolImmuneMask", "mechanic_immune_mask", "school_immune_mask",
         "UnitFlags", "DynamicFlags", "CreatureTypeFlags", "CreatureType", "type", "Family", "pet_family", "Rank",
         "UnitClass", "unit_class", "InhabitType", "inhabit_type", "Civilian", "RacialLeader", "racial_leader",
         "SpeedWalk", "speed_walk", "SpeedRun", "speed_run",
@@ -157,6 +159,8 @@ public static class ContentTableSpecs
         // creature_equip_template: ClassicDB equipentry1..3; vmangos item1..3 with a probability and a patch range (ObjectMgr.cpp:1735).
         new("creature_equip_template", [new KeyColumn("entry")],
             ["equipentry1", "equipentry2", "equipentry3", "item1", "item2", "item3", "probability", "patch_min", "patch_max"], []),
+        // creature_immunities (cmangos only): Entry, SetId, Type (enum SpellImmunity 0..5), Value (mangos-classic ObjectMgr::LoadCreatureImmunities).
+        new("creature_immunities", [new KeyColumn("Entry"), new KeyColumn("SetId"), new KeyColumn("Type"), new KeyColumn("Value")], [], []),
         new("creature_addon", [new KeyColumn("guid")],
             ["mount", "mount_display_id", "stand_state", "sheath_state", "emote", "emote_state"], []),
         new("creature_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")],

@@ -64,6 +64,12 @@ public sealed class CreatureTemplateRow
     /// <summary>ClassicDB EquipmentTemplateId / vmangos equipment_id; the <c>creature_equip_template</c> entry. Added by <see cref="CreatureEquipmentDataModule"/>.</summary>
     public uint EquipmentTemplateId { get; set; }
 
+    /// <summary>vmangos mechanic_immune_mask / cmangos MechanicImmuneMask (bit mechanic - 1). Added by <see cref="CreatureImmunityDataModule"/>.</summary>
+    public uint MechanicImmuneMask { get; set; }
+
+    /// <summary>vmangos school_immune_mask / cmangos SchoolImmuneMask (bit school). Added by <see cref="CreatureImmunityDataModule"/>.</summary>
+    public uint SchoolImmuneMask { get; set; }
+
     public uint UnitFlags { get; set; }
 
     public uint DynamicFlags { get; set; }

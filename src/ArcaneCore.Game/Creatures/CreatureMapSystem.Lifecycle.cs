@@ -537,6 +537,7 @@ public sealed partial class CreatureMapSystem
         creature.ScriptRun = false;
         SetAiImmobilized(creature, false, combatOnly: false);
         creature.FollowMovementDisabled = false;
+        creature.ResetImmunitySet(); // cmangos Creature::InitEntry: UpdateImmunitiesSet(0)
         creature.InvincibilityHpThreshold = 0; // an EventAI death prevention ends with the life it was set in
         creature.AI?.OnRespawn();
         JoinFormation(creature);

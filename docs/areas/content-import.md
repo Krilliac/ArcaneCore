@@ -16,6 +16,14 @@ A running game event's `equipment_id` is a `creature_equip_template` entry too a
 5,298 templates that name one (entry 68, Stormwind City Guard, holds items 1899 / 143 / 2551). Upgrade an existing world with `arcane-db upgrade`, then run
 `refresh` from the z2815 dump (see the PR description for the exact commands); until then its creatures hold nothing, as before.
 
+World schema v57 adds `creature_immunities` (`Entry`, `SetId`, `Type`, `Value`; the mangos `SpellImmunity` enum: 0 effect, 1 aura type, 2 school mask, 3 damage school mask, 4 dispel type,
+5 mechanic) and `creature_template.MechanicImmuneMask` / `SchoolImmuneMask` (`CreatureImmunityDataModule`). The importer reads the cmangos table (a row with a type above 5 is refused with a
+warning) and the template masks of both dialects (cmangos `MechanicImmuneMask` / `SchoolImmuneMask`, vmangos `mechanic_immune_mask` / `school_immune_mask`). vmangos dumps carry only the
+masks and cmangos dumps only the table (the cmangos mask columns are left 0); when a dump carries both, a creature gets the union. `refresh` replaces the table and updates the template masks, and reports
+`creature_immunities` and `creature_template (MechanicImmuneMask, SchoolImmuneMask)` counts; a dump without the table or the columns leaves that half alone. Set 0 is in force from creation and
+respawn; EventAI action 63 switches to another set of the entry. Upgrade an existing world with `arcane-db upgrade`, then run `refresh` from the dump; until then its creatures are immune to nothing
+the auras do not grant, as before. No dump rows are committed.
+
 World schema v53 adds `npc_vendor_template` and `creature_template.VendorTemplateId` (vmangos `vendor_id`). Import reads the shared stock and link. The standard deploy migrates with `arcane-db upgrade` first and then runs `refresh` without `--migrate` (which refuses an older schema); `refresh --migrate` upgrades and refreshes in one step. Refresh replaces the shared stock and updates the links without replacing direct `npc_vendor` rows, and reports the number of links it changed. An `npc_vendor_template` table missing a required column (for example `slot` or `condition_id`) is skipped with a warning, not an abort. Vendor list order and buying follow vmangos `ObjectMgr::LoadVendorTemplates`, `Creature::GetVendorTemplateItems` and `WorldSession::SendListInventory`.
 
 ## Delivered

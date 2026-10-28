@@ -110,7 +110,8 @@ public static class ImmunityRules
             return false;
         }
 
-        if (system.CreatureImmunities is { } creatures && (creatures.SchoolImmuneMask(target) & schoolMask) != 0)
+        if (system.CreatureImmunities is { } creatures
+            && ((creatures.SchoolImmuneMask(target) | creatures.DamageImmuneMask(target)) & schoolMask) != 0)
         {
             return true;
         }
@@ -198,6 +199,12 @@ public static class ImmunityRules
             {
                 return true;
             }
+
+            // creature_immunities dispel rows: any spell of the dispel type, whatever its polarity (mangos-classic Unit::IsImmuneToSpell, Unit.cpp:7351-7354).
+            if (spell.Dispel < 32 && (creatures.DispelImmuneMask(target) & (1u << (int)spell.Dispel)) != 0)
+            {
+                return true;
+            }
         }
 
         bool incoming = spell.IsPositive;
@@ -258,6 +265,13 @@ public static class ImmunityRules
             && (creatures.MechanicImmuneMask(target) & SpellMechanics.Mask(mechanic)) != 0)
         {
             return true;
+        }
+
+        if (!castOnSelf && system.CreatureImmunities is { } rows
+            && ((!effect.IsEmpty && rows.IsImmuneToEffect(target, effect.Effect))
+                || (effect.Effect == SpellEffectName.ApplyAura && effect.AuraType != AuraType.None && rows.IsImmuneToAuraState(target, effect.AuraType))))
+        {
+            return true; // creature_immunities effect and state rows (mangos-classic Unit::IsImmuneToSpellEffect, Unit.cpp:7385-7418)
         }
 
         bool incoming = spell.IsPositive;
