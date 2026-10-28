@@ -62,6 +62,45 @@ public sealed class WorldSpellGroups(Func<GroupManager?> groups) : ISpellGroupRe
         return false;
     }
 
+    public void AppendGroupMembers(Unit unit, bool raid, List<ObjectGuid> into)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(into);
+        if (Manager()?.GetGroup(unit.Guid) is not { } group)
+        {
+            into.Add(unit.Guid);
+            return;
+        }
+
+        // Manual scans (no Find/LINQ lambdas): this runs on map threads and must not allocate.
+        IReadOnlyList<GroupMemberSlot> members = group.Members;
+        GroupMemberSlot? self = null;
+        for (int i = 0; i < members.Count; i++)
+        {
+            if (members[i].Guid == unit.Guid)
+            {
+                self = members[i];
+                break;
+            }
+        }
+
+        if (self is null)
+        {
+            into.Add(unit.Guid);
+            return;
+        }
+
+        bool anySubGroup = raid || !group.IsRaid;
+        for (int i = 0; i < members.Count; i++)
+        {
+            GroupMemberSlot m = members[i];
+            if (anySubGroup || m.SubGroup == self.SubGroup)
+            {
+                into.Add(m.Guid);
+            }
+        }
+    }
+
     public IReadOnlyCollection<ObjectGuid> GetGroupMembers(Unit unit, bool raid)
     {
         ArgumentNullException.ThrowIfNull(unit);
