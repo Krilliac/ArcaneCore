@@ -60,8 +60,7 @@ combat. `ReputationFeature` and `ReputationCombatFeature` now each log one line 
   `SMSG_SET_FACTION_ATWAR` exists only in vmangos (wow_messages has no such message), so it needs a real-client check first.
 - **Honor-rank price discounts** and the taxi variant (`Player.cpp:19470-19510`): need the honor lane. `ReputationPricing.Round` is the
   rounding they will use.
-- **Dump importer wiring** for the two new tables: `ContentImporterCli`, the table specs and a `ReputationTemplatesDumpImporter` are not part of
-  this lane; the world tables fill from SQL for now. classic-db has 12 spillover rows and 3 reward-rate rows (all 1/1/1).
+- **Dump import** of the two tables is delivered: `ReputationTemplatesDumpImporter` (specs in `ContentTableSpecs`, wired into `import` and `verify`) reads both from a classic-db or vmangos dump by column name (neither is patch-versioned) and writes them with the other world tables; classic-db has 12 spillover rows and 3 reward-rate rows (all 1/1/1). Rows naming a faction outside Faction.dbc are kept and dropped with a warning when the world loads (`ReputationContent.Create`).
 - **Alterac Valley** Frostwolf/Stormpike reputation for killing enemy players (`Group.cpp:2305-2320`, battleground lane).
 - **Stop-attack on a forced Friendly rank** handles the player's own victim only; the attacker set, pets and the threat references of the
   faction (`Unit.cpp:10006-10029`) belong to the threat lane.

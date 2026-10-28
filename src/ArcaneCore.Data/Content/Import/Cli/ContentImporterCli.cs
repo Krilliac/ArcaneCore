@@ -369,6 +369,7 @@ public static partial class ContentImporterCli
         var objects = new GameObjectLootDumpImporter();
         var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
         var onKill = new OnKillReputationDumpImporter();
+        var reputationTemplates = new ReputationTemplatesDumpImporter();
         var playerCreate = new PlayerCreateDumpImporter();
         var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
@@ -399,6 +400,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             onKill.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            reputationTemplates.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -538,6 +544,7 @@ public static partial class ContentImporterCli
         GameObjectLootImportReport objectReport = objects.BuildReport();
         ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
         ReputationOnKillImportReport onKillReport = onKill.BuildReport();
+        ReputationTemplatesImportReport reputationTemplatesReport = reputationTemplates.BuildReport();
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
         PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
@@ -563,6 +570,7 @@ public static partial class ContentImporterCli
                     objectReport = await objects.WriteAsync(db, replace, token).ConfigureAwait(false);
                     itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
                     onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    reputationTemplatesReport = await reputationTemplates.WriteAsync(db, replace, token).ConfigureAwait(false);
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
@@ -589,6 +597,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(objectReport.Warnings);
         warnings.AddRange(itemQuestReport.Warnings);
         warnings.AddRange(onKillReport.Warnings);
+        warnings.AddRange(reputationTemplatesReport.Warnings);
         warnings.AddRange(playerReport.Warnings);
         warnings.AddRange(startActionReport.Warnings);
         warnings.AddRange(locationReport.Warnings);
@@ -650,6 +659,8 @@ public static partial class ContentImporterCli
         imported["npc_vendor"] = npcReport.Vendors;
         imported["npc_vendor_template"] = npcReport.VendorTemplates;
         imported["npc_trainer"] = npcReport.Trainers;
+        imported["reputation_spillover_template"] = reputationTemplatesReport.Spillovers;
+        imported["reputation_reward_rate"] = reputationTemplatesReport.RewardRates;
         imported["conditions"] = conditionsReport.Conditions;
         imported["battleground_template"] = battlegroundReport.Templates;
         imported["creature_battleground"] = battlegroundReport.CreatureEvents;
@@ -1078,6 +1089,8 @@ public static partial class ContentImporterCli
                 ("creature_involvedrelation", await db.Set<CreatureQuestEnderRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_item", await db.Set<PlayerCreateInfoItemRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_onkill_reputation", await db.Set<CreatureOnKillReputationRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("reputation_spillover_template", await db.Set<ReputationSpilloverTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("reputation_reward_rate", await db.Set<ReputationRewardRateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("player_create_info", await db.PlayerCreateInfo.CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_spell", await db.Set<PlayerCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_action", await db.Set<PlayerCreateActionRow>().CountAsync(ct).ConfigureAwait(false)),
