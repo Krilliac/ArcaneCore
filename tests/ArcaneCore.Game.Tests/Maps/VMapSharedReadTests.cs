@@ -477,14 +477,15 @@ public sealed class VMapSharedReadTests(ITestOutputHelper output) : IDisposable
         using Scene scene = Build();
         ReaderWriterLockSlim gate = scene.Vmaps.SharedLock;
 
-        Assert.Throws<InvalidOperationException>(() =>
+        Action failing = () =>
         {
             using (VMapSharedReader.Enter(gate))
             {
                 VMapSharedReader.Abort(SharedDrapeAbort.MeshNotShared);
                 throw new InvalidOperationException("boom");
             }
-        });
+        };
+        Assert.Throws<InvalidOperationException>(failing);
 
         Assert.False(VMapSharedReader.Active);
         Assert.Equal(SharedDrapeAbort.None, VMapSharedReader.Reason);
