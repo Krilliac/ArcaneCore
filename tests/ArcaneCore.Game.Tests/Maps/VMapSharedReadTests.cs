@@ -439,7 +439,10 @@ public sealed class VMapSharedReadTests(ITestOutputHelper output) : IDisposable
 
         using (VMapSharedReader.Enter(a))
         {
-            Assert.Throws<InvalidOperationException>(() => VMapSharedReader.Enter(other));
+            Assert.Throws<InvalidOperationException>(() =>
+            {
+                using VMapSharedReader.Scope refused = VMapSharedReader.Enter(other);
+            });
             Assert.Equal(0, other.CurrentReadCount); // refused before anything was taken
             Assert.Equal(1, a.CurrentReadCount);
             Assert.True(VMapSharedReader.HoldsLock(a));
