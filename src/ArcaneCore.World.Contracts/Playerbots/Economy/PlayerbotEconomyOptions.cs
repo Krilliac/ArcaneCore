@@ -51,10 +51,20 @@ public sealed class PlayerbotEconomyOptions
 
     /// <summary>
     /// Buy the reagents of the recipes the bot wants to craft that it carries fewer of than one craft uses at the faction auction house during a
-    /// visit (on by default): at most 2 auctions a visit, a buyout per unit of at most twice the item's reference price, within the visit budget.
-    /// Off: no reagent is searched or bought. Reagents a wanted recipe uses are never listed either way.
+    /// visit (on by default): at most 2 auctions a visit, within the visit budget. Guards: a reagent a vendor stocks is never bought; an auction
+    /// holds at most twice the shortfall; a buyout per unit is at most <see cref="ReagentSellMultiple"/> times the item's vendor sell price
+    /// plus <see cref="ReagentAllowanceCopper"/>. Off: no reagent is searched or bought. Reagents a wanted recipe uses are never listed either way.
     /// </summary>
     public bool BuyReagents { get; set; } = true;
+
+    /// <summary>
+    /// The most a bot pays per unit for a reagent at the house, as a multiple of the item's vendor sell price (1..20), plus
+    /// <see cref="ReagentAllowanceCopper"/>; an item without a vendor sell price is never bought.
+    /// </summary>
+    public int ReagentSellMultiple { get; set; } = 4;
+
+    /// <summary>Copper per unit (0..10000) added to <see cref="ReagentSellMultiple"/> times the vendor sell price in the reagent buy cap.</summary>
+    public int ReagentAllowanceCopper { get; set; } = 10;
 
     public void Validate()
     {
@@ -65,5 +75,7 @@ public sealed class PlayerbotEconomyOptions
             throw new InvalidOperationException($"{section}: BuyUpgradeBudgetFraction must be 0..1.");
         if (VisitIntervalMinutes is < 1 or > MaxVisitIntervalMinutes)
             throw new InvalidOperationException($"{section}: VisitIntervalMinutes must be 1..{MaxVisitIntervalMinutes}.");
+        if (ReagentSellMultiple is < 1 or > 20) throw new InvalidOperationException($"{section}: ReagentSellMultiple must be 1..20.");
+        if (ReagentAllowanceCopper is < 0 or > 10000) throw new InvalidOperationException($"{section}: ReagentAllowanceCopper must be 0..10000.");
     }
 }

@@ -773,6 +773,10 @@ public static class WorldConfigKeys
         LivePlayerbots("Economy:BankDeposit", o => o.Economy.BankDeposit, (o, v) => o.Economy.BankDeposit = v),
         LivePlayerbots("Economy:BuyBankSlots", o => o.Economy.BuyBankSlots, (o, v) => o.Economy.BuyBankSlots = v),
         LivePlayerbots("Economy:BuyReagents", o => o.Economy.BuyReagents, (o, v) => o.Economy.BuyReagents = v),
+        LivePlayerbotsValue("Economy:ReagentSellMultiple", o => o.Economy.ReagentSellMultiple, (o, v) => o.Economy.ReagentSellMultiple = v,
+            v => v is >= 1 and <= 20 ? null : "must be 1..20"),
+        LivePlayerbotsValue("Economy:ReagentAllowanceCopper", o => o.Economy.ReagentAllowanceCopper, (o, v) => o.Economy.ReagentAllowanceCopper = v,
+            v => v is >= 0 and <= 10000 ? null : "must be 0..10000"),
         // Not vmangos keys: how bots plan their money and ride (docs/areas/playbots-economy.md). PlayerbotBudget and PlayerbotMount read the
         // shared PlayerbotOptions.Budget / Mounts at every decision.
         LivePlayerbots("Budget:Enabled", o => o.Budget.Enabled, (o, v) => o.Budget.Enabled = v),

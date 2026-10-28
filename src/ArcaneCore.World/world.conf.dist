@@ -13894,9 +13894,11 @@ World.Playerbots.Economy.BuyBankSlots = true
 #    World.Playerbots.Economy.BuyReagents
 #        Description: Buy the reagents of the recipes the bot wants to craft that it carries fewer
 #                     of than one craft uses at the faction auction house during a visit (on by
-#                     default): at most 2 auctions a visit, a buyout per unit of at most twice the
-#                     item's reference price, within the visit budget. Off: no reagent is searched
-#                     or bought. Reagents a wanted recipe uses are never listed either way.
+#                     default): at most 2 auctions a visit, within the visit budget. Guards: a
+#                     reagent a vendor stocks is never bought; an auction holds at most twice the
+#                     shortfall; a buyout per unit is at most ReagentSellMultiple times the item's
+#                     vendor sell price plus ReagentAllowanceCopper. Off: no reagent is searched or
+#                     bought. Reagents a wanted recipe uses are never listed either way.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -13954,6 +13956,31 @@ World.Playerbots.Economy.ListChancePerVisit = 50
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.MaxListingsPerBot = 5
+
+#
+#    World.Playerbots.Economy.ReagentAllowanceCopper
+#        Description: Copper per unit (0..10000) added to ReagentSellMultiple times the vendor sell
+#                     price in the reagent buy cap.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ReagentAllowanceCopper = 10
+
+#
+#    World.Playerbots.Economy.ReagentSellMultiple
+#        Description: The most a bot pays per unit for a reagent at the house, as a multiple of the
+#                     item's vendor sell price (1..20), plus ReagentAllowanceCopper; an item without
+#                     a vendor sell price is never bought.
+#        Type: int
+#        Default: 4
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ReagentSellMultiple = 4
 
 #
 #    World.Playerbots.Economy.VisitIntervalMinutes

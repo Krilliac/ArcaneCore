@@ -591,9 +591,11 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
 
         if (!player.IsQuestSettlementPending)
         {
-            // The house answered with an error or with silence (an unaffordable or foreign-account bid): leave the auction alone.
+            // The bid settled at once. Money gone means the buyout went through (book it as a purchase); money unchanged means the house
+            // answered with an error or with silence (an unaffordable or foreign-account bid): leave the auction alone.
             session.DrainManagedPackets(WorldOpcode.SmsgAuctionCommandResult);
-            Refuse(choice.Row.Id);
+            if (player.Money < _moneyBefore) BookBuyout(_moneyBefore - player.Money);
+            else Refuse(choice.Row.Id);
             return true;
         }
 
@@ -613,16 +615,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             if (result.Error == AuctionError.Ok)
             {
                 uint paid = _moneyBefore >= player.Money ? _moneyBefore - player.Money : 0;
-                _spent = unchecked(_spent + paid);
-                if (reagent)
-                {
-                    NoteReagentBought();
-                }
-                else
-                {
-                    _purchases++;
-                    PurchasesMade++;
-                }
+                BookBuyout(paid);
 
                 if ((player.Money > _moneyBefore || paid != _expectedCost) && !session.IsInChaosProbe)
                 {
@@ -645,20 +638,8 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             // The settlement finished without a result packet. Money gone means the buyout went through: book it as a purchase
             // (a reagent must not be bought again by the next visit); no money gone means the house did not take the bid.
             uint paid = _moneyBefore >= player.Money ? _moneyBefore - player.Money : 0;
-            _spent = unchecked(_spent + paid);
-            if (paid > 0 && reagent)
-            {
-                NoteReagentBought();
-            }
-            else if (paid > 0)
-            {
-                _purchases++;
-                PurchasesMade++;
-            }
-            else
-            {
-                NoteBidFailed();
-            }
+            if (paid > 0) BookBuyout(paid);
+            else NoteBidFailed();
 
             _phase = _bidReturn;
             return true;
@@ -673,6 +654,25 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// A buyout the bot paid for (<paramref name="paid"/> copper left its purse): count the spend, then book a reagent as bought (so a later
+    /// visit does not buy it again) or a gear upgrade as a purchase. Shared by the confirmed buyout, the settlement that ended without a result,
+    /// and the bid that settled at once without a pending settlement.
+    /// </summary>
+    private void BookBuyout(uint paid)
+    {
+        _spent = unchecked(_spent + paid);
+        if (_bidReturn == PlayerbotEconomyPhase.BuyingReagents)
+        {
+            NoteReagentBought();
+        }
+        else
+        {
+            _purchases++;
+            PurchasesMade++;
+        }
     }
 
     /// <summary>A bid the house did not take: the auction is left alone for a while, and a reagent bid counts toward the visit's two failed tries.</summary>
@@ -735,7 +735,9 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         }
 
         PlayerbotReagentChoice? choice = PlayerbotEconomyPlanner.ChooseReagent(_reagentScan.DistinctBy(row => row.Id), player.Guid.Value, _reagentMissing, limit,
-            entry => player.Inventory.Templates.Find(entry), IsRefused, VendorStockedFor(player));
+            entry => player.Inventory.Templates.Find(entry),
+            template => PlayerbotEconomyPlanner.ReagentUnitCap(template, options.Economy.ReagentSellMultiple, options.Economy.ReagentAllowanceCopper),
+            IsRefused, VendorStockedFor(player));
         if (choice is null)
         {
             _phase = AfterReagents();
@@ -757,9 +759,11 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
 
         if (!player.IsQuestSettlementPending)
         {
-            // The house answered with an error or with silence: leave the auction alone.
+            // The bid settled at once. Money gone means the buyout went through (book it, or the next visit buys the reagent again);
+            // money unchanged means the house answered with an error or with silence: leave the auction alone.
             session.DrainManagedPackets(WorldOpcode.SmsgAuctionCommandResult);
-            NoteBidFailed();
+            if (player.Money < _moneyBefore) BookBuyout(_moneyBefore - player.Money);
+            else NoteBidFailed();
             return true;
         }
 
@@ -1047,14 +1051,15 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
 
     /// <summary>
     /// The vendor-stocked predicate: the <see cref="VendorStocked"/> seam, else the world's service index (resolved once for the returned
-    /// predicate). Fail closed: without the index every entry counts as vendor stocked.
+    /// predicate). Fail closed: without the index, or with an index that lists no vendor-stocked item at all (not built or not loaded),
+    /// every entry counts as vendor stocked.
     /// </summary>
     private Func<uint, bool> VendorStockedFor(Player player)
     {
         if (VendorStocked is { } seam) return seam;
         QuestNpcServices? services = session.Services.GetService<QuestNpcFeature>()?.Services;
         PlayerbotServiceIndex? index = services is null ? null : PlayerbotServiceIndex.Get(session, services, player);
-        return index is null ? static _ => true : index.IsVendorStocked;
+        return index is null || index.VendorStockedCount == 0 ? static _ => true : index.IsVendorStocked;
     }
 
     private IEnumerable<PlayerbotBagItem> BagItems(Player player, IReadOnlyDictionary<uint, uint> wanted)

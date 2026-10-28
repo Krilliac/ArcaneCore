@@ -378,32 +378,92 @@ public sealed class PlayerbotEconomyPlannerTests
 
     // --- the reagents to buy ---------------------------------------------------------------------------------------
 
-    /// <summary>A trade good with a vendor price of 100 copper: the reference price is 100 and the reagent cap 200 copper per unit.</summary>
+    /// <summary>A trade good with a vendor price of 100 copper: the reagent cap is 100 * 4 + 10 = 410 copper per unit at the default options.</summary>
     private static ItemTemplate Reagent(uint entry, uint sell = 100) => Template(entry, ItemClass.TradeGoods, quality: 1, sell: sell);
 
     private static readonly Dictionary<uint, ItemTemplate> ReagentTemplates = Enumerable.Range(8000, 10).ToDictionary(e => (uint)e, e => Reagent((uint)e));
 
-    private const uint ReagentCap = 200;
+    private const uint ReagentCap = 410;
+
+    private static uint DefaultReagentCap(ItemTemplate template)
+    {
+        var defaults = new PlayerbotEconomyOptions();
+        return PlayerbotEconomyPlanner.ReagentUnitCap(template, defaults.ReagentSellMultiple, defaults.ReagentAllowanceCopper);
+    }
 
     private static PlayerbotReagentChoice? ChooseReagent(IEnumerable<PlayerbotAuctionRow> rows, Dictionary<uint, uint> missing, uint limit = 10_000,
-        Func<uint, bool>? refused = null, Func<uint, ItemTemplate?>? templates = null, Func<uint, bool>? vendorStocked = null)
-        => PlayerbotEconomyPlanner.ChooseReagent(rows, Self, missing, limit, templates ?? (entry => ReagentTemplates.GetValueOrDefault(entry)), refused, vendorStocked);
+        Func<uint, bool>? refused = null, Func<uint, ItemTemplate?>? templates = null, Func<uint, bool>? vendorStocked = null, Func<ItemTemplate, uint>? unitCap = null)
+        => PlayerbotEconomyPlanner.ChooseReagent(rows, Self, missing, limit, templates ?? (entry => ReagentTemplates.GetValueOrDefault(entry)),
+            unitCap ?? DefaultReagentCap, refused, vendorStocked);
 
     [Fact]
-    public void ReagentUnitCap_IsTwiceTheReference_AndZeroWithoutAVendorPrice()
+    public void ReagentUnitCap_IsTheSellPriceTimesTheMultiplePlusTheAllowance_AndZeroWithoutASellPrice()
     {
+        Assert.Equal(4, new PlayerbotEconomyOptions().ReagentSellMultiple);
+        Assert.Equal(10, new PlayerbotEconomyOptions().ReagentAllowanceCopper);
+
         ItemTemplate plain = Reagent(8000);
-        Assert.Equal(PlayerbotAuctionPricing.CapMultiple * PlayerbotAuctionPricing.ReferencePerUnit(plain), PlayerbotEconomyPlanner.ReagentUnitCap(plain));
-        Assert.Equal(ReagentCap, PlayerbotEconomyPlanner.ReagentUnitCap(plain));
+        Assert.Equal(ReagentCap, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 4, 10));
+        Assert.Equal(ReagentCap, DefaultReagentCap(plain));
+        Assert.Equal(38u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8001, sell: 7), 4, 10));
+        Assert.Equal(20_010u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8002, sell: 5000), 4, 10));
+        // Only the vendor sell price counts: neither the quality nor the buy price moves the cap.
+        Assert.Equal(4_010u, PlayerbotEconomyPlanner.ReagentUnitCap(Template(8003, ItemClass.TradeGoods, quality: 3, sell: 1000, buy: 9000), 4, 10));
 
-        foreach (ItemTemplate template in new[] { Reagent(8001, sell: 7), Reagent(8002, sell: 5000), Template(8003, ItemClass.TradeGoods, quality: 3, sell: 1000, buy: 9000) })
-        {
-            uint reference = PlayerbotAuctionPricing.ReferencePerUnit(template);
-            Assert.True(reference > 0);
-            Assert.Equal(2 * reference, PlayerbotEconomyPlanner.ReagentUnitCap(template));
-        }
+        // Option extremes.
+        Assert.Equal(100u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 1, 0));
+        Assert.Equal(12_000u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 20, 10_000));
+        Assert.Equal(10u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 0, 10));
 
-        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8004, sell: 0)));
+        // A negative multiple or allowance counts as 0.
+        Assert.Equal(10u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, -3, 10));
+        Assert.Equal(400u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 4, -5));
+        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, -1, -1));
+        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, int.MinValue, int.MinValue));
+
+        // No vendor sell price: never bought, whatever the options.
+        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8004, sell: 0), 4, 10));
+        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8004, sell: 0), 20, 10_000));
+        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(Template(8005, ItemClass.TradeGoods, quality: 1, sell: 0, buy: 4_000), 4, 10));
+
+        // Saturation at uint.MaxValue, exactly at the boundary and one past it.
+        uint half = uint.MaxValue / 2;   // 2147483647
+        Assert.Equal(uint.MaxValue - 1, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8006, sell: half), 2, 0));
+        Assert.Equal(uint.MaxValue, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8006, sell: half), 2, 1));
+        Assert.Equal(uint.MaxValue, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8006, sell: half), 2, 2));
+        Assert.Equal(uint.MaxValue, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8007, sell: uint.MaxValue), 20, 10_000));
+        Assert.Equal(uint.MaxValue, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8007, sell: uint.MaxValue), 1, 0));
+
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ReagentUnitCap(null!, 4, 10));
+    }
+
+    /// <summary>
+    /// White trade goods at item levels 25 and 50 (sell 100 and 400, buy four times the sell price). The listing reference floors at
+    /// 20 * level^2 / 10 (1250 and 5000 copper), so the old cap of twice that (2500 and 10000) was far above the market value of a gathered material.
+    /// </summary>
+    [Theory]
+    [InlineData(25u, 100u, 2_500u, 410u)]
+    [InlineData(50u, 400u, 10_000u, 1_610u)]
+    public void ChooseReagent_RefusesARowAtTheOldReferenceCap_AndChoosesOneAtTheSellPriceCap(uint itemLevel, uint sell, uint expectedOldCap, uint expectedNewCap)
+    {
+        ItemTemplate template = Template(8000, ItemClass.TradeGoods, quality: 1, sell: sell, buy: sell * 4) with { ItemLevel = itemLevel };
+        uint oldCap = PlayerbotAuctionPricing.CapMultiple * PlayerbotAuctionPricing.ReferencePerUnit(template);
+        uint newCap = DefaultReagentCap(template);
+        Assert.Equal(expectedOldCap, oldCap);
+        Assert.Equal(expectedNewCap, newCap);
+        Assert.True(oldCap > 5 * newCap, "the old cap must be much higher than the new one for the test to mean something");
+
+        Func<uint, ItemTemplate?> templates = entry => entry == 8000 ? template : null;
+        var one = new Dictionary<uint, uint> { [8000] = 1 };
+        var two = new Dictionary<uint, uint> { [8000] = 2 };
+
+        Assert.Null(ChooseReagent([Row(1, 8000, oldCap)], one, templates: templates));
+        Assert.Null(ChooseReagent([Row(1, 8000, 2 * oldCap, count: 2)], two, templates: templates));
+        Assert.Null(ChooseReagent([Row(1, 8000, newCap + 1)], one, templates: templates));
+
+        PlayerbotReagentChoice atCap = Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([Row(1, 8000, oldCap), Row(2, 8000, newCap)], one, templates: templates));
+        Assert.Equal(2u, atCap.Row.Id);
+        Assert.Equal(3u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([Row(1, 8000, 2 * oldCap, count: 2), Row(3, 8000, 2 * newCap, count: 2)], two, templates: templates)).Row.Id);
     }
 
     [Fact]
@@ -432,7 +492,6 @@ public sealed class PlayerbotEconomyPlannerTests
 
         PlayerbotReagentChoice choice = Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([cheapShort, dearerCovering, covering, single], missing));
         Assert.Equal(2u, choice.Row.Id);
-        Assert.Equal(3u, choice.Missing);
         Assert.Equal(2u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([single, covering, dearerCovering, cheapShort], missing)).Row.Id);
 
         // Without the cheapest covering row the other covering row still beats every row that falls short.
@@ -447,10 +506,10 @@ public sealed class PlayerbotEconomyPlannerTests
         PlayerbotAuctionRow twoFor67 = Row(6, 8000, 67, count: 2);
         Assert.Equal(5u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([twoFor67, threeFor100], five)).Row.Id);
 
-        // The missing count reported is the one of the chosen row's entry.
+        // With two entries missing, the row that covers its own entry's shortfall wins.
         var both = new Dictionary<uint, uint> { [8000] = 3, [8001] = 1 };
         PlayerbotReagentChoice other = Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([Row(7, 8000, 450, count: 3), Row(8, 8001, 90)], both));
-        Assert.Equal((8u, 1u), (other.Row.Id, other.Missing));
+        Assert.Equal(8u, other.Row.Id);
     }
 
     [Fact]
@@ -495,19 +554,30 @@ public sealed class PlayerbotEconomyPlannerTests
     }
 
     [Fact]
-    public void ChooseReagent_NeverPaysMoreThanTwiceTheReferencePerUnit()
+    public void ChooseReagent_NeverPaysMoreThanTheSellPriceCapPerUnit()
     {
         var missing = new Dictionary<uint, uint> { [8000] = 1 };
-        // The cap is 200 per unit: exactly at the cap is allowed, one copper per unit over it is not (ceil(buyout / count)).
+        // The cap is 410 per unit (sell 100 * 4 + 10): exactly at the cap is allowed, one copper per unit over it is not (ceil(buyout / count)).
         Assert.NotNull(ChooseReagent([Row(1, 8000, ReagentCap)], missing));
         Assert.Null(ChooseReagent([Row(1, 8000, ReagentCap + 1)], missing));
         Assert.NotNull(ChooseReagent([Row(1, 8000, 2 * ReagentCap, count: 2)], missing));
-        Assert.Null(ChooseReagent([Row(1, 8000, (2 * ReagentCap) + 1, count: 2)], missing));
+        Assert.Null(ChooseReagent([Row(1, 8000, (2 * ReagentCap) + 1, count: 2)], missing));   // 410.5 per unit rounds up to 411
         var three = new Dictionary<uint, uint> { [8000] = 3 };   // a stack of three is within the overbuy bound only for a shortfall of two or more
         Assert.NotNull(ChooseReagent([Row(1, 8000, 3 * ReagentCap, count: 3)], three));
-        Assert.Null(ChooseReagent([Row(1, 8000, (3 * ReagentCap) + 1, count: 3)], three));   // 200.33 per unit rounds up to 201
+        Assert.Null(ChooseReagent([Row(1, 8000, (3 * ReagentCap) + 1, count: 3)], three));   // 410.33 per unit rounds up to 411
         // An over-cap row is passed over for a dearer-in-total but in-cap row.
-        Assert.Equal(2u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([Row(1, 8000, 401, count: 2), Row(2, 8000, 400, count: 2)], missing)).Row.Id);
+        Assert.Equal(2u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([Row(1, 8000, 2 * ReagentCap + 2, count: 2), Row(2, 8000, 2 * ReagentCap, count: 2)], missing)).Row.Id);
+
+        // The cap comes from the supplied rule, read per template: a different rule moves the boundary.
+        Assert.NotNull(ChooseReagent([Row(1, 8000, 100)], missing, unitCap: _ => 100));
+        Assert.Null(ChooseReagent([Row(1, 8000, 101)], missing, unitCap: _ => 100));
+        Assert.Null(ChooseReagent([Row(1, 8000, 1)], missing, unitCap: _ => 0));   // a cap of 0 is never eligible
+        Assert.Null(ChooseReagent([Row(1, 8000, 100)], missing, unitCap: _ => 99));
+        Assert.NotNull(ChooseReagent([Row(1, 8000, 100)], missing, unitCap: t => PlayerbotEconomyPlanner.ReagentUnitCap(t, 1, 0)));   // multiple 1, no allowance: the sell price itself
+
+        // An item without a vendor sell price has cap 0 under the real rule: never bought, even for one copper.
+        Dictionary<uint, ItemTemplate> noPrice = new() { [8000] = Reagent(8000, sell: 0) };
+        Assert.Null(ChooseReagent([Row(1, 8000, 1)], missing, templates: entry => noPrice.GetValueOrDefault(entry)));
     }
 
     [Fact]
@@ -588,9 +658,10 @@ public sealed class PlayerbotEconomyPlannerTests
     {
         var missing = new Dictionary<uint, uint> { [8000] = 1 };
         Func<uint, ItemTemplate?> templates = _ => null;
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseReagent(null!, Self, missing, 100, templates));
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseReagent([], Self, null!, 100, templates));
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseReagent([], Self, missing, 100, null!));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseReagent(null!, Self, missing, 100, templates, DefaultReagentCap));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseReagent([], Self, null!, 100, templates, DefaultReagentCap));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseReagent([], Self, missing, 100, null!, DefaultReagentCap));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseReagent([], Self, missing, 100, templates, null!));
     }
 
     // --- the bought memory -----------------------------------------------------------------------------------------
@@ -816,6 +887,24 @@ public sealed class PlayerbotEconomyPlannerTests
         Assert.True(new PlayerbotEconomyOptions().BuyReagents);
         new PlayerbotEconomyOptions { BuyReagents = false }.Validate();
         new PlayerbotEconomyOptions { BuyReagents = true }.Validate();
+    }
+
+    [Fact]
+    public void Options_ReagentCapDefaultsAndBounds()
+    {
+        var defaults = new PlayerbotEconomyOptions();
+        Assert.Equal((4, 10), (defaults.ReagentSellMultiple, defaults.ReagentAllowanceCopper));
+        defaults.Validate();
+
+        new PlayerbotEconomyOptions { ReagentSellMultiple = 1 }.Validate();
+        new PlayerbotEconomyOptions { ReagentSellMultiple = 20 }.Validate();
+        new PlayerbotEconomyOptions { ReagentAllowanceCopper = 0 }.Validate();
+        new PlayerbotEconomyOptions { ReagentAllowanceCopper = 10_000 }.Validate();
+
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ReagentSellMultiple = 0 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ReagentSellMultiple = 21 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ReagentAllowanceCopper = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ReagentAllowanceCopper = 10_001 }.Validate());
     }
 
     [Fact]

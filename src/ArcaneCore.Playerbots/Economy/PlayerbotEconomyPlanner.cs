@@ -18,8 +18,8 @@ internal sealed record PlayerbotListingPlan(uint Buyout, uint StartBid, uint Dep
 /// <summary>The auction the bot buys out and the gain its slot sees.</summary>
 internal sealed record PlayerbotUpgradeChoice(PlayerbotAuctionRow Row, float Gain);
 
-/// <summary>The reagent auction the bot buys out and how many of the item it still lacks.</summary>
-internal sealed record PlayerbotReagentChoice(PlayerbotAuctionRow Row, uint Missing);
+/// <summary>The reagent auction the bot buys out.</summary>
+internal sealed record PlayerbotReagentChoice(PlayerbotAuctionRow Row);
 
 /// <summary>
 /// Entries the bot bought at the auction house lately, which it does not list again for <see cref="HoldMs"/> (no buy-then-relist loop).
@@ -78,11 +78,17 @@ internal static class PlayerbotEconomyPlanner
     /// <summary>The smallest budget (copper) worth a trip for an upgrade alone.</summary>
     internal const uint MinimumUpgradeBudget = 100;
 
-    /// <summary>The most a reagent auction may ask per unit: twice the item's reference price; 0 (never bought) when the reference is 0.</summary>
-    internal static uint ReagentUnitCap(ItemTemplate template)
+    /// <summary>
+    /// The most a reagent auction may ask per unit: the item's vendor sell price times <paramref name="sellMultiple"/> plus
+    /// <paramref name="allowanceCopper"/>, saturated at <see cref="uint.MaxValue"/>; 0 (never bought) when the item has no vendor sell price.
+    /// Negative option values count as 0.
+    /// </summary>
+    internal static uint ReagentUnitCap(ItemTemplate template, int sellMultiple, int allowanceCopper)
     {
         ArgumentNullException.ThrowIfNull(template);
-        return (uint)Math.Min((ulong)PlayerbotAuctionPricing.ReferencePerUnit(template) * PlayerbotAuctionPricing.CapMultiple, uint.MaxValue);
+        if (template.SellPrice == 0) return 0;
+        ulong cap = (ulong)template.SellPrice * (ulong)Math.Max(sellMultiple, 0) + (ulong)Math.Max(allowanceCopper, 0);
+        return (uint)Math.Min(cap, uint.MaxValue);
     }
 
     /// <summary>Entry to missing count (per craft minus carried) for every entry whose carried count is below its per-craft count; zero counts skipped.</summary>
@@ -110,21 +116,23 @@ internal static class PlayerbotEconomyPlanner
     /// <summary>
     /// The reagent auction to buy out, or null: of the rows for a missing entry the bot can pay (a buyout, not its own, within
     /// <paramref name="limit"/>, not refused, not a vendor-stocked item, a count of at most <see cref="ReagentOverbuyFactor"/> times the
-    /// shortfall, at most <see cref="ReagentUnitCap"/> per unit rounded up) the best. A row that covers the shortfall beats one that does
+    /// shortfall, at most <paramref name="unitCap"/> per unit rounded up; a cap of 0 is never eligible) the best. A row that covers the shortfall beats one that does
     /// not; among covering rows the lower total buyout wins, then the lower price per unit (compared exactly), then the lower auction id;
     /// among non-covering rows the lower price per unit, then the lower buyout, then the lower auction id.
     /// </summary>
+    /// <param name="unitCap">The most per unit the bot pays for an item (see <see cref="ReagentUnitCap"/>); 0 means never bought.</param>
     /// <param name="isRefused">Auctions the house refused to sell to the bot lately.</param>
-    /// <param name="isVendorStocked">Item entries a vendor sells: never bought at the house (the vendor price is the market, and a player could otherwise sell vendor goods to bots at twice the reference).</param>
+    /// <param name="isVendorStocked">Item entries a vendor sells: never bought at the house (the vendor price is the market, and a player could otherwise sell vendor goods to bots above it).</param>
     internal static PlayerbotReagentChoice? ChooseReagent(IEnumerable<PlayerbotAuctionRow> rows, ulong self,
-        IReadOnlyDictionary<uint, uint> missing, uint limit, Func<uint, ItemTemplate?> templates, Func<uint, bool>? isRefused = null,
+        IReadOnlyDictionary<uint, uint> missing, uint limit, Func<uint, ItemTemplate?> templates, Func<ItemTemplate, uint> unitCap,
+        Func<uint, bool>? isRefused = null,
         Func<uint, bool>? isVendorStocked = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
         ArgumentNullException.ThrowIfNull(missing);
         ArgumentNullException.ThrowIfNull(templates);
+        ArgumentNullException.ThrowIfNull(unitCap);
         PlayerbotAuctionRow? best = null;
-        uint bestMissing = 0;
         bool bestCovers = false;
         foreach (PlayerbotAuctionRow row in rows)
         {
@@ -132,16 +140,15 @@ internal static class PlayerbotEconomyPlanner
             if (!missing.TryGetValue(row.Entry, out uint lacking) || lacking == 0 || isRefused?.Invoke(row.Id) == true) continue;
             if (isVendorStocked?.Invoke(row.Entry) == true || (ulong)row.Count > (ulong)lacking * ReagentOverbuyFactor) continue;
             if (templates(row.Entry) is not { } template) continue;
-            uint cap = ReagentUnitCap(template);
+            uint cap = unitCap(template);
             if (cap == 0 || (((ulong)row.Buyout + row.Count - 1) / row.Count) > cap) continue;
             bool covers = row.Count >= lacking;
             if (best is { } current && !IsBetterReagent(row, covers, current, bestCovers)) continue;
             best = row;
-            bestMissing = lacking;
             bestCovers = covers;
         }
 
-        return best is { } chosen ? new PlayerbotReagentChoice(chosen, bestMissing) : null;
+        return best is { } chosen ? new PlayerbotReagentChoice(chosen) : null;
     }
 
     private static bool IsBetterReagent(PlayerbotAuctionRow row, bool covers, PlayerbotAuctionRow current, bool currentCovers)

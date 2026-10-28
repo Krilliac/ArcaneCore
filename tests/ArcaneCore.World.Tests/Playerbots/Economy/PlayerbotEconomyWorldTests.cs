@@ -39,6 +39,7 @@ public sealed class PlayerbotEconomyWorldTests
     private const uint SmallRing = 990310;
     private const uint BigRing = 990311;
     private const uint Filler = 990320;
+    private const uint LevelFiftyCloth = 990350;
 
     private static ObjectGuid Auctioneer => ObjectGuid.WithEntry(HighGuid.Unit, AuctioneerEntry, AuctioneerSpawn);
 
@@ -334,6 +335,56 @@ public sealed class PlayerbotEconomyWorldTests
     }
 
     [Fact]
+    public async Task Visit_BuysNoReagentPricedAtTheOldReferenceCap_ButBuysOneAtTheSellPriceCap()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-sell-price-cap", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ScenarioBot seller = await c.LoginAsync("Econseller");
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            // The item templates load with the first login.
+            ItemTemplate silk = Template(economy, LevelFiftyCloth);
+            var defaults = new PlayerbotEconomyOptions();
+            uint oldCap = PlayerbotAuctionPricing.CapMultiple * PlayerbotAuctionPricing.ReferencePerUnit(silk);
+            uint cap = PlayerbotEconomyPlanner.ReagentUnitCap(silk, defaults.ReagentSellMultiple, defaults.ReagentAllowanceCopper);
+            ScenarioContext.ExpectEqual((10_000u, 1_610u), (oldCap, cap), "the old and the new reagent cap per unit of the level 50 cloth");
+
+            await c.GiveMoneyAsync(seller, 5000);
+            await c.GiveMoneyAsync(buyer, 100_000);
+            uint moneyBefore = await buyer.ReadAsync(p => p.Money);
+
+            // A pair at the old cap per unit: 20000 copper in total, inside the visit budget (a quarter of 100000) and the purse, so only the cap refuses it.
+            uint dear = 2 * oldCap;
+            uint dearId = await ListAsync(seller, await c.GiveItemAsync(seller, LevelFiftyCloth, 2), dear / 2, dear, 480);
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            ScenarioContext.Expect(dear < moneyBefore / 4, "the old-cap pair must fit the visit budget");
+            await SetReagentNeedsAsync(c, driver, entry: LevelFiftyCloth);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases of a pair at the old cap");
+            ScenarioContext.ExpectEqual(moneyBefore, await buyer.ReadAsync(p => p.Money), "money after the first visit");
+            await c.ExpectItemCountAsync(buyer, LevelFiftyCloth, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(dearId) is { BidderId: 0 }), "the old-cap pair is still in the house");
+
+            // A pair at the new cap per unit joins it: the next visit buys that one and still leaves the old-cap pair alone.
+            uint fair = 2 * cap;
+            uint fairId = await ListAsync(seller, await c.GiveItemAsync(seller, LevelFiftyCloth, 2), fair / 2, fair, 480);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 2);
+
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases after the second visit");
+            ScenarioContext.ExpectEqual(fair, await c.ReadAsync(() => driver.Economy.Spent), "spent");
+            ScenarioContext.ExpectEqual(moneyBefore - fair, await buyer.ReadAsync(p => p.Money), "money after the second visit");
+            await c.ExpectItemCountAsync(buyer, LevelFiftyCloth, 2);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(fairId) is null), "the new-cap pair left the house");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(dearId) is { BidderId: 0 }), "the old-cap pair is still in the house");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
     public async Task Visit_BuysNoReagent_WhenBuyReagentsIsTurnedOffAfterTheVisitStarted()
     {
         await using ScenarioTestWorld world = await StartAsync();
@@ -512,9 +563,9 @@ public sealed class PlayerbotEconomyWorldTests
     /// Per craft the bot wants two linen cloth (set on the world thread, the seam the economy reads instead of the spellbook). The vendor-stocked
     /// seam is pinned too, so no scenario depends on whether the scenario world has a service index: by default no entry is vendor stocked.
     /// </summary>
-    private static Task SetReagentNeedsAsync(ScenarioContext c, Driver driver, Func<uint, bool>? vendorStocked = null) => c.ReadAsync(() =>
+    private static Task SetReagentNeedsAsync(ScenarioContext c, Driver driver, Func<uint, bool>? vendorStocked = null, uint entry = LinenCloth) => c.ReadAsync(() =>
     {
-        driver.Economy.ReagentNeeds = _ => new Dictionary<uint, uint> { [LinenCloth] = 2 };
+        driver.Economy.ReagentNeeds = _ => new Dictionary<uint, uint> { [entry] = 2 };
         driver.Economy.VendorStocked = vendorStocked ?? (_ => false);
         return true;
     });
@@ -527,7 +578,8 @@ public sealed class PlayerbotEconomyWorldTests
     {
         ScenarioBot seller = await c.LoginAsync("Econseller");
         await c.GiveMoneyAsync(seller, 3000);
-        uint cap = PlayerbotEconomyPlanner.ReagentUnitCap(Template(economy, LinenCloth));
+        var defaults = new PlayerbotEconomyOptions();
+        uint cap = PlayerbotEconomyPlanner.ReagentUnitCap(Template(economy, LinenCloth), defaults.ReagentSellMultiple, defaults.ReagentAllowanceCopper);
         uint within = 2 * cap;
         uint over = (2 * cap) + 2;
         ScenarioContext.Expect(cap > 0 && over < 1000, $"the linen cap {cap} must leave the over-priced pair inside the 1000 copper visit budget");
@@ -1001,6 +1053,7 @@ public sealed class PlayerbotEconomyWorldTests
             PlayerbotEquipmentTests.Ring(SmallRing, 5) with { Name = "Scenario Ring", Quality = 2, SellPrice = 40, BuyPrice = 200 },
             PlayerbotEquipmentTests.Ring(BigRing, 20) with { Name = "Scenario Great Ring", Quality = 2, SellPrice = 40, BuyPrice = 200 },
             new ItemTemplate { Entry = Filler, Name = "Scenario Pebble", Class = 15, Quality = 0, Stackable = 1, SellPrice = 1 },
+            new ItemTemplate { Entry = LevelFiftyCloth, Name = "Scenario Level 50 Cloth", Class = (uint)ItemClass.TradeGoods, Quality = 1, ItemLevel = 50, SellPrice = 400, BuyPrice = 1600, Stackable = 20 },
         ]);
         UseAuctioneer(services);
         more?.Invoke(services);
