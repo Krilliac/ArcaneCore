@@ -64,14 +64,25 @@ every dungeon that holds it a candidate, and the bot takes the best one, not the
 union of its run-catalogue bands (`DungeonRuns`), else the 1.12 recommended levels widened by two levels each side, else the entrance
 level upward (`PlayerbotDungeonFit`). A bot inside a band needs no reason and the highest band wins; a bot outside every band goes only with
 a reason, and then the nearest band wins. The reasons: the quest is not grey for the bot (its level is above the gray level of the bot's
-level), the quest is a key or attunement step of an instance entrance, a creature of the dungeon drops an item of uncommon quality or better
-that the gear scorer rates as an upgrade for the bot, a guildmate or a friend on the bot's own list of the same team already waits for or
-runs the dungeon, or a bot of the same team within `LevelRange` already waits for it. The cheap reasons are looked at first and end the
-search. Farming is a reason in the rule but no bot has a farming or reputation goal yet, so none is produced. A dungeon chosen outside its band
+level), the quest is a key or attunement step of that dungeon's own entrance (the required quest or item of a teleport into that instance map), a creature of the dungeon drops an item of uncommon quality or better
+that the gear scorer rates as an upgrade for the bot (only an item that replaces something worn, needing at most five levels below the
+bot's own), a guildmate or a friend on the bot's own list of the same team already waits for the dungeon, or a bot of the same
+team already waits for it. The gear reason reads the boss's and creatures' own loot rows only, not the shared reference tables, which on
+the classic data often makes it rare and errs on the safe side. A companion or forming-group seed must itself be in the dungeon's band
+(its own goal has no out-of-band reason) and within `LevelRange` of the bot, so the two can really be matched together. The cheap reasons are
+looked at first and end the search, and none is looked for once any candidate dungeon is in band.
+
+**Derived reasons never anchor.** A bot whose only reasons are a companion or a forming group (the derived ones) waits but never anchors a
+group: a plan for an instance goal must hold at least one waiting bot that is in the band or has a direct reason (quest, attunement,
+gear upgrade). This holds for every path that forms an instance group (matching, volunteers, recruits, answers to an LFG line, invited players): the
+matcher skips a window without a qualifying member, the recruiting anchor is the longest-waiting qualifying waiter, and a recruit or a player
+qualifies only when their level is in the dungeon's band. A formed group whose last qualifying member leaves ends as `fit-lost` before it enters. A derived-only waiter is dropped when no qualifying seed remains (checked
+every few seconds). Without this, out-of-band bots would seed one another and form the dungeon among themselves. Farming is a reason in the rule but no bot has a farming or reputation goal yet, so none is produced. A dungeon chosen outside its band
 carries the verdict in the goal's text (`fit=out-of-band 60 vs 15-26: quest`). When every candidate is refused the bot waits for no group and
 the coordinator notes `passes over <dungeon> for quest <id>: 60 is outside 15-26 and has no reason`, once per bot, quest and dungeon every
 ten minutes. `World:Playerbots:Groups:DungeonOutOfBandNeedsReason` (default on) off restores the old reach: every candidate is allowed, still
-ranked band first.
+ranked band first, and the goal carries no fit, so every waiter anchors and seeds as an in-band one does. A mentor group (a stronger friend
+helping a struggling bot) is never made for an instance goal held only by derived reasons.
 
 ## Formation
 

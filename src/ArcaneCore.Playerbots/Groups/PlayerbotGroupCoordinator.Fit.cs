@@ -46,8 +46,9 @@ public sealed partial class PlayerbotGroupCoordinator
 
     // Attunement: the quests and items that gate an instance entrance (areatrigger_teleport required_quest_done, required_item, required_item2).
     private IReadOnlyCollection<AreaTriggerTemplate>? _attuneTriggers;
-    private readonly HashSet<uint> _attuneQuests = [];
-    private readonly HashSet<uint> _attuneItems = [];
+    // Keyed by the teleport's target map, so a key to one instance is no reason for another.
+    private readonly HashSet<(uint Map, uint Quest)> _attuneQuests = [];
+    private readonly HashSet<(uint Map, uint Item)> _attuneItems = [];
 
     // Gear upgrade: the items the creatures of a dungeon map drop (per loot and creature content), and each bot's answer per map.
     private LootContent? _gearLoot;
@@ -120,6 +121,7 @@ public sealed partial class PlayerbotGroupCoordinator
         int level = player.Level;
         bool reasonRequired = _options.Groups.DungeonOutOfBandNeedsReason;
         var options = new (PlayerbotDungeonBand Band, PlayerbotDungeonReasons Reasons)[found.Count];
+        bool anyInBand = false;
         for (int i = 0; i < found.Count; i++)
         {
             DungeonCandidate candidate = found[i];
@@ -133,9 +135,14 @@ public sealed partial class PlayerbotGroupCoordinator
 
             PlayerbotDungeonBand band = PlayerbotDungeonFit.BandOf(candidate.MapId, candidate.Teleport.RequiredLevel, _bandsScratch);
             found[i] = candidate with { Band = band };
-            // The reasons cost scans over the waiting bots and the loot: only a bot outside the band needs them.
-            options[i] = (band, band.Holds(level) || !reasonRequired ? PlayerbotDungeonReasons.None : ReasonsFor(botId, player, quest, found[i], maps, creatures));
+            options[i] = (band, PlayerbotDungeonReasons.None);
+            anyInBand |= band.Holds(level);
         }
+
+        // The reasons cost scans over the waiting bots and the loot: only a bot outside every band needs them (an in-band candidate wins anyway).
+        if (reasonRequired && !anyInBand)
+            for (int i = 0; i < found.Count; i++)
+                options[i].Reasons = ReasonsFor(botId, player, quest, found[i], maps, creatures);
 
         int? pick = PlayerbotDungeonFit.Choose(level, options, reasonRequired);
         if (pick is null)
@@ -157,10 +164,13 @@ public sealed partial class PlayerbotGroupCoordinator
         MapTemplate chosenInstance = chosen.Instance;
         int size = chosenInstance.IsRaid ? Math.Max(PlayerbotGroupContent.InstanceGroupSize(chosenInstance), flagged)
             : Math.Max(flagged >= 2 ? Math.Min(flagged, PlayerbotGroupContent.PartySize) : PlayerbotGroupContent.InstanceGroupSize(chosenInstance), 2);
+        // With the key off nothing is out of band: the goal carries no fit, so it anchors and seeds like an in-band one (the pre-fit goal).
+        bool carriesFit = reasonRequired && !verdict.InBand;
         return new PlayerbotGroupGoal(chosenInstance.IsRaid ? PlayerbotGroupGoalKind.Raid : PlayerbotGroupGoalKind.Dungeon, quest.Id, chosen.Entry,
             chosen.MapId, player.MapId, new Vector3(chosen.Entrance.X, chosen.Entrance.Y, chosen.Entrance.Z), chosen.Entrance.Id,
             new Vector3(chosen.Spawn.X, chosen.Spawn.Y, chosen.Spawn.Z), size, Math.Max(chosen.Teleport.RequiredLevel, quest.MinLevel), "instance",
-            Fit: verdict.InBand ? null : verdict.Trace);
+            Fit: carriesFit ? verdict.Trace : null, Reasons: carriesFit ? verdict.Reasons : PlayerbotDungeonReasons.None,
+            FitBand: reasonRequired ? chosen.Band : default);
     }
 
     /// <summary>
@@ -173,7 +183,7 @@ public sealed partial class PlayerbotGroupCoordinator
     {
         var reasons = PlayerbotDungeonReasons.None;
         if (PlayerbotDungeonFit.QuestQualifies(player.Level, quest.QuestLevel)) reasons |= PlayerbotDungeonReasons.Quest;
-        if (IsAttunementQuest(quest, maps)) reasons |= PlayerbotDungeonReasons.Attunement;
+        if (IsAttunementQuest(quest, candidate.MapId, maps)) reasons |= PlayerbotDungeonReasons.Attunement;
         if (reasons != PlayerbotDungeonReasons.None) return reasons;
 
         (PlayerbotGroupGoalKind, uint) key = (candidate.Instance.IsRaid ? PlayerbotGroupGoalKind.Raid : PlayerbotGroupGoalKind.Dungeon, candidate.MapId);
@@ -184,11 +194,11 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>
-    /// Whether <paramref name="quest"/> is a key or attunement step: its id is the <c>required_quest_done</c> of an area trigger teleport, or
-    /// an item it asks for or rewards is such a teleport's <c>required_item</c> or <c>required_item2</c>. The sets are built from the teleports
-    /// once per trigger table (rebuilt on a reload).
+    /// Whether <paramref name="quest"/> is a key or attunement step for the instance map <paramref name="instanceMapId"/>: its id is the
+    /// <c>required_quest_done</c> of an area trigger teleport into that map, or an item it asks for or rewards is such a teleport's
+    /// <c>required_item</c> or <c>required_item2</c>. The sets are built from the teleports once per trigger table (rebuilt on a reload).
     /// </summary>
-    private bool IsAttunementQuest(Quest quest, WorldMaps maps)
+    private bool IsAttunementQuest(Quest quest, uint instanceMapId, WorldMaps maps)
     {
         IReadOnlyCollection<AreaTriggerTemplate> triggers = maps.AreaTriggers;
         if (!ReferenceEquals(_attuneTriggers, triggers))
@@ -198,20 +208,20 @@ public sealed partial class PlayerbotGroupCoordinator
             foreach (AreaTriggerTemplate trigger in triggers)
             {
                 if (maps.FindAreaTriggerTeleport(trigger.Id) is not { } teleport) continue;
-                if (teleport.RequiredQuestDone != 0) _attuneQuests.Add(teleport.RequiredQuestDone);
-                if (teleport.RequiredItem != 0) _attuneItems.Add(teleport.RequiredItem);
-                if (teleport.RequiredItem2 != 0) _attuneItems.Add(teleport.RequiredItem2);
+                if (teleport.RequiredQuestDone != 0) _attuneQuests.Add((teleport.TargetMap, teleport.RequiredQuestDone));
+                if (teleport.RequiredItem != 0) _attuneItems.Add((teleport.TargetMap, teleport.RequiredItem));
+                if (teleport.RequiredItem2 != 0) _attuneItems.Add((teleport.TargetMap, teleport.RequiredItem2));
             }
 
             _attuneTriggers = triggers;
         }
 
-        if (_attuneQuests.Contains(quest.Id)) return true;
+        if (_attuneQuests.Contains((instanceMapId, quest.Id))) return true;
         if (_attuneItems.Count == 0) return false;
         for (int i = 0; i < quest.ReqItemId.Count; i++)
-            if (quest.ReqItemId[i] != 0 && _attuneItems.Contains(quest.ReqItemId[i])) return true;
+            if (quest.ReqItemId[i] != 0 && _attuneItems.Contains((instanceMapId, quest.ReqItemId[i]))) return true;
         for (int i = 0; i < quest.RewItemId.Count; i++)
-            if (quest.RewItemId[i] != 0 && _attuneItems.Contains(quest.RewItemId[i])) return true;
+            if (quest.RewItemId[i] != 0 && _attuneItems.Contains((instanceMapId, quest.RewItemId[i]))) return true;
         return false;
     }
 
@@ -233,27 +243,19 @@ public sealed partial class PlayerbotGroupCoordinator
         => PlayerbotGroupInvites.SameGuild(social, player, other) || PlayerbotGroupInvites.OnBotsFriendList(social, player, other);
 
     /// <summary>
-    /// A guildmate or friend of the same team already waits for the goal <paramref name="key"/>, or is a member of a bot group whose goal is
-    /// that dungeon.
+    /// A guildmate or friend of the same team, in the dungeon's band and within <see cref="PlayerbotGroupOptions.LevelRange"/>, already waits for
+    /// the goal <paramref name="key"/> (its own goal in band, so an out-of-band waiter seeds no reasons for others). A member of a formed group
+    /// never seeds: it can no longer be joined.
     /// </summary>
     private bool HasCompanion(Guid botId, Player player, (PlayerbotGroupGoalKind, uint) key, PlayerbotDungeonBand band)
     {
-        if (_waiting.Count == 0 && _groups.Count == 0) return false;
+        if (_waiting.Count == 0) return false;
         if (SocialOrNull() is not { } social) return false;
         foreach ((Guid otherId, Waiting waiting) in _waiting)
         {
             if (otherId == botId || waiting.Team != player.Team || waiting.Goal.Key != key || waiting.Goal.Fit is not null) continue;
-            if (TryPlayer(otherId, out Player? other) && band.Holds(other.Level) && IsCompanion(social, player, other)) return true;
-        }
-
-        if (_world is not { } world) return false;
-        foreach (BotGroup group in _groups)
-        {
-            if (group.Goal.MapId != key.Item2 || group.Goal.Kind != key.Item1 || group.Goal.Fit is not null) continue;
-            foreach (Member member in group.Members)
-                if (world.FindOnlinePlayer(member.Guid) is { } other && other.Team == player.Team && !ReferenceEquals(other, player) && band.Holds(other.Level)
-                    && IsCompanion(social, player, other))
-                    return true;
+            if (TryPlayer(otherId, out Player? other) && band.Holds(other.Level) && Math.Abs(other.Level - player.Level) <= _options.Groups.LevelRange
+                && IsCompanion(social, player, other)) return true;
         }
 
         return false;
@@ -268,6 +270,33 @@ public sealed partial class PlayerbotGroupCoordinator
             if (TryPlayer(otherId, out Player? other) && band.Holds(other.Level) && Math.Abs(other.Level - player.Level) <= _options.Groups.LevelRange) return true;
         }
 
+        return false;
+    }
+
+    /// <summary>How often a waiter with only derived reasons is checked for a remaining seed.</summary>
+    internal const uint SeedRecheckMs = 6_000;
+
+    /// <summary>
+    /// Whether a waiting bot keeps waiting: always when it anchors (<see cref="PlayerbotGroupGoal.Anchors"/>); a bot with only derived reasons
+    /// (Companion, FormingGroup) keeps waiting only while a qualifying seed remains, an in-band waiter (of the same goal, not a
+    /// formed group's member) within <see cref="PlayerbotGroupOptions.LevelRange"/>. Checked every <see cref="SeedRecheckMs"/>, not every scan.
+    /// With <see cref="PlayerbotGroupOptions.DungeonOutOfBandNeedsReason"/> off no goal is derived-only, so every wait is kept.
+    /// </summary>
+    private bool KeepsDerivedWait(Guid botId, Player player, Waiting waiting, uint now)
+    {
+        PlayerbotGroupGoal goal = waiting.Goal;
+        if (!_options.Groups.DungeonOutOfBandNeedsReason || goal.Anchors ||unchecked((int)(now - waiting.NextSeedCheckMs)) < 0) return true;
+        waiting.NextSeedCheckMs = unchecked(now + SeedRecheckMs);
+        return ((goal.Reasons & PlayerbotDungeonReasons.Companion) != 0 && HasCompanion(botId, player, goal.Key, goal.FitBand))
+            || ((goal.Reasons & PlayerbotDungeonReasons.FormingGroup) != 0 && HasFormingGroup(botId, player, goal.Key, goal.FitBand));
+    }
+
+    /// <summary>Whether a formed plan holds a waiting bot that anchors its instance goal (<see cref="PlayerbotGroupGoal.Anchors"/>); recruits, volunteers and players never do.</summary>
+    private bool PlanAnchored(PlayerbotGroupPlan plan)
+    {
+        if (_waiting.TryGetValue(plan.Leader.BotId, out Waiting? leading) && leading.Goal.Anchors) return true;
+        foreach ((PlayerbotGroupCandidate bot, _, _) in plan.Members)
+            if (_waiting.TryGetValue(bot.BotId, out Waiting? member) && member.Goal.Anchors) return true;
         return false;
     }
 

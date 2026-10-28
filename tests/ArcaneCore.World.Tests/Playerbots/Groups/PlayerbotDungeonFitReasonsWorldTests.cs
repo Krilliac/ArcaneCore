@@ -29,6 +29,14 @@ public sealed class PlayerbotDungeonFitReasonsWorldTests
 
     private static bool Noted(GroupTestWorld world, string text) => world.Coordinator.Events.Any(e => e.Contains(text, StringComparison.Ordinal));
 
+    // Bots may befriend or guild each other mid-run, which would turn "forminggroup" into "companion+forminggroup"; a test of the exact reason line switches both off.
+    private static void NoGuildsOrFriendsWithLevelRange50(ArcaneCore.World.Playerbots.PlayerbotOptions o)
+    {
+        o.Social.Guilds.Enabled = false;
+        o.Social.Lists.Enabled = false;
+        o.Groups.LevelRange = 50;
+    }
+
     // An uncommon neck piece (anyone can wear it) with a stat, so a gain is real if the slot were worn.
     private static ItemTemplate Neck(uint entry, uint requiredLevel) => new()
     {
@@ -78,7 +86,7 @@ public sealed class PlayerbotDungeonFitReasonsWorldTests
     public async Task AnInBandWaiterOfTheSameTeam_SeedsAFormingGroupReason_ForAnOutOfBandBotWithAGreyQuest()
     {
         // Quest level 40: grey for a 60 (gray level 47), not grey for a 35 (27). LevelRange 50 so only the band decides who may seed.
-        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], configure: o => o.Groups.LevelRange = 50, dungeon: true, dungeonQuestLevel: 40);
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], configure: NoGuildsOrFriendsWithLevelRange50, dungeon: true, dungeonQuestLevel: 40);
         var anchor = await world.AddBotAsync("Anchora", Human, Warrior, 20, [Taunt], EntranceArea);
         Assert.True(await world.RunUntilAsync(60_000, () => world.HasQuest(anchor.Id, DungeonQuest) && Noted(world, "Anchora needs a group")), await world.TraceAsync());
 
@@ -88,8 +96,10 @@ public sealed class PlayerbotDungeonFitReasonsWorldTests
 
         string[] events = await EventsAsync(world);
         Assert.Contains(events, e => e.Contains("Anchora needs a group", StringComparison.Ordinal) && !e.Contains("fit=", StringComparison.Ordinal)); // in band: no fit text
-        Assert.Contains(events, e => e.Contains("Drifter needs a group", StringComparison.Ordinal) && e.Contains("fit=out-of-band 60 vs ", StringComparison.Ordinal)
-            && e.EndsWith(": forminggroup", StringComparison.Ordinal));
+        string drifterNeed = Assert.Single(events, e => e.Contains("Drifter needs a group", StringComparison.Ordinal));
+        // Guilds and friend lists are off, so nothing derives a companion reason: the line ends in exactly the forming-group reason (the quest is grey for a 60).
+        Assert.True(drifterNeed.Contains("fit=out-of-band 60 vs ", StringComparison.Ordinal), drifterNeed);
+        Assert.True(drifterNeed.EndsWith(": forminggroup", StringComparison.Ordinal), drifterNeed);
         Assert.DoesNotContain(events, e => e.Contains("Drifter passes over", StringComparison.Ordinal));
     }
 

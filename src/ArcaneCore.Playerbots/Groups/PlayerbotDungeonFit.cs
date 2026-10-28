@@ -41,6 +41,9 @@ internal static class PlayerbotDungeonFit
     /// <summary>Levels of slack allowed either side of a band.</summary>
     internal const int StaticSlack = 2;
 
+    /// <summary>The reasons that stand on their own; Companion and FormingGroup are derived from other bots waiting and anchor nothing.</summary>
+    internal const PlayerbotDungeonReasons DirectReasons = PlayerbotDungeonReasons.Quest | PlayerbotDungeonReasons.Attunement | PlayerbotDungeonReasons.GearUpgrade;
+
     /// <summary>The band of the instance on <paramref name="mapId"/>, from its entrance level and the catalogue bands sharing the map.</summary>
     internal static PlayerbotDungeonBand BandOf(uint mapId, byte entranceLevel, IEnumerable<PlayerbotDungeonBand> catalogueBands)
     {

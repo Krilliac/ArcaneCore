@@ -59,4 +59,21 @@ public sealed class PlayerbotDungeonFitWorldTests
         Assert.Contains(events, e => e.Contains("fit=out-of-band 60 vs ", StringComparison.Ordinal) && e.Contains(": quest", StringComparison.Ordinal));
         Assert.DoesNotContain(events, e => e.Contains("no reason", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task Level60Bots_HoldingAGreyDeadminesQuest_WaitForAndFormAGroup_WhenDungeonOutOfBandNeedsReasonIsOff_AndTheLineHasNoFit()
+    {
+        // The key off restores the old rule: an out-of-band goal is built with Fit = null, so it anchors and forms like an in-band one.
+        // (With the default, true, the test above shows the same bots never wait.)
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], configure: o => o.Groups.DungeonOutOfBandNeedsReason = false, dungeon: true);
+        (Guid Id, string Name)[] bots = await AddLevel60TrioAsync(world, "Open");
+
+        Assert.True(await world.RunUntilAsync(60_000, () => bots.All(b => world.HasQuest(b.Id, DungeonQuest))), await world.TraceAsync());
+        Assert.True(await world.RunUntilAsync(180_000, () => world.Coordinator.Groups.Count > 0 || world.Coordinator.Totals.Formed > 0), await world.TraceAsync());
+
+        string[] events = await world.OnWorldAsync(() => world.Coordinator.Events.ToArray());
+        Assert.Contains(events, e => e.Contains("needs a group", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, e => e.Contains("needs a group", StringComparison.Ordinal) && e.Contains("fit=", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, e => e.Contains("no reason", StringComparison.Ordinal));
+    }
 }

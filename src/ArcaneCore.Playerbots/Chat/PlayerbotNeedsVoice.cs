@@ -316,13 +316,16 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     /// <summary>The most locality verdicts worked out in one social pass, across all goals (the planner is the cost); cached verdicts are free.</summary>
     internal const int MaxLocalityVerdictsPerPass = 8;
 
+    /// <summary>How long a locality verdict is kept when the bot's or the place's zone was unknown (10 s).</summary>
+    internal const long UnknownZoneVerdictMs = 10_000;
+
     /// <summary>The bot's locality verdict for the goal's place, worked out at most once per <see cref="PlayerbotVoiceOptions.LookingForGroupRepeatSeconds"/> and kept in its state.</summary>
     private PlayerbotLfgLocalityVerdict? LocalityOf(PlayerbotSocialPass pass, PlayerbotVoiceOptions options,
         (PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since) waiting, List<(PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)> list)
     {
         BotState state = StateOf(waiting.Bot, pass.NowMs);
         var key = waiting.Goal.Key;
-        if (state.HasLocality && state.LocalityKey == key && pass.NowMs - state.LocalityMs < options.LookingForGroupRepeatSeconds * 1000L) return state.Locality;
+        if (state.HasLocality && state.LocalityKey == key && pass.NowMs - state.LocalityMs < state.LocalityTtlMs) return state.Locality;
 
         if (_verdictsThisPass >= MaxLocalityVerdictsPerPass) return null; // retried on a later pass
         _verdictsThisPass++;
@@ -332,6 +335,9 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
             () => PlayerbotLfgLocality.SummonAvailable(list.Select(w => (w.Bot.Player, w.Bot.Session)), player, goal.MeetingMap, goal.Meeting));
         state.LocalityKey = key;
         state.LocalityMs = pass.NowMs;
+        // An unknown zone (the terrain tile is not loaded yet) is a verdict to ask again soon, not for the whole repeat interval.
+        bool zoneUnknown = player.MapId == goal.MeetingMap && (player.ZoneId == 0 || PlayerbotLfgLocality.ZoneAt(player, goal.MeetingMap, goal.Meeting) == 0);
+        state.LocalityTtlMs = zoneUnknown ? UnknownZoneVerdictMs : options.LookingForGroupRepeatSeconds * 1000L;
         state.HasLocality = true;
         return state.Locality;
     }
@@ -1086,6 +1092,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         public bool HasLocality;
         public (PlayerbotGroupGoalKind, uint) LocalityKey;
         public long LocalityMs;
+        public long LocalityTtlMs;
         public PlayerbotLfgLocalityVerdict Locality;
 
         public void ResetFight()

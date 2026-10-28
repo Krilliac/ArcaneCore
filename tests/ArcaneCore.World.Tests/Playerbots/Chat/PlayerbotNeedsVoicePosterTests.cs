@@ -215,4 +215,13 @@ public sealed class PlayerbotNeedsVoicePosterTests
     [Fact]
     public void ANullWaiterList_Throws()
         => Assert.Throws<ArgumentNullException>(() => PlayerbotNeedsVoice.ChoosePosterIndex(null!));
+
+    // The verdict cache (LocalityOf) is private and runs inside a social pass against a live world, so no seam drives its time-to-live
+    // directly: this pins the constant that sets it (an unknown-zone verdict is asked again after 10 s, not after the 180 s default repeat).
+    [Fact]
+    public void AnUnknownZoneVerdict_IsKeptTenSeconds_FarShorterThanTheDefaultRepeatInterval()
+    {
+        Assert.Equal(10_000L, PlayerbotNeedsVoice.UnknownZoneVerdictMs);
+        Assert.True(PlayerbotNeedsVoice.UnknownZoneVerdictMs < new PlayerbotVoiceOptions().LookingForGroupRepeatSeconds * 1000L);
+    }
 }

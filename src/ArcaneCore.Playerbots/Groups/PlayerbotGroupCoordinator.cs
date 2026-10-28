@@ -585,6 +585,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public Team Team { get; init; }
         public PlayerbotGroupGoal Goal { get; set; } = goal;
         public uint SinceMs { get; } = since;
+
+        /// <summary>When a waiter with only derived reasons is next checked for a remaining seed (<see cref="KeepsDerivedWait"/>).</summary>
+        public uint NextSeedCheckMs { get; set; } = unchecked(since + SeedRecheckMs);
         private PlayerbotGroupGoal? _descGoal;
         private string? _desc;
 
@@ -666,6 +669,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 // Still wanted? A finished objective, or one the bot no longer has, ends the wait.
                 if (!StillNeeded(player, waiting.Goal))
                 {
+                    Unhold(bot.BotId, null);
+                    continue;
+                }
+
+                if (!KeepsDerivedWait(bot.BotId, player, waiting, now))
+                {
+                    Note($"{player.Name} has no companion or forming group left for {waiting.Goal}: not waiting");
                     Unhold(bot.BotId, null);
                     continue;
                 }
@@ -1036,15 +1046,29 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             }
 
             PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
+            if (goal.InInstance)
+            {
+                // Bots waiting only on derived reasons (a companion, a forming group) never anchor a group; the goal is the longest-waiting anchor's.
+                var anchor = wanting.Where(w => w.Waiting.Goal.Anchors).OrderBy(w => w.Waiting.SinceMs).FirstOrDefault();
+                if (anchor.Waiting is null) continue;
+                goal = anchor.Waiting.Goal;
+            }
+
             int size = wanting.Max(w => w.Waiting.Goal.Size);
             List<PlayerbotGroupCandidate> candidates = BuildCandidates(wanting, goal);
 
-            PlayerbotGroupPlan? plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups);
+            PlayerbotGroupPlan? plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups, goal.InInstance);
             if (plan is null && candidates.Count >= 1) plan = MatchWithVolunteer(candidates, size, goal, groupManager); // asked for it (Volunteers.cs)
             List<Guid> recruited = [];
             if (plan is null && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
             if (plan is null && _options.Groups.InvitePlayers && candidates.Count >= 1)
                 plan = MatchWithPlayer(candidates, size, goal, groupManager);
+            if (plan is not null && goal.InInstance && !PlanAnchored(plan))
+            {
+                plan = null;
+                recruited.Clear();
+            }
+
             if (plan is null) continue;
             Form(goal with { Size = size }, plan);
             if (recruited.Count > 0) NoteRecruited(plan, recruited);
@@ -1087,6 +1111,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             var member = new Member(bot.BotId, new ObjectGuid(bot.Guid), bot.Name, role, bot.TalentRole, subGroup, real)
             {
                 Joined = bot.BotId == plan.Leader.BotId,
+                Qualifying = bot.Qualifying,
             };
             if (!real && _bots.TryGetValue(bot.BotId, out PlayerbotGroupBot running))
             {
@@ -1245,6 +1270,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 if (group.WorldBoss is not null && AdvanceWorldBoss(group, leader, now)) break;
                 if (leader.MapId == group.Goal.MeetingMap && (group.ApproachReached || Arrived(leader, group.Approach, 5f) || WithinApproachRing(leader, group)) || leader.MapId == group.Goal.MapId && group.Goal.InInstance)
                 {
+                    // Every member that qualified has left: nobody in the group is in the band or has a reason to go in.
+                    if (group.Goal.InInstance && !group.Members.Any(m => m.Qualifying))
+                    {
+                        Finish(group, success: false, "fit-lost");
+                        break;
+                    }
+
                     group.Run?.Apply(PlayerbotRunSignal.Arrived);
                     Enter(group, group.Goal.InInstance ? PlayerbotGroupState.Entering : PlayerbotGroupState.Engaging);
                 }
@@ -2225,6 +2257,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public byte SubGroup { get; } = subGroup;
         public bool Real { get; } = real;
         public bool Joined { get; set; }
+
+        /// <summary>Whether the member qualified for an instance goal when the group formed (in band, or a direct reason; <see cref="PlayerbotGroupCandidate.Qualifying"/>).</summary>
+        public bool Qualifying { get; init; } = true;
         public bool Invited { get; set; }
         public bool Refused { get; set; }
         public uint InvitedMs { get; set; }

@@ -51,6 +51,8 @@ internal enum PlayerbotGroupRole : byte
 /// A quest item the goal is for (0: the creature itself): <see cref="ObjectiveEntry"/> is then a creature that drops it, and the goal is
 /// done when each member has the quest's count of the item.
 /// </param>
+/// <param name="Reasons">The reasons that justified a dungeon outside its band (<see cref="PlayerbotDungeonReasons"/>); None for an in-band goal.</param>
+/// <param name="FitBand">The level band of the dungeon the goal was made for (a seeding waiter must be in it, and <see cref="PlayerbotGroupContent.QualifiesAtLevel"/> asks it); default for goals not made by a quest's dungeon choice.</param>
 /// <param name="Fit">
 /// Why a dungeon outside its level band was chosen (<see cref="PlayerbotDungeonFit"/>'s verdict trace, e.g. <c>out-of-band 60 vs 15-26: quest</c>);
 /// null when the bot is in the band or the goal is not a dungeon. Part of the goal's text (<c>fit=...</c>), so the trace reaches the logs.
@@ -68,8 +70,18 @@ internal sealed record PlayerbotGroupGoal(
     byte MinLevel,
     string Source,
     uint ObjectiveItem = 0,
-    string? Fit = null)
+    string? Fit = null,
+    PlayerbotDungeonReasons Reasons = PlayerbotDungeonReasons.None,
+    PlayerbotDungeonBand FitBand = default)
 {
+    /// <summary>
+    /// Whether a bot waiting for this goal can anchor a group for it: the goal is not an instance goal, or the bot is in the dungeon's band
+    /// (<see cref="Fit"/> is null), or it has a direct reason (<see cref="PlayerbotDungeonFit.DirectReasons"/>). A bot whose only reasons
+    /// are derived (a companion or a forming group waiting) never anchors: bots seeded by one another would otherwise form a group of
+    /// out-of-band bots. <see cref="PlayerbotGroupCoordinator"/> requires an anchoring waiter in every instance plan.
+    /// </summary>
+    public bool Anchors => !InInstance || Fit is null || (Reasons & PlayerbotDungeonFit.DirectReasons) != 0;
+
     /// <summary>The matching key (<see cref="PlayerbotGroupGoal"/>).</summary>
     public (PlayerbotGroupGoalKind Kind, uint Value) Key => InInstance ? (Kind, MapId) : (Kind, ObjectiveEntry);
 
@@ -82,7 +94,9 @@ internal sealed record PlayerbotGroupGoal(
 
 /// <summary>
 /// A bot as the matcher sees it. <paramref name="Bonus"/> is the matching preference the cooperation rules add (a guildmate of the group's
-/// caller: 1; 0 otherwise): among bots that waited equally long it comes before level closeness.
+/// caller: 1; 0 otherwise): among bots that waited equally long it comes before level closeness. <paramref name="Qualifying"/> is whether the bot
+/// may anchor an instance group (<see cref="PlayerbotGroupGoal.Anchors"/>; for a recruit or a player, <see cref="PlayerbotGroupContent.QualifiesAtLevel"/>):
+/// true for everything that is not a quest dungeon goal.
 /// </summary>
 internal sealed record PlayerbotGroupCandidate(
     Guid BotId,
@@ -96,7 +110,8 @@ internal sealed record PlayerbotGroupCandidate(
     PlayerbotRole TalentRole,
     float Gear,
     uint NeedSinceMs,
-    int Bonus = 0);
+    int Bonus = 0,
+    bool Qualifying = true);
 
 /// <summary>A formed group, before the invitations go out (<see cref="PlayerbotGroupContent.Match"/>).</summary>
 internal sealed record PlayerbotGroupPlan(
@@ -289,15 +304,39 @@ internal static class PlayerbotGroupContent
     /// <see cref="PlayerbotGroupOptions.LevelRange"/> of every other. The leader is the best tank (highest level, then gear), else
     /// the bot that has waited longest (the quest's owner). A raid is spread over subgroups of five, the tanks and healers first.
     /// </summary>
-    internal static PlayerbotGroupPlan? Match(IReadOnlyList<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupOptions options)
+    internal static PlayerbotGroupPlan? Match(IReadOnlyList<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupOptions options, bool needQualifying = false)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return Match(candidates, size, options, RoleNeeds(size, options));
+        return Match(candidates, size, options, RoleNeeds(size, options), needQualifying);
     }
 
-    /// <summary><see cref="Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions)"/> with the tanks and healers given (a dungeon or raid run's quotas).</summary>
+    /// <summary>Whether a bot of <paramref name="level"/> is in the band of the instance goal (<see cref="PlayerbotGroupGoal.FitBand"/>); true for a goal outside an instance or without a band.</summary>
+    internal static bool QualifiesAtLevel(PlayerbotGroupGoal goal, int level)
+    {
+        ArgumentNullException.ThrowIfNull(goal);
+        return !goal.InInstance || (goal.FitBand.Min == 0 && goal.FitBand.Max == 0) || goal.FitBand.Holds(level);
+    }
+
+    /// <summary>The candidate that has waited longest among those that <see cref="PlayerbotGroupCandidate.Qualifying"/>, or null when none does.</summary>
+    internal static PlayerbotGroupCandidate? QualifyingAnchor(IReadOnlyList<PlayerbotGroupCandidate> candidates)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        PlayerbotGroupCandidate? oldest = null;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            PlayerbotGroupCandidate c = candidates[i];
+            if (!c.Qualifying) continue;
+            if (oldest is null) { oldest = c; continue; }
+            int by = unchecked((int)(c.NeedSinceMs - oldest.NeedSinceMs));
+            if (by < 0 || (by == 0 && c.BotId.CompareTo(oldest.BotId) < 0)) oldest = c;
+        }
+
+        return oldest;
+    }
+
+    /// <summary><see cref="Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions, bool)"/> with the tanks and healers given (a dungeon or raid run's quotas).</summary>
     internal static PlayerbotGroupPlan? Match(IReadOnlyList<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupOptions options,
-        (int Tanks, int Healers) needs)
+        (int Tanks, int Healers) needs, bool needQualifying = false)
     {
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(options);
@@ -309,7 +348,10 @@ internal static class PlayerbotGroupContent
         {
             PlayerbotGroupCandidate[] window = [.. candidates.Where(c => c.Level >= floor && c.Level <= floor + options.LevelRange)];
             if (window.Length < size) continue;
-            if (Fill(window, size, tanks, healers) is { } plan) return plan;
+            if (Fill(window, size, tanks, healers) is not { } plan) continue;
+            // An instance plan needs at least one member that is in band or has a direct reason: try the next floor otherwise.
+            if (needQualifying && !plan.Members.Any(m => m.Bot.Qualifying)) continue;
+            return plan;
         }
 
         return null;

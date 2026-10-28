@@ -163,6 +163,8 @@ public sealed partial class PlayerbotGroupCoordinator
         PlayerbotGroupGoal? goal = _struggles.TryGetValue(lowId, out var struggle) ? struggle.Goal : _waiting.TryGetValue(lowId, out Waiting? waiting) ? waiting.Goal
             : QuestObjectiveGoal(lowPlayer, low.Brain.QuestId != 0 ? low.Brain.QuestId : _helpCalls.TryGetValue(lowId, out var call) ? call.QuestId : 0);
         if (goal is null || goal.QuestId == 0 || QuestState(lowPlayer) is not { } state || state.Quests.Get(goal.QuestId) is not { Status: QuestStatus.Incomplete }) return false;
+        // An instance goal held only by derived reasons (companion, forming group) has no anchor: a mentor group for it would hold no qualifying member.
+        if (goal.InInstance && !goal.Anchors) return false;
         if (GroupManagerOrNull() is not { } groups || groups.GetGroup(lowPlayer.Guid) is not null || groups.GetInvite(lowPlayer.Guid) is not null) return false;
         PlayerbotSocialMemory memory = Social!.Memory;
         GuildManager? guilds = GuildsOrNull();
@@ -199,7 +201,9 @@ public sealed partial class PlayerbotGroupCoordinator
         }
 
         if (best is null) return false;
-        PlayerbotGroupCandidate leader = Candidate(bestId, best, now), friend = Candidate(lowId, lowPlayer, now);
+        // Qualifying is honest for the fit-lost guard: the mentor by its level in the goal's band, the struggling bot also by its own anchoring reasons.
+        PlayerbotGroupCandidate leader = Candidate(bestId, best, now) with { Qualifying = PlayerbotGroupContent.QualifiesAtLevel(goal, best.Level) };
+        PlayerbotGroupCandidate friend = Candidate(lowId, lowPlayer, now) with { Qualifying = goal.Anchors || PlayerbotGroupContent.QualifiesAtLevel(goal, lowPlayer.Level) };
         var plan = new PlayerbotGroupPlan(leader,
         [
             (leader, PlayerbotGroupContent.Preferred(leader.Class, leader.TalentRole), 0),

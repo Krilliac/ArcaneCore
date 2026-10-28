@@ -42,7 +42,7 @@ internal static class PlayerbotLfgLocality
     // Redridge Mountains 44, Stranglethorn Vale 33, Deadwind Pass 41, Swamp of Sorrows 8, Blasted Lands 4, Burning Steppes 46, Searing
     // Gorge 51, Blackrock Mountain 25, Badlands 3, Loch Modan 38, Dun Morogh 1, Wetlands 11, Ironforge 1537, Arathi Highlands 45,
     // Hillsbrad Foothills 267, Alterac Mountains 36, Silverpine Forest 130, The Hinterlands 47, Tirisfal Glades 85, Undercity 1497,
-    // Western Plaguelands 28, Eastern Plaguelands 139. The pairs are land borders: well-known game geography (what a player sees on the
+    // Western Plaguelands 28, Eastern Plaguelands 139; Dustwallow Marsh 15. Added: Arathi Highlands-The Hinterlands (45, 47) and Redridge Mountains-Swamp of Sorrows (44, 8). The pairs are land borders: well-known game geography (what a player sees on the
     // world map), not data from a server. A pair missing here only falls back to the travel-time check of Judge.
     private static readonly (uint A, uint B)[] BorderPairs =
     [
@@ -53,7 +53,7 @@ internal static class PlayerbotLfgLocality
         // Eastern Kingdoms (25 is Blackrock Mountain)
         (12, 1519), (12, 40), (12, 10), (12, 44), (40, 10), (10, 44), (10, 33), (10, 41), (44, 46), (41, 8), (8, 4), (46, 51), (46, 25),
         (51, 25), (3, 38), (38, 1), (38, 11), (1, 1537), (11, 45), (45, 267), (267, 36), (267, 130), (267, 47), (130, 85), (85, 1497),
-        (85, 28), (28, 139),
+        (85, 28), (28, 139), (45, 47), (44, 8),
     ];
 
     private static readonly HashSet<ulong> Borders = BuildBorders();
