@@ -222,6 +222,82 @@ public sealed class AccountDataPersistenceTests
         await WorldTestHost.WaitForAsync(() => feature.TrackedAccounts == 0, "the account's throttle state to be released");
     }
 
+    [Fact]
+    [Trait("Category", "Timing")]
+    public async Task ShortInterval_TheFlushTimer_PersistsTheHeldValue_WhileTheSessionIsStillOpen()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        await using var host = db.StartHost(ShortIntervalMs);
+        byte[] key = await host.AddAccountAsync("ADTIMER");
+        int accountId = (await host.Accounts.FindByUsernameAsync("ADTIMER"))!.Id;
+
+        WorldTestClient client = await host.ConnectAsync();
+        await client.AuthenticateAsync("ADTIMER", key);
+        await client.CollectAsync();
+        await client.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "SET a 1"));
+        await client.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "SET a 2")); // held; the timer queues it
+        await client.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
+        await client.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+
+        // The session never disconnects: only the flush timer can write the second value.
+        await db.WaitForBlobAsync(accountId, 0, "SET a 2");
+        Assert.Equal(2, db.DataWrites);
+        await client.DisposeAsync();
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")]
+    public async Task AStaleFlushTimer_OfAnEndedSession_DoesNotRemoveTheNextSessionsState_AndTheHeldValueSurvivesStop()
+    {
+        const int interval = 2000;
+        await using var db = await TestDatabase.CreateAsync();
+        await using var host = db.StartHost(interval);
+        AccountDataFeature feature = host.WorldServices.GetRequiredService<AccountDataFeature>();
+        byte[] key = await host.AddAccountAsync("ADSTALE");
+        int accountId = (await host.Accounts.FindByUsernameAsync("ADSTALE"))!.Id;
+
+        // Session A: one write at once, one held (a flush timer is scheduled for t0 + interval), then A leaves and the held value is confirmed.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        WorldTestClient a = await host.ConnectAsync();
+        await a.AuthenticateAsync("ADSTALE", key);
+        await a.CollectAsync();
+        await a.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "A 1"));
+        await a.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "A 2"));
+        await a.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
+        await a.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+        await a.DisposeAsync();
+        await db.WaitForBlobAsync(accountId, 0, "A 2");
+        await WorldTestHost.WaitForAsync(() => feature.TrackedAccounts == 0, "A's state to be released");
+
+        // Session B starts half an interval later: its own flush timer is due at t(B) + interval, after A's stale one.
+        await Task.Delay(interval / 2);
+        WorldTestClient b = await host.ConnectAsync();
+        await b.AuthenticateAsync("ADSTALE", key);
+        await b.CollectAsync();
+        await b.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "B 1"));
+        await b.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "B 2")); // held
+        await b.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
+        await b.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+        await db.WaitForBlobAsync(accountId, 0, "B 1");
+        Assert.True(clock.ElapsedMilliseconds < interval + interval / 2 - 100, "B must still be inside the interval");
+
+        // Past A's timer (t0 + interval) but before B's (about t0 + 1.5 interval).
+        long wait = interval + 150 - clock.ElapsedMilliseconds;
+        if (wait > 0)
+        {
+            await Task.Delay((int)wait);
+        }
+
+        Assert.Equal(1, feature.TrackedAccounts); // A's timer must not have forgotten B's state
+        Assert.True(clock.ElapsedMilliseconds < interval + interval / 2 + 100, "B's own timer must not have fired yet");
+
+        await feature.StopAsync().WaitAsync(Budget); // queues what is held in the accounts still tracked
+        await db.WaitForBlobAsync(accountId, 0, "B 2");
+        await b.DisposeAsync();
+    }
+
+    private const int ShortIntervalMs = 300;
+
     private static async Task<string> Inflate(byte[] reply)
     {
         using var zlib = new System.IO.Compression.ZLibStream(new MemoryStream(reply, 8, reply.Length - 8), System.IO.Compression.CompressionMode.Decompress);

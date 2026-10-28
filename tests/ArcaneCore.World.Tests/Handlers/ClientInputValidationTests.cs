@@ -309,6 +309,60 @@ public sealed class ClientInputValidationTests
         }
     }
 
+    [Fact]
+    public async Task PingAfterAuthentication_IsNotUnderThePreAuthNetguardBudget()
+    {
+        await using var host = WorldTestHost.Start();
+        byte[] key = await host.AddAccountAsync("PINGAUTH");
+        var guard = new NetGuard(new NetProtectionOptions { WorldOpcodeBurst = 2, WorldOpcodeRefillPerSecond = 0, WorldPacketsPerSecond = 0, WorldFloodPacketsPerSecond = 0 },
+            () => 0, () => 0, NullLogger.Instance);
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var stop = new CancellationTokenSource();
+        Task session = Task.Run(async () =>
+        {
+            using TcpClient server = await listener.AcceptTcpClientAsync(stop.Token);
+            await using NetworkStream stream = server.GetStream();
+            await using AsyncServiceScope scope = host.WorldServices.CreateAsyncScope();
+            var worldSession = new WorldSession(stream, "127.0.0.1:41003", scope.ServiceProvider, host.Opcodes, host.World, host.Registry,
+                new WorldSessionOptions(), NullLogger.Instance, guard);
+            await worldSession.RunAsync(stop.Token);
+        });
+
+        var socket = new TcpClient();
+        await socket.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port);
+        var client = new WorldTestClient(socket);
+        try
+        {
+            await client.AuthenticateAsync("PINGAUTH", key);
+            await client.CollectAsync();
+            const int pings = 6; // three times the budget of two
+            for (uint i = 1; i <= pings; i++)
+            {
+                byte[] ping = new byte[8];
+                BinaryPrimitives.WriteUInt32LittleEndian(ping, i);
+                await client.SendAsync(WorldOpcode.CmsgPing, ping);
+            }
+
+            var pongs = new List<byte[]>();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            while (pongs.Count < pings && !timeout.IsCancellationRequested)
+            {
+                pongs.Add(await client.ReadUntilAsync(WorldOpcode.SmsgPong).WaitAsync(TimeSpan.FromSeconds(5)));
+            }
+
+            Assert.Equal(pings, pongs.Count);
+            Assert.Equal(0, guard.DroppedPackets);
+        }
+        finally
+        {
+            await client.DisposeAsync();
+            stop.Cancel();
+            listener.Stop();
+            await session.WaitAsync(TimeSpan.FromSeconds(10)).ContinueWith(_ => { }, TaskScheduler.Default);
+        }
+    }
+
     private static async Task<WorldTestClient> AuthenticateAsync(WorldTestHost host, string account)
     {
         byte[] key = await host.AddAccountAsync(account);
