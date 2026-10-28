@@ -22,9 +22,18 @@ namespace ArcaneCore.World.Playerbots;
 /// <item><description><b>Rounding</b>: a turn sharper than <see cref="MaxHeadingStepRadians"/> is replaced, where the legs and the clearance
 /// leave room for it, by a circular arc that starts <see cref="Settings.TurnLeadYards"/> (at most 40% of the shorter leg) before the corner.
 /// The arc has up to <see cref="MaxArcInteriorPoints"/> interior points spread evenly in angle, so no interior vertex of a rounded corner turns
-/// more than <see cref="MaxHeadingStepRadians"/> (the two tangent points turn half as much). A corner whose arc is not possible keeps the
-/// sharp turn it has, moved off the obstacle.</description></item>
+/// more than <see cref="MaxHeadingStepRadians"/> (the two tangent points turn half as much). A corner not sharper than that whose push
+/// would widen its turn past it is rounded too. A corner whose arc is not possible keeps the sharp turn it has, moved off the obstacle.</description></item>
 /// </list>
+/// <para>
+/// The heading guarantee (G), where rounding is on (<see cref="Settings.TurnLeadYards"/> above 0), with A = <see cref="MaxHeadingStepRadians"/>:
+/// every point the shaper creates (the tangent points, the interior arc points and the split point) turns at most A; a vertex it moves whose
+/// turn was at most A stays at most A; an emitted vertex at most A is never raised above A by a later corner's push (the push is cut, or a
+/// split point one yard along the incoming leg takes the turn); an emitted vertex already above A is raised by at most 0.3 radians. Exceptions:
+/// (E1) a corner sharper than A whose arc is not possible (too little lead, no room, a rejected arc, the budget) keeps a sharp turn, widened by
+/// its own push; (E2) a mesh corner kept unchanged whose turn the previous corner's push widened past A and that cannot be rounded;
+/// (E3) the heading at the start point relative to the bot's facing is not bounded.
+/// </para>
 /// Nothing is squeezed: a corner whose far side leaves less than <see cref="EdgeMarginYards"/> after the move (a doorway, a bridge) keeps
 /// its mesh position. A new leg must pass <see cref="SegmentSafe(Map, Vector3, Vector3)"/> or, only where the mesh leg it replaces
 /// (<c>points[i-1]</c> to <c>points[i]</c> or <c>points[i]</c> to <c>points[i+1]</c> of the input, never a shaped neighbour) fails that too,
@@ -36,7 +45,8 @@ namespace ArcaneCore.World.Playerbots;
 /// and the query budget: every probe, ground snap, leg check and measurement of a mesh leg is charged to <see cref="ShapeStats.Queries"/>
 /// before it is made and refused (the corner keeps its mesh position, <see cref="ShapeStats.FallbackBudget"/>) when it would take the path
 /// past <see cref="MaxQueriesPerPath"/>. The count is an estimate of collision and mesh queries (<see cref="SegmentBaseQueries"/> for the fixed
-/// part of a leg check, two or four height lookups per 3 yards of leg); the budget therefore holds for the estimate, not for a hardware counter.
+/// part of a leg check, two or four height lookups per 3 yards of leg); the budget therefore holds for the estimate, not for a hardware counter,
+/// and it is <see cref="MaxQueriesPerPath"/> plus at most one reverse chord check (about 40 queries or fewer), which is charged after the fact.
 /// The only allocation of a path that changes is its point list. World thread; the process-wide totals use <see cref="Interlocked"/> and may be
 /// read from any thread.
 /// </para>
@@ -90,10 +100,20 @@ internal static class PlayerbotPathShaping
     /// </summary>
     internal const int SegmentBaseQueries = 6;
 
-    /// <summary>The most interior points of a rounding arc; with them a turn of up to pi radians stays at or below <see cref="MaxHeadingStepRadians"/> per interior vertex.</summary>
-    internal const int MaxArcInteriorPoints = 4;
+    /// <summary>
+    /// The most interior points of a rounding arc. The arc divides the turn into one more step than it has interior points, so with 5 a turn
+    /// of up to pi radians has steps of at most pi / 6 (about 0.52), below <see cref="MaxHeadingStepRadians"/>.
+    /// </summary>
+    internal const int MaxArcInteriorPoints = 5;
 
-    private const int MaxCornerPoints = MaxArcInteriorPoints + 2;
+    /// <summary>The most points one corner yields: the arc (interior points and two tangent points) and the split point beside it.</summary>
+    private const int MaxCornerPoints = MaxArcInteriorPoints + 2 + 1;
+
+    /// <summary>Radians kept below <see cref="MaxHeadingStepRadians"/> by every cap, so float error never lands above it.</summary>
+    private const float HeadingEpsilonRadians = 1e-3f;
+
+    /// <summary>The most (radians) a push may raise the turn of an already emitted vertex that was above <see cref="MaxHeadingStepRadians"/> before.</summary>
+    private const float SharpNeighbourSlackRadians = 0.3f;
 
     /// <summary>Margin on the planned arc excursion for the widening of the turn when the corner is pushed outward.</summary>
     private const float ArcWidenMargin = 1.25f;
@@ -199,6 +219,21 @@ internal static class PlayerbotPathShaping
         /// <summary>Corners whose arc was dropped (tangent too short for the clearance, or an arc point or chord was not usable); the corner keeps its pushed position.</summary>
         public int ArcRejected;
 
+        /// <summary>Corners whose push was cut so that the turn at the previously emitted vertex stays within the heading bound.</summary>
+        public int NeighbourCaps;
+
+        /// <summary>Corners that got a split point on the incoming leg so that the full push (and its arc) could be kept.</summary>
+        public int NeighbourSplits;
+
+        /// <summary>Unrounded corners whose push was cut so that their own turn stays within the heading bound.</summary>
+        public int SelfCaps;
+
+        /// <summary>Gentle corners (not sharper than the heading bound) that were rounded because their push would have widened the turn past it.</summary>
+        public int AutoRounded;
+
+        /// <summary>Corners kept because the heading bound left no push worth making and there was nothing to round.</summary>
+        public int FallbackHeading;
+
         /// <summary>Stopwatch ticks (<see cref="Stopwatch.Frequency"/> per second) spent shaping.</summary>
         public long ElapsedTicks;
 
@@ -226,6 +261,11 @@ internal static class PlayerbotPathShaping
             PartialPushes += other.PartialPushes;
             ReversedChords += other.ReversedChords;
             RelativeSegments += other.RelativeSegments;
+            NeighbourCaps += other.NeighbourCaps;
+            NeighbourSplits += other.NeighbourSplits;
+            SelfCaps += other.SelfCaps;
+            AutoRounded += other.AutoRounded;
+            FallbackHeading += other.FallbackHeading;
         }
     }
 
@@ -529,6 +569,8 @@ internal static class PlayerbotPathShaping
         int n = points.Count;
         List<Vector3>? output = null;
         Vector3 prev = points[0];
+        Vector3 prevPrev = prev; // the point before prev in the output
+        bool hasPrevPrev = false;
         float accumulated = 0f;
         Span<Vector3> buffer = stackalloc Vector3[MaxCornerPoints];
 
@@ -564,7 +606,7 @@ internal static class PlayerbotPathShaping
                     if (theta >= MinShapeTurnRadians)
                     {
                         stats.CornersConsidered++;
-                        int count = ShapeCorner(map, mesh, prev, points[i - 1], v, next, in s, theta, lenIn, lenOut, dirIn, dirOut, ref stats, buffer, out bool rounded);
+                        int count = ShapeCorner(map, mesh, prevPrev, hasPrevPrev, prev, points[i - 1], v, next, in s, theta, lenIn, lenOut, dirIn, dirOut, ref stats, buffer, out bool rounded);
                         if (count > 0 && AllFinite(buffer[..count]))
                         {
                             if (output is null)
@@ -576,7 +618,9 @@ internal static class PlayerbotPathShaping
 
                             for (int j = 0; j < count; j++)
                                 output.Add(buffer[j]);
+                            prevPrev = count >= 2 ? buffer[count - 2] : prev;
                             prev = buffer[count - 1];
+                            hasPrevPrev = true;
                             stats.CornersShaped++;
                             if (rounded)
                                 stats.CornersRounded++;
@@ -589,7 +633,9 @@ internal static class PlayerbotPathShaping
             if (!shapedHere)
             {
                 output?.Add(v);
+                prevPrev = prev;
                 prev = v;
+                hasPrevPrev = true;
             }
         }
 
@@ -609,6 +655,8 @@ internal static class PlayerbotPathShaping
     private static int ShapeCorner(
         Map map,
         IMeshPointQuery mesh,
+        Vector3 prevPrev,
+        bool hasPrevPrev,
         Vector3 prev,
         Vector3 meshPrev,
         Vector3 v,
@@ -637,6 +685,8 @@ internal static class PlayerbotPathShaping
         float clearance = s.ClearanceYards;
         float lead = MathF.Min(s.TurnLeadYards, 0.4f * MathF.Min(lenIn, lenOut));
         bool rounding = s.TurnLeadYards > 0f && theta > MaxHeadingStepRadians && lead >= MinLeadYards;
+        bool bound = s.TurnLeadYards > 0f; // the heading bound (guarantee G) is kept only where rounding is on
+        bool autoRounded = false; // a gentle corner rounded because its push would widen the turn past the bound
 
         // A fillet with tangent length L across a turn of theta has its apex L * tan(theta / 4) inside the corner, and its chords dip a
         // further sagitta toward it (ArcReach). Moving the corner outward widens the turn, so the planned excursion carries a margin and
@@ -671,6 +721,26 @@ internal static class PlayerbotPathShaping
             push = ComputePush(inwardHit, distIn, outwardHit, distOut, clearance, excursion, 0f, theta, s.CentringMaxYards, out needed);
         }
 
+        // Auto-round (heading bound): a corner not sharper than the bound whose push would widen the turn past it is rounded instead.
+        if (bound && !rounding && theta <= MaxHeadingStepRadians && lead >= MinLeadYards && push >= MinPushYards && push <= room)
+        {
+            float pushedTurn = PushedTurn(prev, v, next, outward, push);
+            if (pushedTurn > MaxHeadingStepRadians)
+            {
+                rounding = true;
+                autoRounded = true;
+                excursion = lead * ArcReach(pushedTurn) * ArcWidenMargin;
+                push = ComputePush(inwardHit, distIn, outwardHit, distOut, clearance, excursion, lead, theta, s.CentringMaxYards, out needed);
+                if (push > room)
+                {
+                    rounding = false;
+                    autoRounded = false;
+                    excursion = 0f;
+                    push = ComputePush(inwardHit, distIn, outwardHit, distOut, clearance, 0f, 0f, theta, s.CentringMaxYards, out needed);
+                }
+            }
+        }
+
         // Pushing the corner outward widens the turn (on short legs by a lot: 0.9 rad can become 1.6), which brings the arc's tangent points
         // nearer the obstacle. The arc is therefore planned for the turn at the moved corner: a few passes of the push against its own result.
         if (rounding && push >= MinPushYards && push <= room)
@@ -686,13 +756,25 @@ internal static class PlayerbotPathShaping
                 float movedTheta = MathF.Acos(Math.Clamp(Vector2.Dot(moveIn / movedIn, moveOut / movedOut), -1f, 1f));
                 float movedLead = MathF.Min(s.TurnLeadYards, 0.4f * MathF.Min(movedIn, movedOut));
                 if (!(movedTheta > MaxHeadingStepRadians) || movedLead < MinLeadYards)
+                {
+                    if (autoRounded)
+                    {
+                        // The moved corner needs no arc after all (or has no lead for one): back to a plain push.
+                        rounding = false;
+                        autoRounded = false;
+                        excursion = 0f;
+                        push = ComputePush(inwardHit, distIn, outwardHit, distOut, clearance, 0f, 0f, theta, s.CentringMaxYards, out needed);
+                    }
+
                     break;
+                }
 
                 float movedExcursion = movedLead * ArcReach(movedTheta) * ArcReplanMargin;
                 float replanned = ComputePush(inwardHit, distIn, outwardHit, distOut, clearance, movedExcursion, movedLead, movedTheta, s.CentringMaxYards, out float replannedNeeded);
                 if (replanned > room)
                 {
                     rounding = false;
+                    autoRounded = false;
                     excursion = 0f;
                     push = ComputePush(inwardHit, distIn, outwardHit, distOut, clearance, 0f, 0f, theta, s.CentringMaxYards, out needed);
                     break;
@@ -723,9 +805,67 @@ internal static class PlayerbotPathShaping
                 return 0;
         }
 
+        OriginalLeg legIn = default, legOut = default; // the mesh legs beside the corner, measured at most once each if a relative check needs them
+        int offset = 0; // 1 when a split point precedes the corner's own points
+        Vector2 obstacle = new(v.X + (inward.X * distIn), v.Y + (inward.Y * distIn));
+        if (bound && push >= MinPushYards)
+        {
+            // The push turns the leg from the previous point; keep the turn at that point (and at this corner) within the heading bound.
+            if (hasPrevPrev)
+            {
+                float pMax = MaxPushForNeighbour(prevPrev, prev, v, dirIn, outward, theta);
+                if (push > pMax)
+                {
+                    bool split = false;
+                    if (rounding && lenIn - MinLegYards >= DReq(push, theta)
+                        && PlanArcTangent(Flat(prev), Flat(v) + (outward * push), Flat(next), lead, distIn, push, clearance, inwardHit, obstacle, out _) >= MinLeadYards
+                        && !(PlanArcTangent(Flat(prev), Flat(v) + (outward * pMax), Flat(next), lead, distIn, pMax, clearance, inwardHit, obstacle, out _) >= MinLeadYards))
+                    {
+                        // The cap would kill the planned arc: a point one yard along the incoming leg takes the turn instead.
+                        Vector3 rawSplit = new(prev.X + (dirIn.X * MinLegYards), prev.Y + (dirIn.Y * MinLegYards), prev.Z);
+                        if (TryGround(map, prev, rawSplit, ref stats, out Vector3 splitPoint)
+                            && SegmentAcceptable(map, prev, splitPoint, meshPrev, v, ref legIn, ref stats))
+                        {
+                            result[0] = splitPoint;
+                            offset = 1;
+                            prev = splitPoint;
+                            lenIn -= MinLegYards;
+                            split = true;
+                        }
+                    }
+
+                    if (!split)
+                    {
+                        push = MathF.Min(push, pMax);
+                        stats.NeighbourCaps++;
+                    }
+                }
+            }
+
+            if (!rounding && theta <= MaxHeadingStepRadians && push >= MinPushYards)
+            {
+                float capped = MaxPushForSelf(prev, v, next, outward, push);
+                if (capped < push)
+                {
+                    push = capped;
+                    stats.SelfCaps++;
+                }
+            }
+
+            if (push < MinPushYards)
+            {
+                push = 0f;
+                if (!rounding)
+                {
+                    stats.Fallbacks++;
+                    stats.FallbackHeading++;
+                    return 0;
+                }
+            }
+        }
+
         // The push ladder: the room is there, but the moved corner or a leg to it may not be walkable (a leg clipping the mesh near the
         // previous point, a ground height that does not match). Smaller pushes are tried in turn, down to half the clearance.
-        OriginalLeg legIn = default, legOut = default; // the mesh legs beside the corner, measured at most once each if a relative check needs them
         Span<float> rungs = stackalloc float[MaxPushRungs];
         int rungCount = BuildPushLadder(push, needed, clearance, rungs);
         PlaceResult placeResult = PlaceResult.Segment;
@@ -763,14 +903,39 @@ internal static class PlayerbotPathShaping
         if (rounding)
         {
             int arc = TryBuildArc(map, prev, meshPrev, placed, next, lead, distIn, push, clearance, inwardHit,
-                new Vector2(v.X + (inward.X * distIn), v.Y + (inward.Y * distIn)), v, ref legIn, ref legOut, ref stats, result);
+                obstacle, v, ref legIn, ref legOut, ref stats, result[offset..]);
             if (arc > 0)
             {
                 rounded = true;
-                return arc;
+                if (offset > 0)
+                    stats.NeighbourSplits++;
+                if (autoRounded)
+                    stats.AutoRounded++;
+                return arc + offset;
             }
 
             stats.ArcRejected++;
+            if (theta <= MaxHeadingStepRadians && PushedTurn(prev, v, next, outward, push) > MaxHeadingStepRadians)
+            {
+                // The gentle corner has no arc and its plain push would widen the turn past the bound: push less, or keep it.
+                float capped = MaxPushForSelf(prev, v, next, outward, push);
+                if (capped >= MinPushYards
+                    && TryPlace(map, prev, meshPrev, v, next, outward, capped, ref legIn, ref legOut, ref stats, out placed) == PlaceResult.Placed)
+                {
+                    stats.SelfCaps++;
+                    if (offset > 0)
+                        stats.NeighbourSplits++;
+                    result[offset] = placed;
+                    return offset + 1;
+                }
+
+                stats.Fallbacks++;
+                if (stats.BudgetStops != stopsBefore)
+                    stats.FallbackBudget++;
+                else
+                    stats.FallbackHeading++;
+                return 0;
+            }
         }
 
         if (push == 0f)
@@ -784,8 +949,10 @@ internal static class PlayerbotPathShaping
             return 0;
         }
 
-        result[0] = placed;
-        return 1;
+        if (offset > 0)
+            stats.NeighbourSplits++;
+        result[offset] = placed;
+        return offset + 1;
     }
 
     /// <summary>A corner left alone after the query budget refused a probe: counted as a budget fallback when the budget was the reason.</summary>
@@ -953,25 +1120,82 @@ internal static class PlayerbotPathShaping
         ref ShapeStats stats,
         Span<Vector3> result)
     {
-        Vector2 pf = Flat(prev), vf = Flat(v), nf = Flat(next);
+        float tangent = PlanArcTangent(Flat(prev), Flat(v), Flat(next), lead, distIn, push, clearance, hasObstacle, obstacle, out ArcPlan plan);
+        if (!(tangent >= MinLeadYards))
+            return 0;
+
+        Vector2 vf = Flat(v);
+        int interior = plan.Interior;
+        int count = interior + 2;
+        Vector2 start = vf - (plan.DirIn * tangent);
+        Vector2 end = vf + (plan.DirOut * tangent);
+        Vector2 centre = start + (plan.NormalIn * (tangent / MathF.Tan(plan.Theta * 0.5f)));
+        float turn = plan.Turn;
+        float theta = plan.Theta;
+
+        Vector3 last = default;
+        for (int k = 0; k < count; k++)
+        {
+            Vector2 flat = ArcFlatPoint(k, count, interior, start, end, centre, turn, theta);
+            if (!TryGround(map, v, new Vector3(flat.X, flat.Y, v.Z), ref stats, out Vector3 point))
+                return 0;
+            // The sub-leg from the previous point to the first tangent point is part of the mesh leg's replacement as well; its end has a snapped height.
+            if (k == 0 && !SegmentAcceptable(map, prev, point, meshPrev, corner, ref legIn, ref stats))
+                return 0;
+            if (k > 0 && !(k <= count / 2
+                    ? SegmentAcceptable(map, last, point, meshPrev, corner, ref legIn, ref stats)
+                    : SegmentAcceptable(map, last, point, corner, next, ref legOut, ref stats)))
+                return 0;
+
+            result[k] = point;
+            last = point;
+        }
+
+        // ...and so is the sub-leg from the last tangent point to the next point.
+        if (!SegmentAcceptable(map, last, next, corner, next, ref legOut, ref stats))
+            return 0;
+
+        return count;
+    }
+
+    /// <summary>The geometry of a planned fillet (see <see cref="PlanArcTangent"/>).</summary>
+    private readonly record struct ArcPlan(int Interior, float Turn, float Theta, Vector2 NormalIn, Vector2 DirIn, Vector2 DirOut);
+
+    /// <summary>
+    /// The longest tangent (yards) the fillet across the placed corner <paramref name="vf"/> can have, or 0 when there is no usable arc:
+    /// the lead capped by the legs, shrunk so that the arc's apex and chords keep the clearance (or, for a partial push, what the placed
+    /// corner itself has) from the obstacle, then bisected until every arc point does. Pure geometry: no mesh query is made.
+    /// </summary>
+    private static float PlanArcTangent(
+        Vector2 pf,
+        Vector2 vf,
+        Vector2 nf,
+        float lead,
+        float distIn,
+        float push,
+        float clearance,
+        bool hasObstacle,
+        Vector2 obstacle,
+        out ArcPlan plan)
+    {
+        plan = default;
         Vector2 inVec = vf - pf;
         Vector2 outVec = nf - vf;
         float lenIn = inVec.Length();
         float lenOut = outVec.Length();
         if (!(lenIn > 1e-3f) || !(lenOut > 1e-3f))
-            return 0;
+            return 0f;
 
         Vector2 dirIn = inVec / lenIn;
         Vector2 dirOut = outVec / lenOut;
         float theta = MathF.Acos(Math.Clamp(Vector2.Dot(dirIn, dirOut), -1f, 1f));
         if (!(theta > MinShapeTurnRadians))
-            return 0;
+            return 0f;
 
         float cross = (dirIn.X * dirOut.Y) - (dirIn.Y * dirOut.X);
         float turn = cross >= 0f ? 1f : -1f; // +1: a left (counter-clockwise) turn
         Vector2 normalIn = turn > 0f ? new Vector2(-dirIn.Y, dirIn.X) : new Vector2(dirIn.Y, -dirIn.X); // toward the inside of the turn
         int interior = Math.Clamp((int)MathF.Ceiling(theta / MaxHeadingStepRadians) - 1, 1, MaxArcInteriorPoints);
-        int count = interior + 2;
 
         float tangent = MathF.Min(lead, 0.4f * MathF.Min(lenIn, lenOut));
 
@@ -1001,36 +1225,87 @@ internal static class PlayerbotPathShaping
             tangent = low;
         }
 
-        if (!(tangent >= MinLeadYards))
-            return 0;
+        plan = new ArcPlan(interior, turn, theta, normalIn, dirIn, dirOut);
+        return tangent >= MinLeadYards ? tangent : 0f;
+    }
 
-        Vector2 start = vf - (dirIn * tangent);
-        Vector2 end = vf + (dirOut * tangent);
-        Vector2 centre = start + (normalIn * (tangent / MathF.Tan(theta * 0.5f)));
+    /// <summary>The flat turn angle (radians, 0 to pi) at <paramref name="b"/> on the way from <paramref name="a"/> to <paramref name="c"/>; 0 when a leg has no length.</summary>
+    private static float Turn(Vector2 a, Vector2 b, Vector2 c)
+    {
+        Vector2 u = b - a, w = c - b;
+        float lu = u.Length(), lw = w.Length();
+        if (!(lu > 1e-6f) || !(lw > 1e-6f))
+            return 0f;
 
-        Vector3 last = default;
-        for (int k = 0; k < count; k++)
+        return MathF.Acos(Math.Clamp(Vector2.Dot(u / lu, w / lw), -1f, 1f));
+    }
+
+    /// <summary>The signed flat turn at <paramref name="b"/> (positive: counter-clockwise); 0 when a leg has no length.</summary>
+    private static float SignedTurn(Vector2 a, Vector2 b, Vector2 c)
+    {
+        Vector2 u = b - a, w = c - b;
+        float lu = u.Length(), lw = w.Length();
+        if (!(lu > 1e-6f) || !(lw > 1e-6f))
+            return 0f;
+
+        u /= lu;
+        w /= lw;
+        return MathF.Atan2((u.X * w.Y) - (u.Y * w.X), Vector2.Dot(u, w));
+    }
+
+    /// <summary>The turn at <paramref name="v"/> after it is pushed <paramref name="p"/> yards along <paramref name="outward"/>.</summary>
+    internal static float PushedTurn(Vector3 prev, Vector3 v, Vector3 next, Vector2 outward, float p)
+        => Turn(Flat(prev), Flat(v) + (outward * p), Flat(next));
+
+    /// <summary>
+    /// The largest push of <paramref name="v"/> along <paramref name="outward"/> that keeps the turn at the already emitted
+    /// <paramref name="prev"/> within the heading bound (a turn that was already above it may grow by at most <see cref="SharpNeighbourSlackRadians"/>);
+    /// <see cref="float.PositiveInfinity"/> when no push can break it, 0 when none is allowed. Pushing rotates the leg from <paramref name="prev"/>
+    /// by atan2(p cos(theta / 2), d + p sin(theta / 2)) toward <paramref name="outward"/>; this solves that for the allowed rotation.
+    /// </summary>
+    internal static float MaxPushForNeighbour(Vector3 prevPrev, Vector3 prev, Vector3 v, Vector2 dirIn, Vector2 outward, float theta)
+    {
+        float tauOld = SignedTurn(Flat(prevPrev), Flat(prev), Flat(v));
+        float sigma = ((dirIn.X * outward.Y) - (dirIn.Y * outward.X)) >= 0f ? 1f : -1f;
+        float absOld = MathF.Abs(tauOld);
+        float allow = absOld <= MaxHeadingStepRadians ? MaxHeadingStepRadians - HeadingEpsilonRadians : absOld + SharpNeighbourSlackRadians - HeadingEpsilonRadians;
+        float deltaMax = (sigma * tauOld) >= 0f ? allow - absOld : allow + absOld;
+        if (deltaMax <= 0f)
+            return 0f;
+        if (deltaMax >= 1.5f)
+            return float.PositiveInfinity;
+
+        float t = MathF.Tan(deltaMax);
+        float den = MathF.Cos(theta * 0.5f) - (t * MathF.Sin(theta * 0.5f));
+        return den <= 0f ? float.PositiveInfinity : t * Vector2.Distance(Flat(v), Flat(prev)) / den;
+    }
+
+    /// <summary>The shortest incoming leg (yards) from which a push of <paramref name="push"/> turns that leg by no more than the heading bound.</summary>
+    private static float DReq(float push, float theta)
+    {
+        float t = MathF.Tan(MaxHeadingStepRadians - HeadingEpsilonRadians);
+        float den = MathF.Cos(theta * 0.5f) - (t * MathF.Sin(theta * 0.5f));
+        return den <= 0f ? 0f : push * den / t;
+    }
+
+    /// <summary>The largest push up to <paramref name="push"/> that leaves the turn at <paramref name="v"/> within the heading bound (0 when none does).</summary>
+    private static float MaxPushForSelf(Vector3 prev, Vector3 v, Vector3 next, Vector2 outward, float push)
+    {
+        float limit = MaxHeadingStepRadians - HeadingEpsilonRadians;
+        if (PushedTurn(prev, v, next, outward, push) <= limit)
+            return push;
+
+        float low = 0f, high = push;
+        for (int iteration = 0; iteration < 12; iteration++)
         {
-            Vector2 flat = ArcFlatPoint(k, count, interior, start, end, centre, turn, theta);
-            if (!TryGround(map, v, new Vector3(flat.X, flat.Y, v.Z), ref stats, out Vector3 point))
-                return 0;
-            // The sub-leg from the previous point to the first tangent point is part of the mesh leg's replacement as well; its end has a snapped height.
-            if (k == 0 && !SegmentAcceptable(map, prev, point, meshPrev, corner, ref legIn, ref stats))
-                return 0;
-            if (k > 0 && !(k <= count / 2
-                    ? SegmentAcceptable(map, last, point, meshPrev, corner, ref legIn, ref stats)
-                    : SegmentAcceptable(map, last, point, corner, next, ref legOut, ref stats)))
-                return 0;
-
-            result[k] = point;
-            last = point;
+            float middle = 0.5f * (low + high);
+            if (PushedTurn(prev, v, next, outward, middle) <= limit)
+                low = middle;
+            else
+                high = middle;
         }
 
-        // ...and so is the sub-leg from the last tangent point to the next point.
-        if (!SegmentAcceptable(map, last, next, corner, next, ref legOut, ref stats))
-            return 0;
-
-        return count;
+        return low;
     }
 
     /// <summary>Bisection steps that find the longest arc tangent that keeps its clearance (1/256 of the lead).</summary>

@@ -452,6 +452,7 @@ public sealed class PlayerbotPathShapingTests
 
             Assert.True(stats.CornersShaped >= 1);
             Assert.True(stats.CornersShaped <= PlayerbotPathShaping.MaxShapedCornersPerPath, $"{stats.CornersShaped} corners shaped");
+            Assert.True(stats.Queries <= PlayerbotPathShaping.MaxQueriesPerPath + 40, $"{stats.Queries} estimated queries (the budget plus one chord check)");
             Assert.True(world.TotalQueries <= 2 * PlayerbotPathShaping.MaxQueriesPerPath, $"{world.TotalQueries} counted fake queries for one path");
             Assert.True(shaped.Count <= PlayerbotPathShaping.MaxShapedPoints, $"{shaped.Count} points");
             Assert.Equal(input[0], shaped[0]);
@@ -470,6 +471,222 @@ public sealed class PlayerbotPathShapingTests
             Assert.True(ticks - ticksBefore >= again.ElapsedTicks);
             return true;
         });
+    }
+
+    private const float HeadingTolerance = 1e-3f;
+
+    /// <summary>The distance the documented clearance bound is pinned at along the legs (not claimed by the docs, which state it for points).</summary>
+    private const float ChordClearanceFloor = 1.5f;
+
+    [Fact]
+    public async Task AnSBendWithWallsAtBothInnerCorners_NeverTurnsMoreThanTheHeadingStep_AndTheSecondPushIsCappedByTheFirstArc()
+    {
+        // East, then north through a connector, then east: two opposite corners 6.4 yd apart, a wall corner on the inside of each.
+        // Before the neighbour cap the second corner's push rotated the leg from the first arc's last tangent point and raised that
+        // vertex to 0.6071 rad.
+        Rect[] region = [new(-1f, -10f, 10f, 0f), new(10f, -10f, 14f, 15f), new(14f, 5f, 26f, 15f)];
+        await RunAsync(region, (world, map, at) =>
+        {
+            Vector3[] input = [at(new(0f, 0f)), at(new(10f, 0f)), at(new(14f, 5f)), at(new(24f, 5f))];
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref stats);
+            LogCost("heading S bend", world, stats, shaped);
+            float turn = MaxTurn(shaped);
+            _output.WriteLine($"max turn {turn:F4} rad, neighbour caps {stats.NeighbourCaps}, splits {stats.NeighbourSplits}");
+
+            Assert.True(turn <= PlayerbotPathShaping.MaxHeadingStepRadians + HeadingTolerance, $"max heading change {turn:F4} rad");
+            Assert.True(stats.NeighbourCaps >= 1, "the second push was not capped by the first corner's arc");
+            Vector2 wall = at(new(14f, 5f)).XY();
+            for (int i = 1; i < shaped.Count - 1; i++)
+                Assert.True(Vector2.Distance(shaped[i].XY(), wall) >= 2f - Tolerance, $"point {i} {shaped[i]} is {Vector2.Distance(shaped[i].XY(), wall):F2} yd from the wall corner");
+            AssertInside(world, shaped);
+            for (int i = 1; i < shaped.Count; i++)
+            {
+                ShapeStats probe = default;
+                Assert.True(PlayerbotPathShaping.SegmentSafe(map, shaped[i - 1], shaped[i])
+                    || PlayerbotPathShaping.SegmentAcceptable(map, shaped[i - 1], shaped[i], shaped[i - 1], shaped[i], ref probe), $"leg {i - 1}->{i} is not safe");
+            }
+
+            Assert.Equal(input[0], shaped[0]);
+            Assert.Equal(input[^1], shaped[^1]);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AShortSBend_InsertsASplitPoint_KeepsTheHeadingStep_AndTheVertexClearance()
+    {
+        // The connector is 3 yd wide and the legs 4.6 yd long: capping the second push would kill its arc, so a split point one yard
+        // along the incoming leg takes the turn instead. Before: 0.6857 rad.
+        Rect[] region = [new(-1f, -10f, 10f, 0f), new(10f, -10f, 13f, 15f), new(13f, 3.5f, 26f, 15f)];
+        await RunAsync(region, (world, map, at) =>
+        {
+            Vector3[] input = [at(new(0f, 0f)), at(new(10f, 0f)), at(new(13f, 3.5f)), at(new(24f, 3.5f))];
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref stats);
+            LogCost("short heading S bend", world, stats, shaped);
+            float turn = MaxTurn(shaped);
+            Vector2 wall1 = at(new(10f, 0f)).XY(), wall2 = at(new(13f, 3.5f)).XY();
+            float chord = NearestApproach(shaped, wall2);
+            float vertex = shaped.Skip(1).Take(shaped.Count - 2).Min(p => MathF.Min(Vector2.Distance(p.XY(), wall1), Vector2.Distance(p.XY(), wall2)));
+            _output.WriteLine($"max turn {turn:F4} rad, splits {stats.NeighbourSplits}, nearest vertex to a wall corner {vertex:F3} yd, nearest approach of a leg to the second wall corner {chord:F3} yd");
+
+            Assert.True(turn <= PlayerbotPathShaping.MaxHeadingStepRadians + HeadingTolerance, $"max heading change {turn:F4} rad");
+            Assert.Equal(1, stats.NeighbourSplits);
+            // The documentation states the clearance for the shaper's points (the moved corner, the arc points, the split point), so that is what is asserted.
+            for (int i = 1; i < shaped.Count - 1; i++)
+                Assert.True(MathF.Min(Vector2.Distance(shaped[i].XY(), wall1), Vector2.Distance(shaped[i].XY(), wall2)) >= 2f - Tolerance, $"point {i} {shaped[i]} is too close to a wall corner");
+            // The legs are not covered by that claim: the leg from the split point to the first tangent point passes the wall corner at
+            // 1.57 yd. That is pinned as the real bound (a regression of the leg geometry shows here) and reported, not hidden.
+            Assert.True(chord >= ChordClearanceFloor, $"a leg passes {chord:F3} yd from the wall corner, the pinned floor is {ChordClearanceFloor}");
+            AssertInside(world, shaped);
+            AssertSegmentsSafe(map, shaped);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AHairpin_UsesEnoughArcPoints_ToKeepTheHeadingStep()
+    {
+        // A turn of nearly pi: with four interior points the step was theta / 5 > 0.6 (0.6084 rad).
+        Rect[] open = [new(-20f, -20f, 40f, 40f)];
+        await RunAsync(open, (world, map, at) =>
+        {
+            Vector3[] input = [at(new(0f, 0f)), at(new(10f, 0f)), at(new(0f, 1f))];
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref stats);
+            LogCost("hairpin", world, stats, shaped);
+            float turn = MaxTurn(shaped);
+            _output.WriteLine($"input turn {MaxTurn(input):F3}, shaped max turn {turn:F4} rad over {shaped.Count} points");
+
+            Assert.True(MaxTurn(input) > 3.0f);
+            Assert.Equal(1, stats.CornersRounded);
+            Assert.True(turn <= PlayerbotPathShaping.MaxHeadingStepRadians + HeadingTolerance, $"max heading change {turn:F4} rad");
+            Assert.Equal(input[0], shaped[0]);
+            Assert.Equal(input[^1], shaped[^1]);
+            AssertInside(world, shaped);
+            AssertSegmentsSafe(map, shaped);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task AGentleCornerWhosePushWouldWidenItPastTheStep_IsRoundedToo_AndNotWithoutALead()
+    {
+        // A 0.46 rad corner on a wall corner at the edge of a corridor: not sharper than the step, but its push (a bounded corridor
+        // centres it too) turned it to 1.5152 rad before.
+        Rect[] region = [new(-1f, -8f, 6f, 0f), new(6f, -8f, 16f, 8f)];
+        await RunAsync(region, (world, map, at) =>
+        {
+            Vector3[] input = [at(new(0f, 0f)), at(new(6f, 0f)), at(new(11f, 2.5f))];
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref stats);
+            LogCost("gentle corner", world, stats, shaped);
+            float turn = MaxTurn(shaped);
+            _output.WriteLine($"input turn {MaxTurn(input):F3}, shaped max turn {turn:F4} rad, auto-rounded {stats.AutoRounded}");
+
+            Assert.True(MaxTurn(input) <= PlayerbotPathShaping.MaxHeadingStepRadians);
+            Assert.True(turn <= PlayerbotPathShaping.MaxHeadingStepRadians + HeadingTolerance, $"max heading change {turn:F4} rad");
+            Assert.True(stats.AutoRounded >= 1, "the widened corner was not rounded");
+            Assert.Equal(1, stats.CornersRounded);
+            AssertInside(world, shaped);
+            AssertSegmentsSafe(map, shaped);
+
+            // With no lead there is no rounding and no heading claim: the machinery is off.
+            ShapeStats off = default;
+            IReadOnlyList<Vector3> noLead = PlayerbotPathShaping.ShapePoints(map, input, new PlayerbotPathShaping.Settings(true, 2f, 4f, TurnLeadYards: 0f), ref off);
+            Assert.Equal(0, off.AutoRounded);
+            Assert.Equal(0, off.NeighbourCaps + off.NeighbourSplits + off.SelfCaps + off.FallbackHeading);
+            Assert.Equal(0, off.CornersRounded);
+            Assert.Equal(3, noLead.Count);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task ATwoCornerPathInTheSameDirection_IsBudgetBound_NotCappedOrSplit()
+    {
+        // BUDGET-REACH FOLLOW-UP: east, north, west along a C. With the default query budget the first corner's arc uses up the path
+        // (190 estimated queries) and the second corner is left unrounded by a budget stop; the neighbour cap and the split point never
+        // run. When the budget reaches the second corner this test should be tightened to the heading bound (design: max 0.5524 rad).
+        Rect[] region = [new(0f, 0f, 30f, 8f), new(22f, 0f, 30f, 30f), new(0f, 22f, 30f, 30f)];
+        await RunAsync(region, (world, map, at) =>
+        {
+            Vector3[] input = [at(new(1f, 7.5f)), at(new(22f, 8f)), at(new(22f, 22f)), at(new(1f, 22.5f))];
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref stats);
+            LogCost("same-direction pair", world, stats, shaped);
+            _output.WriteLine($"budget stops {stats.BudgetStops}, budget fallbacks {stats.FallbackBudget}, caps {stats.NeighbourCaps}, splits {stats.NeighbourSplits}, max turn {MaxTurn(shaped):F4}");
+
+            Assert.Equal(0, stats.NeighbourCaps);
+            Assert.Equal(0, stats.NeighbourSplits);
+            Assert.True(stats.BudgetStops > 0 || stats.FallbackBudget > 0, "the second corner's outcome is not a budget stop");
+            Assert.Equal(1, stats.CornersRounded);
+            Assert.Equal(input[0], shaped[0]);
+            Assert.Equal(input[^1], shaped[^1]);
+            AssertInside(world, shaped);
+            return true;
+        });
+    }
+
+    [Fact]
+    public void ThePushThatKeepsTheNeighbourWithinTheHeadingStep_MatchesABruteForceOfTheTurn()
+    {
+        const float allowedBound = PlayerbotPathShaping.MaxHeadingStepRadians - 1e-3f;
+        const float slack = 0.3f;
+        int finite = 0, infinite = 0, zero = 0;
+        for (float theta = 0.4f; theta <= 2.801f; theta += 0.2f)
+        {
+            for (float tauOld = -1.2f; tauOld <= 1.2001f; tauOld += 0.1f)
+            {
+                foreach (float side in new[] { 1f, -1f })
+                {
+                    // prevPrev -> prev along +x, prev -> v at heading tauOld (10 yd), the corner at v turns by side * theta.
+                    var prevPrev = new Vector3(-10f, 0f, 0f);
+                    var prev = new Vector3(0f, 0f, 0f);
+                    var dirIn = new Vector2(MathF.Cos(tauOld), MathF.Sin(tauOld));
+                    var v = new Vector3(10f * dirIn.X, 10f * dirIn.Y, 0f);
+                    float outHeading = tauOld + (side * theta);
+                    var dirOut = new Vector2(MathF.Cos(outHeading), MathF.Sin(outHeading));
+                    Vector2 outward = -Vector2.Normalize(dirOut - dirIn);
+
+                    float allowed = MathF.Abs(tauOld) <= PlayerbotPathShaping.MaxHeadingStepRadians ? allowedBound : MathF.Abs(tauOld) + slack - 1e-3f;
+                    float pMax = PlayerbotPathShaping.MaxPushForNeighbour(prevPrev, prev, v, dirIn, outward, theta);
+                    string at = $"theta {theta:F2} tauOld {tauOld:F2} side {side}: pMax {pMax}";
+
+                    float TurnAtPrev(float push) => Turn2(prevPrev.XY(), prev.XY(), v.XY() + (outward * push));
+                    if (float.IsPositiveInfinity(pMax))
+                    {
+                        infinite++;
+                        foreach (float push in new[] { 5f, 50f, 1000f })
+                            Assert.True(TurnAtPrev(push) <= allowed + 1e-4f, $"{at}: push {push} turns the neighbour {TurnAtPrev(push):F4} > {allowed:F4}");
+                    }
+                    else if (pMax == 0f)
+                    {
+                        zero++;
+                        foreach (float push in new[] { 0.01f, 0.5f, 3f })
+                            Assert.True(TurnAtPrev(push) > allowed - 1e-4f, $"{at}: push {push} still keeps the neighbour at {TurnAtPrev(push):F4} <= {allowed:F4}");
+                    }
+                    else
+                    {
+                        finite++;
+                        Assert.True(pMax > 0f, at);
+                        Assert.InRange(TurnAtPrev(pMax) - allowed, -1e-4f, 1e-4f);
+                        Assert.True(TurnAtPrev(pMax * 0.5f) <= allowed + 1e-4f, $"{at}: half of it already exceeds");
+                        Assert.True(TurnAtPrev((pMax * 1.2f) + 0.05f) > allowed, $"{at}: a larger push does not exceed");
+                    }
+                }
+            }
+        }
+
+        _output.WriteLine($"grid: {finite} finite caps, {infinite} unbounded, {zero} zero");
+        Assert.True(finite > 50 && zero > 0 && infinite > 0, "the grid must exercise all three cases");
+    }
+
+    private static float Turn2(Vector2 a, Vector2 b, Vector2 c)
+    {
+        Vector2 u = Vector2.Normalize(b - a), w = Vector2.Normalize(c - b);
+        return MathF.Acos(Math.Clamp(Vector2.Dot(u, w), -1f, 1f));
     }
 
     [Fact]

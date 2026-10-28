@@ -134,10 +134,18 @@ it starts along) and the motion's own on-mesh check. Where the mesh's own leg be
 `points[i]`, or `points[i]` to `points[i+1]`; never a leg of an already shaped neighbour) already fails that check (stepped city ground),
 a new leg is accepted only if it is no worse than that mesh leg: floor mismatch and height step within a quarter yard of the mesh leg's,
 line of sight clear, back on the mesh. A mesh leg that passes the check keeps the new leg to the same standard. Otherwise the corner
-keeps its mesh position. A rounding arc has up to four interior points, so no interior vertex of a rounded corner turns more than
-about 34 degrees (the tangent points turn half that); a corner whose arc is not possible keeps a sharp turn, moved off the obstacle. The
+keeps its mesh position. A rounding arc has up to five interior points. With rounding on (`CornerTurnLeadYards` above 0) the shaper keeps a
+heading guarantee: every point it creates (the arc's tangent and interior points, and the split point it may add one yard along
+the incoming leg) turns at most about 34 degrees (0.6 radians; the tangent points turn half that); a corner that was within that bound
+before it was moved stays within it; a point already emitted that was within the bound is never pushed above it by the next corner
+(its push is cut, or the split point takes the turn); and a point already above the bound is pushed at most 0.3 radians further.
+A corner not sharper than the bound whose push would widen its turn past it is rounded instead. Three exceptions: a corner sharper than
+the bound whose arc is not possible (too little lead, no room, an arc point or chord that fails, the budget) keeps a sharp turn,
+widened by its own push; a mesh corner kept unchanged can end up above the bound when the previous corner's push widened its turn and it
+cannot be rounded; and the heading at the start point relative to the bot's facing is not bounded. The
 start and the destination never move. Cost is bounded per plan: at most 12 corners, within 120 yards of the start, and the estimated
-collision and mesh queries (every probe, ground snap and leg check, charged before it is made) never pass 192; a check the budget cannot
+collision and mesh queries (every probe, ground snap and leg check, charged before it is made) stay within 192 plus at most one reverse
+chord check (about 40 or fewer), estimated, not counted by hardware; a check the budget cannot
 pay for leaves the corner at its mesh position. A path with no sharp corner costs nothing.
 `PlayerbotMotion` also gives up navigation loops. A mesh
 route's proof covers its own legs only: a bot taken off its route (a chase, an escape, a fear, a same-map teleport) and handed it
