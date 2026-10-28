@@ -66,7 +66,6 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
         _service = new TeleportService(world, SendBeforeAddToMap, SendAfterAddToMap, logger);
         world.PlayerLoggingOut += _service.Forget;
         _service.HonorlessTargetDue += CastHonorlessTarget;
-        MapEntryMountRule.Attach(_service, () => ResolveSpells()?.System);
     }
 
     /// <summary>Spell 2479, Honorless Target (vmangos Player::ProcessDelayedOperations, Player.cpp:2183-2184).</summary>
@@ -105,8 +104,14 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
         }
     }
 
-    private static void SendAfterAddToMap(Player player)
+    private void SendAfterAddToMap(Player player)
     {
+        // vmangos HandleMoveWorldportAckOpcode (MovementHandler.cpp:189-191): the mount allow check on far arrival only, after the map add.
+        if (ResolveSpells() is { } spells)
+        {
+            MapEntryMountRule.Enforce(spells.System, player);
+        }
+
         if (player.Session is WorldSession session)
         {
             LoginSequence.SendInitialPacketsAfterAddToMap(session, player);

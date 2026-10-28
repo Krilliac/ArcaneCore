@@ -1,6 +1,4 @@
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Locomotion;
-using ArcaneCore.Game.Teleport;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -14,10 +12,13 @@ namespace ArcaneCore.Game.Spells;
 public static class MapEntryMountRule
 {
     /// <summary>
-    /// Dismount <paramref name="player"/> when its current map forbids mounts. Idempotent and a no-op off-map, on an
-    /// allowed map, or when the player is neither mounted nor carrying a Mounted aura.
+    /// Dismount <paramref name="player"/> when its current map forbids mounts: remove every Mounted aura (vmangos
+    /// <c>RemoveSpellsCausingAura(SPELL_AURA_MOUNTED)</c>); the aura's remove handler clears the mount display. A display-only mount
+    /// with no Mounted aura (a taxi flight) is left alone, as vmangos leaves it. Idempotent and a no-op off-map or on an allowed map.
+    /// Call it once per far arrival, after the map add (vmangos HandleMoveWorldportAckOpcode); it is not run on near teleports or at
+    /// login (vmangos has no login map-mount check).
     /// </summary>
-    /// <returns>True when a dismount was performed.</returns>
+    /// <returns>True when a Mounted aura was removed.</returns>
     public static bool Enforce(SpellSystem system, Player player)
     {
         ArgumentNullException.ThrowIfNull(system);
@@ -27,27 +28,12 @@ public static class MapEntryMountRule
             return false;
         }
 
-        bool wasMounted = MountService.IsMounted(player);
-        MountService.Unmount(system, player);
-        system.RemoveAurasByType(player, AuraType.Mounted);
-        return wasMounted;
-    }
-
-    /// <summary>
-    /// Run <see cref="Enforce"/> for every player that completes a far teleport (the point after the map add in vmangos'
-    /// worldport ack). <paramref name="spells"/> is read at each arrival because the spell system may be wired after the
-    /// teleport service; null skips the check.
-    /// </summary>
-    public static void Attach(TeleportService teleports, Func<SpellSystem?> spells)
-    {
-        ArgumentNullException.ThrowIfNull(teleports);
-        ArgumentNullException.ThrowIfNull(spells);
-        teleports.TeleportCompleted += player =>
+        bool hasMountedAura = system.GetAuras(player).Any(h => h.HasAura(AuraType.Mounted));
+        if (hasMountedAura)
         {
-            if (spells() is { } system)
-            {
-                Enforce(system, player);
-            }
-        };
+            system.RemoveAurasByType(player, AuraType.Mounted);
+        }
+
+        return hasMountedAura;
     }
 }

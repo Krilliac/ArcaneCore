@@ -51,9 +51,8 @@ public sealed class MapEntryMountRuleTests
 
     private static TeleportService Teleports(SpellTestKit kit)
     {
-        var teleports = new TeleportService(kit.World, _ => { }, _ => { });
+        var teleports = new TeleportService(kit.World, _ => { }, player => MapEntryMountRule.Enforce(kit.System, player));
         kit.World.PlayerLoggingOut += teleports.Forget;
-        MapEntryMountRule.Attach(teleports, () => kit.System);
         return teleports;
     }
 
@@ -108,11 +107,10 @@ public sealed class MapEntryMountRuleTests
     }
 
     [Fact]
-    public void EnforceOnADungeonMapDismountsAMountedLogin()
+    public void EnforceOnADungeonMapRemovesTheMountedAura()
     {
         using SpellTestKit kit = Kit();
         Player player = MountedPlayer(kit);
-        Assert.True(player.Map!.MapId == 0);
         kit.World.RemovePlayer(player);
         player.MapId = Deadmines;
         kit.World.AddPlayer(player);
@@ -123,6 +121,42 @@ public sealed class MapEntryMountRuleTests
         Assert.False(kit.System.HasAura(player, BrownHorse));
         Assert.Equal(0u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
         Assert.False(MapEntryMountRule.Enforce(kit.System, player));
+    }
+
+    [Fact]
+    public void ANearTeleportInsideADungeonKeepsATriggeredMount()
+    {
+        using SpellTestKit kit = Kit();
+        TeleportService teleports = Teleports(kit);
+        (Player player, _) = kit.AddPlayer(1);
+        player.Level = 60;
+        FarTeleport(kit, teleports, player, Deadmines);
+        kit.System.CastSpell(player, BrownHorse, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.True(kit.System.HasAura(player, BrownHorse));
+
+        Assert.True(teleports.TeleportTo(player, Deadmines, 20f, 20f, 20f, 0));
+        kit.World.RunTick(50);
+        Assert.Equal(TeleportStage.Near, teleports.StageOf(player));
+        Assert.True(teleports.HandleTeleportAck(player, player.Guid.Value));
+        kit.World.RunTick(50);
+
+        Assert.True(kit.System.HasAura(player, BrownHorse));
+        Assert.Equal(14337u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
+    }
+
+    [Fact]
+    public void ADisplayOnlyMountWithoutAMountedAuraIsLeftAlone()
+    {
+        using SpellTestKit kit = Kit();
+        (Player player, _) = kit.AddPlayer(1);
+        kit.World.RemovePlayer(player);
+        player.MapId = Deadmines;
+        kit.World.AddPlayer(player);
+        Assert.True(MountService.Mount(kit.System, player, 14337u));
+
+        Assert.False(MapEntryMountRule.Enforce(kit.System, player));
+
+        Assert.Equal(14337u, player.GetUInt32(UpdateFields.UnitFieldMountdisplayid));
     }
 
     [Fact]
