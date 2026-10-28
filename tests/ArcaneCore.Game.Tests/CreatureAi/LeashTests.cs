@@ -155,8 +155,9 @@ public sealed class LeashTests
         f.System.ApplyCombatMovement(f.Wolf);
         Assert.True(MapCombat.CanReachWithMeleeAutoAttack(f.Wolf, f.Player));
 
-        // Well past the 12 s extension, both beyond the 50 yd area (not 40 s: a fight with no damage exchanged is dropped at about 39 s).
-        Run(f.World, 30000);
+        // Past the 12 s extension (three 5 s refreshes), both beyond the 50 yd area; kept short, a fight with no damage exchanged is dropped
+        // by other rules after about 30-40 s.
+        Run(f.World, 20000);
 
         Assert.False(f.Wolf.IsInEvadeMode);
         Assert.Same(f.Player, f.Wolf.Combat.Victim);
