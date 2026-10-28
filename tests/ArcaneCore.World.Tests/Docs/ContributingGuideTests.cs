@@ -35,7 +35,7 @@ public sealed class ContributingGuideTests
     public void TheBuildCommands_AreExactlyTheRunLinesOfTheCiWorkflow()
     {
         string[] ci = CiRunLines();
-        Assert.True(ci.Length == 4, "ci.yml should have the restore, build, test and mock-client steps; found " + ci.Length);
+        Assert.True(ci.Length == 5, "ci.yml should have the restore, build, test, timing-test and mock-client steps; found " + ci.Length);
 
         Match fence = Regex.Match(Text, @"```\n(dotnet restore.*?)\n```", RegexOptions.Singleline);
         Assert.True(fence.Success, "the guide must show the CI commands in a code block");

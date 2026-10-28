@@ -19,6 +19,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 /// </summary>
 public sealed class DungeonScenarioTests
 {
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task Dungeon_TwoGroupedBotsShareOneInstance_AndAMemberWhoRelogsInsideComesBackToIt()
     {

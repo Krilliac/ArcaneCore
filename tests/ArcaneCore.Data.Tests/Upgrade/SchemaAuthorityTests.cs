@@ -47,6 +47,7 @@ public sealed class SchemaAuthorityTests : IAsyncLifetime
         Assert.Equal(SchemaPolicy.Never, mapped.EffectivePolicy);
     }
 
+    [Trait("Category", "Timing")]
     [Theory]
     [MemberData(nameof(Providers))]
     public async Task FourConcurrentEnsureAsync_OnSharedDatabase_SerializeAndConvergeWithoutDuplicateDdl(DatabaseProvider provider)

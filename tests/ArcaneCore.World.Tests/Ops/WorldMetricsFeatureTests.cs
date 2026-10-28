@@ -45,6 +45,7 @@ public sealed class WorldMetricsFeatureTests
         Assert.Equal("http://+:9600/metrics/", provider2.GetRequiredService<MetricsHost>().ConfiguredPrometheusPrefix);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task Enabled_RecordsTicksMapsAndPerMapSamples()
     {
