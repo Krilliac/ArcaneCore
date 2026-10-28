@@ -367,8 +367,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// <summary>A walk before a boat, zeppelin or portal leg hands off this close to that leg's start.</summary>
     internal const float HandOffYards = 100f;
 
-    /// <summary>A same-map teleport trigger leg is taken once the bot stands this close to its exit (as <see cref="PlayerbotRecovery"/>'s portal walk).</summary>
-    internal const float PortalArrivedYards = 20f;
+    /// <summary>A same-map teleport trigger leg is taken once the bot stands this close to its exit (<see cref="PlayerbotRecovery.PortalArrivedYards"/>).</summary>
+    internal const float PortalArrivedYards = PlayerbotRecovery.PortalArrivedYards;
 
     /// <summary>On top of twice the planned seconds, the time a journey may take before it is overdue.</summary>
     internal const uint SlackMs = 600_000;
@@ -516,7 +516,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     /// <item>Walkable: the same map, and, where the map's walking region graph answers (<see cref="NavMeshPathfinder.RegionGraph"/>, the check
     /// <see cref="PlayerbotNavigation.IsUnreachableOnFoot"/> makes for the bot), the same walkable component. A place the graph cannot place
     /// (no navmesh, the graph not built yet, a point at sea such as a ship's port, or a small fragment) counts as joined: the walk's own
-    /// failure then replans. The first <see cref="BlockingLocates"/> places read their tile at once, so a goal on a tile not read yet is placed.
+    /// failure then replans. The goal reads its tile at once (<see cref="BlockingLocates"/>), so a goal on a tile not read yet is placed.
     /// Memoised per place for this one set of facts.</item>
     /// <item>TriggerPortals: the same-map teleport triggers of the bot's map (<see cref="PlayerbotAreaTriggers.SameMapPortals"/>) that
     /// <see cref="PlayerbotMapPolicy.AllowsTrigger"/> lets a bot take, less those the journey excluded and those whose entry requirements the bot
@@ -564,7 +564,10 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         }
 
         var triggerPortals = new List<TriggerPortal>();
-        foreach ((AreaTriggerTemplate trigger, AreaTriggerTeleport teleport) in PlayerbotAreaTriggers.SameMapPortals(WorldMaps.Of(session.World), player.MapId))
+        IReadOnlyList<(AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)> sameMap = options.Travel.AreaTriggers
+            ? PlayerbotAreaTriggers.SameMapPortals(WorldMaps.Of(session.World), player.MapId)
+            : [];
+        foreach ((AreaTriggerTemplate trigger, AreaTriggerTeleport teleport) in sameMap)
         {
             if (excluded?.Triggers.Contains(trigger.Id) == true
                 || !PlayerbotMapPolicy.AllowsTrigger(options.AllowedMaps, teleport.TargetMap, optedIn: false, leadsToCorpse: false)
@@ -616,12 +619,15 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     private static readonly PathOptions BlockingDryWalkingLocate = DryWalkingLocate with { NonBlockingTiles = false };
 
     /// <summary>
-    /// The first places one set of facts locates with a blocking tile read (the start, the goal and the first ports the planner asks about,
-    /// in its order): a tile not read yet would otherwise leave the place undecided, so a far goal behind a tile the walk never loaded was
-    /// planned as one straight Walk leg (issue #1456, #1569: Teldrassil's upper level toward Ashenvale). The rest are located without waiting.
-    /// A read is a few ms, once per tile, on a call made when a journey is planned, never per tick.
+    /// How many places one set of facts locates with a blocking tile read: the first place that is not the bot's own, which the planner asks
+    /// about right after the start, so the goal. A tile not read yet would otherwise leave the goal undecided, and a far goal behind a tile
+    /// the walk never loaded was planned as one straight Walk leg (issue #1456, #1569: Teldrassil's upper level toward Ashenvale). Every
+    /// other place (ports, trigger ends) is located without waiting and counts as joined while its tile is pending: the walk's own failure
+    /// then replans, by which time the background read has finished. A blocking read is a synchronous world-thread cost (Teldrassil and
+    /// Kalimdor tiles are 1.1 to 3.4 MB; live Debug reads measured p50 22 ms, p90 31 ms, max 225 ms), so it is one per journey plan or
+    /// replan, never per tick, and never six.
     /// </summary>
-    internal const int BlockingLocates = 6;
+    internal const int BlockingLocates = 1;
 
     /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
     private static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
@@ -629,13 +635,17 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId;
         var components = new Dictionary<TravelPlace, (int Component, bool Decides)>();
         int blocking = 0;
+        var self = new TravelPlace(player.MapId, new Vector3(player.X, player.Y, player.Z));
         (int Component, bool Decides) Locate(TravelPlace place)
         {
             if (components.TryGetValue(place, out (int, bool) known)) return known;
             (int, bool) found = (-1, false);
             if (place.Position.IsFinite() && nav.RegionGraph(place.MapId, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes) is { } graph)
             {
-                int region = nav.RegionAt(graph, place.Position, blocking++ < BlockingLocates ? BlockingDryWalkingLocate : DryWalkingLocate);
+                // The bot's own place is never the one to wait for (its tile is the one it stands on).
+                bool wait = place.MapId != self.MapId || place.DistanceTo(self) > 1f;
+                int region = nav.RegionAt(graph, place.Position, wait && blocking < BlockingLocates ? BlockingDryWalkingLocate : DryWalkingLocate);
+                if (wait) blocking++;
                 if (region < 0 && player.Map is { } map && map.MapId == place.MapId)
                 {
                     Vector3 resolved = PlayerbotShip.ResolveDockTarget(map, place.Position, new Vector3(player.X, player.Y, player.Z));
@@ -1237,6 +1247,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     private static string? SwitchOf(TravelMeans means, PlayerbotOptions options) => means switch
     {
         TravelMeans.FlightPath when !options.Taxi.Enabled => "flight paths were switched off",
+        TravelMeans.AreaTrigger when !options.Travel.AreaTriggers => "same-map teleport triggers were switched off",
         TravelMeans.Boat when !options.Travel.Boats => "boats were switched off",
         TravelMeans.Zeppelin when !options.Travel.Zeppelins => "zeppelins were switched off",
         TravelMeans.Hearthstone when !options.Travel.Hearthstone => "the hearthstone was switched off",

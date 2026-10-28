@@ -1,5 +1,5 @@
 using System.Numerics;
-using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots;
 using Xunit;
@@ -37,31 +37,44 @@ public sealed class TravelWalkableUnloadedTileTests(Xunit.Abstractions.ITestOutp
         });
 
     /// <summary>
-    /// The cost of the blocking tile reads (<see cref="PlayerbotTravel.BlockingLocates"/> places, read synchronously on the world thread):
-    /// <c>BuildFacts</c> with the goal's tile not resident, timed on the world thread, then again with every tile resident. The bound is
-    /// generous (a failure means a read that blocks for seconds); the measured times are in the assertion messages and the output.
+    /// One set of facts reads at most <see cref="PlayerbotTravel.BlockingLocates"/> tile synchronously on the world thread (counted by
+    /// <see cref="PathSearchCounters"/>): the first place that is not the bot's own. The next cold place is only queued for a background read
+    /// and counts as joined until it arrives; a new set of facts, which is what a replan builds, places it.
     /// </summary>
     [Fact]
-    public async Task BuildFacts_WithAColdGoalTile_ReadsItOnceAndStaysCheap()
+    public async Task BuildFacts_ReadsOnlyTheFirstColdPlaceOnTheWorldThread_AndQueuesTheRest()
     {
-        await using SyntheticNavWorld world = await StartAsync();
-        const double BudgetMs = 1000.0;
-        (double cold, double warm) = await world.Host.OnWorldAsync(() =>
+        await using SyntheticNavWorld world = await SyntheticNavWorld.StartAsync(_fixture, [TravelIslands.Home()], new FloorLineOfSight(),
+            unloadedTiles: [TravelIslands.Far(), TravelIslands.Large()]);
+        await world.PlaceAsync(TravelIslands.Start);
+        await world.Host.OnWorldAsync(() => { world.Nav.UnloadTile(0, 30, 31); world.Nav.UnloadTile(0, 31, 30); return true; });
+        Assert.Equal(1, PlayerbotTravel.BlockingLocates);
+
+        (bool first, bool second, long syncReads, double ms) = await world.Host.OnWorldAsync(() =>
         {
-            Player player = world.Player;
+            PathSearchTotals before = PathSearchCounters.Current;
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            TravelFacts coldFacts = PlayerbotTravel.BuildFacts(world.Session, player, TravelIslands.Options());
-            _ = coldFacts.Walkable!(TravelPlace.Of(player), new TravelPlace(0, TravelIslands.Goal));
-            double coldMs = sw.Elapsed.TotalMilliseconds;
-            sw.Restart();
-            TravelFacts warmFacts = PlayerbotTravel.BuildFacts(world.Session, player, TravelIslands.Options());
-            _ = warmFacts.Walkable!(TravelPlace.Of(player), new TravelPlace(0, TravelIslands.Goal));
-            return (coldMs, sw.Elapsed.TotalMilliseconds);
+            TravelFacts facts = PlayerbotTravel.BuildFacts(world.Session, world.Player, TravelIslands.Options());
+            TravelPlace here = TravelPlace.Of(world.Player);
+            bool onLarge = facts.Walkable!(here, new TravelPlace(0, new Vector3(100f, 700f, 0f))); // the first cold place: read now
+            bool onFar = facts.Walkable!(here, new TravelPlace(0, TravelIslands.Goal)); // the second: queued, undecided
+            return (onLarge, onFar, (PathSearchCounters.Current - before).SyncTileReads, sw.Elapsed.TotalMilliseconds);
         });
 
-        output.WriteLine($"BuildFacts + walkable test, cold goal tile {cold:F2} ms, warm {warm:F2} ms");
-        Assert.True(cold < BudgetMs, $"cold BuildFacts took {cold:F2} ms (warm {warm:F2} ms)");
-        Assert.True(warm < BudgetMs, $"warm BuildFacts took {warm:F2} ms (cold {cold:F2} ms)");
+        output.WriteLine($"two cold places: {syncReads} synchronous tile read(s), {ms:F2} ms on the world thread");
+        Assert.False(first, "the first cold place is placed on the large island, apart from the bot's");
+        Assert.True(second, "the second cold place is still pending and counts as joined");
+        Assert.Equal(1, syncReads);
+
+        bool walkable = true;
+        for (int attempt = 0; attempt < 200 && walkable; attempt++)
+        {
+            walkable = await world.Host.OnWorldAsync(() =>
+                PlayerbotTravel.BuildFacts(world.Session, world.Player, TravelIslands.Options()).Walkable!(TravelPlace.Of(world.Player), new TravelPlace(0, TravelIslands.Goal)));
+            if (walkable) await Task.Delay(20);
+        }
+
+        Assert.False(walkable, "a new set of facts places the second place too");
     }
 
     [Fact]

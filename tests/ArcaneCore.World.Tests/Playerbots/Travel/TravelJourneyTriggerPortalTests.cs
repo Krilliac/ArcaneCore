@@ -1,6 +1,9 @@
 using System.Numerics;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Teleport;
+using ArcaneCore.World.Features;
+using Microsoft.Extensions.DependencyInjection;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.TestSupport;
@@ -65,6 +68,22 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
 
     private Task<SyntheticNavWorld> StartAsync()
         => SyntheticNavWorld.StartAsync(_fixture, [TravelIslands.Home(), TravelIslands.Far(), TravelIslands.Large()], new FloorLineOfSight());
+
+    /// <summary>
+    /// A world whose registered <see cref="IAreaTriggerGate"/> refuses trigger <see cref="Trigger"/> for every player: a refusal the plan cannot
+    /// foresee (<see cref="PlayerbotTravel.MeetsRequirements"/> reads only the row), so the leg is planned, walked and refused.
+    /// </summary>
+    private Task<SyntheticNavWorld> StartRefusingAsync()
+        => SyntheticNavWorld.StartAsync(_fixture, [TravelIslands.Home(), TravelIslands.Far(), TravelIslands.Large()], new FloorLineOfSight(),
+            configureServices: services => services.AddSingleton<IWorldFeature, RefusingGate>());
+
+    private sealed class RefusingGate : IWorldFeature, IAreaTriggerGate
+    {
+        public void Attach(WorldRuntime world) { }
+
+        public AreaTriggerVerdict Check(Player player, AreaTriggerTeleport teleport)
+            => teleport.Id == Trigger ? AreaTriggerVerdict.Refuse("The way is shut.") : AreaTriggerVerdict.Allow;
+    }
 
     /// <summary>Brain updates every 50 ms tick (a think every 100 ms) and the motion pumped after each, until the journey ends or <paramref name="maxMs"/> passed.</summary>
     private static async Task<JourneyState?> RunAsync(SyntheticNavWorld world, PlayerbotBrain brain, uint maxMs, Action<Player, TravelJourney?> observe)
@@ -139,8 +158,8 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
     [Fact]
     public async Task ATriggerThatRefusesTheBot_FailsTheLegOnce_AndTheReplanHasNoRoute()
     {
-        await using SyntheticNavWorld world = await StartAsync();
-        // Planned while the trigger lets the bot in; its level requirement is raised after (a content reload), so the plan could not foresee the refusal.
+        await using SyntheticNavWorld world = await StartRefusingAsync();
+        // The trigger row admits the bot (level 0); the registered gate refuses it, so the plan cannot foresee the refusal.
         await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 0);
         await world.PlaceAsync(TravelIslands.Start);
         PlayerbotOptions options = TravelIslands.Options();
@@ -151,11 +170,9 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
         {
             await world.Host.OnWorldAsync(() =>
             {
-                Assert.True(world.Player.Level < 60, "the trigger must refuse this bot");
                 Assert.True(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out string? why), why);
                 Assert.Equal(["Walk", "AreaTrigger", "Walk"], PlayerbotTravel.JourneyOf(world.Player)!.Planned.Legs.Select(l => l.Means.ToString()));
             });
-            await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 60);
 
             JourneyState? state = await RunAsync(world, brain, 300_000, (_, _) => { });
             TravelJourney journey = await world.Host.OnWorldAsync(() => PlayerbotTravel.JourneyOf(world.Player)!);
@@ -163,6 +180,10 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
             Assert.Equal(JourneyState.Failed, state);
             Assert.False(string.IsNullOrEmpty(journey.Failure));
             Assert.Equal(1, capture.Count(PlayerbotAnomalies.Key(PlayerbotTravel.AnomalyArea, "leg-failed")));
+            Assert.Contains("trigger 527: area trigger 527", capture.Describe());
+            // The trigger is left out of the replan, which therefore found no other way.
+            Assert.Contains(Trigger, journey.Excluded.Triggers);
+            Assert.Contains("no route", journey.Failure);
             await world.Host.OnWorldAsync(() => Assert.True(world.Player.X < 200f, "the refused bot stayed on its island"));
         }
         finally
@@ -181,7 +202,7 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
     [Fact]
     public async Task ARefusalByAVolumeEnteredOnTheWayIn_StillFailsTheLeg()
     {
-        await using SyntheticNavWorld world = await StartAsync();
+        await using SyntheticNavWorld world = await StartRefusingAsync();
         await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 0, radius: 30f);
         await world.PlaceAsync(TravelIslands.Start);
         PlayerbotOptions options = TravelIslands.Options();
@@ -195,7 +216,6 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
                 Assert.True(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out string? why), why);
                 Assert.Equal(["Walk", "AreaTrigger", "Walk"], PlayerbotTravel.JourneyOf(world.Player)!.Planned.Legs.Select(l => l.Means.ToString()));
             });
-            await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 60, radius: 30f);
 
             JourneyState? state = await RunAsync(world, brain, 120_000, (_, _) => { });
             TravelJourney journey = await world.Host.OnWorldAsync(() => PlayerbotTravel.JourneyOf(world.Player)!);
@@ -203,7 +223,8 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
             Assert.Equal(JourneyState.Failed, state);
             Assert.Equal(1, capture.Count(PlayerbotAnomalies.Key(PlayerbotTravel.AnomalyArea, "leg-failed")));
             // The leg failed on the trigger's own refusal (not as a side effect of a walk that stood in the volume).
-            Assert.Contains("did not teleport the bot", capture.Describe());
+            Assert.Contains("trigger 527: area trigger 527", capture.Describe());
+            Assert.Contains(Trigger, journey.Excluded.Triggers);
         }
         finally
         {
@@ -225,6 +246,23 @@ public sealed class TravelJourneyTriggerPortalTests(ITestOutputHelper output) : 
             Assert.False(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out string? why));
             Assert.NotNull(why);
             Assert.Null(PlayerbotTravel.JourneyOf(world.Player));
+        });
+    }
+
+    /// <summary>With <c>Travel:AreaTriggers</c> off no trigger is planned.</summary>
+    [Fact]
+    public async Task WithTheAreaTriggersSwitchOff_NoTriggerIsPlanned()
+    {
+        await using SyntheticNavWorld world = await StartAsync();
+        await TravelIslands.InstallTriggerAsync(world, Trigger, requiredLevel: 0);
+        await world.PlaceAsync(TravelIslands.Start);
+        PlayerbotOptions options = TravelIslands.Options();
+        options.Travel.AreaTriggers = false;
+        var travel = new PlayerbotTravel(options);
+        await world.Host.OnWorldAsync(() =>
+        {
+            Assert.Empty(PlayerbotTravel.BuildFacts(world.Session, world.Player, options).TriggerPortals);
+            Assert.False(travel.TryBegin(world.Session, world.Player, 0, TravelIslands.Goal, out _));
         });
     }
 }
