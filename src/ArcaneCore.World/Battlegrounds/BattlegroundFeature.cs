@@ -48,6 +48,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 {
     private readonly ILogger _logger = loggers.CreateLogger<BattlegroundFeature>();
     private readonly Dictionary<uint, MatchRuntime> _matches = [];
+    private readonly List<MatchRuntime> _matchScratch = [];
+    private bool _matchScratchInUse;
     private readonly Dictionary<ObjectGuid, GmMove> _gmMoves = [];
     private readonly System.Collections.Concurrent.ConcurrentDictionary<ObjectGuid, BattlegroundEntryPoint> _entryPoints = new();
     private BattlegroundEventIndexMap _events = BattlegroundEventIndexMap.Empty;
@@ -271,17 +273,34 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             _logger.LogFault("battleground.manager-tick", ex, "battleground manager tick failed");
         }
 
-        foreach (MatchRuntime match in _matches.Values.ToArray())
+        // A snapshot (a match tick can add/remove matches) in a reusable scratch list instead of a per-tick ToArray.
+        bool owned = !_matchScratchInUse;
+        List<MatchRuntime> matches = owned ? _matchScratch : [];
+        _matchScratchInUse |= owned;
+        try
         {
-            try
+            matches.AddRange(_matches.Values);
+            for (int i = 0; i < matches.Count; i++)
             {
-                match.Update(diffMs);
+                MatchRuntime match = matches[i];
+                try
+                {
+                    match.Update(diffMs);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("battleground.feature", ex);
+                    AnomalyLedger.Shared.Report("battleground", "feature-fault", $"match {match.Type} instance {match.InstanceId}", $"error={ex.GetType().Name}: {ex.Message}");
+                    _logger.LogFault("battleground.match-tick", ex, "battleground match {Type} instance {InstanceId} tick failed", match.Type, match.InstanceId);
+                }
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
+        }
+        finally
+        {
+            matches.Clear();
+            if (owned)
             {
-                FaultLedger.Shared.Record("battleground.feature", ex);
-                AnomalyLedger.Shared.Report("battleground", "feature-fault", $"match {match.Type} instance {match.InstanceId}", $"error={ex.GetType().Name}: {ex.Message}");
-                _logger.LogFault("battleground.match-tick", ex, "battleground match {Type} instance {InstanceId} tick failed", match.Type, match.InstanceId);
+                _matchScratchInUse = false;
             }
         }
 
