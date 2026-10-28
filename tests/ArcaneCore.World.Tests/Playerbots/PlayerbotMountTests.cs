@@ -453,7 +453,6 @@ public sealed class PlayerbotMountTests
         finally { MountServices.Current.Value = null; }
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task MountedBot_DismountsBeforeTalkingToAnNpc()
     {
@@ -600,7 +599,6 @@ public sealed class PlayerbotMountTests
         }));
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task BattleStance_DoesNotStopTheBotFromMountingWithAKnownMountSpell()
     {
@@ -612,7 +610,6 @@ public sealed class PlayerbotMountTests
         });
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task BatchedMountUp_IsUnderwayUntilItsGo_NotAFailedSummon()
     {

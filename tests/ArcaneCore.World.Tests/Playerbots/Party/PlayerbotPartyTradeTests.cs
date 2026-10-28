@@ -286,7 +286,6 @@ public sealed class PlayerbotPartyTradeTests
     /// Affinity from the party AI's trade note (<c>TradeCompleted</c>, +AffinityPerTrade): a worthless gift gave the junk-gift farm its affinity.
     /// Now only a gift worth at least <c>GiftMinValueCopper</c> of vendor value counts, summed over the stack. The boundary is the design's default (100).
     /// </summary>
-    [Trait("Category", "Timing")]
     [Theory]
     [InlineData(GreyEntry, 1u, false)]
     [InlineData(CheapEntry, 1u, false)]
