@@ -154,10 +154,10 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.Game/Combat/MapCombat.cs:283` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Combat/MapCombat.cs:303` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:170` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:379` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:398` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:428` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:470` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:389` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:408` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:438` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Game/Combat/Reactive/ReactiveService.cs:480` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Crafting/Enchanting/EnchantStatsApplier.cs:59` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Creatures/AI/SmartAi/SmartScript.cs:386` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Creatures/AI/SmartAi/SmartScript.cs:633` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
@@ -199,8 +199,8 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.Game/Instances/Scripts/InstanceData.cs:261` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.Game/Instances/Scripts/InstanceData.cs:278` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.Game/Items/ItemMaintenance.cs:296` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.Game/Locomotion/ClientMovementObservers.cs:114` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Game/Locomotion/ClientMovementObservers.cs:130` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Game/Locomotion/ClientMovementObservers.cs:115` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Game/Locomotion/ClientMovementObservers.cs:131` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.Game/Locomotion/Hazards/MapEnvironment.cs:76` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.Game/Locomotion/Hazards/MapEnvironment.cs:111` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.Game/Locomotion/MapLocomotion.cs:70` | Exception | logged | logs the exception object |
@@ -338,8 +338,8 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.Game/Spells/Procs/SpellSystem.Procs.cs:648` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Spells/Procs/SpellSystem.Procs.cs:665` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Spells/Scripts/SpellScriptRegistry.cs:214` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.Game/Spells/SpellSystem.Auras.cs:511` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.Game/Spells/SpellSystem.Auras.cs:668` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Game/Spells/SpellSystem.Auras.cs:527` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Game/Spells/SpellSystem.Auras.cs:791` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Spells/SpellSystem.Batching.cs:312` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.Game/Spells/SpellSystem.cs:267` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Game/Spells/SpellSystem.cs:306` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
@@ -403,8 +403,8 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.Kernel/Diagnostics/CrashDialog.cs:534` | all exceptions | by-design | documented in place: "Deliberately a catch-all: reporting the dialog's own failure must not stop the crash path either." |
 | `src/ArcaneCore.Kernel/Diagnostics/CrashDialog.cs:546` | Exception | by-design | inferred from the exception type; no comment at the site |
 | `src/ArcaneCore.Kernel/Diagnostics/CrashHandler.cs:222` | all exceptions | by-design | documented in place: "Deliberately a catch-all; see the summary." (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.Kernel/Diagnostics/CrashHandler.cs:347` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
-| `src/ArcaneCore.Kernel/Diagnostics/CrashHandler.cs:362` | Exception | by-design | reported to the operator / returned as a failure result using the exception message (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.Kernel/Diagnostics/CrashHandler.cs:372` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
+| `src/ArcaneCore.Kernel/Diagnostics/CrashHandler.cs:387` | Exception | by-design | reported to the operator / returned as a failure result using the exception message (changed by this lane: comment or counting only) |
 | `src/ArcaneCore.Kernel/Diagnostics/CrashReport.cs:44` | Exception | by-design | inferred from the exception type; no comment at the site (changed by this lane: comment or counting only) |
 | `src/ArcaneCore.Kernel/Diagnostics/CrashReport.cs:152` | Exception | by-design | documented in place: "Individual probes below still run inside Guarded." (changed by this lane: comment or counting only) |
 | `src/ArcaneCore.Kernel/Diagnostics/CrashReport.cs:226` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
@@ -468,13 +468,13 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.Kernel/Ops/Watchdog/MemoryMonitor.cs:319` | InvalidOperationException | by-design | documented in place: "notification cancelled" |
 | `src/ArcaneCore.Kernel/Ops/Watchdog/MemoryMonitor.cs:341` | InvalidOperationException | by-design | documented in place: "notifications are not available in this GC mode; polling continues" |
 | `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:45` | all exceptions | by-design | documented in place: "Never let a failing report block termination of a deadlocked process." |
-| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:317` | Exception | by-design | documented in place: "The tick thread must go on whatever the host's recorder does." (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:510` | Exception | by-design | documented in place: "The watchdog thread must keep checking whatever a subscriber does." (changed by this lane: comment or counting only) |
-| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:530` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
-| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:548` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
-| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:561` | Exception | by-design | inferred from the exception type; no comment at the site |
-| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:574` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:594` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
+| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:313` | Exception | by-design | documented in place: "The tick thread must go on whatever the host's recorder does." (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:504` | Exception | by-design | documented in place: "The watchdog thread must keep checking whatever a subscriber does." (changed by this lane: comment or counting only) |
+| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:524` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
+| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:542` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
+| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:555` | Exception | by-design | inferred from the exception type; no comment at the site |
+| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:568` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Kernel/Ops/Watchdog/TickMonitor.cs:588` | Exception | by-design | reported as the exception type only (a message may hold a secret or client data; some tests enforce it) |
 | `src/ArcaneCore.Kernel/Ops/Watchdog/WatchdogHost.cs:83` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.Kernel/Ops/Watchdog/WatchdogHost.cs:102` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.Kernel/Reflection/CodeAssemblies.cs:104` | ReflectionTypeLoadException | propagated | wraps and throws (inner exception kept unless the site says otherwise) |
@@ -605,37 +605,37 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2142` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
 | `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2160` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
 | `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2181` | TimeoutException | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2212` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2240` | ManagedRevisionConflictException | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2245` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2253` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2272` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2289` | ManagedRevisionConflictException | by-design | documented in place: "not running here; the other writer's row stays as it is" |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2413` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2418` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2443` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2476` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2584` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2739` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3036` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3098` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3149` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3172` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3188` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3198` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3222` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3296` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3311` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3338` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3424` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3456` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3522` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3531` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3636` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3669` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3687` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3905` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:4007` | Exception | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2216` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2244` | ManagedRevisionConflictException | message-only | logs a message without the exception: an expected, recoverable or client-caused condition (review each if the policy changes) |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2249` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2257` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2276` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2293` | ManagedRevisionConflictException | by-design | documented in place: "not running here; the other writer's row stays as it is" |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2417` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2422` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2447` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2480` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2588` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:2743` | Exception | by-design | reported to the operator / returned as a failure result using the exception message |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3040` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3102` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3153` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3176` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3192` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3202` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3226` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3300` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3319` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3346` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3432` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3464` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3530` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3539` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3644` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3677` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3695` | TaskCanceledException | by-design | cancellation / shutdown / disposed: expected control flow |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:3913` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.Playerbots/ManagedPlayerbotFeature.cs:4015` | Exception | by-design | cancellation / shutdown / disposed: expected control flow |
 | `src/ArcaneCore.Playerbots/Opportunities/PlayerbotOpportunities.cs:386` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Playerbots/Opportunities/PlayerbotOpportunities.cs:1133` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.Playerbots/Party/PlayerbotChatCommands.cs:275` | ArgumentOutOfRangeException | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
@@ -900,12 +900,12 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.World/Economy/AuctionBotFeature.cs:638` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Economy/EconomyFeature.Trade.cs:620` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.World/Economy/EconomyFeature.Trade.cs:636` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Economy/EconomyFeature.cs:151` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Economy/EconomyFeature.cs:345` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Economy/EconomyFeature.cs:453` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Economy/EconomyFeature.cs:475` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Economy/EconomyFeature.cs:485` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Economy/EconomyFeature.cs:495` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Economy/EconomyFeature.cs:152` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Economy/EconomyFeature.cs:347` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Economy/EconomyFeature.cs:460` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Economy/EconomyFeature.cs:482` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Economy/EconomyFeature.cs:492` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Economy/EconomyFeature.cs:502` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Economy/EconomySettlements.cs:300` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Economy/EconomySettlements.cs:326` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Economy/EconomySettlements.cs:368` | Exception | logged | logs the exception object |
@@ -1318,8 +1318,8 @@ About 115 sites (`_ = Task.Run`, `_ = XAsync()`, `ContinueWith`, background cons
 | `src/ArcaneCore.World/Social/SocialWriteQueue.cs:1037` | CharacterOwnershipRejectedException | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
 | `src/ArcaneCore.World/Social/SocialWriteQueue.cs:1043` | Exception | FIXED | was propagated (carried to a caller / observer that logs or rethrows it (not checked per site)); now logs the exception object |
 | `src/ArcaneCore.World/Social/SocialWriteQueue.cs:1054` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
-| `src/ArcaneCore.World/Spells/SpellFeature.cs:373` | Exception | logged | logs the exception object |
-| `src/ArcaneCore.World/Spells/SpellFeature.cs:456` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Spells/SpellFeature.cs:410` | Exception | logged | logs the exception object |
+| `src/ArcaneCore.World/Spells/SpellFeature.cs:493` | Exception | logged | logs the exception object |
 | `src/ArcaneCore.World/Spells/SpellStatePersistence.cs:316` | OperationCanceledException | by-design | cancellation / shutdown / disposed: expected control flow; "expected on shutdown" |
 | `src/ArcaneCore.World/Spells/SpellStatePersistence.cs:320` | Exception | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it (changed by this lane: comment or counting only) |
 | `src/ArcaneCore.World/Spells/SpellStatePersistence.cs:382` | CharacterOwnershipRejectedException | ledger-only | counted in the FaultLedger (.server faults) but not written to the log; the failure text is returned to a caller that logs it |
