@@ -188,7 +188,7 @@ Every item runs through implementer, then build-runner (full solution build with
 | #146, #160, #162, #164, #126 CLI and tool consolidation | Operator-facing message and exit-code contracts are parsed by scripts (run-gm-commands.ps1, dev-runner.ps1). spell-import also seeds data and uses host config. Needs per-tool redesign plus in-process tests first. |
 | #159, #163 deploy script restructuring | Live-server path with string-shape tests. Only the shared expected-lines module goes into the #169 bug fix. |
 | #108, #106, #115, #90, #88, #65-type small primitive merges (token buckets, ledger entry core, Lock conversion, RNG unification, class masks) | The edge semantics differ (clock-backwards handling, NoteSynthetic, Monitor.Wait in QueuedLineWriter, inclusive vs exclusive RNG bounds with 419 seeded tests, bit-31 masks). The behaviour-preservation proof costs more than the value. |
-| #43, #55 fault-boundary helpers | The double-record (dotted key plus dashed tag) is observable, and MapUpdateScheduler deliberately has no filter. A helper would mostly reshuffle code. |
+| #43, #55 fault-boundary helpers | The paired record (dotted key plus dashed tag) was observable then; since #1618 a site makes one `LogFault` per fault, and MapUpdateScheduler deliberately has no filter. A helper would mostly reshuffle code. |
 | #196-#207 remaining cross-project items (#198-#207 except the bugs) | Fold into Wave 4 or 2l where they overlap. The rest (#206 same-name types, #207 0xF130 literals, which are const-pattern bound) are low value. |
 
 ---
