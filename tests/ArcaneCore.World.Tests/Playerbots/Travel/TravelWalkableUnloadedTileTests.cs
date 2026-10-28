@@ -37,8 +37,8 @@ public sealed class TravelWalkableUnloadedTileTests(Xunit.Abstractions.ITestOutp
         });
 
     /// <summary>
-    /// One set of facts reads at most <see cref="PlayerbotTravel.BlockingLocates"/> tile synchronously on the world thread (counted by
-    /// <see cref="PathSearchCounters"/>): the first place that is not the bot's own. The next cold place is only queued for a background read
+    /// One set of facts reads at most <see cref="PlayerbotTravel.BlockingLocates"/> tile with a blocking read on the world thread (counted by
+    /// <see cref="PathSearchCounters"/> after the first place): the first place that is not the bot's own. The next cold place is only queued for a background read
     /// and counts as joined until it arrives; a new set of facts, which is what a replan builds, places it.
     /// </summary>
     [Fact]
@@ -50,21 +50,24 @@ public sealed class TravelWalkableUnloadedTileTests(Xunit.Abstractions.ITestOutp
         await world.Host.OnWorldAsync(() => { world.Nav.UnloadTile(0, 30, 31); world.Nav.UnloadTile(0, 31, 30); return true; });
         Assert.Equal(1, PlayerbotTravel.BlockingLocates);
 
-        (bool first, bool second, long syncReads, double ms) = await world.Host.OnWorldAsync(() =>
+        (bool first, bool second, long syncReads, long afterFirst, double ms) = await world.Host.OnWorldAsync(() =>
         {
             PathSearchTotals before = PathSearchCounters.Current;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             TravelFacts facts = PlayerbotTravel.BuildFacts(world.Session, world.Player, TravelIslands.Options());
             TravelPlace here = TravelPlace.Of(world.Player);
             bool onLarge = facts.Walkable!(here, new TravelPlace(0, new Vector3(100f, 700f, 0f))); // the first cold place: read now
+            long afterFirst = (PathSearchCounters.Current - before).SyncTileReads;
             bool onFar = facts.Walkable!(here, new TravelPlace(0, TravelIslands.Goal)); // the second: queued, undecided
-            return (onLarge, onFar, (PathSearchCounters.Current - before).SyncTileReads, sw.Elapsed.TotalMilliseconds);
+            return (onLarge, onFar, (PathSearchCounters.Current - before).SyncTileReads, afterFirst, sw.Elapsed.TotalMilliseconds);
         });
 
-        output.WriteLine($"two cold places: {syncReads} synchronous tile read(s), {ms:F2} ms on the world thread");
+        output.WriteLine($"two cold places: {afterFirst} synchronous tile read(s) for the first, {syncReads} in all, {ms:F2} ms on the world thread");
         Assert.False(first, "the first cold place is placed on the large island, apart from the bot's");
         Assert.True(second, "the second cold place is still pending and counts as joined");
-        Assert.Equal(1, syncReads);
+        // The first place's read is the one blocking read; the second place only queued its tile (installing a finished background
+        // read later is counted too, which is why the total is reported but not asserted).
+        Assert.Equal(1, afterFirst);
 
         bool walkable = true;
         for (int attempt = 0; attempt < 200 && walkable; attempt++)

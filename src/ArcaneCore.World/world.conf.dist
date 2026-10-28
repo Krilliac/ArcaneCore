@@ -18453,6 +18453,18 @@ World.Playerbots.ThinkIntervalMs = 500
 World.Playerbots.ThinkStarvedGapMs = 10000
 
 #
+#    World.Playerbots.Travel.AreaTriggers
+#        Description: Let bots walk into same-map teleport triggers as a leg (Teldrassil's Darnassus
+#                     and Rut'theran portals; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.AreaTriggers = true
+
+#
 #    World.Playerbots.Travel.Boats
 #        Description: Let bots ride the boats (Menethil - Auberdine, Menethil - Theramore, Auberdine
 #                     - Rut'theran, Booty Bay - Ratchet; on by default).
