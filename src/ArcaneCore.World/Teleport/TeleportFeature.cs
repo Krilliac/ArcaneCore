@@ -66,6 +66,7 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
         _service = new TeleportService(world, SendBeforeAddToMap, SendAfterAddToMap, logger);
         world.PlayerLoggingOut += _service.Forget;
         _service.HonorlessTargetDue += CastHonorlessTarget;
+        MapEntryMountRule.Attach(_service, () => ResolveSpells()?.System);
     }
 
     /// <summary>Spell 2479, Honorless Target (vmangos Player::ProcessDelayedOperations, Player.cpp:2183-2184).</summary>
@@ -82,13 +83,18 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
             return;
         }
 
+        ResolveSpells()?.System.CastSpell(player, SpellHonorlessTarget, SpellCastTargets.ForSelf(), triggered: true);
+    }
+
+    private SpellFeature? ResolveSpells()
+    {
         if (!_spellsResolved)
         {
             _spells = services.GetService<SpellFeature>();
             _spellsResolved = true;
         }
 
-        _spells?.System.CastSpell(player, SpellHonorlessTarget, SpellCastTargets.ForSelf(), triggered: true);
+        return _spells;
     }
 
     private static void SendBeforeAddToMap(Player player)

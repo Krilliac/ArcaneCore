@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -60,6 +61,13 @@ public static class LoginSequence
     /// </summary>
     public static void SendInitialPacketsAfterAddToMap(WorldSession session, Player player)
     {
+        // vmangos MovementHandler.cpp:189-191 (mount allow check). A mounted login into a dungeon passes here; a far teleport
+        // already ran the same rule on arrival (MapEntryMountRule.Attach). Enforce is idempotent.
+        if (session.Services.GetService<SpellFeature>() is { } spells)
+        {
+            MapEntryMountRule.Enforce(spells.System, player);
+        }
+
         // docs/areas/world-state.md: the zone tracker derives the zone and sends the world states
         // (and everything else a zone entry triggers) exactly like vmangos' UpdateZone.
         if (session.Services.GetService<WorldState.ZoneAreaFeature>() is { } zones)
