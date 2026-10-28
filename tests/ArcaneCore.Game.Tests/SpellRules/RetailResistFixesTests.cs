@@ -31,6 +31,9 @@ public sealed class RetailResistFixesTests
         return (kit, caster, target);
     }
 
+    /// <summary>The shape that marks Hellfire (warlock family flag, icon 937, visual 5423; SpellEntry.cpp:817-823).</summary>
+    private static SpellInfo AsHellfire(SpellInfo spell) => spell with { SpellFamilyName = 5, SpellFamilyFlags = 1UL << 6, SpellIconId = 937, SpellVisual = 5423 };
+
     private static Creature SpawnCreature(Func<CreatureTemplate, CreatureTemplate> configure)
     {
         CreatureTemplate template = configure(new CreatureTemplate
@@ -102,7 +105,7 @@ public sealed class RetailResistFixesTests
         warlock.SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire, 300);
         kit.System.Random = new Random(7);
         var rules = new VanillaSpellCombatRules();
-        SpellInfo self = RuleTestKit.Magic(hellfireTick, SpellSchool.Fire);
+        SpellInfo self = AsHellfire(RuleTestKit.Magic(hellfireTick, SpellSchool.Fire));
 
         Assert.Equal(0, rules.RollResist(kit.System, warlock, warlock, self, 100, periodic: false));
         int resisted = 0;
@@ -127,7 +130,7 @@ public sealed class RetailResistFixesTests
         var rules = new VanillaSpellCombatRules();
 
         Assert.Equal(75, rules.RollResist(kit.System, warlock, victim, RuleTestKit.Magic(11682, SpellSchool.Fire), 100, periodic: false)); // Hellfire Effect on a victim
-        Assert.Equal(75, rules.RollResist(kit.System, warlock, victim, RuleTestKit.Magic(1949, SpellSchool.Fire), 100, periodic: false)); // the tick id on another unit
+        Assert.Equal(75, rules.RollResist(kit.System, warlock, victim, AsHellfire(RuleTestKit.Magic(1949, SpellSchool.Fire)), 100, periodic: false)); // the tick on another unit
         Assert.Equal(75, rules.RollResist(kit.System, warlock, warlock, RuleTestKit.Magic(5857, SpellSchool.Fire), 100, periodic: false)); // any other spell on self
     }
 
@@ -159,8 +162,9 @@ public sealed class RetailResistFixesTests
         Assert.Equal(500, mob.GetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Arcane));
     }
 
-    private static SpellInfo SelfTick(uint id) =>
-        SpellTestKit.Spell(id, SpellTestKit.Effect(SpellEffectName.ApplyAura, 100, SpellImplicitTarget.UnitCaster, AuraType.PeriodicDamage, amplitude: 1000)) with
+    private static SpellInfo SelfTick(uint id, bool hellfire)
+    {
+        SpellInfo tick = SpellTestKit.Spell(id, SpellTestKit.Effect(SpellEffectName.ApplyAura, 100, SpellImplicitTarget.UnitCaster, AuraType.PeriodicDamage, amplitude: 1000)) with
         {
             School = SpellSchool.Fire,
             Duration = new SpellDuration(60_000, 0, 60_000),
@@ -168,10 +172,12 @@ public sealed class RetailResistFixesTests
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
         };
+        return hellfire ? AsHellfire(tick) : tick;
+    }
 
-    private static uint HealthLostToSelfTicks(uint spellId)
+    private static uint HealthLostToSelfTicks(uint spellId, bool hellfire)
     {
-        using var kit = new SpellTestKit(SelfTick(spellId));
+        using var kit = new SpellTestKit(SelfTick(spellId, hellfire));
         (Player warlock, _) = kit.AddPlayer(1);
         warlock.Level = 60;
         warlock.MaxHealth = 1_000_000;
@@ -188,11 +194,41 @@ public sealed class RetailResistFixesTests
     [Fact]
     public void HellfireTicksThroughTheRealPeriodicPath_AreNeverResisted()
     {
-        uint hellfire = HealthLostToSelfTicks(1949);
+        uint hellfire = HealthLostToSelfTicks(1949, hellfire: true);
 
         Assert.Equal(0u, hellfire % 100u);
         Assert.True(hellfire >= 3_900u, $"{hellfire}"); // every tick landed at full damage (about 40 of them)
-        Assert.True(HealthLostToSelfTicks(900_302) < hellfire); // control: the same self-tick under another id is resisted
+        Assert.True(HealthLostToSelfTicks(900_302, hellfire: false) < hellfire); // control: the same self-tick that is not Hellfire is resisted
+    }
+
+    [Theory]
+    [InlineData(-20, true)]
+    [InlineData(0, false)]
+    public void APercentResistanceAura_UnderAFlatCurse_FollowsTheSameFloorAsTheResistChance(int templateResistance, bool vulnerable)
+    {
+        using var kit = new SpellTestKit();
+        (Player caster, _) = kit.AddPlayer(1);
+        caster.Level = 60;
+        int fire = UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire;
+        Creature mob = SpawnCreature(t => t with { FireRes = templateResistance });
+        mob.SetInt32(fire, mob.GetInt32(fire) - 75); // Curse of the Elements: a flat -75
+        ArcaneCore.Game.Stats.UnitModLedger.For(mob).Apply((ArcaneCore.Game.Stats.UnitMods)((int)ArcaneCore.Game.Stats.UnitMods.Armor + (int)SpellSchool.Fire),
+            ArcaneCore.Game.Stats.UnitModifierType.TotalPct, 10, true); // plus a +10% resistance aura
+
+        PercentStatAuras.RefreshResistance(mob, (int)SpellSchool.Fire);
+
+        int total = mob.GetInt32(fire);
+        float chance = VanillaSpellCombatRules.AverageResistFraction(caster, mob, SpellSchool.Fire);
+        if (vulnerable)
+        {
+            Assert.True(total < -75, $"{total}"); // no floor: the field keeps the vulnerability, it is not clamped back to the template's -20
+            Assert.Equal(Math.Max(total / 300f, -0.75f), chance, 4); // and the chance reads the very same total
+        }
+        else
+        {
+            Assert.Equal(0, total); // floored at 0
+            Assert.Equal(0f, chance);
+        }
     }
 
     [Fact]

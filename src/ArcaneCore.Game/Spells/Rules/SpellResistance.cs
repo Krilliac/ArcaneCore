@@ -10,6 +10,12 @@ public static class SpellResistance
     public const float MaxChance = 0.75f;
 
     /// <summary>
+    /// The lowest total resistance a unit can have: 0 when its own create resistance is not negative, no floor (<see cref="int.MinValue"/>)
+    /// when it is (vmangos Unit::GetTotalResistanceValue). The resist chance and the percent-aura field refresh share this rule.
+    /// </summary>
+    public static int Floor(int baseResistance) => baseResistance < 0 ? int.MinValue : 0;
+
+    /// <summary>
     /// The resist chance of damage against a victim: positive 0..0.75, or negative -0.75..0 for a
     /// vulnerability (the victim has negative resistance).
     /// </summary>
@@ -26,10 +32,7 @@ public static class SpellResistance
     /// </param>
     public static float Chance(int victimResistance, int penetration, int skillMax, int casterLevel, int innateLevelDiff, bool applyInnate, int baseResistance = 0)
     {
-        if (victimResistance < 0 && baseResistance >= 0)
-        {
-            victimResistance = 0;
-        }
+        victimResistance = Math.Max(victimResistance, Floor(baseResistance));
 
         float resistance = victimResistance + penetration;
 

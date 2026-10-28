@@ -106,6 +106,9 @@ public sealed partial record SpellInfo
     /// (null = skip that check). <paramref name="friendlyDispel"/> is the caster/victim friendliness for DISPEL effects
     /// (null = the aura-less fall-through of the null caster/victim call, as the Aura constructor makes it).
     /// </summary>
+    /// <summary>Warlock Hellfire (family flag, icon 937, visual 5423; SpellEntry.cpp:817-823): the self-damaging periodic tick on the caster.</summary>
+    internal bool IsHellfire => IsFitToFamily(FamilyWarlock, WarlockHellfireBit) && SpellIconId == 937 && SpellVisual == 5423;
+
     public bool IsPositiveSpell(Func<uint, SpellInfo?>? lookup = null, bool? friendlyDispel = null)
     {
         if (HasAttribute(SpellAttributes.AuraIsDebuff))
@@ -139,7 +142,7 @@ public sealed partial record SpellInfo
         }
 
         // Hellfire damages the caster but is positive (SpellEntry.cpp:817-823).
-        if (IsFitToFamily(FamilyWarlock, WarlockHellfireBit) && SpellIconId == 937 && SpellVisual == 5423)
+        if (IsHellfire)
         {
             return true;
         }

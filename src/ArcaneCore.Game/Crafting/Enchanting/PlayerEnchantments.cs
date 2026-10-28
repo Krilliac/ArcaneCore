@@ -201,7 +201,7 @@ public sealed class PlayerEnchantments
                     break;
                 case EnchantEffectType.Resistance:
                     // Holy (school 1) has no resistance field: it stays 0 (vmangos Player::UpdateResistances, StatSystem.cpp:117-126).
-                    if (arg < PlayerResistanceCount && arg != 1)
+                    if (arg < PlayerResistanceCount && arg != (uint)SpellSchool.Holy)
                     {
                         AddField(UpdateFields.UnitFieldResistances + (int)arg, amount * sign);
                     }

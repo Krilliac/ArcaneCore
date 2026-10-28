@@ -509,16 +509,13 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
         bool canResist = spell.School != SpellSchool.Normal && !IsBinary(spell) && !spell.IgnoresResistances();
-        if (ReferenceEquals(caster, target) && IsHellfireSelfDamage(spell.Id))
+        if (ReferenceEquals(caster, target) && spell.IsHellfire)
         {
             canResist = false; // a warlock cannot resist its own Hellfire (Patch 1.9.0; vmangos lets it, retail wins)
         }
 
         return RollResist(system, caster, target, spell.School, damage, canResist, periodic ? spell : null);
     }
-
-    /// <summary>Hellfire ranks 1-3, whose periodic tick damages the caster (the damage on victims is Hellfire Effect, 5857/11681/11682, resisted normally).</summary>
-    private static bool IsHellfireSelfDamage(uint spellId) => spellId is 1949 or 11683 or 11684;
 
     /// <summary>
     /// The resist of damage no spell deals (<see cref="ISchoolResistRoll"/>; vmangos CalculateDamageAbsorbAndResist with a null

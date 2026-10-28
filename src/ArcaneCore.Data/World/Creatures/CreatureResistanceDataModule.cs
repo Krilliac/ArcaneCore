@@ -7,7 +7,7 @@ namespace ArcaneCore.Data.World.Creatures;
 /// <summary>
 /// World schema 57: the six magic-school resistances of <c>creature_template</c> (cmangos <c>ResistanceHoly</c>..<c>ResistanceArcane</c>,
 /// vmangos <c>holy_res</c>..<c>arcane_res</c>), so a creature is created with its template resistance instead of 0. Filled by the content
-/// importer; a database upgraded to 57 keeps 0 for every creature until the content is imported again.
+/// importer; a database upgraded to 57 holds 0 for every creature until the content refresh (<see cref="CreatureDumpImporter.RefreshResistancesAsync"/>) backfills the values.
 /// </summary>
 public sealed class CreatureResistanceDataModule : IDataModule
 {
