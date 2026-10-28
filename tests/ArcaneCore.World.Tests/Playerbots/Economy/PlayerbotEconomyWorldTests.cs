@@ -7,10 +7,14 @@ using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Economy.AuctionBot;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Economy;
+using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Playerbots.Scenarios;
@@ -40,6 +44,13 @@ public sealed class PlayerbotEconomyWorldTests
     private const uint BigRing = 990311;
     private const uint Filler = 990320;
     private const uint LevelFiftyCloth = 990350;
+
+    /// <summary>
+    /// The most a bot pays for the Scenario Ring (sell 40, buy 200, quality 2) at the default options and the Alliance house (cut 5 %): its bot floor
+    /// is max(vendor floor 44, 300 % of 40 = 120, reference 141) = 141 and the buy cap 50 % of that, rounded down.
+    /// </summary>
+    private const uint RingBuyout = 70;
+    private const uint RingStartBid = 40;
 
     private static ObjectGuid Auctioneer => ObjectGuid.WithEntry(HighGuid.Unit, AuctioneerEntry, AuctioneerSpawn);
 
@@ -73,8 +84,16 @@ public sealed class PlayerbotEconomyWorldTests
             ulong self = bot.Guid.Value;
             uint depositA = AuctionHouseRules.Deposit(house, a.SellPrice, 3, PlayerbotAuctionPricing.DurationMinutes, economy.Options.AuctionDepositMin, economy.Options.AuctionRateDeposit);
             uint depositB = AuctionHouseRules.Deposit(house, b.SellPrice, 2, PlayerbotAuctionPricing.DurationMinutes, economy.Options.AuctionDepositMin, economy.Options.AuctionRateDeposit);
-            uint buyoutA = PlayerbotAuctionPricing.ListingPrice(a, 3, [], self, house);
-            uint buyoutB = PlayerbotAuctionPricing.ListingPrice(b, 2, [], self, house);
+            float cutRate = economy.Options.AuctionRateCut;
+            int markupA = options.Economy.ListMarkupPercentFor(a.Quality);
+            int markupB = options.Economy.ListMarkupPercentFor(b.Quality);
+            uint buyoutA = PlayerbotAuctionPricing.ListingPrice(a, 3, [], self, house, cutRate, markupA);
+            uint buyoutB = PlayerbotAuctionPricing.ListingPrice(b, 2, [], self, house, cutRate, markupB);
+            uint floorA = PlayerbotAuctionPricing.FloorPerUnit(a, house.CutPercent * cutRate, markupA);
+            uint floorB = PlayerbotAuctionPricing.FloorPerUnit(b, house.CutPercent * cutRate, markupB);
+            // Common trade goods: 500 % of the sell price (1000 and 750 per unit) beats the reference (500 and 375) and the vendor floor.
+            ScenarioContext.ExpectEqual((1000u, 750u), (floorA, floorB), "the bot floor per unit of the two bolts");
+            ScenarioContext.ExpectEqual((3000u, 1500u), (buyoutA, buyoutB), "the asks without a competitor: the floor times the count");
             ScenarioContext.Expect(buyoutA > 0 && buyoutB > 0 && depositA > 0 && depositB > 0, "the test items must be worth listing");
 
             (int listed, AuctionRecord? first, AuctionRecord? second, uint money, uint spent, int placed) = await c.ReadAsync(() =>
@@ -86,8 +105,9 @@ public sealed class PlayerbotEconomyWorldTests
             ScenarioContext.ExpectEqual(3, listed, "auctions of the bot (the old one and two new ones)");
             ScenarioContext.ExpectEqual(2, placed, "listings the bot placed");
             ScenarioContext.Expect(first is not null && second is not null, "the two most valuable stacks are listed");
-            ScenarioContext.ExpectEqual((buyoutA, PlayerbotAuctionPricing.StartBid(buyoutA), depositA, 3u), (first!.Buyout, first.StartBid, first.Deposit, first.ItemCount), "stack A listing");
-            ScenarioContext.ExpectEqual((buyoutB, PlayerbotAuctionPricing.StartBid(buyoutB), depositB, 2u), (second!.Buyout, second.StartBid, second.Deposit, second.ItemCount), "stack B listing");
+            ScenarioContext.ExpectEqual((buyoutA, PlayerbotAuctionPricing.StartBid(buyoutA, floorA, 3), depositA, 3u), (first!.Buyout, first.StartBid, first.Deposit, first.ItemCount), "stack A listing");
+            ScenarioContext.ExpectEqual((buyoutB, PlayerbotAuctionPricing.StartBid(buyoutB, floorB, 2), depositB, 2u), (second!.Buyout, second.StartBid, second.Deposit, second.ItemCount), "stack B listing");
+            ScenarioContext.ExpectEqual((buyoutA, buyoutB), (first.StartBid, second.StartBid), "no competitor: the start bid is lifted to the floor of the stack, which is the buyout");
             ScenarioContext.ExpectEqual(moneyBefore - depositA - depositB, money, "money after the visit: the deposits of the house, nothing else");
             ScenarioContext.ExpectEqual(depositA + depositB, spent, "what the visit counted as spent");
             ScenarioContext.ExpectEqual(0u, await bot.ReadAsync(p => p.Inventory.GetItemCount(BoltA) + p.Inventory.GetItemCount(BoltB)), "the listed stacks left the bags");
@@ -152,12 +172,13 @@ public sealed class PlayerbotEconomyWorldTests
             await c.GiveMoneyAsync(seller, 1000);
             ObjectGuid small = await c.GiveItemAsync(seller, SmallRing);
             ObjectGuid big = await c.GiveItemAsync(seller, BigRing);
-            uint smallId = await ListAsync(seller, small, 100, 400, 480);
+            ScenarioContext.ExpectEqual(RingBuyout, BuyCap(economy, Template(economy, SmallRing)), "the ring's buy cap per unit at the defaults");
+            uint smallId = await ListAsync(seller, small, RingStartBid, RingBuyout, 480);
             uint bigId = await ListAsync(seller, big, 1000, 5000, 480);
             uint smallDeposit = await c.ReadAsync(() => economy.FindAuction(smallId)!.Deposit);
             await c.GiveMoneyAsync(buyer, 4000);
 
-            // Budget: a quarter of 4000 = 1000. The small ring costs 400 and is an upgrade; the great ring costs 5000, above the budget and the purse.
+            // Budget: a quarter of 4000 = 1000. The small ring costs 70 (exactly the buy cap) and is an upgrade; the great ring costs 5000, above the budget and the purse.
             Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
             await StartVisitAsync(c, driver);
             await FinishAsync(c, driver, 1);
@@ -166,8 +187,8 @@ public sealed class PlayerbotEconomyWorldTests
                 (driver.Economy.PurchasesMade, driver.Economy.Spent, driver.Economy.Budget, driver.Economy.ItemsCollected));
             ScenarioContext.ExpectEqual(1, purchases, "purchases");
             ScenarioContext.ExpectEqual(1000u, budget, "visit budget");
-            ScenarioContext.ExpectEqual(400u, spent, "spent");
-            ScenarioContext.ExpectEqual(3600u, await buyer.ReadAsync(p => p.Money), "money after the buyout");
+            ScenarioContext.ExpectEqual(RingBuyout, spent, "spent");
+            ScenarioContext.ExpectEqual(4000u - RingBuyout, await buyer.ReadAsync(p => p.Money), "money after the buyout");
             ScenarioContext.ExpectEqual(1, collected, "items collected from the mailbox");
             await c.ExpectItemCountAsync(buyer, SmallRing, 1);
             await c.ExpectItemCountAsync(buyer, BigRing, 0);
@@ -178,7 +199,7 @@ public sealed class PlayerbotEconomyWorldTests
             MailRecord proceeds = Assert.Single(sellerMail);
             ScenarioContext.ExpectEqual(MailMessageType.Auction, proceeds.MessageType, "the seller's letter");
             ScenarioContext.ExpectEqual(MailRules.AuctionSubject(SmallRing, AuctionMailAction.Successful), proceeds.Subject, "the seller's letter subject");
-            ScenarioContext.ExpectEqual(AuctionHouseRules.Proceeds(400, smallDeposit, AuctionHouseRules.Cut(house, 400)), proceeds.Money, "the seller's proceeds: bid + deposit - cut");
+            ScenarioContext.ExpectEqual(AuctionHouseRules.Proceeds(RingBuyout, smallDeposit, AuctionHouseRules.Cut(house, RingBuyout)), proceeds.Money, "the seller's proceeds: bid + deposit - cut");
             ScenarioContext.ExpectEqual(0, (await MailsAsync(c, buyer)).Count, "the buyer's won letter was emptied and deleted");
             ScenarioContext.ExpectEqual(1, await ItemRowsAsync(c, small.Low), "the ring exists once");
             await c.ReadAsync(() => driver.Active = false);
@@ -195,17 +216,64 @@ public sealed class PlayerbotEconomyWorldTests
             ScenarioBot seller = await c.LoginAsync("Econseller");
             ScenarioBot buyer = await c.LoginAsync("Econbuyer");
             await c.GiveMoneyAsync(seller, 1000);
-            uint auction = await ListAsync(seller, await c.GiveItemAsync(seller, SmallRing), 100, 400, 480);
-            await c.GiveMoneyAsync(buyer, 4000);
+            // 5% of 2000 = 100, the smallest budget that makes a trip. At 99 % of the floor 141 the cap is 139: the ring is within the cap,
+            // above the budget, and the purse could pay it, so only the budget refuses it.
+            PlayerbotOptions options = Options(listChance: 0, maxListings: 5, budget: 0.05f);
+            options.Economy.BuyBelowAskPercent = 99;
+            ScenarioContext.ExpectEqual(139u, BuyCap(economy, Template(economy, SmallRing), options.Economy), "the ring's buy cap per unit at 99 %");
+            uint auction = await ListAsync(seller, await c.GiveItemAsync(seller, SmallRing), 60, 139, 480);
+            await c.GiveMoneyAsync(buyer, 2000);
 
-            // 5% of 4000 = 200: enough for a trip (at least 100) but not for the 400 buyout, though the purse could pay it.
-            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.05f));
+            Driver driver = await AttachAsync(c, buyer, options);
             await StartVisitAsync(c, driver);
             await FinishAsync(c, driver, 1);
 
             ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.PurchasesMade), "purchases");
-            ScenarioContext.ExpectEqual(4000u, await buyer.ReadAsync(p => p.Money), "money");
+            ScenarioContext.ExpectEqual(2000u, await buyer.ReadAsync(p => p.Money), "money");
             ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(auction) is not null), "the auction is still in the house");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_BuysNoUpgradeAboveTheBuyCap_EvenWithinTheBudgetAndThePurse_ButBuysOneAtTheCap()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-upgrade-buy-cap", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            AuctionHouseEntry house = HouseOf(economy);
+            ScenarioBot seller = await c.LoginAsync("Econseller");
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(seller, 1000);
+            await c.GiveMoneyAsync(buyer, 4000);
+            ItemTemplate ring = Template(economy, SmallRing);
+            var defaults = new PlayerbotEconomyOptions();
+            uint floor = PlayerbotAuctionPricing.FloorPerUnit(ring, house.CutPercent * economy.Options.AuctionRateCut, defaults.ListMarkupPercentFor(ring.Quality));
+            ScenarioContext.ExpectEqual((141u, RingBuyout), (floor, BuyCap(economy, ring)), "the ring's floor and buy cap per unit at the defaults");
+
+            // One copper over the cap and the floor itself (what a bot asks): both inside the budget (a quarter of 4000) and the purse.
+            uint overId = await ListAsync(seller, await c.GiveItemAsync(seller, SmallRing), RingStartBid, RingBuyout + 1, 480);
+            uint askId = await ListAsync(seller, await c.GiveItemAsync(seller, SmallRing), RingStartBid, floor, 480);
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.PurchasesMade), "purchases above the cap");
+            ScenarioContext.ExpectEqual(4000u, await buyer.ReadAsync(p => p.Money), "money after the first visit");
+            await c.ExpectItemCountAsync(buyer, SmallRing, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(overId) is { BidderId: 0 } && economy.FindAuction(askId) is { BidderId: 0 }), "both over-cap rings are still in the house");
+
+            // A ring exactly at the cap joins them: the next visit buys that one and leaves the others alone.
+            uint atCapId = await ListAsync(seller, await c.GiveItemAsync(seller, SmallRing), RingStartBid, RingBuyout, 480);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 2);
+
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.PurchasesMade), "purchases after the second visit");
+            ScenarioContext.ExpectEqual(4000u - RingBuyout, await buyer.ReadAsync(p => p.Money), "money after the second visit");
+            await c.ExpectItemCountAsync(buyer, SmallRing, 1);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(atCapId) is null), "the ring at the cap left the house");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(overId) is { BidderId: 0 } && economy.FindAuction(askId) is { BidderId: 0 }), "the over-cap rings are still in the house");
             await c.ReadAsync(() => driver.Active = false);
         });
     }
@@ -335,40 +403,41 @@ public sealed class PlayerbotEconomyWorldTests
     }
 
     [Fact]
-    public async Task Visit_BuysNoReagentPricedAtTheOldReferenceCap_ButBuysOneAtTheSellPriceCap()
+    public async Task Visit_BuysNoReagentPricedAtTwiceTheReference_ButBuysOneAtTheDerivedCap()
     {
         await using ScenarioTestWorld world = await StartAsync();
-        await RunAsync(world, "economy-reagent-sell-price-cap", async c =>
+        await RunAsync(world, "economy-reagent-derived-cap", async c =>
         {
             EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
             ScenarioBot seller = await c.LoginAsync("Econseller");
             ScenarioBot buyer = await c.LoginAsync("Econbuyer");
             // The item templates load with the first login.
             ItemTemplate silk = Template(economy, LevelFiftyCloth);
-            var defaults = new PlayerbotEconomyOptions();
-            uint oldCap = PlayerbotAuctionPricing.CapMultiple * PlayerbotAuctionPricing.ReferencePerUnit(silk);
-            uint cap = PlayerbotEconomyPlanner.ReagentUnitCap(silk, defaults.ReagentSellMultiple, defaults.ReagentAllowanceCopper);
-            ScenarioContext.ExpectEqual((10_000u, 1_610u), (oldCap, cap), "the old and the new reagent cap per unit of the level 50 cloth");
+            // Reference 5000 (20 * 50^2 / 10): twice that is 10000. The bot floor is also 5000 (500 % of 400 and the vendor floor are lower), the cap half of it.
+            uint twiceReference = PlayerbotAuctionPricing.CapMultiple * PlayerbotAuctionPricing.ReferencePerUnit(silk);
+            uint cap = BuyCap(economy, silk);
+            ScenarioContext.ExpectEqual((10_000u, 2_500u), (twiceReference, cap), "twice the reference and the buy cap per unit of the level 50 cloth");
+            uint oldCap = twiceReference;
 
             await c.GiveMoneyAsync(seller, 5000);
             await c.GiveMoneyAsync(buyer, 100_000);
             uint moneyBefore = await buyer.ReadAsync(p => p.Money);
 
-            // A pair at the old cap per unit: 20000 copper in total, inside the visit budget (a quarter of 100000) and the purse, so only the cap refuses it.
+            // A pair at twice the reference per unit: 20000 copper in total, inside the visit budget (a quarter of 100000) and the purse, so only the cap refuses it.
             uint dear = 2 * oldCap;
             uint dearId = await ListAsync(seller, await c.GiveItemAsync(seller, LevelFiftyCloth, 2), dear / 2, dear, 480);
             Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
-            ScenarioContext.Expect(dear < moneyBefore / 4, "the old-cap pair must fit the visit budget");
+            ScenarioContext.Expect(dear < moneyBefore / 4, "the dear pair must fit the visit budget");
             await SetReagentNeedsAsync(c, driver, entry: LevelFiftyCloth);
             await StartVisitAsync(c, driver);
             await FinishAsync(c, driver, 1);
 
-            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases of a pair at the old cap");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases of a pair at twice the reference");
             ScenarioContext.ExpectEqual(moneyBefore, await buyer.ReadAsync(p => p.Money), "money after the first visit");
             await c.ExpectItemCountAsync(buyer, LevelFiftyCloth, 0);
-            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(dearId) is { BidderId: 0 }), "the old-cap pair is still in the house");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(dearId) is { BidderId: 0 }), "the dear pair is still in the house");
 
-            // A pair at the new cap per unit joins it: the next visit buys that one and still leaves the old-cap pair alone.
+            // A pair at the derived cap per unit joins it: the next visit buys that one and still leaves the dear pair alone.
             uint fair = 2 * cap;
             uint fairId = await ListAsync(seller, await c.GiveItemAsync(seller, LevelFiftyCloth, 2), fair / 2, fair, 480);
             await StartVisitAsync(c, driver);
@@ -378,8 +447,8 @@ public sealed class PlayerbotEconomyWorldTests
             ScenarioContext.ExpectEqual(fair, await c.ReadAsync(() => driver.Economy.Spent), "spent");
             ScenarioContext.ExpectEqual(moneyBefore - fair, await buyer.ReadAsync(p => p.Money), "money after the second visit");
             await c.ExpectItemCountAsync(buyer, LevelFiftyCloth, 2);
-            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(fairId) is null), "the new-cap pair left the house");
-            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(dearId) is { BidderId: 0 }), "the old-cap pair is still in the house");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(fairId) is null), "the pair at the cap left the house");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(dearId) is { BidderId: 0 }), "the dear pair is still in the house");
             await c.ReadAsync(() => driver.Active = false);
         });
     }
@@ -507,6 +576,274 @@ public sealed class PlayerbotEconomyWorldTests
         });
     }
 
+    // --- a reagent bid whose outcome the bot does not see ------------------------------------------------------------
+
+    [Fact]
+    public async Task Visit_DoesNotBuyAReagentAgain_WhenTheVisitWasResetWhileItsBidWasPending()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-reset-pending-bid", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy, secondInCapPair: true);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+            uint moneyBefore = await buyer.ReadAsync(p => p.Money);
+            uint nowOf() => buyer.Session!.World.NowMs;
+
+            // Visit 1 is dropped (Reset: the same path as combat, death, a map change or the visit cap) on the world thread in the tick that
+            // placed the reagent bid, while its settlement is still pending. The house has no gear, so the first bid of the visit is the reagent bid.
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver);
+            driver.PauseWhen = e =>
+            {
+                if (e.Phase != PlayerbotEconomyPhase.AwaitBid) return false;
+                e.Reset();
+                return true;
+            };
+            await StartVisitAsync(c, driver);
+            await PaceAsync(c, "visit 1 is reset while its reagent bid is pending", () => !driver.Active);
+            ScenarioContext.ExpectEqual(PlayerbotEconomyPhase.Idle, await c.ReadAsync(() => driver.Economy.Phase), "phase after the reset");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.VisitsFinished), "a dropped visit is not a finished one");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "the reset visit counted no purchase (its outcome was unknown)");
+            ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.Bought.IsAwaitingCollection(LinenCloth, nowOf())), "the aborted pending bid was booked: the linen is awaiting collection");
+
+            // The settlement lands in the database after the reset: the buyout is paid and the won letter waits in the mailbox.
+            await PaceAsync(c, "the settlement of the dropped bid lands", () => buyer.RequirePlayer().Money == moneyBefore - market.Within && !buyer.RequirePlayer().IsQuestSettlementPending);
+            ScenarioContext.ExpectEqual(1, (await MailsAsync(c, buyer)).Count, "the won letter waits in the mailbox");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => new[] { market.WithinId, market.ExtraId }.Count(id => economy.FindAuction(id) is not null)),
+                "exactly one of the two in-cap pairs was bought");
+
+            // Visit 2 buys nothing: the booked pair is on its way, so it is no shortfall.
+            await c.ReadAsync(() => { driver.PauseWhen = null; return true; });
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases after visit 2 (no second buy)");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => new[] { market.WithinId, market.ExtraId }.Count(id => economy.FindAuction(id) is { BidderId: 0 })),
+                "the other in-cap pair is still for sale");
+            ScenarioContext.ExpectEqual(moneyBefore - market.Within, await buyer.ReadAsync(p => p.Money), "money after visit 2: only the first buyout, once");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ItemsCollected), "visit 2 collected the won letter");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 2);
+            ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.Bought.IsHeld(LinenCloth, nowOf())), "still held against listing");
+            await c.ReadAsync(() => { driver.Economy.BidSettlementPendingOverride = null; driver.Economy.DropBidResultForTest = false; driver.Active = false; return true; });
+        });
+    }
+
+    [Fact]
+    public async Task Visit_RefusesAReagentBid_ThatSettledAtOnceWithoutTakingMoney()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-settled-no-money", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy, secondInCapPair: true);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+
+            // The house refuses the bid at once: the purse is emptied from inside the vendor-stocked predicate, which the planner calls while
+            // it chooses the auction, after it computed what the bot can spend and before it sends the bid (no settlement is started and
+            // no money is taken). The pending-settlement answer is pinned false as well: a refusal never leaves a settlement pending.
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            bool emptied = false;
+            await c.ReadAsync(() =>
+            {
+                driver.Economy.ReagentNeeds = _ => new Dictionary<uint, uint> { [LinenCloth] = 2 };
+                driver.Economy.VendorStocked = _ =>
+                {
+                    if (!emptied && driver.Economy.Phase == PlayerbotEconomyPhase.BuyingReagents)
+                    {
+                        emptied = true;
+                        buyer.RequirePlayer().Money = 0;
+                    }
+
+                    return false;
+                };
+                driver.Economy.BidSettlementPendingOverride = _ => false;
+                return true;
+            });
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.Expect(emptied, "the purse was emptied while the planner chose the auction");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases of a refused bid");
+            ScenarioContext.ExpectEqual(0u, await c.ReadAsync(() => driver.Economy.Spent), "spent");
+            ScenarioContext.ExpectEqual(0u, await buyer.ReadAsync(p => p.Money), "money (nothing was taken)");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => !driver.Economy.Bought.IsHeld(LinenCloth, buyer.Session!.World.NowMs)), "a refused bid is not booked as bought");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.WithinId) is { BidderId: 0 }), "the in-cap pair is still for sale, without a bidder");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.ExtraId) is { BidderId: 0 }), "the second in-cap pair is still for sale");
+            ScenarioContext.ExpectEqual(0, (await MailsAsync(c, buyer)).Count, "no letter");
+            await c.ReadAsync(() => { driver.Economy.BidSettlementPendingOverride = null; driver.Economy.DropBidResultForTest = false; driver.Active = false; return true; });
+        });
+    }
+
+    [Fact]
+    public async Task Visit_BooksAReagentBuyout_WhoseSettlementEndsWithoutAResultPacket()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-no-result", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy, secondInCapPair: true);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+            uint moneyBefore = await buyer.ReadAsync(p => p.Money);
+            uint nowOf() => buyer.Session!.World.NowMs;
+
+            // The economy discards the bid's result packet, so the only sign of the buyout is the money that left the purse once the
+            // settlement ended. The visit books it from that, once.
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver);
+            await c.ReadAsync(() => { driver.Economy.DropBidResultForTest = true; return true; });
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases");
+            ScenarioContext.ExpectEqual(market.Within, await c.ReadAsync(() => driver.Economy.Spent), "spent");
+            ScenarioContext.ExpectEqual(moneyBefore - market.Within, await buyer.ReadAsync(p => p.Money), "money: the buyout once");
+            ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.Bought.IsHeld(LinenCloth, nowOf())), "the bought entry is held against listing");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ItemsCollected), "the won letter was collected");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 2);
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => new[] { market.WithinId, market.ExtraId }.Count(id => economy.FindAuction(id) is not null)),
+                "exactly one of the two in-cap pairs was bought");
+            await c.ReadAsync(() => { driver.Economy.BidSettlementPendingOverride = null; driver.Economy.DropBidResultForTest = false; driver.Active = false; return true; });
+        });
+    }
+
+    [Fact]
+    public async Task Visit_DoesNotBuyAReagentAgain_WhenItsPendingBidHitTheOperationDeadline()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-bid-deadline", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy, secondInCapPair: true);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+            uint moneyBefore = await buyer.ReadAsync(p => p.Money);
+            uint nowOf() => buyer.Session!.World.NowMs;
+
+            // The bot is told the settlement stays pending and gets no result packet, so only the operation deadline ends the wait. The
+            // real settlement completes at once in the database (the money leaves, the letter arrives); the bot never sees it.
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver);
+            await c.ReadAsync(() => { driver.Economy.BidSettlementPendingOverride = _ => true; driver.Economy.DropBidResultForTest = true; return true; });
+            driver.PauseWhen = e => e.Bought.IsAwaitingCollection(LinenCloth, nowOf());
+            await StartVisitAsync(c, driver);
+            await PaceAsync(c, "the deadline drops the visit and books the pending bid", () => !driver.Active, TimeSpan.FromSeconds(120));
+            await c.ReadAsync(() => { driver.Economy.BidSettlementPendingOverride = null; driver.Economy.DropBidResultForTest = false; driver.PauseWhen = null; return true; });
+
+            ScenarioContext.ExpectEqual(PlayerbotEconomyPhase.Idle, await c.ReadAsync(() => driver.Economy.Phase), "phase after the deadline");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.VisitsFinished), "a dropped visit is not a finished one");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "the dropped visit counted no purchase (its outcome was unknown)");
+            ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.Bought.IsAwaitingCollection(LinenCloth, nowOf())), "the pending bid was booked at the deadline");
+            await PaceAsync(c, "the settlement of the bid lands", () => buyer.RequirePlayer().Money == moneyBefore - market.Within && !buyer.RequirePlayer().IsQuestSettlementPending);
+            ScenarioContext.ExpectEqual(1, (await MailsAsync(c, buyer)).Count, "the won letter waits in the mailbox");
+
+            // The seams are cleared: the next visit sees the settlement as it is, buys nothing and collects the letter.
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases after the next visit (no second buy)");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => new[] { market.WithinId, market.ExtraId }.Count(id => economy.FindAuction(id) is { BidderId: 0 })),
+                "the other in-cap pair is still for sale");
+            ScenarioContext.ExpectEqual(moneyBefore - market.Within, await buyer.ReadAsync(p => p.Money), "money after the next visit: the first buyout, once");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 2);
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    // --- the vendor-stocked check fails closed -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Visit_BuysNoReagent_WhenTheServiceIndexListsNoVendorStock_AndTheSeamIsNull()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-empty-index", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+
+            // The scenario creature content has no vendor, so the index (if it is built at all) lists no stocked item: fail closed, every
+            // entry counts as vendor stocked and the in-cap pair the bot could afford is left alone.
+            (bool built, int stockedCount, bool linenStocked) = await IndexAsync(c, buyer);
+            ScenarioContext.ExpectEqual(0, stockedCount, $"vendor-stocked items of the scenario world's service index (index built: {built})");
+            ScenarioContext.Expect(!linenStocked, "the index does not list linen as vendor stocked");
+
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver, pinVendorStocked: false);
+            ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.VendorStocked is null), "the vendor-stocked seam is not pinned");
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases with an empty index");
+            ScenarioContext.ExpectEqual(4000u, await buyer.ReadAsync(p => p.Money), "money");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.WithinId) is { BidderId: 0 }), "the in-cap pair is still in the house");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_BuysTheReagent_WhenARealVendorStocksADifferentItem_AndTheSeamIsNull()
+    {
+        await using ScenarioTestWorld world = await StartAsync(services => UseVendor(services, Filler));
+        await RunAsync(world, "economy-reagent-real-index-other-item", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+
+            // A spawned vendor stocks the pebble, so the real index is non-empty and does not list linen: the pair is bought.
+            (bool built, int stockedCount, bool linenStocked) = await IndexAsync(c, buyer);
+            ScenarioContext.Expect(built, "the service index is built");
+            ScenarioContext.ExpectEqual(1, stockedCount, "vendor-stocked items of the index");
+            ScenarioContext.Expect(!linenStocked, "the index does not list linen as vendor stocked");
+
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver, pinVendorStocked: false);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases");
+            ScenarioContext.ExpectEqual(4000u - market.Within, await buyer.ReadAsync(p => p.Money), "money after the buyout");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 2);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.WithinId) is null), "the bought auction left the house");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_BuysNoReagent_WhenARealVendorStocksIt_AndTheSeamIsNull()
+    {
+        await using ScenarioTestWorld world = await StartAsync(services => UseVendor(services, LinenCloth));
+        await RunAsync(world, "economy-reagent-real-index-stocked", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+
+            (bool built, int stockedCount, bool linenStocked) = await IndexAsync(c, buyer);
+            ScenarioContext.Expect(built, "the service index is built");
+            ScenarioContext.ExpectEqual(1, stockedCount, "vendor-stocked items of the index");
+            ScenarioContext.Expect(linenStocked, "the index lists linen as vendor stocked");
+
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver, pinVendorStocked: false);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases of an entry a vendor stocks");
+            ScenarioContext.ExpectEqual(4000u, await buyer.ReadAsync(p => p.Money), "money");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.WithinId) is { BidderId: 0 }), "the in-cap pair is still in the house");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
     [Fact]
     public async Task Visit_NeverListsAReagentTheBotNeeds_WhenTheDefaultReaderFindsItInTheSpellbook()
     {
@@ -563,12 +900,54 @@ public sealed class PlayerbotEconomyWorldTests
     /// Per craft the bot wants two linen cloth (set on the world thread, the seam the economy reads instead of the spellbook). The vendor-stocked
     /// seam is pinned too, so no scenario depends on whether the scenario world has a service index: by default no entry is vendor stocked.
     /// </summary>
-    private static Task SetReagentNeedsAsync(ScenarioContext c, Driver driver, Func<uint, bool>? vendorStocked = null, uint entry = LinenCloth) => c.ReadAsync(() =>
+    private static Task SetReagentNeedsAsync(ScenarioContext c, Driver driver, Func<uint, bool>? vendorStocked = null, uint entry = LinenCloth, bool pinVendorStocked = true) => c.ReadAsync(() =>
     {
         driver.Economy.ReagentNeeds = _ => new Dictionary<uint, uint> { [entry] = 2 };
-        driver.Economy.VendorStocked = vendorStocked ?? (_ => false);
+        // pinVendorStocked: false leaves the seam null, so the economy reads the world's service index (and fails closed without one).
+        if (pinVendorStocked) driver.Economy.VendorStocked = vendorStocked ?? (_ => false);
         return true;
     });
+
+    /// <summary>The world's service index as the economy would resolve it, read on the world thread: whether it was built, how many items it lists as vendor stocked, and whether linen is one.</summary>
+    private static Task<(bool Built, int StockedCount, bool LinenStocked)> IndexAsync(ScenarioContext c, ScenarioBot bot) => c.ReadAsync(() =>
+    {
+        var services = bot.Session!.Services.GetService<QuestNpcFeature>()?.Services;
+        PlayerbotServiceIndex? index = services is null ? null : PlayerbotServiceIndex.Get(bot.Session!, services, bot.RequirePlayer());
+        return (index is not null, index?.VendorStockedCount ?? 0, index?.IsVendorStocked(LinenCloth) ?? false);
+    });
+
+    private const uint VendorEntry = 990060;
+
+    /// <summary>Adds a spawned vendor (beside the start) that stocks exactly <paramref name="stocked"/>, to the content the scenario world loads.</summary>
+    private static void UseVendor(IServiceCollection services, uint stocked)
+    {
+        ICreatureDataStore inner = (ICreatureDataStore)services.Last(d => d.ServiceType == typeof(ICreatureDataStore)).ImplementationInstance!;
+        services.AddSingleton<ICreatureDataStore>(new WithVendor(inner));
+        services.AddSingleton<INpcContentStore>(new VendorStock(stocked));
+    }
+
+    private sealed class WithVendor(ICreatureDataStore inner) : ICreatureDataStore
+    {
+        public async Task<CreatureContent> LoadAsync(CancellationToken cancellationToken = default)
+        {
+            CreatureContent content = await inner.LoadAsync(cancellationToken);
+            var vendor = new CreatureTemplate
+            {
+                Entry = VendorEntry, Name = "Scenario Peddler", Faction = 12, DisplayIds = [49], NpcFlags = (uint)NpcFlags.Vendor,
+                MinLevelHealth = 100, MaxLevelHealth = 100, ExtraFlags = global::ArcaneCore.Game.Creatures.Creature.ExtraFlagNoAggro,
+            };
+            var spawn = new CreatureSpawn { Guid = VendorEntry, Entry = VendorEntry, MapId = 0, X = StartX + 6f, Y = StartY, Z = StartZ };
+
+            // The scenario content has templates and spawns only (no waypoints, models or addons).
+            return new CreatureContent([.. content.Templates, vendor], [.. content.MapsWithSpawns.SelectMany(content.GetSpawns), spawn], [], [], []);
+        }
+    }
+
+    private sealed class VendorStock(uint stocked) : INpcContentStore
+    {
+        public Task<NpcContent> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(NpcContent.Empty with { VendorItems = [new VendorItem { Entry = VendorEntry, Item = stocked, Slot = 1 }] });
+    }
 
     /// <summary>
     /// A seller lists linen cloth three ways: a pair exactly at the reagent cap per unit (the one to buy), a pair one copper per unit over the cap,
@@ -578,8 +957,8 @@ public sealed class PlayerbotEconomyWorldTests
     {
         ScenarioBot seller = await c.LoginAsync("Econseller");
         await c.GiveMoneyAsync(seller, 3000);
-        var defaults = new PlayerbotEconomyOptions();
-        uint cap = PlayerbotEconomyPlanner.ReagentUnitCap(Template(economy, LinenCloth), defaults.ReagentSellMultiple, defaults.ReagentAllowanceCopper);
+        uint cap = BuyCap(economy, Template(economy, LinenCloth));
+        ScenarioContext.ExpectEqual(50u, cap, "the linen buy cap per unit: half of the bot floor 100 (500 % of 13 is 65, the reference is 100)");
         uint within = 2 * cap;
         uint over = (2 * cap) + 2;
         ScenarioContext.Expect(cap > 0 && over < 1000, $"the linen cap {cap} must leave the over-priced pair inside the 1000 copper visit budget");
@@ -692,13 +1071,13 @@ public sealed class PlayerbotEconomyWorldTests
             ScenarioBot seller = await c.LoginAsync("Econseller");
             await c.GiveMoneyAsync(seller, 1000);
             ObjectGuid ring = await c.GiveItemAsync(seller, SmallRing);
-            uint auction = await ListAsync(seller, ring, 100, 400, 480);
+            uint auction = await ListAsync(seller, ring, RingStartBid, RingBuyout, 480);
             uint itemGuid = ring.Low;
 
             Race race = await RaceAsync(c, economy, auction);
             ScenarioContext.ExpectEqual(2, race.BidsSent, "both bots sent their bid (the contention was real)");
             ScenarioContext.ExpectEqual(1, race.Winners.Count, "bots that bought the auction");
-            ScenarioContext.ExpectEqual(4000u - 400u, race.Winners[0].Money, "the winner paid the buyout once");
+            ScenarioContext.ExpectEqual(4000u - RingBuyout, race.Winners[0].Money, "the winner paid the buyout once");
             ScenarioContext.ExpectEqual(4000u, race.Loser.Money, "the loser kept all its money");
             ScenarioContext.ExpectEqual(0, race.Loser.Purchases, "the loser's purchases");
             await ExpectItemOnceAsync(c, economy, auction, itemGuid, race);
@@ -726,7 +1105,7 @@ public sealed class PlayerbotEconomyWorldTests
                 var item = new ItemInstanceData { Guid = economy.ItemGuids!.Next(), Entry = template.Entry, Count = 1, Durability = template.MaxDurability, Charges = [0, 0, 0, 0, 0], Enchantments = new uint[21] };
                 AuctionBotCustodyRow row = ledger.TryReserveListing(AuctionHouseRules.AllianceHouse, id, item.Guid, item.Entry, item.Count, economy.Now)
                     ?? throw new ScenarioAssertionException("the ledger refused the listing");
-                economy.StartBotListing(AuctionHouseRules.AllianceHouse, id, item, 100, 400, economy.Now + (8 * 3600), row.OperationId,
+                economy.StartBotListing(AuctionHouseRules.AllianceHouse, id, item, RingStartBid, RingBuyout, economy.Now + (8 * 3600), row.OperationId,
                     outcome => ledger.Resolve(row.IdemKey, outcome == EconomyOutcome.After, economy.Now));
                 return (id, item.Guid);
             });
@@ -736,7 +1115,7 @@ public sealed class PlayerbotEconomyWorldTests
             Race race = await RaceAsync(c, economy, auction);
             ScenarioContext.ExpectEqual(2, race.BidsSent, "both bots sent their bid (the contention was real)");
             ScenarioContext.ExpectEqual(1, race.Winners.Count, "bots that bought the auction");
-            ScenarioContext.ExpectEqual(4000u - 400u, race.Winners[0].Money, "the winner paid the buyout once");
+            ScenarioContext.ExpectEqual(4000u - RingBuyout, race.Winners[0].Money, "the winner paid the buyout once");
             ScenarioContext.ExpectEqual(4000u, race.Loser.Money, "the loser kept all its money");
             await ExpectItemOnceAsync(c, economy, auction, itemGuid, race);
 
@@ -1073,6 +1452,14 @@ public sealed class PlayerbotEconomyWorldTests
     };
 
     private static AuctionHouseEntry HouseOf(EconomyFeature economy) => economy.Options.AuctionHouses.Single(h => h.Id == AuctionHouseRules.AllianceHouse);
+
+    /// <summary>The most a bot pays per unit for the template: the same expression the economy uses (the Alliance house cut times the cut rate).</summary>
+    private static uint BuyCap(EconomyFeature economy, ItemTemplate template, PlayerbotEconomyOptions? options = null)
+    {
+        options ??= new PlayerbotEconomyOptions();
+        return PlayerbotAuctionPricing.BuyCapPerUnit(template, HouseOf(economy).CutPercent * economy.Options.AuctionRateCut,
+            options.ListMarkupPercentFor(template.Quality), options.BuyBelowAskPercent);
+    }
 
     private static ItemTemplate Template(EconomyFeature economy, uint entry) => economy.Templates.Find(entry) ?? throw new ScenarioAssertionException($"no template {entry}");
 

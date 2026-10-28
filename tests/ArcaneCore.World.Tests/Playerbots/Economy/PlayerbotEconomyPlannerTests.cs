@@ -233,17 +233,35 @@ public sealed class PlayerbotEconomyPlannerTests
     // --- the price plan --------------------------------------------------------------------------------------------
 
     [Fact]
-    public void PlanListing_AsksTheReferencePrice_WithoutACompetitor_AndPaysTheHousesDeposit()
+    public void PlanListing_AsksTheFloor_WithoutACompetitor_AndPaysTheHousesDeposit()
     {
-        PlayerbotBagItem item = Bag(Template(sell: 1000));   // reference 1414
+        PlayerbotBagItem item = Bag(Template(sell: 1000));   // reference 1414 = the floor at a markup of 100 %
         PlayerbotListingPlan plan = Assert.IsType<PlayerbotListingPlan>(
-            PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 1f, 10_000));
+            PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 1f, 10_000, markupPercent: 100));
         Assert.Equal(1414u, plan.Buyout);
-        Assert.Equal(PlayerbotAuctionPricing.StartBid(1414), plan.StartBid);
-        Assert.Equal(1131u, plan.StartBid);
+        // The start bid is never below the floor of the stack, so with no competitor it equals the buyout.
+        Assert.Equal(PlayerbotAuctionPricing.StartBid(1414, 1414, 1), plan.StartBid);
+        Assert.Equal(1414u, plan.StartBid);
         Assert.Equal(200u, plan.Deposit);
         Assert.Equal(PlayerbotAuctionPricing.Deposit(Alliance, item.Template, 1), plan.Deposit);
         Assert.True(plan.StartBid <= plan.Buyout);
+    }
+
+    [Fact]
+    public void PlanListing_UsesTheMarkup_ForTheFloorTheBuyoutAndTheStartBid()
+    {
+        PlayerbotBagItem item = Bag(Template(sell: 1000));   // markup 300 % = 3000, above the reference 1414
+        PlayerbotListingPlan plan = Assert.IsType<PlayerbotListingPlan>(
+            PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 1f, 10_000, markupPercent: 300));
+        Assert.Equal((3000u, 3000u, 200u), (plan.Buyout, plan.StartBid, plan.Deposit));
+        PlayerbotBagItem stack = Bag(Template(sell: 1000), count: 3);
+        PlayerbotListingPlan stackPlan = Assert.IsType<PlayerbotListingPlan>(
+            PlayerbotEconomyPlanner.PlanListing(stack, [], Self, Alliance, 0, 1f, 1f, 10_000, markupPercent: 300));
+        Assert.Equal((9000u, 9000u), (stackPlan.Buyout, stackPlan.StartBid));
+        // A competitor under the floor does not pull the ask under it.
+        PlayerbotListingPlan floored = Assert.IsType<PlayerbotListingPlan>(
+            PlayerbotEconomyPlanner.PlanListing(item, [Row(1, 6000, 1500)], Self, Alliance, 0, 1f, 1f, 10_000, markupPercent: 300));
+        Assert.Equal(3000u, floored.Buyout);
     }
 
     [Fact]
@@ -252,9 +270,9 @@ public sealed class PlayerbotEconomyPlannerTests
         PlayerbotBagItem item = Bag(Template(sell: 1000));
         PlayerbotAuctionRow[] market = [Row(1, 6000, 1500), Row(2, 6000, 1200, owner: Self), Row(3, 6000, 2000)];
         PlayerbotListingPlan plan = Assert.IsType<PlayerbotListingPlan>(
-            PlayerbotEconomyPlanner.PlanListing(item, market, Self, Alliance, 0, 1f, 1f, 10_000));
+            PlayerbotEconomyPlanner.PlanListing(item, market, Self, Alliance, 0, 1f, 1f, 10_000, markupPercent: 100));
         Assert.Equal(1485u, plan.Buyout);   // 1% under 1500
-        Assert.Equal(1188u, plan.StartBid);
+        Assert.Equal(1414u, plan.StartBid); // 80 % is 1188, lifted to the floor 1414
     }
 
     [Fact]
@@ -262,8 +280,9 @@ public sealed class PlayerbotEconomyPlannerTests
     {
         PlayerbotBagItem stack = Bag(Template(sell: 1000), count: 3);
         PlayerbotListingPlan plan = Assert.IsType<PlayerbotListingPlan>(
-            PlayerbotEconomyPlanner.PlanListing(stack, [], Self, Alliance, 0, 1f, 1f, 10_000));
+            PlayerbotEconomyPlanner.PlanListing(stack, [], Self, Alliance, 0, 1f, 1f, 10_000, markupPercent: 100));
         Assert.Equal(1414u * 3, plan.Buyout);
+        Assert.Equal(1414u * 3, plan.StartBid);   // the floor of the stack
         Assert.Equal(PlayerbotAuctionPricing.Deposit(Alliance, stack.Template, 3), plan.Deposit);
     }
 
@@ -271,16 +290,18 @@ public sealed class PlayerbotEconomyPlannerTests
     public void PlanListing_IsNull_WhenTheDepositDoesNotFitTheBudgetLeft_OrTheListingDoesNotPay()
     {
         PlayerbotBagItem item = Bag(Template(sell: 1000));
-        Assert.Null(PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 1f, remainingBudget: 199));
-        Assert.NotNull(PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 1f, remainingBudget: 200));
+        Assert.Null(PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 1f, remainingBudget: 199, markupPercent: 100));
+        Assert.NotNull(PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 1f, remainingBudget: 200, markupPercent: 100));
         // A deposit minimum above the margin: not worth it.
-        Assert.Null(PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 5000, 1f, 1f, remainingBudget: 100_000));
+        Assert.Null(PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 5000, 1f, 1f, remainingBudget: 100_000, markupPercent: 100));
         // A cut rate that eats the margin.
-        Assert.Null(PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 10f, remainingBudget: 100_000));
+        Assert.Null(PlayerbotEconomyPlanner.PlanListing(item, [], Self, Alliance, 0, 1f, 10f, remainingBudget: 100_000, markupPercent: 100));
         // No vendor price: no plan.
-        Assert.Null(PlayerbotEconomyPlanner.PlanListing(Bag(Template(sell: 0)), [], Self, Alliance, 0, 1f, 1f, 100_000));
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.PlanListing(null!, [], Self, Alliance, 0, 1f, 1f, 1));
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.PlanListing(item, [], Self, null!, 0, 1f, 1f, 1));
+        Assert.Null(PlayerbotEconomyPlanner.PlanListing(Bag(Template(sell: 0)), [], Self, Alliance, 0, 1f, 1f, 100_000, markupPercent: 100_000));
+        // A stack whose floor passes the client price limit: no plan.
+        Assert.Null(PlayerbotEconomyPlanner.PlanListing(Bag(Template(sell: 100_000_000), count: 255), [], Self, Alliance, 0, 1f, 1f, uint.MaxValue, markupPercent: 100));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.PlanListing(null!, [], Self, Alliance, 0, 1f, 1f, 1, 100));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.PlanListing(item, [], Self, null!, 0, 1f, 1f, 1, 100));
     }
 
     // --- the upgrade to buy ----------------------------------------------------------------------------------------
@@ -288,9 +309,9 @@ public sealed class PlayerbotEconomyPlannerTests
     private static readonly Dictionary<uint, ItemTemplate> Templates = Enumerable.Range(7000, 20).ToDictionary(e => (uint)e, e => Template((uint)e));
 
     private static PlayerbotUpgradeChoice? Choose(IEnumerable<PlayerbotAuctionRow> rows, Dictionary<uint, float?> gains, uint startMoney = 10_000,
-        uint money = 10_000, uint spent = 0, float fraction = 0.25f, Func<uint, bool>? refused = null)
+        uint money = 10_000, uint spent = 0, float fraction = 0.25f, Func<uint, bool>? refused = null, Func<ItemTemplate, uint>? unitCap = null)
         => PlayerbotEconomyPlanner.ChooseUpgrade(rows, Self, startMoney, money, spent, fraction, entry => Templates.GetValueOrDefault(entry),
-            template => gains.GetValueOrDefault(template.Entry), refused);
+            template => gains.GetValueOrDefault(template.Entry), unitCap ?? (_ => uint.MaxValue), refused);
 
     [Fact]
     public void ChooseUpgrade_TakesTheBiggestGainWithinTheBudget()
@@ -371,24 +392,73 @@ public sealed class PlayerbotEconomyPlannerTests
     [Fact]
     public void ChooseUpgrade_RefusesNullArguments()
     {
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseUpgrade(null!, Self, 1, 1, 0, 1f, _ => null, _ => null));
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseUpgrade([], Self, 1, 1, 0, 1f, null!, _ => null));
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseUpgrade([], Self, 1, 1, 0, 1f, _ => null, null!));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseUpgrade(null!, Self, 1, 1, 0, 1f, _ => null, _ => null, _ => 1u));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseUpgrade([], Self, 1, 1, 0, 1f, null!, _ => null, _ => 1u));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseUpgrade([], Self, 1, 1, 0, 1f, _ => null, null!, _ => 1u));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ChooseUpgrade([], Self, 1, 1, 0, 1f, _ => null, _ => null, null!));
+    }
+
+    [Fact]
+    public void ChooseUpgrade_NeverPaysMoreThanTheUnitCap_RoundedUpPerUnit_AndNeverBuysACapOfZero()
+    {
+        var gains = new Dictionary<uint, float?> { [7001] = 5f, [7002] = 1f };
+        // Exactly at the cap is bought, one copper over is not.
+        Assert.NotNull(Choose([Row(1, 7001, 70)], gains, unitCap: _ => 70));
+        Assert.Null(Choose([Row(1, 7001, 71)], gains, unitCap: _ => 70));
+        // Per unit: 140 for two is 70 each, 141 for two is 70.5 which rounds up to 71.
+        Assert.NotNull(Choose([Row(1, 7001, 140, count: 2)], gains, unitCap: _ => 70));
+        Assert.Null(Choose([Row(1, 7001, 141, count: 2)], gains, unitCap: _ => 70));
+        Assert.NotNull(Choose([Row(1, 7001, 210, count: 3)], gains, unitCap: _ => 70));
+        Assert.Null(Choose([Row(1, 7001, 211, count: 3)], gains, unitCap: _ => 70));   // 70.33 rounds up to 71
+        // A cap of 0 (no vendor price) is never bought, however cheap.
+        Assert.Null(Choose([Row(1, 7001, 1)], gains, unitCap: _ => 0));
+        // The cap is read per template: an over-cap row of the bigger gain is passed over for a lesser one in its cap.
+        PlayerbotAuctionRow[] rows = [Row(1, 7001, 500), Row(2, 7002, 100)];
+        Assert.Equal(2u, Assert.IsType<PlayerbotUpgradeChoice>(Choose(rows, gains, unitCap: t => t.Entry == 7001 ? 499u : 100u)).Row.Id);
+        Assert.Equal(1u, Assert.IsType<PlayerbotUpgradeChoice>(Choose(rows, gains, unitCap: t => t.Entry == 7001 ? 500u : 100u)).Row.Id);
+        Assert.Null(Choose(rows, gains, unitCap: t => t.Entry == 7001 ? 0u : 99u));
+        // The uint extremes do not wrap: a buyout of uint.MaxValue for 2 units is 2147483648 each, rounded up.
+        Assert.Null(Choose([Row(1, 7001, uint.MaxValue, count: 2)], gains, startMoney: uint.MaxValue, money: uint.MaxValue, fraction: 1f, unitCap: _ => 2_147_483_647));
+        Assert.NotNull(Choose([Row(1, 7001, uint.MaxValue, count: 2)], gains, startMoney: uint.MaxValue, money: uint.MaxValue, fraction: 1f, unitCap: _ => 2_147_483_648));
+        // A listing with no units is skipped, not divided by.
+        Assert.Null(Choose([Row(1, 7001, 100, count: 0)], gains, unitCap: _ => 1_000));
+    }
+
+    [Fact]
+    public void ChooseUpgrade_WithTheRealBuyCap_RefusesARowAboveHalfTheBotFloor()
+    {
+        // A ring the bot would wear: sell 40, buy 200, quality 2: reference 141, markup 300 % = 120, so the floor is 141 and the cap at 50 % is 70.
+        ItemTemplate ring = Template(7001, ItemClass.Armor, quality: 2, sell: 40, buy: 200);
+        Dictionary<uint, ItemTemplate> templates = new() { [7001] = ring };
+        var gains = new Dictionary<uint, float?> { [7001] = 3f };
+        var options = new PlayerbotEconomyOptions();
+        Func<ItemTemplate, uint> cap = t => PlayerbotAuctionPricing.BuyCapPerUnit(t, 5f, options.ListMarkupPercentFor(t.Quality), options.BuyBelowAskPercent);
+        Assert.Equal(141u, PlayerbotAuctionPricing.FloorPerUnit(ring, 5f, options.ListMarkupPercentFor(2)));
+        Assert.Equal(70u, cap(ring));
+
+        PlayerbotUpgradeChoice? Pick(uint buyout) => PlayerbotEconomyPlanner.ChooseUpgrade([Row(1, 7001, buyout)], Self, 10_000, 10_000, 0, 1f,
+            entry => templates.GetValueOrDefault(entry), t => gains.GetValueOrDefault(t.Entry), cap);
+        Assert.NotNull(Pick(70));
+        Assert.Null(Pick(71));
+        Assert.Null(Pick(141));   // what a bot asks: never bought
     }
 
     // --- the reagents to buy ---------------------------------------------------------------------------------------
 
-    /// <summary>A trade good with a vendor price of 100 copper: the reagent cap is 100 * 4 + 10 = 410 copper per unit at the default options.</summary>
+    /// <summary>
+    /// A trade good with a vendor price of 100 copper: at the default options its floor is max(vendor floor 107, 100 * 500 % = 500, reference 100) = 500
+    /// and the buy cap 50 % of that, 250 copper per unit.
+    /// </summary>
     private static ItemTemplate Reagent(uint entry, uint sell = 100) => Template(entry, ItemClass.TradeGoods, quality: 1, sell: sell);
 
     private static readonly Dictionary<uint, ItemTemplate> ReagentTemplates = Enumerable.Range(8000, 10).ToDictionary(e => (uint)e, e => Reagent((uint)e));
 
-    private const uint ReagentCap = 410;
+    private const uint ReagentCap = 250;
 
     private static uint DefaultReagentCap(ItemTemplate template)
     {
         var defaults = new PlayerbotEconomyOptions();
-        return PlayerbotEconomyPlanner.ReagentUnitCap(template, defaults.ReagentSellMultiple, defaults.ReagentAllowanceCopper);
+        return PlayerbotAuctionPricing.BuyCapPerUnit(template, Alliance.CutPercent, defaults.ListMarkupPercentFor(template.Quality), defaults.BuyBelowAskPercent);
     }
 
     private static PlayerbotReagentChoice? ChooseReagent(IEnumerable<PlayerbotAuctionRow> rows, Dictionary<uint, uint> missing, uint limit = 10_000,
@@ -397,61 +467,52 @@ public sealed class PlayerbotEconomyPlannerTests
             unitCap ?? DefaultReagentCap, refused, vendorStocked);
 
     [Fact]
-    public void ReagentUnitCap_IsTheSellPriceTimesTheMultiplePlusTheAllowance_AndZeroWithoutASellPrice()
+    public void BuyCapPerUnit_IsHalfTheBotFloorAtTheDefaults_AndZeroWithoutASellPrice()
     {
-        Assert.Equal(4, new PlayerbotEconomyOptions().ReagentSellMultiple);
-        Assert.Equal(10, new PlayerbotEconomyOptions().ReagentAllowanceCopper);
+        var defaults = new PlayerbotEconomyOptions();
+        Assert.Equal(50, defaults.BuyBelowAskPercent);
 
         ItemTemplate plain = Reagent(8000);
-        Assert.Equal(ReagentCap, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 4, 10));
         Assert.Equal(ReagentCap, DefaultReagentCap(plain));
-        Assert.Equal(38u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8001, sell: 7), 4, 10));
-        Assert.Equal(20_010u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8002, sell: 5000), 4, 10));
-        // Only the vendor sell price counts: neither the quality nor the buy price moves the cap.
-        Assert.Equal(4_010u, PlayerbotEconomyPlanner.ReagentUnitCap(Template(8003, ItemClass.TradeGoods, quality: 3, sell: 1000, buy: 9000), 4, 10));
+        Assert.Equal(50u, DefaultReagentCap(Reagent(8001, sell: 7)));   // floor 100 (the reference beats 35 and the vendor floor 9)
+        Assert.Equal(12_500u, DefaultReagentCap(Reagent(8002, sell: 5000)));   // floor 25000
+        // Quality picks the markup: a q3 item with sell 1000 floors at 800 % = 8000 (reference 3897).
+        Assert.Equal(4_000u, DefaultReagentCap(Template(8003, ItemClass.TradeGoods, quality: 3, sell: 1000, buy: 9000)));
+        // The buy price counts only through the reference: sell 100, buy 9000, q1 gives a reference of 2250 above the 500 markup term.
+        Assert.Equal(1_125u, DefaultReagentCap(Template(8008, ItemClass.TradeGoods, quality: 1, sell: 100, buy: 9000)));
 
         // Option extremes.
-        Assert.Equal(100u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 1, 0));
-        Assert.Equal(12_000u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 20, 10_000));
-        Assert.Equal(10u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 0, 10));
-
-        // A negative multiple or allowance counts as 0.
-        Assert.Equal(10u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, -3, 10));
-        Assert.Equal(400u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, 4, -5));
-        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, -1, -1));
-        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(plain, int.MinValue, int.MinValue));
+        Assert.Equal(5u, PlayerbotAuctionPricing.BuyCapPerUnit(plain, 5f, 500, 1));
+        Assert.Equal(495u, PlayerbotAuctionPricing.BuyCapPerUnit(plain, 5f, 500, 99));
+        Assert.Equal(1_000u, PlayerbotAuctionPricing.BuyCapPerUnit(plain, 5f, 2000, 50));
 
         // No vendor sell price: never bought, whatever the options.
-        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8004, sell: 0), 4, 10));
-        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8004, sell: 0), 20, 10_000));
-        Assert.Equal(0u, PlayerbotEconomyPlanner.ReagentUnitCap(Template(8005, ItemClass.TradeGoods, quality: 1, sell: 0, buy: 4_000), 4, 10));
+        Assert.Equal(0u, DefaultReagentCap(Reagent(8004, sell: 0)));
+        Assert.Equal(0u, PlayerbotAuctionPricing.BuyCapPerUnit(Reagent(8004, sell: 0), 5f, 100_000, 99));
+        Assert.Equal(0u, DefaultReagentCap(Template(8005, ItemClass.TradeGoods, quality: 1, sell: 0, buy: 4_000)));
 
-        // Saturation at uint.MaxValue, exactly at the boundary and one past it.
-        uint half = uint.MaxValue / 2;   // 2147483647
-        Assert.Equal(uint.MaxValue - 1, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8006, sell: half), 2, 0));
-        Assert.Equal(uint.MaxValue, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8006, sell: half), 2, 1));
-        Assert.Equal(uint.MaxValue, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8006, sell: half), 2, 2));
-        Assert.Equal(uint.MaxValue, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8007, sell: uint.MaxValue), 20, 10_000));
-        Assert.Equal(uint.MaxValue, PlayerbotEconomyPlanner.ReagentUnitCap(Reagent(8007, sell: uint.MaxValue), 1, 0));
+        // The largest item: floor at the price limit, cap half of it.
+        Assert.Equal(1_000_000_000u, DefaultReagentCap(Reagent(8007, sell: uint.MaxValue)));
 
-        Assert.Throws<ArgumentNullException>(() => PlayerbotEconomyPlanner.ReagentUnitCap(null!, 4, 10));
+        Assert.Throws<ArgumentNullException>(() => PlayerbotAuctionPricing.BuyCapPerUnit(null!, 5f, 500, 50));
     }
 
     /// <summary>
     /// White trade goods at item levels 25 and 50 (sell 100 and 400, buy four times the sell price). The listing reference floors at
-    /// 20 * level^2 / 10 (1250 and 5000 copper), so the old cap of twice that (2500 and 10000) was far above the market value of a gathered material.
+    /// 20 * level^2 / 10 (1250 and 5000 copper), which is also the bot floor (it beats 500 % of the sell price and the vendor floor). A row at twice
+    /// the reference (2500 and 10000) is refused; the derived cap is half the floor (625 and 2500).
     /// </summary>
     [Theory]
-    [InlineData(25u, 100u, 2_500u, 410u)]
-    [InlineData(50u, 400u, 10_000u, 1_610u)]
-    public void ChooseReagent_RefusesARowAtTheOldReferenceCap_AndChoosesOneAtTheSellPriceCap(uint itemLevel, uint sell, uint expectedOldCap, uint expectedNewCap)
+    [InlineData(25u, 100u, 2_500u, 625u)]
+    [InlineData(50u, 400u, 10_000u, 2_500u)]
+    public void ChooseReagent_RefusesARowAtTwiceTheReference_AndChoosesOneAtTheDerivedCap(uint itemLevel, uint sell, uint expectedOldCap, uint expectedNewCap)
     {
         ItemTemplate template = Template(8000, ItemClass.TradeGoods, quality: 1, sell: sell, buy: sell * 4) with { ItemLevel = itemLevel };
         uint oldCap = PlayerbotAuctionPricing.CapMultiple * PlayerbotAuctionPricing.ReferencePerUnit(template);
         uint newCap = DefaultReagentCap(template);
         Assert.Equal(expectedOldCap, oldCap);
         Assert.Equal(expectedNewCap, newCap);
-        Assert.True(oldCap > 5 * newCap, "the old cap must be much higher than the new one for the test to mean something");
+        Assert.True(oldCap > 3 * newCap, "twice the reference must be far above the derived cap for the test to mean something");
 
         Func<uint, ItemTemplate?> templates = entry => entry == 8000 ? template : null;
         var one = new Dictionary<uint, uint> { [8000] = 1 };
@@ -554,17 +615,17 @@ public sealed class PlayerbotEconomyPlannerTests
     }
 
     [Fact]
-    public void ChooseReagent_NeverPaysMoreThanTheSellPriceCapPerUnit()
+    public void ChooseReagent_NeverPaysMoreThanTheDerivedCapPerUnit()
     {
         var missing = new Dictionary<uint, uint> { [8000] = 1 };
-        // The cap is 410 per unit (sell 100 * 4 + 10): exactly at the cap is allowed, one copper per unit over it is not (ceil(buyout / count)).
+        // The cap is 250 per unit (half of the floor 500): exactly at the cap is allowed, one copper per unit over it is not (ceil(buyout / count)).
         Assert.NotNull(ChooseReagent([Row(1, 8000, ReagentCap)], missing));
         Assert.Null(ChooseReagent([Row(1, 8000, ReagentCap + 1)], missing));
         Assert.NotNull(ChooseReagent([Row(1, 8000, 2 * ReagentCap, count: 2)], missing));
-        Assert.Null(ChooseReagent([Row(1, 8000, (2 * ReagentCap) + 1, count: 2)], missing));   // 410.5 per unit rounds up to 411
+        Assert.Null(ChooseReagent([Row(1, 8000, (2 * ReagentCap) + 1, count: 2)], missing));   // 250.5 per unit rounds up to 251
         var three = new Dictionary<uint, uint> { [8000] = 3 };   // a stack of three is within the overbuy bound only for a shortfall of two or more
         Assert.NotNull(ChooseReagent([Row(1, 8000, 3 * ReagentCap, count: 3)], three));
-        Assert.Null(ChooseReagent([Row(1, 8000, (3 * ReagentCap) + 1, count: 3)], three));   // 410.33 per unit rounds up to 411
+        Assert.Null(ChooseReagent([Row(1, 8000, (3 * ReagentCap) + 1, count: 3)], three));   // 250.33 per unit rounds up to 251
         // An over-cap row is passed over for a dearer-in-total but in-cap row.
         Assert.Equal(2u, Assert.IsType<PlayerbotReagentChoice>(ChooseReagent([Row(1, 8000, 2 * ReagentCap + 2, count: 2), Row(2, 8000, 2 * ReagentCap, count: 2)], missing)).Row.Id);
 
@@ -573,7 +634,9 @@ public sealed class PlayerbotEconomyPlannerTests
         Assert.Null(ChooseReagent([Row(1, 8000, 101)], missing, unitCap: _ => 100));
         Assert.Null(ChooseReagent([Row(1, 8000, 1)], missing, unitCap: _ => 0));   // a cap of 0 is never eligible
         Assert.Null(ChooseReagent([Row(1, 8000, 100)], missing, unitCap: _ => 99));
-        Assert.NotNull(ChooseReagent([Row(1, 8000, 100)], missing, unitCap: t => PlayerbotEconomyPlanner.ReagentUnitCap(t, 1, 0)));   // multiple 1, no allowance: the sell price itself
+        // At 99 % of a floor of 107 (markup 100 %: the vendor floor 107 beats the reference 100) the cap is 105.
+        Assert.NotNull(ChooseReagent([Row(1, 8000, 105)], missing, unitCap: t => PlayerbotAuctionPricing.BuyCapPerUnit(t, 5f, 100, 99)));
+        Assert.Null(ChooseReagent([Row(1, 8000, 106)], missing, unitCap: t => PlayerbotAuctionPricing.BuyCapPerUnit(t, 5f, 100, 99)));
 
         // An item without a vendor sell price has cap 0 under the real rule: never bought, even for one copper.
         Dictionary<uint, ItemTemplate> noPrice = new() { [8000] = Reagent(8000, sell: 0) };
@@ -695,6 +758,53 @@ public sealed class PlayerbotEconomyPlannerTests
         Assert.True(wrapped.IsHeld(20, unchecked(boughtAt + PlayerbotBoughtMemory.HoldMs - 1)));
         Assert.False(wrapped.IsHeld(20, unchecked(boughtAt + PlayerbotBoughtMemory.HoldMs)));
         Assert.Equal(0, wrapped.Count);
+    }
+
+    [Fact]
+    public void BoughtMemory_NoteBought_SweepsEntriesWhoseHoldHasExpired_WithoutAnyQuery()
+    {
+        var memory = new PlayerbotBoughtMemory();
+        memory.NoteBought(10, 5_000);
+        memory.NoteBought(11, 6_000);
+        Assert.Equal(2, memory.Count);
+
+        // Entry 12 is noted exactly HoldMs + 1 after entry 10, which is 1000 ms short of entry 11's hold ending: only entry 10 is swept.
+        memory.NoteBought(12, 5_000 + PlayerbotBoughtMemory.HoldMs + 1);
+        Assert.Equal(2, memory.Count);
+        Assert.False(memory.IsHeld(10, 5_000 + PlayerbotBoughtMemory.HoldMs + 1), "the expired entry was swept");
+        Assert.True(memory.IsHeld(11, 5_000 + PlayerbotBoughtMemory.HoldMs + 1));
+        Assert.True(memory.IsHeld(12, 5_000 + PlayerbotBoughtMemory.HoldMs + 1));
+
+        // An entry exactly at the end of its hold is swept too (the hold is [At, At + HoldMs)), and a re-note of the same entry keeps it.
+        var edge = new PlayerbotBoughtMemory();
+        edge.NoteBought(20, 0);
+        edge.NoteBought(21, PlayerbotBoughtMemory.HoldMs - 1);
+        Assert.Equal(2, edge.Count);
+        edge.NoteBought(22, PlayerbotBoughtMemory.HoldMs);
+        Assert.Equal(2, edge.Count);
+        edge.NoteBought(21, PlayerbotBoughtMemory.HoldMs + 10);
+        Assert.Equal(2, edge.Count);
+        Assert.True(edge.IsAwaitingCollection(21, PlayerbotBoughtMemory.HoldMs + 10));
+    }
+
+    [Fact]
+    public void BoughtMemory_AnUnqueriedEntry_DoesNotWrapBackIntoItsHold_AfterALaterNoteBoughtSweptIt()
+    {
+        const uint noted = 5_000;
+        var memory = new PlayerbotBoughtMemory();
+        memory.NoteBought(10, noted);
+
+        // The entry is never queried; a later purchase of another entry (HoldMs + 1 on) sweeps it.
+        memory.NoteBought(11, noted + PlayerbotBoughtMemory.HoldMs + 1);
+        Assert.Equal(1, memory.Count);
+
+        // 2^32 + 1000 ms after the first purchase the uint clock reads noted + 1000 again, which unchecked arithmetic would take for a
+        // purchase 1000 ms old: without the sweep the entry would be held again.
+        uint wrapped = unchecked((uint)(noted + (1L << 32) + 1_000));
+        Assert.Equal(noted + 1_000, wrapped);
+        Assert.False(memory.IsHeld(10, wrapped));
+        Assert.False(memory.IsAwaitingCollection(10, wrapped));
+        Assert.Equal(1, memory.Count);
     }
 
     [Fact]
@@ -890,21 +1000,64 @@ public sealed class PlayerbotEconomyPlannerTests
     }
 
     [Fact]
-    public void Options_ReagentCapDefaultsAndBounds()
+    public void Options_ListMarkupAndBuyBelowAskDefaultsAndBounds()
     {
         var defaults = new PlayerbotEconomyOptions();
-        Assert.Equal((4, 10), (defaults.ReagentSellMultiple, defaults.ReagentAllowanceCopper));
+        Assert.Equal((500, 300, 800, 10_000, 50),
+            (defaults.ListMarkupPercentCommon, defaults.ListMarkupPercentUncommon, defaults.ListMarkupPercentRare, defaults.ListMarkupPercentEpic, defaults.BuyBelowAskPercent));
         defaults.Validate();
 
-        new PlayerbotEconomyOptions { ReagentSellMultiple = 1 }.Validate();
-        new PlayerbotEconomyOptions { ReagentSellMultiple = 20 }.Validate();
-        new PlayerbotEconomyOptions { ReagentAllowanceCopper = 0 }.Validate();
-        new PlayerbotEconomyOptions { ReagentAllowanceCopper = 10_000 }.Validate();
+        new PlayerbotEconomyOptions { ListMarkupPercentCommon = 100 }.Validate();
+        new PlayerbotEconomyOptions { ListMarkupPercentCommon = 100_000 }.Validate();
+        new PlayerbotEconomyOptions { ListMarkupPercentUncommon = 100 }.Validate();
+        new PlayerbotEconomyOptions { ListMarkupPercentUncommon = 100_000 }.Validate();
+        new PlayerbotEconomyOptions { ListMarkupPercentRare = 100 }.Validate();
+        new PlayerbotEconomyOptions { ListMarkupPercentRare = 100_000 }.Validate();
+        new PlayerbotEconomyOptions { ListMarkupPercentEpic = 100 }.Validate();
+        new PlayerbotEconomyOptions { ListMarkupPercentEpic = 100_000 }.Validate();
+        new PlayerbotEconomyOptions { BuyBelowAskPercent = 1 }.Validate();
+        new PlayerbotEconomyOptions { BuyBelowAskPercent = 99 }.Validate();
 
-        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ReagentSellMultiple = 0 }.Validate());
-        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ReagentSellMultiple = 21 }.Validate());
-        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ReagentAllowanceCopper = -1 }.Validate());
-        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ReagentAllowanceCopper = 10_001 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentCommon = 99 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentCommon = 100_001 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentUncommon = 99 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentUncommon = 100_001 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentRare = 99 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentRare = 100_001 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentEpic = 99 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentEpic = 100_001 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ListMarkupPercentEpic = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { BuyBelowAskPercent = 0 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { BuyBelowAskPercent = 100 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { BuyBelowAskPercent = -5 }.Validate());
+    }
+
+    [Fact]
+    public void Options_ReagentSellMultipleAndAllowanceCopper_AreGone()
+    {
+        Assert.Null(typeof(PlayerbotEconomyOptions).GetProperty("ReagentSellMultiple"));
+        Assert.Null(typeof(PlayerbotEconomyOptions).GetProperty("ReagentAllowanceCopper"));
+        const System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public;
+        Assert.Null(typeof(PlayerbotEconomyPlanner).GetMethod("ReagentUnitCap", all));
+    }
+
+    [Fact]
+    public void Options_ListMarkupPercentFor_PicksTheQualityTier_PoorAndCommonShareOne_EpicAndAboveShareOne()
+    {
+        var options = new PlayerbotEconomyOptions
+        {
+            ListMarkupPercentCommon = 111, ListMarkupPercentUncommon = 222, ListMarkupPercentRare = 333, ListMarkupPercentEpic = 444,
+        };
+        Assert.Equal(111, options.ListMarkupPercentFor(0));
+        Assert.Equal(111, options.ListMarkupPercentFor(1));
+        Assert.Equal(222, options.ListMarkupPercentFor(2));
+        Assert.Equal(333, options.ListMarkupPercentFor(3));
+        Assert.Equal(444, options.ListMarkupPercentFor(4));
+        Assert.Equal(444, options.ListMarkupPercentFor(5));
+        Assert.Equal(444, options.ListMarkupPercentFor(6));
+        Assert.Equal(444, options.ListMarkupPercentFor(uint.MaxValue));
+        var defaults = new PlayerbotEconomyOptions();
+        Assert.Equal(new[] { 500, 500, 300, 800, 10_000, 10_000 }, new uint[] { 0, 1, 2, 3, 4, 5 }.Select(defaults.ListMarkupPercentFor).ToArray());
     }
 
     [Fact]

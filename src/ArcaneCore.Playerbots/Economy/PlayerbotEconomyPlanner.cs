@@ -43,6 +43,9 @@ internal sealed class PlayerbotBoughtMemory
     /// <summary>Notes a purchase of <paramref name="entry"/> at world time <paramref name="now"/>: (re)starts its hold and adds one to its awaiting-collection count.</summary>
     internal void NoteBought(uint entry, uint now)
     {
+        // Entries are otherwise dropped only when queried, and an unqueried one would wrap back into its hold after 2^32 ms (~49.7 days).
+        foreach (uint expired in _bought.Where(pair => pair.Key != entry && unchecked(now - pair.Value.At) >= HoldMs).Select(pair => pair.Key).ToArray())
+            _bought.Remove(expired);
         int awaiting = _bought.TryGetValue(entry, out (uint At, long Order, int Awaiting) known) ? known.Awaiting : 0;
         if (!_bought.ContainsKey(entry) && _bought.Count >= MaxEntries) _bought.Remove(_bought.MinBy(pair => pair.Value.Order).Key);
         _bought[entry] = (now, _next++, awaiting < int.MaxValue ? awaiting + 1 : awaiting);
@@ -78,19 +81,6 @@ internal static class PlayerbotEconomyPlanner
     /// <summary>The smallest budget (copper) worth a trip for an upgrade alone.</summary>
     internal const uint MinimumUpgradeBudget = 100;
 
-    /// <summary>
-    /// The most a reagent auction may ask per unit: the item's vendor sell price times <paramref name="sellMultiple"/> plus
-    /// <paramref name="allowanceCopper"/>, saturated at <see cref="uint.MaxValue"/>; 0 (never bought) when the item has no vendor sell price.
-    /// Negative option values count as 0.
-    /// </summary>
-    internal static uint ReagentUnitCap(ItemTemplate template, int sellMultiple, int allowanceCopper)
-    {
-        ArgumentNullException.ThrowIfNull(template);
-        if (template.SellPrice == 0) return 0;
-        ulong cap = (ulong)template.SellPrice * (ulong)Math.Max(sellMultiple, 0) + (ulong)Math.Max(allowanceCopper, 0);
-        return (uint)Math.Min(cap, uint.MaxValue);
-    }
-
     /// <summary>Entry to missing count (per craft minus carried) for every entry whose carried count is below its per-craft count; zero counts skipped.</summary>
     internal static IReadOnlyDictionary<uint, uint> Shortfalls(IReadOnlyDictionary<uint, uint> perCraft, Func<uint, uint> carried)
     {
@@ -120,7 +110,7 @@ internal static class PlayerbotEconomyPlanner
     /// not; among covering rows the lower total buyout wins, then the lower price per unit (compared exactly), then the lower auction id;
     /// among non-covering rows the lower price per unit, then the lower buyout, then the lower auction id.
     /// </summary>
-    /// <param name="unitCap">The most per unit the bot pays for an item (see <see cref="ReagentUnitCap"/>); 0 means never bought.</param>
+    /// <param name="unitCap">The most per unit the bot pays for an item (<see cref="PlayerbotAuctionPricing.BuyCapPerUnit"/>); 0 means never bought.</param>
     /// <param name="isRefused">Auctions the house refused to sell to the bot lately.</param>
     /// <param name="isVendorStocked">Item entries a vendor sells: never bought at the house (the vendor price is the market, and a player could otherwise sell vendor goods to bots above it).</param>
     internal static PlayerbotReagentChoice? ChooseReagent(IEnumerable<PlayerbotAuctionRow> rows, ulong self,
@@ -232,15 +222,16 @@ internal static class PlayerbotEconomyPlanner
     /// money: it counts against the visit's budget).
     /// </summary>
     internal static PlayerbotListingPlan? PlanListing(PlayerbotBagItem item, IReadOnlyList<PlayerbotAuctionRow> competitors, ulong self,
-        AuctionHouseEntry house, uint depositMinimum, float depositRate, float cutRate, uint remainingBudget)
+        AuctionHouseEntry house, uint depositMinimum, float depositRate, float cutRate, uint remainingBudget, int markupPercent)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(house);
-        uint buyout = PlayerbotAuctionPricing.ListingPrice(item.Template, item.Count, competitors, self, house, cutRate);
+        uint buyout = PlayerbotAuctionPricing.ListingPrice(item.Template, item.Count, competitors, self, house, cutRate, markupPercent);
         if (buyout == 0) return null;
+        uint floor = PlayerbotAuctionPricing.FloorPerUnit(item.Template, house.CutPercent * cutRate, markupPercent);
         uint deposit = PlayerbotAuctionPricing.Deposit(house, item.Template, item.Count, depositMinimum, depositRate);
         if (!PlayerbotAuctionPricing.IsWorthListing(item.Template, item.Count, buyout, deposit, house, cutRate, remainingBudget)) return null;
-        return new PlayerbotListingPlan(buyout, PlayerbotAuctionPricing.StartBid(buyout), deposit);
+        return new PlayerbotListingPlan(buyout, PlayerbotAuctionPricing.StartBid(buyout, floor, item.Count), deposit);
     }
 
     /// <summary>
@@ -251,19 +242,24 @@ internal static class PlayerbotEconomyPlanner
     /// <param name="money">The money held now.</param>
     /// <param name="spent">What this visit has spent so far (deposits and buyouts).</param>
     /// <param name="gain">The gain of wearing an item; null when the bot cannot use it.</param>
+    /// <param name="unitCap">The most per unit the bot pays for an item (<see cref="PlayerbotAuctionPricing.BuyCapPerUnit"/>); 0 means never bought.</param>
     /// <param name="isRefused">Auctions the house refused to sell to the bot lately.</param>
     internal static PlayerbotUpgradeChoice? ChooseUpgrade(IEnumerable<PlayerbotAuctionRow> rows, ulong self, uint startMoney, uint money,
-        uint spent, float fraction, Func<uint, ItemTemplate?> templates, Func<ItemTemplate, float?> gain, Func<uint, bool>? isRefused = null)
+        uint spent, float fraction, Func<uint, ItemTemplate?> templates, Func<ItemTemplate, float?> gain, Func<ItemTemplate, uint> unitCap,
+        Func<uint, bool>? isRefused = null)
     {
         ArgumentNullException.ThrowIfNull(rows);
         ArgumentNullException.ThrowIfNull(templates);
         ArgumentNullException.ThrowIfNull(gain);
+        ArgumentNullException.ThrowIfNull(unitCap);
         uint limit = Math.Min(Remaining(VisitBudget(startMoney, fraction), spent), money);
         PlayerbotUpgradeChoice? best = null;
         foreach (PlayerbotAuctionRow row in rows)
         {
-            if (row.Buyout == 0 || row.Buyout > limit || row.Owner == self || isRefused?.Invoke(row.Id) == true) continue;
+            if (row.Buyout == 0 || row.Count == 0 || row.Buyout > limit || row.Owner == self || isRefused?.Invoke(row.Id) == true) continue;
             if (templates(row.Entry) is not { } template || gain(template) is not { } value || value <= PlayerbotItemScore.MinimumGain) continue;
+            uint cap = unitCap(template);
+            if (cap == 0 || ((ulong)row.Buyout + row.Count - 1) / row.Count > cap) continue;
             if (best is null || value > best.Gain
                 || (value == best.Gain && (row.Buyout < best.Row.Buyout || (row.Buyout == best.Row.Buyout && row.Id < best.Row.Id))))
                 best = new PlayerbotUpgradeChoice(row, value);
