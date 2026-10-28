@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells.Warlock;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Spells;
@@ -27,7 +28,7 @@ internal readonly record struct PlayerbotLfgLocalityVerdict(bool MayAdvertise, P
 /// zone or a bordering one, when the planner (<see cref="PlayerbotTravelPlanner"/>: flight paths, the hearthstone and its bind point, mage
 /// portals and teleports, ships) puts the trip under <c>LfgMaxTravelSeconds</c>, or when a warlock waiting for the same goal can summon it
 /// (Ritual of Summoning, spell 698). Live logs showed a bot advertising Dire Maul (Feralas) in "General - Winterspring".
-/// <para>Thread affinity: <see cref="ForPlace"/> and <see cref="SummonAvailable"/> read world state and run on the world thread; the other members are pure.</para>
+/// <para>Thread affinity: <c>ForPlace</c> and <see cref="SummonAvailable"/> read world state and run on the world thread; the other members are pure.</para>
 /// </summary>
 internal static class PlayerbotLfgLocality
 {
@@ -46,7 +47,7 @@ internal static class PlayerbotLfgLocality
     private static readonly (uint A, uint B)[] BorderPairs =
     [
         // Kalimdor
-        (141, 1657), (141, 148), (148, 331), (148, 361), (331, 361), (331, 16), (331, 406), (331, 17), (361, 618), (361, 493), (618, 493),
+        (141, 1657), (148, 331), (148, 361), (331, 361), (331, 16), (331, 406), (331, 17), (361, 618), (361, 493), (618, 493),
         (406, 17), (406, 405), (405, 357), (17, 14), (17, 215), (17, 15), (17, 400), (14, 1637), (1637, 17), (215, 1638), (400, 357),
         (400, 440), (440, 490), (490, 1377),
         // Eastern Kingdoms (25 is Blackrock Mountain)
@@ -113,6 +114,13 @@ internal static class PlayerbotLfgLocality
     /// <paramref name="summonAvailable"/>. A planner failure counts as no route. World thread; the planner runs only when the zones do not decide.
     /// </summary>
     internal static PlayerbotLfgLocalityVerdict ForPlace(WorldSession session, Player player, PlayerbotOptions options, uint placeMap, Vector3 place, bool summonAvailable)
+        => ForPlace(session, player, options, placeMap, place, () => summonAvailable);
+
+    /// <summary>
+    /// <see cref="ForPlace(WorldSession, Player, PlayerbotOptions, uint, Vector3, bool)"/> with the summon worked out lazily:
+    /// <paramref name="summonAvailable"/> runs only when neither the zones nor the planned trip allow advertising (null: no summon).
+    /// </summary>
+    internal static PlayerbotLfgLocalityVerdict ForPlace(WorldSession session, Player player, PlayerbotOptions options, uint placeMap, Vector3 place, Func<bool>? summonAvailable)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(player);
@@ -132,24 +140,35 @@ internal static class PlayerbotLfgLocality
             FaultLedger.Shared.Record("playerbot.lfg-locality", ex);
         }
 
-        return Judge(player.MapId, player.ZoneId, placeMap, placeZone, seconds, summonAvailable, max);
+        PlayerbotLfgLocalityVerdict byTrip = Judge(player.MapId, player.ZoneId, placeMap, placeZone, seconds, false, max);
+        if (byTrip.MayAdvertise || summonAvailable is null || !summonAvailable()) return byTrip;
+        return Judge(player.MapId, player.ZoneId, placeMap, placeZone, seconds, true, max);
     }
 
+    /// <summary>The members at the place the 1.12 ritual needs: the warlock who casts it and two more who click the portal.</summary>
+    internal const int SummonersNeeded = 3;
+
     /// <summary>
-    /// Whether any bot of <paramref name="group"/> other than <paramref name="asker"/> is a warlock that knows Ritual of Summoning
-    /// (<see cref="RitualOfSummoning"/>) and itself stands in the zone of the place or a bordering one. World thread.
+    /// Whether the bots of <paramref name="group"/> other than <paramref name="asker"/> can summon it: at least <see cref="SummonersNeeded"/>
+    /// of them are alive and stand in the zone of the place or a bordering one, and one of those is a warlock who knows Ritual of Summoning
+    /// (<see cref="RitualOfSummoning"/>) and carries a Soul Shard (<see cref="SoulShardRules.SoulShard"/>). World thread.
     /// </summary>
     internal static bool SummonAvailable(IEnumerable<(Player Player, WorldSession Session)> group, Player asker, uint placeMap, Vector3 place)
     {
         ArgumentNullException.ThrowIfNull(group);
+        int local = 0;
+        bool warlock = false;
         foreach ((Player other, WorldSession session) in group)
         {
-            if (ReferenceEquals(other, asker) || other.Class != Class.Warlock || !other.IsAlive) continue;
-            if (session.Services.GetService<SpellFeature>() is not { } spells || !spells.Spellbook.HasSpell(other, RitualOfSummoning)) continue;
+            if (ReferenceEquals(other, asker) || !other.IsAlive) continue;
             PlayerbotLfgReach reach = Judge(other.MapId, other.ZoneId, placeMap, ZoneAt(other, placeMap, place), null, false, 0).Reach;
-            if (reach is PlayerbotLfgReach.SameZone or PlayerbotLfgReach.AdjacentZone) return true;
+            if (reach is not (PlayerbotLfgReach.SameZone or PlayerbotLfgReach.AdjacentZone)) continue;
+            local++;
+            if (!warlock && other.Class == Class.Warlock && other.Inventory.GetItemCount(SoulShardRules.SoulShard) > 0
+                && session.Services.GetService<SpellFeature>() is { } spells && spells.Spellbook.HasSpell(other, RitualOfSummoning))
+                warlock = true;
         }
 
-        return false;
+        return warlock && local >= SummonersNeeded;
     }
 }

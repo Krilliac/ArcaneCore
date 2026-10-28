@@ -69,6 +69,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     private readonly Dictionary<(BattlegroundType Type, uint Instance), BattlegroundState> _battlegrounds = [];
     private readonly Dictionary<string, long> _calls = new(StringComparer.Ordinal);
     private readonly Dictionary<((PlayerbotGroupGoalKind, uint) Goal, Team Team), long> _holds = [];
+    private int _verdictsThisPass;
     private readonly HashSet<ObjectGuid> _dings = [];
     private readonly Random _random = new();
     private PlayerbotChat? _hooked;
@@ -98,6 +99,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         PlayerbotVoiceOptions options = chat.VoiceOptions;
         if (!options.Enabled || !chat.SpeechOptions.Enabled || pass.Bots.Count == 0) return;
         _budget = options.LinesPerPass;
+        _verdictsThisPass = 0;
         if (options.BattlegroundCalls) Battlegrounds(pass, chat, options);
         if (options.RunCalls) Runs(pass, chat);
         if (options.LookingForGroup || options.QuestHelp) LookingForGroup(pass, chat, options);
@@ -239,7 +241,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     /// <summary>
     /// The waiting bot that posts for the goal of <paramref name="list"/> (bots of one goal and team): the one waiting longest. Under
     /// <see cref="PlayerbotVoiceOptions.LfgNearDungeonOnly"/> the first of them in that order that is alive, out of combat and near enough to
-    /// the goal's place (<see cref="PlayerbotLfgLocality.ForPlace"/>, a warlock of the list counting as a summon); null when none is, in which
+    /// the goal's place (<c>PlayerbotLfgLocality.ForPlace</c>, a warlock of the list with two helpers counting as a summon); null when none is, in which
     /// case the line is not posted and the holding is logged at Debug once per <see cref="PlayerbotVoiceOptions.LookingForGroupRepeatSeconds"/>.
     /// </summary>
     private (PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)? ChoosePoster(PlayerbotSocialPass pass, PlayerbotVoiceOptions options,
@@ -248,46 +250,86 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         var ordered = list.OrderBy(w => w.Since).ToList();
         if (!options.LfgNearDungeonOnly) return ordered[0];
 
-        (PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)? firstHeld = null;
-        PlayerbotLfgLocalityVerdict heldVerdict = default;
-        foreach (var waiting in ordered)
+        var waiters = new (bool Eligible, Func<PlayerbotLfgLocalityVerdict?> Verdict)[ordered.Count];
+        for (int i = 0; i < ordered.Count; i++)
         {
+            var waiting = ordered[i];
             Player candidate = waiting.Bot.Player;
-            if (!candidate.IsAlive || candidate.Combat.IsInCombat) continue;
-            PlayerbotLfgLocalityVerdict verdict = LocalityOf(pass, options, waiting, list);
-            if (verdict.MayAdvertise) return waiting;
-            if (firstHeld is null)
-            {
-                firstHeld = waiting;
-                heldVerdict = verdict;
-            }
+            waiters[i] = (candidate.IsAlive && !candidate.Combat.IsInCombat, () => LocalityOf(pass, options, waiting, list));
         }
 
-        if (firstHeld is { } held)
+        PosterChoice choice = ChoosePosterIndex(waiters);
+        if (choice.Index is { } index) return ordered[index];
+        // Verdicts left for the next pass (the per-pass cap) are not a holding: nothing is logged and the goal is looked at again.
+        if (!choice.Deferred && choice.HeldIndex is { } heldIndex)
         {
+            var held = ordered[heldIndex];
             var holdKey = (held.Goal.Key, held.Bot.Player.Team);
             if (!_holds.TryGetValue(holdKey, out long at) || pass.NowMs - at >= options.LookingForGroupRepeatSeconds * 1000L)
             {
                 _holds[holdKey] = pass.NowMs;
-                logger.LogDebug("Playerbot {Bot} holds its LFG for {What}: {Trace}", held.Bot.Player.Name, LfgSubject(pass, held.Goal) ?? held.Goal.ToString(), heldVerdict.Trace);
+                logger.LogDebug("Playerbot {Bot} holds its LFG for {What}: {Trace}", held.Bot.Player.Name, LfgSubject(pass, held.Goal) ?? held.Goal.ToString(), choice.HeldVerdict.Trace);
             }
         }
 
         return null;
     }
 
+    /// <summary>The outcome of <see cref="ChoosePosterIndex"/>.</summary>
+    /// <param name="Index">The waiter that posts, or null.</param>
+    /// <param name="Deferred">At least one eligible waiter's verdict was not available yet (null), so a null <paramref name="Index"/> is not final.</param>
+    /// <param name="HeldIndex">The first eligible waiter whose verdict refused (the one a holding is logged for), or null.</param>
+    /// <param name="HeldVerdict">The refusing verdict of <paramref name="HeldIndex"/>.</param>
+    internal readonly record struct PosterChoice(int? Index, bool Deferred, int? HeldIndex, PlayerbotLfgLocalityVerdict HeldVerdict);
+
+    /// <summary>
+    /// Who posts the LFG of a goal: the first waiter, in waiting order, that is eligible (alive, out of combat) and whose locality verdict allows
+    /// advertising. A verdict is asked lazily and only for eligible waiters up to the one that is allowed; a null verdict means it cannot be
+    /// worked out now (the per-pass cap), which marks the choice <see cref="PosterChoice.Deferred"/> and moves on to the next waiter. Pure.
+    /// </summary>
+    internal static PosterChoice ChoosePosterIndex(IReadOnlyList<(bool Eligible, Func<PlayerbotLfgLocalityVerdict?> Verdict)> waitersInSinceOrder)
+    {
+        ArgumentNullException.ThrowIfNull(waitersInSinceOrder);
+        bool deferred = false;
+        int? heldIndex = null;
+        PlayerbotLfgLocalityVerdict heldVerdict = default;
+        for (int i = 0; i < waitersInSinceOrder.Count; i++)
+        {
+            if (!waitersInSinceOrder[i].Eligible) continue;
+            if (waitersInSinceOrder[i].Verdict() is not { } verdict)
+            {
+                deferred = true;
+                continue;
+            }
+
+            if (verdict.MayAdvertise) return new PosterChoice(i, deferred, heldIndex, heldVerdict);
+            if (heldIndex is null)
+            {
+                heldIndex = i;
+                heldVerdict = verdict;
+            }
+        }
+
+        return new PosterChoice(null, deferred, heldIndex, heldVerdict);
+    }
+
+    /// <summary>The most locality verdicts worked out in one social pass, across all goals (the planner is the cost); cached verdicts are free.</summary>
+    internal const int MaxLocalityVerdictsPerPass = 8;
+
     /// <summary>The bot's locality verdict for the goal's place, worked out at most once per <see cref="PlayerbotVoiceOptions.LookingForGroupRepeatSeconds"/> and kept in its state.</summary>
-    private PlayerbotLfgLocalityVerdict LocalityOf(PlayerbotSocialPass pass, PlayerbotVoiceOptions options,
+    private PlayerbotLfgLocalityVerdict? LocalityOf(PlayerbotSocialPass pass, PlayerbotVoiceOptions options,
         (PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since) waiting, List<(PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)> list)
     {
         BotState state = StateOf(waiting.Bot, pass.NowMs);
         var key = waiting.Goal.Key;
         if (state.HasLocality && state.LocalityKey == key && pass.NowMs - state.LocalityMs < options.LookingForGroupRepeatSeconds * 1000L) return state.Locality;
 
+        if (_verdictsThisPass >= MaxLocalityVerdictsPerPass) return null; // retried on a later pass
+        _verdictsThisPass++;
         PlayerbotGroupGoal goal = waiting.Goal;
         Player player = waiting.Bot.Player;
-        bool summon = PlayerbotLfgLocality.SummonAvailable(list.Select(w => (w.Bot.Player, w.Bot.Session)), player, goal.MeetingMap, goal.Meeting);
-        state.Locality = PlayerbotLfgLocality.ForPlace(waiting.Bot.Session, player, pass.Bot, goal.MeetingMap, goal.Meeting, summon);
+        state.Locality = PlayerbotLfgLocality.ForPlace(waiting.Bot.Session, player, pass.Bot, goal.MeetingMap, goal.Meeting,
+            () => PlayerbotLfgLocality.SummonAvailable(list.Select(w => (w.Bot.Player, w.Bot.Session)), player, goal.MeetingMap, goal.Meeting));
         state.LocalityKey = key;
         state.LocalityMs = pass.NowMs;
         state.HasLocality = true;

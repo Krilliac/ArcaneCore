@@ -2,14 +2,17 @@ using System.Globalization;
 using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Bots.Progression;
+using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Playerbots.Party;
 using ArcaneCore.World.Social;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +29,9 @@ public sealed partial class PlayerbotGroupCoordinator
 {
     /// <summary>How long a bot's answer to "does this dungeon drop an upgrade for it" is kept.</summary>
     internal const uint GearFitMemoryMs = 600_000;
+
+    /// <summary>A dropped item counts as an upgrade only when it needs a level of at least the bot's level less this.</summary>
+    internal const int GearLevelFloor = 5;
 
     /// <summary>One dungeon that holds an objective creature, the way into it and where the creature stands.</summary>
     private readonly record struct DungeonCandidate(uint MapId, MapTemplate Instance, AreaTriggerTemplate Entrance, AreaTriggerTeleport Teleport,
@@ -102,6 +108,13 @@ public sealed partial class PlayerbotGroupCoordinator
 
         if (found.Count == 0) return null;
 
+        // Every candidate refused for this bot and quest not long ago: skip the band, reason and loot scans until the refusal runs out.
+        uint refusedAt = Now;
+        bool allRefused = true;
+        for (int i = 0; i < found.Count && allRefused; i++)
+            allRefused = _passedOver.TryGetValue((botId, quest.Id, found[i].MapId), out uint refusedUntil) && unchecked((int)(refusedUntil - refusedAt)) > 0;
+        if (allRefused) return null;
+
         IReadOnlyList<PlayerbotRunPlan> plans = Catalogue().Plans;
         PlayerbotRunOptions runs = _options.Groups.DungeonRuns;
         int level = player.Level;
@@ -121,7 +134,7 @@ public sealed partial class PlayerbotGroupCoordinator
             PlayerbotDungeonBand band = PlayerbotDungeonFit.BandOf(candidate.MapId, candidate.Teleport.RequiredLevel, _bandsScratch);
             found[i] = candidate with { Band = band };
             // The reasons cost scans over the waiting bots and the loot: only a bot outside the band needs them.
-            options[i] = (band, band.Holds(level) ? PlayerbotDungeonReasons.None : ReasonsFor(botId, player, quest, found[i], maps, creatures));
+            options[i] = (band, band.Holds(level) || !reasonRequired ? PlayerbotDungeonReasons.None : ReasonsFor(botId, player, quest, found[i], maps, creatures));
         }
 
         int? pick = PlayerbotDungeonFit.Choose(level, options, reasonRequired);
@@ -164,8 +177,8 @@ public sealed partial class PlayerbotGroupCoordinator
         if (reasons != PlayerbotDungeonReasons.None) return reasons;
 
         (PlayerbotGroupGoalKind, uint) key = (candidate.Instance.IsRaid ? PlayerbotGroupGoalKind.Raid : PlayerbotGroupGoalKind.Dungeon, candidate.MapId);
-        if (HasCompanion(botId, player, key)) reasons |= PlayerbotDungeonReasons.Companion;
-        if (HasFormingGroup(botId, player, key)) reasons |= PlayerbotDungeonReasons.FormingGroup;
+        if (HasCompanion(botId, player, key, candidate.Band)) reasons |= PlayerbotDungeonReasons.Companion;
+        if (HasFormingGroup(botId, player, key, candidate.Band)) reasons |= PlayerbotDungeonReasons.FormingGroup;
         if (DropsUpgrade(botId, player, candidate.MapId, creatures)) reasons |= PlayerbotDungeonReasons.GearUpgrade;
         return reasons;
     }
@@ -223,22 +236,23 @@ public sealed partial class PlayerbotGroupCoordinator
     /// A guildmate or friend of the same team already waits for the goal <paramref name="key"/>, or is a member of a bot group whose goal is
     /// that dungeon.
     /// </summary>
-    private bool HasCompanion(Guid botId, Player player, (PlayerbotGroupGoalKind, uint) key)
+    private bool HasCompanion(Guid botId, Player player, (PlayerbotGroupGoalKind, uint) key, PlayerbotDungeonBand band)
     {
         if (_waiting.Count == 0 && _groups.Count == 0) return false;
         if (SocialOrNull() is not { } social) return false;
         foreach ((Guid otherId, Waiting waiting) in _waiting)
         {
-            if (otherId == botId || waiting.Team != player.Team || waiting.Goal.Key != key) continue;
-            if (TryPlayer(otherId, out Player? other) && IsCompanion(social, player, other)) return true;
+            if (otherId == botId || waiting.Team != player.Team || waiting.Goal.Key != key || waiting.Goal.Fit is not null) continue;
+            if (TryPlayer(otherId, out Player? other) && band.Holds(other.Level) && IsCompanion(social, player, other)) return true;
         }
 
         if (_world is not { } world) return false;
         foreach (BotGroup group in _groups)
         {
-            if (group.Goal.MapId != key.Item2 || group.Goal.Kind != key.Item1) continue;
+            if (group.Goal.MapId != key.Item2 || group.Goal.Kind != key.Item1 || group.Goal.Fit is not null) continue;
             foreach (Member member in group.Members)
-                if (world.FindOnlinePlayer(member.Guid) is { } other && other.Team == player.Team && !ReferenceEquals(other, player) && IsCompanion(social, player, other))
+                if (world.FindOnlinePlayer(member.Guid) is { } other && other.Team == player.Team && !ReferenceEquals(other, player) && band.Holds(other.Level)
+                    && IsCompanion(social, player, other))
                     return true;
         }
 
@@ -246,15 +260,25 @@ public sealed partial class PlayerbotGroupCoordinator
     }
 
     /// <summary>A bot of the same team already waits for the goal <paramref name="key"/>, within <see cref="PlayerbotGroupOptions.LevelRange"/> of this bot.</summary>
-    private bool HasFormingGroup(Guid botId, Player player, (PlayerbotGroupGoalKind, uint) key)
+    private bool HasFormingGroup(Guid botId, Player player, (PlayerbotGroupGoalKind, uint) key, PlayerbotDungeonBand band)
     {
         foreach ((Guid otherId, Waiting waiting) in _waiting)
         {
-            if (otherId == botId || waiting.Team != player.Team || waiting.Goal.Key != key) continue;
-            if (TryPlayer(otherId, out Player? other) && Math.Abs(other.Level - player.Level) <= _options.Groups.LevelRange) return true;
+            if (otherId == botId || waiting.Team != player.Team || waiting.Goal.Key != key || waiting.Goal.Fit is not null) continue;
+            if (TryPlayer(otherId, out Player? other) && band.Holds(other.Level) && Math.Abs(other.Level - player.Level) <= _options.Groups.LevelRange) return true;
         }
 
         return false;
+    }
+
+    /// <summary>Whether wearing <paramref name="template"/> gains over the item worn in the slot it would take (an empty slot does not count).</summary>
+    private static bool ReplacesWornItem(Player player, ItemTemplate template)
+    {
+        if (PlayerbotGearScoreSeam.Gain(player, template) is not { } gain || gain <= PlayerbotItemScore.MinimumGain) return false;
+        // Filling an empty slot does not count: the item must replace something worn in the slot it would take.
+        PlayerbotStatWeights weights = PlayerbotTalentBuilds.Choose(player.Class, player.Guid.Low).Weights;
+        PlayerbotItemScore.UpgradeGain(player, template, PlayerbotItemScore.Score(template, weights), weights, null, out byte slot);
+        return slot != InventorySlots.NullSlot && player.Inventory.GetItem(InventorySlots.Bag0, slot) is not null;
     }
 
     /// <summary>
@@ -281,18 +305,15 @@ public sealed partial class PlayerbotGroupCoordinator
         {
             var onMap = new HashSet<uint>();
             foreach (CreatureSpawn spawn in creatures.GetSpawns(mapId)) onMap.Add(spawn.Entry);
-            var dropped = new List<uint>();
-            foreach ((uint item, uint[] droppers) in PlayerbotDropIndex.Index(loot))
+            // The creatures' own loot rows only: reference tables (world-drop pools shared by many creatures) do not make a dungeon an upgrade.
+            var dropped = new SortedSet<uint>();
+            foreach (CreatureLootInfo info in loot.CreatureInfos)
             {
-                for (int i = 0; i < droppers.Length; i++)
-                {
-                    if (!onMap.Contains(droppers[i])) continue;
-                    dropped.Add(item);
-                    break;
-                }
+                if (info.LootId == 0 || !onMap.Contains(info.Entry)) continue;
+                foreach (LootStoreRow row in loot.GetRows(LootTableKind.Creature, info.LootId))
+                    if (row.Item != 0 && row.MinCountOrRef >= 0) dropped.Add(row.Item);
             }
 
-            dropped.Sort();
             _gearItemsByMap[mapId] = items = [.. dropped];
         }
 
@@ -300,7 +321,9 @@ public sealed partial class PlayerbotGroupCoordinator
         for (int i = 0; i < items.Length && !fits; i++)
         {
             if (player.Inventory.Templates.Find(items[i]) is not { Quality: >= 2 } template || template.RequiredLevel > player.Level) continue;
-            fits = PlayerbotGearScoreSeam.Gain(player, template) is { } gain && gain > PlayerbotItemScore.MinimumGain;
+            uint needed = template.RequiredLevel != 0 ? template.RequiredLevel : template.ItemLevel;
+            if ((int)needed < player.Level - GearLevelFloor) continue;
+            fits = ReplacesWornItem(player, template);
         }
 
         _gearFits[(botId, mapId)] = (unchecked(now + GearFitMemoryMs), fits);

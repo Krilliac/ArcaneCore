@@ -55,7 +55,8 @@ public sealed class PlayerbotDungeonFitWorldTests
         Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.WaitingBots.Any() || world.Coordinator.Groups.Any()), await world.TraceAsync());
 
         string[] events = await world.OnWorldAsync(() => world.Coordinator.Events.ToArray());
-        Assert.Contains(events, e => e.Contains("fit=", StringComparison.Ordinal) && e.Contains("quest", StringComparison.Ordinal));
+        // PlayerbotDungeonFit.Judge: "out-of-band {level} vs {band}: {reasons}" in the goal text as fit=...; the quest is the only reason here.
+        Assert.Contains(events, e => e.Contains("fit=out-of-band 60 vs ", StringComparison.Ordinal) && e.Contains(": quest", StringComparison.Ordinal));
         Assert.DoesNotContain(events, e => e.Contains("no reason", StringComparison.Ordinal));
     }
 }

@@ -119,9 +119,12 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// <param name="extraCreatures">More creature templates and their spawns (the bosses of the dungeon and raid run tests).</param>
     /// <param name="dungeonQuestLevel">The quest level of <see cref="DungeonQuest"/> (default 10).</param>
     /// <param name="extraTemplates">More creature templates with no database spawn (an event boss a test places with <c>SpawnTemporary</c>).</param>
+    /// <param name="extraItems">More item templates (gear a dungeon boss drops).</param>
+    /// <param name="extraLoot">More loot rows (creature or reference tables) next to the boss's own.</param>
     public static async Task<GroupTestWorld> StartAsync(uint[] quests, Action<PlayerbotOptions>? configure = null, bool dungeon = false,
         Action<IServiceCollection>? services = null, (CreatureTemplate Template, CreatureSpawn Spawn)[]? extraCreatures = null, bool rfc = false,
-        bool openWorldTrophyDrop = false, CreatureTemplate[]? extraTemplates = null, byte dungeonQuestLevel = 10)
+        bool openWorldTrophyDrop = false, CreatureTemplate[]? extraTemplates = null, byte dungeonQuestLevel = 10,
+        ItemTemplate[]? extraItems = null, (LootTableKind Kind, LootStoreRow Row)[]? extraLoot = null)
     {
         var options = new PlayerbotOptions
         {
@@ -129,7 +132,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             Groups = { FormationTimeoutSeconds = 600 },
         };
         configure?.Invoke(options);
-        var content = new GroupContent(quests, dungeon, openWorldTrophyDrop, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])], extraTemplates ?? [], dungeonQuestLevel);
+        var content = new GroupContent(quests, dungeon, openWorldTrophyDrop, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])], extraTemplates ?? [], dungeonQuestLevel, extraLoot ?? []);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(collection =>
         {
             if (dungeon) DeadminesTestContent.Register(collection);
@@ -139,7 +142,11 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             collection.AddSingleton<IQuestContentStore>(content);
             collection.AddScoped<ILootDataStore>(_ => content);
             if (collection.LastOrDefault(d => d.ServiceType == typeof(IItemTemplateSource))?.ImplementationInstance is ArcaneCore.World.Tests.Items.InMemoryItemTemplateSource items)
+            {
                 items.Templates.Add(new ItemTemplate { Entry = BossTrophy, Name = "Deadmines Boss's Trophy", Class = 12, Quality = 1, Stackable = 1, MaxCount = 1 });
+                foreach (ItemTemplate extra in extraItems ?? []) items.Templates.Add(extra);
+            }
+
             services?.Invoke(collection);
         });
         await world.Host.OnWorldAsync(() =>
@@ -285,13 +292,14 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     }
 
     /// <summary>The giver, the creatures and the quests (a later registration replaces the scenario content's stores).</summary>
-    private sealed class GroupContent(uint[] quests, bool dungeon, bool openWorldTrophyDrop, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra, CreatureTemplate[] templatesOnly, byte dungeonQuestLevel) : ICreatureDataStore, IQuestContentStore, ILootDataStore
+    private sealed class GroupContent(uint[] quests, bool dungeon, bool openWorldTrophyDrop, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra, CreatureTemplate[] templatesOnly, byte dungeonQuestLevel, (LootTableKind Kind, LootStoreRow Row)[] extraLoot) : ICreatureDataStore, IQuestContentStore, ILootDataStore
     {
         Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new LootContent(
             [
                 (LootTableKind.Creature, new LootStoreRow(BossEntry, 0, 100f, 0, -(int)BossLootReference, 1)),
                 (LootTableKind.Reference, new LootStoreRow(BossLootReference, BossTrophy, -100f, 0, 1, 1)),
                 .. openWorldTrophyDrop ? [(LootTableKind.Creature, new LootStoreRow(OgreEntry, BossTrophy, -100f, 0, 1, 1))] : Array.Empty<(LootTableKind, LootStoreRow)>(),
+                .. extraLoot,
             ],
             [new CreatureLootInfo(BossEntry, BossEntry, 0, 0, 0), .. openWorldTrophyDrop ? [new CreatureLootInfo(OgreEntry, OgreEntry, 0, 0, 0)] : Array.Empty<CreatureLootInfo>()]));
 
