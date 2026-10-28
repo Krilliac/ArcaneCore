@@ -178,7 +178,7 @@ public sealed class RetailResistFixesTests
         warlock.Health = 1_000_000;
         warlock.SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire, 300);
         kit.System.CombatRules = new VanillaSpellCombatRules();
-        kit.System.Damage = new ArcaneCore.Game.Combat.MapCombatDamageSink();
+        kit.System.Damage = new MapCombatDamageSink();
         kit.System.Random = new Random(11);
         kit.System.CastSpell(warlock, spellId, SpellCastTargets.ForSelf(), triggered: true);
         kit.Advance(40_500);
