@@ -356,7 +356,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
     /// <see cref="PlayerInventory.CanStoreItem(byte, byte, List{ItemPosCount}, ItemTemplate, uint, Item?, bool, out byte, out uint)"/>
     /// the move itself uses; offered items are never in the bank (SetTradeItem refuses a bank position), so only inventory targets matter.
     /// </summary>
-    private static bool RefuseIfStoredOntoOffered(WorldSession session, Player player, ItemTemplate template, uint count, Item? source, byte bag, byte slot)
+    internal static bool RefuseIfStoredOntoOffered(WorldSession session, Player player, ItemTemplate template, uint count, Item? source, byte bag, byte slot)
     {
         if (session.Services.GetService<EconomyFeature>() is not { } economy || economy.TradeOf(player) is null)
         {
