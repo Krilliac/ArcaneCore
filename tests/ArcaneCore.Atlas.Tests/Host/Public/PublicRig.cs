@@ -333,14 +333,24 @@ internal static class SocketExtensions
     /// <summary>
     /// The next message that is not the pushed <c>live.status</c> event (<c>op</c> "event", <c>topic</c> "live.status": the live status a hub
     /// broadcasts on its own schedule, which may already be on its way when the server decides to close), or null when the peer closed. Any
-    /// other event is returned, and the wait ends with a <see cref="TimeoutException"/> at the deadline even while events keep arriving.
+    /// other event is returned, and the wait ends with a <see cref="TimeoutException"/> at the deadline, both while events keep arriving and
+    /// when the socket goes quiet.
     /// </summary>
     public static async Task<string?> ReceiveSkippingEventsAsync(this ClientWebSocket socket, int timeoutMs = 10_000)
     {
         DateTime end = DateTime.UtcNow.AddMilliseconds(timeoutMs);
         while (DateTime.UtcNow < end)
         {
-            string? text = await socket.ReceiveTextAsync(Math.Max(100, (int)(end - DateTime.UtcNow).TotalMilliseconds));
+            string? text;
+            try
+            {
+                text = await socket.ReceiveTextAsync(Math.Max(100, (int)(end - DateTime.UtcNow).TotalMilliseconds));
+            }
+            catch (OperationCanceledException)
+            {
+                break; // ReceiveTextAsync's own timeout: a quiet socket ends the wait the same way as a busy one
+            }
+
             if (text is null)
             {
                 return null;

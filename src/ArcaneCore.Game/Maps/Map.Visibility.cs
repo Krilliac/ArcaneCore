@@ -54,14 +54,17 @@ public sealed partial class Map
     }
 
     /// <summary>
-    /// Show a non-player object just placed in this map to everyone near it, and send each of them the create packet before this returns
-    /// (vmangos <c>Map::Add</c> runs <c>UpdateObjectVisibility</c> at once and <c>Player::UpdateVisibilityOf</c> sends the create then and there).
-    /// A packet the caller sends afterwards that names the object (SMSG_DUEL_REQUESTED) then reaches a client that already knows it. World thread.
+    /// Show a non-player object already placed in this map to everyone near it, and send each of them the create packet before this returns.
+    /// The ordering follows vmangos, where <c>Map::Add</c> calls <c>UpdateObjectVisibility</c> and <c>Player::UpdateVisibilityOf</c> sends the
+    /// create at once; the create block type is whatever the regular visibility pass picks (this does not mark the object new). A packet the
+    /// caller sends afterwards that names the object (SMSG_DUEL_REQUESTED) then reaches a client that already knows it.
+    /// Preconditions: world thread, outside the update phase. A player, or an object that is not in this map, is ignored.
     /// </summary>
     public void AnnounceObject(WorldObject obj)
     {
         ArgumentNullException.ThrowIfNull(obj);
         EnsureWorldThread();
+        EnsureNotInUpdatePhase();
         if (obj is Player || !ReferenceEquals(obj.Map, this))
         {
             return;
