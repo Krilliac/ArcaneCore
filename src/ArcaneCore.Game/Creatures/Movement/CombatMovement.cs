@@ -75,10 +75,11 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
     private bool _reachable = true;
     private bool _deferred;
     private int _leashRefreshMs = LeashRefreshIntervalMs;
+    private bool _pathLaunched;
 
     /// <summary>
-    /// How long (ms) a chaser may stand at its target before it refreshes its leash extension clock again (vmangos
-    /// TargetedMovementGenerator m_leashExtensionTimer, re-armed to 5000 whenever the generator moves).
+    /// The period (ms) of the chaser's leash extension timer (vmangos TargetedMovementGenerator.h:107, <c>m_leashExtensionTimer{ 5000 }</c>;
+    /// re-armed to 5000 when the generator starts a new path, <c>m_bRecalculateTravel</c>, TargetedMovementGenerator.cpp:399-401).
     /// </summary>
     public const int LeashRefreshIntervalMs = 5000;
 
@@ -130,6 +131,7 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         }
 
         _deferred = false;
+        _pathLaunched = false;
         _recheckMs -= (int)Math.Min(diffMs, int.MaxValue);
         if (_recheckMs <= 0 || (!creature.IsMoving && _reachable))
         {
@@ -149,23 +151,17 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
         return true;
     }
 
-    /// <summary>True when standing in position at the target keeps the creature's leash extension clock fresh (a melee chaser).</summary>
-    protected virtual bool RefreshesLeashWhenInPosition => false;
-
     /// <summary>
-    /// vmangos m_leashExtensionTimer: while the creature stands in position at its target (a melee chaser actually attacking) the clock is
-    /// refreshed every <see cref="LeashRefreshIntervalMs"/>, so a long melee fight far from home does not evade. Moving re-arms the timer.
-    /// Damage does not refresh the leash.
+    /// vmangos TargetedMovementGenerator::Update (TargetedMovementGenerator.cpp:389-401): while the chase spline is finalized (the creature
+    /// stands still, whether at melee reach or at a ranged chase's distance) a 5000 ms timer runs and, each time it passes, the creature's
+    /// leash extension clock is refreshed (<c>Creature::UpdateLeashExtensionTime</c>), so a mob does not leash while its victim stands and waits.
+    /// A new path (a launched spline, not each tick of a moving one) re-arms the timer to 5000. A chase whose re-path is deferred does not count (it has not finished anything), and a
+    /// creature that cannot move never reaches this. Chase generators only (melee and ranged); Follow does not refresh a creature's leash.
     /// </summary>
     private void TickLeashRefresh(Creature creature, ICreatureMover mover, uint diffMs)
     {
-        if (creature.IsMoving)
-        {
-            _leashRefreshMs = LeashRefreshIntervalMs;
-            return;
-        }
-
-        if (_deferred || !RefreshesLeashWhenInPosition || !IsInPosition(creature))
+        // A moving chaser neither counts nor re-arms: the timer is re-armed only when a new path starts (Step).
+        if (creature.IsMoving || _deferred || _pathLaunched || Type != MovementGeneratorType.Chase)
         {
             return;
         }
@@ -263,6 +259,8 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
             if (Vector3.DistanceSquared(path[^1], new Vector3(creature.X, creature.Y, creature.Z)) > ArrivedEpsilon * ArrivedEpsilon)
             {
                 mover.MovePath(creature, path, Run(creature), SplineFacing.None);
+                _leashRefreshMs = LeashRefreshIntervalMs; // vmangos m_bRecalculateTravel: a new path re-arms the leash extension timer
+                _pathLaunched = true; // the launching update does not also count
             }
             else if (creature.IsMoving)
             {
@@ -287,8 +285,6 @@ internal abstract class TargetedMovementGenerator(Unit target) : ICreatureMoveme
 internal sealed class ChaseMovementGenerator(Unit target) : TargetedMovementGenerator(target)
 {
     public override MovementGeneratorType Type => MovementGeneratorType.Chase;
-
-    protected override bool RefreshesLeashWhenInPosition => true;
 
     protected override bool IsInPosition(Creature creature) => MapCombat.CanReachWithMeleeAutoAttack(creature, Target);
 
