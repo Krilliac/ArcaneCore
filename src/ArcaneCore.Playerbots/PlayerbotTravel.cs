@@ -6,9 +6,12 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.World.Playerbots.Population;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
@@ -163,6 +166,7 @@ internal sealed class TravelExclusions
     public HashSet<uint> Teleports { get; } = [];
     public bool Hearthstone { get; set; }
     public bool Flights { get; set; }
+    public HashSet<uint> Triggers { get; } = [];
 }
 
 /// <summary>
@@ -550,6 +554,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             ships.Add(route);
         }
 
+        IReadOnlyList<TriggerTeleport> triggers = TriggersOf(session, player, excluded);
         return new TravelFacts
         {
             Alliance = alliance,
@@ -561,9 +566,35 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             OwnTeleports = teleports,
             Portals = portals,
             Ships = ships,
-            Walkable = WalkableFor(player),
+            Triggers = triggers,
+            Walkable = WalkableFor(player, triggers),
             Flight = options.Taxi.Enabled && excluded is not { Flights: true } ? FlightFor(session, player, options, cap, now) : null,
         };
+    }
+
+    /// <summary>Same-map exits nearer than this to their trigger are no way anywhere.</summary>
+    private const float MinTriggerHopYards = 2 * ArriveYards;
+
+    /// <summary>
+    /// The same-map teleport triggers the bot may take: triggers on its map whose <c>areatrigger_teleport</c> leads to the same map, to a point
+    /// at least <see cref="MinTriggerHopYards"/> from the trigger, with no requirement the bot lacks (level, item, quest, condition).
+    /// </summary>
+    private static List<TriggerTeleport> TriggersOf(WorldSession session, Player player, TravelExclusions? excluded)
+    {
+        var found = new List<TriggerTeleport>();
+        WorldMaps maps = WorldMaps.Of(session.World);
+        foreach (AreaTriggerTemplate trigger in PlayerbotAreaTriggers.OnMap(maps, player.MapId))
+        {
+            if (excluded?.Triggers.Contains(trigger.Id) == true || maps.FindAreaTriggerTeleport(trigger.Id) is not { } teleport) continue;
+            if (teleport.TargetMap != player.MapId || teleport.RequiredLevel > player.Level) continue;
+            if (teleport.RequiredItem != 0 || teleport.RequiredItem2 != 0 || teleport.RequiredQuestDone != 0 || teleport.RequiredCondition != 0) continue;
+            var entrance = new TravelPlace(player.MapId, new Vector3(trigger.X, trigger.Y, trigger.Z));
+            var exit = new TravelPlace(player.MapId, new Vector3(teleport.TargetX, teleport.TargetY, teleport.TargetZ));
+            if (!entrance.Position.IsFinite() || !exit.Position.IsFinite() || entrance.DistanceTo(exit) < MinTriggerHopYards) continue;
+            found.Add(new TriggerTeleport(trigger.Id, entrance, exit));
+        }
+
+        return found;
     }
 
     private static readonly PathOptions WalkingLocate = new()
@@ -577,7 +608,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
     };
 
     /// <summary>The walkable test of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>.</summary>
-    private static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player)
+    private static Func<TravelPlace, TravelPlace, bool> WalkableFor(Player player, IReadOnlyList<TriggerTeleport> triggers)
     {
         if (player.Map?.Collision.Pathfinder is not NavMeshPathfinder nav) return static (a, b) => a.MapId == b.MapId;
         var components = new Dictionary<TravelPlace, (int Component, bool Decides)>();
@@ -607,9 +638,42 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             if (a.MapId != b.MapId) return false;
             (int ca, bool da) = Locate(a);
             (int cb, bool db) = Locate(b);
-            return !da || !db || ca == cb;
+            return Joined(a, b, ca, da, cb, db, triggers);
         };
     }
+
+    /// <summary>A same-map trigger that moves the bot up or down by more than this many yards joins two levels no walk joins (Rut'theran to Teldrassil's upper ground).</summary>
+    private const float TriggerLevelYards = 150f;
+
+    /// <summary>A place stands on a trigger's level when its height is within this many yards of the trigger's end.</summary>
+    private const float OnLevelYards = 75f;
+
+    /// <summary>
+    /// Whether two places of one map count as walkable from each other given what the region graph answered for each (<c>d*</c>: it placed
+    /// the place in <c>c*</c>). A place it could not place counts as joined, except across the water bots do not cross by themselves
+    /// (<see cref="PopulationTownProgression.SeparatedByWater"/>) and between the two levels a same-map teleport trigger joins
+    /// (<see cref="TriggerSeparates"/>): a walk planned there fails only after thousands of yards, and the trigger is the way.
+    /// </summary>
+    internal static bool Joined(TravelPlace a, TravelPlace b, int ca, bool da, int cb, bool db, IReadOnlyList<TriggerTeleport> triggers)
+    {
+        if (da && db) return ca == cb;
+        return !PopulationTownProgression.SeparatedByWater(a.MapId, a.Position.X, a.Position.Y, b.MapId, b.Position.X, b.Position.Y)
+            && !TriggerSeparates(a, b, triggers);
+    }
+
+    /// <summary>Whether a trigger that changes the bot's height by more than <see cref="TriggerLevelYards"/> has one place at its entrance's height and the other at its exit's (either way round).</summary>
+    internal static bool TriggerSeparates(TravelPlace a, TravelPlace b, IReadOnlyList<TriggerTeleport> triggers)
+    {
+        foreach (TriggerTeleport t in triggers)
+        {
+            if (MathF.Abs(t.Entrance.Position.Z - t.Exit.Position.Z) <= TriggerLevelYards) continue;
+            if ((OnLevel(a, t.Entrance) && OnLevel(b, t.Exit)) || (OnLevel(a, t.Exit) && OnLevel(b, t.Entrance))) return true;
+        }
+
+        return false;
+    }
+
+    private static bool OnLevel(TravelPlace place, TravelPlace end) => MathF.Abs(place.Position.Z - end.Position.Z) <= OnLevelYards;
 
     /// <summary>The flight estimate of <see cref="BuildFacts(WorldSession, Player, PlayerbotOptions, IReadOnlyList{ShipRoute}, TravelExclusions?)"/>, or null without the taxi data.</summary>
     private static Func<TravelPlace, TravelPlace, (float Seconds, uint Copper)?>? FlightFor(WorldSession session, Player player, PlayerbotOptions options,
@@ -968,6 +1032,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
                 journey.LegStarted = true;
                 journey.LegHandle = PlayerbotHearthstone.LegOf(player);
                 return StepResult.Traveling;
+            case TravelMeans.TeleportTrigger:
+                journey.LegStarted = true;
+                return Trigger(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.MageTeleport:
                 if (!PlayerbotMageService.TryBeginTeleport(session, player, leg.SpellId, options, out why)) return StepResult.Failed;
                 journey.LegStarted = true;
@@ -1035,6 +1102,9 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
                 return StepResult.Failed;
             }
 
+            case TravelMeans.TeleportTrigger:
+                if (player.Combat.IsInCombat) return StepResult.Yield;
+                return Trigger(session, player, options, journey, leg, elapsedMs, now, out why);
             case TravelMeans.Hearthstone:
             {
                 TravelCastLeg? cast = PlayerbotHearthstone.LegOf(player);
@@ -1072,13 +1142,65 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         return StepResult.Yield;
     }
 
+    /// <summary>
+    /// One step of a same-map teleport trigger leg: the bot walks into the trigger (the motion reports it and the server teleports the bot,
+    /// <see cref="PlayerbotAreaTriggers"/>); the leg ends once it stands within <see cref="ArriveYards"/> of the exit. A refusal of this
+    /// trigger (level, requirement, map policy) fails the leg and keeps the trigger out of the replan.
+    /// </summary>
+    private static StepResult Trigger(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, TravelLeg leg, uint elapsedMs,
+        uint now, out string? why)
+    {
+        why = null;
+        if (player.MapId != leg.To.MapId)
+        {
+            why = $"trigger {leg.TriggerId}: on map {player.MapId}, the exit on map {leg.To.MapId}";
+            journey.Excluded.Triggers.Add(leg.TriggerId);
+            return StepResult.Failed;
+        }
+
+        if (TravelPlace.Of(player).DistanceTo(leg.To) <= ArriveYards)
+        {
+            PlayerbotMovementControl.Stop(session, player);
+            return StepResult.Next;
+        }
+
+        if (PlayerbotAreaTriggers.TryConsumeTeleportRefusal(player, leg.TriggerId, journey.LegBeganMs, out string refused))
+        {
+            journey.Excluded.Triggers.Add(leg.TriggerId);
+            why = $"trigger {leg.TriggerId} refused the bot: {refused}";
+            return StepResult.Failed;
+        }
+
+        switch (journey.Walk.Step(session, player, options, leg.From.Position, elapsedMs, now, journey.SpendLeft(options.Travel), out string? walkWhy))
+        {
+            case JourneyWalk.Outcome.Yield:
+                return StepResult.Yield;
+            case JourneyWalk.Outcome.Failed:
+                journey.Excluded.Triggers.Add(leg.TriggerId);
+                why = $"trigger {leg.TriggerId}: walk: {walkWhy}";
+                return StepResult.Failed;
+            default:
+                return StepResult.Traveling;
+        }
+    }
+
     /// <summary>One step of a walk (or flight-path) leg; a hand-off walk ends near the next leg's start, and its failure there hands off too.</summary>
     private static StepResult Walk(WorldSession session, Player player, PlayerbotOptions options, TravelJourney journey, TravelLeg leg, uint elapsedMs,
         uint now, out string? why)
     {
         why = null;
         bool handOff = journey.LegIndex + 1 < journey.Legs.Count
-            && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin or TravelMeans.MagePortal;
+            && journey.Legs[journey.LegIndex + 1].Means is TravelMeans.Boat or TravelMeans.Zeppelin or TravelMeans.MagePortal or TravelMeans.TeleportTrigger;
+        // A walk to a teleport trigger ends well before its volume: the motion reports the trigger on the tick the bot steps in, so a walk that
+        // went on to the trigger's centre would be carried away mid-leg. The trigger leg walks the last yards, and a bot already carried to the
+        // exit completes this walk.
+        if (journey.LegIndex + 1 < journey.Legs.Count && journey.Legs[journey.LegIndex + 1] is { Means: TravelMeans.TeleportTrigger } next
+            && player.MapId == next.To.MapId && TravelPlace.Of(player).DistanceTo(next.To) <= ArriveYards)
+        {
+            PlayerbotMovementControl.Stop(session, player);
+            return StepResult.Next;
+        }
+
         if (player.MapId != leg.To.MapId)
         {
             if (PlayerbotTram.IsTraveling(player) || (player.MapId == TramNetwork.TramMapId && leg.To.MapId != TramNetwork.TramMapId))
@@ -1221,6 +1343,7 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
         string what = leg.Means switch
         {
             TravelMeans.Boat or TravelMeans.Zeppelin => string.Create(CultureInfo.InvariantCulture, $"{leg.Means} {leg.TransportEntry}"),
+            TravelMeans.TeleportTrigger => string.Create(CultureInfo.InvariantCulture, $"TeleportTrigger {leg.TriggerId}"),
             TravelMeans.MageTeleport => string.Create(CultureInfo.InvariantCulture, $"MageTeleport {leg.SpellId}"),
             TravelMeans.MagePortal => string.Create(CultureInfo.InvariantCulture, $"MagePortal {leg.SpellId} by {leg.MageGuid:X}"),
             _ => leg.Means.ToString(),

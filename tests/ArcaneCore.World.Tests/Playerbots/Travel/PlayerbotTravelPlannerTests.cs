@@ -287,6 +287,80 @@ public sealed class PlayerbotTravelPlannerTests
         Assert.NotNull(r);
         Assert.Equal(2ul, r.Legs[0].MageGuid);
     }
+    // Same-map teleport triggers (the Rut'theran Village portal up to Teldrassil's upper ground and its way back). Layout on Kalimdor:
+    // the mainland x < 1000 (component 0), the Rut'theran island 1000..8000 (component 1), the upper ground x >= 8000 (component 2).
+    // A ship's port joins its own shore.
+    private static int Component(TravelPlace p) => p.Position.X < 1000f ? 0 : p.Position.X < 8000f ? 1 : 2;
+
+    private static readonly TravelPlace s_auberdineDock = P(Kalimdor, 100), s_rutheranDock = P(Kalimdor, 5000);
+    private static readonly TravelPlace s_portalUp = P(Kalimdor, 5000), s_portalUpExit = P(Kalimdor, 9000);
+    private static readonly TravelPlace s_portalDown = P(Kalimdor, 9000), s_portalDownExit = P(Kalimdor, 5050);
+
+    private static TravelFacts TeldrassilFacts(params TriggerTeleport[] triggers) => Facts() with
+    {
+        Ships = [Ship(7, TravelMeans.Boat, s_auberdineDock, s_rutheranDock, 300)],
+        Walkable = (a, b) => Component(a) == Component(b),
+        Triggers = triggers,
+    };
+
+    [Fact]
+    public void WithoutAnyTrigger_UpperTeldrassilIsUnreachableFromTheMainlandAndBack()
+    {
+        // Documents the gap the trigger edge closes: nothing else joins the island to the upper ground.
+        TravelFacts f = Facts() with
+        {
+            Ships = [Ship(7, TravelMeans.Boat, s_auberdineDock, s_rutheranDock, 300)],
+            Walkable = (a, b) => Component(a) == Component(b),
+        };
+        Assert.Null(PlayerbotTravelPlanner.Plan(f, P(Kalimdor, 0), P(Kalimdor, 9100)));
+        Assert.Null(PlayerbotTravelPlanner.Plan(f, P(Kalimdor, 9100), P(Kalimdor, 0)));
+    }
+
+    [Fact]
+    public void Plan_MainlandToUpperTeldrassil_WithoutHearth_RidesBoatThenPortal()
+    {
+        TravelFacts f = TeldrassilFacts(new TriggerTeleport(2215, s_portalUp, s_portalUpExit));
+        Assert.False(f.HearthReady);
+        TravelRoute? r = PlayerbotTravelPlanner.Plan(f, P(Kalimdor, 0), P(Kalimdor, 9100));
+        Assert.NotNull(r);
+        Assert.Equal([TravelMeans.Walk, TravelMeans.Boat, TravelMeans.TeleportTrigger, TravelMeans.Walk], Means(r));
+        Assert.Equal(s_portalUp, r.Legs[2].From);
+        Assert.Equal(s_portalUpExit, r.Legs[2].To);
+        Assert.Equal(0u, r.Legs[2].Copper);
+        Assert.Equal(0u, r.Copper);
+    }
+
+    [Fact]
+    public void Plan_UpperTeldrassilToMainland_WithoutHearth_TakesPortalDown()
+    {
+        TravelFacts f = TeldrassilFacts(new TriggerTeleport(2215, s_portalUp, s_portalUpExit), new TriggerTeleport(2216, s_portalDown, s_portalDownExit));
+        TravelRoute? r = PlayerbotTravelPlanner.Plan(f, s_portalDown, P(Kalimdor, 0));
+        Assert.NotNull(r);
+        Assert.Equal([TravelMeans.TeleportTrigger, TravelMeans.Walk, TravelMeans.Boat, TravelMeans.Walk], Means(r));
+        Assert.Equal(s_portalDown, r.Legs[0].From);
+        Assert.Equal(s_portalDownExit, r.Legs[0].To);
+    }
+
+    [Fact]
+    public void Plan_TriggerIsOneWay_ExitToEntranceWithoutAReverseTriggerHasNoRoute()
+    {
+        TravelFacts f = TeldrassilFacts(new TriggerTeleport(2215, s_portalUp, s_portalUpExit));
+        Assert.Null(PlayerbotTravelPlanner.Plan(f, P(Kalimdor, 9100), P(Kalimdor, 0)));
+        Assert.Null(PlayerbotTravelPlanner.Plan(f, s_portalUpExit, s_portalUp));
+    }
+
+    [Fact]
+    public void Plan_TriggerOnAnotherIslandIsNotUsedWhenTheEntranceCannotBeReached()
+    {
+        // The entrance stands on the island, the bot is on the mainland and no boat runs: the trigger alone gives no route.
+        TravelFacts f = Facts() with
+        {
+            Walkable = (a, b) => Component(a) == Component(b),
+            Triggers = [new TriggerTeleport(2215, s_portalUp, s_portalUpExit)],
+        };
+        Assert.Null(PlayerbotTravelPlanner.Plan(f, P(Kalimdor, 0), P(Kalimdor, 9100)));
+    }
+
 }
 
 public sealed class PlayerbotTravelOptionsTests

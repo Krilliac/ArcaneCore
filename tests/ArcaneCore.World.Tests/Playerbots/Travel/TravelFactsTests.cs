@@ -189,3 +189,57 @@ public sealed class TravelFactsTests
         Assert.False(capture.OfSubsystem(PlayerbotAnomalies.Subsystem(PlayerbotTravel.AnomalyArea)).Any());
     }
 }
+
+/// <summary>The walkable answer for a place the walking region graph could not place (<see cref="PlayerbotTravel.Joined"/>).</summary>
+public sealed class TravelWalkableUndecidedTests
+{
+    private static TravelPlace Kalimdor(float x, float y) => new(1, new Vector3(x, y, 0f));
+
+    [Fact]
+    public void UndecidedPlace_AcrossTheTeldrassilWater_IsNotWalkable()
+    {
+        TravelPlace upper = Kalimdor(9054f, 1599f), mainlandDock = Kalimdor(6873f, -2039f);
+        Assert.False(PlayerbotTravel.Joined(upper, mainlandDock, 284, true, -1, false, []));
+        Assert.False(PlayerbotTravel.Joined(mainlandDock, upper, -1, false, 284, true, []));
+        Assert.False(PlayerbotTravel.Joined(upper, mainlandDock, -1, false, -1, false, []));
+    }
+
+    [Fact]
+    public void UndecidedPlace_OnTheSameSide_IsWalkable()
+    {
+        Assert.True(PlayerbotTravel.Joined(Kalimdor(9054f, 1599f), Kalimdor(8800f, 900f), 284, true, -1, false, []));
+        Assert.True(PlayerbotTravel.Joined(Kalimdor(6873f, -2039f), Kalimdor(6000f, -3000f), -1, false, 12764, true, []));
+    }
+
+    [Fact]
+    public void DecidedPlaces_AreWalkableOnlyInOneComponent()
+    {
+        Assert.True(PlayerbotTravel.Joined(Kalimdor(0f, 0f), Kalimdor(10f, 10f), 5, true, 5, true, []));
+        Assert.False(PlayerbotTravel.Joined(Kalimdor(0f, 0f), Kalimdor(10f, 10f), 5, true, 6, true, []));
+    }
+
+    // Rut'theran's portal (trigger 542): the entrance on the island at sea level, the exit on Teldrassil's upper ground 1,300 yards up.
+    private static readonly TriggerTeleport s_portalUp = new(542, Kalimdor(8799f, 970f, 30f), Kalimdor(9946f, 2613f, 1316f));
+    private static TravelPlace Kalimdor(float x, float y, float z) => new(1, new Vector3(x, y, z));
+
+    [Fact]
+    public void UndecidedPort_AndAnyUpperTeldrassilPlace_AreNotWalkable_WhereTheTriggerJoinsThem()
+    {
+        TravelPlace port = Kalimdor(8706f, 965f, 13f), upperGoal = Kalimdor(9054f, 1599f, 1335f), dolanaar = Kalimdor(9701f, 945f, 1291f);
+        TriggerTeleport[] triggers = [s_portalUp];
+        Assert.False(PlayerbotTravel.Joined(port, upperGoal, -1, false, 284, true, triggers));
+        Assert.False(PlayerbotTravel.Joined(upperGoal, port, -1, false, -1, false, triggers));
+        Assert.False(PlayerbotTravel.Joined(port, dolanaar, -1, false, -1, false, triggers));
+        Assert.False(PlayerbotTravel.Joined(dolanaar, port, -1, false, -1, false, triggers));
+    }
+
+    [Fact]
+    public void UndecidedPlace_OnOneLevelOfTheTrigger_IsStillWalkable()
+    {
+        TriggerTeleport[] triggers = [s_portalUp];
+        Assert.True(PlayerbotTravel.Joined(Kalimdor(8706f, 965f, 13f), Kalimdor(8800f, 900f, 20f), -1, false, -1, false, triggers));
+        Assert.True(PlayerbotTravel.Joined(Kalimdor(9054f, 1599f, 1335f), Kalimdor(9701f, 945f, 1291f), -1, false, 284, true, triggers));
+        // Without the trigger the same two levels stay "undecided counts as joined" (the strait rule does not apply on this side).
+        Assert.True(PlayerbotTravel.Joined(Kalimdor(8706f, 965f, 13f), Kalimdor(9054f, 1599f, 1335f), -1, false, 284, true, []));
+    }
+}

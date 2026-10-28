@@ -2,7 +2,8 @@ namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
 /// The route planner (docs/areas/playbots.md, Travel): a pure function of <see cref="TravelFacts"/> and two places. It builds a small graph
-/// (the start, the goal, every ship port, the bind point, every own-teleport destination, every portal's mage place and destination) and
+/// (the start, the goal, every ship port, the bind point, every own-teleport destination, every portal's mage place and destination, every
+/// same-map teleport trigger's entrance and exit) and
 /// searches it for the fewest seconds whose copper fits <see cref="TravelFacts.SpendCap"/>. Pure: no world, no session, no state kept between
 /// calls; safe on any thread. Allocation: a handful of small lists per call (the graph is under 64 nodes); not a per-tick call.
 /// </summary>
@@ -25,6 +26,9 @@ internal static class PlayerbotTravelPlanner
 
     /// <summary>Own teleports beyond this many are ignored (each needs a bit of the used-mask).</summary>
     private const int MaxTeleports = 62;
+
+    /// <summary>Seconds a same-map teleport trigger takes (the step into it and the load after it).</summary>
+    internal const float TriggerSeconds = 3f;
 
     private const ulong HearthBit = 1UL << 63;
 
@@ -71,6 +75,7 @@ internal static class PlayerbotTravelPlanner
         int teleportCount = Math.Min(facts.OwnTeleports.Count, MaxTeleports);
         for (int i = 0; i < teleportCount; i++) Node(facts.OwnTeleports[i].Destination);
         foreach (PortalOffer o in facts.Portals) { Node(o.MagePlace); Node(o.Destination); }
+        foreach (TriggerTeleport t in facts.Triggers) { Node(t.Entrance); Node(t.Exit); }
 
         PriorityQueue<Label, (float Seconds, int Legs, uint Copper, int Order)> open = new();
         Dictionary<(int Node, bool LastWalk, ulong Used), List<Label>> kept = [];
@@ -120,6 +125,13 @@ internal static class PlayerbotTravelPlanner
                     Step(cur, index[s.PortB], new TravelLeg(s.Means, s.PortA, s.PortB, s.PeriodSeconds, 0) { TransportEntry = s.Entry }, false, cur.Used);
                 if (s.PortB == here)
                     Step(cur, index[s.PortA], new TravelLeg(s.Means, s.PortB, s.PortA, s.PeriodSeconds, 0) { TransportEntry = s.Entry }, false, cur.Used);
+            }
+
+            // A same-map teleport trigger, from its entrance only, as often as it is needed.
+            foreach (TriggerTeleport t in facts.Triggers)
+            {
+                if (t.Entrance != here || t.Exit == here) continue;
+                Step(cur, index[t.Exit], new TravelLeg(TravelMeans.TeleportTrigger, t.Entrance, t.Exit, TriggerSeconds, 0) { TriggerId = t.TriggerId }, false, cur.Used);
             }
 
             // The hearthstone, once, from anywhere.

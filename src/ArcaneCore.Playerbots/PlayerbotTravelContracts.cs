@@ -27,6 +27,9 @@ internal enum TravelMeans : byte
 
     /// <summary>A portal a mage bot opened on request, clicked by the requester (<see cref="PlayerbotMageService"/>).</summary>
     MagePortal,
+
+    /// <summary>A same-map teleport trigger (an area trigger whose teleport leads to its own map, such as the Rut'theran Village portal) walked into.</summary>
+    TeleportTrigger,
 }
 
 /// <summary>Which faction may use a transport route.</summary>
@@ -50,6 +53,9 @@ internal sealed record TravelLeg(TravelMeans Means, TravelPlace From, TravelPlac
     public uint TransportEntry { get; init; }
     public uint SpellId { get; init; }
     public ulong MageGuid { get; init; }
+
+    /// <summary>The area trigger of a <see cref="TravelMeans.TeleportTrigger"/> leg.</summary>
+    public uint TriggerId { get; init; }
 }
 
 /// <summary>A whole planned trip: its legs in order, their total time and copper.</summary>
@@ -70,6 +76,9 @@ internal readonly record struct PortalOffer(ulong MageGuid, uint PortalSpellId, 
 
 /// <summary>A Teleport spell the bot (a mage) knows and can cast now, with the place it leads to (<c>spell_target_position</c>).</summary>
 internal readonly record struct OwnTeleport(uint SpellId, TravelPlace Destination);
+
+/// <summary>A same-map teleport trigger the bot may walk into: its id, where it stands (<paramref name="Entrance"/>) and where it sets the bot down (<paramref name="Exit"/>).</summary>
+internal readonly record struct TriggerTeleport(uint TriggerId, TravelPlace Entrance, TravelPlace Exit);
 
 /// <summary>
 /// Everything the planner (<see cref="PlayerbotTravelPlanner.Plan"/>) knows about one bot: what it is, what it has, which routes it may
@@ -94,6 +103,9 @@ internal sealed record TravelFacts
 
     /// <summary>Portals mages near the bot offer now (empty with the service off).</summary>
     public IReadOnlyList<PortalOffer> Portals { get; init; } = [];
+
+    /// <summary>The same-map teleport triggers the bot may take (from an entrance to its exit only; empty when the map has none).</summary>
+    public IReadOnlyList<TriggerTeleport> Triggers { get; init; } = [];
 
     /// <summary>The boat and zeppelin routes the bot may ride now (faction and the Boats/Zeppelins switches applied).</summary>
     public IReadOnlyList<ShipRoute> Ships { get; init; } = [];
