@@ -540,7 +540,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
         if (_stage == Stage.None && TryShedUnkillableQuest(player, services, state, now)) return true;
 
-        long phaseStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        long phaseStartTicks = PlayerbotThinkProbe.Timestamp();
         QuestTarget? target = FindCandidate(player, services, state, refreshBagSpace: false, phaseStartTicks: phaseStartTicks);
         if (target is null && _roomWanted && _stage == Stage.None && TryMakeRoomInFullLog(player, services, state, now))
             return true;
@@ -690,9 +690,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
     }
 
+    // The phase is timed on the running think's clock (PlayerbotThinkProbe.Timestamp): the system clock in a real think, a test's manual
+    // clock under a test probe, so a test of the fallbacks does not depend on how fast a loaded machine runs the first 25 ms.
     private static bool IsQuestNavigationBudgetExhausted(long phaseStartTicks)
     {
-        if (phaseStartTicks != 0 && System.Diagnostics.Stopwatch.GetTimestamp() - phaseStartTicks >= MaxQuestPhaseBudgetTicks)
+        if (phaseStartTicks != 0 && PlayerbotThinkProbe.Timestamp() - phaseStartTicks >= MaxQuestPhaseBudgetTicks)
             return true;
         PlayerbotThinkProbe? probe = PlayerbotThinkProbe.Active;
         return probe is not null && (probe.QueryTicks >= MaxQuestProbeQueryTicks || probe.Clamped > 0);
@@ -814,7 +816,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     {
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         return services?.StateOf(player) is { Loaded: true } state
-            ? FindCandidate(player, services, state, refreshBagSpace: true, phaseStartTicks: System.Diagnostics.Stopwatch.GetTimestamp()) : null;
+            ? FindCandidate(player, services, state, refreshBagSpace: true, phaseStartTicks: PlayerbotThinkProbe.Timestamp()) : null;
     }
 
     private QuestTarget? FindCandidate(Player player, QuestNpcServices services, PlayerNpcState state, bool refreshBagSpace = true, long phaseStartTicks = 0)
