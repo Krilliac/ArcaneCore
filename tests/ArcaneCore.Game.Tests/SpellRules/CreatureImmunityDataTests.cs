@@ -224,6 +224,32 @@ public sealed class CreatureImmunityDataTests
     }
 
     [Fact]
+    public void AnEntryChange_ReturnsTheCreatureToSetZero()
+    {
+        const uint other = Boss + 1;
+        CreatureTemplate template = Template(Boss, null);
+        CreatureTemplate changed = Template(other, null);
+        CreatureImmunity[] rows =
+        [
+            Row(0, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Stun),
+            Row(1, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Root),
+            new(other, 1, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Fear),
+        ];
+        var content = new CreatureContent([template, changed], [Spawn(1, Boss, 0, 0)], [], [], [], immunities: rows);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreatureAiTestKit.CreateAiSystem(content);
+        using (world)
+        {
+            CreatureAiTestKit.AddPlayer(world, 1, 40, 0);
+            Creature boss = system.Creatures.Single();
+            Assert.True(boss.UpdateImmunitySet(1));
+
+            Assert.True(system.UpdateEntry(boss, other));
+
+            Assert.Equal(0u, boss.ImmunitySetId); // cmangos Creature::UpdateEntry ends with UpdateImmunitiesSet(0)
+        }
+    }
+
+    [Fact]
     public void ATwinEmperorSchoolImmunity_ComposesOverTheDataProvider()
     {
         using var kit = new SpellTestKit(

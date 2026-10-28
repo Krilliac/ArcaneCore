@@ -205,7 +205,7 @@ public sealed class CreatureDumpImporter
     public IReadOnlyCollection<CreatureImmunityRow> ImmunitySnapshot() => [.. _immunities.Values];
 
     /// <summary>
-    /// Content refresh of creature immunities (world schema 57): replace <c>creature_immunities</c> with the rows read, and set
+    /// Content refresh of creature immunities (world schema 57): replace <c>creature_immunities</c> with the rows read (a dump that carries the table with no valid rows empties it), and set
     /// <c>creature_template.MechanicImmuneMask</c> / <c>SchoolImmuneMask</c> of the templates already in the world from the dump. Each half runs only when
     /// the dump carried it (the table; the template columns), so a dump without either leaves the world as it is. Runs inside the caller's
     /// <see cref="Content.Import.ImportTransaction"/>. Returns the immunity rows written and the templates changed.
@@ -214,7 +214,7 @@ public sealed class CreatureDumpImporter
     {
         ArgumentNullException.ThrowIfNull(db);
         int rows = 0;
-        if (_sawImmunityTable && _immunities.Count > 0)
+        if (_sawImmunityTable)
         {
             await db.Set<CreatureImmunityRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _immunities.Values, cancellationToken).ConfigureAwait(false);

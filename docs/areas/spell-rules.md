@@ -89,8 +89,8 @@ returns. Features of this area live in namespace `ArcaneCore.World.Spells` so th
   `SchoolImmuneMask` and the active `creature_immunities` set (world schema 57; see `content-import.md`). A dump that carries both gets the union.
   Rows of type school (2) count as the template school mask (harmful spells of the school and its damage), type damage (3) only absorbs damage,
   type dispel (4), effect (0) and state (1) are checked for spells from others, type mechanic (5) joins the mechanic mask. mangos-classic applies a
-  school row to positive spells too and ignores self-casts; ArcaneCore keeps the vmangos reading (harmful only, self-casts exempt) for both sources.
-  EventAI action 63 switches the set (`Creature.UpdateImmunitySet`); a set the entry has no rows for is refused, a respawn goes back to set 0.
+  school row to positive spells too and blocks self-casts for every row type; ArcaneCore deliberately keeps the vmangos reading (school rows harmful only, self-casts exempt for all rows, dispel rows included) for both sources. State rows are checked for every effect with an aura name.
+  EventAI action 63 switches the set (`Creature.UpdateImmunitySet`); a set the entry has no rows for is refused, a respawn or an entry change (EventAI UPDATE_TEMPLATE) goes back to set 0.
   Wrapping providers (`TwinEmperorSpellModule`) must forward every `ICreatureImmunityProvider` member to the provider they wrap.
 - Per-spell coefficient data (`spell_bonus`), DR for pets (pets lane: only players are "player-like" for
   diminishing returns), talents' `ISpellModifiers` implementation, item equip spells that grant spell power.

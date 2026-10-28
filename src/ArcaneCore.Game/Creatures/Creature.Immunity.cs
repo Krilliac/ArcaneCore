@@ -29,6 +29,6 @@ public sealed partial class Creature
         return true;
     }
 
-    /// <summary>A respawn starts again on set 0 (mangos-classic Creature::InitEntry calls <c>UpdateImmunitiesSet(0)</c>, Creature.cpp:613).</summary>
+    /// <summary>A respawn and an entry change start again on set 0 (mangos-classic Creature::UpdateEntry ends with <c>UpdateImmunitiesSet(0)</c>, Creature.cpp:613; a respawn reaches it through ResetEntry, Creature.cpp:636-654).</summary>
     internal void ResetImmunitySet() => ImmunitySetId = 0;
 }
