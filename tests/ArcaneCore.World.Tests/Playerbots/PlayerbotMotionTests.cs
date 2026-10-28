@@ -398,6 +398,84 @@ public sealed class PlayerbotMotionTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task Pump_WhenNavigatedStepIsLevel_IsAcceptedEvenWithNoSightLine()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
+            float wallX = 0f, originX = 0f;
+            // The same floor on both sides of a sight blocker at x0 + 5: a level step is never refused for its line of sight.
+            List<(float X, float Z)> steps = await WalkNavigatedRouteAsync(host, session, x0 =>
+            {
+                originX = x0;
+                wallX = x0 + 5f;
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new StoreyLineOfSight(wallX, Floor, Floor, float.NaN, float.NaN),
+                    pathfinder: new StoreyMeshPathfinder(wallX, Floor, Floor));
+            }, endRise: 0f, pumps: 4);
+
+            Assert.True(steps[^1].X > wallX + 1f, $"bot stopped at {steps[^1].X - originX} yd, short of the level step past the blocker at 5 yd");
+            Assert.All(steps, s => Assert.InRange(s.Z, Floor - 0.5f, Floor + 0.5f));
+            Assert.Equal(0, capture.Count(Key(Code.RouteBlocked)));
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task Pump_WhenNavigatedStepClimbsAStoreyWithAClearSightLine_IsAccepted()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
+            const float stairRise = 4f; // well over the 2 yd step height
+            float wallX = 0f;
+            // A stair: the blocker at x0 + 5 is open between the floors (the door band spans both storeys), so the sight line clears the step.
+            List<(float X, float Z)> steps = await WalkNavigatedRouteAsync(host, session, x0 =>
+            {
+                wallX = x0 + 5f;
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new StoreyLineOfSight(wallX, Floor, Floor + stairRise, Floor, Floor + stairRise + 4f),
+                    pathfinder: new StoreyMeshPathfinder(wallX, Floor, Floor + stairRise));
+            }, endRise: stairRise, pumps: 4);
+
+            Assert.True(steps[^1].X > wallX, "bot did not climb past the stair");
+            Assert.InRange(steps[^1].Z, Floor + stairRise - 0.5f, Floor + stairRise + 0.5f);
+            Assert.Equal(0, capture.Count(Key(Code.RouteBlocked)));
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task Pump_WhenNavigatedStepClimbsAStoreyTheMeshProves_IsAcceptedWithNoSightLine()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
+            const float stairRise = 4f;
+            float wallX = 0f;
+            // Nothing sees across the blocker, but the mesh walk stays on the mesh from the step's start to its end (StaysOnMesh).
+            List<(float X, float Z)> steps = await WalkNavigatedRouteAsync(host, session, x0 =>
+            {
+                wallX = x0 + 5f;
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new StoreyLineOfSight(wallX, Floor, Floor + stairRise, float.NaN, float.NaN),
+                    pathfinder: new StoreyMeshPathfinder(wallX, Floor, Floor + stairRise, proveStart: true));
+            }, endRise: stairRise, pumps: 4);
+
+            Assert.True(steps[^1].X > wallX, "bot did not climb past the stair");
+            Assert.InRange(steps[^1].Z, Floor + stairRise - 0.5f, Floor + stairRise + 0.5f);
+            Assert.Equal(0, capture.Count(Key(Code.RouteBlocked)));
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
     /// <summary>
     /// Starts a navigated route along +X from the bot (at <see cref="Floor"/>, rising by <paramref name="endRise"/> over 20 yd) after
     /// <paramref name="install"/> set the collision up for the bot's x, then pumps once per heartbeat and returns the bot's x and z after each.
@@ -453,8 +531,8 @@ public sealed class PlayerbotMotionTests
         public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info) { info = default; return false; }
     }
 
-    /// <summary>A mesh walk answers the surface under the end of the segment (west floor before <paramref name="wallX"/>, else east); a zero-length walk has no answer.</summary>
-    private sealed class StoreyMeshPathfinder(float wallX, float westFloor, float eastFloor) : IPathfinder, IMeshPointQuery
+    /// <summary>A mesh walk answers the surface under the end of the segment (west floor before <paramref name="wallX"/>, else east); a zero-length walk has no answer unless <c>proveStart</c> (then it answers the start's surface, so a step is proven to stay on the mesh).</summary>
+    private sealed class StoreyMeshPathfinder(float wallX, float westFloor, float eastFloor, bool proveStart = false) : IPathfinder, IMeshPointQuery
     {
         public bool Enabled => true;
         public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
@@ -465,7 +543,9 @@ public sealed class PlayerbotMotionTests
         {
             if (Vector2.DistanceSquared(new Vector2(start.X, start.Y), new Vector2(end.X, end.Y)) < 1e-6f)
             {
-                return MeshRaycastResult.Unavailable(end);
+                return proveStart
+                    ? new MeshRaycastResult(true, false, 1f, start with { Z = start.X >= wallX ? eastFloor : westFloor })
+                    : MeshRaycastResult.Unavailable(end);
             }
 
             return new MeshRaycastResult(true, false, 1f, end with { Z = end.X >= wallX ? eastFloor : westFloor });
