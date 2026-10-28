@@ -21,7 +21,7 @@ case "$flt" in
       *) block 10 0 1 Successful; exit 0 ;;
     esac ;;
   *'=Timing'*)
-    echo "[xUnit.net 00:00:00.01]   Starting:    X (parallel test collections = off, max threads = 1)"
+    echo "[xUnit.net 00:00:00.01]   Starting:    X (parallel mode = none, stop on fail = off, explicit = off)"
     case "$SIM_CASE" in
       flaky|twice|rerun-empty) echo "  Failed Ns.T.Flaky(x: 1) [5 ms]"; echo "  Failed Ns.T.Flaky(x: 2) [5 ms]"; block 2 2 0 Failed; exit 1 ;;
       two-flaky) echo "  Failed Ns.T.One [5 ms]"; echo "  Failed Ns.T.Two [5 ms]"; block 1 2 0 Failed; exit 1 ;;
@@ -56,7 +56,7 @@ check() {
     echo "ok   $name: exit $got"
   fi
 }
-check pass 0 "" '^GATE RESULT: PASS$'
+check pass 0 "" 'serial: confirmed'
 check flaky 0 "" '^FLAKY \(passed on rerun\): Ns\.T\.Flaky$' 'FAILED TWICE'
 [ "$(cut -f4 "$work/logs-flaky/flake-ledger.txt" 2>/dev/null)" = Ns.T.Flaky ] || { echo "FAIL flaky: ledger row missing"; bad=1; }
 check two-flaky 0 "" 'timing reruns: 2 \(passed on rerun 2'

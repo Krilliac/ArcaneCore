@@ -110,7 +110,8 @@ if [ "$stage" != main ]; then
     run_test "$log" "$logs/trx-timing" "$flt" 1 "$t"; rc=$?
     read -r p f s < <(counts "$log"); e=$((p + f))
     b_exec=$((b_exec + e)) b_pass=$((b_pass + p)) b_fail=$((b_fail + f)) b_skip=$((b_skip + s))
-    grep -qiE 'parallel test collections = off|ParallelizeTestCollections[^a-z]*false' "$log" && serial_seen=1
+    # xunit's own line for the run (DiagnosticMessages): "Starting: <assembly> (parallel mode = none, ...)".
+    grep -qE 'Starting: .*\((parallel mode = none|parallel test collections = off)' "$log" && serial_seen=1
     echo "timing $t rc=$rc executed $e (passed $p, failed $f), skipped $s"
     summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s")
     # Every target must bring timing tests of its own (a target that lost its tags would otherwise hide behind another's).
