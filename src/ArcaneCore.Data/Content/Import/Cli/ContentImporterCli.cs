@@ -53,7 +53,8 @@ public static partial class ContentImporterCli
           import <dump>...      import the creature, game object, loot, item, quest, kill-reputation and
                                 new-character (start position, starting spell, teleport target) and
                                 location (portal, GM teleport) and totem spell tables
-                                (and the starting outfit, playercreateinfo_item), and the world-state
+                                (and the starting outfit, playercreateinfo_item), the enchantment tables
+                                spell_proc_item_enchant and spell_enchant_charges, and the world-state
                                 tables game_weather (zone weather chances) and exploration_basexp, and the seven
                                 game-event tables (game_event, game_event_time, game_event_creature, game_event_gameobject,
                                 game_event_creature_data, game_event_quest, game_event_mail; both dialects)
@@ -369,6 +370,7 @@ public static partial class ContentImporterCli
         var objects = new GameObjectLootDumpImporter();
         var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
         var onKill = new OnKillReputationDumpImporter();
+        var enchantProcs = new EnchantProcDumpImporter();
         var playerCreate = new PlayerCreateDumpImporter();
         var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
@@ -399,6 +401,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             onKill.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            enchantProcs.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -538,6 +545,7 @@ public static partial class ContentImporterCli
         GameObjectLootImportReport objectReport = objects.BuildReport();
         ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
         ReputationOnKillImportReport onKillReport = onKill.BuildReport();
+        EnchantProcImportReport enchantProcReport = enchantProcs.BuildReport();
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
         PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
@@ -563,6 +571,7 @@ public static partial class ContentImporterCli
                     objectReport = await objects.WriteAsync(db, replace, token).ConfigureAwait(false);
                     itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
                     onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    enchantProcReport = await enchantProcs.WriteAsync(db, replace, token).ConfigureAwait(false);
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
@@ -589,6 +598,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(objectReport.Warnings);
         warnings.AddRange(itemQuestReport.Warnings);
         warnings.AddRange(onKillReport.Warnings);
+        warnings.AddRange(enchantProcReport.Warnings);
         warnings.AddRange(playerReport.Warnings);
         warnings.AddRange(startActionReport.Warnings);
         warnings.AddRange(locationReport.Warnings);
@@ -630,6 +640,8 @@ public static partial class ContentImporterCli
         skipped["game_event_creature_orphans"] = gameEventReport.OrphanCreatureRows;
         skipped["game_event_gameobject_orphans"] = gameEventReport.OrphanGameObjectRows;
         AddEventOrphanWarning(warnings, gameEventReport);
+        imported["spell_proc_item_enchant"] = enchantProcReport.ProcEnchants;
+        imported["spell_enchant_charges"] = enchantProcReport.EnchantCharges;
         imported["game_weather"] = worldState.Weather.Count;
         imported["exploration_basexp"] = worldState.BaseXp.Count;
         imported["world_safe_locs"] = graveyardReport.SafeLocs;

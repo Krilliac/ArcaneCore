@@ -234,6 +234,8 @@ public static class ContentTableSpecs
         new("pickpocketing_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("disenchant_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("skill_fishing_base_level", [new KeyColumn("entry")], ["skill"], []),
+        new("spell_proc_item_enchant", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsProcColumn),
+        new("spell_enchant_charges", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsChargesColumn),
         new("item_template", [new KeyColumn("entry")], [], s_itemSignatures, ItemQuestDumpImporter.ReadsItemColumn),
         new("quest_template", [new KeyColumn("entry")], [], s_questSignatures, ItemQuestDumpImporter.ReadsQuestColumn),
         new("creature_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
