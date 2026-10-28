@@ -1372,7 +1372,8 @@ public sealed class WardenTests
         {
             WardenFeature feature = host.WorldServices.GetRequiredService<WardenFeature>();
             feature.PendingBanStopWait = TimeSpan.FromMilliseconds(200);
-            long before = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(s => s.Site == "warden.ban-stop").Sum(s => s.Count);
+            // The stop bound's message is built by Warden ("... (account(s) N) ..."): count the one that names this test's account.
+            var probe = new ArcaneCore.World.Tests.Playerbots.FaultCountProbe("warden.ban-stop", $"account(s) {session.AccountId}");
             try
             {
                 await store.WriteEntered.WaitAsync(TimeSpan.FromSeconds(10));
@@ -1384,8 +1385,7 @@ public sealed class WardenTests
                 store.Release();
             }
 
-            long after = ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(s => s.Site == "warden.ban-stop").Sum(s => s.Count);
-            Assert.True(after > before, "the pending ban write at the stop bound was not recorded"); // the Record + LogFault pair counts it more than once by design
+            probe.AssertCountedOnce("the pending ban write at the stop bound"); // LogFault records it: no Record of its own beside it
             Assert.Contains(ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot(),
                 s => s.Site == "warden.ban-stop" && s.SampleMessage.Contains($"account(s) {session.AccountId}", StringComparison.Ordinal));
         }
@@ -1414,6 +1414,68 @@ public sealed class WardenTests
                 s => s.Site == "warden.ban" && s.ExceptionType == typeof(BanStoreDownException).FullName);
             Assert.Equal(SessionState.Closed, session.State);
         }
+    }
+
+    [Fact]
+    public async Task AFailedBanWrite_IsCountedOnce_UnderWardenBan()
+    {
+        var probe = new ArcaneCore.World.Tests.Playerbots.FaultCountProbe("warden.ban");
+        var store = new GatedBanStore { FailOnRelease = probe.Fault() };
+        (WorldTestHost host, WorldTestClient client, WorldSession session) = await FailedBanScanAsync(store, "wardenbancnt");
+        await using (host)
+        await using (client)
+        {
+            try
+            {
+                await store.WriteEntered.WaitAsync(TimeSpan.FromSeconds(10));
+                await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the session was kicked");
+            }
+            finally
+            {
+                store.Release(); // the write now fails
+            }
+
+            await host.WorldServices.GetRequiredService<WardenFeature>().StopAsync(); // waits for the write in flight
+            probe.AssertCountedOnce("the ban write catch");
+        }
+    }
+
+    [Fact]
+    public async Task AThrowingVerdictSubscriber_IsCountedOnce_AndTheSessionIsStillKicked()
+    {
+        var probe = new ArcaneCore.World.Tests.Playerbots.FaultCountProbe("warden.verdict");
+        await using WorldTestHost host = WardenHostWith(_ => { });
+        host.WorldServices.GetRequiredService<WardenFeature>().Verdict += (_, _) => throw probe.Fault();
+        byte[] key = await host.AddAccountAsync("wardenvcnt");
+        await using WorldTestClient client = await host.ConnectAsync();
+        await client.AuthenticateAsync("wardenvcnt", key);
+        WorldSession session = host.Registry.Sessions.Single(s => s.AccountName.Equals("wardenvcnt", StringComparison.OrdinalIgnoreCase));
+
+        await client.SendAsync(WorldOpcode.CmsgWardenData, new Client(key).Write(0xFF)); // an unknown command: one Kick verdict
+        await WorldTestHost.WaitForAsync(() => session.State == SessionState.Closed, "the verdict kicked the session after the subscriber threw");
+
+        probe.AssertCountedOnce("the verdict subscriber catch");
+    }
+
+    private sealed class ThrowingWorldDbFactory(Exception failure) : Microsoft.EntityFrameworkCore.IDbContextFactory<ArcaneCore.Data.Content.WorldDbContext>
+    {
+        public ArcaneCore.Data.Content.WorldDbContext CreateDbContext() => throw failure;
+    }
+
+    [Fact]
+    public async Task AFailedWardenChecksLoad_IsCountedOnce_UnderWardenLoadChecks()
+    {
+        var probe = new ArcaneCore.World.Tests.Playerbots.FaultCountProbe("warden.load-checks");
+        var signal = new ArcaneCore.World.Tests.Playerbots.FaultSignalLogger<WardenFeature>(probe.Marker);
+        await using WorldTestHost host = WardenHostWith(_ => { }, services =>
+        {
+            services.AddSingleton<Microsoft.Extensions.Logging.ILogger<WardenFeature>>(signal);
+            services.AddSingleton<Microsoft.EntityFrameworkCore.IDbContextFactory<ArcaneCore.Data.Content.WorldDbContext>>(new ThrowingWorldDbFactory(probe.Fault()));
+        }, o => o.LoadFromDatabase = true);
+
+        await signal.Faulted.WaitAsync(TimeSpan.FromSeconds(30)); // the load runs in the background from Attach
+
+        probe.AssertCountedOnce("the warden_checks load catch");
     }
 
     [Fact]

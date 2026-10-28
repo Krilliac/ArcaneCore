@@ -13,10 +13,15 @@ internal sealed class FaultCountProbe
     private readonly string _site;
     private readonly long _before;
 
-    public FaultCountProbe(string site)
+    /// <param name="site">The ledger site the catch logs under.</param>
+    /// <param name="marker">
+    /// Text the counted messages contain. Null: a unique one, for a test that injects its own exception (<see cref="Fault"/>); a test whose
+    /// fault message is built by the product (the Warden stop bound) names the part of it that is its own.
+    /// </param>
+    public FaultCountProbe(string site, string? marker = null)
     {
         _site = site;
-        Marker = site.Replace('.', '-') + "-once-" + Guid.NewGuid().ToString("N");
+        Marker = marker ?? site.Replace('.', '-') + "-once-" + Guid.NewGuid().ToString("N");
         _before = Count();
     }
 
@@ -35,5 +40,27 @@ internal sealed class FaultCountProbe
     {
         long counted = Count() - _before;
         Assert.True(counted == 1, $"{catchSite}: expected the fault to be counted 1 time under '{_site}', actual {counted}");
+    }
+}
+
+/// <summary>
+/// A logger that completes <see cref="Faulted"/> when an Error entry carries an exception whose message holds the marker. A fault logged through
+/// <c>LogFault</c> records into the ledger before it reaches the logger, so once this fires the fault is fully counted (no wait for a count to settle).
+/// Everything else is dropped.
+/// </summary>
+internal sealed class FaultSignalLogger<T>(string marker) : Microsoft.Extensions.Logging.ILogger<T>
+{
+    private readonly TaskCompletionSource _faulted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public Task Faulted => _faulted.Task;
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state,
+        Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        if (logLevel == Microsoft.Extensions.Logging.LogLevel.Error && exception?.Message.Contains(marker, StringComparison.Ordinal) == true) _faulted.TrySetResult();
     }
 }
