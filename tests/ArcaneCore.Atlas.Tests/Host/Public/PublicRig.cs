@@ -330,6 +330,20 @@ internal static class SocketExtensions
         }
     }
 
+    /// <summary>
+    /// The next message that is not a pushed event (<c>op</c> "event", such as the live status a hub broadcasts on its own schedule, which may
+    /// already be on its way when the server decides to close), or null when the peer closed.
+    /// </summary>
+    public static async Task<string?> ReceiveSkippingEventsAsync(this ClientWebSocket socket, int timeoutMs = 10_000)
+    {
+        DateTime end = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (true)
+        {
+            string? text = await socket.ReceiveTextAsync(Math.Max(100, (int)(end - DateTime.UtcNow).TotalMilliseconds));
+            if (text is null || JsonNode.Parse(text)?["op"]?.GetValue<string>() != "event") return text;
+        }
+    }
+
     /// <summary>Reads messages until one has this <c>op</c> (and <c>topic</c> when given); null when the socket closed first.</summary>
     public static async Task<JsonNode?> ReceiveUntilAsync(this ClientWebSocket socket, string op, string? topic = null, int timeoutMs = 10_000)
     {
