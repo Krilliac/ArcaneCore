@@ -19,8 +19,18 @@ public static class SpellResistance
     /// <param name="casterLevel">The caster's own level (the conversion divides by it).</param>
     /// <param name="innateLevelDiff">Victim level minus caster level as each sees the other (boss-relative).</param>
     /// <param name="applyInnate">Whether the creature innate resistance applies (creature victim, damage rather than hit).</param>
-    public static float Chance(int victimResistance, int penetration, int skillMax, int casterLevel, int innateLevelDiff, bool applyInnate)
+    /// <param name="baseResistance">
+    /// The victim's own (create) resistance in the school, before any aura. A resistance aura (Curse of the Elements, Curse of Shadow)
+    /// cannot push the total below 0 unless this base is itself negative: a real vulnerability only comes from the unit (Patch 1.9.0;
+    /// vmangos Unit::GetTotalResistanceValue concept). A player has 0.
+    /// </param>
+    public static float Chance(int victimResistance, int penetration, int skillMax, int casterLevel, int innateLevelDiff, bool applyInnate, int baseResistance = 0)
     {
+        if (victimResistance < 0 && baseResistance >= 0)
+        {
+            victimResistance = 0;
+        }
+
         float resistance = victimResistance + penetration;
 
         // 1.12: penetration alone can never push a non-negative resistance below zero (:896-898).

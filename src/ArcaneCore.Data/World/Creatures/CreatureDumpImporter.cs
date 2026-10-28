@@ -770,6 +770,12 @@ public sealed class CreatureDumpImporter
             MinLevelMana = U32(row, "MinLevelMana"),
             MaxLevelMana = U32(row, "MaxLevelMana"),
             Armor = U32(row, "Armor"),
+            HolyRes = I32(row, "ResistanceHoly", "holy_res"),
+            FireRes = I32(row, "ResistanceFire", "fire_res"),
+            NatureRes = I32(row, "ResistanceNature", "nature_res"),
+            FrostRes = I32(row, "ResistanceFrost", "frost_res"),
+            ShadowRes = I32(row, "ResistanceShadow", "shadow_res"),
+            ArcaneRes = I32(row, "ResistanceArcane", "arcane_res"),
             MinMeleeDamage = F32(row, 0f, "MinMeleeDmg"),
             MaxMeleeDamage = F32(row, 0f, "MaxMeleeDmg"),
             MinRangedDamage = F32(row, 0f, "MinRangedDmg"),
@@ -1266,6 +1272,19 @@ public sealed class CreatureDumpImporter
         => string.IsNullOrEmpty(raw) ? 0 : (int)double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
 
     private static uint U32(DumpRow row, params ReadOnlySpan<string> names) => U32Or(row, 0, names);
+
+    /// <summary>A signed integer column (a resistance may be negative); absent or empty = 0.</summary>
+    private static int I32(DumpRow row, params ReadOnlySpan<string> names)
+    {
+        string? raw = Get(row, names);
+        if (string.IsNullOrEmpty(raw))
+        {
+            return 0;
+        }
+
+        double value = double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
+        return value <= int.MinValue ? int.MinValue : value >= int.MaxValue ? int.MaxValue : (int)value;
+    }
 
     private static uint U32Or(DumpRow row, uint fallback, params ReadOnlySpan<string> names)
     {

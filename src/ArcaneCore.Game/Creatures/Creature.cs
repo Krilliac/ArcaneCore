@@ -553,6 +553,12 @@ public sealed partial class Creature : Unit, ICombatCreature
         SetFloat(UpdateFields.UnitFieldMaxrangeddamage, t.MaxRangedDamage * damageRate);
         SetUInt32(UpdateFields.UnitFieldRangedAttackPower, t.RangedAttackPower);
         SetUInt32(UpdateFields.UnitFieldResistances, t.Armor);
+        // The create resistance of every magic school (vmangos Creature::UpdateEntry, Creature.cpp:606-611); holy stays 0 in the field
+        // (CreatureTemplate.ResistanceOf), and a negative template value is a vulnerability.
+        for (int school = 1; school <= 6; school++)
+        {
+            SetInt32(UpdateFields.UnitFieldResistances + school, t.ResistanceOf(school));
+        }
     }
 
     /// <summary>
