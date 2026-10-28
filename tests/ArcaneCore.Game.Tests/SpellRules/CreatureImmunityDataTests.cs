@@ -233,6 +233,7 @@ public sealed class CreatureImmunityDataTests
         [
             Row(0, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Stun),
             Row(1, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Root),
+            new(other, 0, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Fear),
             new(other, 1, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Fear),
         ];
         var content = new CreatureContent([template, changed], [Spawn(1, Boss, 0, 0)], [], [], [], immunities: rows);
@@ -247,6 +248,73 @@ public sealed class CreatureImmunityDataTests
 
             Assert.Equal(0u, boss.ImmunitySetId); // cmangos Creature::UpdateEntry ends with UpdateImmunitiesSet(0)
         }
+    }
+
+    [Fact]
+    public void AnEntryWithNoSetZero_KeepsTheSetItWasOn()
+    {
+        const uint other = Boss + 1;
+        CreatureTemplate template = Template(Boss, null);
+        CreatureTemplate changed = Template(other, null);
+        CreatureImmunity[] rows =
+        [
+            Row(0, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Stun),
+            Row(1, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Root),
+            new(other, 1, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Fear),
+        ];
+        var content = new CreatureContent([template, changed], [Spawn(1, Boss, 0, 0)], [], [], [], immunities: rows);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreatureAiTestKit.CreateAiSystem(content);
+        using (world)
+        {
+            CreatureAiTestKit.AddPlayer(world, 1, 40, 0);
+            Creature boss = system.Creatures.Single();
+            Assert.True(boss.UpdateImmunitySet(1));
+
+            Assert.True(system.UpdateEntry(boss, other));
+
+            Assert.Equal(1u, boss.ImmunitySetId); // cmangos UpdateImmunitiesSet(0) returns early when set 0 has no rows (Creature.cpp:2462-2481)
+        }
+    }
+
+    [Fact]
+    public void ARespawn_ReturnsTheCreatureToSetZero()
+    {
+        CreatureTemplate template = Template(Boss, null);
+        CreatureImmunity[] rows =
+        [
+            Row(0, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Stun),
+            Row(1, CreatureImmunityType.Mechanic, (uint)SpellMechanic.Root),
+        ];
+        var content = new CreatureContent([template], [Spawn(1, Boss, 0, 0)], [], [], [], immunities: rows);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreatureAiTestKit.CreateAiSystem(content);
+        using (world)
+        {
+            CreatureAiTestKit.AddPlayer(world, 1, 40, 0);
+            Creature boss = system.Creatures.Single();
+            Assert.True(boss.UpdateImmunitySet(1));
+
+            system.KillCreature(boss);
+            for (int i = 0; i < 4000 && !(boss.IsAlive && boss.IsInWorld); i++)
+            {
+                CreatureAiTestKit.Run(world, 100);
+            }
+
+            Assert.True(boss.IsAlive && boss.IsInWorld, "the boss did not respawn");
+            Assert.Equal(0u, boss.ImmunitySetId); // cmangos Creature::ResetEntry -> UpdateEntry -> UpdateImmunitiesSet(0)
+        }
+    }
+
+    [Fact]
+    public void ADamageRow_AbsorbsMeleeAndEveryOtherAbsorbDamageCaller()
+    {
+        using SpellTestKit kit = Kit();
+        Creature boss = Make(null, 0, 0, Row(0, CreatureImmunityType.Damage, SpellSchoolMasks.Of(SpellSchool.Normal)));
+        Creature plain = Make(null, 0, 0);
+
+        // Melee reaches immunity only through AbsorbDamage (white damage: no spell); mangos-classic Unit::IsImmuneToDamage covers it (Unit.cpp:1924, 8929).
+        Assert.Equal(100u, kit.System.AbsorbDamage(null, boss, SpellSchoolMasks.Of(SpellSchool.Normal), 100, null));
+        Assert.Equal(0u, kit.System.AbsorbDamage(null, boss, SpellSchoolMasks.Of(SpellSchool.Fire), 100, null));
+        Assert.Equal(0u, kit.System.AbsorbDamage(null, plain, SpellSchoolMasks.Of(SpellSchool.Normal), 100, null));
     }
 
     [Fact]

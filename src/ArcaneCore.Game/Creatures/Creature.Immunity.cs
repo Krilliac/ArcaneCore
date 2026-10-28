@@ -29,6 +29,9 @@ public sealed partial class Creature
         return true;
     }
 
-    /// <summary>A respawn and an entry change start again on set 0 (mangos-classic Creature::UpdateEntry ends with <c>UpdateImmunitiesSet(0)</c>, Creature.cpp:613; a respawn reaches it through ResetEntry, Creature.cpp:636-654).</summary>
-    internal void ResetImmunitySet() => ImmunitySetId = 0;
+    /// <summary>
+    /// A respawn and an entry change go back to set 0 (mangos-classic Creature::UpdateEntry ends with <c>UpdateImmunitiesSet(0)</c>, Creature.cpp:613; a respawn reaches it
+    /// through ResetEntry, Creature.cpp:636-654). As in mangos-classic, an entry with no set 0 rows keeps the set it was on (<see cref="UpdateImmunitySet"/> refuses it).
+    /// </summary>
+    internal void ResetImmunitySet() => UpdateImmunitySet(0);
 }

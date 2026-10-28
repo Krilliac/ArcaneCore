@@ -69,7 +69,8 @@ public static class ImmunityRules
 
     /// <summary>
     /// vmangos Unit::IsImmuneToSchoolMask (Unit.cpp:10497-10508): any school-immunity aura covers a school of the mask,
-    /// whatever its polarity. Used to absorb all damage of an immune unit.
+    /// whatever its polarity, and so does a creature school or damage immunity (template mask and creature_immunities rows of type 2 and 3;
+    /// mangos-classic Unit::IsImmuneToDamage, Unit.cpp:7326-7341, covers melee too, Unit.cpp:1924, 8929). Used to absorb all damage of an immune unit.
     /// </summary>
     public static bool IsImmuneToSchoolMask(SpellSystem system, Unit unit, uint schoolMask)
     {
@@ -80,7 +81,7 @@ public static class ImmunityRules
             return false;
         }
 
-        if (system.CreatureImmunities is { } creatures && (creatures.SchoolImmuneMask(unit) & schoolMask) != 0)
+        if (system.CreatureImmunities is { } creatures && ((creatures.SchoolImmuneMask(unit) | creatures.DamageImmuneMask(unit)) & schoolMask) != 0)
         {
             return true;
         }
