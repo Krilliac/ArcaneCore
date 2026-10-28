@@ -17092,6 +17092,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Economy:BuyReagents",
+      "section": "World:Playerbots",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Buy the reagents of the recipes the bot wants to craft that it carries fewer of than one craft uses at the faction auction house during a visit (on by default): at most 2 auctions a visit, a buyout per unit of at most twice the item's reference price, within the visit budget. Off: no reagent is searched or bought. Reagents a wanted recipe uses are never listed either way.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Economy:BuyUpgradeBudgetFraction",
       "section": "World:Playerbots",
       "type": "float",

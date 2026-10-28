@@ -13891,6 +13891,21 @@ World.Playerbots.Economy.BankDeposit = true
 World.Playerbots.Economy.BuyBankSlots = true
 
 #
+#    World.Playerbots.Economy.BuyReagents
+#        Description: Buy the reagents of the recipes the bot wants to craft that it carries fewer
+#                     of than one craft uses at the faction auction house during a visit (on by
+#                     default): at most 2 auctions a visit, a buyout per unit of at most twice the
+#                     item's reference price, within the visit budget. Off: no reagent is searched
+#                     or bought. Reagents a wanted recipe uses are never listed either way.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.BuyReagents = true
+
+#
 #    World.Playerbots.Economy.BuyUpgradeBudgetFraction
 #        Description: The share of the money a bot holds at the start of a visit that the visit may
 #                     spend in all (0..1): listing deposits and the buyout of an upgrade count

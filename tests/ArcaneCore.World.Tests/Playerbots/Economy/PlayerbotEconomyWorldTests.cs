@@ -12,7 +12,10 @@ using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Playerbots.Scenarios;
+using ArcaneCore.World.Spells;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Playerbots.Scenarios;
 using Microsoft.EntityFrameworkCore;
@@ -204,6 +207,236 @@ public sealed class PlayerbotEconomyWorldTests
             ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(auction) is not null), "the auction is still in the house");
             await c.ReadAsync(() => driver.Active = false);
         });
+    }
+
+    // --- the visit buys reagents -------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Visit_BuysTheCheapestReagentAuctionThatCoversTheShortfall_AndCollectsIt()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-buying", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+            uint moneyBefore = await buyer.ReadAsync(p => p.Money);
+
+            // The bot lacks two linen per craft; its budget (a quarter of 4000 = 1000) covers the in-cap pair.
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            (int reagents, int purchases, uint spent, int collected, bool held) = await c.ReadAsync(() =>
+                (driver.Economy.ReagentPurchasesMade, driver.Economy.PurchasesMade, driver.Economy.Spent, driver.Economy.ItemsCollected,
+                 driver.Economy.Bought.IsHeld(LinenCloth, buyer.Session!.World.NowMs)));
+            ScenarioContext.ExpectEqual(1, reagents, "reagent purchases");
+            ScenarioContext.ExpectEqual(0, purchases, "upgrade purchases");
+            ScenarioContext.ExpectEqual(market.Within, spent, "spent");
+            ScenarioContext.ExpectEqual(1, collected, "items collected from the mailbox");
+            ScenarioContext.ExpectEqual(moneyBefore - market.Within, await buyer.ReadAsync(p => p.Money), "money after the buyout");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 2);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.WithinId) is null), "the bought auction left the house");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.OverId) is { BidderId: 0 }), "the over-priced pair is still for sale");
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.SingleId) is { BidderId: 0 }), "the single linen is still for sale");
+            ScenarioContext.Expect(held, "the bought entry is held against listing");
+            ScenarioContext.ExpectEqual(0, (await MailsAsync(c, buyer)).Count, "the buyer's won letter was emptied and deleted");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_BuysNoReagent_WhenBuyReagentsIsOff()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-off", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+
+            PlayerbotOptions options = Options(listChance: 0, maxListings: 5, budget: 0.25f);
+            options.Economy.BuyReagents = false;
+            Driver driver = await AttachAsync(c, buyer, options);
+            await SetReagentNeedsAsync(c, driver);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases while off");
+            ScenarioContext.ExpectEqual(4000u, await buyer.ReadAsync(p => p.Money), "money while off");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 0);
+            ScenarioContext.Expect(await c.ReadAsync(() => economy.FindAuction(market.WithinId) is not null), "the in-cap pair is still in the house");
+
+            // The same market, the same bot, the switch turned on: now the pair is bought (the off result was the switch, not the market).
+            await c.ReadAsync(() => { options.Economy.BuyReagents = true; return true; });
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 2);
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases once on");
+            ScenarioContext.ExpectEqual(4000u - market.Within, await buyer.ReadAsync(p => p.Money), "money once on");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 2);
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_NeverListsAReagentTheBotNeeds()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-keep", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ScenarioBot bot = await c.LoginAsync("Econkeeper");
+            await c.GiveMoneyAsync(bot, 5000);
+            await c.GiveItemAsync(bot, LinenCloth, 3);
+            await c.GiveItemAsync(bot, BoltA, 3);
+
+            // Linen is a trade good with a vendor price, listable like BoltA, but a wanted recipe uses it (two per craft; the bot carries three).
+            Driver driver = await AttachAsync(c, bot, Options(listChance: 100, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver);
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ListingsPlaced), "listings placed");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => economy.Auctions.Count(v => v.Auction.SellerId == (int)bot.Guid.Low && v.Auction.ItemEntry == BoltA)), "BoltA auctions of the bot");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => economy.Auctions.Count(v => v.Auction.SellerId == (int)bot.Guid.Low && v.Auction.ItemEntry == LinenCloth)), "linen auctions of the bot");
+            await c.ExpectItemCountAsync(bot, LinenCloth, 3);
+            await c.ExpectItemCountAsync(bot, BoltA, 0);
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_DoesNotBuyAReagentAgain_WhileTheBoughtOneWaitsInTheMailbox()
+    {
+        await using ScenarioTestWorld world = await StartAsync();
+        await RunAsync(world, "economy-reagent-awaiting", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ReagentMarket market = await SeedReagentMarketAsync(c, economy, secondInCapPair: true);
+            ScenarioBot buyer = await c.LoginAsync("Econbuyer");
+            await c.GiveMoneyAsync(buyer, 4000);
+            uint moneyBefore = await buyer.ReadAsync(p => p.Money);
+            uint nowOf() => buyer.Session!.World.NowMs;
+
+            // Visit 1 buys one in-cap pair and is cut off (from inside the tick, on the world thread) when it reaches the mail step: the won
+            // letter, which holds the linen, stays in the mailbox.
+            Driver driver = await AttachAsync(c, buyer, Options(listChance: 0, maxListings: 5, budget: 0.25f));
+            await SetReagentNeedsAsync(c, driver);
+            driver.PauseWhen = e =>
+            {
+                if (e.Phase != PlayerbotEconomyPhase.MailStart || e.ReagentPurchasesMade != 1) return false;
+                e.Reset();
+                return true;
+            };
+            await StartVisitAsync(c, driver);
+            await c.WaitUntilAsync("visit 1 is cut off at the mail step", () => !driver.Active);
+            ScenarioContext.ExpectEqual(PlayerbotEconomyPhase.Idle, await c.ReadAsync(() => driver.Economy.Phase), "phase after the cut");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases after visit 1");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => driver.Economy.ItemsCollected), "nothing collected yet");
+            ScenarioContext.ExpectEqual(moneyBefore - market.Within, await buyer.ReadAsync(p => p.Money), "money after the first buyout");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 0);
+            ScenarioContext.ExpectEqual(1, (await MailsAsync(c, buyer)).Count, "the won letter waits in the mailbox");
+            ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.Bought.IsAwaitingCollection(LinenCloth, nowOf())), "the linen is awaiting collection");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => new[] { market.WithinId, market.ExtraId }.Count(id => economy.FindAuction(id) is not null)),
+                "exactly one of the two in-cap pairs was bought");
+
+            // Visit 2: the bot still carries no linen, but the bought pair is on its way, so it is not a shortfall: the second pair stays in the house.
+            await c.ReadAsync(() => { driver.PauseWhen = null; return true; });
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ReagentPurchasesMade), "reagent purchases after visit 2 (no second buy)");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => new[] { market.WithinId, market.ExtraId }.Count(id => economy.FindAuction(id) is { BidderId: 0 })),
+                "the other in-cap pair is still for sale");
+            ScenarioContext.ExpectEqual(moneyBefore - market.Within, await buyer.ReadAsync(p => p.Money), "money after visit 2: only the first buyout");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ItemsCollected), "visit 2 collected the won letter");
+            await c.ExpectItemCountAsync(buyer, LinenCloth, 2);
+            ScenarioContext.Expect(!await c.ReadAsync(() => driver.Economy.Bought.IsAwaitingCollection(LinenCloth, nowOf())), "collected: no longer awaited");
+            ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.Bought.IsHeld(LinenCloth, nowOf())), "still held against listing");
+            ScenarioContext.ExpectEqual(0, (await MailsAsync(c, buyer)).Count, "the won letter was emptied and deleted");
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    [Fact]
+    public async Task Visit_NeverListsAReagentTheBotNeeds_WhenTheDefaultReaderFindsItInTheSpellbook()
+    {
+        const uint Potion = 990330, Recipe = 996101;
+        await using ScenarioTestWorld world = await StartAsync(services =>
+        {
+            var items = (InMemoryItemTemplateSource)services.Last(d => d.ServiceType == typeof(IItemTemplateSource)).ImplementationInstance!;
+            items.Templates.Add(new ItemTemplate { Entry = Potion, Name = "Scenario Potion", Class = (uint)ItemClass.Consumable, InventoryType = (uint)InventoryType.NonEquip,
+                Stackable = 20, AllowableClass = uint.MaxValue, AllowableRace = uint.MaxValue });
+        });
+        await RunAsync(world, "economy-reagent-keep-spellbook", async c =>
+        {
+            EconomyFeature economy = c.Services.GetRequiredService<EconomyFeature>();
+            ScenarioBot bot = await c.LoginAsync("Econcrafter");
+            await c.GiveMoneyAsync(bot, 5000);
+            await c.GiveItemAsync(bot, LinenCloth, 3);
+            await c.GiveItemAsync(bot, BoltA, 3);
+
+            // The bot really knows a recipe (two linen cloth makes a potion it carries none of); ReagentNeeds stays null, so the economy reads the spellbook.
+            bool wanted = await c.ReadAsync(() =>
+            {
+                SpellFeature feature = c.Services.GetRequiredService<SpellFeature>();
+                feature.System.Store = new SpellStore([new SpellInfo
+                {
+                    Id = Recipe,
+                    Effects = [new SpellEffectInfo { Effect = SpellEffectName.CreateItem, ItemType = Potion }, new(), new()],
+                    Reagents = [new SpellReagent(LinenCloth, 2)],
+                    Totems = [0, 0],
+                }], [], []);
+                feature.Spellbook.LearnSpell(bot.RequirePlayer(), Recipe);
+                var needs = new PlayerbotVendorSupplyNeeds();
+                needs.Refresh(bot.RequirePlayer(), feature.System.Store, feature.Spellbook);
+                return needs.Reagents.TryGetValue(LinenCloth, out uint perCraft) && perCraft == 2;
+            });
+            ScenarioContext.Expect(wanted, "precondition: the spellbook read wants two linen per craft");
+
+            Driver driver = await AttachAsync(c, bot, Options(listChance: 100, maxListings: 5, budget: 0.25f));
+            ScenarioContext.Expect(await c.ReadAsync(() => driver.Economy.ReagentNeeds is null), "the default reader is in use");
+            await StartVisitAsync(c, driver);
+            await FinishAsync(c, driver, 1);
+
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => driver.Economy.ListingsPlaced), "listings placed");
+            ScenarioContext.ExpectEqual(1, await c.ReadAsync(() => economy.Auctions.Count(v => v.Auction.SellerId == (int)bot.Guid.Low && v.Auction.ItemEntry == BoltA)), "BoltA auctions of the bot");
+            ScenarioContext.ExpectEqual(0, await c.ReadAsync(() => economy.Auctions.Count(v => v.Auction.SellerId == (int)bot.Guid.Low && v.Auction.ItemEntry == LinenCloth)), "linen auctions of the bot");
+            await c.ExpectItemCountAsync(bot, LinenCloth, 3);
+            await c.ReadAsync(() => driver.Active = false);
+        });
+    }
+
+    private sealed record ReagentMarket(uint Cap, uint Within, uint WithinId, uint OverId, uint SingleId, uint ExtraId = 0);
+
+    /// <summary>Per craft the bot wants two linen cloth (set on the world thread, the seam the economy reads instead of the spellbook).</summary>
+    private static Task SetReagentNeedsAsync(ScenarioContext c, Driver driver) => c.ReadAsync(() =>
+    {
+        driver.Economy.ReagentNeeds = _ => new Dictionary<uint, uint> { [LinenCloth] = 2 };
+        return true;
+    });
+
+    /// <summary>
+    /// A seller lists linen cloth three ways: a pair exactly at the reagent cap per unit (the one to buy), a pair one copper per unit over the cap,
+    /// and a single cheap cloth that does not cover a shortfall of two.
+    /// </summary>
+    private static async Task<ReagentMarket> SeedReagentMarketAsync(ScenarioContext c, EconomyFeature economy, bool secondInCapPair = false)
+    {
+        ScenarioBot seller = await c.LoginAsync("Econseller");
+        await c.GiveMoneyAsync(seller, 3000);
+        uint cap = PlayerbotEconomyPlanner.ReagentUnitCap(Template(economy, LinenCloth));
+        uint within = 2 * cap;
+        uint over = (2 * cap) + 2;
+        ScenarioContext.Expect(cap > 0 && over < 1000, $"the linen cap {cap} must leave the over-priced pair inside the 1000 copper visit budget");
+
+        // One stack at a time: a second stack of the same entry would merge into the first one in the bags.
+        uint withinId = await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 2), within / 2, within, 480);
+        uint overId = await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 2), over / 2, over, 480);
+        uint singleId = await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 1), 10, cap / 4 + 1, 480);
+        uint extraId = secondInCapPair ? await ListAsync(seller, await c.GiveItemAsync(seller, LinenCloth, 2), within / 2, within, 480) : 0;
+        return new ReagentMarket(cap, within, withinId, overId, singleId, extraId);
     }
 
     // --- the visit collects ------------------------------------------------------------------------------------------

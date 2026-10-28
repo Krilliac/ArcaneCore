@@ -13,6 +13,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -32,6 +33,7 @@ internal enum PlayerbotEconomyPhase
     AwaitMailList,
     MailWork,
     AwaitMailResult,
+    BuyingReagents,
 }
 
 /// <summary>
@@ -73,6 +75,12 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
     /// <summary>The most letters one visit handles.</summary>
     internal const int MaxLettersPerVisit = 20;
 
+    /// <summary>The reagent auctions one visit buys.</summary>
+    internal const int MaxReagentPurchasesPerVisit = 2;
+
+    /// <summary>The reagent searches one visit sends.</summary>
+    internal const int MaxReagentSearchesPerVisit = 4;
+
     private const int MaxRefusedAuctions = 64;
     private const int MaxFailures = 4;
     private const int MaxTravelFailures = 3;
@@ -92,6 +100,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
     private uint _spent;
     private bool _wantList;
     private bool _wantBuy;
+    private bool _wantReagents;
     private bool _listingFault;
     private int _failures;
     private int _travelFailures;
@@ -110,6 +119,19 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
     private int _buyAttempts;
     private int _scanStep;
     private readonly List<PlayerbotAuctionRow> _scan = [];
+
+    // The reagent buying: what the bot still lacks, the entries to search in turn, the rows found, and the bid in flight.
+    private static readonly IReadOnlyDictionary<uint, uint> NoReagents = new Dictionary<uint, uint>();
+    private readonly PlayerbotVendorSupplyNeeds _supply = new();
+    private readonly Dictionary<uint, uint> _reagentMissing = [];
+    private readonly List<uint> _reagentOrder = [];
+    private readonly List<PlayerbotAuctionRow> _reagentScan = [];
+    private int _reagentSearches;
+    private int _reagentPurchases;
+    private int _reagentFailures;
+    private PlayerbotEconomyPhase _bidReturn = PlayerbotEconomyPhase.Buying;
+    private uint _bidEntry;
+    private uint _bidCount;
 
     // The mailbox work.
     private ObjectGuid _mailbox;
@@ -146,6 +168,18 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
     internal int ListingsPlaced { get; private set; }
 
     internal int PurchasesMade { get; private set; }
+
+    /// <summary>Reagent auctions bought over the bot's life (tests, inspection).</summary>
+    internal int ReagentPurchasesMade { get; private set; }
+
+    /// <summary>Entries the bot bought lately, which it does not list again.</summary>
+    internal PlayerbotBoughtMemory Bought { get; } = new PlayerbotBoughtMemory();
+
+    /// <summary>
+    /// Test seam: the per-craft reagent counts of the recipes the bot wants. Null (default) reads them from the bot's spellbook through a
+    /// <see cref="ArcaneCore.World.Playerbots.Progression.PlayerbotVendorSupplyNeeds"/>.
+    /// </summary>
+    internal Func<Player, IReadOnlyDictionary<uint, uint>>? ReagentNeeds { get; set; }
 
     internal int ItemsCollected { get; private set; }
 
@@ -227,11 +261,16 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         if (!economy.Settlements.CanAct(session, player)) return false;
 
         var random = RandomSource?.Invoke() ?? new Random(unchecked((int)(player.Guid.Low * 2654435761u) ^ (int)(_visitNumber * 40503u)));
-        IReadOnlyList<PlayerbotBagItem> listables = PlayerbotEconomyPlanner.Listables(BagItems(player), item => PlayerbotGearScoreSeam.Gain(player, item), _relist);
+        IReadOnlyDictionary<uint, uint> wanted = WantedReagents(player);
+        IReadOnlyList<PlayerbotBagItem> listables = PlayerbotEconomyPlanner.Listables(BagItems(player, wanted), item => PlayerbotGearScoreSeam.Gain(player, item), _relist);
         bool list = listables.Count > 0 && PlayerbotEconomyPlanner.RollsToList(config, random);
-        bool buy = Math.Min(PlayerbotEconomyPlanner.VisitBudget(player.Money, config.BuyUpgradeBudgetFraction), Spendable(player)) >= PlayerbotEconomyPlanner.MinimumUpgradeBudget
-            && PlayerbotTownGoals.FreeBagSlots(player) > 0;
-        if (!list && !buy && !(Reached(now, _nextMailTriggerAt) && HasUnreadMail(out bool known) && known))
+        uint visitMoney = Math.Min(PlayerbotEconomyPlanner.VisitBudget(player.Money, config.BuyUpgradeBudgetFraction), Spendable(player));
+        bool buy = visitMoney >= PlayerbotEconomyPlanner.MinimumUpgradeBudget && PlayerbotTownGoals.FreeBagSlots(player) > 0;
+        IReadOnlyDictionary<uint, uint> shortfalls = config.BuyReagents && visitMoney >= PlayerbotEconomyPlanner.MinimumUpgradeBudget && PlayerbotTownGoals.FreeBagSlots(player) > 0
+            ? WithoutAwaiting(PlayerbotEconomyPlanner.Shortfalls(wanted, entry => player.Inventory.GetItemCount(entry)), now)
+            : NoReagents;
+        bool reagents = shortfalls.Count > 0;
+        if (!list && !buy && !reagents && !(Reached(now, _nextMailTriggerAt) && HasUnreadMail(out bool known) && known))
         {
             // Nothing to list or buy and no unread letter: wait a full interval. A mail query the shared budget refused is tried again.
             if (session.ManagedBudget is { Remaining: <= 0 }) return false;
@@ -247,6 +286,27 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         _spent = 0;
         _wantList = list;
         _wantBuy = buy;
+        _wantReagents = reagents;
+        _reagentMissing.Clear();
+        _reagentOrder.Clear();
+        foreach ((uint entry, uint missing) in shortfalls) _reagentMissing[entry] = missing;
+        _reagentOrder.AddRange(_reagentMissing.Keys.Order());
+        if (_reagentOrder.Count > 1)
+        {
+            // The searches are capped, so the start rotates with the visit: later entries get their turn on later visits.
+            int start = (int)(_visitNumber % (uint)_reagentOrder.Count);
+            if (start > 0)
+            {
+                List<uint> head = _reagentOrder.GetRange(0, start);
+                _reagentOrder.RemoveRange(0, start);
+                _reagentOrder.AddRange(head);
+            }
+        }
+
+        _reagentScan.Clear();
+        _reagentSearches = 0;
+        _reagentPurchases = 0;
+        _reagentFailures = 0;
         _listingFault = false;
         _failures = 0;
         _travelFailures = 0;
@@ -285,6 +345,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             PlayerbotEconomyPhase.OwnerList => StepOwnerList(player, economy, config, now),
             PlayerbotEconomyPhase.Listing => StepListing(player, economy, config, now),
             PlayerbotEconomyPhase.AwaitSell => StepAwaitSell(player, now),
+            PlayerbotEconomyPhase.BuyingReagents => StepBuyingReagents(player, economy, now),
             PlayerbotEconomyPhase.Buying => StepBuying(player, economy, config, now),
             PlayerbotEconomyPhase.AwaitBid => StepAwaitBid(player, now),
             PlayerbotEconomyPhase.MailStart => StepMailStart(player, economy, elapsedMs, now),
@@ -309,6 +370,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             // No faction auctioneer in sight or on the map's hints: the auction part is over; the mailbox may still be here.
             _wantList = false;
             _wantBuy = false;
+            _wantReagents = false;
             return ToMail();
         }
 
@@ -344,7 +406,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
 
         _slots = PlayerbotEconomyPlanner.FreeListingSlots(config, page.Total);
         _queue.Clear();
-        foreach (PlayerbotBagItem item in PlayerbotEconomyPlanner.Listables(BagItems(player), t => PlayerbotGearScoreSeam.Gain(player, t), _relist))
+        foreach (PlayerbotBagItem item in PlayerbotEconomyPlanner.Listables(BagItems(player, WantedReagents(player)), t => PlayerbotGearScoreSeam.Gain(player, t), _relist))
             _queue.Enqueue(item);
         _phase = _slots > 0 && _queue.Count > 0 ? PlayerbotEconomyPhase.Listing : AfterListing();
         return true;
@@ -509,6 +571,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         }
 
         _buyAttempts++;
+        _bidReturn = PlayerbotEconomyPhase.Buying;
         _bidAuction = choice.Row.Id;
         _moneyBefore = player.Money;
         _expectedCost = choice.Row.Buyout;
@@ -534,6 +597,7 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
 
     private bool StepAwaitBid(Player player, uint now)
     {
+        bool reagent = _bidReturn == PlayerbotEconomyPhase.BuyingReagents;
         foreach (ManagedSessionPacket packet in session.DrainManagedPackets(WorldOpcode.SmsgAuctionCommandResult))
         {
             if (!TryDecode(() => PlayerbotEconomyWire.DecodeCommandResult(packet.Payload), out PlayerbotAuctionResult result)
@@ -541,10 +605,18 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
                 continue;
             if (result.Error == AuctionError.Ok)
             {
-                _purchases++;
-                PurchasesMade++;
                 uint paid = _moneyBefore >= player.Money ? _moneyBefore - player.Money : 0;
                 _spent = unchecked(_spent + paid);
+                if (reagent)
+                {
+                    NoteReagentBought();
+                }
+                else
+                {
+                    _purchases++;
+                    PurchasesMade++;
+                }
+
                 if ((player.Money > _moneyBefore || paid != _expectedCost) && !session.IsInChaosProbe)
                 {
                     PlayerbotAnomalies.Report(player, "economy", "money-invalid",
@@ -554,18 +626,18 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             }
             else
             {
-                Refuse(_bidAuction);
+                NoteBidFailed();
             }
 
-            _phase = PlayerbotEconomyPhase.Buying;
+            _phase = _bidReturn;
             return true;
         }
 
         if (!player.IsQuestSettlementPending)
         {
             _spent = unchecked(_spent + (_moneyBefore >= player.Money ? _moneyBefore - player.Money : 0));
-            Refuse(_bidAuction);
-            _phase = PlayerbotEconomyPhase.Buying;
+            NoteBidFailed();
+            _phase = _bidReturn;
             return true;
         }
 
@@ -576,6 +648,101 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         }
 
         return true;
+    }
+
+    /// <summary>A bid the house did not take: the auction is left alone for a while, and a reagent bid counts toward the visit's two failed tries.</summary>
+    private void NoteBidFailed()
+    {
+        Refuse(_bidAuction);
+        if (_bidReturn == PlayerbotEconomyPhase.BuyingReagents) _reagentFailures++;
+    }
+
+    /// <summary>A reagent buyout went through: count it, hold the entry against listing, and take it off what the bot still lacks.</summary>
+    private void NoteReagentBought()
+    {
+        _reagentPurchases++;
+        ReagentPurchasesMade++;
+        Bought.NoteBought(_bidEntry, session.World.NowMs);
+        if (_reagentMissing.TryGetValue(_bidEntry, out uint lacking)) _reagentMissing[_bidEntry] = lacking > _bidCount ? lacking - _bidCount : 0;
+        _reagentScan.RemoveAll(row => row.Id == _bidAuction);
+    }
+
+    // --- the reagents ----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The reagent phase: search the house for each reagent the bot lacks (one search a think, at most <see cref="MaxReagentSearchesPerVisit"/>
+    /// a visit), then buy out the best auction within the cap per unit and the visit's budget, up to <see cref="MaxReagentPurchasesPerVisit"/>.
+    /// </summary>
+    private bool StepBuyingReagents(Player player, EconomyFeature economy, uint now)
+    {
+        if (!AuctioneerStillUsable(player, economy)) return Finish(now);
+        uint limit = Math.Min(Math.Min(PlayerbotEconomyPlanner.Remaining(Budget, _spent), player.Money), Spendable(player));
+        if (_reagentPurchases >= MaxReagentPurchasesPerVisit || _reagentFailures >= 2 || limit == 0
+            || PlayerbotTownGoals.FreeBagSlots(player) == 0 || !economy.Settlements.CanAct(session, player))
+        {
+            _phase = AfterReagents();
+            return true;
+        }
+
+        if (_reagentSearches < Math.Min(_reagentOrder.Count, MaxReagentSearchesPerVisit))
+        {
+            uint entry = _reagentOrder[_reagentSearches];
+            if (!Bought.IsAwaitingCollection(entry, now) && player.Inventory.Templates.Find(entry) is { } wanted)
+            {
+                session.DrainManagedPackets(WorldOpcode.SmsgAuctionListResult);
+                byte[] search = PlayerbotEconomyWire.ListItems(_auctioneer.Value, 0, wanted.Name, 0, 0, PlayerbotEconomyWire.Any, wanted.Class,
+                    PlayerbotEconomyWire.Any, PlayerbotEconomyWire.Any, usable: false);
+                if (!session.TryManagedAction(WorldOpcode.CmsgAuctionListItems, search)) return Failed();
+                IReadOnlyList<ManagedSessionPacket> replies = session.DrainManagedPackets(WorldOpcode.SmsgAuctionListResult);
+                if (replies.Count > 0 && TryDecode(() => PlayerbotEconomyWire.DecodeAuctionList(replies[^1].Payload), out PlayerbotAuctionPage? page) && page is not null)
+                    _reagentScan.AddRange(page.Rows);
+            }
+
+            _reagentSearches++;
+            return true;
+        }
+
+        PlayerbotReagentChoice? choice = PlayerbotEconomyPlanner.ChooseReagent(_reagentScan.DistinctBy(row => row.Id), player.Guid.Value, _reagentMissing, limit,
+            entry => player.Inventory.Templates.Find(entry), IsRefused);
+        if (choice is null)
+        {
+            _phase = AfterReagents();
+            return true;
+        }
+
+        _bidReturn = PlayerbotEconomyPhase.BuyingReagents;
+        _bidAuction = choice.Row.Id;
+        _bidEntry = choice.Row.Entry;
+        _bidCount = choice.Row.Count;
+        _moneyBefore = player.Money;
+        _expectedCost = choice.Row.Buyout;
+        session.DrainManagedPackets(WorldOpcode.SmsgAuctionCommandResult);
+        if (!session.TryManagedAction(WorldOpcode.CmsgAuctionPlaceBid, PlayerbotEconomyWire.PlaceBid(_auctioneer.Value, choice.Row.Id, choice.Row.Buyout)))
+        {
+            NoteBidFailed();
+            return Failed();
+        }
+
+        if (!player.IsQuestSettlementPending)
+        {
+            // The house answered with an error or with silence: leave the auction alone.
+            session.DrainManagedPackets(WorldOpcode.SmsgAuctionCommandResult);
+            NoteBidFailed();
+            return true;
+        }
+
+        _operationDeadline = unchecked(now + OperationTimeoutMs);
+        _phase = PlayerbotEconomyPhase.AwaitBid;
+        return true;
+    }
+
+    /// <summary>The per-craft reagent counts of the recipes the bot wants: the test seam, else its spellbook; none without a spell system.</summary>
+    private IReadOnlyDictionary<uint, uint> WantedReagents(Player player)
+    {
+        if (ReagentNeeds is { } seam) return seam(player);
+        if (session.Services.GetService<SpellFeature>() is not { } feature) return NoReagents;
+        _supply.RefreshIfChanged(player, feature.System.Store, feature.Spellbook, session.World.NowMs);
+        return _supply.Reagents;
     }
 
     // --- the mailbox -----------------------------------------------------------------------------------------------
@@ -721,6 +888,9 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
                     {
                         _letterItem = 0;
                         ItemsCollected++;
+                        if (PlayerbotEconomyPlanner.TryParseAuctionSubject(letter.Subject, out uint takenEntry, out AuctionMailAction takenAction)
+                            && takenAction == AuctionMailAction.Won)
+                            Bought.NoteCollected(takenEntry);
                     }
                     else
                     {
@@ -789,7 +959,9 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
 
     // --- shared helpers --------------------------------------------------------------------------------------------
 
-    private PlayerbotEconomyPhase AfterListing() => _wantBuy ? PlayerbotEconomyPhase.Buying : MailPhase();
+    private PlayerbotEconomyPhase AfterListing() => _wantReagents ? PlayerbotEconomyPhase.BuyingReagents : AfterReagents();
+
+    private PlayerbotEconomyPhase AfterReagents() => _wantBuy ? PlayerbotEconomyPhase.Buying : MailPhase();
 
     private PlayerbotEconomyPhase MailPhase()
     {
@@ -828,12 +1000,23 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         return false;
     }
 
-    private IEnumerable<PlayerbotBagItem> BagItems(Player player)
+    /// <summary>The shortfalls without the entries the bot bought and has not yet collected from their letters (it must not buy them again).</summary>
+    private IReadOnlyDictionary<uint, uint> WithoutAwaiting(IReadOnlyDictionary<uint, uint> shortfalls, uint now)
+    {
+        if (shortfalls.Count == 0) return shortfalls;
+        var kept = new Dictionary<uint, uint>(shortfalls.Count);
+        foreach ((uint entry, uint missing) in shortfalls)
+            if (!Bought.IsAwaitingCollection(entry, now)) kept[entry] = missing;
+        return kept;
+    }
+
+    private IEnumerable<PlayerbotBagItem> BagItems(Player player, IReadOnlyDictionary<uint, uint> wanted)
     {
         // What the bot keeps whatever its price: food, drink and potions it uses, and what an open quest asks for (the reservations of
         // PlayerbotTownGoals.IsProtected, read here from the same sources).
         QuestNpcServices? services = session.Services.GetService<QuestNpcFeature>()?.Services;
         SpellSystem? spells = session.Services.GetService<SpellFeature>()?.System;
+        uint now = session.World.NowMs;
         HashSet<uint> required = services is null
             ? []
             : [.. (services.StateOf(player)?.Quests.Statuses ?? new Dictionary<uint, QuestStatusData>())
@@ -843,7 +1026,8 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         {
             if (item.BagSlot == InventorySlots.Bag0 && (item.Slot < InventorySlots.ItemStart || item.Slot >= InventorySlots.ItemEnd)) continue;
             if (item.Template.Quality == 0) continue;
-            bool reserved = required.Contains(item.Entry) || (spells is not null && PlayerbotConsumables.TryClassify(item.Template, spells, out _));
+            bool reserved = required.Contains(item.Entry) || wanted.ContainsKey(item.Entry) || Bought.IsHeld(item.Entry, now)
+                || (spells is not null && PlayerbotConsumables.TryClassify(item.Template, spells, out _));
             yield return new PlayerbotBagItem(item.Guid, item.Template, item.Count, player.Inventory.CanTransferOut(item) == ArcaneCore.Game.Items.InventoryResult.Ok, reserved);
         }
     }
@@ -906,6 +1090,9 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
         _destinations.Clear();
         _queue.Clear();
         _scan.Clear();
+        _reagentScan.Clear();
+        _reagentMissing.Clear();
+        _reagentOrder.Clear();
         _letters.Clear();
         _auctioneer = default;
         _mailbox = default;

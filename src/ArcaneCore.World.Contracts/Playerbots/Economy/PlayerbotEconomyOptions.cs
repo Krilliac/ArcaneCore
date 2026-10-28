@@ -49,6 +49,13 @@ public sealed class PlayerbotEconomyOptions
     /// </summary>
     public bool BuyBankSlots { get; set; } = true;
 
+    /// <summary>
+    /// Buy the reagents of the recipes the bot wants to craft that it carries fewer of than one craft uses at the faction auction house during a
+    /// visit (on by default): at most 2 auctions a visit, a buyout per unit of at most twice the item's reference price, within the visit budget.
+    /// Off: no reagent is searched or bought. Reagents a wanted recipe uses are never listed either way.
+    /// </summary>
+    public bool BuyReagents { get; set; } = true;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Economy";

@@ -18,6 +18,53 @@ internal sealed record PlayerbotListingPlan(uint Buyout, uint StartBid, uint Dep
 /// <summary>The auction the bot buys out and the gain its slot sees.</summary>
 internal sealed record PlayerbotUpgradeChoice(PlayerbotAuctionRow Row, float Gain);
 
+/// <summary>The reagent auction the bot buys out and how many of the item it still lacks.</summary>
+internal sealed record PlayerbotReagentChoice(PlayerbotAuctionRow Row, uint Missing);
+
+/// <summary>
+/// Entries the bot bought at the auction house lately, which it does not list again for <see cref="HoldMs"/> (no buy-then-relist loop).
+/// A purchase also stays "awaiting collection" until the mail step takes the bought item from its letter, so a letter that was not
+/// collected does not make the next visit buy the same reagent again.
+/// In memory, bounded to <see cref="MaxEntries"/> (the oldest purchase goes first); lost on restart. World thread only.
+/// </summary>
+internal sealed class PlayerbotBoughtMemory
+{
+    internal const int MaxEntries = 64;
+
+    internal const uint HoldMs = 86_400_000;
+
+    private readonly Dictionary<uint, (uint At, long Order, bool Awaiting)> _bought = [];
+    private long _next;
+
+    /// <summary>How many entries are remembered.</summary>
+    internal int Count => _bought.Count;
+
+    /// <summary>Notes a purchase of <paramref name="entry"/> at world time <paramref name="now"/>, (re)starting its hold and marking it awaiting collection.</summary>
+    internal void NoteBought(uint entry, uint now)
+    {
+        if (!_bought.ContainsKey(entry) && _bought.Count >= MaxEntries) _bought.Remove(_bought.MinBy(pair => pair.Value.Order).Key);
+        _bought[entry] = (now, _next++, true);
+    }
+
+    /// <summary>The bought item of <paramref name="entry"/> was taken from its letter: it is no longer awaiting collection (the listing hold stays).</summary>
+    internal void NoteCollected(uint entry)
+    {
+        if (_bought.TryGetValue(entry, out (uint At, long Order, bool Awaiting) known)) _bought[entry] = (known.At, known.Order, false);
+    }
+
+    /// <summary>Whether <paramref name="entry"/> was bought within <see cref="HoldMs"/> of <paramref name="now"/>; an entry past its hold is forgotten.</summary>
+    internal bool IsHeld(uint entry, uint now)
+    {
+        if (!_bought.TryGetValue(entry, out (uint At, long Order, bool Awaiting) known)) return false;
+        if (unchecked(now - known.At) < HoldMs) return true;
+        _bought.Remove(entry);
+        return false;
+    }
+
+    /// <summary>Whether <paramref name="entry"/> is held (within <see cref="HoldMs"/>) and its bought item has not been collected; false after the hold, so a lost letter cannot block buying forever.</summary>
+    internal bool IsAwaitingCollection(uint entry, uint now) => IsHeld(entry, now) && _bought[entry].Awaiting;
+}
+
 /// <summary>
 /// The economy bot's decisions, pure and deterministic over plain values: which items to list, how many listings a visit may add, the
 /// price and whether it pays, which upgrade to buy within the visit budget. The world side (<see cref="PlayerbotEconomy"/>) only supplies
@@ -27,6 +74,70 @@ internal static class PlayerbotEconomyPlanner
 {
     /// <summary>The smallest budget (copper) worth a trip for an upgrade alone.</summary>
     internal const uint MinimumUpgradeBudget = 100;
+
+    /// <summary>The most a reagent auction may ask per unit: twice the item's reference price; 0 (never bought) when the reference is 0.</summary>
+    internal static uint ReagentUnitCap(ItemTemplate template)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        return (uint)Math.Min((ulong)PlayerbotAuctionPricing.ReferencePerUnit(template) * PlayerbotAuctionPricing.CapMultiple, uint.MaxValue);
+    }
+
+    /// <summary>Entry to missing count (per craft minus carried) for every entry whose carried count is below its per-craft count; zero counts skipped.</summary>
+    internal static IReadOnlyDictionary<uint, uint> Shortfalls(IReadOnlyDictionary<uint, uint> perCraft, Func<uint, uint> carried)
+    {
+        ArgumentNullException.ThrowIfNull(perCraft);
+        ArgumentNullException.ThrowIfNull(carried);
+        var missing = new Dictionary<uint, uint>();
+        foreach ((uint entry, uint count) in perCraft)
+        {
+            if (count == 0) continue;
+            uint have = carried(entry);
+            if (have < count) missing[entry] = count - have;
+        }
+
+        return missing;
+    }
+
+    /// <summary>
+    /// The reagent auction to buy out, or null: of the rows for a missing entry the bot can pay (a buyout, not its own, within
+    /// <paramref name="limit"/>, not refused, at most <see cref="ReagentUnitCap"/> per unit rounded up) the one that covers the shortfall
+    /// first, then the lowest price per unit (compared exactly), then the lower buyout, then the lower auction id.
+    /// </summary>
+    internal static PlayerbotReagentChoice? ChooseReagent(IEnumerable<PlayerbotAuctionRow> rows, ulong self,
+        IReadOnlyDictionary<uint, uint> missing, uint limit, Func<uint, ItemTemplate?> templates, Func<uint, bool>? isRefused = null)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        ArgumentNullException.ThrowIfNull(missing);
+        ArgumentNullException.ThrowIfNull(templates);
+        PlayerbotAuctionRow? best = null;
+        uint bestMissing = 0;
+        bool bestCovers = false;
+        foreach (PlayerbotAuctionRow row in rows)
+        {
+            if (row.Buyout == 0 || row.Count == 0 || row.Buyout > limit || row.Owner == self) continue;
+            if (!missing.TryGetValue(row.Entry, out uint lacking) || lacking == 0 || isRefused?.Invoke(row.Id) == true) continue;
+            if (templates(row.Entry) is not { } template) continue;
+            uint cap = ReagentUnitCap(template);
+            if (cap == 0 || (((ulong)row.Buyout + row.Count - 1) / row.Count) > cap) continue;
+            bool covers = row.Count >= lacking;
+            if (best is { } current && !IsBetterReagent(row, covers, current, bestCovers)) continue;
+            best = row;
+            bestMissing = lacking;
+            bestCovers = covers;
+        }
+
+        return best is { } chosen ? new PlayerbotReagentChoice(chosen, bestMissing) : null;
+    }
+
+    private static bool IsBetterReagent(PlayerbotAuctionRow row, bool covers, PlayerbotAuctionRow current, bool currentCovers)
+    {
+        if (covers != currentCovers) return covers;
+        ulong mine = (ulong)row.Buyout * current.Count;
+        ulong theirs = (ulong)current.Buyout * row.Count;
+        if (mine != theirs) return mine < theirs;
+        if (row.Buyout != current.Buyout) return row.Buyout < current.Buyout;
+        return row.Id < current.Id;
+    }
 
     /// <summary>Whether the bot lists <paramref name="item"/>: vendor trash stays with the vendors (<c>PlayerbotTownGoals</c> sells poor quality items and white junk).</summary>
     /// <param name="upgradeGain">What wearing the item would gain (<c>PlayerbotGearScoreSeam</c>); null when the bot cannot use it.</param>
