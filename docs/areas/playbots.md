@@ -1905,6 +1905,14 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
   invite ("inv", "can i join", "i can heal") within `PostLifeSeconds` puts the player into that group's matching
   (`PlayerbotGroupCoordinator.Volunteer`): the group forms with the player when enough bots wait, and the leader invites through the
   normal group path. Too low, already grouped or no longer looking is answered so.
+- **Where bots advertise** (`LfgNearDungeonOnly`, `LfgMaxTravelSeconds`): a bot posts an LFG, LFM or quest-help line for a place only
+  when it could be there soon. Of the bots waiting for one goal, the first in waiting order that is alive and out of combat and that stands
+  in the place's zone or a bordering one, or whose planned trip to the place (the travel planner: known flight paths, the hearthstone and
+  its bind point, mage portals and teleports, ships) takes at most `LfgMaxTravelSeconds`, or can be summoned by a warlock of the same
+  waiting group who knows Ritual of Summoning and is itself in or next to the place's zone, posts it. If none qualifies nothing is posted and
+  the holding bot is logged at Debug once per `LookingForGroupRepeatSeconds`. A bot's answer is worked out at most once per that interval.
+  The same rule picks the dungeon of the idle "LFG" line a bot says when asked to look for a group: the dungeon whose range holds its level
+  (highest first) that it is near enough to. Off, the bot waiting longest always posts, as before.
 - **Quest help** (`QuestHelp`): a bot waiting for partners on an elite quest asks General "anyone for <quest>?" once per
   `QuestHelpRepeatSeconds`.
 - **Trade** (`Trade`): once per `TradeRepeatSeconds`, in Trade in a capital (General `GeneralSharePercent` of the time, and only then

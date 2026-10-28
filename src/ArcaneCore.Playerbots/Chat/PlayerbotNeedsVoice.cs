@@ -68,6 +68,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     private readonly Dictionary<int, RunState> _runs = [];
     private readonly Dictionary<(BattlegroundType Type, uint Instance), BattlegroundState> _battlegrounds = [];
     private readonly Dictionary<string, long> _calls = new(StringComparer.Ordinal);
+    private readonly Dictionary<((PlayerbotGroupGoalKind, uint) Goal, Team Team), long> _holds = [];
     private readonly HashSet<ObjectGuid> _dings = [];
     private readonly Random _random = new();
     private PlayerbotChat? _hooked;
@@ -186,14 +187,13 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         foreach (var list in wanting.Values)
         {
             if (_budget <= 0) return;
-            (PlayerbotSocialBot poster, PlayerbotGroupGoal goal, uint _) = list.OrderBy(w => w.Since).First();
+            if (ChoosePoster(pass, options, list) is not { } chosen) continue;
+            (PlayerbotSocialBot poster, PlayerbotGroupGoal goal, uint _) = chosen;
             Player player = poster.Player;
             if (!player.IsAlive || player.Combat.IsInCombat) continue;
             BotState state = StateOf(poster, pass.NowMs);
             int size = list.Max(w => w.Goal.Size);
-            string? what = goal.Kind == PlayerbotGroupGoalKind.Quest
-                ? QuestTitle(pass, goal.QuestId)
-                : PlayerbotVoiceFacts.DungeonName(goal.MapId, WorldMaps.Of(pass.World).Registry.Find(goal.MapId)?.Name, Random);
+            string? what = LfgSubject(pass, goal);
             if (what is null) continue;
             if (options.QuestHelp && goal.Kind == PlayerbotGroupGoalKind.Quest && pass.NowMs - state.QuestHelpMs >= options.QuestHelpRepeatSeconds * 1000L
                 && Channel(pass, player, BuiltInChannels.GeneralId) is { } general)
@@ -228,6 +228,70 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                     key, sentence, instruction, null, [.. values]))
                 chat.Voice.Post(poster.Id, new PlayerbotVoicePost(PlayerbotVoicePostKind.LookingForGroup, chat.NowMs, what, MinLevel: goal.MinLevel));
         }
+    }
+
+    /// <summary>What an LFG line for <paramref name="goal"/> names: the quest's title, else the dungeon as players call it; null when there is no name.</summary>
+    private string? LfgSubject(PlayerbotSocialPass pass, PlayerbotGroupGoal goal)
+        => goal.Kind == PlayerbotGroupGoalKind.Quest
+            ? QuestTitle(pass, goal.QuestId)
+            : PlayerbotVoiceFacts.DungeonName(goal.MapId, WorldMaps.Of(pass.World).Registry.Find(goal.MapId)?.Name, Random);
+
+    /// <summary>
+    /// The waiting bot that posts for the goal of <paramref name="list"/> (bots of one goal and team): the one waiting longest. Under
+    /// <see cref="PlayerbotVoiceOptions.LfgNearDungeonOnly"/> the first of them in that order that is alive, out of combat and near enough to
+    /// the goal's place (<see cref="PlayerbotLfgLocality.ForPlace"/>, a warlock of the list counting as a summon); null when none is, in which
+    /// case the line is not posted and the holding is logged at Debug once per <see cref="PlayerbotVoiceOptions.LookingForGroupRepeatSeconds"/>.
+    /// </summary>
+    private (PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)? ChoosePoster(PlayerbotSocialPass pass, PlayerbotVoiceOptions options,
+        List<(PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)> list)
+    {
+        var ordered = list.OrderBy(w => w.Since).ToList();
+        if (!options.LfgNearDungeonOnly) return ordered[0];
+
+        (PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)? firstHeld = null;
+        PlayerbotLfgLocalityVerdict heldVerdict = default;
+        foreach (var waiting in ordered)
+        {
+            Player candidate = waiting.Bot.Player;
+            if (!candidate.IsAlive || candidate.Combat.IsInCombat) continue;
+            PlayerbotLfgLocalityVerdict verdict = LocalityOf(pass, options, waiting, list);
+            if (verdict.MayAdvertise) return waiting;
+            if (firstHeld is null)
+            {
+                firstHeld = waiting;
+                heldVerdict = verdict;
+            }
+        }
+
+        if (firstHeld is { } held)
+        {
+            var holdKey = (held.Goal.Key, held.Bot.Player.Team);
+            if (!_holds.TryGetValue(holdKey, out long at) || pass.NowMs - at >= options.LookingForGroupRepeatSeconds * 1000L)
+            {
+                _holds[holdKey] = pass.NowMs;
+                logger.LogDebug("Playerbot {Bot} holds its LFG for {What}: {Trace}", held.Bot.Player.Name, LfgSubject(pass, held.Goal) ?? held.Goal.ToString(), heldVerdict.Trace);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The bot's locality verdict for the goal's place, worked out at most once per <see cref="PlayerbotVoiceOptions.LookingForGroupRepeatSeconds"/> and kept in its state.</summary>
+    private PlayerbotLfgLocalityVerdict LocalityOf(PlayerbotSocialPass pass, PlayerbotVoiceOptions options,
+        (PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since) waiting, List<(PlayerbotSocialBot Bot, PlayerbotGroupGoal Goal, uint Since)> list)
+    {
+        BotState state = StateOf(waiting.Bot, pass.NowMs);
+        var key = waiting.Goal.Key;
+        if (state.HasLocality && state.LocalityKey == key && pass.NowMs - state.LocalityMs < options.LookingForGroupRepeatSeconds * 1000L) return state.Locality;
+
+        PlayerbotGroupGoal goal = waiting.Goal;
+        Player player = waiting.Bot.Player;
+        bool summon = PlayerbotLfgLocality.SummonAvailable(list.Select(w => (w.Bot.Player, w.Bot.Session)), player, goal.MeetingMap, goal.Meeting);
+        state.Locality = PlayerbotLfgLocality.ForPlace(waiting.Bot.Session, player, pass.Bot, goal.MeetingMap, goal.Meeting, summon);
+        state.LocalityKey = key;
+        state.LocalityMs = pass.NowMs;
+        state.HasLocality = true;
+        return state.Locality;
     }
 
     /// <summary>LookingForGroup, or (outside a capital, <see cref="PlayerbotVoiceOptions.GeneralSharePercent"/> of the time, or without it) General.</summary>
@@ -950,6 +1014,8 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
             if (pass.NowMs - state.SeenMs >= 60_000) _battlegrounds.Remove(key);
         foreach ((string key, long at) in _calls.ToArray())
             if (pass.NowMs - at >= 600_000) _calls.Remove(key);
+        foreach (KeyValuePair<((PlayerbotGroupGoalKind, uint) Goal, Team Team), long> hold in _holds.ToArray())
+            if (pass.NowMs - hold.Value >= 3_600_000) _holds.Remove(hold.Key);
         if (_dings.Count > 512) _dings.Clear();
     }
 
@@ -975,6 +1041,10 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         public long LfgMs;
         public long TradeMs;
         public long QuestHelpMs;
+        public bool HasLocality;
+        public (PlayerbotGroupGoalKind, uint) LocalityKey;
+        public long LocalityMs;
+        public PlayerbotLfgLocalityVerdict Locality;
 
         public void ResetFight()
         {

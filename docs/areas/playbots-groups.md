@@ -59,6 +59,20 @@ before. When a quest objective is avoided for strength and a group of 2 to 5 wou
 it as the creature to hunt, so the brain goes on with everything else it can do alone (other quests, grinding, trainers, vendors)
 while it waits.
 
+**Which dungeon.** A quest objective that spawns inside several dungeons (a boss's head, a creature found in more than one instance) makes
+every dungeon that holds it a candidate, and the bot takes the best one, not the first by map id. Each dungeon has a level band: the
+union of its run-catalogue bands (`DungeonRuns`), else the 1.12 recommended levels widened by two levels each side, else the entrance
+level upward (`PlayerbotDungeonFit`). A bot inside a band needs no reason and the highest band wins; a bot outside every band goes only with
+a reason, and then the nearest band wins. The reasons: the quest is not grey for the bot (its level is above the gray level of the bot's
+level), the quest is a key or attunement step of an instance entrance, a creature of the dungeon drops an item of uncommon quality or better
+that the gear scorer rates as an upgrade for the bot, a guildmate or a friend on the bot's own list of the same team already waits for or
+runs the dungeon, or a bot of the same team within `LevelRange` already waits for it. The cheap reasons are looked at first and end the
+search. Farming is a reason in the rule but no bot has a farming or reputation goal yet, so none is produced. A dungeon chosen outside its band
+carries the verdict in the goal's text (`fit=out-of-band 60 vs 15-26: quest`). When every candidate is refused the bot waits for no group and
+the coordinator notes `passes over <dungeon> for quest <id>: 60 is outside 15-26 and has no reason`, once per bot, quest and dungeon every
+ten minutes. `World:Playerbots:Groups:DungeonOutOfBandNeedsReason` (default on) off restores the old reach: every candidate is allowed, still
+ranked band first.
+
 ## Formation
 
 Bots that want the same thing are matched: the same objective creature for open-world content (two quests that kill the same elite
@@ -684,6 +698,7 @@ still be fought, or lead a group of his own. All state is in memory (`PlayerbotG
 | `MinTank` | 1 | 0..5 | tanks a group of three or more needs |
 | `MinHealer` | 1 | 0..5 | healers a group of three or more needs |
 | `FormationTimeoutSeconds` | 300 | 30..86400 | how long a bot waits for partners before it sets the goal aside |
+| `DungeonOutOfBandNeedsReason` | true | | a bot outside a dungeon's level band waits for a group there only with a reason ("Which dungeon", above); off: any candidate dungeon, still ranked in-band first |
 | `RaidsEnabled` | true | | raid quests and raid instances as quest and instance goals (convert to a raid), and world-boss raids; it does not gate raid runs, which only `World:Playerbots:Groups:DungeonRuns:Raids:Enabled` switches |
 | `InvitePlayers` | true | | invite a nearby real player on the group's goal into a short group (opted in to AI chat, or liked) |
 | `InvitePlayerAffinity` | 20 | -100..100 | affinity that lets the bots invite a player without an AI chat opt-in |

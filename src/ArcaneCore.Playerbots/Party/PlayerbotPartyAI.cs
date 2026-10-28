@@ -745,13 +745,46 @@ internal sealed class PlayerbotPartyAI
             {
                 if (_chat is not { } chat || social?.Groups.GetGroup(player.Guid) is not null || !player.IsAlive) return;
                 Chat.BotChatPersona persona = Persona(player, ObjectGuid.Empty);
-                if (persona.Facts?.SuitedDungeon is null) return;
+                if (persona.Facts is null || LfgDungeon(player) is not { } lfgDungeon) return;
+                persona = persona with { Facts = persona.Facts with { SuitedDungeon = lfgDungeon.Name } };
                 var ask = new Chat.BotChatAsk(_botId, player.Guid, persona, player.Guid, player.Name, ChatType.Channel, string.Empty, false, false);
                 if (Chat.PlayerbotBuiltinChat.Pick("post.lfg", ask, null, _random) is { } text)
                     chat.TrySpeak(_botId, player.Guid, Chat.BotSpeech.InChannel(Chat.PlayerbotChannelMembership.LookingForGroup, text, "lfg", Chat.BotSpeechPriority.Normal));
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// The dungeon an LFG line of the bot names (<c>JoinLfg</c>): among the five-player dungeons whose range holds the bot's level
+    /// (<see cref="Chat.PlayerbotDungeons.Fits"/>, highest minimum level first) the first whose entrance the bot is near enough to advertise
+    /// (<see cref="Chat.PlayerbotLfgLocality.ForPlace"/>, no summon; the entrance on the bot's map nearest to it, else any entrance); null
+    /// when none, so nothing is posted. Without <c>LfgNearDungeonOnly</c> the first fitting dungeon is named, as before.
+    /// </summary>
+    private Chat.PlayerbotDungeon? LfgDungeon(Player player)
+    {
+        bool nearOnly = _options.Chat.Voice.LfgNearDungeonOnly;
+        Game.Maps.Templates.WorldMaps maps = Game.Maps.Templates.WorldMaps.Of(_session.World);
+        var at = new Vector3(player.X, player.Y, player.Z);
+        foreach (Chat.PlayerbotDungeon dungeon in Chat.PlayerbotDungeons.All.Where(d => !d.Raid && d.MapId != 0 && Chat.PlayerbotDungeons.Fits(d, player.Level))
+                     .OrderByDescending(d => d.MinLevel))
+        {
+            if (!nearOnly) return dungeon;
+            ArcaneCore.Kernel.WorldData.AreaTriggerTemplate? entrance = Groups.PlayerbotGroupCoordinator.EntranceTo(maps, player.MapId, dungeon.MapId, at);
+            if (entrance is null)
+            {
+                foreach (ArcaneCore.Kernel.WorldData.AreaTriggerTemplate trigger in maps.AreaTriggers)
+                {
+                    if (maps.FindAreaTriggerTeleport(trigger.Id)?.TargetMap != dungeon.MapId) continue;
+                    if (entrance is null || trigger.Id < entrance.Id) entrance = trigger;
+                }
+            }
+
+            if (entrance is null) continue;
+            if (Chat.PlayerbotLfgLocality.ForPlace(_session, player, _options, entrance.MapId, new Vector3(entrance.X, entrance.Y, entrance.Z), false).MayAdvertise) return dungeon;
+        }
+
+        return null;
     }
 
     private (string? Zone, string? Subzone) ZoneNames(Player player)

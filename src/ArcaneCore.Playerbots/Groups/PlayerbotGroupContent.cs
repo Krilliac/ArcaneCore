@@ -51,6 +51,10 @@ internal enum PlayerbotGroupRole : byte
 /// A quest item the goal is for (0: the creature itself): <see cref="ObjectiveEntry"/> is then a creature that drops it, and the goal is
 /// done when each member has the quest's count of the item.
 /// </param>
+/// <param name="Fit">
+/// Why a dungeon outside its level band was chosen (<see cref="PlayerbotDungeonFit"/>'s verdict trace, e.g. <c>out-of-band 60 vs 15-26: quest</c>);
+/// null when the bot is in the band or the goal is not a dungeon. Part of the goal's text (<c>fit=...</c>), so the trace reaches the logs.
+/// </param>
 internal sealed record PlayerbotGroupGoal(
     PlayerbotGroupGoalKind Kind,
     uint QuestId,
@@ -63,7 +67,8 @@ internal sealed record PlayerbotGroupGoal(
     int Size,
     byte MinLevel,
     string Source,
-    uint ObjectiveItem = 0)
+    uint ObjectiveItem = 0,
+    string? Fit = null)
 {
     /// <summary>The matching key (<see cref="PlayerbotGroupGoal"/>).</summary>
     public (PlayerbotGroupGoalKind Kind, uint Value) Key => InInstance ? (Kind, MapId) : (Kind, ObjectiveEntry);
@@ -72,7 +77,7 @@ internal sealed record PlayerbotGroupGoal(
     public bool InInstance => EntranceTrigger != 0;
 
     public override string ToString() => string.Create(CultureInfo.InvariantCulture,
-        $"{Kind.ToString().ToLowerInvariant()}:{(InInstance ? MapId : ObjectiveEntry)} quest={QuestId}{(ObjectiveItem != 0 ? $" item={ObjectiveItem} from={ObjectiveEntry}" : "")} size={Size} source={Source}");
+        $"{Kind.ToString().ToLowerInvariant()}:{(InInstance ? MapId : ObjectiveEntry)} quest={QuestId}{(ObjectiveItem != 0 ? $" item={ObjectiveItem} from={ObjectiveEntry}" : "")} size={Size} source={Source}{(Fit is not null ? $" fit={Fit}" : "")}");
 }
 
 /// <summary>

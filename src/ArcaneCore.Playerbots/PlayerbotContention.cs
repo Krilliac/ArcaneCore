@@ -525,6 +525,10 @@ internal static class PlayerbotDropIndex
     /// </summary>
     internal const float TraceDropRatio = 20f;
 
+    /// <summary>The whole drop index of <paramref name="loot"/> (item entry to its droppers, ascending): the cache <see cref="DroppersOf"/> reads. Read only.</summary>
+    internal static IReadOnlyDictionary<uint, uint[]> Index(LootContent loot)
+        => Cache.GetValue(loot, PlayerbotGroupContent.DropIndex);
+
     /// <summary>The creature entries that drop <paramref name="item"/>, ascending (empty when none does).</summary>
     internal static IReadOnlyList<uint> DroppersOf(LootContent loot, uint item)
         => Cache.GetValue(loot, PlayerbotGroupContent.DropIndex).GetValueOrDefault(item) ?? [];

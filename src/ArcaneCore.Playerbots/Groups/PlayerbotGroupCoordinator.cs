@@ -322,6 +322,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             _waiting.Clear();
             ResetRecruiting();
             _setAside.Clear();
+            ClearFit();
             _failStreaks.Clear();
             _declinedPlayers.Clear();
             _leaderChanges.Clear();
@@ -605,6 +606,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             if (unchecked(now - streak.LastMs) >= FailStreakMemoryMs) _failStreaks.Remove(streakKey);
         foreach ((ObjectGuid key, uint until) in _declinedPlayers)
             if (unchecked((int)(until - now)) <= 0) _declinedPlayers.Remove(key);
+        PruneFit(now);
 
         if (_waiting.Count > 0)
         {
@@ -848,7 +850,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                     int raw = quest.ReqCreatureOrGOId[index];
                     if (raw <= 0 || status.CreatureOrGOCount[index] >= quest.ReqCreatureOrGOCount[index]) continue;
                     uint entry = (uint)raw;
-                    if (GoalFor(player, maps, creatures, quest, entry, flagged) is { } goal && !IsSetAside(bot.BotId, goal.Key)) return goal;
+                    if (GoalFor(bot.BotId, player, maps, creatures, quest, entry, flagged) is { } goal && !IsSetAside(bot.BotId, goal.Key)) return goal;
                 }
 
                 // A quest item dropped only inside instances (a dungeon quest that asks for a boss's head and nothing else): the goal is the
@@ -859,13 +861,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                     uint item = quest.ReqItemId[index];
                     if (item == 0 || quest.ReqItemCount[index] == 0 || player.Inventory.GetItemCount(item) >= quest.ReqItemCount[index]) continue;
                     if (!InstanceOnlyItem(item, creatures, maps)) continue;
-                    IReadOnlyList<uint> droppers = DroppersOf(item);
-                    for (int dIdx = 0; dIdx < droppers.Count; dIdx++)
-                    {
-                        uint dropper = droppers[dIdx];
-                        if (GoalFor(player, maps, creatures, quest, dropper, flagged) is { InInstance: true } goal && !IsSetAside(bot.BotId, goal.Key))
-                            return goal with { ObjectiveItem = item };
-                    }
+                    // Every dropper's dungeon is a candidate; the dungeon fit takes the best of them (InstanceGoalFor).
+                    if (InstanceGoalFor(bot.BotId, player, maps, creatures, quest, DroppersOf(item), flagged) is { } goal && !IsSetAside(bot.BotId, goal.Key))
+                        return goal with { ObjectiveItem = item };
                 }
             }
         }
@@ -936,7 +934,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     /// through an entrance trigger on the bot's continent), on the bot's map when the quest is flagged for a group. Null when one
     /// bot is enough or the place cannot be reached.
     /// </summary>
-    private PlayerbotGroupGoal? GoalFor(Player player, WorldMaps maps, CreatureContent creatures, Quest quest, uint entry, int flagged)
+    private PlayerbotGroupGoal? GoalFor(Guid botId, Player player, WorldMaps maps, CreatureContent creatures, Quest quest, uint entry, int flagged)
     {
         IReadOnlyList<CreatureSpawn> here = creatures.GetSpawns(player.MapId, entry);
         if (here.Count > 0)
@@ -950,24 +948,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 player.MapId, player.MapId, at, 0, at, flagged, quest.MinLevel, "quest");
         }
 
-        (uint MapId, MapTemplate Instance)[] dungeonMaps = GetDungeonMapsWithSpawns(creatures, maps.Registry);
-        for (int i = 0; i < dungeonMaps.Length; i++)
-        {
-            (uint mapId, MapTemplate instance) = dungeonMaps[i];
-            IReadOnlyList<CreatureSpawn> inside = creatures.GetSpawns(mapId, entry);
-            if (inside.Count == 0) continue;
-            if (EntranceTo(maps, player.MapId, mapId, new Vector3(player.X, player.Y, player.Z)) is not { } entrance) continue;
-            if (maps.FindAreaTriggerTeleport(entrance.Id) is not { } teleport) continue;
-            int size = instance.IsRaid ? Math.Max(PlayerbotGroupContent.InstanceGroupSize(instance), flagged)
-                : Math.Max(flagged >= 2 ? Math.Min(flagged, PlayerbotGroupContent.PartySize) : PlayerbotGroupContent.InstanceGroupSize(instance), 2);
-            if (instance.IsRaid && !_options.Groups.RaidsEnabled) return null;
-            CreatureSpawn spawn = NearestSpawn(inside, teleport.TargetX, teleport.TargetY);
-            return new PlayerbotGroupGoal(instance.IsRaid ? PlayerbotGroupGoalKind.Raid : PlayerbotGroupGoalKind.Dungeon, quest.Id, entry,
-                mapId, player.MapId, new Vector3(entrance.X, entrance.Y, entrance.Z), entrance.Id, new Vector3(spawn.X, spawn.Y, spawn.Z),
-                size, Math.Max(teleport.RequiredLevel, quest.MinLevel), "instance");
-        }
-
-        return null;
+        _singleEntry[0] = entry;
+        return InstanceGoalFor(botId, player, maps, creatures, quest, _singleEntry, flagged);
     }
 
     /// <summary>The nearest area trigger on <paramref name="fromMap"/> whose teleport leads into <paramref name="instanceMap"/>.</summary>
