@@ -69,7 +69,8 @@ public interface ISpellGroupResolver
     IReadOnlyCollection<ObjectGuid> GetGroupMembers(Unit unit, bool raid);
 
     /// <summary>
-    /// Whether <paramref name="other"/> is in <c>GetGroupMembers(unit, raid)</c> (so true for the unit itself),
+    /// Whether <paramref name="other"/> is in <c>GetGroupMembers(unit, raid)</c> of the same resolver, answered with the same set (a unit
+    /// is in its own set, except where a resolver redirects it, as <c>OwnerAwareGroupResolver</c> does for a totem: it answers for the totem's owner),
     /// answered without allocating. Implementations should override; the default enumerates the collection.
     /// </summary>
     bool IsMember(Unit unit, ObjectGuid other, bool raid)
