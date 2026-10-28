@@ -404,6 +404,7 @@ public sealed class GhostVisibilityTests
         // Inject an orphan GUID into VisibleObjects that does not exist on the map:
         var orphanGuid = ObjectGuid.WithEntry(HighGuid.Unit, 9999, 999999);
         player.VisibleObjects.Add(orphanGuid);
+        rig.Map.NoteRemoval(); // the visible-set pass is epoch-gated: an orphan is healed after a removal or on the 64th update
         player.NeedsVisibilityUpdate = true;
 
         // Inject a dead creature into AttackersInternal and ThreatenedByInternal without ThreatList entry:
