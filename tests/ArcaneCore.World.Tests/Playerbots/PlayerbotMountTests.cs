@@ -62,6 +62,9 @@ public sealed class PlayerbotMountTests
         spells.Store = new SpellStore([.. spells.Store.All.Where(s => s.Id != MountFixture.MountSpell), new SpellInfo
         {
             Id = MountFixture.MountSpell, Attributes = attributes,
+            // Permanent like the real mount spells. Without a duration the aura gets the 300 ms floor for sub-200 ms durations (SpellAuraHolder), and the
+            // bot dismounts on its own after 300 ms of world time, which a loaded host's test steps outlast.
+            Duration = new SpellDuration(-1, 0, -1),
             Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature }, new(), new()],
         }], [], []);
     }
@@ -292,7 +295,18 @@ public sealed class PlayerbotMountTests
         return result;
     }
 
-    [Trait("Category", "Timing")]
+    /// <summary>The synthetic mount-up is permanent: the bot is still mounted a second of world time later, well past the 300 ms floor of a duration-less aura.</summary>
+    [Fact]
+    public async Task TheMountUp_Lasts_PastTheShortAuraFloor()
+        => await RunAsync(new MountFixture(), async (host, session) =>
+        {
+            (_, bool mounted, _) = await TryMountAsync(host, session);
+            Assert.True(mounted, LastMountState(session));
+            uint at = await host.OnWorldAsync(() => host.World.NowMs);
+            await host.WaitForWorldAsync(() => unchecked((int)(host.World.NowMs - at)) >= 1000, "a second of world time");
+            Assert.True(await host.OnWorldAsync(() => MountService.IsMounted(session.Player!)), await host.OnWorldAsync(() => MountState(host, session, session.Player!)));
+        });
+
     [Fact]
     public async Task LongLegOutdoors_MountsThroughTheRealItemUsePath()
     {
@@ -439,7 +453,6 @@ public sealed class PlayerbotMountTests
         finally { MountServices.Current.Value = null; }
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task MountedBot_DismountsBeforeTalkingToAnNpc()
     {
@@ -586,7 +599,6 @@ public sealed class PlayerbotMountTests
         }));
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task BattleStance_DoesNotStopTheBotFromMountingWithAKnownMountSpell()
     {
@@ -598,7 +610,6 @@ public sealed class PlayerbotMountTests
         });
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task BatchedMountUp_IsUnderwayUntilItsGo_NotAFailedSummon()
     {

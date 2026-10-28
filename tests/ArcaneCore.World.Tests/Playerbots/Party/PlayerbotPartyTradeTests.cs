@@ -157,10 +157,22 @@ public sealed class PlayerbotPartyTradeTests
             await HelpTestKit.UntilAsync(() => StateAsync(player).Result.Opened, "the bot to open the trade window");
         }
 
-        /// <summary>An accept that follows a change by less than a second is bounced by the server (scam prevention), so the player waits it out.</summary>
+        /// <summary>
+        /// The player accepts once the server would not bounce the accept (scam prevention). The server measures from the change it HANDLED, in whole
+        /// seconds of its own clock, so a fixed client-side delay raced a change still queued on the world thread: the change landed late, the accept
+        /// fell in the same second, was bounced, and nobody re-accepted. Instead the client's earlier packets are drained through a barrier (all handled),
+        /// then the accept waits until the trade is gone or the accepting side's last change is outside the window.
+        /// </summary>
         public async Task AcceptAsync(WorldTestClient client)
         {
-            await Task.Delay(1100);
+            string player = ReferenceEquals(client, Master) ? MasterName : ReferenceEquals(client, Stranger) ? StrangerName : throw new ArgumentException("not a scene client", nameof(client));
+            await client.CollectThroughBarrierAsync();
+            // EconomyFeature measures with its TimeProvider (TimeProvider.System unless the host registers one), as unix milliseconds.
+            TimeProvider clock = World.Host.WorldServices.GetService<TimeProvider>() ?? TimeProvider.System;
+            await HelpTestKit.UntilAsync(() => World.Host.OnWorldAsync(() =>
+                Economy.TradeOf(HelpTestKit.Online(World, player)) is not { } trade
+                || !TradeRules.ScamPrevented(trade.SideOf(HelpTestKit.Online(World, player)).LastModifiedMs, clock.GetUtcNow().ToUnixTimeMilliseconds(),
+                    Economy.Options.TradeScamPreventionMs, Economy.Options.TradeScamPreventionWholeSeconds)).Result, "the server's scam-prevention window to pass");
             await client.SendAsync(WorldOpcode.CmsgAcceptTrade, Gold(1));
         }
 
@@ -274,7 +286,6 @@ public sealed class PlayerbotPartyTradeTests
     /// Affinity from the party AI's trade note (<c>TradeCompleted</c>, +AffinityPerTrade): a worthless gift gave the junk-gift farm its affinity.
     /// Now only a gift worth at least <c>GiftMinValueCopper</c> of vendor value counts, summed over the stack. The boundary is the design's default (100).
     /// </summary>
-    [Trait("Category", "Timing")]
     [Theory]
     [InlineData(GreyEntry, 1u, false)]
     [InlineData(CheapEntry, 1u, false)]

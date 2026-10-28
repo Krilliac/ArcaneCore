@@ -47,6 +47,7 @@ public sealed class PlayerbotMountAnomalyTests
         spells.Store = new SpellStore([.. spells.Store.All.Where(s => s.Id != MountFixture.MountSpell), new SpellInfo
         {
             Id = MountFixture.MountSpell, Attributes = attributes,
+            Duration = new SpellDuration(-1, 0, -1), // permanent like a real mount (see PlayerbotMountTests.InstallMountSpell): no 300 ms aura floor
             Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature }, new(), new()],
         }], [], []);
     }
@@ -162,6 +163,7 @@ public sealed class PlayerbotMountAnomalyTests
             {
                 Id = MountFixture.MountSpell,
                 CastTime = new SpellCastTime(3000, 0, 3000),
+                Duration = new SpellDuration(-1, 0, -1), // permanent like a real mount (see PlayerbotMountTests.InstallMountSpell)
                 Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature }, new(), new()],
             }], [], []);
 
