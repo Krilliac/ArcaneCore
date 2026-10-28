@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ArcaneCore.Data.Auth;
@@ -430,10 +431,11 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
     // --- unreachable, secrets, usage -------------------------------------------------------
 
     [Theory]
-    [InlineData(DatabaseProvider.MariaDb, "Server=127.0.0.1;Port=1;Database=arcane;User ID=arcane;Password=" + Marker + ";Connection Timeout=3")]
-    [InlineData(DatabaseProvider.PostgreSql, "Host=127.0.0.1;Port=1;Database=arcane;Username=arcane;Password=" + Marker + ";Timeout=3")]
-    public async Task UnreachableServer_ExitsSix_AndNoOutputHoldsThePasswordOrTheConnectionString(DatabaseProvider provider, string connectionString)
+    [InlineData(DatabaseProvider.MariaDb, "Server=127.0.0.1;Port={port};Database=arcane;User ID=arcane;Password=" + Marker + ";Connection Timeout=3")]
+    [InlineData(DatabaseProvider.PostgreSql, "Host=127.0.0.1;Port={port};Database=arcane;Username=arcane;Password=" + Marker + ";Timeout=3")]
+    public async Task UnreachableServer_ExitsSix_AndNoOutputHoldsThePasswordOrTheConnectionString(DatabaseProvider provider, string connectionStringTemplate)
     {
+        string connectionString = connectionStringTemplate.Replace("{port}", ClosedLoopbackPort.Next().ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal);
         var options = new DatabaseOptions { Provider = provider, ConnectionString = connectionString };
 
         foreach (string[] args in new[]
@@ -482,7 +484,7 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
             Characters = new DatabaseConnectionOptions
             {
                 Provider = DatabaseProvider.MariaDb,
-                ConnectionString = "Server=127.0.0.1;Port=1;Database=c;User ID=u;Password=" + Marker + ";Connection Timeout=3",
+                ConnectionString = $"Server=127.0.0.1;Port={ClosedLoopbackPort.Next()};Database=c;User ID=u;Password=" + Marker + ";Connection Timeout=3",
             },
         };
 
