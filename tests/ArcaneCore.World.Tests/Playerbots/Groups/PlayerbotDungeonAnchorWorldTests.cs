@@ -387,4 +387,68 @@ public sealed class PlayerbotDungeonAnchorWorldTests
         Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == tank.Id);
         Assert.DoesNotContain(world.Coordinator.WaitingBots, w => w.BotId == priest.Id);
     }
+
+    // --- fit-lost finish ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task FormedInstanceGroup_WhoseOnlyQualifyingMemberLeavesWhileTravelling_EndsWithFitLost_BeforeEntering()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], NoOwnGuilds, dungeon: true);
+        // Seed is level 27 mage (in band 15-28, qualifying).
+        // Tank and healer are level 31 warrior and priest (out of band, non-qualifying guildmates).
+        // The level-31 warrior is the tank and leader.
+        var seed = await world.AddBotAsync("Fitseed", Human, Mage, 27, [Fireball], EntranceArea);
+        await AwaitSeedWaitingAsync(world, seed);
+
+        var tank = await world.AddBotAsync("Fittank", Human, Warrior, 31, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Fitprie", Human, Priest, 31, [LesserHeal, Smite], EntranceArea);
+        await MakeGuildAsync(world, "Fitguild", seed, tank, healer);
+
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Travelling)), await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        Assert.Equal(tank.Id, group.LeaderBotId);
+        Assert.Single(group.Members, m => m.Qualifying);
+        Assert.Equal(seed.Id, group.Members.Single(m => m.Qualifying).BotId);
+
+        // While the group is travelling, its only qualifying member leaves.
+        var stopped = await world.Bots.StopAsync(seed.Name);
+        Assert.True(stopped.Success, stopped.Code);
+
+        // The group arrives at the entrance without any qualifying member left and ends with reason "fit-lost".
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Count == 0 || group.Reason == "fit-lost"), await world.TraceAsync());
+        Assert.Equal("fit-lost", group.Reason);
+        Assert.False(group.Succeeded);
+        string[] events = await EventsAsync(world);
+        Assert.Contains(events, e => e.Contains("gave up", StringComparison.Ordinal) && e.Contains("fit-lost", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FormedInstanceGroup_WhoseNonQualifyingMemberLeavesWhileTravelling_ContinuesAndDoesNotEndWithFitLost()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], NoOwnGuilds, dungeon: true);
+        // Seed is level 27 mage (in band 15-28, qualifying).
+        // Tank and healer are level 31 warrior and priest (out of band, non-qualifying guildmates).
+        // The level-31 warrior is the tank and leader.
+        var seed = await world.AddBotAsync("Contseed", Human, Mage, 27, [Fireball], EntranceArea);
+        await AwaitSeedWaitingAsync(world, seed);
+
+        var tank = await world.AddBotAsync("Conttank", Human, Warrior, 31, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Contprie", Human, Priest, 31, [LesserHeal, Smite], EntranceArea);
+        await MakeGuildAsync(world, "Contguild", seed, tank, healer);
+
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State == PlayerbotGroupState.Travelling)), await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        Assert.Equal(tank.Id, group.LeaderBotId);
+
+        // A non-qualifying member (the healer) leaves while travelling.
+        var stopped = await world.Bots.StopAsync(healer.Name);
+        Assert.True(stopped.Success, stopped.Code);
+
+        // The group still holds the qualifying seed, so it does not end with "fit-lost" and advances towards entering.
+        Assert.True(await world.RunUntilAsync(60_000, () => group.State is PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging || group.Reason is not null),
+            await world.TraceAsync());
+        Assert.NotEqual("fit-lost", group.Reason);
+        string[] events = await EventsAsync(world);
+        Assert.DoesNotContain(events, e => e.Contains("fit-lost", StringComparison.Ordinal));
+    }
 }

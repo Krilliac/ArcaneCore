@@ -72,10 +72,10 @@ public sealed class PlayerbotGroupQualifyingMatchTests
     }
 
     [Fact]
-    public void AWindowWhoseFillLeavesOutTheOnlyQualifyingMember_IsSkipped_AndALaterFloorIsUsed()
+    public void AWindowWhoseCandidatesIncludeAQualifyingMember_FormsAPlan_OnTheFirstFloorThatHoldsIt()
     {
-        // Floor 40 holds all four (40..45); Fill takes the three that waited longest (40, 41, 42) and leaves out the qualifying 43.
-        // Floor 41 holds 41, 42 and 43 only: that window's plan has the qualifying member.
+        // Floor 40 holds all four (40..45); Fill reserves one slot for the qualifying 43, so floor 40 succeeds without skipping to floor 41.
+        // Floor 41 is not needed because floor 40's plan includes the qualifying member.
         PlayerbotGroupCandidate[] candidates =
         [
             Bot("Forty", 40, 1, false), Bot("Fortyone", 41, 2, false), Bot("Fortytwo", 42, 3, false), Bot("Fortythree", 43, 4, true),
@@ -83,7 +83,36 @@ public sealed class PlayerbotGroupQualifyingMatchTests
 
         Assert.Equal(["Forty", "Fortyone", "Fortytwo"], Names(Match(candidates, 3, needQualifying: false)!)); // the first window wins without the rule
         PlayerbotGroupPlan plan = Match(candidates, 3, needQualifying: true)!;
-        Assert.Equal(["Fortyone", "Fortythree", "Fortytwo"], Names(plan));
+        Assert.Equal(["Forty", "Fortyone", "Fortythree"], Names(plan));
+    }
+
+    [Fact]
+    public void AWindowWhereOlderNonQualifyingBotsWouldFillEverySlot_IncludesTheQualifyingBot()
+    {
+        // All candidates at level 40: only one floor exists. Without qualifying-aware Fill, the three older non-qualifying bots
+        // fill every slot and Match would return null. With qualifying-aware Fill, the qualifying bot is included.
+        PlayerbotGroupCandidate[] candidates =
+        [
+            Bot("Old1", 40, 1, false), Bot("Old2", 40, 2, false), Bot("Old3", 40, 3, false), Bot("Qual", 40, 4, true),
+        ];
+
+        Assert.Equal(["Old1", "Old2", "Old3"], Names(Match(candidates, 3, needQualifying: false)!));
+        PlayerbotGroupPlan plan = Match(candidates, 3, needQualifying: true)!;
+        Assert.NotNull(plan);
+        Assert.Equal(["Old1", "Old2", "Qual"], Names(plan));
+        Assert.Contains(plan.Members, m => m.Bot.Name == "Qual" && m.Bot.Qualifying);
+    }
+
+    [Fact]
+    public void AWindowWhereNoQualifyingBotExists_ReturnsNull_WhenQualifyingIsNeeded()
+    {
+        PlayerbotGroupCandidate[] candidates =
+        [
+            Bot("Old1", 40, 1, false), Bot("Old2", 40, 2, false), Bot("Old3", 40, 3, false), Bot("Old4", 40, 4, false),
+        ];
+
+        Assert.NotNull(Match(candidates, 3, needQualifying: false));
+        Assert.Null(Match(candidates, 3, needQualifying: true));
     }
 
     [Fact]
@@ -135,6 +164,54 @@ public sealed class PlayerbotGroupQualifyingMatchTests
         var low = new Guid(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         var high = new Guid(2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         Assert.Equal("Low", PlayerbotGroupContent.QualifyingAnchor([Bot("High", 27, 5, true, high), Bot("Low", 27, 5, true, low)])!.Name);
+    }
+
+    // --- The uint.MaxValue "sorts last" sentinel of a real player candidate (Invites, Volunteers) ----------------------------
+
+    private static PlayerbotGroupCandidate Player(string name, byte level, bool qualifying)
+        => Bot(name, level, uint.MaxValue, qualifying, Guid.Empty);
+
+    [Fact]
+    public void ThePlayerSentinel_NeverTakesASlotFromOlderBots_WhenTheBotsFillThePlan()
+    {
+        // Uptime ticks are far below 2^31, so a plain wrap-safe difference would read uint.MaxValue as the longest waiter.
+        PlayerbotGroupCandidate[] candidates = [Player("Human", 30, false), Bot("Botone", 30, 1000, false), Bot("Bottwo", 30, 2000, false)];
+
+        PlayerbotGroupPlan plan = Match(candidates, 2, needQualifying: false)!;
+        Assert.Equal(["Botone", "Bottwo"], Names(plan));
+        Assert.DoesNotContain(plan.Members, m => m.Bot.BotId == Guid.Empty);
+    }
+
+    [Fact]
+    public void ThePlayerSentinel_IsIncludedWhenBotsAreShort_AndTheLeaderIsTheBot()
+    {
+        PlayerbotGroupCandidate[] candidates = [Player("Human", 30, false), Bot("Botone", 30, 5000, false)];
+
+        PlayerbotGroupPlan plan = Match(candidates, 2, needQualifying: false)!;
+        Assert.Equal(["Botone", "Human"], Names(plan));
+        Assert.Equal("Botone", plan.Leader.Name);
+        Assert.NotEqual(Guid.Empty, plan.Leader.BotId);
+    }
+
+    [Fact]
+    public void ThePlayerSentinel_NeverBecomesTheQualifyingAnchor_OverAQualifyingBot()
+    {
+        PlayerbotGroupCandidate[] candidates = [Player("Human", 30, true), Bot("Botone", 30, 5000, true)];
+        Assert.Equal("Botone", PlayerbotGroupContent.QualifyingAnchor(candidates)!.Name);
+        Assert.Equal("Botone", PlayerbotGroupContent.QualifyingAnchor([.. candidates.Reverse()])!.Name);
+        // Alone, the sentinel is still the anchor (it is the only qualifier).
+        Assert.Equal("Human", PlayerbotGroupContent.QualifyingAnchor([Player("Human", 30, true), Bot("Other", 30, 1, false)])!.Name);
+    }
+
+    [Fact]
+    public void ThePlayerSentinel_QualifyingPlayerDoesNotDisplaceOlderBots_WhenQualifyingIsNeeded()
+    {
+        PlayerbotGroupCandidate[] candidates = [Player("Human", 30, true), Bot("Botone", 30, 1000, false), Bot("Bottwo", 30, 2000, true)];
+
+        PlayerbotGroupPlan plan = Match(candidates, 2, needQualifying: true)!;
+        Assert.Equal(["Botone", "Bottwo"], Names(plan));
+        Assert.Contains(plan.Members, m => m.Bot.Name == "Bottwo" && m.Bot.Qualifying);
+        Assert.NotEqual(Guid.Empty, plan.Leader.BotId);
     }
 
     // --- QualifiesAtLevel -------------------------------------------------------------------------------------------------

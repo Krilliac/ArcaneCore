@@ -327,11 +327,20 @@ internal static class PlayerbotGroupContent
             PlayerbotGroupCandidate c = candidates[i];
             if (!c.Qualifying) continue;
             if (oldest is null) { oldest = c; continue; }
-            int by = unchecked((int)(c.NeedSinceMs - oldest.NeedSinceMs));
+            int by = NeedSinceComparer.Instance.Compare(c.NeedSinceMs, oldest.NeedSinceMs);
             if (by < 0 || (by == 0 && c.BotId.CompareTo(oldest.BotId) < 0)) oldest = c;
         }
 
         return oldest;
+    }
+
+    private sealed class NeedSinceComparer : IComparer<uint>
+    {
+        public static readonly NeedSinceComparer Instance = new();
+        // uint.MaxValue is the "sorts last" sentinel a real player candidate carries (Invites, Volunteers): it stays newest, whatever the
+        // wrap-safe difference says; any other pair is ordered by the wrap-safe difference of the millisecond ticks.
+        public int Compare(uint x, uint y)
+            => x == y ? 0 : x == uint.MaxValue ? 1 : y == uint.MaxValue ? -1 : unchecked((int)(x - y));
     }
 
     /// <summary><see cref="Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions, bool)"/> with the tanks and healers given (a dungeon or raid run's quotas).</summary>
@@ -348,7 +357,7 @@ internal static class PlayerbotGroupContent
         {
             PlayerbotGroupCandidate[] window = [.. candidates.Where(c => c.Level >= floor && c.Level <= floor + options.LevelRange)];
             if (window.Length < size) continue;
-            if (Fill(window, size, tanks, healers) is not { } plan) continue;
+            if (Fill(window, size, tanks, healers, needQualifying) is not { } plan) continue;
             // An instance plan needs at least one member that is in band or has a direct reason: try the next floor otherwise.
             if (needQualifying && !plan.Members.Any(m => m.Bot.Qualifying)) continue;
             return plan;
@@ -357,13 +366,14 @@ internal static class PlayerbotGroupContent
         return null;
     }
 
-    private static PlayerbotGroupPlan? Fill(PlayerbotGroupCandidate[] window, int size, int tanks, int healers)
+    private static PlayerbotGroupPlan? Fill(PlayerbotGroupCandidate[] window, int size, int tanks, int healers, bool needQualifying = false)
     {
+        if (needQualifying && !window.Any(c => c.Qualifying)) return null;
         var chosen = new List<(PlayerbotGroupCandidate Bot, PlayerbotGroupRole Role)>();
         var left = new List<PlayerbotGroupCandidate>(window);
         foreach (PlayerbotGroupCandidate tank in left.Where(c => CanTank(c.Class))
                      .OrderByDescending(c => Preferred(c.Class, c.TalentRole) == PlayerbotGroupRole.Tank)
-                     .ThenByDescending(c => c.Level).ThenByDescending(c => c.Gear).ThenBy(c => c.NeedSinceMs).Take(tanks).ToArray())
+                     .ThenByDescending(c => c.Level).ThenByDescending(c => c.Gear).ThenBy(c => c.NeedSinceMs, NeedSinceComparer.Instance).Take(tanks).ToArray())
         {
             chosen.Add((tank, PlayerbotGroupRole.Tank));
             left.Remove(tank);
@@ -372,7 +382,7 @@ internal static class PlayerbotGroupContent
         if (chosen.Count < tanks) return null;
         foreach (PlayerbotGroupCandidate healer in left.Where(c => CanHeal(c.Class))
                      .OrderByDescending(c => Preferred(c.Class, c.TalentRole) == PlayerbotGroupRole.Healer)
-                     .ThenByDescending(c => c.Level).ThenBy(c => c.NeedSinceMs).Take(healers).ToArray())
+                     .ThenByDescending(c => c.Level).ThenBy(c => c.NeedSinceMs, NeedSinceComparer.Instance).Take(healers).ToArray())
         {
             chosen.Add((healer, PlayerbotGroupRole.Healer));
             left.Remove(healer);
@@ -380,7 +390,7 @@ internal static class PlayerbotGroupContent
 
         if (chosen.Count < tanks + healers) return null;
         byte anchor = chosen.Count > 0 ? chosen[0].Bot.Level : left.Max(c => c.Level);
-        foreach (PlayerbotGroupCandidate rest in left.OrderBy(c => c.NeedSinceMs).ThenByDescending(c => c.Bonus).ThenBy(c => Math.Abs(c.Level - anchor))
+        foreach (PlayerbotGroupCandidate rest in left.OrderBy(c => c.NeedSinceMs, NeedSinceComparer.Instance).ThenByDescending(c => c.Bonus).ThenBy(c => Math.Abs(c.Level - anchor))
                      .ThenBy(c => c.BotId).Take(size - chosen.Count).ToArray())
         {
             // A bot that prefers tanking or healing still fills a damage slot when the roles are covered.
@@ -393,9 +403,56 @@ internal static class PlayerbotGroupContent
         }
 
         if (chosen.Count < size) return null;
+
+        if (needQualifying && !chosen.Any(c => c.Bot.Qualifying))
+        {
+            // No qualifying member is otherwise chosen: reserve one slot for the best qualifying candidate in the window that fits a needed role or a damage slot.
+            int damageIndex = chosen.FindLastIndex(c => c.Role == PlayerbotGroupRole.Damage);
+            if (damageIndex >= 0)
+            {
+                PlayerbotGroupCandidate? bestQual = window.Where(c => c.Qualifying)
+                    .OrderBy(c => c.NeedSinceMs, NeedSinceComparer.Instance)
+                    .ThenByDescending(c => c.Bonus)
+                    .ThenBy(c => Math.Abs(c.Level - anchor))
+                    .ThenBy(c => c.BotId)
+                    .FirstOrDefault();
+                if (bestQual is null) return null;
+                chosen[damageIndex] = (bestQual, PlayerbotGroupRole.Damage);
+            }
+            else
+            {
+                int healerIndex = chosen.FindLastIndex(c => c.Role == PlayerbotGroupRole.Healer);
+                PlayerbotGroupCandidate? bestQualHealer = healerIndex >= 0
+                    ? window.Where(c => c.Qualifying && CanHeal(c.Class))
+                        .OrderByDescending(c => Preferred(c.Class, c.TalentRole) == PlayerbotGroupRole.Healer)
+                        .ThenByDescending(c => c.Level)
+                        .ThenBy(c => c.NeedSinceMs, NeedSinceComparer.Instance)
+                        .FirstOrDefault()
+                    : null;
+                if (bestQualHealer is not null)
+                {
+                    chosen[healerIndex] = (bestQualHealer, PlayerbotGroupRole.Healer);
+                }
+                else
+                {
+                    int tankIndex = chosen.FindLastIndex(c => c.Role == PlayerbotGroupRole.Tank);
+                    PlayerbotGroupCandidate? bestQualTank = tankIndex >= 0
+                        ? window.Where(c => c.Qualifying && CanTank(c.Class))
+                            .OrderByDescending(c => Preferred(c.Class, c.TalentRole) == PlayerbotGroupRole.Tank)
+                            .ThenByDescending(c => c.Level)
+                            .ThenByDescending(c => c.Gear)
+                            .ThenBy(c => c.NeedSinceMs, NeedSinceComparer.Instance)
+                            .FirstOrDefault()
+                        : null;
+                    if (bestQualTank is null) return null;
+                    chosen[tankIndex] = (bestQualTank, PlayerbotGroupRole.Tank);
+                }
+            }
+        }
+
         PlayerbotGroupCandidate leader = chosen.Where(c => c.Role == PlayerbotGroupRole.Tank).Select(c => c.Bot)
-            .OrderByDescending(c => c.Level).ThenByDescending(c => c.Gear).ThenBy(c => c.NeedSinceMs).FirstOrDefault()
-            ?? chosen.Select(c => c.Bot).OrderBy(c => c.NeedSinceMs).ThenByDescending(c => c.Level).ThenBy(c => c.BotId).First();
+            .OrderByDescending(c => c.Level).ThenByDescending(c => c.Gear).ThenBy(c => c.NeedSinceMs, NeedSinceComparer.Instance).FirstOrDefault()
+            ?? chosen.Select(c => c.Bot).OrderBy(c => c.NeedSinceMs, NeedSinceComparer.Instance).ThenByDescending(c => c.Level).ThenBy(c => c.BotId).First();
 
         // Raid subgroups: tanks, then healers, then the rest dealt round the subgroups so each holds its share of every role.
         int subgroups = Math.Max(1, (size + PartySize - 1) / PartySize);

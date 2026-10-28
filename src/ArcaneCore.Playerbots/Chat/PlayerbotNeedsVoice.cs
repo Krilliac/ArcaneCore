@@ -250,15 +250,15 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         var ordered = list.OrderBy(w => w.Since).ToList();
         if (!options.LfgNearDungeonOnly) return ordered[0];
 
-        var waiters = new (bool Eligible, Func<PlayerbotLfgLocalityVerdict?> Verdict)[ordered.Count];
-        for (int i = 0; i < ordered.Count; i++)
-        {
-            var waiting = ordered[i];
-            Player candidate = waiting.Bot.Player;
-            waiters[i] = (candidate.IsAlive && !candidate.Combat.IsInCombat, () => LocalityOf(pass, options, waiting, list));
-        }
-
-        PosterChoice choice = ChoosePosterIndex(waiters);
+        PosterChoice choice = ChoosePosterIndex(
+            ordered.Count,
+            (Self: this, pass, options, ordered, list),
+            static (s, i) =>
+            {
+                Player candidate = s.ordered[i].Bot.Player;
+                return candidate.IsAlive && !candidate.Combat.IsInCombat;
+            },
+            static (s, i) => s.Self.LocalityOf(s.pass, s.options, s.ordered[i], s.list));
         if (choice.Index is { } index) return ordered[index];
         // Verdicts left for the next pass (the per-pass cap) are not a holding: nothing is logged and the goal is looked at again.
         if (!choice.Deferred && choice.HeldIndex is { } heldIndex)
@@ -290,13 +290,29 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
     internal static PosterChoice ChoosePosterIndex(IReadOnlyList<(bool Eligible, Func<PlayerbotLfgLocalityVerdict?> Verdict)> waitersInSinceOrder)
     {
         ArgumentNullException.ThrowIfNull(waitersInSinceOrder);
+        return ChoosePosterIndex(
+            waitersInSinceOrder.Count,
+            waitersInSinceOrder,
+            static (w, i) => w[i].Eligible,
+            static (w, i) => w[i].Verdict());
+    }
+
+    /// <summary><see cref="ChoosePosterIndex"/> driven without per-waiter closure allocations.</summary>
+    internal static PosterChoice ChoosePosterIndex<TState>(
+        int count,
+        TState state,
+        Func<TState, int, bool> isEligible,
+        Func<TState, int, PlayerbotLfgLocalityVerdict?> getVerdict)
+    {
+        ArgumentNullException.ThrowIfNull(isEligible);
+        ArgumentNullException.ThrowIfNull(getVerdict);
         bool deferred = false;
         int? heldIndex = null;
         PlayerbotLfgLocalityVerdict heldVerdict = default;
-        for (int i = 0; i < waitersInSinceOrder.Count; i++)
+        for (int i = 0; i < count; i++)
         {
-            if (!waitersInSinceOrder[i].Eligible) continue;
-            if (waitersInSinceOrder[i].Verdict() is not { } verdict)
+            if (!isEligible(state, i)) continue;
+            if (getVerdict(state, i) is not { } verdict)
             {
                 deferred = true;
                 continue;

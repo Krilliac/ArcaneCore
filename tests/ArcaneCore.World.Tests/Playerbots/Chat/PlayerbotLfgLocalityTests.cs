@@ -13,6 +13,7 @@ public sealed class PlayerbotLfgLocalityTests
 {
     // 1.12 AreaTable ids (tests/ThirdParty/WowWorldMessages/src/vanilla/Area.cs).
     private const uint Orgrimmar = 1637, Durotar = 14, Barrens = 17, Feralas = 357, ThousandNeedles = 400, Desolace = 405, Winterspring = 618;
+    private const uint Badlands = 3, SearingGorge = 51, Alterac = 36, WesternPlaguelands = 28;
     private const uint Kalimdor = 1;
     private const int MaxTravel = 600;
 
@@ -33,6 +34,8 @@ public sealed class PlayerbotLfgLocalityTests
     [InlineData(Feralas, Desolace)]
     [InlineData(ThousandNeedles, Feralas)] // symmetric
     [InlineData(Desolace, Feralas)]
+    [InlineData(Badlands, SearingGorge)]
+    [InlineData(Alterac, WesternPlaguelands)]
     public void Adjacent_ForZonesThatBorderEachOther(uint a, uint b) => Assert.True(PlayerbotLfgLocality.Adjacent(a, b));
 
     [Theory]
@@ -42,6 +45,7 @@ public sealed class PlayerbotLfgLocalityTests
     [InlineData(Feralas, Winterspring)]
     [InlineData(Durotar, Feralas)]
     [InlineData(Barrens, Winterspring)]
+    [InlineData(Orgrimmar, Barrens)]
     public void Adjacent_IsFalseForFarApartZones(uint a, uint b) => Assert.False(PlayerbotLfgLocality.Adjacent(a, b));
 
     [Fact]

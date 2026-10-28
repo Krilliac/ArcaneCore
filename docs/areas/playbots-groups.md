@@ -76,7 +76,7 @@ looked at first and end the search, and none is looked for once any candidate du
 group: a plan for an instance goal must hold at least one waiting bot that is in the band or has a direct reason (quest, attunement,
 gear upgrade). This holds for every path that forms an instance group (matching, volunteers, recruits, answers to an LFG line, invited players): the
 matcher skips a window without a qualifying member, the recruiting anchor is the longest-waiting qualifying waiter, and a recruit or a player
-qualifies only when their level is in the dungeon's band. A formed group whose last qualifying member leaves ends as `fit-lost` before it enters. A derived-only waiter is dropped when no qualifying seed remains (checked
+qualifies only when their level is in the dungeon's band while `DungeonOutOfBandNeedsReason` is on (with it off, any level qualifies). A formed group whose last qualifying member leaves ends as `fit-lost` before it enters. A derived-only waiter is dropped when no qualifying seed remains (checked
 every few seconds). Without this, out-of-band bots would seed one another and form the dungeon among themselves. Farming is a reason in the rule but no bot has a farming or reputation goal yet, so none is produced. A dungeon chosen outside its band
 carries the verdict in the goal's text (`fit=out-of-band 60 vs 15-26: quest`). When every candidate is refused the bot waits for no group and
 the coordinator notes `passes over <dungeon> for quest <id>: 60 is outside 15-26 and has no reason`, once per bot, quest and dungeon every
