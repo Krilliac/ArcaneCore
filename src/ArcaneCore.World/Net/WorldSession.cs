@@ -294,10 +294,6 @@ public sealed partial class WorldSession : IPlayerSession
         {
             Close();
             await DrainWriterAsync(writer).ConfigureAwait(false);
-
-            // The 1.12 client uploads its changed settings in a burst as it logs out: queue what the throttle still holds for this account
-            // (the feature writes it from a scope of its own, so this session's scope ending does not matter).
-            Services.GetService<AccountDataFeature>()?.FlushAccount(AccountId);
         }
     }
 
@@ -1016,15 +1012,13 @@ public sealed partial class WorldSession : IPlayerSession
             return false;
         }
 
-        // An earlier session of the account may still hold throttled values: queue and write them before reading, or this session
-        // would serve (and compare against) a stale blob and the earlier session's flush could land after this session's writes.
-        if (Services.GetService<AccountDataFeature>() is { IsAttached: true } accountData)
-        {
-            await accountData.DrainAccountAsync(stored.Id).ConfigureAwait(false);
-        }
-
+        // An earlier session of the account may hold values not yet written (throttled or queued): take them before the read and lay
+        // them over the loaded settings, so this session serves the newest blob. Nothing here waits for the account data queue.
+        AccountDataFeature? accountData = Services.GetService<AccountDataFeature>() is { IsAttached: true } attached ? attached : null;
+        AccountDataFeature.PendingAccountData? pendingData = accountData?.Snapshot(stored.Id);
         AccountSettings settings = await Services.GetRequiredService<IAccountDataStore>()
             .GetAsync(stored.Id).ConfigureAwait(false);
+        AttachAccountData(accountData, stored.Id, settings, pendingData);
 
         lock (_sendLock)
         {
@@ -1142,6 +1136,32 @@ public sealed partial class WorldSession : IPlayerSession
         }
     }
 
+    /// <summary>The account data feature this session is counted in (set once, by <see cref="AttachAccountData"/>; released by <see cref="Close"/>).</summary>
+    private AccountDataFeature? _accountDataFeature;
+
+    private int _accountDataAccountId;
+
+    /// <summary>Count this session in the account's throttle state and overlay the values an earlier session left unwritten. Synchronous, so a session that attached always reaches <see cref="Close"/>.</summary>
+    private void AttachAccountData(AccountDataFeature? feature, int accountId, AccountSettings settings, AccountDataFeature.PendingAccountData? pending)
+    {
+        if (feature is null)
+        {
+            return;
+        }
+
+        lock (_sendLock)
+        {
+            if (_state == SessionState.Closed)
+            {
+                return; // Close already ran and would never release it
+            }
+
+            feature.AttachSession(accountId, settings, pending);
+            _accountDataAccountId = accountId;
+            Volatile.Write(ref _accountDataFeature, feature);
+        }
+    }
+
     private void Close()
     {
         lock (_sendLock)
@@ -1157,6 +1177,10 @@ public sealed partial class WorldSession : IPlayerSession
             _packetCapture = null;
             _outbound.Writer.TryComplete();
         }
+
+        // The 1.12 client uploads its changed settings in a burst as it logs out: the last session of the account queues what the throttle
+        // still holds (the feature writes from a scope of its own, so this session's scope ending does not matter).
+        Interlocked.Exchange(ref _accountDataFeature, null)?.EndSession(_accountDataAccountId);
 
         _registry.Unregister(this);
         DiscardQueuedPackets(); // a closed session retains nothing

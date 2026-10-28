@@ -5,7 +5,9 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using Microsoft.EntityFrameworkCore;
+using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Handlers;
@@ -148,11 +150,89 @@ public sealed class AccountDataPersistenceTests
         await second.CollectAsync();
         await second.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(0u));
         byte[] reply = await second.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+        Assert.Equal("SET a 2", await Inflate(reply));
+        await second.DisposeAsync(); // the last session of the account out queues what the throttle still holds
+        await db.WaitForBlobAsync(accountId, 0, "SET a 2");
+    }
+
+    [Fact]
+    public async Task ASlowWrite_OfOneAccount_DoesNotDelayAnotherAccountsLogin_AndAReconnectStillServesTheNewestBlob()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        await using var host = db.StartHost(LongIntervalMs);
+        byte[] keyA = await host.AddAccountAsync("ADSLOWA");
+        byte[] keyB = await host.AddAccountAsync("ADSLOWB");
+        int accountA = (await host.Accounts.FindByUsernameAsync("ADSLOWA"))!.Id;
+        db.BlockWritesOf(accountA);
+        try
+        {
+            WorldTestClient a1 = await host.ConnectAsync();
+            await a1.AuthenticateAsync("ADSLOWA", keyA);
+            await a1.CollectAsync();
+            await a1.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "SET a slow"));
+            await a1.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
+            await a1.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+            await WorldTestHost.WaitForAsync(() => db.BlockedWrites == 1, "the account's write to be in progress (and stuck)");
+
+            // The queue's consumer is stuck in A's write: no login may wait for it.
+            WorldTestClient b = await host.ConnectAsync();
+            await b.AuthenticateAsync("ADSLOWB", keyB).WaitAsync(TimeSpan.FromSeconds(5));
+
+            // A reconnect of A is not delayed either, and serves the value that is not in the database yet.
+            WorldTestClient a2 = await host.ConnectAsync();
+            await a2.AuthenticateAsync("ADSLOWA", keyA).WaitAsync(TimeSpan.FromSeconds(5));
+            await a2.CollectAsync();
+            await a2.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(0u));
+            byte[] reply = await a2.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+            Assert.Equal("SET a slow", await Inflate(reply));
+        }
+        finally
+        {
+            db.ReleaseWrites();
+        }
+
+        await db.WaitForBlobAsync(accountA, 0, "SET a slow");
+    }
+
+    [Fact]
+    public async Task AGatewayBackedSession_ServesTheNewestBlob_OfAnEarlierSocketSession_AndReleasesTheAccount()
+    {
+        await using var db = await TestDatabase.CreateAsync();
+        await using var host = db.StartHost(LongIntervalMs);
+        AccountDataFeature feature = host.WorldServices.GetRequiredService<AccountDataFeature>();
+        byte[] key = await host.AddAccountAsync("ADGATE");
+        int accountId = (await host.Accounts.FindByUsernameAsync("ADGATE"))!.Id;
+
+        WorldTestClient first = await host.ConnectAsync();
+        await first.AuthenticateAsync("ADGATE", key);
+        await first.CollectAsync();
+        await first.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "SET a 1"));
+        await first.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "SET a 2")); // held inside the interval
+        await first.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
+        await first.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
+
+        await using AsyncServiceScope scope = host.WorldServices.CreateAsyncScope();
+        WorldSession remote = WorldSession.CreateRemote(
+            new NullRemoteOutput(), "127.0.0.1:41002", scope.ServiceProvider, host.Opcodes, host.World, host.Registry, new WorldSessionOptions(), NullLogger.Instance);
+        Assert.Equal(AuthResponseCode.Ok, await remote.AuthenticateRemoteAsync(accountId, "ADGATE", 5875, CancellationToken.None));
+        Assert.Equal("SET a 2", Encoding.ASCII.GetString(remote.Settings.Data[0]!.Data));
+
+        remote.AbandonRemote();
+        await db.WaitForBlobAsync(accountId, 0, "SET a 2");
+        await WorldTestHost.WaitForAsync(() => feature.TrackedAccounts == 0, "the account's throttle state to be released");
+    }
+
+    private static async Task<string> Inflate(byte[] reply)
+    {
         using var zlib = new System.IO.Compression.ZLibStream(new MemoryStream(reply, 8, reply.Length - 8), System.IO.Compression.CompressionMode.Decompress);
         using var text = new MemoryStream();
         await zlib.CopyToAsync(text);
-        Assert.Equal("SET a 2", Encoding.ASCII.GetString(text.ToArray()));
-        await db.WaitForBlobAsync(accountId, 0, "SET a 2");
+        return Encoding.ASCII.GetString(text.ToArray());
+    }
+
+    private sealed class NullRemoteOutput : IRemoteSessionOutput
+    {
+        public bool TrySend(WorldOpcode opcode, ReadOnlySpan<byte> payload) => true;
     }
 
     private static byte[] AccountData(uint type, string text)
@@ -177,6 +257,9 @@ public sealed class AccountDataPersistenceTests
         private readonly string _path;
         private readonly DbContextOptions<CharacterDbContext> _options;
         private int _dataWrites;
+        private int _blockedAccount = -1;
+        private int _blockedWrites;
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private TestDatabase(string path)
         {
@@ -205,8 +288,24 @@ public sealed class AccountDataPersistenceTests
             {
                 services.AddDbContextPool<CharacterDbContext>(builder => builder.UseSqlite(ConnectionString(_path)), poolSize: 1);
                 services.AddScoped<IAccountDataStore>(provider => new CountingStore(
-                    new EfAccountDataStore(provider.GetRequiredService<CharacterDbContext>()), () => Interlocked.Increment(ref _dataWrites)));
+                    new EfAccountDataStore(provider.GetRequiredService<CharacterDbContext>()), async accountId =>
+                    {
+                        Interlocked.Increment(ref _dataWrites);
+                        if (accountId == Volatile.Read(ref _blockedAccount))
+                        {
+                            Interlocked.Increment(ref _blockedWrites);
+                            await _release.Task.WaitAsync(TimeSpan.FromSeconds(60));
+                        }
+                    }));
             });
+
+        /// <summary>Writes in progress that <see cref="BlockWritesOf"/> is holding.</summary>
+        public int BlockedWrites => Volatile.Read(ref _blockedWrites);
+
+        /// <summary>From now on a blob write of this account does not finish until <see cref="ReleaseWrites"/> (a slow or hung database).</summary>
+        public void BlockWritesOf(int accountId) => Volatile.Write(ref _blockedAccount, accountId);
+
+        public void ReleaseWrites() => _release.TrySetResult();
 
         public async Task WaitForBlobAsync(int accountId, int type, string expected)
         {
@@ -256,14 +355,14 @@ public sealed class AccountDataPersistenceTests
         private static string ConnectionString(string path) => $"Data Source={path};Pooling=False";
     }
 
-    private sealed class CountingStore(IAccountDataStore inner, Action onSaveData) : IAccountDataStore
+    private sealed class CountingStore(IAccountDataStore inner, Func<int, Task> beforeSaveData) : IAccountDataStore
     {
         public Task<AccountSettings> GetAsync(int accountId, CancellationToken cancellationToken = default) => inner.GetAsync(accountId, cancellationToken);
 
-        public Task SaveDataAsync(int accountId, int type, AccountDataEntry entry, CancellationToken cancellationToken = default)
+        public async Task SaveDataAsync(int accountId, int type, AccountDataEntry entry, CancellationToken cancellationToken = default)
         {
-            onSaveData();
-            return inner.SaveDataAsync(accountId, type, entry, cancellationToken);
+            await beforeSaveData(accountId);
+            await inner.SaveDataAsync(accountId, type, entry, cancellationToken);
         }
 
         public Task SaveTutorialsAsync(int accountId, IReadOnlyList<uint> tutorials, CancellationToken cancellationToken = default)
