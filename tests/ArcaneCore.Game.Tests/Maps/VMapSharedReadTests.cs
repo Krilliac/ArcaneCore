@@ -460,8 +460,10 @@ public sealed class VMapSharedReadTests(ITestOutputHelper output) : IDisposable
         gate.EnterReadLock(); // a shared reader inside the lock
         try
         {
-            writer = Task.Run(mutate);
-            SpinWait.SpinUntil(() => gate.WaitingWriteCount == 1 || writer.IsCompleted, TimeSpan.FromSeconds(10));
+            // A dedicated thread (the pool may be starved by the other test classes running in parallel); a missing lock would finish at once,
+            // so the generous wait only costs time when the lock is there.
+            writer = Task.Factory.StartNew(mutate, TaskCreationOptions.LongRunning);
+            SpinWait.SpinUntil(() => gate.WaitingWriteCount == 1 || writer.IsCompleted, TimeSpan.FromSeconds(60));
             Assert.False(writer.IsCompleted, $"{mutator} changed the loaded tiles while a shared reader was inside the lock");
             Assert.Equal(1, gate.WaitingWriteCount);
         }
