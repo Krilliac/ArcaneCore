@@ -59,7 +59,7 @@ public sealed class UnreachableClassificationTests
 
     [Theory]
     [MemberData(nameof(TimeoutShapes))]
-    public void ContentImporter_MapsTimeoutShapedFailuresToTheDatabaseExitCode_WithoutThePassword(string shape)
+    public void ContentImporter_DatabaseError_RedactsThePassword_ForTimeoutShapedFailures(string shape)
     {
         Type importer = typeof(ContentImporterCli);
         Type target = importer.GetNestedType("Target", BindingFlags.NonPublic)!;
