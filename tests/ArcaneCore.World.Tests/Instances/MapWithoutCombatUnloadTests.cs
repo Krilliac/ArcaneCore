@@ -70,13 +70,14 @@ public sealed class MapWithoutCombatUnloadTests
             Map map = world.GetMap(33, 101);
             Assert.Null(map.FindUpdater<MapCombat>());
 
+            Assert.Equal(0, attached.TrackedMaps?.Invoke() ?? 0); // a map without combat is not followed (checked before the unload drops it anyway)
+
             world.UnloadMap(map);
             world.RunTick(0);
 
             Assert.True(map.IsUnloaded);
             Assert.Empty(log.Errors);
             Assert.Equal(0, FaultsNaming(feature) - before);
-            Assert.Equal(0, attached.TrackedMaps?.Invoke() ?? 0); // a map without combat is not followed
         }
         finally
         {
