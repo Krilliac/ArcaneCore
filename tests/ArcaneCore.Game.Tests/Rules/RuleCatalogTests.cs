@@ -51,6 +51,9 @@ public sealed class RuleCatalogTests
         { "missing condition", Rule(1) with { ConditionId = 999 }, "rule", "condition_id 999 is not a loaded conditions row" },
         { "cooldown max below min", Rule(1) with { CooldownMinMs = 500, CooldownMaxMs = 100 }, "rule", "cooldown 500..100 ms" },
         { "negative cooldown", Rule(1) with { CooldownMinMs = -1, CooldownMaxMs = 100 }, "rule", "cooldown -1..100 ms" },
+        { "cooldown range up to int.MaxValue", Rule(1) with { CooldownMinMs = 0, CooldownMaxMs = int.MaxValue }, "rule", "cooldown 0..2147483647 ms must be at most 86400000 ms" },
+        { "fixed cooldown of int.MaxValue", Rule(1) with { CooldownMinMs = int.MaxValue, CooldownMaxMs = int.MaxValue }, "rule", "cooldown 2147483647..2147483647 ms must be at most 86400000 ms" },
+        { "cooldown one past the cap", Rule(1) with { CooldownMinMs = 0, CooldownMaxMs = RuleCatalog.MaxCooldownMs + 1 }, "rule", "must be at most 86400000 ms" },
         { "unknown flag", Rule(1) with { Flags = 0x101 }, "rule", "flags 0x101 has unknown bits" },
         { "combat and out of combat", Rule(1) with { Flags = (int)(RuleFlags.Repeatable | RuleFlags.CombatOnly | RuleFlags.OutOfCombatOnly) }, "rule", "never fire" },
     };
@@ -79,6 +82,7 @@ public sealed class RuleCatalogTests
         { "missing list", Action(1, StartList, 8), "param1 (list_id) = 8 is not a rule_list id" },
         { "spell id 0", Action(1, Cast, 0), "param1 (spell_id) = 0 is not a known spell" },
         { "negative delay", RecordOf(1, 5, delayMs: -1), "delay_ms -1 must not be negative" },
+        { "delay of int.MaxValue", RecordOf(1, 5, delayMs: int.MaxValue), "delay_ms 2147483647 must be at most 86400000" },
         { "action flags", RecordOf(1, 5) with { Flags = 1 }, "flags 1 are not defined for actions" },
     };
 

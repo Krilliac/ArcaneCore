@@ -80,7 +80,7 @@ public sealed class RuleTracer
     }
 }
 
-/// <summary>What the evaluator counted since it was created (diagnostics; <c>.rules check</c> prints them for the world's evaluators).</summary>
+/// <summary>What the evaluator counted since it was created (diagnostics for its host; P0 wires no host, so no command prints them yet).</summary>
 public sealed class RuleEvaluatorCounters
 {
     /// <summary>Rule firings whose actions ran.</summary>

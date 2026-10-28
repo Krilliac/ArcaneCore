@@ -68,7 +68,8 @@ public sealed class RuleEvaluator(Random random)
                 state.Fired[bound.Slot] = true;
                 if (rule.CooldownMaxMs > 0)
                 {
-                    int cooldown = rule.CooldownMinMs == rule.CooldownMaxMs ? rule.CooldownMinMs : _random.Next(rule.CooldownMinMs, rule.CooldownMaxMs + 1);
+                    // Drawn in 64 bits: max + 1 in int overflows at int.MaxValue (the catalog caps the range, but the draw must not rely on that).
+                    long cooldown = rule.CooldownMinMs == rule.CooldownMaxMs ? rule.CooldownMinMs : _random.NextInt64(rule.CooldownMinMs, (long)rule.CooldownMaxMs + 1);
                     state.CooldownUntil[bound.Slot] = nowMs + cooldown;
                 }
 

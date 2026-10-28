@@ -100,7 +100,7 @@ public sealed class RuleEvaluatorTests
         var replay = new Random(5);
 
         evaluator.Fire(state, subject, Ping, default, 0);
-        long until = replay.Next(100, 201);
+        long until = replay.NextInt64(100, 201);
         Assert.Equal(1000, state.CooldownOf(catalog.Bind(Kind).ForEvent(Ping)[0].Slot));
         Assert.Equal(until, state.CooldownOf(1));
 
@@ -112,6 +112,39 @@ public sealed class RuleEvaluatorTests
         // until-1: both cool down; until: rule 2 again; 999: rule 2 (its second cooldown ended), rule 1 still cools; 1000: rule 1.
         Assert.Equal([1, 2, 2, 2, 1], subject.Tags);
         Assert.InRange(until, 100, 200);
+    }
+
+    [Fact]
+    public void ACooldownAtTheCap_IsAccepted_AndDrawnWithoutOverflow()
+    {
+        RuleCatalog catalog = Build(Simple(Rule(1) with { CooldownMinMs = 0, CooldownMaxMs = RuleCatalog.MaxCooldownMs }));
+        Assert.Empty(catalog.Rejected);
+        (RuleSubjectState state, TestSubject subject) = Bound(catalog);
+
+        Assert.Equal(1, Evaluator(seed: 3).Fire(state, subject, Ping, default, 10));
+        Assert.InRange(state.CooldownOf(0), 10, 10L + RuleCatalog.MaxCooldownMs);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(int.MaxValue - 1)]
+    [InlineData(int.MaxValue)]
+    public void ACooldownUpToIntMaxValue_NeverThrowsInFire(int min)
+    {
+        // The catalog rejects this by default; a raised cap shows the evaluator's draw itself cannot overflow (it once computed max + 1 in int).
+        RuleCatalog catalog = Build(
+            Simple(Rule(1) with { CooldownMinMs = min, CooldownMaxMs = int.MaxValue }),
+            new RuleBuildOptions { Conditions = RuleTestKit.Conditions, MaxCooldownMs = int.MaxValue });
+        Assert.Empty(catalog.Rejected);
+        (RuleSubjectState state, TestSubject subject) = Bound(catalog);
+        long now = long.MaxValue / 2;
+
+        Assert.Equal(1, Evaluator(seed: 7).Fire(state, subject, Ping, default, now));
+        Assert.InRange(state.CooldownOf(0), now + min, now + int.MaxValue);
+        if (min > 0)
+        {
+            Assert.Equal(0, Evaluator(seed: 7).Fire(state, subject, Ping, default, now + 1));
+        }
     }
 
     [Fact]

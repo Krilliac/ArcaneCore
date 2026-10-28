@@ -17,6 +17,12 @@ public sealed record RuleBuildOptions
 
     /// <summary>Whether a creature entry exists; null = entries are only checked to be positive.</summary>
     public Func<int, bool>? CreatureEntryExists { get; init; }
+
+    /// <summary>The largest <c>cooldown_max_ms</c> a rule may have (default <see cref="RuleCatalog.MaxCooldownMs"/>); larger is rejected.</summary>
+    public int MaxCooldownMs { get; init; } = RuleCatalog.MaxCooldownMs;
+
+    /// <summary>The largest <c>delay_ms</c> an action may have (default <see cref="RuleCatalog.MaxDelayMs"/>); larger is rejected.</summary>
+    public int MaxDelayMs { get; init; } = RuleCatalog.MaxDelayMs;
 }
 
 /// <summary>
@@ -37,6 +43,14 @@ public sealed class RuleCatalog
 
     /// <summary>Rule ids from here up are server-authored (custom); shipped and converted content stays below.</summary>
     public const int CustomIdStart = 1_000_000;
+
+    /// <summary>The default cap on <c>cooldown_max_ms</c>: 24 hours. A longer cooldown is a data error (a rule meant to fire once a day or less
+    /// is a once-only rule), and the cap keeps the drawn cooldown and the subject's clock arithmetic far from overflow.</summary>
+    public const int MaxCooldownMs = 86_400_000;
+
+    /// <summary>The default cap on an action's <c>delay_ms</c>: 24 hours. Delays of one sequence are summed while lists compile, so an
+    /// unbounded delay could overflow that sum.</summary>
+    public const int MaxDelayMs = 86_400_000;
 
     private const RuleFlags KnownFlags = RuleFlags.Repeatable | RuleFlags.CombatOnly | RuleFlags.OutOfCombatOnly | RuleFlags.DebugTrace | RuleFlags.StableShare;
     private const RuleSubjectFlags KnownSubjectFlags = RuleSubjectFlags.Player | RuleSubjectFlags.Bot | RuleSubjectFlags.Creature | RuleSubjectFlags.Elite | RuleSubjectFlags.GameObject;
@@ -414,6 +428,7 @@ public sealed class RuleCatalog
                 : row.ConditionId < 0 ? $"condition_id {row.ConditionId} must not be negative"
                 : row.ConditionId != 0 && options.Conditions.Find((uint)row.ConditionId) is null ? $"condition_id {row.ConditionId} is not a loaded conditions row"
                 : row.CooldownMinMs < 0 || row.CooldownMaxMs < row.CooldownMinMs ? $"cooldown {row.CooldownMinMs}..{row.CooldownMaxMs} ms must satisfy 0 <= min <= max"
+                : row.CooldownMaxMs > options.MaxCooldownMs ? $"cooldown {row.CooldownMinMs}..{row.CooldownMaxMs} ms must be at most {options.MaxCooldownMs} ms"
                 : (flags & ~KnownFlags) != 0 ? $"flags 0x{row.Flags:X} has unknown bits (known: 0x{(int)KnownFlags:X})"
                 : (flags & (RuleFlags.CombatOnly | RuleFlags.OutOfCombatOnly)) == (RuleFlags.CombatOnly | RuleFlags.OutOfCombatOnly) ? "combat-only and out-of-combat-only together never fire"
                 : actionRows.Length == 0 ? "the rule has no rule_action rows (it would fire and do nothing)"
@@ -478,6 +493,12 @@ public sealed class RuleCatalog
             if (row.DelayMs < 0)
             {
                 problem = $"delay_ms {row.DelayMs} must not be negative";
+                return null;
+            }
+
+            if (row.DelayMs > options.MaxDelayMs)
+            {
+                problem = $"delay_ms {row.DelayMs} must be at most {options.MaxDelayMs} ms";
                 return null;
             }
 

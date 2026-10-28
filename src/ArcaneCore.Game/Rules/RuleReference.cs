@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace ArcaneCore.Game.Rules;
@@ -75,6 +76,11 @@ public static class RuleReference
             .Append("fires once until the host resets the subject), the cooldown, the subject filter's columns, the filter's `share_pct`, then ")
             .Append("`chance_pct` and last `condition_id` (an undecidable condition fails closed). Only a rule that passed every check draws a ")
             .Append("cooldown in `cooldown_min_ms..cooldown_max_ms`.\n\n")
+            .Append("`phase_mask` is a positive mask: bit n set means the rule fires in phase n (0..31, the phase `set_phase` sets), and 0 ")
+            .Append("means every phase. It is neither EventAI's mask (cmangos `event_inverse_phase_mask`, where a set bit n means the event does ")
+            .Append("**not** fire in phase n) nor SmartAI's (TrinityCore `event_phase_mask`, where bit n means phase n + 1 and phase 0 matches no ")
+            .Append("non-zero mask); the EventAI and SmartAI converters translate them. `cooldown_max_ms` and an action's `delay_ms` are at most ")
+            .Append(RuleCatalog.MaxCooldownMs.ToString(CultureInfo.InvariantCulture)).Append(" ms (24 hours); a larger value is a rejected row.\n\n")
             .Append("`chance_pct` is a fresh roll per firing. With the StableShare flag it is instead a stable share of subjects, as `share_pct` ")
             .Append("is: a subject is selected when `bucket(seed, rule_id, guid) < pct`, where bucket is two SplitMix64 finalisations of the ")
             .Append("three inputs, mod 100 (`RuleShare.Bucket`). A filter uses its `share_seed`; the StableShare chance uses the filter's seed ")
