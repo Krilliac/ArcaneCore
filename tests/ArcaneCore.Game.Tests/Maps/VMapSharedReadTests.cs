@@ -430,6 +430,66 @@ public sealed class VMapSharedReadTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(0, gate.CurrentReadCount);
     }
 
+    [Fact]
+    public void AScopeOnAnotherLockIsRefused_AndSequentialScopesLeaveNothingHeld()
+    {
+        using Scene scene = Build();
+        ReaderWriterLockSlim a = scene.Vmaps.SharedLock;
+        using var other = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
+
+        using (VMapSharedReader.Enter(a))
+        {
+            Assert.Throws<InvalidOperationException>(() => VMapSharedReader.Enter(other));
+            Assert.Equal(0, other.CurrentReadCount); // refused before anything was taken
+            Assert.Equal(1, a.CurrentReadCount);
+            Assert.True(VMapSharedReader.HoldsLock(a));
+            Assert.False(VMapSharedReader.HoldsLock(other));
+            Assert.True(VMapSharedReader.Active);
+        }
+
+        Assert.Equal(0, a.CurrentReadCount);
+        Assert.False(VMapSharedReader.HoldsLock(a));
+        Assert.False(VMapSharedReader.Active);
+
+        using (VMapSharedReader.Enter(other)) // one after the other is fine
+        {
+            Assert.Equal(1, other.CurrentReadCount);
+            Assert.True(VMapSharedReader.HoldsLock(other));
+            Assert.False(VMapSharedReader.HoldsLock(a));
+        }
+
+        Assert.Equal(0, other.CurrentReadCount);
+        Assert.False(VMapSharedReader.HoldsLock(other));
+        using (VMapSharedReader.Enter(a)) // and a re-entry on A after B must not throw
+        {
+            Assert.Equal(1, a.CurrentReadCount);
+        }
+
+        Assert.Equal(0, a.CurrentReadCount);
+    }
+
+    [Fact]
+    public void AnExceptionInsideAScope_RestoresTheModeTheLockAndTheReason()
+    {
+        using Scene scene = Build();
+        ReaderWriterLockSlim gate = scene.Vmaps.SharedLock;
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            using (VMapSharedReader.Enter(gate))
+            {
+                VMapSharedReader.Abort(SharedDrapeAbort.MeshNotShared);
+                throw new InvalidOperationException("boom");
+            }
+        });
+
+        Assert.False(VMapSharedReader.Active);
+        Assert.Equal(SharedDrapeAbort.None, VMapSharedReader.Reason);
+        Assert.False(VMapSharedReader.HoldsLock(gate));
+        Assert.Equal(0, gate.CurrentReadCount);
+        Assert.NotNull(Shared(scene.Collision, StartA, LegA, Models(), out _)); // the next drape on this thread works
+    }
+
     // --- 4b. every change of the loaded tiles takes the write side of the lock a shared read holds ---------------------------------
 
     [Theory]
@@ -464,6 +524,7 @@ public sealed class VMapSharedReadTests(ITestOutputHelper output) : IDisposable
             // so the generous wait only costs time when the lock is there.
             writer = Task.Factory.StartNew(mutate, TaskCreationOptions.LongRunning);
             SpinWait.SpinUntil(() => gate.WaitingWriteCount == 1 || writer.IsCompleted, TimeSpan.FromSeconds(60));
+            Assert.False(writer.IsFaulted, writer.Exception?.ToString());
             Assert.False(writer.IsCompleted, $"{mutator} changed the loaded tiles while a shared reader was inside the lock");
             Assert.Equal(1, gate.WaitingWriteCount);
         }

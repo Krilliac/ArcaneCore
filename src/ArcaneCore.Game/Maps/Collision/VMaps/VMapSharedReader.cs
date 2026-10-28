@@ -29,7 +29,7 @@ public enum SharedDrapeAbort
 public static class SharedDrapeStats
 {
     // One init-only array rather than writable static fields (StaticMutableStateAuditTests): [0] hits, [1] fallbacks, [2 + reason] per reason.
-    private static readonly long[] s_counts = new long[2 + 6];
+    private static readonly long[] s_counts = new long[2 + Enum.GetValues<SharedDrapeAbort>().Length];
 
     /// <summary>Drapes answered outside the gate.</summary>
     public static long Hits => Interlocked.Read(ref s_counts[0]);
@@ -118,9 +118,15 @@ internal static class VMapSharedReader
         private readonly ReaderWriterLockSlim? _wasHeld;
 
         // Nesting: a scope opened inside another on the same thread and the same lock joins the outer one (it does not take the lock again,
-        // which the non-recursive lock would refuse) and restores the outer state when it ends; the outer scope releases the lock.
+        // which the non-recursive lock would refuse) and restores the outer state when it ends; the outer scope releases the lock. Only one
+        // lock is tracked per thread, so a nested scope on a different lock is refused up front, before anything is taken or changed.
         internal Scope(bool wasActive, SharedDrapeAbort wasAbort, ReaderWriterLockSlim? vmapLock)
         {
+            if (vmapLock is not null && t_heldLock is not null && !ReferenceEquals(t_heldLock, vmapLock))
+            {
+                throw new InvalidOperationException("A shared drape scope cannot nest inside one holding a different vmap lock.");
+            }
+
             _wasActive = wasActive;
             _wasAbort = wasAbort;
             _wasHeld = t_heldLock;
