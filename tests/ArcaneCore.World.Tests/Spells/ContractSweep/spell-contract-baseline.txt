@@ -1638,9 +1638,7 @@ a.unhandled-other	29280	script:ScriptEffect
 a.unhandled-other	29281	script:ScriptEffect
 a.unhandled-other	29282	script:ScriptEffect
 a.unhandled-other	29283	script:ScriptEffect
-a.unhandled-other	29284	dummy:Dummy
 a.unhandled-other	29285	script:ScriptEffect
-a.unhandled-other	29286	dummy:Dummy
 a.unhandled-other	29287	script:ScriptEffect
 a.unhandled-other	29288	dummy:Dummy
 a.unhandled-other	29313	script:ScriptEffect
