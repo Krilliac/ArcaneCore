@@ -12296,7 +12296,10 @@ World.Playerbots.Battlegrounds.QueueChancePerMinute = 0.05
 #                     default cap of 20 gets 80, so bots alone can start it and fill it to 40 per
 #                     team. A type whose minimum the cap covers keeps the cap. Off: such a type is
 #                     refused for bots (CapBelowMinimum) instead of queues that can never pop. The
-#                     retail template values are never changed.
+#                     retail template values are never changed. A raise is logged as a warning
+#                     naming each raised type and its new cap. Upgrade note: this replaces the
+#                     former RaiseCapToMatchMinimum, which raised the cap only to 2 x
+#                     MinPlayersPerTeam; set it to false to keep a low cap.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false

@@ -35,6 +35,8 @@ public sealed class PlayerbotBattlegroundOptions
     /// default) to 2 x <c>MaxPlayersPerTeam</c>, for example Alterac Valley (20 per team minimum, 40 maximum) against the default cap of 20
     /// gets 80, so bots alone can start it and fill it to 40 per team. A type whose minimum the cap covers keeps the cap. Off: such a type
     /// is refused for bots (<c>CapBelowMinimum</c>) instead of queues that can never pop. The retail template values are never changed.
+    /// A raise is logged as a warning naming each raised type and its new cap. Upgrade note: this replaces the former RaiseCapToMatchMinimum,
+    /// which raised the cap only to 2 x <c>MinPlayersPerTeam</c>; set it to false to keep a low cap.
     /// </summary>
     public bool RaiseCapToFillTemplate { get; set; } = true;
 

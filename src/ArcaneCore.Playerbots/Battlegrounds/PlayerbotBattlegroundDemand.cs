@@ -16,9 +16,9 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// </para>
 /// <para>
 /// <b>Open slots.</b> The server invites queued players into a match of the (type, bracket) that is preparing or running and has free
-/// slots (vmangos <c>FillPlayersToBG</c>; <c>BattlegroundQueue.CheckFreeSlots</c>), and a leaver frees a slot again. The free slots of
-/// each team that no real player waiting in the queue and no bot already on its way would take are <see cref="FillNeed"/>; those bots
-/// are chosen first and skip the chance roll, under the caps.
+/// slots (vmangos <c>FillPlayersToBG</c>; <c>BattlegroundQueue.CheckFreeSlots</c>), and a leaver frees a slot again. For a type whose cap
+/// is raised, the free slots of each team that no real player waiting in the queue and no bot already on its way would take are
+/// <see cref="FillNeed"/>; those bots are chosen first and skip the chance roll, under the caps. Other types fill by the roll alone.
 /// </para>
 /// <para>
 /// <b>Real players.</b> With <c>PreferFillingRealPlayerQueues</c>, a (type, bracket) a real player waits in needs bots until both teams
@@ -73,8 +73,6 @@ internal sealed class PlayerbotBattlegroundDemand
 
     internal int BotsPending(BattlegroundType type, int bracket, Team team) => _pending.GetValueOrDefault((type, bracket, Slot(team)));
 
-    /// <summary>Whether any preparing or running match has an open slot.</summary>
-    internal bool AnyOpenSlots => _open.Count > 0;
 
     /// <summary>A running match of this (type, bracket) already holds the cap in bots and still has room: a new queuer would be put into it.</summary>
     internal void BlockBracket(BattlegroundType type, int bracket) => _blocked.Add((type, bracket));
@@ -146,15 +144,31 @@ internal sealed class PlayerbotBattlegroundDemand
     /// <summary>
     /// The bots <paramref name="team"/> still needs to fill the open slots of the (type, bracket)'s preparing or running matches:
     /// <c>max(0, open(team) - realWaiting(team) - pending(team))</c>, so a real player waiting in the queue keeps the slot the server
-    /// would invite them into. Zero unless bots queue on their own (<paramref name="queueChancePerMinute"/> above 0) or, with
-    /// <paramref name="preferFilling"/>, a real player plays in such a match.
+    /// would invite them into. Only for a type whose cap <c>RaiseCapToFillTemplate</c> raises (<see cref="IsRaised"/>: Alterac Valley at the
+    /// default cap; Warsong Gulch and Arathi Basin keep the chance roll alone). A match a real player plays in is filled only with
+    /// <c>PreferFillingRealPlayerQueues</c>; a match of bots only while bots queue on their own (<c>QueueChancePerMinute</c> above 0).
     /// </summary>
-    internal int FillNeed(BattlegroundType type, int bracket, Team team, float queueChancePerMinute, bool preferFilling)
+    internal int FillNeed(BattlegroundType type, int bracket, Team team, BattlegroundTemplate template, PlayerbotBattlegroundOptions options)
     {
+        ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(options);
+        if (!IsRaised(template, options.MaxBotsPerBattleground, options.RaiseCapToFillTemplate)) return 0;
         int open = OpenSlots(type, bracket, team);
         if (open <= 0) return 0;
-        if (!(queueChancePerMinute > 0f) && !(preferFilling && _openWithReal.Contains((type, bracket)))) return 0;
+        bool holdsReal = _openWithReal.Contains((type, bracket));
+        if (holdsReal ? !options.PreferFillingRealPlayerQueues : !(options.QueueChancePerMinute > 0f)) return 0;
         return Math.Max(0, open - RealWaiting(type, bracket, team) - BotsPending(type, bracket, team));
+    }
+
+    /// <summary>Whether some (type, bracket, team) has a <see cref="FillNeed"/> above 0: the coordinator then looks over every free bot at the scan.</summary>
+    internal bool AnyFillNeed(Func<BattlegroundType, BattlegroundTemplate?> templates, PlayerbotBattlegroundOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(templates);
+        ArgumentNullException.ThrowIfNull(options);
+        if (_open.Count == 0 || !options.Enabled) return false;
+        foreach ((BattlegroundType type, int bracket, int team) in _open.Keys)
+            if (templates(type) is { } template && FillNeed(type, bracket, team == Slot(Team.Horde) ? Team.Horde : Team.Alliance, template, options) > 0) return true;
+        return false;
     }
 
     /// <summary>
@@ -204,7 +218,7 @@ internal sealed class PlayerbotBattlegroundDemand
             if (RealNeed(options.PreferFillingRealPlayerQueues, choice.Type, choice.Bracket, team, template) > 0
                 && (RealWaiting(choice.Type, choice.Bracket) > 0 || options.QueueChancePerMinute > 0f))
                 return choice;
-            if (FillNeed(choice.Type, choice.Bracket, team, options.QueueChancePerMinute, options.PreferFillingRealPlayerQueues) > 0) return choice;
+            if (FillNeed(choice.Type, choice.Bracket, team, template, options) > 0) return choice;
             open.Add(choice);
         }
 

@@ -170,6 +170,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             _refusedMasters.Clear();
             _stalledMasters.Clear();
             _scanElapsed = ScanMs;
+            _raiseWarned = null;
             _world = null;
         }
     }
@@ -376,12 +377,41 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     private string RaisedCaps(PlayerbotBattlegroundOptions o)
     {
         if (Feature()?.Manager is not { } manager) return string.Empty;
-        var raised = new List<string>();
+        string raised = RaisedList(manager, o);
+        return raised.Length == 0 ? string.Empty : $" ({raised} to fill the template)";
+    }
+
+    /// <summary>Each loaded type whose cap is raised and its new cap, e.g. <c>AlteracValley raised to 80</c>; empty when none is.</summary>
+    private static string RaisedList(BattlegroundManager manager, PlayerbotBattlegroundOptions o)
+    {
+        List<string>? raised = null;
         foreach (BattlegroundType type in PlayerbotBattlegroundBrackets.Types)
             if (manager.TemplateOf(type) is { } template && PlayerbotBattlegroundDemand.IsRaised(template, o.MaxBotsPerBattleground, o.RaiseCapToFillTemplate))
-                raised.Add(string.Create(CultureInfo.InvariantCulture,
+                (raised ??= []).Add(string.Create(CultureInfo.InvariantCulture,
                     $"{type} raised to {PlayerbotBattlegroundDemand.EffectiveCap(template, o.MaxBotsPerBattleground, o.RaiseCapToFillTemplate)}"));
-        return raised.Count == 0 ? string.Empty : $" ({string.Join(", ", raised)} to fill the template)";
+        return raised is null ? string.Empty : string.Join(", ", raised);
+    }
+
+    /// <summary>The configured cap and the raised types last warned about (<see cref="WarnRaisedCaps"/>); null before the first scan.</summary>
+    private (int Cap, string Raised)? _raiseWarned;
+
+    /// <summary>The warnings logged about a configured cap that <c>RaiseCapToFillTemplate</c> overrides (status and tests).</summary>
+    internal int RaiseWarnings { get; private set; }
+
+    /// <summary>
+    /// One warning when the configured <c>MaxBotsPerBattleground</c> is overridden for some type: at the first scan after the world starts
+    /// (the templates are loaded), and again whenever a <c>.reload config</c> (or a template reload) changes the cap or which types are
+    /// raised. A reload that changes neither does not repeat it.
+    /// </summary>
+    private void WarnRaisedCaps(BattlegroundManager manager, PlayerbotBattlegroundOptions o)
+    {
+        string raised = RaisedList(manager, o);
+        if (_raiseWarned is { } last && last.Cap == o.MaxBotsPerBattleground && last.Raised == raised) return;
+        _raiseWarned = (o.MaxBotsPerBattleground, raised);
+        if (raised.Length == 0) return;
+        RaiseWarnings++;
+        logger.LogWarning("World:Playerbots:Battlegrounds:MaxBotsPerBattleground = {Cap} is below twice a template's MinPlayersPerTeam; RaiseCapToFillTemplate overrides it: {Raised} (2 x MaxPlayersPerTeam). Set RaiseCapToFillTemplate = false to keep the cap (such a type is then refused for bots).",
+            o.MaxBotsPerBattleground, raised);
     }
 
     // --- the queue machine, every tick ----------------------------------------------------------------------------------
@@ -752,13 +782,16 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         AssignRoles(feature);
 
         PlayerbotBattlegroundOptions options = _options.Battlegrounds;
+        WarnRaisedCaps(manager, options);
         float chance = PlayerbotBattlegroundDemand.ChancePerThink(options.QueueChancePerMinute, sinceMs);
-        // Also every free bot is looked over while a preparing or running match has a slot open (Pick decides whether it fills it).
+        // Also every free bot is looked over while a raised type's preparing or running match has a slot open that bots should fill.
         bool anyRealWaiting = _demand.AnyRealWaiting || (options.PreferFillingRealPlayerQueues && options.QueueChancePerMinute > 0f && _demand.AnyBotWaiting)
-            || _demand.AnyOpenSlots;
+            || _demand.AnyFillNeed(manager.TemplateOf, options);
         bool checkedRefusalsThisScan = false;
+        // The same test as PlayerbotBattlegroundDemand.IsRaised: the cap covers 2 x min(MinPlayersPerTeam, MaxPlayersPerTeam), in long.
         Func<BattlegroundType, bool> capCoversMinimum = type => options.RaiseCapToFillTemplate || options.MaxBotsPerBattleground <= 0
-            || manager.TemplateOf(type) is not { } template || options.MaxBotsPerBattleground >= 2 * (int)template.MinPlayersPerTeam;
+            || manager.TemplateOf(type) is not { } template
+            || options.MaxBotsPerBattleground >= 2L * Math.Min(template.MinPlayersPerTeam, template.MaxPlayersPerTeam);
         foreach (PlayerbotBattlegroundBot bot in _orderedBots)
         {
             if (_tracked.ContainsKey(bot.BotId) || !bot.Free || !bot.Session.IsManaged || bot.Session.Player is not { IsInWorld: true } player) continue;

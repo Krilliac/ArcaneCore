@@ -102,7 +102,7 @@ Bots found guilds, fill and rank them, say a short line in guild chat and (off b
 (`World:Playerbots:Social`, live): `docs/areas/playbots-social.md`.
 Free bots near a battlemaster of their faction queue for Warsong Gulch, Arathi Basin and Alterac Valley (Arathi Basin and Alterac Valley
 where the server routes their banners, as it does the classic-db goobers; Alterac Valley's 20-per-team minimum is met and its 40 per
-team filled by `RaiseCapToFillTemplate`), fill the open slots of a preparing or running match, fill the queues real players wait in, play the objective (the enemy flag, the node banners with spell 21651) and leave when the match ends:
+team filled by `RaiseCapToFillTemplate`, which also has bots fill the open slots of a preparing or running Alterac Valley), fill the queues real players wait in, play the objective (the enemy flag, the node banners with spell 21651) and leave when the match ends:
 `PlayerbotBattlegroundCoordinator` and `PlayerbotBattlegroundAI` (`World:Playerbots:Battlegrounds`, live; `.playerbot battlegrounds`):
 `docs/areas/playbots-battlegrounds.md`.
 

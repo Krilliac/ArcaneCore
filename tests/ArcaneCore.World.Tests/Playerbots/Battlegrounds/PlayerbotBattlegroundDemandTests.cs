@@ -377,20 +377,33 @@ public sealed class PlayerbotBattlegroundDemandTests
 
     // --- open slots of a preparing or running match (the server's FillPlayersToBG invites queued players into them) ---
 
-    /// <summary>A running AV match of <paramref name="botsPerTeam"/> bots and <paramref name="openPerTeam"/> open slots per team, as the coordinator's snapshot records it.</summary>
-    private static PlayerbotBattlegroundDemand RunningAv(int botsPerTeam, int openPerTeam, bool holdsReal = false)
+    /// <summary>A running match of <paramref name="botsPerTeam"/> bots and <paramref name="openPerTeam"/> open slots per team, as the coordinator's snapshot records it.</summary>
+    private static PlayerbotBattlegroundDemand Running(BattlegroundType type, int bracket, int botsPerTeam, int openPerTeam, bool holdsReal = false)
     {
         var demand = new PlayerbotBattlegroundDemand();
-        demand.AddMatchInBracket(BattlegroundType.AlteracValley, 0);
+        demand.AddMatchInBracket(type, bracket);
         for (int i = 0; i < botsPerTeam; i++)
         {
-            demand.AddBotCommitted(BattlegroundType.AlteracValley, 0, Team.Alliance);
-            demand.AddBotCommitted(BattlegroundType.AlteracValley, 0, Team.Horde);
+            demand.AddBotCommitted(type, bracket, Team.Alliance);
+            demand.AddBotCommitted(type, bracket, Team.Horde);
         }
 
-        demand.AddOpenSlots(BattlegroundType.AlteracValley, 0, Team.Alliance, openPerTeam, holdsReal);
-        demand.AddOpenSlots(BattlegroundType.AlteracValley, 0, Team.Horde, openPerTeam, holdsReal);
+        demand.AddOpenSlots(type, bracket, Team.Alliance, openPerTeam, holdsReal);
+        demand.AddOpenSlots(type, bracket, Team.Horde, openPerTeam, holdsReal);
         return demand;
+    }
+
+    private static PlayerbotBattlegroundDemand RunningAv(int botsPerTeam, int openPerTeam, bool holdsReal = false)
+        => Running(BattlegroundType.AlteracValley, 0, botsPerTeam, openPerTeam, holdsReal);
+
+    private static int AvNeed(PlayerbotBattlegroundDemand demand, Team team, PlayerbotBattlegroundOptions options)
+        => demand.FillNeed(BattlegroundType.AlteracValley, 0, team, Av, options);
+
+    private static PlayerbotBattlegroundOptions WithChance(float chance, bool prefer = true)
+    {
+        PlayerbotBattlegroundOptions options = Options(20, prefer);
+        options.QueueChancePerMinute = chance;
+        return options;
     }
 
     [Fact]
@@ -398,6 +411,7 @@ public sealed class PlayerbotBattlegroundDemandTests
     {
         PlayerbotBattlegroundDemand demand = RunningAv(botsPerTeam: 20, openPerTeam: 20);
         PlayerbotBattlegroundOptions options = Options(20);
+        Assert.True(demand.AnyFillNeed(AvTemplates, options));
         foreach (Team team in new[] { Team.Alliance, Team.Horde })
         {
             int added = 0;
@@ -410,44 +424,94 @@ public sealed class PlayerbotBattlegroundDemandTests
 
             Assert.Equal(20, added);
             Assert.Equal(40, demand.BotsCommitted(BattlegroundType.AlteracValley, 0, team));
-            Assert.Equal(0, demand.FillNeed(BattlegroundType.AlteracValley, 0, team, options.QueueChancePerMinute, true));
+            Assert.Equal(0, AvNeed(demand, team, options));
         }
 
         Assert.Equal(80, demand.BotsCommitted(BattlegroundType.AlteracValley, 0));
+        Assert.False(demand.AnyFillNeed(AvTemplates, options));
     }
 
     [Fact]
     public void OpenSlots_ARealPlayerWaiting_KeepsTheirSlot_BotsTakeOnlyTheRest()
     {
+        PlayerbotBattlegroundOptions options = Options(20);
+
         // One open Alliance slot after a leaver, one real Alliance player waiting: the server invites the player, so no bot goes.
-        PlayerbotBattlegroundDemand demand = RunningAv(botsPerTeam: 40, openPerTeam: 0);
+        PlayerbotBattlegroundDemand demand = RunningAv(botsPerTeam: 39, openPerTeam: 0);
         demand.AddOpenSlots(BattlegroundType.AlteracValley, 0, Team.Alliance, 1, holdsRealPlayer: false);
         demand.AddRealWaiting(BattlegroundType.AlteracValley, 0, Team.Alliance);
-        Assert.Equal(0, demand.FillNeed(BattlegroundType.AlteracValley, 0, Team.Alliance, 0.05f, true));
+        Assert.Equal(0, AvNeed(demand, Team.Alliance, options));
+        Assert.Null(demand.Pick(AvChoice, Team.Alliance, AvTemplates, options, chanceHit: false, pick: 0));
 
         // Two open slots, one real player: one bot.
         demand.AddOpenSlots(BattlegroundType.AlteracValley, 0, Team.Alliance, 1, holdsRealPlayer: false);
-        Assert.Equal(1, demand.FillNeed(BattlegroundType.AlteracValley, 0, Team.Alliance, 0.05f, true));
+        Assert.Equal(1, AvNeed(demand, Team.Alliance, options));
 
         // A bot already on its way takes it.
         demand.AddBotPending(BattlegroundType.AlteracValley, 0, Team.Alliance);
-        Assert.Equal(0, demand.FillNeed(BattlegroundType.AlteracValley, 0, Team.Alliance, 0.05f, true));
-        Assert.Equal(0, demand.FillNeed(BattlegroundType.AlteracValley, 0, Team.Horde, 0.05f, true)); // Horde has no open slot
+        Assert.Equal(0, AvNeed(demand, Team.Alliance, options));
+        Assert.Equal(0, AvNeed(demand, Team.Horde, options)); // Horde has no open slot
     }
 
     [Fact]
-    public void OpenSlots_WithTheChanceOff_AreFilledOnlyForAMatchARealPlayerPlaysIn()
+    public void OpenSlots_OfABotsOnlyMatch_AreFilledOnlyWhileBotsQueueOnTheirOwn()
     {
         PlayerbotBattlegroundDemand botsOnly = RunningAv(botsPerTeam: 20, openPerTeam: 20);
-        Assert.Equal(0, botsOnly.FillNeed(BattlegroundType.AlteracValley, 0, Team.Horde, 0f, true));
-        PlayerbotBattlegroundOptions off = Options(20);
-        off.QueueChancePerMinute = 0f;
-        Assert.Null(botsOnly.Pick(AvChoice, Team.Horde, AvTemplates, off, chanceHit: false, pick: 0));
+        Assert.Equal(20, AvNeed(botsOnly, Team.Horde, WithChance(1e-9f)));
+        Assert.Equal(0, AvNeed(botsOnly, Team.Horde, WithChance(0f)));
+        Assert.False(botsOnly.AnyFillNeed(AvTemplates, WithChance(0f)));
+        Assert.Null(botsOnly.Pick(AvChoice, Team.Horde, AvTemplates, WithChance(0f), chanceHit: false, pick: 0));
+    }
 
+    [Fact]
+    public void OpenSlots_OfAMatchARealPlayerPlaysIn_AreFilledOnlyWithPreferFillingRealPlayerQueues()
+    {
         PlayerbotBattlegroundDemand withReal = RunningAv(botsPerTeam: 20, openPerTeam: 20, holdsReal: true);
-        Assert.Equal(20, withReal.FillNeed(BattlegroundType.AlteracValley, 0, Team.Horde, 0f, true));
-        Assert.Equal(0, withReal.FillNeed(BattlegroundType.AlteracValley, 0, Team.Horde, 0f, false)); // PreferFillingRealPlayerQueues off
-        Assert.Equal(AvChoice[0], withReal.Pick(AvChoice, Team.Horde, AvTemplates, off, chanceHit: false, pick: 0));
+        Assert.Equal(20, AvNeed(withReal, Team.Horde, WithChance(0f)));
+        Assert.Equal(20, AvNeed(withReal, Team.Horde, WithChance(0.05f)));
+        Assert.Equal(AvChoice[0], withReal.Pick(AvChoice, Team.Horde, AvTemplates, WithChance(0f), chanceHit: false, pick: 0));
+
+        // PreferFillingRealPlayerQueues off: no fill without a roll, whatever the chance.
+        Assert.Equal(0, AvNeed(withReal, Team.Horde, WithChance(0f, prefer: false)));
+        Assert.Equal(0, AvNeed(withReal, Team.Horde, WithChance(0.05f, prefer: false)));
+        Assert.False(withReal.AnyFillNeed(AvTemplates, WithChance(0.05f, prefer: false)));
+        Assert.Null(withReal.Pick(AvChoice, Team.Horde, AvTemplates, WithChance(0.05f, prefer: false), chanceHit: false, pick: 0));
+    }
+
+    // The retail rows (vmangos battleground_template): Warsong Gulch 4..10 per team, Arathi Basin 6..15.
+    private static readonly BattlegroundTemplate RetailWsg = PlayerbotBattlegroundBracketTests.Template(BattlegroundType.WarsongGulch, 10, 60, minPerTeam: 4, maxPerTeam: 10);
+    private static readonly BattlegroundTemplate RetailAb = PlayerbotBattlegroundBracketTests.Template(BattlegroundType.ArathiBasin, 20, 60, minPerTeam: 6, maxPerTeam: 15);
+
+    [Fact]
+    public void WarsongGulchAndArathiBasin_AtTheDefaults_GetNoFillNeed_TheRollAloneQueuesForThem()
+    {
+        var defaults = new PlayerbotBattlegroundOptions();
+        Assert.False(PlayerbotBattlegroundDemand.IsRaised(RetailWsg, defaults.MaxBotsPerBattleground, defaults.RaiseCapToFillTemplate));
+        Assert.False(PlayerbotBattlegroundDemand.IsRaised(RetailAb, defaults.MaxBotsPerBattleground, defaults.RaiseCapToFillTemplate));
+        BattlegroundTemplate? templates(BattlegroundType type) => type switch
+        {
+            BattlegroundType.WarsongGulch => RetailWsg,
+            BattlegroundType.ArathiBasin => RetailAb,
+            _ => null,
+        };
+
+        foreach ((BattlegroundType type, int open) in new[] { (BattlegroundType.WarsongGulch, 6), (BattlegroundType.ArathiBasin, 9) })
+        {
+            PlayerbotBattlegroundChoice[] choice = [new(type, 2)];
+            foreach (bool holdsReal in new[] { false, true })
+            {
+                // A running match of 4 bots a team with open slots, a bots-only one and one with a real player in it.
+                PlayerbotBattlegroundDemand demand = Running(type, 2, botsPerTeam: 4, openPerTeam: open, holdsReal);
+                foreach (Team team in new[] { Team.Alliance, Team.Horde })
+                {
+                    Assert.Equal(0, demand.FillNeed(type, 2, team, templates(type)!, defaults));
+                    Assert.Null(demand.Pick(choice, team, templates, defaults, chanceHit: false, pick: 0)); // no roll: no bot
+                    Assert.Equal(choice[0], demand.Pick(choice, team, templates, defaults, chanceHit: true, pick: 0)); // the roll as before
+                }
+
+                Assert.False(demand.AnyFillNeed(templates, defaults));
+            }
+        }
     }
 
     [Fact]
@@ -457,6 +521,7 @@ public sealed class PlayerbotBattlegroundDemandTests
         PlayerbotBattlegroundDemand demand = RunningAv(botsPerTeam: 10, openPerTeam: 30);
         PlayerbotBattlegroundOptions options = Options(20);
         options.RaiseCapToFillTemplate = false;
+        Assert.Equal(0, AvNeed(demand, Team.Alliance, options));
         Assert.Null(demand.Pick(AvChoice, Team.Alliance, AvTemplates, options, chanceHit: true, pick: 0));
 
         // A bracket blocked by a match holding the cap stays blocked.
@@ -470,9 +535,9 @@ public sealed class PlayerbotBattlegroundDemandTests
     {
         PlayerbotBattlegroundDemand demand = RunningAv(botsPerTeam: 1, openPerTeam: 5, holdsReal: true);
         demand.AddBotPending(BattlegroundType.AlteracValley, 0, Team.Alliance);
-        Assert.True(demand.AnyOpenSlots);
+        Assert.True(demand.AnyFillNeed(AvTemplates, Options(20)));
         demand.Clear();
-        Assert.False(demand.AnyOpenSlots);
+        Assert.False(demand.AnyFillNeed(AvTemplates, Options(20)));
         Assert.Equal(0, demand.OpenSlots(BattlegroundType.AlteracValley, 0, Team.Alliance));
         Assert.Equal(0, demand.BotsPending(BattlegroundType.AlteracValley, 0, Team.Alliance));
     }

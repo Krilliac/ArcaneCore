@@ -55,17 +55,21 @@ The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal l
 | a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), in a walking region the bot's own joins (by the navigation mesh's region graph, no path search; an indoor end is let through; a master that stands still is preferred to one that walks waypoints), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
 
 Then the pick (`PlayerbotBattlegroundDemand.Pick`): a (type, bracket) a real player waits in, whose team still needs bots to reach the
-template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`); so is one whose preparing or running match has a slot of
-the bot's team open that no real player waiting in the queue and no bot already on its way will take (`FillNeed`: the server's queue
-invites queued players into such a match, `BattlegroundQueue.CheckFreeSlots` as vmangos `FillPlayersToBG`, and a leaver frees a slot again;
-only while `QueueChancePerMinute` is above 0, or, with `PreferFillingRealPlayerQueues`, while a real player plays in the match); otherwise the bot rolls its per-minute chance
+template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`). For a type whose cap `RaiseCapToFillTemplate` raises
+(Alterac Valley at the default cap), so is one whose preparing or running match has a slot of the bot's team open that no real player
+waiting in the queue and no bot already on its way will take (`FillNeed`: the server's queue invites queued players into such a match,
+`BattlegroundQueue.CheckFreeSlots` as vmangos `FillPlayersToBG`, and a leaver frees a slot again). A match a real player plays in is filled
+that way only with `PreferFillingRealPlayerQueues`; a match of bots only while `QueueChancePerMinute` is above 0. Warsong Gulch and Arathi
+Basin at the default cap fill their open slots by the chance roll alone, as before; otherwise the bot rolls its per-minute chance
 (`QueueChancePerMinute`, as `1 - (1 - p)^(scan seconds / 60)`) and takes a random one of the open choices. A choice is open while the
 bracket holds fewer than `MaxBotsPerBattleground` committed bots, the bot's team fewer than `min(MaxPlayersPerTeam, ceil(cap / 2))`, and
 no running match of the bracket with room already holds the cap in bots. With `RaiseCapToFillTemplate` (on) a type whose template
 minimum needs more than the cap (2 x `MinPlayersPerTeam`, Alterac Valley's 20 per team against the default cap of 20) uses 2 x
 `MaxPlayersPerTeam` as its cap (80 for Alterac Valley, 40 per team), so bots alone can start it and fill it to the template's maximum; a
 type whose minimum the cap covers (Warsong Gulch and Arathi Basin at the default 20) keeps the configured cap. With it off such a type is
-refused (`CapBelowMinimum`, logged once). The `.playerbot battlegrounds` status line names each loaded type whose cap is raised.
+refused (`CapBelowMinimum`, logged once). The `.playerbot battlegrounds` status line names each loaded type whose cap is raised, and the
+coordinator logs one warning naming each raised type and its new cap at its first scan after the world starts and again whenever a
+`.reload config` changes the cap or which types are raised.
 
 The snapshot behind these numbers is rebuilt at every scan from the battleground manager itself: the real players (sessions that are
 not managed) waiting in each queue and not yet invited, the bots this coordinator committed (walking, joining, queued, invited,
@@ -189,7 +193,7 @@ s (and leaves that buff alone for 30 s) and forgets a buff that despawned or som
 | `World:Playerbots:Battlegrounds:QueueChancePerMinute` | `0.05` | 0..1. The chance per minute that a free, eligible bot starts to queue; each 2-second scan rolls `1 - (1 - p)^(seconds / 60)`. A real player's queue that needs bots is filled without a roll. |
 | `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `20` | 0..80. Unless `RaiseCapToFillTemplate` raises it for a type whose template minimum needs more, bots committed to one (type, bracket) never exceed it, a team never more than `min(MaxPlayersPerTeam, ceil(cap / 2))`, a running match holding it blocks its bracket, and an invitation into a match holding it is declined. 0 queues no bot. |
 | `World:Playerbots:Battlegrounds:PreferFillingRealPlayerQueues` | `true` | A (type, bracket) a real player waits in gets bots at once, up to the template's minimum per team, before any random choice. |
-| `World:Playerbots:Battlegrounds:RaiseCapToFillTemplate` | `true` | A type whose template minimum needs more bots than `MaxBotsPerBattleground` (2 x `MinPlayersPerTeam`, e.g. Alterac Valley's 20 per team) gets 2 x `MaxPlayersPerTeam` as its cap (Alterac Valley: 80, 40 per team), so bots alone can start it and fill it, and backfill a leaver's slot. A type whose minimum the cap covers keeps the cap. Off: the type is refused for bots (`CapBelowMinimum`). Template values are never changed. |
+| `World:Playerbots:Battlegrounds:RaiseCapToFillTemplate` | `true` | A type whose template minimum needs more bots than `MaxBotsPerBattleground` (2 x `MinPlayersPerTeam`, e.g. Alterac Valley's 20 per team) gets 2 x `MaxPlayersPerTeam` as its cap (Alterac Valley: 80, 40 per team), so bots alone can start it and fill it, and backfill a leaver's slot. A type whose minimum the cap covers keeps the cap. Off: the type is refused for bots (`CapBelowMinimum`). Template values are never changed. Upgrade note: this replaces the former RaiseCapToMatchMinimum, which raised the cap only to 2 x `MinPlayersPerTeam`; a configured cap below a type's minimum is now overridden to 2 x `MaxPlayersPerTeam` (a warning is logged), so set this to `false` to keep a low cap. |
 | `World:Playerbots:Battlegrounds:MaxTravelYards` | `1500` | 100..20000. The farthest (straight line, same map) a battlemaster may stand for a bot to choose it. |
 | `World:Playerbots:Battlegrounds:MaxQueueWaitMinutes` | `30` | 1..240. A bot leaves a queue after this long and does not queue for that type again for 10 minutes. |
 
