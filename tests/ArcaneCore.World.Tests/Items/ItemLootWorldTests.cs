@@ -1,5 +1,6 @@
 using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Skills;
@@ -88,6 +89,23 @@ public sealed class ItemLootWorldTests
         Assert.NotNull(await host.OnWorldAsync(() => player.Inventory.GetItemByGuid(clam.Guid)));
         ItemLootData? kept = await host.OnWorldAsync(() => clam.ToData().Loot);
         Assert.Equal(Jerky, Assert.Single(kept!.Items).ItemId);
+    }
+
+    [Fact]
+    public async Task OpenItem_OnALootableClamWhileDead_RepliesYouAreDead_AndDoesNotOpenIt()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("DEADCLAM", "Deadclam");
+        Player player = await host.PlayerAsync("Deadclam");
+        Item clam = await GiveAsync(host, player, Clam);
+        await host.OnWorldAsync(() => player.Map!.Combat.KillPlayer(player));
+        await client.CollectAsync();
+
+        // vmangos HandleOpenItemOpcode refuses when dead before the gift/non-gift branch (SpellHandler.cpp:163-174).
+        await client.SendAsync(WorldOpcode.CmsgOpenItem, [clam.BagSlot, clam.Slot]);
+        byte[] error = await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure);
+        Assert.Equal((byte)InventoryResult.YouAreDead, error[0]);
+        Assert.DoesNotContain((await client.CollectAsync()).Select(p => p.Opcode), op => op == WorldOpcode.SmsgLootResponse);
     }
 
     private static byte[] CastOn(Item item)

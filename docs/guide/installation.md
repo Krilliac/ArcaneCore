@@ -66,6 +66,12 @@ The world daemon is found through the realm list. On first start an empty realm 
 (name, `Address` as `ip:port` of the world daemon, type, flags, population, category). The shipped seed points at `127.0.0.1:8085`; change the
 address to the one clients will use. Ports and bind addresses are `Auth:Port`, `Auth:BindAddress`, `World:Port` and `World:BindAddress`.
 
+The world daemon keeps its own row current, as vmangos mangosd does: `World:Realm:Id` (default 1, vmangos `RealmID`) names the row. When the world
+has started it clears the row's Offline flag and sets the population to 0; when it stops it sets the Offline flag, so the realm list shows the
+realm offline while the world is down. Each new session writes the population hint, 2 x sessions / `World:Realm:PlayerLimit` (default 100, vmangos
+`PlayerLimit`). A world with no matching row logs a warning and runs on; `World:Realm:Id = 0` turns the writes off. A gateway worker
+(`Cluster:Worker:Enabled`) does not write the row; in that topology the operator owns the row ([gateway](../areas/gateway.md)).
+
 ## 5. Create an account
 
 Accounts are not created automatically: the shipped `Auth:AutocreateAccounts` is `false`, and the feature is a development convenience, not retail

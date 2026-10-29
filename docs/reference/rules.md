@@ -10,7 +10,7 @@ Generated from the rule primitives and hosts of the Game assembly (`RuleVocabula
 | 2 | creature | yes | 0 Global, 1 Entry, 2 Guid | Speak, Cast |
 | 3 | gameobject | no | - | - |
 | 4 | areatrigger | no | - | - |
-| 5 | world_event | no | - | - |
+| 5 | world_event | yes | 0 Global, 3 GameEvent | Speak |
 | 6 | map | no | - | - |
 | 7 | economy | no | - | - |
 
@@ -113,6 +113,9 @@ Rule and rule_text ids below 1000000 are shipped content; server-authored rows u
 | 32 | `creature.summoned_despawned` | creature | 1 `entry` (Int): Creature entry. | A creature of the entry that this creature summoned left the world. |
 | 33 | `creature.receive_ai_event` | creature | 1 `ai_event_type` (Int): <br>2 `sender_entry` (Int): 0: any sender. | An AI event of the type reached the creature, from a sender of the entry (0: any sender); the sender is the event_sender target. |
 | 34 | `creature.spell_hit_target` | creature | 1 `spell_id` (Int): 0: any spell.<br>2 `school_mask` (Int):  | A spell the creature cast landed on a unit (the invoker): spell id 0 or equal, and the school bit in the mask. |
+| 1 | `world_event.started` | world_event | 1 `mode` (Int): 0 every start, 1 only a fresh start, 2 only a resume after a restart. | The game event started (a restart that only resumes an event that was running counts as a start of mode 0 and 2). |
+| 2 | `world_event.stopped` | world_event | - | The game event stopped. |
+| 3 | `world_event.update` | world_event | - | Fires on every world tick while the game event runs; give the rule the repeatable flag and a cooldown to run it on a period. |
 
 ## actions
 
@@ -173,6 +176,8 @@ Rule and rule_text ids below 1000000 are shipped content; server-authored rows u
 | 148 | `creature.set_immobilized` | creature | 1 `apply` (Bool): <br>2 `combat_only` (Bool):  | Root or free the creature; a combat-only root ends at the next reset. |
 | 149 | `creature.set_immunity_set` | creature | 1 `set_id` (NonNegative):  | Switch the creature to a creature_immunities set of its entry. |
 | 150 | `creature.set_follow_movement` | creature | 1 `state` (Int):  | 0 holds a follow movement still, 1 lets it follow again. |
+| 100 | `world_event.start_event` | world_event | 1 `event_id` (Int): game_event.entry. | Start another game event (GameEventService.StartEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event is stopped again by its own window. |
+| 101 | `world_event.stop_event` | world_event | 1 `event_id` (Int): game_event.entry. | Stop a game event (GameEventService.StopEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event inside its window is started again by the schedule. |
 
 ## targets
 

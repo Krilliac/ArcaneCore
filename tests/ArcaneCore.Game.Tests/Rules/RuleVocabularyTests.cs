@@ -7,14 +7,18 @@ namespace ArcaneCore.Game.Tests.Rules;
 public sealed class RuleVocabularyTests
 {
     [Fact]
-    public void Default_HoldsTheSharedPrimitives_AndNoHost()
+    public void Default_HoldsTheSharedPrimitives_AndTheShippedHosts()
     {
         RuleVocabulary vocabulary = RuleVocabulary.Default;
 
-        // Host lanes add their primitives to Default; the shared (any-host) set is what this test pins.
+        Assert.Contains("world_event", vocabulary.Hosts.Select(h => h.Name));
+        Assert.Equal(
+            ["event 1 world_event.started", "event 2 world_event.stopped", "event 3 world_event.update", "action 100 world_event.start_event", "action 101 world_event.stop_event"],
+            vocabulary.Primitives.Where(p => p.Host == RuleHostKind.WorldEvent).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
+        IReadOnlyList<RulePrimitiveInfo> shared = [.. vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Any)];
         Assert.Equal(
             ["action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "target 1 self", "target 2 invoker"],
-            vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Any).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
+            shared.Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
         Assert.All(vocabulary.Primitives, p => Assert.True(p.IsBuiltIn));
         Assert.All(vocabulary.Primitives, p => Assert.False(string.IsNullOrWhiteSpace(p.Description)));
     }

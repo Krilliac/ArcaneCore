@@ -79,9 +79,6 @@ public sealed class PlayerbotSocialMemoryOptions
     /// <summary>How much the bot's sociability trait adds to the chance of asking for help (0..1).</summary>
     public float CallForHelpSociabilityWeight { get; set; } = 0.6f;
 
-    /// <summary>Let a managed bot that is asked for help join the fight, by its helpfulness and its liking for the asker.</summary>
-    public bool AnswerHelpEnabled { get; set; } = true;
-
     /// <summary>Days after which a relation's affinity has drifted half-way back to 0 when it is not refreshed (1..365). Rivals use <see cref="RivalHalfLifeDays"/>.</summary>
     public int AffinityHalfLifeDays { get; set; } = 14;
 
