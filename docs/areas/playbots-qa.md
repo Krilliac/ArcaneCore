@@ -314,11 +314,12 @@ transient failure stops the pass (the rest would fail the same way); a refusal (
 
 ### New issues only for recent findings
 
-`CreateWithinHours` (default 24; 0..8760; 0 = the running build only) limits when a **new** issue is opened. A finding gets one only if the running build has met it, or it
-was last seen within that many hours. Findings are loaded from the store at start-up and their severity follows their lifetime count, so after a restart an old, high-count
-finding that nothing on the running build has met would otherwise head the queue and be filed as if it were new. Such a finding opens no issue (nothing is listed, searched or
-created for it, and a dry run writes no pending file); it is logged once per process. A finding that already holds an issue number is updated,
-commented on, reopened or closed as before, and it opens an issue as soon as the running build meets it again.
+`CreateWithinHours` (default 24; 0..8760; 0 = only findings met since this start-up) limits when a **new** issue is opened. A finding gets one only if the running build has met it
+since this process started (it was seen again after the start-up), or it was last seen within that many hours. Findings are loaded from the store at start-up and their severity follows
+their lifetime count, so after a restart an old, high-count finding that nothing has met since (even one last met on this same build before the restart) would otherwise head the queue
+and be filed as if it were new. Such a finding opens no issue (nothing is searched or created for it, the issue list is not read on its account, and a dry run writes no pending file); it is
+logged once per process. If a pass has already read the issue list for another finding and that list carries the stale finding's marker, the finding is linked to that issue and updated.
+A finding that already holds an issue number is updated, commented on, reopened or closed as before, and it opens an issue as soon as it is met again.
 
 ### Rate caps
 

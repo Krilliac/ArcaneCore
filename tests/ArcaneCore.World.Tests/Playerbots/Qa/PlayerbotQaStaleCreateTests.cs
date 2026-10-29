@@ -98,7 +98,7 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
     /// <summary>The real start-up path: the saved findings are loaded into a fresh aggregator with <see cref="PlayerbotQaAggregator.Restore"/> at "now" (<see cref="QaData.T0"/>).</summary>
     private static PlayerbotQaAggregator Restored(params QaFindingView[] views)
     {
-        var aggregator = new PlayerbotQaAggregator(100, 5, Salt);
+        var aggregator = new PlayerbotQaAggregator(100, 5, Salt, build: CurrentBuild);
         aggregator.Restore(new QaAggregatorState(views, new Dictionary<string, ulong[]>()), QaData.T0);
         return aggregator;
     }
@@ -110,10 +110,10 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         FirstBuild = OldBuild, LastBuild = OldBuild, BuildCounts = [new QaBuildCount(OldBuild, 2247)],
     });
 
-    /// <summary>Recurring on the running build, last seen minutes ago.</summary>
+    /// <summary>Recurring on the running build since this start-up: last seen at the publisher's construction time (<see cref="QaData.T0"/>), which is when it begins counting.</summary>
     private static QaFindingView Fresh(uint quest = 1700) => Persisted(quest, v => v with
     {
-        Count = 2247, DistinctBots = 227, FirstSeenUtc = QaData.T0.AddDays(-7), LastSeenUtc = QaData.T0.AddMinutes(-5),
+        Count = 2247, DistinctBots = 227, FirstSeenUtc = QaData.T0.AddDays(-7), LastSeenUtc = QaData.T0,
         FirstBuild = OldBuild, LastBuild = CurrentBuild, BuildCounts = [new QaBuildCount(CurrentBuild, 5), new QaBuildCount(OldBuild, 2242)],
     });
 
@@ -158,6 +158,26 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         QaFindingView after = state.Get(fresh.Id)!;
         Assert.Equal(QaPublicationState.Published, after.Publication.State);
         Assert.True(after.Publication.HoldsIssue, "the created issue's number was not recorded on the finding");
+    }
+
+    // The persisted per-build counts say the CURRENT build met it, but that was before the restart: a restart on the same build must not make it new.
+    [Fact]
+    public async Task SixDayOldFinding_WhoseBuildCountsHoldTheCurrentBuild_IsNeitherSearchedNorCreated()
+    {
+        QaFindingView old = Persisted(1656, v => v with
+        {
+            Count = 2247, DistinctBots = 227, FirstSeenUtc = QaData.T0.AddDays(-7), LastSeenUtc = QaData.T0.AddDays(-6),
+            FirstBuild = CurrentBuild, LastBuild = CurrentBuild, BuildCounts = [new QaBuildCount(CurrentBuild, 2247)],
+        });
+        Assert.True(old.CountOnBuild(CurrentBuild) >= 5);
+        PlayerbotQaAggregator state = Restored(old);
+        var transport = new StaleCreateTransport();
+
+        await Run(NewPublisher(state, transport), state);
+
+        Assert.True(transport.Created.Count == 0, $"a finding last seen 6 days ago, met on the current build only before the restart, was given a new issue ({transport.Created.Count} created)");
+        Assert.True(transport.Searches == 0, $"it was looked up by search ({transport.Searches} searches)");
+        Assert.False(state.Get(old.Id)!.Publication.HoldsIssue);
     }
 
     [Fact]
@@ -229,6 +249,27 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
     [Fact]
     public async Task StaleFinding_WhoseMarkerIsInTheIssueList_IsNotDuplicated()
     {
+        // The fresh finding is Pending and the stale one Failed (no issue number), so the fresh one is published first: it lists the issue index and creates its issue,
+        // and only then does the stale one come up, with the index already read by this pass. It must be linked to its listed issue, not skipped and not duplicated.
+        QaFindingView fresh = Fresh(1700);
+        QaFindingView stale = Stale(1656) with { Publication = new QaPublication(QaPublicationState.Failed, 0, "earlier failure") };
+        PlayerbotQaAggregator state = Restored(stale, fresh);
+        var transport = new StaleCreateTransport();
+        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(stale.Id) + "\nPlayerbot QA finding: opened last week");
+
+        await Run(NewPublisher(state, transport), state);
+
+        Assert.True(transport.Created.Count == 1, $"only the fresh finding may open an issue, {transport.Created.Count} were created");
+        Assert.Equal(QaPublicationState.Published, state.Get(fresh.Id)!.Publication.State);
+        QaFindingView after = state.Get(stale.Id)!;
+        Assert.Equal(QaPublicationState.Published, after.Publication.State);
+        Assert.Equal(issue, after.Publication.Issue);
+        Assert.Equal(0, transport.Searches);
+    }
+
+    [Fact]
+    public async Task StaleFinding_WhoseMarkerIsInTheIssueList_IsNotDuplicated_WhenItIsTheOnlyFinding()
+    {
         QaFindingView stale = Stale();
         PlayerbotQaAggregator state = Restored(stale);
         var transport = new StaleCreateTransport();
@@ -237,6 +278,32 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         await Run(NewPublisher(state, transport), state);
 
         Assert.True(transport.Created.Count == 0, "a duplicate issue was created for a stale finding whose marker is in the issue list");
+    }
+
+    // A finding that holds #N which the list, GetIssue and the search all fail to find: it creates only when it is recent.
+    [Fact]
+    public async Task StaleFinding_HoldingAnIssueNumberNobodyFinds_IsNotRecreated()
+    {
+        QaFindingView stale = Stale() with { Publication = new QaPublication(QaPublicationState.Failed, 777, "earlier failure"), OccurrencesReported = 0 };
+        PlayerbotQaAggregator state = Restored(stale);
+        var transport = new StaleCreateTransport();
+
+        await Run(NewPublisher(state, transport), state);
+
+        Assert.True(transport.Created.Count == 0, $"a stale finding holding an unfound issue number was given a new issue ({transport.Created.Count} created)");
+    }
+
+    [Fact]
+    public async Task FreshFinding_HoldingAnIssueNumberNobodyFinds_OpensExactlyOneIssue()
+    {
+        QaFindingView fresh = Fresh() with { Publication = new QaPublication(QaPublicationState.Failed, 777, "earlier failure"), OccurrencesReported = 0 };
+        PlayerbotQaAggregator state = Restored(fresh);
+        var transport = new StaleCreateTransport();
+
+        await Run(NewPublisher(state, transport), state);
+
+        Assert.True(transport.Created.Count == 1, $"a recurring finding whose issue number is gone should open exactly one issue, opened {transport.Created.Count}");
+        Assert.Equal(QaPublicationState.Published, state.Get(fresh.Id)!.Publication.State);
     }
 
     [Fact]

@@ -136,8 +136,8 @@ public sealed class PlayerbotQaGitHubOptions
     public int MaxIssuesPerHour { get; set; } = 5;
 
     /// <summary>
-    /// A new issue is opened only for a finding met on the running build, or last seen within this many hours (0..8760; 0 = the running build only). A finding known only from
-    /// history (loaded at start-up, last met on an older build earlier than that) never opens one, and is not looked up; an issue it already holds (by number) is still updated.
+    /// A new issue is opened only for a finding met since this start-up, or last seen within this many hours (0..8760; 0 = only findings met since this start-up). A finding known
+    /// only from history (loaded at start-up, last seen earlier than that) never opens one, and is not looked up; an issue it already holds (by number) is still updated.
     /// </summary>
     public int CreateWithinHours { get; set; } = 24;
 

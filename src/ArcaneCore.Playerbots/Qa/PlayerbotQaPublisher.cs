@@ -110,7 +110,7 @@ internal sealed class QaLedger
 /// Reports eligible findings: a dry run (reporter enabled, <c>Publish</c> off) writes the would-be issues to <c>qa/pending-issues/</c> and makes no
 /// network call (no client is even created); publishing finds the finding's issue by its exact marker (open or closed), comments on an open one
 /// (at most once per interval and under the hourly comment cap), leaves a closed one alone (or reopens it with <c>ReopenClosed</c>), and creates an
-/// issue when none exists (under the hourly create cap, and only for a finding met on the running build or last seen within
+/// issue when none exists (under the hourly create cap, and only for a finding met on the running build since this process started or last seen within
 /// <see cref="PlayerbotQaGitHubOptions.CreateWithinHours"/>: one replayed from the store after a restart is not new). A per-fingerprint lock makes find-then-create atomic within the process. A pass lists the labelled
 /// issues once (<see cref="IQaIssueTransport.ListIndexAsync"/>) and finds every marker in that index; a finding with no known issue is skipped before any
 /// lookup while the create cap is exhausted; the lookups outside the index (an issue by number, the search) are capped at <see cref="MaxLookupsPerPass"/> per
@@ -278,11 +278,12 @@ internal sealed class PlayerbotQaPublisher
     }
 
     /// <summary>
-    /// Whether a NEW issue may be opened for <paramref name="f"/>: it was met on the running build, or was last seen within <see cref="PlayerbotQaGitHubOptions.CreateWithinHours"/>
-    /// of <paramref name="now"/> (0 = the running build only). A finding known only from history (loaded at start-up) fails this; updating its existing issue is not affected.
+    /// Whether a NEW issue may be opened for <paramref name="f"/>: it was met on the running build by this process (that build has counted it, and it was last seen since this
+    /// publisher started), or was last seen within <see cref="PlayerbotQaGitHubOptions.CreateWithinHours"/> of <paramref name="now"/> (0 = only findings met since this start-up).
+    /// A finding known only from history (loaded at start-up, even one last met on this same build before a restart) fails this; updating its existing issue is not affected.
     /// </summary>
     private bool MayCreate(QaFindingView f, DateTime now)
-        => f.CountOnBuild(_build) > 0 || (_options.GitHub.CreateWithinHours > 0 && now - f.LastSeenUtc <= TimeSpan.FromHours(_options.GitHub.CreateWithinHours));
+        => (f.CountOnBuild(_build) > 0 && f.LastSeenUtc >= _startedUtc) || (_options.GitHub.CreateWithinHours > 0 && now - f.LastSeenUtc <= TimeSpan.FromHours(_options.GitHub.CreateWithinHours));
 
     private bool Eligible(QaFindingView f, IReadOnlyList<QaFindingView> all)
     {
@@ -348,25 +349,33 @@ internal sealed class PlayerbotQaPublisher
                 && Ledger.CanComment(now, git.MaxCommentsPerHour);
             if (current.Publication.Issue <= 0)
             {
-                // No known issue: only a create can make progress. A finding known only from history never opens one (nothing is listed, searched or created).
+                // No known issue: only a create can make progress. A finding known only from history never opens one (nothing is listed, searched or created);
+                // if this pass has already listed the issues and the list carries its marker, it falls through and is linked and updated like any other.
                 if (!MayCreate(current, now))
                 {
-                    if (_staleSkipped.TryAdd(id, 0)) // once per finding per process: the pass repeats every few minutes
+                    if (pass.Index?.ByMarker(id) is null)
                     {
-                        _logger.LogInformation("Bot QA: finding {Id} was last seen {LastSeen:u} with no occurrence on build {Build}; no new issue is opened for it", current.ShortId, current.LastSeenUtc, _build);
+                        if (_staleSkipped.TryAdd(id, 0)) // once per finding per process: the pass repeats every few minutes
+                        {
+                            _logger.LogInformation("Bot QA: finding {Id} was last seen {LastSeen:u} with no occurrence on build {Build} since start-up; no new issue is opened for it", current.ShortId, current.LastSeenUtc, _build);
+                        }
+
+                        return true;
+                    }
+                }
+                else
+                {
+                    _staleSkipped.TryRemove(id, out _); // a finding that goes stale again is logged again
+
+                    // The cap forbidding the create means nothing is looked up.
+                    if (!Ledger.CanCreate(now, git.MaxIssuesPerHour))
+                    {
+                        _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, current.ShortId);
+                        return true;
                     }
 
-                    return true;
+                    if (!SpellCreateAllowed(current, pass, now)) return true;
                 }
-
-                // The cap forbidding the create means nothing is looked up.
-                if (!Ledger.CanCreate(now, git.MaxIssuesPerHour))
-                {
-                    _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, current.ShortId);
-                    return true;
-                }
-
-                if (!SpellCreateAllowed(current, pass, now)) return true;
             }
             else if (current.Publication.State == QaPublicationState.Published && !commentDue && !statusDue)
             {
@@ -411,6 +420,8 @@ internal sealed class PlayerbotQaPublisher
             if (found is null)
             {
                 if (!MayCreate(current, now)) return true; // held a number that was not found: still not a finding to open a new issue for
+
+                _staleSkipped.TryRemove(id, out _);
 
                 if (!Ledger.CanCreate(now, git.MaxIssuesPerHour))
                 {
