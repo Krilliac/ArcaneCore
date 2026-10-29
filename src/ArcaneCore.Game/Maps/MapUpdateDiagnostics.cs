@@ -234,18 +234,51 @@ internal sealed class MapUpdateDiagnostics
     }
 
     /// <summary>The subsystem an updater belongs to, by type name (the type name itself when it has no friendlier label).</summary>
-    internal static string SubsystemOf(IMapUpdater updater) => updater.GetType().Name switch
+    internal static string SubsystemOf(IMapUpdater updater) => SubsystemOf(updater.GetType());
+
+    /// <summary>
+    /// <see cref="SubsystemOf(IMapUpdater)"/> for a type. Matches on type names, so updaters in later layers (World, packs) are labelled
+    /// without a reference to them. Every <c>InstanceData</c> subclass (the per-instance boss scripts) shares one label.
+    /// </summary>
+    internal static string SubsystemOf(Type updaterType) => updaterType.Name switch
     {
         "CreatureMapSystem" => "creature AI (CreatureMapSystem)",
         "MapLocomotion" => "movement (MapLocomotion)",
         "MapCollision" => "collision and pathing (MapCollision)",
         "MapCombat" => "combat (MapCombat)",
-        "PetMapSystem" or "MapUnitControl" => "pets (" + updater.GetType().Name + ")",
+        "PetMapSystem" or "MapUnitControl" => "pets (" + updaterType.Name + ")",
         "GameObjectMapSystem" => "gameobjects (GameObjectMapSystem)",
-        "SpellObjectSystem" or "TrapSystem" or "TotemMapUpdater" => "spell objects (" + updater.GetType().Name + ")",
-        "ReactiveUpdater" or "LiquidAuraInterruptUpdater" or "StealthDetectionUpdater" or "EnchantUpdater" => "spells and auras (" + updater.GetType().Name + ")",
-        var name => name,
+        "SpellObjectSystem" or "TrapSystem" or "TotemMapUpdater" => "spell objects (" + updaterType.Name + ")",
+        "ReactiveUpdater" or "LiquidAuraInterruptUpdater" or "StealthDetectionUpdater" or "EnchantUpdater" => "spells and auras (" + updaterType.Name + ")",
+        "MapDuel" => "duels (MapDuel)",
+        "MapEnvironment" => "environment hazards (MapEnvironment)",
+        "MapWeather" => "weather (MapWeather)",
+        "ZoneAreaUpdater" => "zones and areas (ZoneAreaUpdater)",
+        "FishingService" => "fishing (FishingService)",
+        "LootRollManager" => "loot (LootRollManager)",
+        "TradeMapUpdater" => "trade (TradeMapUpdater)",
+        "TransportMapUpdater" => "transports (TransportMapUpdater)",
+        "ItemMaintenanceUpdater" => "items (ItemMaintenanceUpdater)",
+        "SkillPersistenceUpdater" => "skills (SkillPersistenceUpdater)",
+        "QuestNpcMapUpdater" => "quest NPCs (QuestNpcMapUpdater)",
+        "InstanceMapUpdater" => "instances (InstanceMapUpdater)",
+        "TaxiFlightSystem" or "FlightUpdater" => "taxi flights (" + updaterType.Name + ")",
+        "InstanceData" => "instance scripts (InstanceData)",
+        var name => IsInstanceData(updaterType) ? "instance scripts (InstanceData)" : name,
     };
+
+    private static bool IsInstanceData(Type type)
+    {
+        for (Type? t = type.BaseType; t is not null; t = t.BaseType)
+        {
+            if (t.Name == "InstanceData")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>"name 812 ms, name 400 ms, name 90 ms" for <see cref="TopContributors"/>; "none" when nothing was timed.</summary>
     internal string FormatTop(int count)
