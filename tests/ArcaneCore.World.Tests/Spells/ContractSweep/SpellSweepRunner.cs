@@ -301,8 +301,32 @@ internal sealed class SpellSweepRunner
         }
     }
 
+    /// <summary>
+    /// One cast of the scene's spell, resolved: with spell batching on (<see cref="SpellSystem.SpellBatchWindowMs"/>, which
+    /// ARCANECORE_TEST_SPELL_BATCH_MS sets for the whole test run) a non-triggered go that passes its check answers CastOk but only goes off
+    /// at the next batch boundary, so the sweep waits for it (<see cref="SettleBatch"/>) before any check reads what the cast did.
+    /// </summary>
     private SpellCastResult Cast(SweepScene scene, bool triggered)
-        => _probe.Cast(_rig.System, scene.Caster, scene.Spell.Id, scene.Targets, triggered);
+    {
+        SpellCastResult result = _probe.Cast(_rig.System, scene.Caster, scene.Spell.Id, scene.Targets, triggered);
+        SettleBatch();
+        return result;
+    }
+
+    /// <summary>
+    /// Tick until what is held for the batch boundary has resolved: the casts' goes, and with <paramref name="swings"/> the white swings too
+    /// (MapCombat.SwingBatch.cs). At most one window, in 50 ms steps. A no-op with batching off (nothing is ever held), so the sweep then runs
+    /// exactly as it did before batching existed. A cast waits for its own go only: waiting for a swing it provoked would let time pass
+    /// that the same check without batching does not see.
+    /// </summary>
+    private void SettleBatch(bool swings = false)
+    {
+        uint window = _rig.System.SpellBatchWindowMs;
+        for (uint waited = 0; (_rig.System.PendingBatchedGoes > 0 || (swings && _rig.Map.Combat.PendingSwings > 0)) && waited <= window; waited += 50)
+        {
+            _rig.World.RunTick(50);
+        }
+    }
 
     private Unit? FindAuraUnit(SweepScene scene)
     {
@@ -472,20 +496,26 @@ internal sealed class SpellSweepRunner
                 }
 
                 bool expected = (flags & action.FlagsFor(unit)) != 0;
+                IReadOnlyList<SpellAuraHolder> held = _probe.Holders(_rig.System, unit, spell.Id);
                 if (!action.Perform(scene, unit))
                 {
                     state = "not-run:action-failed";
                     return;
                 }
 
+                // With batching on, what the action set off resolves at the batch boundary, up to one window later: an action that is a cast
+                // (CastOther) goes off there, and so does the white swing a struck unit answers with in the tick after the action. A short aura
+                // (300 ms) can run out meanwhile, and an aura that expired was not removed by the action.
                 _rig.World.RunTick(50);
+                SettleBatch(swings: true);
                 bool present = _probe.Holders(_rig.System, unit, spell.Id).Count > 0;
+                bool ranOut = held.Count > 0 && held.All(h => h.IsRemoved && h.RemoveMode == AuraRemoveMode.Expire);
                 state = "ran";
                 if (expected && present)
                 {
                     Violate(SweepCategory.InterruptNotRemoved, spell.Id, $"{action.Name} flags=0x{flags:X}");
                 }
-                else if (!expected && !present && unit.IsAlive && !spell.IsChanneled && spell.ProcCharges == 0 && spell.ProcFlags == ProcFlags.None)
+                else if (!expected && !present && !ranOut && unit.IsAlive && !spell.IsChanneled && spell.ProcCharges == 0 && spell.ProcFlags == ProcFlags.None)
                 {
                     Violate(SweepCategory.InterruptRemovedWithoutFlag, spell.Id, $"{action.Name} flags=0x{flags:X}");
                 }
