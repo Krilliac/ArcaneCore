@@ -84,6 +84,16 @@ public sealed class GrobbulusAI : RaidBossAI
 
     protected override void ResetActions() { base.ResetActions(); _slimeStream = 5000; }
 
+    /// <summary>
+    /// mangos-classic boss_grobbulus.cpp boss_grobbulusAI::EnterEvadeMode: the clean-up cast, Despawn Boss Adds (30134), takes the Fallout Slimes
+    /// and Grobbulus Clouds with it (<see cref="NaxxramasDespawnSummonsScript"/>) before the evade.
+    /// </summary>
+    public override void OnEvade()
+    {
+        Cast(NaxxramasDespawnSummonsScript.DespawnBossAdds, Me, triggered: true);
+        base.OnEvade();
+    }
+
     protected override void UpdateCombat(uint diffMs)
     {
         // vmangos boss_grobbulus.cpp UpdateSlimeStream: while the victim is out of melee auto-attack reach the countdown
@@ -201,18 +211,33 @@ public sealed class ThaddiusAI : RaidBossAI
     {
         base.OnRespawn();
         if (Instance is NaxxramasInstance { ConstructAddsDefeated: false })
+        {
             Me.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer;
+            ApplySpawnStun();
+        }
     }
 
     /// <summary>
     /// boss_thaddiusAI::JustReachedHome (boss_thaddius.cpp:125-129) after the encounter fails: Thaddius is unattackable again until the
-    /// adds fall (Reset :109-115). Limit: the Thaddius spawn stun aura (28160) is not modelled.
+    /// adds fall (Reset :109-115), and stunned by Thadius Spawn again.
     /// </summary>
     public override void OnReachedHome()
     {
         base.OnReachedHome();
         if (Instance is NaxxramasInstance { ConstructAddsDefeated: false })
+        {
             Me.UnitFlags |= UnitFlags.NotSelectable | UnitFlags.ImmuneToPlayer;
+            ApplySpawnStun();
+        }
+    }
+
+    /// <summary>
+    /// mangos-classic boss_thaddius.cpp Reset and JustReachedHome: Thadius Spawn (28160, a stun) with CAST_TRIGGERED | CAST_AURA_NOT_PRESENT. The
+    /// coils' Shock removes it at the overload (<see cref="ThaddiusShockScript"/>).
+    /// </summary>
+    private void ApplySpawnStun()
+    {
+        if (System?.HasAura(Me, ThaddiusShockScript.ThaddiusSpawn) != true) Cast(ThaddiusShockScript.ThaddiusSpawn, Me, triggered: true);
     }
 
     /// <summary>boss_thaddiusAI::JustDied (boss_thaddius.cpp:131-145): both adds are forced to despawn.</summary>

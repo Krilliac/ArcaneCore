@@ -152,6 +152,7 @@ public sealed partial class NaxxramasInstance
                 SetData(Thaddius, EncounterState.Special);
                 if (GetSingleCreatureFromStorage(15928) is { IsAlive: true } thaddius)
                 {
+                    ShockThaddius(thaddius);
                     // His flags come off in his own Aggro (boss_thaddius.cpp:117-123), when he actually engages.
                     // ArcaneCore only: cmangos soft-locks here when nobody is alive (Creature.cpp:2382-2400 yields no target and he never
                     // fights). With no living player the encounter fails instead (the Fail handler keeps him flagged); precedent
@@ -160,6 +161,22 @@ public sealed partial class NaxxramasInstance
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// The coils' overload beam: each living Tesla Coil (16218) casts Shock (28159) at Thaddius, whose script drops his spawn stun (28160) and
+    /// casts the lightning visual that pulls the zone (<see cref="ThaddiusShockScript"/>). mangos-classic boss_thaddius.cpp TriggerTeslas
+    /// (the effect of 28359 on each coil: remove its auras, cast Shock) and ShockThaddius; vmangos boss_thaddius.cpp EVENT_TRANSITION_2 (each
+    /// coil casts SPELL_SHOCK_OVERLOAD at him, the stun is removed). A map without coil spawns still loses the stun, as vmangos removes it from
+    /// the AI.
+    /// </summary>
+    private void ShockThaddius(Creature thaddius)
+    {
+        if (Instance.FindUpdater<CreatureMapSystem>() is not { } system) return;
+        Creature[] coils = [.. system.Creatures.Where(c => c.Entry == 16218 && c.IsAlive)];
+        foreach (Creature coil in coils)
+            system.CastSpell(coil, ThaddiusShockScript.Shock, thaddius, triggered: true);
+        if (coils.Length == 0) system.RemoveAuras(thaddius, ThaddiusShockScript.ThaddiusSpawn);
     }
 
     public override void OnCreatureCreate(Creature creature)
@@ -185,22 +202,10 @@ public sealed partial class NaxxramasInstance
 
     private void OnPartTwoCreatureDeath(Creature creature)
     {
-        // mangos-classic boss_gothik.cpp SummonedCreatureJustDied and anchor-spell chain:
-        // a live-side trainee/knight/rider reappears as its spectral counterpart.
+        // vmangos boss_gothik.cpp boss_gothikAI::SummonedCreatureJustDied: a living-side trainee, knight or rider reappears as its
+        // spectral counterpart through the anchor spell chain (NaxxramasInstance.GothikAnchors.cs, GothikAnchorChainScript).
         if (GetData(Gothik) is not (EncounterState.InProgress or EncounterState.Special)) return;
-        uint spectral = creature.Entry switch
-        {
-            16124 => 16127u, 16125 => 16148u, 16126 => 16150u, _ => 0u,
-        };
-        if (spectral == 0 || Instance.FindUpdater<CreatureMapSystem>() is not { } system
-            || system.Content.FindTemplate(spectral) is not { } template
-            || GetSingleGameObjectFromStorage(181170) is not { } gate) return;
-        Creature? trigger = system.Creatures.Where(c => c.Entry == 16137 && c.Y > gate.Y)
-            .MinBy(c => Math.Abs(c.X - creature.X) + Math.Abs(c.Y - creature.Y));
-        if (trigger is null) return; // requires ClassicDB's spectral-side sub-boss trigger spawns
-        Creature add = system.SpawnTemporary(template, trigger.X, trigger.Y, trigger.Z, trigger.Orientation, creature);
-        if (Instance.Players.FirstOrDefault(p => p.IsAlive && p.Y > gate.Y) is { } player)
-            add.AI?.AttackStart(player);
+        StartGothikAnchorChain(creature);
     }
 
     private void OnPartTwoObjectCreate(GameObject go)

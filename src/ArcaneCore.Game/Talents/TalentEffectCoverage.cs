@@ -188,6 +188,9 @@ public static class TalentEffectCoverage
 
         // Evil Twin: the summon player effect refuses the player who has it (GameObjectSpellEffects.EffectSummonPlayer, SpellEffects.cpp:4791).
         new(ExternalReaderKind.DummySpell, 23445, 0, "GameObjects/GameObjectSpellEffects.cs", @"HasAura\(target, EvilTwin\)"),
+        // Mind Exhaustion (23958): the Orb of Domination refuses a player who carries it (vmangos GOHello_go_orb_of_domination).
+        new(ExternalReaderKind.DummySpell, 23958, 0, "Instances/Scripts/BlackwingLair/BlackwingLairInstance.Events.cs",
+            @"HasAura\(player, MindExhaustion\)"),
 
         // Demonic Sacrifice: removed when a demon is summoned (SummonService) and kept through death (ResurrectEffects).
         new(ExternalReaderKind.ClassScript, (uint)DemonicSacrificeScript.ClassScriptMisc, 0, "Pets/SummonService.Demons.cs",

@@ -343,7 +343,7 @@ public sealed class TalentEffectCoverageTests
         Assert.False(Reads(readers[0] with { Site = "NoSuchFile.cs" }), "the scan matches a file that does not exist");
         Assert.Empty(readers.Where(reader => !Reads(reader)).Select(reader => $"{reader.Kind} {reader.Key}: {reader.Site} /{reader.Pattern}/"));
         Assert.Equal(
-            [831u, 832u, 833u, 834u, 835u, 2028u, 2029u, 2188u, 2189u, 2228u, 2388u, 2389u, 2390u, 2689u, 3654u, 3736u, 4327u, 4415u, 11094u, 11189u, 13043u, 17007u, 17864u, 18393u, 18692u, 18693u, 20375u, 20711u, 23445u, 28332u],
+            [831u, 832u, 833u, 834u, 835u, 2028u, 2029u, 2188u, 2189u, 2228u, 2388u, 2389u, 2390u, 2689u, 3654u, 3736u, 4327u, 4415u, 11094u, 11189u, 13043u, 17007u, 17864u, 18393u, 18692u, 18693u, 20375u, 20711u, 23445u, 23958u, 28332u],
             readers.Where(r => r.Kind is ExternalReaderKind.ClassScript or ExternalReaderKind.DummySpell).Select(r => r.Key).Distinct().Order());
     }
 

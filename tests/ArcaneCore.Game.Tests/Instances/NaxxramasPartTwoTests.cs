@@ -226,33 +226,39 @@ public sealed class NaxxramasPartTwoTests
     }
 
     [Fact]
-    public void Gothik_LiveSideDeathCreatesSpectralAddAtImportedDeadSideTrigger()
+    public void Gothik_LiveSideDeathStartsTheAnchorChainFromACorpseTrigger()
     {
+        // vmangos boss_gothikAI::SummonedCreatureJustDied: a 15 s sub-boss trigger on the corpse casts To Anchor 1 (27892 for a trainee) at the
+        // nearest high anchor of the living side. The rest of the chain is NaxxramasEncounterSpellTests (it needs the real spell system).
         using var raid = new Raid(16060).Initialize();
         var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
             [GameObjectTestKit.GoTemplate(181170, GameObjectType.Door)], [], [], [], []));
         raid.Map.AddUpdater(objects);
         objects.Summon(181170, 0, 0, 270, 0);
-        raid.Creatures.SpawnTemporary(Template(16137), 0, 10, 270, 0);
+        Creature spectralAnchor = raid.Creatures.SpawnTemporary(Template(16137), 0, 10, 270, 0);
+        Creature livingAnchor = raid.Creatures.SpawnTemporary(Template(16137), 0, -20, 270, 0);
         Creature live = raid.Creatures.SpawnTemporary(Template(16124), 0, -10, 270, 0);
         raid.Map.Combat.Kill(raid.Tank, live);
-        Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 16127 && c.Y == 10);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 27892 && c.Target == livingAnchor && c.Triggered);
+        Assert.DoesNotContain(raid.Caster.Casts, c => c.Target == spectralAnchor);
+        Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 16137 && c.Y == -10); // the corpse trigger
+        Assert.DoesNotContain(raid.Creatures.Creatures, c => c.Entry == 16127); // nothing is raised directly
     }
 
     [Fact]
-    public void Gothik_LiveSideDeathStillCreatesTheSpectralAdd_WhenTheTriggerRunsTheSpellAnchorScript()
+    public void Gothik_LiveSideDeathStartsTheChain_WhenTheTriggersRunTheSpellAnchorScript()
     {
-        // Spec 533-spell_anchor check 3: the inert GothikAnchorAI on 16137 must not disturb the PartTwo trigger lookup.
+        // Spec 533-spell_anchor check 3: the inert GothikAnchorAI on 16137 must not disturb the trigger lookup.
         using var raid = new Raid(16060).Initialize();
         var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
             [GameObjectTestKit.GoTemplate(181170, GameObjectType.Door)], [], [], [], []));
         raid.Map.AddUpdater(objects);
         objects.Summon(181170, 0, 0, 270, 0);
-        Creature trigger = raid.Creatures.SpawnTemporary(Template(16137) with { ScriptName = GothikAnchorAI.ScriptName }, 0, 10, 270, 0);
+        Creature trigger = raid.Creatures.SpawnTemporary(Template(16137) with { ScriptName = GothikAnchorAI.ScriptName }, 0, -20, 270, 0);
         Assert.IsType<GothikAnchorAI>(trigger.AI);
-        Creature live = raid.Creatures.SpawnTemporary(Template(16124), 0, -10, 270, 0);
+        Creature live = raid.Creatures.SpawnTemporary(Template(16125), 0, -10, 270, 0);
         raid.Map.Combat.Kill(raid.Tank, live);
-        Assert.Contains(raid.Creatures.Creatures, c => c.Entry == 16127 && c.Y == 10);
+        Assert.Contains(raid.Caster.Casts, c => c.Spell == 27928 && c.Target == trigger);
         Assert.Null(trigger.Combat.Victim);
     }
 

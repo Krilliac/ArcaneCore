@@ -1,6 +1,11 @@
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.Gnomeregan;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Tests.Spells;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Instances;
@@ -70,5 +75,23 @@ public sealed class GnomereganScriptTests
         Assert.Equal(EncounterState.Done, data.GetData(GnomereganInstance.TypeThermaplugg));
         Assert.False(data.FaceActive(2));
         Assert.Equal("0 3", run.SavedData);
+    }
+    [Fact]
+    public void ActivateBomb_TheSpellsDummyActivatesARandomFace()
+    {
+        // Spell.dbc 5875 11511 Activate Bomb A: effect 0 DUMMY at TARGET_LOCATION_DATABASE (17). vmangos
+        // EffectDummyCreature_spell_boss_thermaplugg: DoActivateBombFace(urand(0, MAX_GNOME_FACES - 1)).
+        SpellInfo bombA = SpellTestKit.Spell(ThermapluggAi.ActivateBombA,
+            SpellTestKit.Effect(SpellEffectName.Dummy, 1, SpellImplicitTarget.LocationDatabase));
+        var spells = new SpellSystem(new SpellStore([bombA], [], []), () => 10000);
+        SpellScriptDispatcher.Install(spells, new SpellScriptRegistry([new ThermapluggActivateBombScript()]));
+        using DungeonScriptHarness run = new(map => new GnomereganInstance(map), [ThermapluggAi.Entry], [ThermapluggAi.Entry],
+            (RelayScriptCatalog?)null, new CreatureAiServices { Spells = new SpellSystemCreatureCaster(spells) });
+        var data = Assert.IsType<GnomereganInstance>(run.Data);
+        Assert.Equal(0, Enumerable.Range(0, 6).Count(data.FaceActive));
+
+        Assert.Equal(SpellCastResult.CastOk,
+            spells.CastSpell(run.Creature(ThermapluggAi.Entry), ThermapluggAi.ActivateBombA, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.Equal(1, Enumerable.Range(0, 6).Count(data.FaceActive));
     }
 }
