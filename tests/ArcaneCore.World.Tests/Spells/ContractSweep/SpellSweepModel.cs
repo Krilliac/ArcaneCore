@@ -88,7 +88,7 @@ internal sealed class SweepSpellOutcome
     public SortedDictionary<string, string> Checks { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// The coverage line: spell id, generic cast result, and the checks that ran (b..i; c with the number of interrupt actions that ran).
+    /// The coverage line: spell id, generic cast result, and the checks that ran (b..i; c with the names of the interrupt actions that ran).
     /// </summary>
     public string Coverage()
     {
@@ -97,10 +97,10 @@ internal sealed class SweepSpellOutcome
         {
             if (letter == "c")
             {
-                int actions = state.Split(',').Count(part => part.EndsWith("=ran", StringComparison.Ordinal));
-                if (actions > 0)
+                string[] actions = [.. state.Split(',').Where(part => part.EndsWith("=ran", StringComparison.Ordinal)).Select(part => part[..^"=ran".Length])];
+                if (actions.Length > 0)
                 {
-                    ran.Add("c" + actions);
+                    ran.Add("c:" + string.Join(',', actions));
                 }
             }
             else if (state.StartsWith("ran", StringComparison.Ordinal) || state is "permanent-1s" or "long-config-only")
@@ -109,7 +109,9 @@ internal sealed class SweepSpellOutcome
             }
         }
 
-        return $"{SpellId}\t{CastResult}\t{string.Join(' ', ran)}";
+        // No trailing separator when nothing ran: the editorconfig trims trailing whitespace in every file.
+        string cast = CastResult.Length > 0 ? CastResult : "-";
+        return ran.Count == 0 ? $"{SpellId}\t{cast}" : $"{SpellId}\t{cast}\t{string.Join(' ', ran)}";
     }
 }
 

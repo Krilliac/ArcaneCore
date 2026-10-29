@@ -275,19 +275,28 @@ internal sealed class SweepFaultCapture : ILoggerFactory
     private readonly object _gate = new();
     private Dictionary<string, long> _ledgerCounts = [];
     private long _ledgerTotal = -1;
+    private long _ledgerEpoch = -1;
 
     /// <summary>Report the ledger signatures whose counts rose since the last call (the first call only takes the starting counts).</summary>
     private void DrainLedger()
     {
         FaultLedger ledger = FaultLedger.Shared;
         long total = ledger.Total;
-        if (total == _ledgerTotal)
+        long epoch = ledger.Epoch;
+        if (total == _ledgerTotal && epoch == _ledgerEpoch)
         {
             return;
         }
 
         bool first = _ledgerTotal < 0;
+        if (epoch != _ledgerEpoch)
+        {
+            // A Reset cleared the counts: every entry since then is new.
+            _ledgerCounts = [];
+        }
+
         _ledgerTotal = total;
+        _ledgerEpoch = epoch;
         Dictionary<string, long> counts = [];
         foreach (FaultSnapshot entry in ledger.Snapshot())
         {
