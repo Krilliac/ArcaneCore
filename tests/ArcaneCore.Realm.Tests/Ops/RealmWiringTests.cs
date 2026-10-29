@@ -38,6 +38,7 @@ public sealed class RealmWiringTests
             builder.ConfigureContainer(new DefaultServiceProviderFactory(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true }));
             using IHost host = builder.Build();
             Assert.Contains(host.Services.GetServices<IHostedService>(), s => s.GetType().Name == "LogonServer");
+            Assert.Contains(host.Services.GetServices<IHostedService>(), s => s.GetType().Name == "SupervisedChildDrain");
         }
         finally
         {

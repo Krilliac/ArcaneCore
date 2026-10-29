@@ -9,7 +9,10 @@ internal static class ConfProcess
 {
     public sealed record Result(int ExitCode, string Output);
 
-    public static async Task<Result> RunWorldAsync(params string[] args)
+    public static Task<Result> RunWorldAsync(params string[] args) => RunWorldAsync(environment: null, args);
+
+    /// <summary>As <see cref="RunWorldAsync(string[])"/>, with extra environment variables set (a null value removes the variable) for the child only.</summary>
+    public static async Task<Result> RunWorldAsync(IReadOnlyDictionary<string, string?>? environment, params string[] args)
     {
         var info = new ProcessStartInfo(DotnetMuxer())
         {
@@ -28,6 +31,21 @@ internal static class ConfProcess
         info.Environment.Remove("NOTIFY_SOCKET");
         info.Environment.Remove("WATCHDOG_USEC");
         info.Environment.Remove("ARCANECORE_CONFIG");
+        info.Environment.Remove("ARCANECORE_SUPERVISED_CHILD");
+        if (environment is not null)
+        {
+            foreach ((string name, string? value) in environment)
+            {
+                if (value is null)
+                {
+                    info.Environment.Remove(name);
+                }
+                else
+                {
+                    info.Environment[name] = value;
+                }
+            }
+        }
 
         using Process process = Process.Start(info) ?? throw new InvalidOperationException("the world process did not start");
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();
@@ -46,7 +64,7 @@ internal static class ConfProcess
         return new Result(process.ExitCode, await stdout + await stderr);
     }
 
-    private static string DotnetMuxer()
+    internal static string DotnetMuxer()
     {
         string? current = Environment.ProcessPath;
         if (current is not null && Path.GetFileNameWithoutExtension(current).Equals("dotnet", StringComparison.OrdinalIgnoreCase))
