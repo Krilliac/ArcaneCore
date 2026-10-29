@@ -88,7 +88,7 @@ public static class RuleReference
             .Append("across ticks and restarts; a new seed reshuffles them.\n\n")
             .Append("Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the ")
             .Append($"sequence then waits in one of the subject's {RuleSubjectState.PendingCapacity} pending slots. Lists started one inside another with no delay in between nest at most ")
-            .Append($"{RuleEvaluator.MaxListDepth} deep: a longer chain, or a list that starts itself again with no delay in between, is rejected at load (with the rule that starts it); a delay anywhere in the chain breaks it, and a start that still gets too deep at run time fails and is counted.\n\n")
+            .Append($"{RuleEvaluator.MaxListDepth} deep: a longer chain, or a list that starts itself again with no delay in between, is rejected at load (with the rule that starts it); a delay ends the synchronous part, the load check counts only zero-delay starts and a resumed list tail runs at depth 1, so a start that still gets too deep at run time fails and is counted. The bot host runs its rules in one synchronous pass and never resumes a run: a bot rule action with `delay_ms` above 0, or a list with one, is rejected at load.\n\n")
             .Append($"Ids below {RuleCatalog.CustomIdStart} are shipped or converted content; server-authored rows use {RuleCatalog.CustomIdStart} and up. ")
             .Append($"`playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, a ladder rung ({RuleCatalog.RungGoalIdStart} to {RuleCatalog.RungGoalIdEnd}: 100 plus the rung number), or {RuleCatalog.CustomGoalIdStart} and up for a custom goal. A goal a rule proposes needs a non-zero `driver`.\n\n");
 

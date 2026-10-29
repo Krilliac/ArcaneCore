@@ -10,8 +10,8 @@ using Xunit;
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
-/// The shipped bot goal ladder in the world initializer (the Warden check precedent): an empty <c>playerbot_goal</c>, <c>rule</c> or
-/// <c>rule_action</c> table is filled from <see cref="PlayerbotLadderContent"/> (the one source of the rows), an edited table is left alone.
+/// The shipped bot goal ladder in the world initializer (the Warden check precedent): an empty <c>playerbot_goal</c> table, or an empty <c>rule</c> table (which also brings the ladder's <c>rule_action</c> rows; <c>rule_action</c> is not checked on its own), is filled from
+/// <see cref="PlayerbotLadderContent"/> (the one source of the rows); a table with rows is left alone.
 /// </summary>
 public sealed class PlayerbotLadderSeedTests : IAsyncLifetime
 {

@@ -207,6 +207,54 @@ public sealed class BotGoalLadderTests
     }
 
     [Fact]
+    public void ADelayedAction_OnTheBotHost_IsRejectedAtLoad_AndSoIsAListWithADelay()
+    {
+        RuleContent delayed = WithCustom([CustomRule()], [Propose(CustomRuleId, CustomGoalId, 5000) with { DelayMs = 500 }]);
+        RuleRejection rule = Assert.Single(Build(delayed).Rejected);
+        Assert.Equal(RuleDataTables.Action, rule.Table);
+        Assert.Contains("never resumes a delayed action", rule.Reason, StringComparison.Ordinal);
+
+        const int StartList = 2;
+        RuleContent viaList = WithCustom([CustomRule()], [new RuleActionRecord { OwnerId = CustomRuleId, ActionType = StartList, Param1 = 9, TargetType = BotRuleIds.SelfTarget }]) with
+        {
+            Lists = [new RuleListRecord { Id = 9 }],
+            ListActions = [Propose(9, CustomGoalId, 5000) with { DelayMs = 100 }],
+        };
+        RuleCatalog catalog = Build(viaList);
+        Assert.Contains(catalog.Rejected, r => r.Table == RuleDataTables.List && r.Id == 9 && r.Reason.Contains("never resumes", StringComparison.Ordinal));
+        Assert.Contains(catalog.Rejected, r => r.Table == RuleDataTables.Action && r.Id == CustomRuleId);
+
+        RuleContent immediate = WithCustom([CustomRule()], [Propose(CustomRuleId, CustomGoalId, 5000)]);
+        Assert.Empty(Build(immediate).Rejected);
+    }
+
+    [Theory]
+    [InlineData(65)]
+    [InlineData(17)]
+    [InlineData(63)]
+    [InlineData(-1)]
+    public void AGoalWithADriverThatIsNotARung_IsRejectedAtLoad(int driver)
+    {
+        RuleContent content = new() { Goals = [new PlayerbotGoalRecord { GoalId = CustomGoalId, Name = "bad driver", Driver = (short)driver }] };
+
+        RuleRejection rejection = Assert.Single(Build(content).Rejected);
+        Assert.Contains("is not a ladder rung", rejection.Reason, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(100)]
+    [InlineData(117)]
+    [InlineData(150)]
+    [InlineData(199)]
+    public void LadderGoalIds_AreOnlyTheDefinedRungs(int goalId)
+    {
+        RuleContent content = new() { Goals = [new PlayerbotGoalRecord { GoalId = (short)goalId, Name = "outside the rungs", Driver = 1 }] };
+
+        Assert.Contains("is not a PlayerbotGoalKind value or a ladder rung", Assert.Single(Build(content).Rejected).Reason, StringComparison.Ordinal);
+        Assert.Empty(Build(new RuleContent { Goals = [new PlayerbotGoalRecord { GoalId = RuleCatalog.RungGoalIdEnd, Name = "last rung", Driver = 16 }] }).Rejected);
+    }
+
+    [Fact]
     public void ACondition_GatesItsRule_WithTheBotAsSource_AndFailsClosedWhenUndecidable()
     {
         RuleContent content = WithCustom([CustomRule(conditionId: 77)], [Propose(CustomRuleId, CustomGoalId, 5000)]);

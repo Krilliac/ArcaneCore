@@ -66,6 +66,8 @@ internal sealed partial class PlayerbotBrain : IPlayerbotRungRunner
     private bool _ladderTownBegun;
     private bool? _ladderVisibleQuestTarget;
     private PlayerbotRuleSubject? _ruleSubject;
+    private PlayerbotRuleLadder? _ruleHost;
+    private BotGoalLadder? _goalLadder;
 
     private LadderStep RunLadder(Player player, uint interval)
     {
@@ -75,10 +77,11 @@ internal sealed partial class PlayerbotBrain : IPlayerbotRungRunner
         _ladderVisibleQuestTarget = null;
         try
         {
-            PlayerbotRuleLadder host = PlayerbotRuleLadder.For(_session.Services);
+            PlayerbotRuleLadder host = _ruleHost ??= PlayerbotRuleLadder.For(_session.Services);
+            BotGoalLadder ladder = _goalLadder ??= host.CreateLadder();
             PlayerbotRuleSubject subject = _ruleSubject ??= new PlayerbotRuleSubject();
             subject.Bind(player);
-            host.Ladder.Choose(subject, host.Catalog(), _session.World.NowMs);
+            ladder.Choose(subject, host.Catalog(), _session.World.NowMs);
             return PlayerbotLadder.Dispatch(this, subject.Candidates);
         }
         finally

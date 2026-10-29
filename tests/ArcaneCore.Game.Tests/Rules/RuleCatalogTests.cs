@@ -161,7 +161,7 @@ public sealed class RuleCatalogTests
                 "rule_subject_filter 4: class_mask 32 has bits outside the playable classes (0x5DF)",
                 "rule_subject_filter 5: team 3 must be 0 (any), 1 (Alliance) or 2 (Horde)",
                 "rule_subject_filter 6: subject_flags 256 has unknown bits (known: 0x1F)",
-                "playerbot_goal 500: goal_id 500 is not a PlayerbotGoalKind value or a ladder rung (100..199); custom goals start at 1000",
+                "playerbot_goal 500: goal_id 500 is not a PlayerbotGoalKind value or a ladder rung (101..116); custom goals start at 1000",
                 "playerbot_goal 1001: name is empty",
             ],
             catalog.Rejected.Select(r => r.ToString()));

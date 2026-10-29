@@ -42,7 +42,7 @@ public sealed class PlayerbotRuleLadderTests
         RuleCatalog first = host.Catalog();
         RuleCatalog second = host.Catalog();
         var bot = new PlayerbotLadderReplayTests.ReplayBot(5);
-        host.Ladder.Choose(bot, first, 0);
+        host.CreateLadder().Choose(bot, first, 0);
 
         Assert.Same(first, second);
         Assert.Equal(PlayerbotLadderReplayTests.TodaysOrder, bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
@@ -57,7 +57,7 @@ public sealed class PlayerbotRuleLadderTests
         PlayerbotRuleLadder host = PlayerbotRuleLadder.Create(sp, null);
         var bot = new PlayerbotLadderReplayTests.ReplayBot(5);
 
-        host.Ladder.Choose(bot, host.Catalog(), 0);
+        host.CreateLadder().Choose(bot, host.Catalog(), 0);
 
         Assert.Equal(PlayerbotLadderReplayTests.TodaysOrder, bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
     }
@@ -72,6 +72,68 @@ public sealed class PlayerbotRuleLadderTests
 
         Assert.Same(feature.Catalog, host.Catalog());
         Assert.Empty(logs.Warnings);
+    }
+
+    [Fact]
+    public void GoalRowsWithoutAnyLadderRule_FallBackToTheShippedLadder_WithTheWarning()
+    {
+        var logs = new CapturingLoggerFactory();
+        using ServiceProvider sp = Services(logs);
+        // The goal rows are there, the rule table held other rows so the ladder rules were never seeded.
+        RuleFeature feature = Feature(sp, new RuleContent { Goals = PlayerbotLadderContent.Goals });
+        PlayerbotRuleLadder host = PlayerbotRuleLadder.Create(sp, feature);
+        var bot = new PlayerbotLadderReplayTests.ReplayBot(5);
+
+        host.CreateLadder().Choose(bot, host.Catalog(), 0);
+
+        Assert.Equal(PlayerbotLadderReplayTests.TodaysOrder, bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
+        Assert.Single(logs.Warnings);
+    }
+
+    [Fact]
+    public void BrainsWithoutARuleFeature_ShareNoEvaluator_AndConcurrentPassesNeverDisturbEachOther()
+    {
+        using ServiceProvider sp = Services();
+        using ServiceProvider other = Services();
+        PlayerbotRuleLadder host = PlayerbotRuleLadder.For(sp);
+        Assert.Same(host, PlayerbotRuleLadder.For(sp));
+        Assert.NotSame(host, PlayerbotRuleLadder.For(other));
+
+        int bad = 0;
+        Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, worker =>
+        {
+            // Each brain asks the shared host for its own ladder, as PlayerbotBrain does.
+            BotGoalLadder ladder = PlayerbotRuleLadder.For(sp).CreateLadder();
+            var bot = new PlayerbotLadderReplayTests.ReplayBot((ulong)worker + 1);
+            for (int i = 0; i < 3000; i++)
+            {
+                ladder.Choose(bot, host.Catalog(), i);
+                if (bot.CandidateCount != 16) Interlocked.Increment(ref bad);
+            }
+        });
+
+        Assert.Equal(0, bad);
+        Assert.Equal(0, host.Counters.Faults);
+        Assert.Equal(0, host.Counters.Reentrant);
+    }
+
+    [Fact]
+    public void TheCatalogChoiceAndAPass_AllocateNothingOncePrimed()
+    {
+        using ServiceProvider sp = Services();
+        PlayerbotRuleLadder host = PlayerbotRuleLadder.For(sp);
+        BotGoalLadder ladder = host.CreateLadder();
+        var bot = new PlayerbotLadderReplayTests.ReplayBot(3);
+        for (int i = 0; i < 50; i++) ladder.Choose(bot, host.Catalog(), i);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 1000; i++)
+        {
+
+            ladder.Choose(bot, host.Catalog(), i);
+        }
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
 
     [Fact]
@@ -104,7 +166,7 @@ public sealed class PlayerbotRuleLadderTests
         for (ulong guid = 1; guid <= 2000; guid++)
         {
             var bot = new PlayerbotLadderReplayTests.ReplayBot(guid);
-            host.Ladder.Choose(bot, host.Catalog(), 0);
+            host.CreateLadder().Choose(bot, host.Catalog(), 0);
             bool first = bot.Candidates[0].Rung == PlayerbotLadderRung.Trainers;
             if (bot.Facts.Class == 1)
             {

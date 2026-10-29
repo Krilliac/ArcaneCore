@@ -42,10 +42,10 @@ public sealed class RuleCatalog
     public const short CustomGoalIdStart = 1000;
 
     /// <summary>The first and last <c>playerbot_goal</c> id of the shipped ladder rungs (100 + the rung number): rungs that have no <see cref="PlayerbotGoalKind"/> of their own.</summary>
-    public const short RungGoalIdStart = 100;
+    public const short RungGoalIdStart = 101;
 
     /// <summary>See <see cref="RungGoalIdStart"/>.</summary>
-    public const short RungGoalIdEnd = 199;
+    public const short RungGoalIdEnd = 116;
 
     /// <summary>Rule ids from here up are server-authored (custom); shipped and converted content stays below.</summary>
     public const int CustomIdStart = 1_000_000;
@@ -314,14 +314,19 @@ public sealed class RuleCatalog
             }
         }
 
+        private static bool IsRungGoalId(short goalId)
+            => goalId is >= RungGoalIdStart and <= RungGoalIdEnd && Enum.IsDefined((PlayerbotLadderRung)(goalId - RungGoalIdStart + 1));
+
         private void LoadGoals()
         {
             foreach (PlayerbotGoalRecord row in content.Goals.OrderBy(g => g.GoalId))
             {
                 string? problem = row.GoalId < 0 ? "goal_id must not be negative"
                     : _goals.ContainsKey(row.GoalId) ? "duplicate goal_id (the first row is kept)"
-                    : row.GoalId < CustomGoalIdStart && !Enum.IsDefined((PlayerbotGoalKind)row.GoalId) && row.GoalId is < RungGoalIdStart or > RungGoalIdEnd
+                    : row.GoalId < CustomGoalIdStart && !Enum.IsDefined((PlayerbotGoalKind)row.GoalId) && !IsRungGoalId(row.GoalId)
                         ? $"goal_id {row.GoalId} is not a PlayerbotGoalKind value or a ladder rung ({RungGoalIdStart}..{RungGoalIdEnd}); custom goals start at {CustomGoalIdStart}"
+                    : row.Driver != 0 && !(row.Driver > 0 && Enum.IsDefined((PlayerbotLadderRung)row.Driver))
+                        ? $"driver {row.Driver} is not a ladder rung (0 for none, or 1..{(short)Enum.GetValues<PlayerbotLadderRung>().Max()})"
                     : string.IsNullOrWhiteSpace(row.Name) ? "name is empty"
                     : null;
                 if (problem is not null)
@@ -552,6 +557,12 @@ public sealed class RuleCatalog
             if (row.DelayMs < 0)
             {
                 problem = $"delay_ms {row.DelayMs} must not be negative";
+                return null;
+            }
+
+            if (row.DelayMs > 0 && !host.AllowsDelays)
+            {
+                problem = $"delay_ms {row.DelayMs}: the {host.Name} host runs its rules in one synchronous pass and never resumes a delayed action";
                 return null;
             }
 

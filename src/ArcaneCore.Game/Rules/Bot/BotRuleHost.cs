@@ -32,6 +32,8 @@ public sealed class BotRuleHostDefinition : RuleHostDefinition
     public override IReadOnlyList<RuleOwnerKind> Owners { get; } = [RuleOwnerKind.Global];
 
     public override RuleCapabilities Capabilities => RuleCapabilities.None;
+
+    public override bool AllowsDelays => false;
 }
 
 /// <summary><c>bot.goal_evaluate</c>: the bot is choosing its next goal (once per out-of-combat ladder pass).</summary>
