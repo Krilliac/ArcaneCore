@@ -81,6 +81,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
         WorldRuntimeOptions options = session.World.Options;
         ChatFeature chat = session.Services.GetRequiredService<ChatFeature>();
+        if (type is not (ChatType.Afk or ChatType.Dnd) && chat.Options.MaxMessageLength > 0 && message.Length > chat.Options.MaxMessageLength)
+        {
+            return; // World:Chat:MaxMessageLength: an oversized message is dropped before it is gated or broadcast (AFK/DND text is cut by MaxAwayMessageLength instead)
+        }
+
         if (language == Language.Addon)
         {
             // Disabled addon channel? (vmangos AddonChannel). Addon messages are not touched by the
@@ -194,6 +199,24 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 message = filtered;
             }
         }
+        else
+        {
+            // A text that fails the link check or the word filter is not spoken chat: dropping the packet would stop the player from going
+            // AFK/DND at all, so a player who is not yet AFK/DND goes AFK/DND with the empty (client default) text. A player who already is
+            // keeps the state and the old text: an empty text would toggle it off, which the player did not ask for.
+            if (SanitizeAwayText(message, chat.Options, session.Services.GetService<ChatWordFilterFeature>()?.Filter) is { } away)
+            {
+                message = away;
+            }
+            else if (type == ChatType.Afk ? player.IsAfk : player.IsDnd)
+            {
+                return;
+            }
+            else
+            {
+                message = string.Empty;
+            }
+        }
 
         // AzerothCore PlayerScript::OnPlayerCanUseChat (docs/integration/script-hooks.md): after commands, before every feature and the core.
         if (session.World.Scripts.Player.HasChat
@@ -288,6 +311,46 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
             default:
                 break;
         }
+    }
+
+    /// <summary>
+    /// AFK and DND text is stored on the player and sent to every whisperer, so it gets the same treatment as spoken chat: the
+    /// invisible-character strip (<see cref="ChatOptions.FakeMessagePreventing"/>), the cap (<see cref="ChatOptions.MaxAwayMessageLength"/>,
+    /// cut by <see cref="ChatSanitizer.TruncateAtSafeBoundary"/> so it never lands inside a colour or hyperlink sequence or between the two
+    /// halves of a surrogate pair; the result may be shorter than the cap), the link check (<see cref="ChatOptions.StrictLinkSeverity"/>)
+    /// and the word filter (<see cref="ChatOptions.WordFilter"/>). Null when the text fails the link check or is blocked by the word
+    /// filter: the caller then sets the state with an empty text rather than dropping the packet (or, if the player is already
+    /// AFK/DND, leaves state and text alone). vmangos does not sanitise AFK/DND text at all (ChatHandler.cpp:221, toggles at 611-645), so this
+    /// whole step goes beyond it; every part of it is behind an option.
+    /// </summary>
+    internal static string? SanitizeAwayText(string message, ChatOptions options, ChatWordFilter? filter)
+    {
+        if (message.Length == 0)
+        {
+            return message;
+        }
+
+        if (options.FakeMessagePreventing)
+        {
+            message = ChatSanitizer.StripInvisibleChars(message);
+        }
+
+        if (options.MaxAwayMessageLength > 0 && message.Length > options.MaxAwayMessageLength)
+        {
+            message = ChatSanitizer.TruncateAtSafeBoundary(message, options.MaxAwayMessageLength);
+        }
+
+        if (options.StrictLinkSeverity > 0 && !ChatSanitizer.IsValidChatMessage(message, options.StrictLinkSeverity))
+        {
+            return null;
+        }
+
+        if (options.WordFilter && filter is { ChatRuleCount: > 0 })
+        {
+            return filter.Apply(message);
+        }
+
+        return message;
     }
 
     /// <summary>

@@ -137,20 +137,30 @@ public sealed class UndermapTests
     }
 
     [Fact]
-    public void WhenBelowTerrainFloorWithNoModelSupport_ThePlayerIsSnappedBackToTerrainSurface()
+    public void WhenBelowTerrainFloorWithNoModelSupport_TheLivingPlayerIsNotSnappedToTheSurface_AndNothingRecallsIt()
     {
+        // Retail: the server never rewrites a living player's Z to the terrain surface. The old behaviour put it at Ground + 0.05
+        // and cleared Jumping/FallingFar; the recall only exists while FallingFar, 100+ yards under a model-aware ground.
         using var kit = new HazardTestKit(liquid: null);
-        Player player = kit.AddPlayer(4_105_099, HazardTestKit.Ground, out _);
+        var teleports = new ArcaneCore.Game.Teleport.TeleportService(kit.Kit.World, _ => { }, _ => { });
+        Player player = kit.AddPlayer(4_105_099, HazardTestKit.Ground, out FakeSession session);
+        player.LastSafePosition = (0u, HazardTestKit.X, HazardTestKit.Y, HazardTestKit.Ground + 5f, 0f);
+        player.UndermapRecallArmed = true;
+        session.Clear();
+        float below = HazardTestKit.Ground - 12f;
 
         MovementInfo previous = player.Movement;
-        var incoming = new MovementInfo { Flags = MovementFlags.None, Time = 1, X = HazardTestKit.X, Y = HazardTestKit.Y, Z = HazardTestKit.Ground - 12f };
+        var incoming = new MovementInfo { Flags = MovementFlags.None, Time = 1, X = HazardTestKit.X, Y = HazardTestKit.Y, Z = below };
         var context = new MovementObserverContext(player, kit.Kit.World, WorldOpcode.MsgMoveHeartbeat);
         MovementObservers.Before(context, in previous, ref incoming);
         player.ApplyClientMovement(incoming, 1);
         MovementObservers.After(context, in previous);
 
-        Assert.Equal(HazardTestKit.Ground + 0.05f, player.Movement.Z, 0.01f);
-        Assert.Equal(HazardTestKit.Ground + 0.05f, player.Z, 0.01f);
-        Assert.Equal(MovementFlags.None, player.Movement.Flags & (MovementFlags.Jumping | MovementFlags.FallingFar));
+        Assert.Equal(below, player.Movement.Z);
+        Assert.Equal(below, player.Z);
+        Assert.NotEqual(HazardTestKit.Ground + 0.05f, player.Z, 0.01f);
+        Assert.False(teleports.IsBeingTeleported(player));
+        Assert.DoesNotContain(session.Sent, p => p.Opcode == WorldOpcode.MsgMoveTeleportAck);
+        Assert.True(player.UndermapRecallArmed);
     }
 }

@@ -40,7 +40,7 @@ public sealed class ExecuteDummyScript : ISpellScript
         SpellSystem system = context.System;
         float rage = SpellSystem.GetPower(context.Caster, PowerType.Rage) * context.Spell.Effects[0].DamageMultiplier;
         int basePoints = (int)context.Spell.SimpleValue(0) + SpellRounding.DitherFloor(rage, system.Random); // rand_dither
-        system.CastCustomSpell(context.Caster, ExecuteDamage, SpellCastTargets.ForUnit(context.Target.Guid), basePoints);
+        system.CastCustomSpell(context.Caster, ExecuteDamage, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), basePoints);
     }
 }
 
@@ -98,7 +98,7 @@ public sealed class DeepWoundsScript : ISpellScript
         float damage = offhand
             ? (caster.GetFloat(UpdateFields.UnitFieldMinoffhanddamage) + caster.GetFloat(UpdateFields.UnitFieldMaxoffhanddamage)) / 2
             : (caster.GetFloat(UpdateFields.UnitFieldMindamage) + caster.GetFloat(UpdateFields.UnitFieldMaxdamage)) / 2;
-        context.System.CastCustomSpell(caster, DeepWound, SpellCastTargets.ForUnit(context.Target.Guid), (int)(damage * share / 4));
+        context.System.CastCustomSpell(caster, DeepWound, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), (int)(damage * share / 4));
     }
 }
 

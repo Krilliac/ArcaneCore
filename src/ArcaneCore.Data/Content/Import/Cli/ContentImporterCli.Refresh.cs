@@ -206,6 +206,7 @@ public static partial class ContentImporterCli
         MapAreaDbcSnapshot? mapTables = null;
         IReadOnlyList<TaxiNode>? taxiNodes = null;
         IReadOnlyList<TaxiPath>? taxiPaths = null;
+        IReadOnlyList<RaceTaxiStart>? raceTaxiStarts = null;
         TaxiPathNodeCatalog? taxiPathNodes = null;
         if (dbcDirectory is not null)
         {
@@ -262,6 +263,7 @@ public static partial class ContentImporterCli
             // The flight masters' nodes and paths (vmangos reads them from these DBCs; the world reads the tables), and the ships' paths.
             taxiNodes = ReadOptionalDbc(dbcDirectory, "TaxiNodes.dbc", "taxi_nodes", NpcServiceDbcReaders.LoadTaxiNodes, warnings);
             taxiPaths = ReadOptionalDbc(dbcDirectory, "TaxiPath.dbc", "taxi_path", NpcServiceDbcReaders.LoadTaxiPaths, warnings);
+            raceTaxiStarts = ReadOptionalDbc(dbcDirectory, "ChrRaces.dbc", "race_taxi_start", NpcServiceDbcReaders.LoadRaceTaxiStarts, warnings);
 
             string taxiPathNodePath = Path.Combine(dbcDirectory, "TaxiPathNode.dbc");
             if (File.Exists(taxiPathNodePath))
@@ -345,6 +347,7 @@ public static partial class ContentImporterCli
         Count(WmoAreaDataModule.WmoAreaTemplateTable, mapTables?.WmoAreas?.Count ?? 0, mapTables?.WmoAreas is not null);
         Count("taxi_nodes", taxiNodes?.Count ?? 0, taxiNodes is not null);
         Count("taxi_path", taxiPaths?.Count ?? 0, taxiPaths is not null);
+        Count("race_taxi_start", raceTaxiStarts?.Count ?? 0, raceTaxiStarts is not null);
         GameEventImportReport eventReport = gameEvents.BuildReport();
         bool anyEvents = eventReport.Events > 0;
         string[] eventTables = [GameEventDataModule.EventTable, GameEventDataModule.TimeTable, GameEventDataModule.CreatureTable,
@@ -495,6 +498,12 @@ public static partial class ContentImporterCli
                     {
                         await db.Set<TaxiPath>().ExecuteDeleteAsync(token).ConfigureAwait(false);
                         await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
+                    }
+
+                    if (raceTaxiStarts is not null)
+                    {
+                        await db.Set<RaceTaxiStart>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                        await ImportBatch.InsertAsync(db, raceTaxiStarts, token).ConfigureAwait(false);
                     }
 
                     if (spawnEntries.Count > 0)

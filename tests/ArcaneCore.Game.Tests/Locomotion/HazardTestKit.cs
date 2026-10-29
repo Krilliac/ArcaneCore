@@ -56,9 +56,20 @@ internal sealed class HazardTestKit : IDisposable
     public TestCombatHooks Hooks { get; }
 
     public Player AddPlayer(uint guid, float z, out FakeSession session, AccountSecurity security = AccountSecurity.Player)
+        => AddPlayerOfRace(guid, z, out session, security, Race.Human);
+
+    /// <summary>An opposing-team, PvP-flagged player: attackable under the default relations (see <c>SpellTestKit.AddHostilePlayer</c>).</summary>
+    public Player AddHostilePlayer(uint guid, float z, out FakeSession session, AccountSecurity security = AccountSecurity.Player)
+    {
+        Player player = AddPlayerOfRace(guid, z, out session, security, Race.Orc);
+        MapCombat.UpdatePvp(player, true);
+        return player;
+    }
+
+    private Player AddPlayerOfRace(uint guid, float z, out FakeSession session, AccountSecurity security, Race race)
     {
         session = new FakeSession((int)guid, security);
-        Player player = TestWorld.CreatePlayer(guid, X, Y, session);
+        Player player = TestWorld.CreatePlayer(guid, X, Y, session, race: race);
         player.Level = 60;
         player.MaxHealth = 3000;
         player.Health = 3000;

@@ -12,7 +12,7 @@ namespace ArcaneCore.Data.Npc;
 
 public sealed record NpcImportReport(
     int NpcGossips, int GossipMenus, int GossipOptions, int NpcTexts, int Vendors, int Trainers,
-    int Replaced, int Skipped, IReadOnlyList<string> Diagnostics, int VendorTemplates, int TextBroadcasts = 0);
+    int Replaced, int Skipped, IReadOnlyList<string> Diagnostics, int VendorTemplates, int PointsOfInterest = 0, int TextBroadcasts = 0);
 
 /// <summary>
 /// Maps the existing CMaNGOS NPC service tables into the already-owned EF entities. Reflection is
@@ -37,6 +37,7 @@ public sealed class NpcDumpImporter
     private readonly Dictionary<(uint, uint), VendorItem> _vendors = [];
     private readonly Dictionary<(uint, uint), VendorTemplateItemRow> _vendorTemplates = [];
     private readonly Dictionary<(uint, uint), TrainerSpell> _trainers = [];
+    private readonly Dictionary<uint, PointOfInterest> _pois = [];
     private readonly List<string> _diagnostics = [];
     private bool _sawVendorTemplateTable;
     private bool _sawTextBroadcastTable;
@@ -103,6 +104,8 @@ public sealed class NpcDumpImporter
                         Put(_options, x, v => (v.MenuId, v.Id));
                         break;
                     }
+                    // vmangos/cmangos points_of_interest: map markers for gossip options (action_poi_id). Coordinates are world x/y and may be negative.
+                    case "points_of_interest": { PointOfInterest x = ConvertModel<PointOfInterest>(row, allowNegativeFloats: true); RequirePositive(x.Entry, table, "entry"); Put(_pois, x, v => v.Entry); break; }
                     case "npc_text": { NpcTextRow x = ConvertModel<NpcTextRow>(row); RequirePositive(x.Id, table, "ID"); Put(_texts, x, v => v.Id); break; }
                     case NpcTextBroadcastDataModule.Table:
                     {
@@ -140,7 +143,7 @@ public sealed class NpcDumpImporter
     public IReadOnlyCollection<GossipMenuOption> ScriptedOptions => [.. _options.Values.Where(o => o.ActionScriptId != 0)];
 
     public NpcImportReport BuildReport() => new(_gossip.Count, _menus.Count, _options.Count, _texts.Count,
-        _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics], _vendorTemplates.Count, _textBroadcasts.Count);
+        _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics], _vendorTemplates.Count, _pois.Count, _textBroadcasts.Count);
 
     public bool SawVendorTemplateTable => _sawVendorTemplateTable;
 
@@ -217,6 +220,7 @@ public sealed class NpcDumpImporter
                     await db.Set<VendorItem>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<VendorTemplateItemRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<TrainerSpell>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<PointOfInterest>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                 }
                 const int batchSize = 2000;
                 await InsertBatchedAsync(db, _gossip.Values, batchSize, ct).ConfigureAwait(false);
@@ -227,6 +231,7 @@ public sealed class NpcDumpImporter
                 await InsertBatchedAsync(db, _vendors.Values, batchSize, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _vendorTemplates.Values, batchSize, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _trainers.Values, batchSize, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _pois.Values, batchSize, ct).ConfigureAwait(false);
             }
             finally
             {
@@ -260,21 +265,21 @@ public sealed class NpcDumpImporter
         map[key(value)] = value;
     }
 
-    private static T ConvertModel<T>(DumpRow row) where T : new()
+    private static T ConvertModel<T>(DumpRow row, bool allowNegativeFloats = false) where T : new()
     {
         T result = new();
         Dictionary<string, PropertyInfo> properties = PropertyCache.GetOrAdd(typeof(T), BuildPropertyMap);
         for (int i = 0; i < row.Columns.Count && i < row.Values.Count; i++)
         {
             if (row.Values[i] is null || !properties.TryGetValue(Normalize(row.Columns[i]), out PropertyInfo? property)) continue;
-            try { property.SetValue(result, Parse(row.Values[i]!, property.PropertyType)); }
+            try { property.SetValue(result, Parse(row.Values[i]!, property.PropertyType, allowNegativeFloats)); }
             catch (Exception error) when (error is FormatException or OverflowException or InvalidDataException)
             { throw new InvalidDataException($"{row.Table}.{row.Columns[i]}: {error.Message}", error); }
         }
         return result;
     }
 
-    private static object Parse(string raw, Type type)
+    private static object Parse(string raw, Type type, bool allowNegativeFloats = false)
     {
         if (type == typeof(string)) return raw;
         if (type == typeof(uint)) return uint.Parse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture);
@@ -283,7 +288,7 @@ public sealed class NpcDumpImporter
         if (type == typeof(float))
         {
             float value = float.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
-            if (!float.IsFinite(value) || value < 0) throw new InvalidDataException("probability must be finite and nonnegative");
+            if (!float.IsFinite(value) || (value < 0 && !allowNegativeFloats)) throw new InvalidDataException(allowNegativeFloats ? "value must be finite" : "probability must be finite and nonnegative");
             return value;
         }
         throw new InvalidDataException($"unsupported property type {type.Name}");
@@ -360,6 +365,7 @@ public sealed class NpcDumpImporter
         ["gossip_menu_option"] = typeof(GossipMenuOption), ["npc_text"] = typeof(NpcTextRow),
         [NpcTextBroadcastDataModule.Table] = typeof(NpcTextBroadcastRow),
         ["npc_vendor"] = typeof(VendorItem), ["npc_vendor_template"] = typeof(VendorTemplateItemRow), ["npc_trainer"] = typeof(TrainerSpell),
+        ["points_of_interest"] = typeof(PointOfInterest),
     };
 
     private static void RequirePositive(uint value, string table, string column)
@@ -377,6 +383,7 @@ public sealed class NpcDumpImporter
         ["npc_vendor"] = ["entry", "item", "maxcount", "incrtime", "slot", "condition_id"],
         ["npc_vendor_template"] = ["entry", "item", "maxcount", "incrtime", "slot", "condition_id"],
         ["npc_trainer"] = ["entry", "spell", "spellcost", "reqskill", "reqskillvalue", "reqlevel"],
+        ["points_of_interest"] = ["entry", "x", "y", "icon", "flags", "data", "icon_name"],
     };
 
 }

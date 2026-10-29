@@ -146,10 +146,19 @@ public sealed partial class Player : Unit
     public HomeBind Home { get; set; }
 
     /// <summary>
-    /// vmangos Player::SaveNoUndermapPosition (Player.h, from HandleMoverRelocation): the last place the player moved freely and was not
-    /// falling far, with z already raised by the 3 + 2 yards vmangos adds. Null until the first such movement; reset on a map change.
+    /// vmangos Player::SaveNoUndermapPosition (Player.h:1781-1788, from HandleMoverRelocation): the last place the player moved freely and
+    /// was not falling far, with z already raised by the 3 + 2 yards vmangos adds. Null until the first such movement.
+    /// It is a record, not a one-shot: the unstuck spell reads it (vmangos Spell::EffectStuck, SpellEffects.cpp:4780) and the under-map
+    /// recall never clears it; the recall's one-shot validity is <see cref="UndermapRecallArmed"/>.
     /// </summary>
     public (uint MapId, float X, float Y, float Z, float O)? LastSafePosition { get; set; }
+
+    /// <summary>
+    /// vmangos <c>m_undermapPosValid</c> (Player.h:1787, 1795, 1799): whether <see cref="LastSafePosition"/> may still be used by the
+    /// under-map recall. Set when the position is saved by a free move; cleared by a recall (also one dropped for distance or map). A
+    /// second far fall without a fresh free move does not recall again.
+    /// </summary>
+    public bool UndermapRecallArmed { get; set; }
 
     /// <summary>GUIDs of the objects this player's client currently has (vmangos m_visibleGUIDs).</summary>
     public HashSet<ObjectGuid> VisibleObjects { get; } = [];
