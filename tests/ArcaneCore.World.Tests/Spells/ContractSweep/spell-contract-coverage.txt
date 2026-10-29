@@ -21617,7 +21617,7 @@
 28816	CastOk
 28817	CastOk
 28818	CastOk
-28819	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
+28819	CastOk	b c:move,turn,melee-hit-taken,mount,stand-up
 28820	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 28821	CastOk
 28823	CastOk

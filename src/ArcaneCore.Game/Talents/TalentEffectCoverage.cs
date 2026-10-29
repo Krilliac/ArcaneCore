@@ -4,6 +4,7 @@ using ArcaneCore.Game.Spells.Druid;
 using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Spells.Shaman;
 using ArcaneCore.Game.Spells.Warlock;
 using ArcaneCore.Game.Stats;
 using ArcaneCore.Kernel.Talents;
@@ -168,6 +169,10 @@ public static class TalentEffectCoverage
         // (vmangos SpellEffects.cpp:4502-4529, "all seals have judgement's aura dummy spell id in 2 effect").
         new(ExternalReaderKind.DummySpell, 20375, 0, "Spells/Paladin/PaladinSpellScripts.cs",
             @"holder\.Auras\[JudgementEffectIndex\] is not \{ Type: AuraType\.Dummy \}"),
+
+        // Healing Way (29203, the stacking DUMMY aura the talent puts on a healed target): HealingWayRules multiplies the healing taken from Healing Wave
+        // (vmangos Unit::SpellHealingBonusTaken; cmangos Shaman.cpp HealingWay OnDamageCalculate).
+        new(ExternalReaderKind.DummySpell, HealingWayRules.HealingWayAura, 0, "Spells/Shaman/HealingWayRules.cs", @"holder\.Spell\.Id != HealingWayAura\b"),
 
         // Spirit of Redemption (20711): the killing blow on a priest with the talent aura makes the spirit (vmangos Unit::Kill, Unit.cpp:1108-1140).
         new(ExternalReaderKind.DummySpell, SpellSystem.SpiritOfRedemptionTalent, 0, "Spells/SpellSystem.SpiritOfRedemption.cs",
