@@ -15,6 +15,7 @@ using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
 using ArcaneCore.World.Persistence;
+using ArcaneCore.World.RealmList;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -48,6 +49,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 
         ICharacterStore characters = session.Services.GetRequiredService<ICharacterStore>();
         IReadOnlyList<CharacterRecord> list = await characters.GetByAccountAsync(session.AccountId).ConfigureAwait(false);
+        int owned = list.Count; // before the client limit: the realm list counts every character of the account
 
         if (session.Services.GetService<CharacterCreationFeature>()?.Options.Mode != CharacterCreationMode.Legacy)
         {
@@ -75,6 +77,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         IReadOnlyDictionary<int, uint> flags = await CharacterRename.CharEnumFlagsOfAccountAsync(session).ConfigureAwait(false);
 
         session.Send(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(list, equipment, flags));
+        await RealmCharacterCounts.RefreshAsync(session, owned).ConfigureAwait(false); // repairs a count that drifted; a no-op write when it did not
     }
 
     /// <summary>
@@ -233,6 +236,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         SendResult(session, WorldOpcode.SmsgCharCreate, CharResult.CharCreateSuccess);
+        await RealmCharacterCounts.RefreshAsync(session).ConfigureAwait(false); // the realm list shows the new count (vmangos CharacterHandler.cpp:314)
     }
 
     /// <summary>Remove a character whose creation failed after the row was inserted.</summary>
@@ -289,6 +293,10 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // Stored rows go through the data modules, live state through ICharacterDeleteHook.
         bool deleted = await CharacterDeletion.TryDeleteAsync(session, guid).ConfigureAwait(false);
         SendResult(session, WorldOpcode.SmsgCharDelete, deleted ? CharResult.CharDeleteSuccess : CharResult.CharDeleteFailed);
+        if (deleted)
+        {
+            await RealmCharacterCounts.RefreshAsync(session).ConfigureAwait(false); // vmangos Player.cpp:4492 recounts the account
+        }
     }
 
     private static async Task HandlePlayerLoginAsync(WorldSession session, byte[] payload)
