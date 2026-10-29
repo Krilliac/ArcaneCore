@@ -37,6 +37,8 @@ public sealed class ClusterSupervisorProcessTests : IDisposable
         "--Database:Characters:Provider=Sqlite", "--Database:Characters:ConnectionString=Data Source=" + CharactersDb,
         "--Database:World:Provider=Sqlite", "--Database:World:ConnectionString=Data Source=" + Path.Combine(_dir, "world.db"),
         "--World:Port=48999",
+        "--World:RemoteAdmin:Enabled=false", // if the supervisor branch ever regresses, the test world must not bind the RA port or take the console
+        "--World:Console:Enabled=false",
         "--Logging:ArcaneCore:File:Enabled=true", "--Logging:ArcaneCore:File:Path=" + Path.Combine(_dir, "world.log"),
         "--Cluster:Supervisor:Enabled=true",
         "--Cluster:Supervisor:MinClusterProcesses=1",

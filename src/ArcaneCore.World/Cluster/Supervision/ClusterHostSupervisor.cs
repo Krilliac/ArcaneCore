@@ -306,7 +306,7 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
 
 /// <summary>
 /// Outcome of <see cref="ClusterHostSupervisor.PlanStartAll"/>: the processes a start would launch, in
-/// configuration order, and the ones admission would refuse with the reason.
+/// start order (<see cref="SupervisedProcessConfig.StartOrder"/>, then key), and the ones admission would refuse with the reason.
 /// </summary>
 public sealed record SupervisorStartPlan(IReadOnlyList<string> Admitted, IReadOnlyList<(string Name, string Reason)> Denied);
 
@@ -365,11 +365,26 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 config.Name = key;
 
             config.Validate();
-            _entries[config.Name] = new ManagedEntry(config);
+            _entries[config.Name] = new ManagedEntry(config, key);
         }
     }
 
     public SupervisedOutputMultiplexer Multiplexer => _multiplexer;
+
+    /// <summary>
+    /// The one start order: ascending <see cref="SupervisedProcessConfig.StartOrder"/>, ties broken by configuration key (ordinal).
+    /// Configuration binding enumerates keys sorted, not as written, so the order is never the order of the file. Call under <c>_gate</c>.
+    /// </summary>
+    private List<ManagedEntry> OrderedEntriesUnderLock()
+    {
+        List<ManagedEntry> ordered = [.. _entries.Values];
+        ordered.Sort((a, b) =>
+        {
+            int byOrder = a.Config.StartOrder.CompareTo(b.Config.StartOrder);
+            return byOrder != 0 ? byOrder : string.CompareOrdinal(a.Key, b.Key);
+        });
+        return ordered;
+    }
 
     /// <summary>
     /// Evaluates whether <paramref name="candidate"/> can be admitted under the host's process ceiling,
@@ -449,7 +464,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             }
 
             _options.Processes[config.Name] = config;
-            _entries[config.Name] = new ManagedEntry(config);
+            _entries[config.Name] = new ManagedEntry(config, config.Name);
         }
     }
 
@@ -485,7 +500,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     /// <summary>
     /// Simulates <see cref="StartAllAsync"/> without launching anything: walks the registered processes in configuration
-    /// order and applies the admission rules cumulatively (process count, total allocated memory, the free-memory reserve
+    /// start order (<see cref="SupervisedProcessConfig.StartOrder"/>, then key) and applies the admission rules cumulatively (process count, total allocated memory, the free-memory reserve
     /// against one probe read, single-writer map ownership), so a caller can refuse a start that cannot reach its minimum
     /// before the first child is launched.
     /// </summary>
@@ -497,10 +512,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             var denied = new List<(string Name, string Reason)>();
             long availableMb = _capacityProbe.GetAvailableMemoryMb();
             int count = 0;
-            long committedMb = 0;
+            long committedMb = 0; // memory of entries this plan would start; running entries are already inside availableMb (as in CheckAdmission)
+            long allocatedMb = 0; // everything counted against MaxTotalAllocatedMemoryMb, running entries included
             var mapOwners = new Dictionary<uint, string>();
 
-            foreach (ManagedEntry entry in _entries.Values)
+            foreach (ManagedEntry entry in OrderedEntriesUnderLock())
             {
                 SupervisedProcessConfig cfg = entry.Config;
                 bool alreadyActive = entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff;
@@ -513,9 +529,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                     {
                         reason = $"active process count ({count + 1}) would exceed MaxConcurrentProcesses ({_options.MaxConcurrentProcesses}).";
                     }
-                    else if (_options.MaxTotalAllocatedMemoryMb is { } maxTotalMb && committedMb + cfg.RequiredMemoryMb > maxTotalMb)
+                    else if (_options.MaxTotalAllocatedMemoryMb is { } maxTotalMb && allocatedMb + cfg.RequiredMemoryMb > maxTotalMb)
                     {
-                        reason = $"projected allocated memory ({committedMb + cfg.RequiredMemoryMb} MiB) exceeds MaxTotalAllocatedMemoryMb ({maxTotalMb} MiB).";
+                        reason = $"projected allocated memory ({allocatedMb + cfg.RequiredMemoryMb} MiB) exceeds MaxTotalAllocatedMemoryMb ({maxTotalMb} MiB).";
                     }
                     else if (availableMb - committedMb - cfg.RequiredMemoryMb < _options.MinFreeMemoryReserveMb)
                     {
@@ -542,7 +558,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
                 admitted.Add(cfg.Name);
                 count++;
-                committedMb += cfg.RequiredMemoryMb;
+                allocatedMb += cfg.RequiredMemoryMb;
+                if (!alreadyActive)
+                    committedMb += cfg.RequiredMemoryMb;
                 if (isWorker)
                 {
                     foreach (uint mapId in entry.MapAssignments)
@@ -557,14 +575,14 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// Starts all registered supervised processes in configuration order.
+    /// Starts all registered supervised processes in start order (<see cref="SupervisedProcessConfig.StartOrder"/>, then key).
     /// </summary>
     public async Task<IReadOnlyList<SupervisedProcessSnapshot>> StartAllAsync(CancellationToken ct = default)
     {
         string[] names;
         lock (_gate)
         {
-            names = [.. _entries.Keys];
+            names = [.. OrderedEntriesUnderLock().Select(e => e.Config.Name)];
         }
 
         var snapshots = new List<SupervisedProcessSnapshot>(names.Length);
@@ -648,7 +666,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         string[] names;
         lock (_gate)
         {
-            names = [.. _entries.Keys.Reverse()];
+            names = [.. OrderedEntriesUnderLock().Select(e => e.Config.Name).Reverse()];
         }
 
         foreach (string name in names)
@@ -678,7 +696,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     {
         lock (_gate)
         {
-            return [.. _entries.Values.Select(e => e.ToSnapshot())];
+            return [.. OrderedEntriesUnderLock().Select(e => e.ToSnapshot())];
         }
     }
 
@@ -886,6 +904,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private sealed class ManagedEntry
     {
         public SupervisedProcessConfig Config { get; }
+        public string Key { get; }
         public List<uint> MapAssignments { get; }
         public SupervisedProcessState State { get; set; } = SupervisedProcessState.Stopped;
         public ISupervisedProcess? Process { get; set; }
@@ -896,9 +915,10 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public CancellationTokenSource? StopCts { get; set; }
         public Task? MonitorTask { get; set; }
 
-        public ManagedEntry(SupervisedProcessConfig config)
+        public ManagedEntry(SupervisedProcessConfig config, string key)
         {
             Config = config;
+            Key = key;
             MapAssignments = [.. config.MapAssignments];
         }
 

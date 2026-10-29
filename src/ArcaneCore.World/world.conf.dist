@@ -1837,7 +1837,8 @@ Cluster.Supervisor.MinFreeMemoryReserveMb = 1024
 
 #
 #    Cluster.Supervisor.Processes
-#        Description: Supervised process definitions in start order, keyed by a configuration key
+#        Description: Supervised process definitions, started in ascending
+#                     SupervisedProcessConfig.StartOrder (ties by key), keyed by a configuration key
 #                     that must not contain : (e.g. worker-EK); the display name may, via
 #                     SupervisedProcessConfig.Name (worker:EK).
 #        Type: Dictionary<string, SupervisedProcessConfig>

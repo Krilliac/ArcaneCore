@@ -357,13 +357,13 @@ public sealed class ClusterHostSupervisorTests : IDisposable
             MaxTotalAllocatedMemoryMb = 700,
             MinFreeMemoryReserveMb = 1_000,
         };
-        options.Processes["realm"] = new SupervisedProcessConfig { Name = "realm", Role = SupervisedRoles.Realm, ExecutablePath = "x", RequiredMemoryMb = 300 };
-        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 300 };
-        options.Processes["w-a"] = new SupervisedProcessConfig { Name = "w-a", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 200, MapAssignments = [0] };
-        options.Processes["w-b"] = new SupervisedProcessConfig { Name = "w-b", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [0] };
-        options.Processes["w-c"] = new SupervisedProcessConfig { Name = "w-c", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [0] };
-        options.Processes["w-d"] = new SupervisedProcessConfig { Name = "w-d", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [1] };
-        options.Processes["w-e"] = new SupervisedProcessConfig { Name = "w-e", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [2] };
+        options.Processes["realm"] = new SupervisedProcessConfig { Name = "realm", Role = SupervisedRoles.Realm, ExecutablePath = "x", RequiredMemoryMb = 300, StartOrder = 0 };
+        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 300, StartOrder = 1 };
+        options.Processes["w-a"] = new SupervisedProcessConfig { Name = "w-a", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 200, MapAssignments = [0], StartOrder = 2 };
+        options.Processes["w-b"] = new SupervisedProcessConfig { Name = "w-b", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [0], StartOrder = 3 };
+        options.Processes["w-c"] = new SupervisedProcessConfig { Name = "w-c", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [0], StartOrder = 4 };
+        options.Processes["w-d"] = new SupervisedProcessConfig { Name = "w-d", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [1], StartOrder = 5 };
+        options.Processes["w-e"] = new SupervisedProcessConfig { Name = "w-e", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [2], StartOrder = 6 };
 
         using var mux = new SupervisedOutputMultiplexer(TextWriter.Null);
         using var supervisor = new ClusterHostSupervisor(options, new FakeSupervisedProcessLauncher(), mux, new FakeCapacityProbe(availableMemoryMb: 100_000));
@@ -435,6 +435,102 @@ public sealed class ClusterHostSupervisorTests : IDisposable
 
         Assert.Equal("ARCANECORE_SUPERVISED_CHILD", SupervisedChild.EnvironmentVariable);
         Assert.Equal("worker:EK", info.Environment[SupervisedChild.EnvironmentVariable]);
+    }
+
+    [Fact]
+    public async Task StartOrder_DecidesLaunchDrainAndAdmissionOrder_NotTheSortedKeyOrder()
+    {
+        // Configuration binding enumerates keys sorted (gateway, realm, worker-EK); StartOrder is what the supervisor follows.
+        ClusterSupervisorOptions Build(int max)
+        {
+            var o = new ClusterSupervisorOptions { MaxConcurrentProcesses = max, MinFreeMemoryReserveMb = 0 };
+            o.Processes["realm"] = new SupervisedProcessConfig { Name = "realm", Role = SupervisedRoles.Realm, ExecutablePath = "x", RequiredMemoryMb = 1, StartOrder = 0 };
+            o.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1, StartOrder = 1 };
+            o.Processes["worker-EK"] = new SupervisedProcessConfig { Name = "worker-EK", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 1, StartOrder = 2 };
+            return o;
+        }
+
+        var launcher = new OrderRecordingLauncher();
+        using var mux = new SupervisedOutputMultiplexer(TextWriter.Null);
+        await using var supervisor = new ClusterHostSupervisor(Build(9), launcher, mux, new FakeCapacityProbe(availableMemoryMb: 16_384));
+
+        Assert.Equal(["realm", "gateway", "worker-EK"], supervisor.PlanStartAll().Admitted);
+        Assert.Equal(["realm", "gateway", "worker-EK"], supervisor.GetSnapshots().Select(s => s.Name));
+
+        await supervisor.StartAllAsync();
+        Assert.Equal(["realm", "gateway", "worker-EK"], launcher.Launched.ToArray());
+
+        await supervisor.DrainAndStopAsync();
+        Assert.Equal(["worker-EK", "gateway", "realm"], launcher.Drained.ToArray());
+
+        // With room for two, the highest StartOrder is the one denied.
+        using var mux2 = new SupervisedOutputMultiplexer(TextWriter.Null);
+        await using var limited = new ClusterHostSupervisor(Build(2), new OrderRecordingLauncher(), mux2, new FakeCapacityProbe(availableMemoryMb: 16_384));
+        SupervisorStartPlan plan = limited.PlanStartAll();
+        Assert.Equal(["realm", "gateway"], plan.Admitted);
+        Assert.Equal("worker-EK", Assert.Single(plan.Denied).Name);
+    }
+
+    [Fact]
+    public async Task PlanStartAll_DoesNotCountRunningProcessesAgainstTheProbedReserve()
+    {
+        var options = new ClusterSupervisorOptions { MinFreeMemoryReserveMb = 500 };
+        options.Processes["one"] = new SupervisedProcessConfig { Name = "one", Role = SupervisedRoles.Realm, ExecutablePath = "x", RequiredMemoryMb = 300, StartOrder = 0 };
+        options.Processes["two"] = new SupervisedProcessConfig { Name = "two", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 300, StartOrder = 1 };
+        using var mux = new SupervisedOutputMultiplexer(TextWriter.Null);
+        await using var supervisor = new ClusterHostSupervisor(options, new OrderRecordingLauncher(), mux, new FakeCapacityProbe(availableMemoryMb: 1_000));
+        await supervisor.StartProcessAsync("one");
+
+        // "one" is running, so its 300 MiB is already missing from the 1000 MiB the probe reports: 1000 - 300 = 700 >= 500.
+        SupervisorStartPlan plan = supervisor.PlanStartAll();
+
+        Assert.Equal(["one", "two"], plan.Admitted);
+        Assert.Empty(plan.Denied);
+    }
+
+    private sealed class OrderRecordingLauncher : ISupervisedProcessLauncher
+    {
+        public ConcurrentQueue<string> Launched { get; } = new();
+
+        public ConcurrentQueue<string> Drained { get; } = new();
+
+        public ISupervisedProcess Launch(SupervisedProcessConfig config)
+        {
+            Launched.Enqueue(config.Name);
+            return new Child(this, config.Name);
+        }
+
+        private sealed class Child(OrderRecordingLauncher owner, string name) : ISupervisedProcess
+        {
+            private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public int ProcessId => 1;
+
+            public bool HasExited => _exit.Task.IsCompleted;
+
+            public int? ExitCode => _exit.Task.IsCompleted ? _exit.Task.Result : null;
+
+            public event Action<string, bool>? OutputLineReceived
+            {
+                add { }
+                remove { }
+            }
+
+            public Task<int> WaitForExitAsync(CancellationToken ct = default) => _exit.Task.WaitAsync(ct);
+
+            public Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default)
+            {
+                owner.Drained.Enqueue(name);
+                _exit.TrySetResult(0);
+                return Task.FromResult(true);
+            }
+
+            public void KillOwnedProcess() => _exit.TrySetResult(-1);
+
+            public void Dispose()
+            {
+            }
+        }
     }
 
     private static async Task<SupervisedProcessSnapshot> WaitForStateAsync(ClusterHostSupervisor supervisor, string name, SupervisedProcessState state)

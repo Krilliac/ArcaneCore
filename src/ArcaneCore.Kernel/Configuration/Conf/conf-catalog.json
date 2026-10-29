@@ -2400,7 +2400,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Supervised process definitions in start order, keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`).",
+      "meaning": "Supervised process definitions, started in ascending `SupervisedProcessConfig.StartOrder` (ties by key), keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`).",
       "allowed": "a map: one key per entry name; each entry is a group of keys",
       "docs": "docs/reference/configuration.md#clustersupervisor",
       "isCollection": true

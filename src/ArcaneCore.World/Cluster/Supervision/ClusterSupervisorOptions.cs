@@ -118,6 +118,13 @@ public sealed class SupervisedProcessConfig
     /// </summary>
     public IReadOnlyList<uint> MapAssignments { get; set; } = [];
 
+    /// <summary>
+    /// Position in the start sequence (default 0): processes start in ascending order, ties broken by the configuration key
+    /// (ordinal), and drain in the reverse. Needed because configuration binding returns keys sorted, not in file order;
+    /// for example give <c>realm</c> 0, <c>gateway</c> 1 and the workers 2. Also decides which process is denied first when admission runs out.
+    /// </summary>
+    public int StartOrder { get; set; }
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Name))
@@ -172,7 +179,7 @@ public sealed class ClusterSupervisorOptions
     public long? MaxTotalAllocatedMemoryMb { get; set; }
 
     /// <summary>
-    /// Supervised process definitions in start order, keyed by a configuration key that must not contain <c>:</c>
+    /// Supervised process definitions, started in ascending <see cref="SupervisedProcessConfig.StartOrder"/> (ties by key), keyed by a configuration key that must not contain <c>:</c>
     /// (e.g. <c>worker-EK</c>); the display name may, via <see cref="SupervisedProcessConfig.Name"/> (<c>worker:EK</c>).
     /// </summary>
     public Dictionary<string, SupervisedProcessConfig> Processes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -214,6 +221,7 @@ public sealed class ClusterSupervisorOptions
                     RestartBackoffMaxMs = config.RestartBackoffMaxMs,
                     DrainTimeoutMs = config.DrainTimeoutMs,
                     RequiredMemoryMb = config.RequiredMemoryMb,
+                    StartOrder = config.StartOrder,
                 };
                 effective.Validate();
             }

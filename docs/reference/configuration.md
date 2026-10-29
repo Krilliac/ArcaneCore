@@ -323,7 +323,7 @@ How to read the tables:
 | `Cluster:Supervisor:MaxTotalAllocatedMemoryMb` | `long?` | `null` | - | Optional cap on the sum of `SupervisedProcessConfig.RequiredMemoryMb` across all active supervised processes. |
 | `Cluster:Supervisor:MinClusterProcesses` | `int` | `3` | - | Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3). A start that can admit fewer launches nothing and refuses with a message naming this key. |
 | `Cluster:Supervisor:MinFreeMemoryReserveMb` | `long` | `1024` | - | Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB). |
-| `Cluster:Supervisor:Processes` | `Dictionary<string, SupervisedProcessConfig>` | `{}` | - | Supervised process definitions in start order, keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`). |
+| `Cluster:Supervisor:Processes` | `Dictionary<string, SupervisedProcessConfig>` | `{}` | - | Supervised process definitions, started in ascending `SupervisedProcessConfig.StartOrder` (ties by key), keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`). |
 
 ## `Cluster:Worker`
 
