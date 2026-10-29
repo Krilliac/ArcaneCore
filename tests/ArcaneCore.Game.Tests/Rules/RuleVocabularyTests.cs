@@ -11,11 +11,10 @@ public sealed class RuleVocabularyTests
     {
         RuleVocabulary vocabulary = RuleVocabulary.Default;
 
-        Assert.Empty(vocabulary.Hosts);
+        // Host lanes add their primitives to Default; the shared (any-host) set is what this test pins.
         Assert.Equal(
             ["action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "target 1 self", "target 2 invoker"],
-            vocabulary.Primitives.Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
-        Assert.All(vocabulary.Primitives, p => Assert.Equal(RuleHostKind.Any, p.Host));
+            vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Any).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
         Assert.All(vocabulary.Primitives, p => Assert.True(p.IsBuiltIn));
         Assert.All(vocabulary.Primitives, p => Assert.False(string.IsNullOrWhiteSpace(p.Description)));
     }
