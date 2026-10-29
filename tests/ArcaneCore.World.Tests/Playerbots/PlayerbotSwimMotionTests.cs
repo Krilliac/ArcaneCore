@@ -203,6 +203,162 @@ public sealed class PlayerbotSwimMotionTests
             });
         });
 
+    /// <summary>The seabed of the mesh test lake: 18 yd under the surface, far past <see cref="PlayerbotMotion.MeshFloorToleranceYards"/> (4).</summary>
+    private const float DeepGround = 70f;
+
+    /// <summary>
+    /// Live terrain meshes only the liquid surface over deep water. A navigated mesh route over water deeper than the mesh floor tolerance
+    /// had its steps placed on that surface (PlayerbotMotion.Validate / MeshSurface), where the water is not swim depth by the liquid rule
+    /// (level > z + 0.75 collision height): no HighLiquid, no swimming, run speed, and a mount that never drops.
+    /// </summary>
+    [Fact]
+    public async Task MeshRouteOverDeepWater_Swims_AtSwimSpeed_AndSetsTheHighLiquidFlag()
+        => await RunAsync(async (host, session) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Assert.True(Surface - DeepGround > PlayerbotMotion.MeshFloorToleranceYards + 1f, "fixture: the seabed must be out of the mesh floor tolerance");
+                Vector3 a = new(-40f, Y, Surface), b = new(10f, Y, Surface); // the mesh polygon is the water surface
+                player.Relocate(a.X, a.Y, a.Z, 0f, host.World.NowMs);
+                session.ManagedBudget = new ManagedActionBudget(4);
+                var route = new PlayerbotRoute([a, b], 50f, navigated: true) { MeshPoints = [a, b] };
+                Assert.True(PlayerbotMotion.Follow(session, player, route, new PlayerbotOptions { Enabled = true }, host.World.NowMs), "the route did not start");
+
+                float swim = UnitSpeed.Get(player, MoveType.Swim);
+                Assert.Equal(SwimYardsPerSecond, swim, 2);
+                Step(host, session, player); // the first heartbeat may still be at the speed the route started with
+                var trace = new List<string>();
+                for (int i = 2; i <= 3; i++)
+                {
+                    float moved = Step(host, session, player);
+                    trace.Add($"#{i}: {moved:F2} yd z={player.Z:F2} {player.Movement.Flags} env={player.Locomotion.Environment}");
+                    string all = string.Join("; ", trace);
+                    Assert.True(Math.Abs(moved - swim) <= 0.1f, $"step {i} over deep water on a mesh route moved {moved:F3} yd in 1000 ms; swim speed is {swim:F3} ({all})");
+                    Assert.True(player.Movement.HasFlag(MovementFlags.Swimming), $"step {i}: no MOVEFLAG_SWIMMING ({all})");
+                    Assert.True(player.Locomotion.Environment.HasFlag(EnvironmentFlags.HighLiquid), $"step {i}: the server HighLiquid flag is not set, so a mount would not drop ({all})");
+                }
+
+                return true;
+            });
+        }, ground: DeepGround, pathfinder: new SurfaceOnlyMesh(Surface));
+
+    [Fact]
+    public async Task ShoreCrossing_LandToWater_SendsOneStartSwimWithinAStep()
+        => await RunAsync((host, session) => host.OnWorldAsync(() => { WalkShore(host, session, intoWater: true); return true; }));
+
+    [Fact]
+    public async Task ShoreCrossing_WaterToLand_SendsOneStopSwimWithinAStep()
+        => await RunAsync((host, session) => host.OnWorldAsync(() => { WalkShore(host, session, intoWater: false); return true; }));
+
+    /// <summary>
+    /// 100 ms steps across x = 0. Packets are what the motion sends through the movement handler (ManagedDispatchObserver); the position and
+    /// flags are read after each step. The swim packet must come at the shore, not at the next 500 ms heartbeat.
+    /// </summary>
+    private static void WalkShore(WorldTestHost host, WorldSession session, bool intoWater)
+    {
+        Player player = session.Player!;
+        float startX = intoWater ? 3f : -3f, endX = intoWater ? -40f : 40f;
+        Place(host, player, startX);
+        LiquidEnvironment.UpdateTerrainFlags(player);
+        var ops = new List<WorldOpcode>();
+        session.ManagedDispatchObserver = op => ops.Add(op);
+        try
+        {
+            Assert.True(Follow(host, session, player, new Vector3(startX, Y, Ground), new Vector3(endX, Y, Ground)), "the route did not start");
+            var packets = new List<(int Step, WorldOpcode[] Ops, Vector2 Pos, MovementFlags Flags)> { (0, [.. ops], new(player.X, player.Y), player.Movement.Flags) };
+            for (int step = 1; step <= 14; step++)
+            {
+                ops.Clear();
+                PlayerbotMotion.ElapseForTests(player, 100);
+                PlayerbotMotion.Pump(session, player, host.World.NowMs);
+                if (ops.Count > 0) packets.Add((step, [.. ops], new(player.X, player.Y), player.Movement.Flags));
+            }
+
+            string trace = string.Join("; ", packets.Select(p => $"@{p.Step}: [{string.Join(",", p.Ops)}] x={p.Pos.X:F2} {p.Flags}"));
+            WorldOpcode swimOp = intoWater ? WorldOpcode.MsgMoveStartSwim : WorldOpcode.MsgMoveStopSwim;
+            WorldOpcode otherOp = intoWater ? WorldOpcode.MsgMoveStopSwim : WorldOpcode.MsgMoveStartSwim;
+            Assert.True(intoWater ? player.X < -1f : player.X > 1f, $"the bot did not cross the shore ({trace})");
+            Assert.True(1 == packets.Sum(p => p.Ops.Count(o => o == swimOp)), $"expected exactly one {swimOp} ({trace})");
+            Assert.True(0 == packets.Sum(p => p.Ops.Count(o => o == otherOp)), $"expected no {otherOp} ({trace})");
+
+            // At the shore: within one step of it at run speed (0.7 yd), not at a later heartbeat.
+            var swimPacket = packets.Single(p => p.Ops.Contains(swimOp));
+            if (intoWater) Assert.True(swimPacket.Pos.X is >= -0.75f and <= 0.05f, $"{swimOp} sent at x={swimPacket.Pos.X:F2}, not at the shore ({trace})");
+            else Assert.True(swimPacket.Pos.X is >= -0.05f and <= 0.75f, $"{swimOp} sent at x={swimPacket.Pos.X:F2}, not at the shore ({trace})");
+
+            for (int i = 0; i < packets.Count; i++)
+            {
+                var p = packets[i];
+                if (MathF.Abs(p.Pos.X) > 0.05f)
+                    Assert.True(p.Flags.HasFlag(MovementFlags.Swimming) == p.Pos.X < 0f, $"packet @{p.Step}: Swimming flag disagrees with x={p.Pos.X:F2} ({trace})");
+                if (i == 0) continue;
+                var q = packets[i - 1];
+                float bound = (q.Pos.X < -0.05f && p.Pos.X < -0.05f ? SwimYardsPerSecond : RunYardsPerSecond) * ((p.Step - q.Step) * 0.1f) + 0.06f;
+                Assert.True(Vector2.Distance(q.Pos, p.Pos) <= bound, $"packet @{p.Step} jumped {Vector2.Distance(q.Pos, p.Pos):F2} yd from @{q.Step} (bound {bound:F2}) ({trace})");
+            }
+        }
+        finally { session.ManagedDispatchObserver = null; }
+    }
+
+    /// <summary>A bot mounted on land rides into the lake: after the crossing it has lost the mount, swims at swim speed and nothing reports an overspeed.</summary>
+    [Fact]
+    public async Task MountedBotRidingFromLandIntoWater_IsDismounted_Swims_AndReportsNoOverspeed()
+        => await RunAsync(async (host, session) =>
+        {
+            await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<CreatureWorldFeature>().Install(new CreatureContent(
+                [new CreatureTemplate { Entry = MountCreature, Name = "Test Horse", DisplayIds = [MountDisplay], DisplayProbabilities = [100] }], [], [], [], [])));
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                using AnomalyCapture capture = H1AnomalyKit.CaptureFor(player);
+                SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                spells.Store = new SpellStore([.. spells.Store.All, MountSpell()], [], []);
+                Place(host, player, 10f);
+                LiquidEnvironment.UpdateTerrainFlags(player);
+                Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, MountSpellId, SpellCastTargets.ForSelf(), triggered: true));
+                Assert.True(UnitSpeed.IsMounted(player), "the fixture mount did not take");
+                for (int ack = 0; ack < 4; ack++) { session.ManagedBudget = new ManagedActionBudget(4); PlayerbotMovementControl.Update(session, player); }
+                float mounted = UnitSpeed.Get(player, MoveType.Run);
+                Assert.True(mounted > RunYardsPerSecond + 0.5f, "fixture: the mount must give a mounted run speed");
+
+                Assert.True(Follow(host, session, player, new Vector3(10f, Y, Ground), new Vector3(-60f, Y, Ground)), "the route did not start");
+                float crossing = Step(host, session, player); // 11.2 yd west from x = 10: across the shore
+                Assert.True(player.X < 0f, $"fixture: the first step did not reach the water (x {player.X:F2}, moved {crossing:F2})");
+
+                float swim = UnitSpeed.Get(player, MoveType.Swim);
+                var trace = new List<string> { $"#1: {crossing:F2} yd x={player.X:F2} mounted={UnitSpeed.IsMounted(player)} {player.Movement.Flags}" };
+                for (int i = 2; i <= 3; i++)
+                {
+                    float moved = Step(host, session, player);
+                    trace.Add($"#{i}: {moved:F2} yd x={player.X:F2} mounted={UnitSpeed.IsMounted(player)} {player.Movement.Flags}");
+                    string all = string.Join("; ", trace);
+                    Assert.False(UnitSpeed.IsMounted(player), $"step {i}: still mounted in deep water ({all})");
+                    Assert.True(Math.Abs(moved - swim) <= 0.1f, $"step {i} in the water moved {moved:F3} yd in 1000 ms; swim speed is {swim:F3} ({all})");
+                    Assert.True(player.Movement.HasFlag(MovementFlags.Swimming), $"step {i}: no MOVEFLAG_SWIMMING ({all})");
+                }
+
+                string key = PlayerbotAnomalies.Key("motion", "overspeed");
+                Assert.False(capture.Any(key), $"unexpected {key} along the ride; reported: {string.Join(", ", capture.Notices.Select(n => n.Key))} ({string.Join("; ", trace)})");
+                return true;
+            });
+        });
+
+    /// <summary>A navigation mesh that is the liquid surface only (what the generator builds over deep water): every walk ends on it.</summary>
+    private sealed class SurfaceOnlyMesh(float surface) : IPathfinder, IMeshPointQuery
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => PathResult.StraightLine(start, end, PathType.Normal);
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+        { point = center; return false; }
+
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => new(true, false, 1f, end with { Z = surface });
+    }
+
     private static SpellInfo MountSpell() => new()
     {
         Id = MountSpellId,
@@ -237,14 +393,14 @@ public sealed class PlayerbotSwimMotionTests
         return Vector2.Distance(before, new(player.X, player.Y));
     }
 
-    private static async Task RunAsync(Func<WorldTestHost, WorldSession, Task> body)
+    private static async Task RunAsync(Func<WorldTestHost, WorldSession, Task> body, float ground = Ground, IPathfinder? pathfinder = null)
     {
         string dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-swim-motion-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(dataDir, "maps"));
         try
         {
-            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 32, 32)), MapTileBytes(Ground, Surface));
-            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 31, 32)), MapTileBytes(Ground, null));
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 32, 32)), MapTileBytes(ground, Surface));
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 31, 32)), MapTileBytes(ground, null));
             await using WorldTestHost host = WorldTestHost.Start(
                 configure: options => options.Maps.DataDirectory = dataDir,
                 configureServices: services => services.AddSingleton<ArcaneCore.World.Features.IWorldFeature, H1AnomalyKit.ManualClock>());
@@ -253,7 +409,7 @@ public sealed class PlayerbotSwimMotionTests
             {
                 await host.OnWorldAsync(() =>
                 {
-                    WorldCollision.Of(host.World).Install(lineOfSight: new SwimFloor(Ground), pathfinder: new OpenPathfinder());
+                    WorldCollision.Of(host.World).Install(lineOfSight: new SwimFloor(ground), pathfinder: pathfinder ?? new OpenPathfinder());
                     return true;
                 });
                 await body(host, session);

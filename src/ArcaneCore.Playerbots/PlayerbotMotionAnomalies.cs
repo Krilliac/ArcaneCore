@@ -306,11 +306,11 @@ internal static class PlayerbotMotionAnomalies
     /// now for <paramref name="nextPoint"/>): the stuck check every heartbeat, the ground and crossing checks once per sample.
     /// </summary>
     internal static void AfterHeartbeat(WorldSession session, Player player, Map map, PlayerbotMotion.MotionState state,
-        PlayerbotRoute route, Vector3 from, int fromNext, int nextPoint, Vector3 to, uint now, uint ageMs = 0, bool swam = false)
+        PlayerbotRoute route, Vector3 from, int fromNext, int nextPoint, Vector3 to, uint now, uint ageMs = 0, bool swam = false, bool walkMode = false)
     {
         MotionWatch watch = state.Watch;
         CheckStuck(session, player, watch, route, to, now);
-        CheckOverspeed(session, player, state, from, to, ageMs, swam, now);
+        CheckOverspeed(session, player, state, from, to, ageMs, swam, walkMode, now);
         if (!watch.SampleDue(now) || session.IsInChaosProbe) return;
         CheckGround(player, map, watch, to, now);
         CheckCrossing(player, map, watch, route, fromNext, nextPoint, from, to, now);
@@ -318,20 +318,22 @@ internal static class PlayerbotMotionAnomalies
 
     /// <summary>
     /// The step from <paramref name="from"/> to <paramref name="to"/> took <paramref name="ageMs"/> and was walked in the swim state
-    /// <paramref name="swam"/>: more than <see cref="OverspeedFactor"/> times the speed <see cref="PlayerbotMotion.Speed"/> gives the
-    /// bot now is reported. The motion state's own speed is not the yardstick (a fault in it is what this finds).
+    /// <paramref name="swam"/> and the walk mode <paramref name="walkMode"/>: more than <see cref="OverspeedFactor"/> times the bot's
+    /// current swim speed (swimming), walk speed (walk mode) or run speed is reported. The motion state's own speed is not the yardstick
+    /// (a fault in it is what this finds).
     /// </summary>
     internal static void CheckOverspeed(WorldSession session, Player player, PlayerbotMotion.MotionState state, Vector3 from, Vector3 to,
-        uint ageMs, bool swam, uint now)
+        uint ageMs, bool swam, bool walkMode, uint now)
     {
         if (ageMs < OverspeedMinAgeMs || session.IsInChaosProbe) return;
-        if (!PlayerbotMotion.Speed(player, state.MoveSpeedCap, swam, out float expected, out bool walk)) return;
+        float expected = UnitSpeed.Get(player, swam ? MoveType.Swim : walkMode ? MoveType.Walk : MoveType.Run);
+        if (!float.IsFinite(expected) || expected <= 0) return;
         float travelled = Vector2.Distance(new Vector2(from.X, from.Y), new Vector2(to.X, to.Y));
         float actual = travelled / (ageMs / 1000f);
         if (!(actual > OverspeedFactor * expected) || !state.Watch.Due(Code.Overspeed, now)) return;
         Emit(player, Code.Overspeed,
             string.Create(CultureInfo.InvariantCulture,
-                $"moved {actual:F2} yd/s, expected {expected:F2} yd/s (motion speed {state.Speed:F2}, run speed {UnitSpeed.Get(player, MoveType.Run):F2}, mounted {UnitSpeed.IsMounted(player)}, swimming {swam}, walk {walk}), {travelled:F2} yd in {ageMs} ms"),
+                $"moved {actual:F2} yd/s, expected {expected:F2} yd/s (motion speed {state.Speed:F2}, run speed {UnitSpeed.Get(player, MoveType.Run):F2}, mounted {UnitSpeed.IsMounted(player)}, swimming {swam}, walk {walkMode}), {travelled:F2} yd in {ageMs} ms"),
             AnomalySeverity.Warning);
     }
 
