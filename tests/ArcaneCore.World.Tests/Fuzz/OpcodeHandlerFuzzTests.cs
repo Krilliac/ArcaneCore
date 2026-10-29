@@ -9,6 +9,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -40,10 +41,39 @@ public sealed class OpcodeHandlerFuzzTests(ITestOutputHelper output)
     [Fact]
     public async Task OpcodeHandlers_RejectMalformedPackets_WithoutCorruptingStateOrStallingTheWorld()
     {
-        var run = new HandlerFuzzRun(output, HandlerFuzzSettings.FromEnvironment());
-        List<HandlerFuzzFinding> findings = await run.ExecuteAsync(KnownHandlerCount);
+        var run = new HandlerFuzzRun(output, HandlerFuzzSettings.FromEnvironment(), new HandlerFuzzOptions { KnownHandlerCount = KnownHandlerCount, EnforceCoverage = true });
+        List<HandlerFuzzFinding> findings = await run.ExecuteAsync();
         Assert.True(findings.Count == 0, run.FormatFindings());
     }
+}
+
+/// <summary>What a run is checked against; the defaults are the real run's. The pipeline test injects a table of planted handlers and short deadlines.</summary>
+internal sealed class HandlerFuzzOptions
+{
+    /// <summary>The table to enumerate and call; null: the host's real opcode table.</summary>
+    public OpcodeTable? Table { get; init; }
+
+    /// <summary>The table must hold at least this many handlers.</summary>
+    public int KnownHandlerCount { get; init; }
+
+    /// <summary>
+    /// How long a session handler may take. A hang bound, not a timing assertion: generous (10 s per case) so a loaded machine never trips it;
+    /// the pipeline test shortens it to prove the hang finding.
+    /// </summary>
+    public TimeSpan SessionHandlerDeadline { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>How long the world may go without a tick or a round trip (a hang bound, generous like <see cref="SessionHandlerDeadline"/>).</summary>
+    public TimeSpan TickDeadline { get; init; } = TimeSpan.FromSeconds(10);
+
+    public IReadOnlyDictionary<WorldOpcode, string> KickAllowlist { get; init; } = HandlerFuzzKit.KickAllowlist;
+
+    public IReadOnlyDictionary<WorldOpcode, string> RecoveryCapAllowlist { get; init; } = HandlerFuzzKit.RecoveryCapAllowlist;
+
+    /// <summary>
+    /// The real run: in an unfiltered run with the default random iterations, the coverage floors (traced handlers, cases) and the
+    /// fixture creature and gameobject in the GUID set are enforced, so a run that silently checks less than before fails.
+    /// </summary>
+    public bool EnforceCoverage { get; init; }
 }
 
 /// <summary>One fuzz run: the host, the three sessions, the case loop, the findings and the report.</summary>
@@ -56,8 +86,6 @@ internal sealed class HandlerFuzzRun
     private const int MaxRecoveriesPerOpcode = 3;
     private static readonly TimeSpan WorldBatchBudget = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan WorldCallDeadline = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan SessionHandlerDeadline = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan TickDeadline = TimeSpan.FromSeconds(10);
 
     private enum Stop { None, Kicked, LeftWorld, Transfer, Dead }
 
@@ -68,7 +96,8 @@ internal sealed class HandlerFuzzRun
     private readonly List<HandlerFuzzFinding> _order = [];
     private readonly List<HandlerFuzzStats> _stats = [];
     private readonly List<string> _notes = [];
-    private readonly Dictionary<WorldOpcode, (int Count, string First)> _unexpectedKicks = [];
+    private readonly HandlerFuzzOptions _options;
+    private int _activeOpcode = -1;
     private WorldTestHost _host = null!;
     private Slot _primary = null!;
     private Slot _other = null!;
@@ -79,11 +108,16 @@ internal sealed class HandlerFuzzRun
     private int _carryOverRecoveries;
     private int _rawOccurrences;
 
-    public HandlerFuzzRun(ITestOutputHelper output, HandlerFuzzSettings settings)
+    public HandlerFuzzRun(ITestOutputHelper output, HandlerFuzzSettings settings, HandlerFuzzOptions? options = null)
     {
         _output = output;
         _settings = settings;
+        _options = options ?? new HandlerFuzzOptions();
     }
+
+    private TimeSpan SessionHandlerDeadline => _options.SessionHandlerDeadline;
+
+    private TimeSpan TickDeadline => _options.TickDeadline;
 
     /// <summary>A client connection with its session and, for a character in the world, the player; the drain loop reads and discards its output.</summary>
     private sealed class Slot(WorldTestClient client, WorldSession session, Player? player, ulong characterGuid, int accountId) : IAsyncDisposable
@@ -154,7 +188,7 @@ internal sealed class HandlerFuzzRun
 
     // --- run -------------------------------------------------------------------------------
 
-    public async Task<List<HandlerFuzzFinding>> ExecuteAsync(int knownHandlerCount)
+    public async Task<List<HandlerFuzzFinding>> ExecuteAsync()
     {
         var total = Stopwatch.StartNew();
         var setupWatch = Stopwatch.StartNew();
@@ -196,10 +230,94 @@ internal sealed class HandlerFuzzRun
         }
 
         _host.World.WorldTick += _ => Interlocked.Increment(ref _ticks);
-        OpcodeTable table = _host.Opcodes;
+        FaultLedger.Shared.FaultNoticed += OnFaultNoticed;
+        try
+        {
+            await RunAsync(total, setupWatch);
+        }
+        finally
+        {
+            FaultLedger.Shared.FaultNoticed -= OnFaultNoticed;
+            await CleanUpAsync();
+        }
+
+        return [.. _order];
+    }
+
+    /// <summary>
+    /// A fault the ledger noticed while this run was going: counted only when it was raised on this host's world thread (the ledger is
+    /// process-wide and other tests run in parallel, but <c>IsWorldThread</c> is per world). The ledger raises a notice for the first
+    /// occurrence of a signature in the process (and throttled repeats), so a fault whose signature an earlier test already recorded is not seen:
+    /// this is a best-effort net for new faults, not a complete count.
+    /// </summary>
+    private void OnFaultNoticed(FaultNotice notice)
+    {
+        if (_host is null || !_host.World.IsWorldThread)
+        {
+            return;
+        }
+
+        int active = Volatile.Read(ref _activeOpcode);
+        if (active < 0)
+        {
+            return;
+        }
+
+        AddFinding((WorldOpcode)active, "deferred-fault:" + notice.Site, notice.CondensedStack.Split('\n')[0].Trim(),
+            $"{notice.ExceptionType}: {notice.Message}\n        {notice.CondensedStack}",
+            "(fault recorded on the world thread while this opcode was running: inside a case or in a tick between cases)", -1, []);
+    }
+
+    private async Task CleanUpAsync()
+    {
+        // Drains and clients first (each bounded inside Slot.DisposeAsync), then the host. After a hung world thread World.Stop would join a
+        // thread that never returns, so the host is stopped on a bounded best-effort basis and abandoned past it; otherwise teardown is bounded
+        // generously and a timeout is a failure.
+        if (_primary is not null)
+        {
+            await _primary.DisposeAsync();
+        }
+
+        if (_other is not null)
+        {
+            await _other.DisposeAsync();
+        }
+
+        if (_select is not null)
+        {
+            await _select.DisposeAsync();
+        }
+
+        Task stop = _host.DisposeAsync().AsTask();
+        if (_hung)
+        {
+            try
+            {
+                await stop.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+            {
+                _output.WriteLine("teardown: the host did not stop within 10 s after the hang; abandoned");
+            }
+        }
+        else
+        {
+            await stop.WaitAsync(TimeSpan.FromSeconds(120));
+        }
+    }
+
+    private async Task RunAsync(Stopwatch total, Stopwatch setupWatch)
+    {
+        OpcodeTable table = _options.Table ?? _host.Opcodes;
         List<WorldOpcode> opcodes = [.. table.Opcodes.OrderBy(o => (ushort)o)];
         Assert.True(opcodes.Count > 0, "the opcode table is empty");
-        Assert.True(opcodes.Count >= knownHandlerCount, $"the opcode table has {opcodes.Count} handlers, fewer than the known {knownHandlerCount}: lower the floor only when a handler is deliberately removed");
+        Assert.True(opcodes.Count >= _options.KnownHandlerCount, $"the opcode table has {opcodes.Count} handlers, fewer than the known {_options.KnownHandlerCount}: lower the floor only when a handler is deliberately removed");
+        bool fullRun = _settings.OpcodeFilter is null && _settings.RandomIterations >= HandlerFuzzSettings.DefaultRandomIterations;
+        if (_settings.OpcodeFilter is not null && !opcodes.Any(_settings.Selects))
+        {
+            AddFinding(0, "opcode-filter-selected-nothing", "-", $"ARCANECORE_HANDLER_FUZZ_OPCODE='{_settings.OpcodeFilter}' matches no opcode of the table: nothing was fuzzed", "-", 0, []);
+            return;
+        }
 
         await ProvisionAllAsync();
         setupWatch.Stop();
@@ -209,6 +327,17 @@ internal sealed class HandlerFuzzRun
             return (_primary.Player!.Inventory.AllItems.Count(), HandlerFuzzKit.NearestCreature(_primary.Player!) is null ? 0 : 1, string.Join(", ", g.Select(x => x.Name)));
         });
         _output.WriteLine($"fixture: primary on map {_primary.Player!.MapId} with {items} item(s), nearest creature {(creatures == 1 ? "found" : "none")}; guid set: {guidNames}");
+        if (_options.EnforceCoverage && fullRun)
+        {
+            foreach (string required in new[] { "nearest creature", "fixture gameobject", "first item", "other-map player" })
+            {
+                if (!guidNames.Contains(required, StringComparison.Ordinal))
+                {
+                    AddFinding(0, "fixture-missing", "-", $"the GUID set has no '{required}': the fixture no longer reaches the handlers it exists for (guid set: {guidNames})", "-", 0, []);
+                }
+            }
+        }
+
         _output.WriteLine($"setup: {setupWatch.Elapsed.TotalSeconds:F1} s ({opcodes.Count} handlers in the table; seed {_settings.BaseSeed}, {_settings.RandomIterations} random case(s) per opcode)");
 
         var worldWatch = new Stopwatch();
@@ -226,6 +355,7 @@ internal sealed class HandlerFuzzRun
             }
 
             Assert.True(table.TryGet(opcode, out OpcodeHandler? handler));
+            Volatile.Write(ref _activeOpcode, (int)opcode);
             var stats = new HandlerFuzzStats(opcode, handler.Stripped ? "stripped" : handler.World is not null ? "world" : "session");
             _stats.Add(stats);
             if (handler.Stripped)
@@ -253,29 +383,35 @@ internal sealed class HandlerFuzzRun
             stats.Traced = source.Traced;
             stats.Fields = source.Fields.Count;
             stats.Millis = watch.Elapsed.TotalMilliseconds;
+            if (stats.RecoveryCapped && !_options.RecoveryCapAllowlist.ContainsKey(opcode))
+            {
+                AddFinding(opcode, "recovery-capped", "-", $"the fuzz had to replace the session more than {MaxRecoveriesPerOpcode} times (kicked {stats.Kicks}x) and skipped the rest of this opcode's cases; it is not in the recovery-cap allowlist", stats.FirstKick ?? "-", stats.Cases, []);
+            }
+
             if (stats.Cases == 0 && !_hung)
             {
                 AddFinding(opcode, "handler-executed-no-cases", "-", "no mutation ran for this handler (no usable session, or recovery failed before the first case)", "-", 0, []);
             }
         }
 
+        Volatile.Write(ref _activeOpcode, -1);
         total.Stop();
-        PrintSummary(total.Elapsed, setupWatch.Elapsed, worldWatch.Elapsed, sessionWatch.Elapsed, opcodes.Count);
-        if (!_hung)
+        if (_options.EnforceCoverage && fullRun && !_hung)
         {
-            await DisposeAllAsync();
+            int traced = _stats.Count(x => x.Kind != "stripped" && x.Cases > 0 && x.Traced);
+            int cases = _stats.Sum(x => x.Cases);
+            if (traced < HandlerFuzzKit.MinTracedHandlers)
+            {
+                AddFinding(0, "coverage-floor", "-", $"only {traced} handlers had their layout traced; the floor is {HandlerFuzzKit.MinTracedHandlers}", "-", 0, []);
+            }
+
+            if (cases < HandlerFuzzKit.MinLightCases)
+            {
+                AddFinding(0, "coverage-floor", "-", $"only {cases} cases ran; the floor is {HandlerFuzzKit.MinLightCases}", "-", 0, []);
+            }
         }
 
-        // A hung world thread cannot be disposed (World.Stop joins it): the host is abandoned and the process end tears it down.
-        return [.. _order];
-    }
-
-    private async Task DisposeAllAsync()
-    {
-        await _primary.DisposeAsync();
-        await _other.DisposeAsync();
-        await _select.DisposeAsync();
-        await _host.DisposeAsync();
+        PrintSummary(total.Elapsed, setupWatch.Elapsed, worldWatch.Elapsed, sessionWatch.Elapsed, opcodes.Count);
     }
 
     // --- provisioning ----------------------------------------------------------------------
@@ -471,7 +607,7 @@ internal sealed class HandlerFuzzRun
             Stop stop = Stop.None;
             if (HandlerFuzzKit.IsKicked(session))
             {
-                NoteKick(stats, fuzzCase, session);
+                NoteKick(stats, fuzzCase, index, session);
                 stop = Stop.Kicked;
             }
             else if (session.State != SessionState.InWorld || !ReferenceEquals(session.Player, player))
@@ -534,17 +670,14 @@ internal sealed class HandlerFuzzRun
         return Stop.None;
     }
 
-    private void NoteKick(HandlerFuzzStats stats, HandlerFuzzCase fuzzCase, WorldSession session)
+    private void NoteKick(HandlerFuzzStats stats, HandlerFuzzCase fuzzCase, int index, WorldSession session)
     {
         stats.Kicks++;
-        string first = $"{fuzzCase.Description} (reason: {session.KickReason ?? "none recorded"}, state {session.State})";
-        stats.FirstKick ??= first;
-        if (!HandlerFuzzKit.KickIsExpected(stats.Opcode))
+        string reason = $"reason: {session.KickReason ?? "none recorded"}, state {session.State}";
+        stats.FirstKick ??= $"{fuzzCase.Description} ({reason})";
+        if (!_options.KickAllowlist.ContainsKey(stats.Opcode))
         {
-            lock (_gate)
-            {
-                _unexpectedKicks[stats.Opcode] = _unexpectedKicks.TryGetValue(stats.Opcode, out var seen) ? (seen.Count + 1, seen.First) : (1, first);
-            }
+            AddFinding(stats.Opcode, "unexpected-kick", "-", $"the handler disconnected the session ({reason}); the opcode is not in the kick allowlist", fuzzCase.Description, index, fuzzCase.Payload);
         }
     }
 
@@ -663,7 +796,7 @@ internal sealed class HandlerFuzzRun
 
                 if (check.kicked)
                 {
-                    NoteKick(stats, fuzzCase, slot.Session);
+                    NoteKick(stats, fuzzCase, index, slot.Session);
                 }
 
                 consumed = check.gone;
@@ -674,7 +807,7 @@ internal sealed class HandlerFuzzRun
                 bool kicked = HandlerFuzzKit.IsKicked(slot.Session);
                 if (kicked)
                 {
-                    NoteKick(stats, fuzzCase, slot.Session);
+                    NoteKick(stats, fuzzCase, index, slot.Session);
                 }
 
                 consumed = kicked || !await SelectHealthyAsync();
@@ -702,6 +835,11 @@ internal sealed class HandlerFuzzRun
                 else
                 {
                     await ReplaceSelectAsync();
+                }
+
+                if (hung)
+                {
+                    return; // a handler that hangs would hang again on every case: one finding is enough
                 }
             }
         }
@@ -770,7 +908,9 @@ internal sealed class HandlerFuzzRun
     public string FormatFindings()
     {
         var sb = new StringBuilder();
-        sb.AppendLine(CultureInfo.InvariantCulture, $"{_order.Count} distinct finding(s) ({_rawOccurrences} occurrence(s)); base seed {_settings.BaseSeed}; replay one with ARCANECORE_HANDLER_FUZZ_OPCODE=<name> ARCANECORE_HANDLER_FUZZ_SEED={_settings.BaseSeed}");
+        sb.AppendLine(CultureInfo.InvariantCulture, $"{_order.Count} distinct finding(s) ({_rawOccurrences} occurrence(s)); base seed {_settings.BaseSeed}");
+        sb.AppendLine("The payload literal of each finding is its reproducer: feed those bytes to the handler. ARCANECORE_HANDLER_FUZZ_SEED / ARCANECORE_HANDLER_FUZZ_OPCODE regenerate the same payloads,");
+        sb.AppendLine("but the world state they run against (GUIDs, inventory, kicks and recoveries before them) can differ in a filtered run.");
         int n = 0;
         foreach (HandlerFuzzFinding f in _order)
         {
@@ -800,15 +940,6 @@ internal sealed class HandlerFuzzRun
                 + (s.TransfersStuck > 0 ? $" transfers-stuck={s.TransfersStuck}" : string.Empty);
             _output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"  {WorldOpcodeNames.GetName(s.Opcode),-40} {(ushort)s.Opcode,4} {s.Kind,-8} {(s.Kind == "stripped" ? "-" : s.Traced ? $"traced/{s.Fields}f" : "byte-level"),-12} cases={s.Cases,5} {s.Millis,7:F0} ms{flags}"));
-        }
-
-        if (_unexpectedKicks.Count > 0)
-        {
-            _output.WriteLine("kicks on opcodes that are not movement / anti-cheat / logout (a kick is the defined outcome for cheat-like input; listed, not findings):");
-            foreach ((WorldOpcode opcode, (int count, string first)) in _unexpectedKicks.OrderBy(k => (ushort)k.Key))
-            {
-                _output.WriteLine($"  {WorldOpcodeNames.GetName(opcode)}: {count} kick(s), first on '{first}'");
-            }
         }
 
         foreach (string note in _notes)

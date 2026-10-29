@@ -19,18 +19,18 @@ public sealed class HandlerMalformedContractTests(HandlerMalformedContractTests.
     public static TheoryData<string, WorldOpcode, byte[]> Rows => new()
     {
         { "NpcServiceHandlers.RequireLength (LIST_INVENTORY, empty)", WorldOpcode.CmsgListInventory, None },
-        { "NpcServiceHandlers.GossipSelectOption length (:60)", WorldOpcode.CmsgGossipSelectOption, None },
-        { "NpcServiceHandlers.GossipSelectOption code (:71)", WorldOpcode.CmsgGossipSelectOption, [.. new byte[12], 0x41] },
-        { "NpcServiceHandlers.ActivateTaxiExpress length (:178)", WorldOpcode.CmsgActivatetaxiexpress, None },
-        { "NpcServiceHandlers.ActivateTaxiExpress count (:187)", WorldOpcode.CmsgActivatetaxiexpress, new byte[17] },
+        { "NpcServiceHandlers.GossipSelectOption length (length check)", WorldOpcode.CmsgGossipSelectOption, None },
+        { "NpcServiceHandlers.GossipSelectOption code (code check)", WorldOpcode.CmsgGossipSelectOption, [.. new byte[12], 0x41] },
+        { "NpcServiceHandlers.ActivateTaxiExpress length (length check)", WorldOpcode.CmsgActivatetaxiexpress, None },
+        { "NpcServiceHandlers.ActivateTaxiExpress count (node count check)", WorldOpcode.CmsgActivatetaxiexpress, new byte[17] },
         { "QuestNpcInteractionHandlers.RequireLength (QUESTGIVER_HELLO)", WorldOpcode.CmsgQuestgiverHello, None },
-        { "QuestNpcQueryHandlers.HandleQuestQuery (:30)", WorldOpcode.CmsgQuestQuery, None },
-        { "QuestNpcQueryHandlers.HandleNpcTextQuery (:50)", WorldOpcode.CmsgNpcTextQuery, None },
-        { "QuestShareHandlers.PushResult (:37)", WorldOpcode.MsgQuestPushResult, None },
-        { "QuestShareHandlers.ReadQuest (:48)", WorldOpcode.CmsgPushquesttoparty, None },
+        { "QuestNpcQueryHandlers.HandleQuestQuery (quest id length)", WorldOpcode.CmsgQuestQuery, None },
+        { "QuestNpcQueryHandlers.HandleNpcTextQuery (text id and guid length)", WorldOpcode.CmsgNpcTextQuery, None },
+        { "QuestShareHandlers.PushResult (exact length)", WorldOpcode.MsgQuestPushResult, None },
+        { "QuestShareHandlers.ReadQuest (quest id length)", WorldOpcode.CmsgPushquesttoparty, None },
         { "TalentHandlers.RequireLength (LEARN_TALENT)", WorldOpcode.CmsgLearnTalent, None },
-        { "MeetingStoneHandlers.Info (:77)", WorldOpcode.CmsgMeetingstoneInfo, new byte[1] },
-        { "InactiveQueueHandlers.RequireEmptyBody (:39)", WorldOpcode.CmsgBattlefieldStatus, new byte[1] },
+        { "MeetingStoneHandlers.Info (empty body)", WorldOpcode.CmsgMeetingstoneInfo, new byte[1] },
+        { "InactiveQueueHandlers.RequireEmptyBody (empty body)", WorldOpcode.CmsgBattlefieldStatus, new byte[1] },
     };
 
     [Theory]

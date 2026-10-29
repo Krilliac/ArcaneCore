@@ -1,3 +1,6 @@
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+
 namespace ArcaneCore.Protocol;
 
 /// <summary>The primitive a <see cref="PacketReader"/> read performed.</summary>
@@ -54,7 +57,8 @@ internal static class PacketReadTrace
         return new Scope(previous);
     }
 
-    /// <summary>Append one event when this thread has a sink; a no-op otherwise.</summary>
+    /// <summary>Append one event when this thread has a sink; a no-op otherwise. Not inlined, so the reader's inlined check stays one load and a branch.</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
     internal static void Record(PacketReadKind kind, int offset, int width, bool ok)
         => t_events?.Add(new PacketReadEvent(kind, offset, width, ok));
 
@@ -79,7 +83,8 @@ internal static class PacketReadTrace
 
             _disposed = true;
             t_events = _previous;
-            Interlocked.Decrement(ref s_tracers);
+            int remaining = Interlocked.Decrement(ref s_tracers);
+            Debug.Assert(remaining >= 0, "a trace scope was disposed more often than it was begun");
         }
     }
 }

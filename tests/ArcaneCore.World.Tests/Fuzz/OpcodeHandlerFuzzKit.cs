@@ -867,16 +867,41 @@ internal static class HandlerFuzzKit
         WorldOpcode.CmsgGossipSelectOption,
     ];
 
-    /// <summary>Opcodes whose handler may disconnect the session as its defined outcome (movement, anti-cheat, logout).</summary>
-    internal static bool KickIsExpected(WorldOpcode opcode)
+    /// <summary>
+    /// Opcodes whose handler is known to disconnect the session on the fuzz's input, each with the reason. A kick on any other opcode is a
+    /// finding. Built from what kicks today: the four guild text handlers (GuildOptions: disconnect a client that sends over-long guild
+    /// text, GuildManager.RejectOversized). No movement, anti-cheat or logout handler kicked on any generated payload.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<WorldOpcode, string> KickAllowlist = new Dictionary<WorldOpcode, string>
     {
-        string name = WorldOpcodeNames.GetName(opcode);
-        return name.Contains("MOVE", StringComparison.Ordinal) || name.Contains("LOGOUT", StringComparison.Ordinal)
-            || name.Contains("WARDEN", StringComparison.Ordinal) || name.Contains("_ACK", StringComparison.Ordinal)
-            || name.Contains("TELEPORT", StringComparison.Ordinal) || name.Contains("FORCE", StringComparison.Ordinal)
-            || name.Contains("ACTIVE_MOVER", StringComparison.Ordinal) || name.Contains("SPLINE", StringComparison.Ordinal)
-            || name.Contains("FALL", StringComparison.Ordinal) || name.Contains("TIME_SKIPPED", StringComparison.Ordinal);
-    }
+        [WorldOpcode.CmsgGuildCreate] = "guild over-length text kick (GuildManager.RejectOversized)",
+        [WorldOpcode.CmsgGuildMotd] = "guild over-length text kick (GuildManager.RejectOversized)",
+        [WorldOpcode.CmsgGuildAddRank] = "guild over-length text kick (GuildManager.RejectOversized)",
+        [WorldOpcode.CmsgGuildInfoText] = "guild over-length text kick (GuildManager.RejectOversized)",
+    };
+
+    /// <summary>
+    /// Opcodes allowed to run out of recoveries (the fuzz kicked the primary more than three times). Any other capped opcode is a finding,
+    /// because the rest of its cases were skipped.
+    /// </summary>
+    internal static readonly IReadOnlyDictionary<WorldOpcode, string> RecoveryCapAllowlist = new Dictionary<WorldOpcode, string>
+    {
+        [WorldOpcode.CmsgGuildMotd] = "guild over-length text kick (GuildManager.RejectOversized): every over-long MOTD disconnects the sender",
+    };
+
+    /// <summary>Every break name <see cref="CheckPlayer"/> can emit (the invariant tests show that each one fires).</summary>
+    internal static readonly string[] AllBreakNames =
+    [
+        "position-not-finite", "position-out-of-range", "map-null", "map-id-mismatch", "max-health-zero", "health-above-max",
+        "alive-with-zero-health", "dead-with-health", "ghost-health", "ghost-flag-mismatch", "money-changed-outside-set",
+        "inventory-changed-outside-set", "money-above-cap", "stack-above-max",
+    ];
+
+    /// <summary>Full-run floor: traced handlers (228 at the time of writing, with the fixture creature in place).</summary>
+    internal const int MinTracedHandlers = 220;
+
+    /// <summary>Full-run floor: cases executed in the light run (about 74,000 at the time of writing).</summary>
+    internal const int MinLightCases = 70_000;
 
     /// <summary>The nearest creature to the player on its map within a radius (world thread), or null.</summary>
     internal static Creature? NearestCreature(Player player)
