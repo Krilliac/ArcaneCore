@@ -106,7 +106,7 @@ public sealed class DeathAnomalyTests
         r.Watcher.Sweep(r.World.NowMs);
         Assert.DoesNotContain(r.Cap.Notices, n => n.Key != Durability);
 
-        r.Combat.SpawnCorpseBones(r.Victim); // the body vanishes while the player is still a ghost
+        r.Combat.RemoveResurrectedCorpse(r.Victim); // the body vanishes while the player is still a ghost (SpawnCorpseBones only acts on the alive)
         r.Watcher.Sweep(r.World.NowMs + 1000);
         r.Watcher.Sweep(r.World.NowMs + 2000);
 
