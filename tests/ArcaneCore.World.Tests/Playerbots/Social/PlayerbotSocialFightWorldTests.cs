@@ -158,7 +158,11 @@ public sealed class PlayerbotSocialFightWorldTests
         await world.Host.OnWorldAsync(() =>
         {
             Player bot = Online(world, "Helpvictim");
+            // The first mob goes too: left standing beside the bot, still hostile and hit by it, it was the bot's next target, and a think that
+            // attacked it before the fight read looked put the bot back in combat, so the tracker never saw this fight end (hosted CI, 15 s).
+            Assert.True(Systems.TryGetValue(bot.Map!, out CreatureMapSystem? system));
             bot.Map!.Combat.CombatStop(bot);
+            system.Despawn(mob);
             Assert.False(bot.Combat.IsInCombat);
         });
         PlayerbotFightSocial tracker = PartyTestHost.Feature(world.Host).FightOf(victim)!;

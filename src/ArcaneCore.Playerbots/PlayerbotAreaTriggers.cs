@@ -56,6 +56,30 @@ internal static class PlayerbotAreaTriggers
         internal IReadOnlyCollection<AreaTriggerTemplate>? Source;
         internal readonly Dictionary<uint, PlayerbotTriggerIndex> ByMap = [];
         internal readonly Dictionary<(uint FromMap, uint TargetMap), AreaTriggerTemplate[]> ByTargetMap = [];
+        internal readonly Dictionary<uint, (AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)[]> SameMap = [];
+    }
+
+    /// <summary>
+    /// The area triggers on <paramref name="mapId"/> whose teleport leads within that map (a portal such as Teldrassil's Darnassus 527 and
+    /// Rut'theran 542), each with its teleport row (cached per map like <see cref="EntrancesTo"/>; no allocation on a cache hit).
+    /// </summary>
+    internal static IReadOnlyList<(AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)> SameMapPortals(WorldMaps maps, uint mapId)
+    {
+        PlayerbotTriggerIndex index = Index(maps, mapId);
+        MapCache cache = Caches.GetValue(maps, static _ => new MapCache());
+        if (!cache.SameMap.TryGetValue(mapId, out (AreaTriggerTemplate, AreaTriggerTeleport)[]? list))
+        {
+            var found = new List<(AreaTriggerTemplate, AreaTriggerTeleport)>();
+            foreach (AreaTriggerTemplate trigger in index.All)
+            {
+                if (maps.FindAreaTriggerTeleport(trigger.Id) is { } teleport && teleport.TargetMap == mapId) found.Add((trigger, teleport));
+            }
+
+            list = [.. found];
+            cache.SameMap[mapId] = list;
+        }
+
+        return list;
     }
 
     /// <summary>The area triggers on <paramref name="mapId"/>, in id order (cached per map; rebuilt after a reload of the trigger table).</summary>
@@ -88,6 +112,7 @@ internal static class PlayerbotAreaTriggers
         {
             cache.ByMap.Clear();
             cache.ByTargetMap.Clear();
+            cache.SameMap.Clear();
             cache.Source = source;
         }
 

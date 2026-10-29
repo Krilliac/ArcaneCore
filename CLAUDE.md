@@ -77,15 +77,15 @@ type `FullName`** (see `src/ArcaneCore.World/Features/WorldFeatures.cs`, `src/Ar
 ```csharp
 catch (Exception ex) when (ex is not OutOfMemoryException)
 {
-    FaultLedger.Shared.Record("map.visibility", ex);          // dotted site key: the fault ledger / .server faults
-    _logger.LogFault("map-visibility", ex, "...", args);      // dashed tag: throttled log line (FaultLedgerLogging)
+    _logger.LogFault("movement.observer-before", ex, "...", args);      // dotted site: throttled log line AND one fault-ledger record (FaultLedgerLogging)
 }
 ```
 
-Both writes are intentional and observable (`src/ArcaneCore.Kernel/Diagnostics/FaultLedger.cs`, example in
-`src/ArcaneCore.Game/Maps/Map.cs`). **Don't collapse them into a helper or drop one.** Cancellation is not a fault: skip
-`OperationCanceledException` before recording where a token is in play. Don't add empty catches. Policy and the catch census are in
-[docs/ops/exception-audit.md](docs/ops/exception-audit.md).
+`LogFault` already records the fault to the ledger once (`src/ArcaneCore.Kernel/Diagnostics/FaultLedger.cs`, example in
+`src/ArcaneCore.Game/Locomotion/ClientMovementObservers.cs`), so **don't pair it with `FaultLedger.Shared.Record` for the same site**: that double-counts. Add a separate
+`Record` only for a deliberately broader or narrower second key (the playerbot battleground coordinator is the example). Prefer dotted site names for new code; a few older `LogFault` tags are dashed.
+Cancellation is not a fault: skip `OperationCanceledException` before recording where a token is in play. Don't add empty catches. Policy and
+the catch census are in [docs/ops/exception-audit.md](docs/ops/exception-audit.md).
 
 ## Pitfalls (each of these has bitten a lane)
 
@@ -138,14 +138,16 @@ The gate needs `ARCANECORE_LANES_ROOT` (or `-LanesRoot`). The commands mirror `.
 ```
 dotnet restore ArcaneCore.slnx --locked-mode
 dotnet build ArcaneCore.slnx -c Release --no-restore
-dotnet test tests/ci/Game.slnf  -c Release --no-build -m:1 --logger trx --results-directory TestResults
-dotnet test tests/ci/World.slnf -c Release --no-build -m:1 --logger trx --results-directory TestResults
-dotnet test tests/ci/Data.slnf  -c Release --no-build -m:1 --logger trx --results-directory TestResults
-dotnet test tests/ci/Rest.slnf  -c Release --no-build -m:1 --logger trx --results-directory TestResults
+dotnet test tests/ci/Game.slnf  -c Release --no-build -m:1 --filter "Category!=Timing" --logger trx --results-directory TestResults
+dotnet test tests/ci/World.slnf -c Release --no-build -m:1 --filter "Category!=Timing" --logger trx --results-directory TestResults
+dotnet test tests/ci/Data.slnf  -c Release --no-build -m:1 --filter "Category!=Timing" --logger trx --results-directory TestResults
+dotnet test tests/ci/Rest.slnf  -c Release --no-build -m:1 --filter "Category!=Timing" --logger trx --results-directory TestResults
+bash tools/ops/ci/test-stages.sh --stage timing --logs timing-logs tests/ci/Game.slnf tests/ci/World.slnf tests/ci/Data.slnf tests/ci/Rest.slnf
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
 ```
 
 - `Rest.slnf` = Realm, MockClient, Kernel, Cryptography, Gateway and Atlas tests. The four filters cover every test project once.
+- Timing-sensitive tests carry `[Trait("Category", "Timing")]` and run in the serial timing stage, with one isolated rerun; a `FLAKY (passed on rerun)` line is a bug to fix ([contributing](docs/guide/contributing.md)).
 - `tools/ops/ci/full-suite-gate.ps1` is the one-shot alternative. It exits 2 when restore or build fails, so nothing ran.
 - **Check counts, not exit codes.** Read the passed/failed/skipped totals per suite and compare them with the base branch. A
   killed run, a filter that matched 0 tests, or a build that never ran can all exit 0.

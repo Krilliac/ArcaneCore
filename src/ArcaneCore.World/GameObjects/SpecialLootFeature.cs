@@ -87,7 +87,12 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
                 InterruptSpells = player => spells.System.CancelCast(player, 0),
             };
             var pockets = new PickpocketLoot(loot);
-            map.Combat.UnitKilled += pockets.OnCreatureKilled;
+            MapCombat? combat = map.FindUpdater<MapCombat>();
+            if (combat is { } c)
+            {
+                c.UnitKilled += pockets.OnCreatureKilled;
+            }
+
             _pickpockets.Add(map, pockets);
             _disenchants.Add(map, new DisenchantLoot(loot));
             var insignia = new InsigniaLoot(loot)
@@ -95,7 +100,11 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
                 InBattleground = player => services.GetService<BattlegroundFeature>()?.BattlegroundOf(player.Guid) is not null || map.Template is { IsBattleground: true },
                 RefLootOf = player => services.GetService<BattlegroundFeature>()?.BattlegroundOf(player.Guid)?.Template.PlayerSkinRefLootId ?? 0,
             };
-            map.Combat.BonesRemoved += loot.RemoveSpecial;
+            if (combat is { } bonesCombat)
+            {
+                bonesCombat.BonesRemoved += loot.RemoveSpecial;
+            }
+
             _insignia.Add(map, insignia);
         }
     }
@@ -105,9 +114,9 @@ public sealed class SpecialLootFeature(IServiceProvider services, ILogger<Specia
         _fishing.Remove(map);
         _disenchants.Remove(map);
         _insignia.Remove(map);
-        if (_pickpockets.Remove(map, out PickpocketLoot? pockets))
+        if (_pickpockets.Remove(map, out PickpocketLoot? pockets) && map.FindUpdater<MapCombat>() is { } combat)
         {
-            map.Combat.UnitKilled -= pockets.OnCreatureKilled;
+            combat.UnitKilled -= pockets.OnCreatureKilled;
         }
     }
 }

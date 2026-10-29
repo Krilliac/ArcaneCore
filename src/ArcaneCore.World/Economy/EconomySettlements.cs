@@ -308,7 +308,6 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
             }
             else
             {
-                FaultLedger.Shared.Record("economy.settlement", ex);
                 AnomalyLedger.Shared.Report("economy", "settlement-failed", $"operation {operation.Id}", $"error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("economy.settlement", ex, "economy operation {Operation} failed", operation.Id);
             }
@@ -325,7 +324,6 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
                 }
                 catch (Exception reconciliation) when (reconciliation is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("economy.settlement-reconcile", reconciliation);
                     AnomalyLedger.Shared.Report("economy", "settlement-reconcile-failed", $"operation {operation.Id}", $"reconcile error={reconciliation.GetType().Name}: {reconciliation.Message}", AnomalySeverity.Error);
                     logger.LogFault("economy.settlement-reconcile", reconciliation, "could not reconcile economy operation {Operation}", operation.Id);
                 }
@@ -367,7 +365,6 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("economy.settlement-callback", ex);
             AnomalyLedger.Shared.Report("economy", "settlement-failed", $"operation {operation.Id}", $"callback error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("economy.settlement-callback", ex, "economy operation {Operation} callback failed", operation.Id);
         }
@@ -438,7 +435,6 @@ public sealed class EconomySettlements(IServiceScopeFactory scopes, ILogger logg
                 savesQuarantine.QuarantineCharacter(actor.Id);
             }
 
-            FaultLedger.Shared.Record("economy.settlement-publish", ex);
             AnomalyLedger.Shared.Report("economy", "settlement-reconcile-failed", $"character {actor.Id}", $"operation={operation.Id} publish error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
             logger.LogFault("economy.settlement-publish", ex, "economy publication failed for character {Character}; fresh login is required", actor.Id);
             if (current)

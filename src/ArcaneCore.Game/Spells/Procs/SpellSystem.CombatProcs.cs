@@ -57,12 +57,12 @@ public sealed partial class SpellSystem
             return;
         }
 
-        var done = new HashSet<SpellAura>(ReferenceEqualityComparer.Instance);
+        // Runs on every landed melee hit: scan with plain loops and allocate the done set only once a shield is found (none for a shieldless victim).
+        HashSet<SpellAura>? done = null;
         while (attacker.IsAlive && victim.IsInWorld
-            && GetAuras(victim).Where(h => !h.IsRemoved).SelectMany(h => h.Auras.OfType<SpellAura>().Where(a => a.Type == AuraType.DamageShield && !done.Contains(a)).Select(a => (h, a)))
-                .FirstOrDefault() is ({ } holder, { } aura))
+            && TryFindNextDamageShield(GetAuras(victim), done, out SpellAuraHolder holder, out SpellAura aura))
         {
-            done.Add(aura);
+            (done ??= new HashSet<SpellAura>(ReferenceEqualityComparer.Instance)).Add(aura);
             SpellInfo spell = holder.Spell;
             SpellMissInfo miss = RollHitWithoutReflect(victim, attacker, spell);
             if (miss != SpellMissInfo.None)
@@ -91,6 +91,34 @@ public sealed partial class SpellSystem
                 OnDamageTaken(attacker, victim, dealt, periodic: false, sourceSpellId: spell.Id);
             }
         }
+    }
+
+    /// <summary>The first live DamageShield aura of <paramref name="holders"/> not yet in <paramref name="done"/> (null means none done); allocation free.</summary>
+    private static bool TryFindNextDamageShield(List<SpellAuraHolder> holders, HashSet<SpellAura>? done, out SpellAuraHolder holder, out SpellAura aura)
+    {
+        for (int i = 0; i < holders.Count; i++)
+        {
+            SpellAuraHolder h = holders[i];
+            if (h.IsRemoved)
+            {
+                continue;
+            }
+
+            IReadOnlyList<SpellAura?> auras = h.Auras;
+            for (int j = 0; j < auras.Count; j++)
+            {
+                if (auras[j] is { Type: AuraType.DamageShield } a && (done is null || !done.Contains(a)))
+                {
+                    holder = h;
+                    aura = a;
+                    return true;
+                }
+            }
+        }
+
+        holder = null!;
+        aura = null!;
+        return false;
     }
 
     /// <summary>

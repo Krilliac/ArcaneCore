@@ -46,6 +46,7 @@ public sealed class SqliteFirstCommandTimeoutTests : IDisposable
         "ExecuteSqlRaw", "ExecuteSqlRawAsync", "ExecuteScalar", "ExecuteScalarAsync", "WriteQuery", "WriteQueryAsync", "BeginTransaction", "BeginTransactionAsync",
     };
 
+    [Trait("Category", "Timing")]
     [Theory]
     [MemberData(nameof(Scenarios))]
     public Task TheFirstCommandOnAFreshContext_FailsLockedWithinTheWriteBound(string scenario) => FailsWithinBound(scenario, 30);
