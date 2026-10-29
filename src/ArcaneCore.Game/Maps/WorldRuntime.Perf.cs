@@ -168,7 +168,7 @@ public sealed partial class WorldRuntime
     }
 
     /// <summary>The clock the summary interval runs on: the manual game clock under <see cref="UseManualClock"/>, else the world's stopwatch.</summary>
-    private long PerfClockMicros() => _manualClock ? Interlocked.Read(ref _manualNowMs) * 1000 : _clock.Elapsed.Ticks / 10;
+    private long PerfClockMicros() => _manualClock ? Clock.ElapsedMs * 1000 : _clock.Elapsed.Ticks / 10;
 
     private ArcaneCore.Kernel.Ops.Watchdog.HostLoadVerdict HostVerdictOf(long windowMicros)
         => HostLoad?.Report(windowMicros)?.Verdict ?? ArcaneCore.Kernel.Ops.Watchdog.HostLoadVerdict.Unknown;

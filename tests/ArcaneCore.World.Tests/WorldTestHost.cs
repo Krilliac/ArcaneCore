@@ -54,8 +54,9 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     private WorldTestHost(
         int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices, WorldSessionOptions? sessionOptions, ILogger? sessionLogger,
-        BanOptions? banOptions)
+        BanOptions? banOptions, TestClock clock)
     {
+        Clock = clock;
         _sessionOptions = sessionOptions ?? new WorldSessionOptions { PreAuthTimeout = TestPreAuthTimeout };
         _sessionLogger = sessionLogger ?? NullLogger.Instance;
         Bans = new Bans.InMemoryBanStore(StatusEvents);
@@ -91,6 +92,13 @@ internal sealed class WorldTestHost : IAsyncDisposable
         collection.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         collection.AddWorldFeatures();
         WorldTestServices.RegisterAll(collection);
+        if (clock.IsManual)
+        {
+            // Game time for features that take a time provider; a TimeProvider registered by the test (configureServices) replaces this one.
+            collection.AddSingleton(_ => new GameTimeProvider(World!.Clock));
+            collection.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<GameTimeProvider>());
+        }
+
         configureServices?.Invoke(collection);
         _services = collection.BuildServiceProvider();
         Registry = _services.GetRequiredService<SessionRegistry>();
@@ -100,6 +108,12 @@ internal sealed class WorldTestHost : IAsyncDisposable
         SaveQueue = _services.GetRequiredService<CharacterSaveQueue>();
         World = new WorldRuntime(options, SaveQueue, NullLogger<WorldRuntime>.Instance);
         Opcodes = WorldServiceCollectionExtensions.BuildOpcodeTable();
+
+        if (clock.IsManual)
+        {
+            World.UseManualClockFrom(clock.StartMs, clock.StartUtc, clock.StepMs);
+            ArcaneCore.Game.WorldState.WorldStateHooks.For(World).Time = new ClockGameTime(World.Clock);
+        }
 
         // A test that needs the world to run at a chosen instant sets GameTime around Start (async-local, so tests stay isolated); it must be
         // in place before the features attach, because the game event feature reads the clock while it loads.
@@ -173,8 +187,11 @@ internal sealed class WorldTestHost : IAsyncDisposable
     /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
     public static WorldTestHost Start(
         int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null, Action<IServiceCollection>? configureServices = null,
-        WorldSessionOptions? sessionOptions = null, ILogger? sessionLogger = null, BanOptions? banOptions = null)
-        => new(compressionThreshold, configure, configureServices, sessionOptions, sessionLogger, banOptions);
+        WorldSessionOptions? sessionOptions = null, ILogger? sessionLogger = null, BanOptions? banOptions = null, TestClock? clock = null)
+        => new(compressionThreshold, configure, configureServices, sessionOptions, sessionLogger, banOptions, clock ?? TestClock.Real);
+
+    /// <summary>How this host's game clock moves (<see cref="TestClock.Real"/> unless the test chose the manual clock).</summary>
+    public TestClock Clock { get; }
 
     /// <summary>Create an account with a fresh session key (as if it had just logged in at the realm).</summary>
     public async Task<byte[]> AddAccountAsync(string name, AccountSecurity security = AccountSecurity.Player)
@@ -268,6 +285,145 @@ internal sealed class WorldTestHost : IAsyncDisposable
             await Task.Delay(10);
         }
     }
+
+    /// <summary>Packets queued for the world thread and not yet handled, over every session of this host.</summary>
+    public int InboundWorldQueueDepth()
+    {
+        lock (_sessions)
+        {
+            return _sessions.Sum(e => e.Session?.InboundWorldQueueDepth ?? 0);
+        }
+    }
+
+    private static readonly TimeSpan DefaultHangGuard = TimeSpan.FromSeconds(120);
+
+    private void RequireManual()
+    {
+        if (!Clock.IsManual)
+        {
+            throw new InvalidOperationException("this host runs the real clock (start it with TestClock.Manual)");
+        }
+    }
+
+    /// <summary>
+    /// Manual clock: the zero-advance barrier. Waits until every packet any client of this host has sent has been dispatched by its
+    /// session (queued for the world thread or handled by the read loop), then runs one zero-diff tick: the commands posted so far run, and each
+    /// session's queue is processed up to <see cref="WorldSessionOptions.MaxWorldPacketsPerTick"/> packets in that tick (a deeper queue needs more ticks).
+    /// Game time does not move. Called first by every other advancing member.
+    /// </summary>
+    public async Task SettleAsync(TimeSpan? hangGuard = null)
+    {
+        RequireManual();
+        TimeSpan guard = hangGuard ?? DefaultHangGuard;
+        await WaitForDeliveryAsync(guard);
+        await GuardedAsync(World.AdvanceTicksAsync(0), guard, "settle");
+    }
+
+    /// <summary>Manual clock: run exactly <paramref name="ticks"/> ticks of the clock step after everything sent so far has arrived.</summary>
+    public async Task StepAsync(int ticks = 1, TimeSpan? hangGuard = null)
+    {
+        await SettleAsync(hangGuard);
+        await GuardedAsync(World.AdvanceTicksAsync(ticks), hangGuard ?? DefaultHangGuard, $"step {ticks}");
+    }
+
+    /// <summary>Manual clock: run <paramref name="milliseconds"/> of game time (the last tick may be shorter than the step).</summary>
+    public async Task AdvanceAsync(uint milliseconds, TimeSpan? hangGuard = null)
+    {
+        await SettleAsync(hangGuard);
+        await GuardedAsync(World.AdvanceClockAsync(milliseconds), hangGuard ?? DefaultHangGuard, $"advance {milliseconds} ms");
+    }
+
+    /// <summary>
+    /// Manual clock: advance tick by tick until <paramref name="condition"/> (evaluated on the world thread) holds. Fails with
+    /// <see cref="GameTimeoutException"/> when <paramref name="maxGameMs"/> of game time pass first, and with <see cref="WorldHangException"/>
+    /// when the wall <paramref name="hangGuard"/> (default 120 s) runs out first, which means the world is stuck rather than slow.
+    /// </summary>
+    public async Task RunUntilAsync(Func<bool> condition, string what, uint maxGameMs, TimeSpan? hangGuard = null)
+    {
+        await SettleAsync(hangGuard);
+        TimeSpan guard = hangGuard ?? DefaultHangGuard;
+        var wall = System.Diagnostics.Stopwatch.StartNew();
+        long startMs = World.Clock.ElapsedMs;
+        long startTick = World.Clock.TickNumber;
+        if (await GuardedAsync(World.InvokeAsync(condition), guard, $"until: {what}"))
+        {
+            return;
+        }
+
+        if (!await GuardedAsync(World.AdvanceClockUntilAsync(maxGameMs, condition), guard, $"until: {what}"))
+        {
+            throw new GameTimeoutException(
+                $"timed out waiting for: {what} - {World.Clock.ElapsedMs - startMs} game ms ({maxGameMs} allowed), {World.Clock.TickNumber - startTick} ticks, {wall.ElapsedMilliseconds} wall ms");
+        }
+    }
+
+    private async Task<T> GuardedAsync<T>(Task<T> task, TimeSpan guard, string what)
+    {
+        try
+        {
+            return await task.WaitAsync(guard);
+        }
+        catch (TimeoutException)
+        {
+            throw Hang(what, guard, null);
+        }
+        catch (PendingWorkHangException ex)
+        {
+            throw Hang(what, guard, ex);
+        }
+    }
+
+    private async Task GuardedAsync(Task task, TimeSpan guard, string what)
+    {
+        try
+        {
+            await task.WaitAsync(guard);
+        }
+        catch (TimeoutException)
+        {
+            throw Hang(what, guard, null);
+        }
+        catch (PendingWorkHangException ex)
+        {
+            throw Hang(what, guard, ex);
+        }
+    }
+
+    private WorldHangException Hang(string what, TimeSpan guard, Exception? inner)
+        => new($"the world did not complete '{what}' within {guard.TotalSeconds:F0} s of wall time (game {World.Clock.ElapsedMs} ms, tick {World.Clock.TickNumber}); pending work: [{string.Join(", ", World.PendingWork.Names())}]", inner);
+
+    /// <summary>Wait until every packet a client of this host sent has been dispatched by a session (wall-bounded by <paramref name="guard"/>).</summary>
+    private async Task WaitForDeliveryAsync(TimeSpan guard)
+    {
+        var wall = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            long sent;
+            lock (_clients)
+            {
+                sent = _clients.Sum(c => c.SentPackets);
+            }
+
+            long dispatched;
+            lock (_sessions)
+            {
+                dispatched = _sessions.Sum(e => e.Session?.InboundDispatched ?? 0);
+            }
+
+            if (dispatched >= sent)
+            {
+                return;
+            }
+
+            if (wall.Elapsed > guard)
+            {
+                throw new WorldHangException($"clients sent {sent} packets but sessions dispatched only {dispatched} within {guard.TotalSeconds:F0} s of wall time", null);
+            }
+
+            await Task.Delay(1);
+        }
+    }
+
 
     public async ValueTask DisposeAsync()
     {
@@ -395,4 +551,45 @@ internal sealed class WorldTestHost : IAsyncDisposable
             }
         }
     }
+}
+
+/// <summary>How a <see cref="WorldTestHost"/> game clock moves.</summary>
+internal sealed class TestClock
+{
+    private TestClock(bool isManual, long startMs, DateTimeOffset startUtc, uint stepMs)
+    {
+        IsManual = isManual;
+        StartMs = startMs;
+        StartUtc = startUtc;
+        StepMs = stepMs;
+    }
+
+    /// <summary>The production clock (unchanged behaviour).</summary>
+    public static TestClock Real { get; } = new(false, 0, default, 50);
+
+    /// <summary>The manual clock: game time moves only through the host StepAsync, AdvanceAsync and RunUntilAsync, from <paramref name="startMs"/> and <paramref name="startUtc"/> (default 2027-01-01Z).</summary>
+    public static TestClock Manual(long startMs = 0, DateTimeOffset? startUtc = null, uint stepMs = 50)
+        => new(true, startMs, startUtc ?? new DateTimeOffset(2027, 1, 1, 0, 0, 0, TimeSpan.Zero), stepMs);
+
+    public bool IsManual { get; }
+
+    public long StartMs { get; }
+
+    public DateTimeOffset StartUtc { get; }
+
+    public uint StepMs { get; }
+}
+
+/// <summary>The game-time budget of a <see cref="WorldTestHost.RunUntilAsync"/> ran out: the condition never held in game time.</summary>
+internal sealed class GameTimeoutException(string message) : Exception(message);
+
+/// <summary>The wall hang guard ran out: the world (or a client delivery) is stuck, which is not the same as a slow simulation.</summary>
+internal sealed class WorldHangException(string message, Exception? inner) : Exception(message, inner);
+
+/// <summary>The host game clock as the world-state systems <see cref="ArcaneCore.Game.WorldState.Time.IGameTime"/> (UTC).</summary>
+internal sealed class ClockGameTime(WorldClock clock) : ArcaneCore.Game.WorldState.Time.IGameTime
+{
+    public DateTimeOffset UtcNow => clock.UtcNow;
+
+    public TimeZoneInfo Zone => TimeZoneInfo.Utc;
 }

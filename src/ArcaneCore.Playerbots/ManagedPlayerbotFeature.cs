@@ -2384,8 +2384,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             double visitMs = Stopwatch.GetElapsedTime(visitStarted).TotalMilliseconds;
             if (lane == PlayerbotThinkRotation.ThinkLane.Normal) feature._thinkBudget.ObserveVisit(visitMs);
             else CombatMs += visitMs;
-            // A think longer than the stall threshold stood the world still: credited now, so the bots thought after it are not (Update).
-            if (visitMs > feature._stallThresholdMs)
+            // A think longer than the stall threshold stood the world still: credited now, so the bots thought after it are not (Update). Only on the real
+            // clock: the gaps of a deterministic clock are game time, which a wall-clock stall does not move.
+            if (visitMs > feature._stallThresholdMs && feature._world is { Clock.IsDeterministic: false })
             {
                 ulong excess = (ulong)Math.Min(int.MaxValue, visitMs - feature._stallThresholdMs);
                 feature._stalledMs += excess;
@@ -2408,7 +2409,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         _thinkBudget.ObserveTickInterval(elapsedMs);
         Interlocked.Add(ref _clockMs, elapsedMs);
         (ActiveBot[] bots, int botsVersion) = RefreshOrdered();
-        uint now = world.NowMs;
+        // Two clocks, never subtracted from one another: `now` is the live one (think gaps, stalls, silence: wall time inside a tick), `gameNow` the tick-start
+        // game time that every stamp of the movement and the thinks carries (PlayerbotMotion.Pump, NoteThink).
+        uint now = world.Clock.LiveNowMs;
+        uint gameNow = world.NowMs;
         double realTickMs = _thinkBudget.RealTickMs(world.Options.TickIntervalMs);
         if (_tickNowPrimed)
         {
@@ -2437,7 +2441,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 ReportSessionLostOnce(active, "tick");
                 continue;
             }
-            try { PlayerbotMotion.Pump(active.Session, mover, now); }
+            try { PlayerbotMotion.Pump(active.Session, mover, gameNow); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "movement", ex); continue; }
             // Party intake, every tick for every autonomous bot (a scripted controller drains its own queue): invitations,
             // chat, loot rolls and resurrection offers are answered as they come, not when the bot's turn in the budget comes.
@@ -2638,9 +2642,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (active.Paused || active.Session.State != SessionState.InWorld) active.GapPrimed = false;
         if (!active.Paused && active.Session.State == SessionState.InWorld && _world is { } world)
         {
-            uint sinceLast = unchecked(world.NowMs - active.LastUpdateMs);
+            uint thinkNowMs = world.Clock.LiveNowMs;
+            uint sinceLast = unchecked(thinkNowMs - active.LastUpdateMs);
             ulong stalledSince = _stalledMs - active.StalledAtThink;
-            active.LastUpdateMs = world.NowMs;
+            active.LastUpdateMs = thinkNowMs;
             active.StalledAtThink = _stalledMs;
             // The motion lease follows the scheduler's pass, also for a bot with no gap of its own yet (its first think skips the gap below).
             Player? measured = active.Session.Player;
@@ -4099,7 +4104,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public string Name = entry.Session.Player?.Name ?? string.Empty;
         public string AnomalySubject = entry.Session.Player is { } p ? PlayerbotAnomalies.SubjectOf(p) : $"bot {entry.BotId:D}";
         public uint MapId = entry.Session.Player?.Map?.MapId ?? entry.Session.Player?.MapId ?? 0;
-        public uint LastUpdateMs = entry.Session.World.NowMs;
+        public uint LastUpdateMs = entry.Session.World.Clock.LiveNowMs;
         /// <summary>The feature's world-stall total at this bot's last think: the stall since is not silence (<see cref="PlayerbotThinkStarvation.ShouldReport(uint, uint, uint, ref bool, ulong)"/>).</summary>
         public ulong StalledAtThink;
         /// <summary>Whether a think of this bot has run since it logged in or was last unpaused (its gap is a think gap from then on).</summary>

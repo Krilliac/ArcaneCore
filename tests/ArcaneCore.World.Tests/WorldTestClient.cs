@@ -339,8 +339,14 @@ internal sealed class WorldTestClient : IAsyncDisposable
         }
     }
 
+    private long _sentPackets;
+
+    /// <summary>Packets this client has written to the server (counted before the write, so a barrier never under-waits).</summary>
+    public long SentPackets => Interlocked.Read(ref _sentPackets);
+
     public async Task SendAsync(WorldOpcode opcode, byte[] payload)
     {
+        Interlocked.Increment(ref _sentPackets);
         byte[] frame = new byte[WorldHeaderCrypt.IncomingHeaderLength + payload.Length];
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 4));
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(2, 4), (uint)opcode);
