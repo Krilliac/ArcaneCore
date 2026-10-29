@@ -330,6 +330,23 @@ internal sealed class SpellSweepRunner
     }
 
     /// <summary>
+    /// A next-swing spell (Heroic Strike, Cleave, Maul) only queues on the cast: its power and cooldown are taken when the melee swing
+    /// casts it (vmangos Spell::cast, Spell.cpp:3695 and 3716, from Unit::AttackerStateUpdate, Unit.cpp:2250-2254). Delivers that swing;
+    /// null when the spell is not a next-swing one or the swing cast it, else the swing's refusal.
+    /// </summary>
+    private SpellCastResult? DeliverSwing(SweepScene scene, SpellInfo spell)
+    {
+        if (!spell.IsNextMeleeSwing)
+        {
+            return null;
+        }
+
+        SpellCastResult swing = _rig.System.CastQueuedMeleeSpell(scene.Caster, scene.Target);
+        SettleBatch();
+        return swing == SpellCastResult.CastOk ? null : swing;
+    }
+
+    /// <summary>
     /// One cast of the scene's spell, resolved: with spell batching on (<see cref="SpellSystem.SpellBatchWindowMs"/>, which
     /// ARCANECORE_TEST_SPELL_BATCH_MS sets for the whole test run) a non-triggered go that passes its check answers CastOk but only goes off
     /// at the next batch boundary, so the sweep waits for it (<see cref="SettleBatch"/>) before any check reads what the cast did.
@@ -745,6 +762,20 @@ internal sealed class SpellSweepRunner
                 return;
             }
 
+            // A next-swing spell (Heroic Strike, Cleave, Maul) only queues on the cast; its cooldown starts when the melee swing casts it
+            // (vmangos Spell::cast -> SendSpellCooldown, Spell.cpp:3695, from Unit::AttackerStateUpdate, Unit.cpp:2250-2254). Deliver that swing.
+            if (DeliverSwing(scene, spell) is { } swing)
+            {
+                state = "not-run:swing-" + swing;
+                return;
+            }
+
+            // The cooldowns start with the cast (vmangos Spell::cast), so they are read before a channel is waited out: a short one (Soul
+            // Siphon's 1 s category) would have ended by the time the channel did, and the engine drops an ended cooldown.
+            uint now = _rig.World.NowMs;
+            bool ownMissing = own && _probe.IsReady(_rig.System, scene.Caster, spell);
+            bool categoryMissing = category && !(_probe.CategoryCooldownUntil(_rig.System, scene.Caster, spell.Category) is { } until && until > now);
+
             WaitOutCast(scene, spell);
             if (IsCasting(scene.Caster))
             {
@@ -753,19 +784,23 @@ internal sealed class SpellSweepRunner
             }
 
             state = "ran";
-            uint now = _rig.World.NowMs;
-            if (own && _probe.IsReady(_rig.System, scene.Caster, spell))
+            if (ownMissing)
             {
                 Violate(SweepCategory.CooldownMissing, spell.Id, $"recovery={spell.RecoveryTime}");
             }
 
-            if (category && !(_probe.CategoryCooldownUntil(_rig.System, scene.Caster, spell.Category) is { } until && until > now))
+            if (categoryMissing)
             {
                 Violate(SweepCategory.CategoryCooldownMissing, spell.Id, $"category={spell.Category} recovery={spell.CategoryRecoveryTime}");
             }
 
+            // A spell its own aura triggers into the same category (Explode 25698 triggers Explode 25699, category 35, 10 minutes) restarts
+            // that cooldown while the wait runs (vmangos Spell::cast -> SendSpellCooldown runs for triggered casts too), so "ready again" is
+            // not the cooldown's contract for it.
+            bool restarted = category && spell.Effects.Any(e => e.TriggerSpell != 0 && _catalog?.Store.Get(e.TriggerSpell) is { } triggered
+                && triggered.Category == spell.Category && triggered.CategoryRecoveryTime > 0);
             uint wait = Math.Max(spell.RecoveryTime, spell.CategoryRecoveryTime);
-            if (wait <= MaxSimulatedMs)
+            if (wait <= MaxSimulatedMs && !restarted)
             {
                 Advance(wait + 200, 1000);
                 if (!_probe.IsReady(_rig.System, scene.Caster, spell))
@@ -816,6 +851,12 @@ internal sealed class SpellSweepRunner
                 return;
             }
 
+            if (DeliverSwing(scene, spell) is { } swing)
+            {
+                state = "not-run:swing-" + swing;
+                return;
+            }
+
             // A channel pays its cost when it starts (vmangos Spell::cast takes the power before the channel runs), so it is read
             // now; a cast with a cast time cannot be running here (NoCastTime), so anything still casting must be a channel.
             uint after = _probe.Power(scene.Caster, power);
@@ -833,11 +874,36 @@ internal sealed class SpellSweepRunner
 
             state = channelling ? "ran:channel" : "ran";
             long deducted = (long)before - after;
-            long minimum = spell.ManaCost + (power == PowerType.Mana ? (long)baseMana * spell.ManaCostPercentage / 100 : 0);
-            long maximum = minimum + (long)spell.ManaCostPerLevel * scene.Caster.Level;
+            bool selfDrain = ReferenceEquals(scene.Target, scene.Caster)
+                && spell.Effects.Any(e => e.Effect is SpellEffectName.PowerDrain or SpellEffectName.PowerBurn);
+            // The cost the row declares, as vmangos Spell::CalculatePowerCost reads it (Spell.cpp:6977-7026): the flat cost plus the per-level
+            // cost at the caster's rank (the level, capped at MaxLevel * 5) over 5 less the base level, plus the percentage of the create mana
+            // (mana) or of the maximum power; then, for SCALES_WITH_CREATURE_LEVEL (0x80000) spells, the cost over (1.117 * spell level /
+            // caster level - 0.1327). The scene's caster has no cost modifiers or spell mods.
+            long rank = spell.MaxLevel > 0 && scene.Caster.Level >= spell.MaxLevel * 5 ? spell.MaxLevel * 5 : scene.Caster.Level;
+            long minimum = spell.ManaCost + ((long)spell.ManaCostPerLevel * ((rank / 5) - spell.BaseLevel));
+            if (spell.ManaCostPercentage > 0)
+            {
+                minimum += spell.ManaCostPercentage * (power == PowerType.Mana ? baseMana : max) / 100;
+            }
+
+            if (((uint)spell.Attributes & 0x80000u) != 0)
+            {
+                float scale = (1.117f * spell.SpellLevel / scene.Caster.Level) - 0.1327f;
+                minimum = scale > 0.0001f ? (long)(minimum / scale) : 0;
+            }
+
+            minimum = Math.Max(minimum, 0);
+            long maximum = minimum;
             if (deducted < minimum - 1)
             {
                 Violate(SweepCategory.CostNotDeducted, spell.Id, $"{power} expected>={minimum}");
+            }
+            else if (selfDrain)
+            {
+                // A drain or burn aimed at the caster takes its own power on top of the cost, and vmangos gives none back from a self
+                // drain (Spell::EffectPowerDrain, SpellEffects.cpp:1737-1738), so the total is not the cost alone.
+                state = "ran:self-drain";
             }
             else if (deducted > maximum + 1 && power != PowerType.Rage)
             {
@@ -856,6 +922,15 @@ internal sealed class SpellSweepRunner
             || spell.Range.Max <= 0 || spell.Range.Max >= 1000)
         {
             Checked('g', "not-run:no-unit-range");
+            return;
+        }
+
+        // vmangos Spell::CheckRange (Spell.cpp:6882) lets a next-swing spell through at any distance: the melee swing itself only fires
+        // within reach (Unit::AttackerStateUpdate), so the cast has no range refusal to check.
+        if (spell.IsNextMeleeSwing)
+        {
+            _sceneOrdinal++; // the scene the check used to build: later scenes keep their seeds (and so their rolls)
+            Checked('g', "not-run:next-swing");
             return;
         }
 
