@@ -169,6 +169,11 @@ services need a real consumer and custody/transaction design before extraction.
 The services that do qualify (Warden placement, bot chat, bot planning, the
 auction house bot) are decided in [auxiliary services](#auxiliary-services).
 
+Status of the roles in the executable: a World process hosts `Combined` and `MapWorker` only (`Cluster:Node:Role`, see
+[gateway.md](areas/gateway.md#node-role-and-realm-authority-leases)). On a map worker the realm singletons (auction house bot, AutoBroadcast) attach under
+characters-database leases (`realm_authority_lease`); the dedicated social and economy authorities above are not built, and a World process configured as
+one refuses to start. Storage writes are not yet checked against the fencing token at commit.
+
 ### Subsystem separation and alternatives
 
 Every subsystem keeps a clean module boundary. The chosen executable boundary

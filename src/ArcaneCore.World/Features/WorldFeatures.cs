@@ -59,12 +59,15 @@ public static class WorldFeatures
     /// <summary>
     /// Create every registered feature and attach it to <paramref name="world"/> (before <see cref="WorldRuntime.Start"/>),
     /// through the <see cref="FeatureHost"/>: a plain feature with <see cref="IWorldFeature.Attach"/>, a detachable one with
-    /// <see cref="IDetachableWorldFeature.AttachFrom"/> and a subscription bag the host owns.
+    /// <see cref="IDetachableWorldFeature.AttachFrom"/> and a subscription bag the host owns. A non-null
+    /// <paramref name="admit"/> leaves out the features it returns false for (a node role that does not run them);
+    /// they are neither attached nor stopped.
     /// </summary>
-    public static void AttachWorldFeatures(this IServiceProvider services, WorldRuntime world)
+    public static void AttachWorldFeatures(this IServiceProvider services, WorldRuntime world, Func<IWorldFeature, bool>? admit = null)
     {
         FeatureHost host = services.GetService<FeatureHost>() ?? new FeatureHost();
-        host.AttachAll(world, services.GetServices<IWorldFeature>());
+        IEnumerable<IWorldFeature> features = services.GetServices<IWorldFeature>();
+        host.AttachAll(world, admit is null ? features : features.Where(admit));
     }
 
     /// <summary>Stop in reverse attachment order; every feature receives shutdown even if one fails.</summary>
@@ -77,6 +80,11 @@ public static class WorldFeatures
             if (host?.IsDetached(feature) == true)
             {
                 continue; // its quiesce already stopped and drained it
+            }
+
+            if (host is { HasAttached: true } && !host.IsAttached(feature))
+            {
+                continue; // a role filter never admitted it
             }
 
             try

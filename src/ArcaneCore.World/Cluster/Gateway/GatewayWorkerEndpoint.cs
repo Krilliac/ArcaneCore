@@ -58,15 +58,32 @@ public sealed class GatewayWorkerEndpoint(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_host is { } host)
-        {
-            await host.DisposeAsync().ConfigureAwait(false);
-            _host = null;
-        }
+        // Clear the field before disposing so the second call (DisposeAsync after the host's StopAsync) is a no-op
+        // for the link host even when the first disposal threw.
+        GatewaySessionLinkHost? host = _host;
+        _host = null;
+        WorldGatewaySessionAcceptor? acceptor = Acceptor;
+        await StopInOrderAsync(
+            host is null ? null : host.DisposeAsync,
+            acceptor is null ? null : acceptor.StopAsync).ConfigureAwait(false);
+    }
 
-        if (Acceptor is { } acceptor)
+    /// <summary>Stop the link host first, then the acceptor; the acceptor is stopped even when the host's disposal throws.</summary>
+    internal static async Task StopInOrderAsync(Func<ValueTask>? stopHost, Func<Task>? stopAcceptor)
+    {
+        try
         {
-            await acceptor.StopAsync().ConfigureAwait(false);
+            if (stopHost is not null)
+            {
+                await stopHost().ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            if (stopAcceptor is not null)
+            {
+                await stopAcceptor().ConfigureAwait(false);
+            }
         }
     }
 

@@ -25,6 +25,7 @@ How to read the tables:
 - [`CharacterCreation`](#charactercreation)
 - [`ClientData`](#clientdata)
 - [`Cluster:Fencing`](#clusterfencing)
+- [`Cluster:Node`](#clusternode)
 - [`Cluster:NodeBridge`](#clusternodebridge)
 - [`Cluster:Worker`](#clusterworker)
 - [`Combat`](#combat)
@@ -305,6 +306,14 @@ How to read the tables:
 | `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. |
 | `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
 | `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
+
+## `Cluster:Node`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Node:AuthorityLeaseRenewSeconds` | `int` | `10` | - | How often a held lease is renewed (1 to a third of the TTL). A node that cannot renew in time stops itself rather than run a singleton without the lease. Only used when Role is not Combined. |
+| `Cluster:Node:AuthorityLeaseTtlSeconds` | `int` | `30` | - | How long a realm singleton lease stays valid without a renewal (5 to 600). A node that dies releases its singletons to another node after this long. Only used when Role is not Combined. |
+| `Cluster:Node:Role` | `ClusterNodeRole` | `Combined` | - | The role this World process runs as: `Combined` (the default) runs every feature here. `MapWorker` needs Cluster:Worker:Enabled = true; the realm-wide singletons (the auction house bot and AutoBroadcast) then run on this node only while it holds their database lease. `Social`, `Economy` and `Gateway` are refused on a World process: the shared auction, mail and presence state they would need does not exist yet. Values: `Combined`, `Gateway`, `MapWorker`, `Social`, `Economy`. |
 
 ## `Cluster:NodeBridge`
 

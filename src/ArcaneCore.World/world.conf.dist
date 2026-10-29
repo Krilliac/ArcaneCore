@@ -1734,6 +1734,52 @@ Cluster.Fencing.Enabled = false
 # Cluster.Fencing.TakeoverIncarnation =
 
 #----------------------------------------------------------------------------
+# Cluster:Node
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Node.AuthorityLeaseRenewSeconds
+#        Description: How often a held lease is renewed (1 to a third of the TTL). A node that
+#                     cannot renew in time stops itself rather than run a singleton without the
+#                     lease. Only used when Role is not Combined.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternode
+#
+Cluster.Node.AuthorityLeaseRenewSeconds = 10
+
+#
+#    Cluster.Node.AuthorityLeaseTtlSeconds
+#        Description: How long a realm singleton lease stays valid without a renewal (5 to 600). A
+#                     node that dies releases its singletons to another node after this long. Only
+#                     used when Role is not Combined.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternode
+#
+Cluster.Node.AuthorityLeaseTtlSeconds = 30
+
+#
+#    Cluster.Node.Role
+#        Description: The role this World process runs as: Combined (the default) runs every feature
+#                     here. MapWorker needs Cluster:Worker:Enabled = true; the realm-wide singletons
+#                     (the auction house bot and AutoBroadcast) then run on this node only while it
+#                     holds their database lease. Social, Economy and Gateway are refused on a World
+#                     process: the shared auction, mail and presence state they would need does not
+#                     exist yet. Values: Combined, Gateway, MapWorker, Social, Economy.
+#        Type: ClusterNodeRole
+#        Default: Combined
+#        Allowed: Combined | Gateway | MapWorker | Social | Economy
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternode
+#
+Cluster.Node.Role = Combined
+
+#----------------------------------------------------------------------------
 # Cluster:NodeBridge
 #----------------------------------------------------------------------------
 

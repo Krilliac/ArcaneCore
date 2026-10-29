@@ -130,7 +130,7 @@ closed. Open work 3 lists the gaps from [gateway.md](areas/gateway.md#not-done-y
 |---|---|---|---|
 | M15.0 | `42f7cf9e3`, `8b801352e`, `1fbf3d37a`, `361a19dd3`, `ab0378823` | Reputation fencing, schema authority, durable ID block allocators, session generation claims, character flush barrier. | Merged. Closure not independently verified (unverified). |
 | M15.1 | `379768eed` | Roles, readiness and gateway-worker transport. | Merged. Open gap (gateway.md): real-client acceptance of the gateway path has not been run. Closure criteria: design doc. |
-| M15.2 | `7ef7ae3aa` | Presence directory, cross-worker social router, fenced economy lease. | Merged. Closure not independently verified (unverified). |
+| M15.2 | `7ef7ae3aa` | Presence directory, cross-worker social router, fenced economy lease. | Merged. Role filter hosted (`Cluster:Node:Role` Combined/MapWorker); realm singletons attach under characters-DB leases (`realm_authority_lease`, characters 67). Open gap: dedicated Social/Economy processes refused; no commit-time fencing-token check. Closure not independently verified (unverified). |
 | M15.3 | `c6f749c98` | Continent leases, instance placement, character handoff. | Merged. Open gap (gateway.md): the handoff moves ownership and saved state but still disconnects the client; the seamless reroute is not built. Closure criteria: design doc. |
 | M15.4 | `38caa3a00` | Host supervisor, capacity admission, console multiplexer. | Merged. Closure not independently verified (unverified). |
 | M15.5 | `f3d42215d` | CLI maintenance guard, content revision compatibility, rollback coordinator, diagnostics. | Merged. Open gap (gateway.md): the gateway has no conf catalog entry or metrics. Closure criteria: design doc. |
