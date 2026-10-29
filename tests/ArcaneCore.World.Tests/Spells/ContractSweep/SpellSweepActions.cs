@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Spells;
@@ -52,7 +53,7 @@ internal sealed class ProductionSweepActions : ISweepActions
             new("turn", AuraInterruptMask.Turning, PlayerOnly: true, (scene, unit) => Turn(scene, (Player)unit)),
             // MapCombat.DealDamage stands a seated player up (vmangos Unit::DealDamage), which fires STANDING_CANCELS; a spell with that
             // bit seats its caster (food, drink), so the hit legitimately ends it.
-            new("melee-hit-taken", AuraInterruptMask.Damage, PlayerOnly: false, MeleeHitTaken,
+            new(MeleeHitTakenName, AuraInterruptMask.Damage, PlayerOnly: false, MeleeHitTaken,
                 unit => unit is Player && unit.StandState is not (StandState.Stand or StandState.Dead) ? AuraInterruptMask.Standing : 0),
             new("melee-swing", AuraInterruptMask.Attacking, PlayerOnly: false, MeleeSwing),
             new("cast", AuraInterruptMask.Action | AuraInterruptMask.ActionLate, PlayerOnly: true, (scene, unit) => CastOther(scene, (Player)unit)),
@@ -60,6 +61,9 @@ internal sealed class ProductionSweepActions : ISweepActions
             new("stand-up", AuraInterruptMask.Standing, PlayerOnly: true, (scene, unit) => StandUp((Player)unit)),
         ];
     }
+
+    /// <summary>The name of the melee-hit-taken action (the interrupt check exempts procFlags auras from its DAMAGE bit, as vmangos does).</summary>
+    public const string MeleeHitTakenName = "melee-hit-taken";
 
     /// <summary>A horse model (CreatureDisplayInfo 2404, the Brown Horse); any display id mounts.</summary>
     public const uint MountDisplay = 2404;
@@ -106,10 +110,18 @@ internal sealed class ProductionSweepActions : ISweepActions
         return SwingUntilHit(scene, attacker, victim);
     }
 
-    /// <summary><paramref name="attacker"/>'s own white swings at an enemy.</summary>
+    /// <summary>
+    /// <paramref name="attacker"/>'s own white swings at an enemy. The struck creature does not answer (passive): its answering hit would be
+    /// damage taken, which is the melee-hit-taken action's to check, not this one's.
+    /// </summary>
     public static bool MeleeSwing(SweepScene scene, Unit attacker)
     {
         Unit victim = attacker is Player ? scene.Striker() : scene.EnemyPlayer();
+        if (victim is Creature struck)
+        {
+            struck.ReactState = CreatureReactState.Passive;
+        }
+
         return SwingUntilHit(scene, attacker, victim);
     }
 
