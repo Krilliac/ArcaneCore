@@ -12,7 +12,7 @@ namespace ArcaneCore.Kernel.Ops.ServerConsole;
 /// the daemon consoles (<c>WorldConsole</c>, <c>RealmConsole</c>, which stay off on redirected input) never see the line as a command.
 /// <para>Thread affinity: <see cref="StartAsync"/>/<see cref="StopAsync"/> on the host thread; the handlers run on the reader thread.</para>
 /// </summary>
-public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplicationLifetime lifetime, ILoggerFactory loggerFactory) : IHostedService
+public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplicationLifetime lifetime, ILoggerFactory loggerFactory, ISupervisedLifecycleRequestHandler? lifecycle = null, Func<int>? exitCode = null) : IHostedService
 {
     /// <summary>Environment variable the supervisor sets on every child (its value is the child's process name).</summary>
     public const string EnvironmentVariable = "ARCANECORE_SUPERVISED_CHILD";
@@ -22,6 +22,12 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
 
     private readonly ILogger _logger = loggerFactory.CreateLogger("ArcaneCore.SupervisedChild");
     private ConsoleLineReader? _reader;
+    private CancellationTokenRegistration _stoppingRegistration;
+    private readonly Func<int> _exitCode = exitCode ?? (() => ExitCodes.Current);
+    private Task _announcement = Task.CompletedTask;
+
+    /// <summary>The longest <see cref="StopAsync"/> waits for the stopping announcement to be written.</summary>
+    public static readonly TimeSpan AnnouncementWait = TimeSpan.FromSeconds(2);
 
     /// <summary>The reader thread; null when no reader was started. Exposed for tests.</summary>
     public Thread? ReaderThread => _reader?.Thread;
@@ -36,6 +42,11 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
             return Task.CompletedTask;
         }
 
+        if (source.SupervisorProtocol)
+        {
+            _stoppingRegistration = lifetime.ApplicationStopping.Register(AnnounceStopping);
+        }
+
         _reader = new ConsoleLineReader(source.Input, "supervised-drain");
         _reader.Start(OnLine, _logger, () => Stop("the supervisor closed stdin"));
         return Task.CompletedTask;
@@ -47,10 +58,52 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
         {
             Stop("the supervisor asked for a drain");
         }
+        else if (SupervisorProtocol.TryParseForwardedLifecycle(line, out SupervisorLifecycleRequest request))
+        {
+            if (lifecycle is null)
+            {
+                _logger.LogWarning("ignored a lifecycle {Action} forwarded by the supervisor: this process has no lifecycle handler", request.Action);
+                return;
+            }
+
+            _logger.LogWarning("The supervisor forwarded a lifecycle {Action} (delay {Delay} s, exit code {Code}) requested by {By}", request.Action, request.DelaySeconds, request.ExitCode, request.By);
+            lifecycle.Request(request);
+        }
+        else if (SupervisorProtocol.TryParseLifecycleResult(line, out SupervisorLifecycleResult result))
+        {
+            lifecycle?.Result(result);
+        }
         else
         {
-            _logger.LogDebug("ignored a supervisor stdin line that is not 'drain'");
+            _logger.LogDebug("ignored a supervisor stdin line that is not 'drain' or a lifecycle line");
         }
+    }
+
+    // The host began to stop: say why, from the exit code that will be returned (ServerLifecycleFeature stores it before it calls StopApplication).
+    // StopApplication can be called on the world thread, so the line is composed here but written on the thread pool (a full stdout pipe must not stall
+    // the world); StopAsync waits a bounded time for the write so the line still precedes the exit.
+    private void AnnounceStopping()
+    {
+        if (string.IsNullOrEmpty(source.SupervisorToken))
+        {
+            return; // no per-run token, nothing the supervisor could trust
+        }
+
+        int code = _exitCode();
+        string line = SupervisorProtocol.FormatStopping(source.SupervisorToken, SupervisorProtocol.IntentFor(code), code);
+        // A dedicated thread, not the pool: the announcement must not wait behind (or be starved by) blocked pool threads during a shutdown.
+        _announcement = Task.Factory.StartNew(() =>
+        {
+            try
+            {
+                source.Output.WriteLine(line);
+                source.Output.Flush();
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+                _logger.LogDebug("the stopping announcement could not be written: {Reason}", ex.GetType().Name);
+            }
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
     private void Stop(string reason)
@@ -59,9 +112,17 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
         lifetime.StopApplication();
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
+        _stoppingRegistration.Dispose();
         _reader?.Stop();
-        return Task.CompletedTask;
+        try
+        {
+            await _announcement.WaitAsync(AnnouncementWait).ConfigureAwait(false); // bounded by its own timeout; a cancelled shutdown token must not turn this into an exception
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogDebug("the stopping announcement was still being written after {Seconds} s", AnnouncementWait.TotalSeconds);
+        }
     }
 }

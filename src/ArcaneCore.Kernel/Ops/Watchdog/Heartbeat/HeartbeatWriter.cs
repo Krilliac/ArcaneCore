@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.Kernel.Ops.Watchdog.Counters;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,22 @@ public sealed record HeartbeatPlan(IHeartbeatSink Sink, int IntervalSeconds, str
     /// yields <see cref="NullHeartbeatSink"/> with the reason in <see cref="Note"/>, never an exception.
     /// </summary>
     public static HeartbeatPlan Resolve(HeartbeatOptions options, Func<string, string?> environment, int processId, string contentRoot, TextWriter stdout)
+    {
+        HeartbeatPlan configured = ResolveConfigured(options, environment, processId, contentRoot, stdout);
+        if (!SupervisorProtocol.IsEnabled(environment) || options.Mode == HeartbeatMode.Stdout)
+        {
+            return configured;
+        }
+
+        // A child of the cluster host supervisor (SupervisorProtocol) beats on stdout as well, whatever the operator configured: the supervisor
+        // reads its hang signal from there. The operator's own sink and interval stay; with none configured (interval 0) the beat is every 10 s.
+        var supervisor = new TextWriterHeartbeatSink(stdout, processId, "stdout (supervisor)");
+        int interval = configured.IntervalSeconds > 0 ? configured.IntervalSeconds : 10;
+        IHeartbeatSink sink = configured.Sink is NullHeartbeatSink ? supervisor : new CompositeHeartbeatSink([configured.Sink, supervisor]);
+        return new HeartbeatPlan(sink, interval, configured.Note);
+    }
+
+    private static HeartbeatPlan ResolveConfigured(HeartbeatOptions options, Func<string, string?> environment, int processId, string contentRoot, TextWriter stdout)
     {
         bool systemd = SystemdNotifySink.TryReadEnvironment(environment, processId, out string? socket, out long watchdogMicros);
         HeartbeatMode mode = options.Mode == HeartbeatMode.Auto ? (systemd ? HeartbeatMode.Systemd : HeartbeatMode.None) : options.Mode;

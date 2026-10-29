@@ -160,6 +160,7 @@ public sealed class ClusterHostSupervisorTests : IDisposable
             Console = SupervisedConsoleMode.None,
             RestartBackoffMinMs = 1_000,
             RestartBackoffMaxMs = 60_000,
+            HangTimeoutSeconds = 0, // this test records every delay the supervisor asks for: the hang watch would add its own
             MapAssignments = [0],
         };
         options.Processes[workerCfg.Name] = workerCfg;
@@ -397,7 +398,7 @@ public sealed class ClusterHostSupervisorTests : IDisposable
     {
         var launcher = new FakeSupervisedProcessLauncher();
         var options = new ClusterSupervisorOptions();
-        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1 };
+        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1, HangTimeoutSeconds = 0 };
         var delays = new ConcurrentQueue<int>();
         var console = new StringWriter();
         using var mux = new SupervisedOutputMultiplexer(console);
