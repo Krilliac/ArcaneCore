@@ -1,3 +1,6 @@
+using ArcaneCore.Kernel.Diagnostics;
+using Microsoft.Extensions.Logging;
+
 namespace ArcaneCore.Game.Rules;
 
 /// <summary>
@@ -23,7 +26,15 @@ public sealed class RuleEvaluator(Random random)
     /// <summary>How deep started lists may nest (a list starting a list starting a list ...).</summary>
     public const int MaxListDepth = 8;
 
+    /// <summary>How many firings may be running at once on one evaluator (an action that fires another event of its subject, and so on); deeper firings are refused and counted.</summary>
+    public const int MaxFireNesting = 8;
+
+    private const short UpdateKey = short.MinValue;
+
     private readonly Random _random = random ?? throw new ArgumentNullException(nameof(random));
+    private readonly RuleSubjectState?[] _activeStates = new RuleSubjectState?[MaxFireNesting];
+    private readonly short[] _activeEvents = new short[MaxFireNesting];
+    private int _active;
 
     /// <summary>The condition check; without one every conditioned rule fails closed.</summary>
     public IRuleConditionGate? Conditions { get; init; }
@@ -34,7 +45,17 @@ public sealed class RuleEvaluator(Random random)
     /// <summary>Where traced evaluations go; without a sink nothing is traced.</summary>
     public IRuleTraceSink? TraceSink { get; init; }
 
-    public RuleEvaluatorCounters Counters { get; } = new();
+    /// <summary>What this evaluator counted; a host that runs several evaluators on one thread may hand them one shared instance.</summary>
+    public RuleEvaluatorCounters Counters { get; init; } = new();
+
+    /// <summary>Finds a delayed run's invoker again when the run resumes; without one a resumed run has no invoker.</summary>
+    public IRuleSubjectResolver? Subjects { get; init; }
+
+    /// <summary>Where <see cref="TryFire"/> and <see cref="TryUpdate"/> log the faults they catch (through the fault ledger); without one the fault is recorded in the ledger only.</summary>
+    public ILogger? Logger { get; init; }
+
+    /// <summary>The dotted fault-ledger site prefix of this evaluator's host (<c>rules.bot</c>); <c>.fire</c> or <c>.update</c> is appended.</summary>
+    public string FaultSite { get; init; } = "rules";
 
     /// <summary>
     /// Fire <paramref name="eventType"/> for <paramref name="subject"/>: evaluate each rule of the event in the subject's binding and run
@@ -50,6 +71,98 @@ public sealed class RuleEvaluator(Random random)
             return 0;
         }
 
+        if (!Enter(state, eventType))
+        {
+            return 0;
+        }
+
+        try
+        {
+            return FireRules(rules, state, subject, eventType, args, nowMs, invoker);
+        }
+        finally
+        {
+            Leave();
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Fire"/> for a host loop that must survive a faulting primitive: a fault (anything but <see cref="OutOfMemoryException"/>) is
+    /// recorded in the fault ledger under <c>FaultSite + ".fire"</c>, logged (throttled), counted in <see cref="RuleEvaluatorCounters.Faults"/>, and
+    /// the firing ends with 0. This is the fault-ledger idiom hosts wrap their calls in; the evaluator itself does not catch.
+    /// </summary>
+    public int TryFire(RuleSubjectState state, IRuleSubject subject, short eventType, in RuleEventArgs args, long nowMs, IRuleSubject? invoker = null)
+    {
+        try
+        {
+            return Fire(state, subject, eventType, args, nowMs, invoker);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Fault(".fire", ex, eventType);
+            return 0;
+        }
+    }
+
+    /// <summary><see cref="Update"/> inside the same fault-ledger idiom as <see cref="TryFire"/> (site <c>FaultSite + ".update"</c>).</summary>
+    public void TryUpdate(RuleSubjectState state, IRuleSubject subject, long nowMs)
+    {
+        try
+        {
+            Update(state, subject, nowMs);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Fault(".update", ex, 0);
+        }
+    }
+
+    private void Fault(string suffix, Exception ex, short eventType)
+    {
+        Counters.Faults++;
+        string site = FaultSite + suffix;
+        if (Logger is { } logger)
+        {
+            logger.LogFault(site, ex, "Rule evaluation faulted (event {EventType})", eventType);
+        }
+        else
+        {
+            FaultLedger.Shared.Record(site, ex);
+        }
+    }
+
+    private bool Enter(RuleSubjectState state, short eventType)
+    {
+        for (int i = 0; i < _active; i++)
+        {
+            if (ReferenceEquals(_activeStates[i], state) && _activeEvents[i] == eventType)
+            {
+                Counters.Reentrant++;
+                return false;
+            }
+        }
+
+        if (_active == MaxFireNesting)
+        {
+            Counters.Reentrant++;
+            return false;
+        }
+
+        _activeStates[_active] = state;
+        _activeEvents[_active] = eventType;
+        _active++;
+        return true;
+    }
+
+    private void Leave()
+    {
+        _active--;
+        _activeStates[_active] = null;
+    }
+
+    private int FireRules(ReadOnlySpan<BoundRule> rules, RuleSubjectState state, IRuleSubject subject, short eventType, in RuleEventArgs args,
+        long nowMs, IRuleSubject? invoker)
+    {
         ulong guid = subject.Guid;
         bool traceSubject = TraceSink is not null && Tracer is { Count: > 0 } tracer && tracer.IsTraced(guid);
         int ran = 0;
@@ -90,6 +203,23 @@ public sealed class RuleEvaluator(Random random)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(subject);
+        if (!Enter(state, UpdateKey))
+        {
+            return;
+        }
+
+        try
+        {
+            UpdateRuns(state, subject, nowMs);
+        }
+        finally
+        {
+            Leave();
+        }
+    }
+
+    private void UpdateRuns(RuleSubjectState state, IRuleSubject subject, long nowMs)
+    {
         Span<PendingRun> pending = state.Pending;
         for (int i = 0; i < pending.Length; i++)
         {
@@ -100,10 +230,21 @@ public sealed class RuleEvaluator(Random random)
 
             PendingRun run = pending[i];
             pending[i] = default;
+            IRuleSubject? invoker = null;
+            if (run.InvokerGuid != 0)
+            {
+                // The run kept the invoker's guid only: an invoker that despawned or logged out meanwhile is gone, and the rest of the run goes on without it.
+                invoker = run.InvokerGuid == subject.Guid ? subject : Subjects?.Resolve(run.InvokerGuid);
+                if (invoker is null)
+                {
+                    Counters.InvokerLost++;
+                }
+            }
+
             int actionsRun = 0;
             int actionsFailed = 0;
             // A resumed run starts a new synchronous chain: the depth limit guards one firing's nesting, not a list that repeats itself after a delay.
-            RunSequence(actions, run.Next, resumed: true, run.List, run.RuleId, state, subject, run.Invoker, nowMs, run.List is null ? 0 : 1, ref actionsRun, ref actionsFailed);
+            RunSequence(actions, run.Next, resumed: true, run.List, run.RuleId, state, subject, invoker, nowMs, run.List is null ? 0 : 1, ref actionsRun, ref actionsFailed);
         }
     }
 
@@ -251,7 +392,7 @@ public sealed class RuleEvaluator(Random random)
         {
             if (pending[i].Actions is null)
             {
-                pending[i] = new PendingRun { Actions = actions, List = list, Next = next, DueMs = dueMs, Invoker = invoker, RuleId = ruleId };
+                pending[i] = new PendingRun { Actions = actions, List = list, Next = next, DueMs = dueMs, InvokerGuid = invoker?.Guid ?? 0, RuleId = ruleId };
                 return;
             }
         }

@@ -38,8 +38,14 @@ public sealed record RuleBuildOptions
 /// </summary>
 public sealed class RuleCatalog
 {
-    /// <summary>Goal ids from here up are server-defined goals; below it a goal id must be a <see cref="PlayerbotGoalKind"/> value.</summary>
+    /// <summary>Goal ids from here up are server-defined goals; below it a goal id must be a <see cref="PlayerbotGoalKind"/> value or a ladder rung (<see cref="RungGoalIdStart"/>..<see cref="RungGoalIdEnd"/>).</summary>
     public const short CustomGoalIdStart = 1000;
+
+    /// <summary>The first and last <c>playerbot_goal</c> id of the shipped ladder rungs (100 + the rung number): rungs that have no <see cref="PlayerbotGoalKind"/> of their own.</summary>
+    public const short RungGoalIdStart = 100;
+
+    /// <summary>See <see cref="RungGoalIdStart"/>.</summary>
+    public const short RungGoalIdEnd = 199;
 
     /// <summary>Rule ids from here up are server-authored (custom); shipped and converted content stays below.</summary>
     public const int CustomIdStart = 1_000_000;
@@ -157,6 +163,8 @@ public sealed class RuleCatalog
             LoadListRows();
             (Dictionary<int, CompiledRule> enabled, int disabled, Dictionary<CompiledRule, HashSet<int>> ruleLists) = LoadRules();
 
+            RejectDeepChains();
+
             // A list that starts a rejected list (possible only through a delayed cycle) is rejected, and so is a rule that starts one.
             bool changed = true;
             while (changed)
@@ -210,6 +218,57 @@ public sealed class RuleCatalog
             return new RuleCatalog(vocabulary, enabled, disabled, lists, _filters, _texts, _goals, _conditions, _rejected);
         }
 
+        /// <summary>
+        /// Rejects a list whose zero-delay chain of started lists is longer than <see cref="RuleEvaluator.MaxListDepth"/>: at run time the ninth
+        /// list would be cut (<see cref="RuleEvaluatorCounters.DepthLimited"/>) and its actions silently skipped, which a loaded row must never do.
+        /// A rule's chain is its first list's chain, so checking lists covers rules too.
+        /// </summary>
+        private void RejectDeepChains()
+        {
+            var depths = new Dictionary<CompiledRuleList, int>(ReferenceEqualityComparer.Instance);
+            foreach (((RuleHostKind _, int id), ListResult result) in _compiledLists.OrderBy(kv => kv.Key.Item2).ThenBy(kv => kv.Key.Item1))
+            {
+                if (result.List is { } list && ChainDepth(list, depths, []) > RuleEvaluator.MaxListDepth)
+                {
+                    result.List = null;
+                    result.Reason = $"it starts lists {depths[list]} deep with no delay in between; the limit is {RuleEvaluator.MaxListDepth} (put a delay in the chain or shorten it)";
+                }
+            }
+        }
+
+        /// <summary>The number of lists in the longest chain that starts from <paramref name="list"/> without a delay (the list itself counts).</summary>
+        private static int ChainDepth(CompiledRuleList list, Dictionary<CompiledRuleList, int> depths, HashSet<CompiledRuleList> visiting)
+        {
+            if (depths.TryGetValue(list, out int known))
+            {
+                return known;
+            }
+
+            if (!visiting.Add(list))
+            {
+                return int.MaxValue / 2;
+            }
+
+            int deepest = 0;
+            foreach (CompiledAction action in list.Actions)
+            {
+                if (action.DelayMs > 0)
+                {
+                    break;
+                }
+
+                if (action.Action is StartRuleListAction && action.Reference is CompiledRuleList child)
+                {
+                    deepest = Math.Max(deepest, ChainDepth(child, depths, visiting));
+                }
+            }
+
+            visiting.Remove(list);
+            int depth = 1 + deepest;
+            depths[list] = depth;
+            return depth;
+        }
+
         private bool IsRejected(RuleHostKind host, int list) => !_compiledLists.TryGetValue((host, list), out ListResult? result) || result.List is null;
 
         private void LoadTexts()
@@ -261,8 +320,8 @@ public sealed class RuleCatalog
             {
                 string? problem = row.GoalId < 0 ? "goal_id must not be negative"
                     : _goals.ContainsKey(row.GoalId) ? "duplicate goal_id (the first row is kept)"
-                    : row.GoalId < CustomGoalIdStart && !Enum.IsDefined((PlayerbotGoalKind)row.GoalId)
-                        ? $"goal_id {row.GoalId} is not a PlayerbotGoalKind value; custom goals start at {CustomGoalIdStart}"
+                    : row.GoalId < CustomGoalIdStart && !Enum.IsDefined((PlayerbotGoalKind)row.GoalId) && row.GoalId is < RungGoalIdStart or > RungGoalIdEnd
+                        ? $"goal_id {row.GoalId} is not a PlayerbotGoalKind value or a ladder rung ({RungGoalIdStart}..{RungGoalIdEnd}); custom goals start at {CustomGoalIdStart}"
                     : string.IsNullOrWhiteSpace(row.Name) ? "name is empty"
                     : null;
                 if (problem is not null)
@@ -649,6 +708,7 @@ public sealed class RuleCatalog
                     RuleParamKind.ConditionId when value <= 0 || options.Conditions.Find((uint)value) is null => "is not a loaded conditions row",
                     RuleParamKind.RuleListId when !_listRows.ContainsKey(value) => "is not a rule_list id",
                     RuleParamKind.GoalId when value is < short.MinValue or > short.MaxValue || !_goals.ContainsKey((short)value) => "is not a loaded playerbot_goal id",
+                    RuleParamKind.GoalId when _goals[(short)value].Driver == 0 => "is a playerbot_goal without a driver (nothing would run it)",
                     _ => null,
                 };
                 if (problem is not null)

@@ -87,10 +87,10 @@ public static class RuleReference
             .Append($"(0 without a filter) xor 0x{RuleShare.StableChanceSalt:X8}, so the two shares are independent. The same subjects stay selected ")
             .Append("across ticks and restarts; a new seed reshuffles them.\n\n")
             .Append("Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the ")
-            .Append($"sequence then waits in one of the subject's {RuleSubjectState.PendingCapacity} pending slots. Lists nest at most ")
-            .Append($"{RuleEvaluator.MaxListDepth} deep (checked when they run: a deeper start fails and is counted), and a list that starts itself again with no delay in between is rejected at load.\n\n")
+            .Append($"sequence then waits in one of the subject's {RuleSubjectState.PendingCapacity} pending slots. Lists started one inside another with no delay in between nest at most ")
+            .Append($"{RuleEvaluator.MaxListDepth} deep: a longer chain, or a list that starts itself again with no delay in between, is rejected at load (with the rule that starts it); a delay anywhere in the chain breaks it, and a start that still gets too deep at run time fails and is counted.\n\n")
             .Append($"Ids below {RuleCatalog.CustomIdStart} are shipped or converted content; server-authored rows use {RuleCatalog.CustomIdStart} and up. ")
-            .Append($"`playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, or {RuleCatalog.CustomGoalIdStart} and up for a custom goal.\n\n");
+            .Append($"`playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, a ladder rung ({RuleCatalog.RungGoalIdStart} to {RuleCatalog.RungGoalIdEnd}: 100 plus the rung number), or {RuleCatalog.CustomGoalIdStart} and up for a custom goal. A goal a rule proposes needs a non-zero `driver`.\n\n");
 
         b.Append("## Parameter kinds\n\n| Kind | Checked at load |\n| --- | --- |\n");
         foreach (RuleParamKind kind in Enum.GetValues<RuleParamKind>())

@@ -55,7 +55,7 @@ public sealed class RuleCommandsTests
     public void EveryLeaf_IsGameMaster()
     {
         CommandTable table = ChatCommands.CreateTable();
-        foreach (string leaf in new[] { "rules check", "rules vocab", "rules trace" })
+        foreach (string leaf in new[] { "rules check", "rules vocab", "rules trace", "rules stats" })
         {
             Assert.Null(table.Resolve(leaf, AccountSecurity.Moderator));
             Assert.NotNull(table.Resolve(leaf, AccountSecurity.GameMaster));
@@ -120,5 +120,24 @@ public sealed class RuleCommandsTests
         Assert.Equal(["Stopped tracing 0x1F40."], await ConsoleAsync(host, ".rules trace 8000"));
         Assert.StartsWith("Syntax:", (await ConsoleAsync(host, ".rules trace nope"))[0], StringComparison.Ordinal);
         Assert.StartsWith("Syntax:", (await ConsoleAsync(host, ".rules trace 0"))[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Stats_PrintsTheRegisteredEvaluatorCounters_NarrowedToAHost()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        RuleFeature feature = host.WorldServices.GetRequiredService<RuleFeature>();
+
+        Assert.Equal(["No rule host is running an evaluator."], await ConsoleAsync(host, ".rules stats"));
+
+        var counters = new RuleEvaluatorCounters { Fired = 7, ActionsRun = 9, Reentrant = 2, Faults = 1 };
+        feature.Counters.Register(RuleHostKind.Bot, "bot test", counters);
+        feature.Counters.Register(RuleHostKind.Creature, "creature map 0", new RuleEvaluatorCounters());
+
+        Assert.Equal(["bot bot test: fired=7 actions=9 failed=0 dropped_runs=0 depth_limited=0 reentrant=2 invoker_lost=0 faults=1"],
+            await ConsoleAsync(host, ".rules stats bot"));
+        Assert.Equal(2, (await ConsoleAsync(host, ".rules stats")).Length);
+        Assert.Equal(["No gameobject evaluator is running."], await ConsoleAsync(host, ".rules stats gameobject"));
+        Assert.StartsWith("Unknown rule host 'dragon'.", (await ConsoleAsync(host, ".rules stats dragon"))[0], StringComparison.Ordinal);
     }
 }

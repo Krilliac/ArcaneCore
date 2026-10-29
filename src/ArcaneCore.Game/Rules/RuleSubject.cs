@@ -48,3 +48,13 @@ public interface IRuleConditionGate
 {
     bool? Evaluate(uint conditionId, IRuleSubject subject, IRuleSubject? invoker);
 }
+
+/// <summary>
+/// Looks a subject up by its <see cref="IRuleSubject.Guid"/> on the host's thread. The evaluator uses it to find the invoker of a delayed
+/// run again when the run resumes: a pending run keeps only the guid, so an invoker that despawned or logged out in the meantime is neither
+/// kept alive nor acted on. Null when the subject no longer exists in the host.
+/// </summary>
+public interface IRuleSubjectResolver
+{
+    IRuleSubject? Resolve(ulong guid);
+}
