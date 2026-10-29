@@ -16,7 +16,6 @@ using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Social;
@@ -268,31 +267,49 @@ public sealed class PlayerbotPvpKillRoutingWorldTests
         int heard = 0;
         long faultsBefore = FaultsAt("playerbot.pvp-feed");
 
+        List<Map> detached = [];
         PlayerbotPvpKillFeed feed = await world.Host.OnWorldAsync(() =>
         {
+            Map failing = world.Host.World.GetMap(33, 101);
             var feed = new PlayerbotPvpKillFeed(world.Host.World, (_, _) => heard++);
-            // A map built without DefaultMapUpdaters has no MapCombat: Combat throws. Put it first in the feed's set (a HashSet hands a freed slot
-            // to the next map added: the world's maps leave in reverse order, so the first slot is the last freed), so Dispose meets it before
-            // the real maps and a Dispose that stops at the first failure leaves them subscribed.
-            var broken = new Map(0, 9_999, world.Host.World, NullLogger.Instance);
-            Map[] real = [.. world.Host.World.Maps];
-            for (int i = real.Length - 1; i >= 0; i--) feed.Remove(real[i]);
-            Assert.ThrowsAny<Exception>(() => feed.Add(broken));
-            foreach (Map map in real) feed.Add(map);
-            Assert.Equal(real.Length + 1, feed.MapCount);
+            // Put the failing map first in the feed's set (a HashSet hands a freed slot to the next map added: the maps leave in reverse
+            // order, so the first slot is the last freed), so Dispose meets it before the others: a Dispose that stops at the first
+            // failure leaves them subscribed.
+            Map[] all = [.. world.Host.World.Maps];
+            for (int i = all.Length - 1; i >= 0; i--)
+            {
+                feed.Remove(all[i]);
+            }
+
+            feed.Add(failing);
+            foreach (Map map in all)
+            {
+                feed.Add(map);
+            }
+
+            Assert.Equal(all.Length, feed.MapCount);
+            feed.BeforeDetach = map =>
+            {
+                detached.Add(map);
+                if (ReferenceEquals(map, failing))
+                {
+                    throw new InvalidOperationException("the map cannot be detached");
+                }
+            };
             return feed;
         });
 
         feed.Dispose();
 
         Assert.Equal(0, feed.MapCount);
+        Assert.True(detached.Count >= 2 && detached[0].MapId == 33 && detached[0].InstanceId == 101, "the failing map was met first");
         Assert.True(FaultsAt("playerbot.pvp-feed") > faultsBefore, "the failed detach is in the fault ledger");
         await world.Host.OnWorldAsync(() =>
         {
             Slay(Online(world, "Faultkiller"), Online(world, "Faultvictim"));
             Assert.False(Online(world, "Faultvictim").IsAlive);
         });
-        Assert.Equal(0, heard); // the real maps were detached although the broken one failed first
+        Assert.Equal(0, heard); // the other maps were detached although the first one failed
     }
 
     private static long FaultsAt(string site) => FaultLedger.Shared.Snapshot().Where(f => f.Site == site).Sum(f => f.Count);

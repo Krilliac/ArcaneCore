@@ -28,11 +28,11 @@ public sealed class DatabaseGuardSqliteLockTests
     {
         using ServiceProvider provider = Build(
             ("Database:Provider", "MariaDb"),
-            ("Database:ConnectionString", "Server=127.0.0.1;Port=1;Database=arcane;User=arcane;Password=arcane;"),
+            ("Database:ConnectionString", $"Server=127.0.0.1;Port={ClosedLoopbackPort.Next()};Database=arcane;User=arcane;Password=arcane;"),
             ("Database:Characters:Provider", "Sqlite"),
             ("Database:Characters:ConnectionString", "Data Source=:memory:"),
             ("Database:World:Provider", "PostgreSql"),
-            ("Database:World:ConnectionString", "Host=127.0.0.1;Port=1;Database=arcane;Username=arcane;Password=arcane;"));
+            ("Database:World:ConnectionString", $"Host=127.0.0.1;Port={ClosedLoopbackPort.Next()};Database=arcane;Username=arcane;Password=arcane;"));
         DatabaseGuard guard = provider.GetRequiredService<DatabaseGuard>();
 
         Assert.Equal(TimeoutStrategy.Cooperative, guard.PipelineFor(DatabaseComponent.Auth).Timeout!.Strategy);

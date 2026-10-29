@@ -45,6 +45,7 @@ public sealed class SpellEnvironmentalMitigation(SpellSystem system) : IEnvironm
         }
 
         int resist = _system.CombatRules is ISchoolResistRoll roll ? roll.RollResist(_system, player, player, SchoolOf(school), damage) : 0;
+        // A player has no negative create resistance, so the roll is never negative today; the branch stays for the shared signed-roll contract.
         uint remaining = resist < 0 ? damage + (uint)-resist : damage - Math.Min(damage, (uint)resist);
         uint absorb = _system.AbsorbDamage(player, player, mask, remaining, spell: null);
         return new EnvironmentalMitigation(absorb, resist);

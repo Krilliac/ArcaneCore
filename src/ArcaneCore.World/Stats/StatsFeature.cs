@@ -186,7 +186,13 @@ public sealed class StatsFeature : IWorldFeature, ICharacterHooks, IDisposable
         }
     }
 
-    private void OnMapCreated(Map map) => map.Combat.Stats = _source;
+    private void OnMapCreated(Map map)
+    {
+        if (map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combat.Stats = _source;
+        }
+    }
 
     private void OnBaseValuesApplied(Player player)
     {

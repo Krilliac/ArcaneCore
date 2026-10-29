@@ -198,6 +198,7 @@ public sealed class TradeOfferedItemMoveTests
         Assert.Equal(5u, await ReceiverCountAsync(rig));
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task SplitOfAnotherStack_WhileSomethingIsOffered_StillWorks()
     {
@@ -436,6 +437,7 @@ public sealed class TradeOfferedItemMoveTests
     /// The destination branch of the same handler: the offered trinket sits in the trinket slot (put there on the world thread after the first accept) and a different, not offered trinket is auto-equipped over it. That would swap the offered item out, so it is
     /// refused with ItemLocked but not scored (the offered item is not the one the client dragged).
     /// </summary>
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task AutoEquipItemSlotOntoAnEquippedOfferedItem_AfterFirstAccept_IsRefusedWithoutScoring()
     {

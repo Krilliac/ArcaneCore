@@ -33,6 +33,7 @@ public sealed class HotProbeUpdater(Map map, WorldRuntime world) : IMapUpdater
 /// maps created after the commit get a newly added default updater, maps that already exist keep
 /// what they have, and an invalid marked type fails the scan and changes nothing.
 /// </summary>
+[Collection(DefaultMapUpdatersCollection.Name)]
 public sealed class DefaultMapUpdaterRefreshTests
 {
     [Fact]
