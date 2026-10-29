@@ -132,8 +132,6 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
     private int[] _readyPhase = [];
     private Unit?[] _eventTargets = [];
     private int _depth;
-    private int _livePhase;
-    private bool _phaseOnLoan;
     private uint _updateTimeMs;
     private uint _diffMs;
     private long _clock;
@@ -613,9 +611,9 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
         CreatureFireFrame saved = _frame;
         CreatureRuleRunner? previous = t_current;
         t_current = this;
-        // The evaluator checks the rule phase mask against the phase the rule was readied in (cmangos checks it when readying, never again). The
-        // state carries that phase only until the first action, creature.row, hands the live phase back; the actions then run against it.
-        _livePhase = _state.Phase;
+        // The evaluator's phase gate sees the phase the rule was readied in (cmangos checks it when it readies a row and never again); the live
+        // phase is left alone, so every action reads and writes it, also when this firing nests inside another one.
+        int outerGate = _state.GatePhase;
         int readyPhase = _readyPhase[slot];
         try
         {
@@ -636,8 +634,7 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
                 Context.NextRandom();
             }
 
-            _state.Phase = readyPhase;
-            _phaseOnLoan = true;
+            _state.GatePhase = readyPhase;
             _state.CooldownUntil[slot] = 0;
             int ran = _evaluator.Fire(_state, this, rule.EventType, default, _clock, Wrap(invoker));
             _state.CooldownUntil[slot] = 0;
@@ -651,7 +648,7 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
         }
         finally
         {
-            SettleLivePhase();
+            _state.GatePhase = outerGate;
             _frame = saved;
             t_current = previous;
             _inProgress[slot] = false;
@@ -697,16 +694,6 @@ public sealed class CreatureRuleRunner : IRuleSubject, IRuleSpeaker, IRuleCaster
     {
         _enabled[slot] = true;
         _timerUntil[slot] = 0;
-    }
-
-    /// <summary>Hand the live phase back to the state once the evaluator phase check is behind (the first action, or the end of the firing).</summary>
-    internal void SettleLivePhase()
-    {
-        if (_phaseOnLoan)
-        {
-            _phaseOnLoan = false;
-            _state.Phase = _livePhase;
-        }
     }
 
     internal void Enable(int slot) => _enabled[slot] = true;

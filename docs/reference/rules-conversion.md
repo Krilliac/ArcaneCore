@@ -60,6 +60,8 @@ EventAI stores an inverse mask `I`: the row is hidden in every phase whose bit i
 * `I = 0xFFFFFFFF` hides the row in all 32 phases, so it can never run: the row is written **disabled** and reported.
 * Anything else becomes `phase_mask = ~I` as 32 bits.
 
+The creature host gates a rule on the phase it was readied in, as cmangos EventAI does (it checks the phase when it readies a row and never again); every phase action (`set_phase`, `inc_phase`, `random_phase`, `random_phase_range`) reads and writes the live phase. The host sets `RuleSubjectState.GatePhase` around the firing for this, so an authored rule needs no `creature.row`. This follows cmangos and the old executor, not vmangos, which rechecks the live phase when it processes the row (CreatureEventAI.cpp:109).
+
 ### Timers and caps
 
 Timers are in milliseconds. The engine caps `cooldown_*_ms` and `delay_ms` at 24 hours (86,400,000 ms). The converter checks every timer
@@ -70,6 +72,8 @@ A negative repeat is reported. A repeat maximum below the repeat minimum is the 
 
 `creature.row(flags, action_count)` is the first action of every converted row (seq 0). It carries the EventAI options and draws the firing's
 random value at the place the old executor draws it, so a seeded run draws in the same order.
+
+The marker is only for converted rows: it carries the EventAI options and the random draw. An authored rule needs none, and its phase gate and phase actions behave as described under Phase masks.
 
 | Flag | Value | EventAI flag |
 |---|---|---|
@@ -83,7 +87,7 @@ random value at the place the old executor draws it, so a seeded run draws in th
 ### Rows written disabled
 
 A row the old executor never runs is written with `enabled = 0` and listed in the report so that it stays visible: chance 0, the debug-only
-flag (`0x80`) and the all-32-bits inverse mask. A chance above 100 is written as 100. A chance above 100 and a SET_PHASE outside 0 to 31 are written clamped (as the old executor reads them) and listed as informational `Adjusted` findings; the row still counts as converted.
+flag (`0x80`) and the all-32-bits inverse mask. A chance above 100 and a SET_PHASE outside 0 to 31 are written clamped (as the old executor reads them) and listed as informational `Adjusted` findings; the row still counts as converted.
 
 The debug-only flag is a gate in the old executor (`Creatures:EventAi:DebugOnlyEvents`, off by default), so a debug-only row is written disabled: with `DebugOnlyEvents=true` the old executor runs it and the converted rule does not, and parity differs for those rows.
 

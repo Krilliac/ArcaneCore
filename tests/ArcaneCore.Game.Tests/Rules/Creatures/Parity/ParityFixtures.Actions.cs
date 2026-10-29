@@ -132,6 +132,17 @@ internal static partial class ParityFixtures
 
         yield return new ParityScenario
         {
+            Name = "phase-gated-row-readied-before-phase-change-still-runs",
+            Rows =
+            [
+                Row(180, 0, 500, 500, 0, 0, a1: Phase(2)),
+                Row(181, 0, 500, 500, 0, 0, inversePhase: ~1u, a1: Mark(181)),
+            ],
+            Steps = [Pull(), Wait(1500)],
+        };
+
+        yield return new ParityScenario
+        {
             Name = "every-target-type",
             Rows =
             [

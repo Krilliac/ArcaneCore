@@ -35,8 +35,8 @@ public sealed record EventAiConversion(RuleContent Content, IReadOnlyList<EventA
 
     public int Unconvertible => Issues.Count(i => i.Outcome == EventAiConversionOutcome.Unconvertible);
 
-    /// <summary>How many findings are informational adjustments (<see cref="EventAiConversionOutcome.Adjusted"/>); the rows count as converted.</summary>
-    public int Adjusted => Issues.Count(i => i.Outcome == EventAiConversionOutcome.Adjusted);
+    /// <summary>How many source rows had at least one informational adjustment (<see cref="EventAiConversionOutcome.Adjusted"/>); the rows count as converted.</summary>
+    public int Adjusted => Issues.Where(i => i.Outcome == EventAiConversionOutcome.Adjusted).Select(i => i.SourceId).Distinct().Count();
 }
 
 /// <summary>
