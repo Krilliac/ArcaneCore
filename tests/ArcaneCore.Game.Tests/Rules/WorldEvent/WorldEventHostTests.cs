@@ -227,6 +227,71 @@ public sealed class WorldEventHostTests
         Assert.Equal(["start 9", "say hello"], h.Control.Log);
     }
 
+    /// <summary>A control that behaves like <c>GameEventService</c>: it refuses to start a running event, ignores a stop of a stopped one, and tells the runner.</summary>
+    private sealed class ServiceLikeControl : IWorldEventControl
+    {
+        public HashSet<ushort> Active { get; } = [];
+
+        public List<string> Log { get; } = [];
+
+        public WorldEventRuleRunner? Runner { get; set; }
+
+        public bool StartEvent(ushort eventId)
+        {
+            if (Active.Add(eventId))
+            {
+                Runner!.OnEventChanged(eventId, active: true, resume: false);
+            }
+
+            return true;
+        }
+
+        public bool StopEvent(ushort eventId)
+        {
+            if (Active.Remove(eventId))
+            {
+                Runner!.OnEventChanged(eventId, active: false, resume: false);
+            }
+
+            return true;
+        }
+
+        public void Announce(string text) => Log.Add(text);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AStartStopPingPong_CutAtTheNestingLimit_LeavesTheEntriesAgreeingWithTheGameEvents(bool startFirst)
+    {
+        var control = new ServiceLikeControl();
+        RuleCatalog catalog = RuleCatalog.Build(Content(
+            [Rule(1, WorldEventRuleIds.Started, global: true, flags: RuleFlags.Repeatable), Rule(2, WorldEventRuleIds.Stopped, global: true, flags: RuleFlags.Repeatable),
+             Rule(3, WorldEventRuleIds.Update, global: true, flags: RuleFlags.Repeatable)],
+            [Act(1, WorldEventRuleIds.StopEvent, 7), Act(2, WorldEventRuleIds.StartEvent, 7), Act(3, SayAction, 1)]), RuleVocabulary.Default);
+        Assert.Empty(catalog.Rejected);
+        long now = 0;
+        var runner = new WorldEventRuleRunner(() => catalog, control, new RuleEvaluator(new Random(1)), () => now);
+        control.Runner = runner;
+        if (!startFirst)
+        {
+            control.Active.Add(7);
+            runner.OnEventChanged(7, active: true, resume: true); // running before, resumed: its start rule stops it and so on
+        }
+        else
+        {
+            control.StartEvent(7);
+        }
+
+        Assert.True(runner.NestingSkips > 0);
+        control.Log.Clear();
+        runner.Update();
+
+        bool running = control.Active.Contains(7);
+        Assert.Equal(running ? 1 : 0, runner.EntryCount);
+        Assert.Equal(running ? ["hello"] : [], control.Log);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(70000)]

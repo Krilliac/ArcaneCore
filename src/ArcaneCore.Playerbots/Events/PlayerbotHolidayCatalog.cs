@@ -98,6 +98,9 @@ internal sealed class PlayerbotFestivalFlavours
     /// <summary>No rows.</summary>
     internal static PlayerbotFestivalFlavours Empty { get; } = new([]);
 
+    /// <summary>Whether the table has the row of holiday id 0.</summary>
+    internal bool HasDefault => _default is not null;
+
     /// <summary>The number of named holidays (the default row not counted).</summary>
     internal int Count => _byHoliday.Count;
 

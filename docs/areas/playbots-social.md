@@ -382,8 +382,9 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
   Festival, Love is in the Air, Noblegarden, Children's Week, Hallow's End, Harvest Festival, Darkmoon Faire, fishing contest, or a plain
   "festival") that sets its name, its emotes and its `event.<flavour>.arrive` lines. The flavours are rows of the `holiday_flavour` table
   (world schema 62, shipped by `sql/content/world/<provider>/0002_holiday_flavour.sql`; holiday id 0 is the plain "festival", and the
-  pack reads the table when it attaches). A database without those rows still runs the festivals as plain gathering "festival"s with no
-  crowd emotes, so install the content file after upgrading. The fishing contest names itself but does not gather
+  pack reads the table when it attaches). The world database initializer seeds the shipped rows into an empty table at start (nothing to
+  apply by hand; the content file is for resetting or editing them), and the pack logs a warning when the table has no holiday-0 row,
+  in which case festivals run as plain gathering "festival"s with no crowd emotes. The fishing contest names itself but does not gather
   (its NPCs run a contest, not a party). `World:Playerbots:Social:Events:Holidays:ExcludedEvents` is a comma list of event ids (at most 64) that are never festivals.
 - **The board.** `PlayerbotWorldEventBoard` listens to the game events and rebuilds its picture only when a festival event starts or stops:
   the placed NPCs of the running festival (the positive `game_event_creature` rows of the root and its running members) that talk, give

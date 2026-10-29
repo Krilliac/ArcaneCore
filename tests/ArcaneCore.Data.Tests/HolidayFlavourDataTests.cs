@@ -1,4 +1,6 @@
 using ArcaneCore.Data.Content;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.WorldData.WorldState;
@@ -79,6 +81,54 @@ public sealed class HolidayFlavourDataTests : IAsyncLifetime
         Assert.Equal([0u, 141u, 181u, 201u, 301u, 321u, 324u, 327u, 335u, 341u, 374u, 375u, 9999u], second.Select(r => r.HolidayId));
         Assert.Equal("custom", second[^1].FlavourKey);
     }
+
+    [Fact]
+    public async Task TheCodeSeed_EqualsTheShippedContentFile_RowForRow()
+    {
+        string script = await File.ReadAllTextAsync(ContentFile("sqlite"));
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+        }
+
+        await Run(cs, script);
+
+        Assert.Equal(await Read(cs), HolidayFlavourSeed.Rows);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheInitializerSeedsAnEmptyTable_AndAnEditedTableIsKept(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(provider);
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Database:Provider"] = connection.Provider.ToString(),
+            ["Database:ConnectionString"] = connection.ConnectionString,
+        }).Build();
+        var collection = new ServiceCollection();
+        collection.AddLogging();
+        collection.AddWorldDatabase(configuration);
+        await using ServiceProvider services = collection.BuildServiceProvider();
+
+        await services.GetRequiredService<WorldDbInitializer>().InitializeAsync();
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            Assert.Equal(HolidayFlavourSeed.Rows, await new EfHolidayFlavourStore(db).LoadAsync());
+            Assert.Contains(HolidayFlavourSeed.Rows, r => r is { HolidayId: 301, Gather: false });
+            db.RemoveRange(db.Set<HolidayFlavourRow>().Where(r => r.HolidayId != 341));
+            await db.SaveChangesAsync();
+        }
+
+        await services.GetRequiredService<WorldDbInitializer>().InitializeAsync();
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            Assert.Equal(341u, Assert.Single(await new EfHolidayFlavourStore(db).LoadAsync()).HolidayId);
+        }
+    }
+
+    public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
 
     [Theory]
     [InlineData("sqlite")]

@@ -91,8 +91,8 @@ Ids below 1000000 are shipped or converted content; server-authored rows use 100
 | 2 | `start_rule_list` | shared | 1 `list_id` (RuleListId): rule_list.id. | Start a rule list for the subject: its actions up to the first delay run now, the rest later; a list already running restarts. |
 | 3 | `say` | shared | 1 `text_id` (TextId): rule_text.id. | The subject says a rule_text (its type picks say, yell, emote or whisper) to the target. |
 | 4 | `cast` | shared | 1 `spell_id` (SpellId): The spell.<br>2 `cast_flags` (NonNegative): Host-defined cast flags (0 = a normal cast). | The subject casts a spell on the target. |
-| 100 | `world_event.start_event` | world_event | 1 `event_id` (Int): game_event.entry. | Start another game event (GameEventService.StartEvent). |
-| 101 | `world_event.stop_event` | world_event | 1 `event_id` (Int): game_event.entry. | Stop a game event (GameEventService.StopEvent). |
+| 100 | `world_event.start_event` | world_event | 1 `event_id` (Int): game_event.entry. | Start another game event (GameEventService.StartEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event is stopped again by its own window. |
+| 101 | `world_event.stop_event` | world_event | 1 `event_id` (Int): game_event.entry. | Stop a game event (GameEventService.StopEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event inside its window is started again by the schedule. |
 
 ## targets
 

@@ -34,7 +34,7 @@ internal static class WorldEventParams
 }
 
 /// <summary><c>world_event.start_event(event_id)</c>.</summary>
-[RulePrimitive(RuleHostKind.WorldEvent, WorldEventRuleIds.StartEvent, "world_event.start_event", Description = "Start another game event (GameEventService.StartEvent).")]
+[RulePrimitive(RuleHostKind.WorldEvent, WorldEventRuleIds.StartEvent, "world_event.start_event", Description = "Start another game event (GameEventService.StartEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event is stopped again by its own window.")]
 [RuleParam(1, "event_id", RuleParamKind.Int, Description = "game_event.entry.")]
 public sealed class WorldEventStartEventAction : RuleAction
 {
@@ -47,7 +47,7 @@ public sealed class WorldEventStartEventAction : RuleAction
 }
 
 /// <summary><c>world_event.stop_event(event_id)</c>.</summary>
-[RulePrimitive(RuleHostKind.WorldEvent, WorldEventRuleIds.StopEvent, "world_event.stop_event", Description = "Stop a game event (GameEventService.StopEvent).")]
+[RulePrimitive(RuleHostKind.WorldEvent, WorldEventRuleIds.StopEvent, "world_event.stop_event", Description = "Stop a game event (GameEventService.StopEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event inside its window is started again by the schedule.")]
 [RuleParam(1, "event_id", RuleParamKind.Int, Description = "game_event.entry.")]
 public sealed class WorldEventStopEventAction : RuleAction
 {

@@ -72,3 +72,27 @@ public sealed class EfHolidayFlavourStore(WorldDbContext db) : IHolidayFlavourSt
             .Select(r => new HolidayFlavourRecord(r.HolidayId, r.FlavourKey, r.Name, r.Emote1, r.Emote2, r.Emote3, r.Gather != 0))
             .ToListAsync(cancellationToken).ConfigureAwait(false);
 }
+
+/// <summary>
+/// The shipped <c>holiday_flavour</c> rows, seeded by <see cref="Content.WorldDbInitializer"/> into an empty table (nothing applies
+/// <c>sql/content</c> by itself, and a schema step carries no rows). <c>sql/content/world/&lt;provider&gt;/0002_holiday_flavour.sql</c> holds the
+/// same rows for an operator who edits them; a test compares the two row for row.
+/// </summary>
+public static class HolidayFlavourSeed
+{
+    public static IReadOnlyList<HolidayFlavourRecord> Rows { get; } =
+    [
+        new(0, "festival", "", 21, 101, 34, true),
+        new(141, "winterveil", "Winter Veil", 21, 5, 0, true),
+        new(181, "noblegarden", "Noblegarden", 21, 101, 34, true),
+        new(201, "children", "Children's Week", 21, 101, 34, true),
+        new(301, "fishing", "Fishing Extravaganza", 21, 101, 34, false),
+        new(321, "harvest", "Harvest Festival", 21, 101, 34, true),
+        new(324, "hallows", "Hallow's End", 60, 21, 0, true),
+        new(327, "lunar", "Lunar Festival", 17, 21, 0, true),
+        new(335, "love", "Love is in the Air", 21, 101, 34, true),
+        new(341, "midsummer", "Midsummer", 34, 21, 0, true),
+        new(374, "darkmoon", "Darkmoon Faire", 21, 5, 60, true),
+        new(375, "darkmoon", "Darkmoon Faire", 21, 5, 60, true),
+    ];
+}

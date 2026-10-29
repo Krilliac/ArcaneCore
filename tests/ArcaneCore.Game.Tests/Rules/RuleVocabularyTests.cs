@@ -12,6 +12,9 @@ public sealed class RuleVocabularyTests
         RuleVocabulary vocabulary = RuleVocabulary.Default;
 
         Assert.Contains("world_event", vocabulary.Hosts.Select(h => h.Name));
+        Assert.Equal(
+            ["event 1 world_event.started", "event 2 world_event.stopped", "event 3 world_event.update", "action 100 world_event.start_event", "action 101 world_event.stop_event"],
+            vocabulary.Primitives.Where(p => p.Host == RuleHostKind.WorldEvent).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
         IReadOnlyList<RulePrimitiveInfo> shared = [.. vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Any)];
         Assert.Equal(
             ["action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "target 1 self", "target 2 invoker"],

@@ -13,7 +13,9 @@ namespace ArcaneCore.Game.Rules.WorldEvent;
 /// Thread affinity: world thread only (the game-event service, the world tick and the evaluator's <see cref="Random"/> share it). State: the
 /// entries are owned here; a catalog swap (<c>.reload rules</c>) rebinds every running event to the new catalog with a fresh state, so a
 /// rule that already fired may fire again and a delayed run in flight is dropped. A stopped event keeps its entry until its delayed
-/// actions ran, so a stop rule's delays complete.
+/// actions ran, so a stop rule's delays complete; a stop does not cancel the delayed runs parked earlier (they continue whichever rule
+/// parked them), and a start of the same event again replaces the entry and drops whatever the previous run left pending. A change that
+/// arrives past <see cref="MaxNesting"/> is still recorded in the entries and only fires no rules.
 /// </para>
 /// <para>
 /// Fault and re-entrancy boundary (the engine core does neither): every evaluator call is wrapped in the fault-ledger idiom (a throwing
@@ -66,11 +68,13 @@ public sealed class WorldEventRuleRunner : IGameEventListener
 
     public void OnEventChanged(ushort eventId, bool active, bool resume)
     {
-        if (_nesting >= MaxNesting)
+        // Past the nesting limit the change is still recorded (the game-event service has applied it already, so the entries must agree
+        // with it) but no rule fires for it.
+        bool fire = _nesting < MaxNesting;
+        if (!fire)
         {
             NestingSkips++;
-            _logger?.LogWarning("world-event rules: event {EventId} {Change} skipped, rules nested {Depth} deep", eventId, active ? "start" : "stop", _nesting);
-            return;
+            _logger?.LogWarning("world-event rules: event {EventId} {Change} fired no rules, they were nested {Depth} deep", eventId, active ? "start" : "stop", _nesting);
         }
 
         _nesting++;
@@ -80,13 +84,21 @@ public sealed class WorldEventRuleRunner : IGameEventListener
             {
                 Entry entry = Bind(eventId);
                 _entries[eventId] = entry;
-                Fire(entry, WorldEventRuleIds.Started, new RuleEventArgs(resume ? 1 : 0));
+                if (fire)
+                {
+                    Fire(entry, WorldEventRuleIds.Started, new RuleEventArgs(resume ? 1 : 0));
+                }
             }
             else if (_entries.TryGetValue(eventId, out Entry? entry) && entry.Running)
             {
                 entry.Running = false;
-                Fire(entry, WorldEventRuleIds.Stopped, default);
-                if (entry.State.PendingCount == 0)
+                if (fire)
+                {
+                    Fire(entry, WorldEventRuleIds.Stopped, default);
+                }
+
+                // A rule fired above may have started the event again, which replaced this entry: that one stays.
+                if (entry.State.PendingCount == 0 && _entries.TryGetValue(eventId, out Entry? current) && ReferenceEquals(current, entry))
                 {
                     _entries.Remove(eventId);
                 }
@@ -159,5 +171,14 @@ public sealed class WorldEventRuleRunner : IGameEventListener
     }
 
     private void Faulted(string what, Entry entry, Exception ex)
-        => _logger?.LogFault("world-event.rules", ex, "world-event rule {What} for game event {EventId} failed", what, entry.Subject.EventId);
+    {
+        if (_logger is null)
+        {
+            FaultLedger.Shared.Record("world-event.rules", ex);
+        }
+        else
+        {
+            _logger.LogFault("world-event.rules", ex, "world-event rule {What} for game event {EventId} failed", what, entry.Subject.EventId);
+        }
+    }
 }
