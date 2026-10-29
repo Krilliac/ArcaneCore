@@ -650,6 +650,7 @@ public static partial class ContentImporterCli
         imported["npc_vendor"] = npcReport.Vendors;
         imported["npc_vendor_template"] = npcReport.VendorTemplates;
         imported["npc_trainer"] = npcReport.Trainers;
+        imported["points_of_interest"] = npcReport.PointsOfInterest;
         imported["conditions"] = conditionsReport.Conditions;
         imported["battleground_template"] = battlegroundReport.Templates;
         imported["creature_battleground"] = battlegroundReport.CreatureEvents;
