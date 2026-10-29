@@ -90,6 +90,12 @@ public sealed class ReloadAllMembershipTests
 
         // instance_encounter (DungeonEncounter.dbc through classic-db) is an ArcaneCore table, the playerbot dungeon and raid runs' catalogue source.
         ["instance_encounter"] = false,
+
+        // conditions (Chat.cpp:818) is not listed by any all_* command (ServerCommands.cpp:885-905).
+        ["conditions"] = false,
+
+        // rules (the shared rule engine's tables) is an ArcaneCore addition; all reaches it, like the other content tables.
+        ["rules"] = true,
     };
 
     /// <summary>
@@ -103,11 +109,11 @@ public sealed class ReloadAllMembershipTests
         "all_loot", "creature_loot_template", "gameobject_loot_template", "item_loot_template", "skinning_loot_template",
         "reference_loot_template", "fishing_loot_template", "pickpocketing_loot_template", "disenchant_loot_template",
         "skill_fishing_base_level", "gameobject_template", "spell_threats", "creature_onkill_reputation", "game_weather", "reputation_reward_rate", "reputation_spillover_template",
-        "reserved_name", "spell_proc_item_enchant", "spell_proc_event",
+        "reserved_name", "spell_proc_item_enchant", "spell_proc_event", "conditions",
     };
 
     /// <summary>Names with no vmangos counterpart (each needs a reason in docs/areas/hot-reload.md).</summary>
-    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges", "chat_word_filter", "instance_encounter" };
+    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges", "chat_word_filter", "instance_encounter", "rules" };
 
     private static ReloadCoordinator Coordinator(WorldTestHost host) => host.WorldServices.GetRequiredService<ReloadFeature>().Coordinator;
 

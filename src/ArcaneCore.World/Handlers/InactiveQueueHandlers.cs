@@ -36,7 +36,7 @@ public sealed class InactiveQueueHandlers : IOpcodeHandlerGroup
         // Upstream NullClientPacket reads no body fields but does not enforce this length.
         if (payload.Length != 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "queue status request requires an empty body");
+            MalformedPacket.Throw("queue status request requires an empty body");
         }
     }
 }
