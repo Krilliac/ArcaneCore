@@ -249,31 +249,32 @@ public sealed partial class SpellSystem
         UpdateSpellBatch(); // casts held for the spell batch window go off together (SpellSystem.Batching.cs)
         if (_states.Count == 0)
         {
+            PublishStateCounters(0, 0);
             return;
         }
 
         uint now = NowMs;
-        int stateCount = _states.Count;
-        UnitSpellState[] states = System.Buffers.ArrayPool<UnitSpellState>.Shared.Rent(stateCount);
-        _states.Values.CopyTo(states, 0);
-        try
+        if (!ActiveSetEnabled)
         {
-            for (int i = 0; i < stateCount; i++)
+            FlushPendingWakes(); // the all-states loop does not read the list: merge pending wakes and drop detached states so it stays bounded
+            _active.RemoveAll(LeavesActiveList);
+            int allVisited = UpdateAllStates(diffMs, now);
+            int activeStates = 0;
+            foreach (UnitSpellState s in _states.Values)
             {
-                try
+                if (s.IsActive)
                 {
-                    UpdateState(states[i], diffMs, now);
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    FaultLedger.Shared.Record("spell.update", ex);
+                    activeStates++;
                 }
             }
+
+            PublishStateCounters(allVisited, activeStates);
+            return;
         }
-        finally
-        {
-            System.Buffers.ArrayPool<UnitSpellState>.Shared.Return(states, clearArray: true);
-        }
+
+        int visited = UpdateActiveStates(diffMs, now);
+        PublishStateCounters(visited, _active.Count + _pendingWakes.Count);
+        AuditDormantStates();
     }
 
     private void UpdateState(UnitSpellState state, uint diffMs, uint now)
@@ -341,7 +342,7 @@ public sealed partial class SpellSystem
         ExpireCooldowns(state, now);
         if (state.IsIdle)
         {
-            _states.Remove(state.Unit.Guid);
+            DropState(state);
         }
     }
 
@@ -1290,7 +1291,7 @@ public sealed partial class SpellSystem
         }
 
         state.Auras.Clear();
-        _states.Remove(state.Unit.Guid);
+        DropState(state);
     }
 
     // --- checks -------------------------------------------------------------------------
@@ -1935,8 +1936,16 @@ public sealed partial class SpellSystem
     {
         if (!_states.TryGetValue(unit.Guid, out UnitSpellState? state) || !ReferenceEquals(state.Unit, unit))
         {
-            state = new UnitSpellState(unit);
+            if (state is not null)
+            {
+                Detach(state); // a different Unit object with the same guid
+            }
+
+            state = new UnitSpellState(this, unit, _nextStateSeq++);
             _states[unit.Guid] = state;
+            _all.Add(state);
+            unit.SpellState = state;
+            state.Wake(SpellWakeReason.StateCreated);
         }
 
         return state;

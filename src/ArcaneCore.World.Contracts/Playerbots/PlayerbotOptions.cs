@@ -101,6 +101,38 @@ public sealed class PlayerbotOptions
     public float ChaseReplanYards { get; set; } = 5f;
 
     /// <summary>
+    /// Whether a navigated bot route is shaped after its corners are found (<c>PlayerbotPathShaping</c>): a corner is moved off the
+    /// obstacle on the inside of the turn (a post, a wall corner) and toward the middle of a bounded corridor, and a sharp turn is
+    /// rounded with a short arc. Every shaped leg is checked against the walkable mesh and the line of sight; a corner that cannot be
+    /// shaped safely (a doorway, a bridge) keeps its mesh position. This is the master switch for <see cref="CornerClearanceYards"/>,
+    /// <see cref="CornerCentringMaxYards"/> and <see cref="CornerTurnLeadYards"/>.
+    /// </summary>
+    public bool PathShaping { get; set; } = true;
+
+    /// <summary>
+    /// The clearance (yards, 0.5..5) kept from the obstacle on the inside of a turn when <see cref="PathShaping"/> moves a route corner.
+    /// The navigation mesh is built with a 0.2 yard agent radius, so an unshaped corner sits that close to the wall or post it goes around.
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0.5 to 5 ('.' is the decimal point)")]
+    public float CornerClearanceYards { get; set; } = 2f;
+
+    /// <summary>
+    /// The most (yards, 0..10) the centring part of a <see cref="PathShaping"/> move can be: a corner in a corridor bounded on both sides
+    /// (a road between two walls) is pushed away from the inside of the turn by the larger of the clearance still missing and its way to
+    /// the middle of the corridor, and this caps that way to the middle only, so it never lowers the clearance push. 0 turns road centring
+    /// off. A corner is never moved closer than 0.5 yard to the far side.
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 10 ('.' is the decimal point); 0 turns road centring off")]
+    public float CornerCentringMaxYards { get; set; } = 4f;
+
+    /// <summary>
+    /// How far before a corner (yards, 0..6) <see cref="PathShaping"/> starts to turn it: the tangent length of the arc that rounds a
+    /// turn sharper than about 34 degrees. 0 turns rounding off; the lead is also held to 40% of the shorter leg beside the corner.
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 6 ('.' is the decimal point); 0 turns corner rounding off")]
+    public float CornerTurnLeadYards { get; set; } = 2.5f;
+
+    /// <summary>
     /// A single bot think longer than this many milliseconds is logged with its bot, goal, phases and path searches
     /// (<c>PlayerbotSlowThinkLog</c>; 0 = off, 0..60000). A think over it only because of garbage-collector pauses (think time minus GC pause under the threshold) is counted as <c>bot-brain/think-gc-stall</c> at Info instead of <c>think-slow</c>. Live: <c>.reload config</c> applies a change at once.
     /// </summary>
@@ -327,6 +359,9 @@ public sealed class PlayerbotOptions
         if (ThinkStarvedGapMs != 0 && ThinkStarvedGapMs is < 1000 or > 3_600_000)
             throw new InvalidOperationException($"{SectionName}: ThinkStarvedGapMs must be 0 (off) or 1000..3600000.");
         if (!float.IsFinite(ChaseReplanYards) || ChaseReplanYards is < 0.5f or > 100f) throw new InvalidOperationException($"{SectionName}: ChaseReplanYards must be 0.5..100.");
+        if (!float.IsFinite(CornerClearanceYards) || CornerClearanceYards is < 0.5f or > 5f) throw new InvalidOperationException($"{SectionName}: CornerClearanceYards must be 0.5..5.");
+        if (!float.IsFinite(CornerCentringMaxYards) || CornerCentringMaxYards is < 0f or > 10f) throw new InvalidOperationException($"{SectionName}: CornerCentringMaxYards must be 0..10.");
+        if (!float.IsFinite(CornerTurnLeadYards) || CornerTurnLeadYards is < 0f or > 6f) throw new InvalidOperationException($"{SectionName}: CornerTurnLeadYards must be 0..6.");
         if (!double.IsFinite(SlowThinkLogMs) || SlowThinkLogMs is < 0 or > 60_000) throw new InvalidOperationException($"{SectionName}: SlowThinkLogMs must be 0..60000.");
         if (MaxThinkSearchNodes != 0 && MaxThinkSearchNodes is < ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes or > 10_000_000)
             throw new InvalidOperationException($"{SectionName}: MaxThinkSearchNodes must be 0 or {ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000.");

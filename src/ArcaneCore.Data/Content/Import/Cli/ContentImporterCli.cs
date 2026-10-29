@@ -19,6 +19,7 @@ using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Data.World.PlayerStats;
+using ArcaneCore.Data.World.Pets;
 using ArcaneCore.Data.World.Totems;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Npc;
@@ -54,7 +55,8 @@ public static partial class ContentImporterCli
           import <dump>...      import the creature, game object, loot, item, quest, kill-reputation and
                                 new-character (start position, starting spell, teleport target) and
                                 location (portal, GM teleport) and totem spell tables
-                                (and the starting outfit, playercreateinfo_item), and the world-state
+                                (and the starting outfit, playercreateinfo_item), the enchantment tables
+                                spell_proc_item_enchant and spell_enchant_charges, and the world-state
                                 tables game_weather (zone weather chances) and exploration_basexp, and the seven
                                 game-event tables (game_event, game_event_time, game_event_creature, game_event_gameobject,
                                 game_event_creature_data, game_event_quest, game_event_mail; both dialects)
@@ -427,6 +429,7 @@ public static partial class ContentImporterCli
         var objects = new GameObjectLootDumpImporter();
         var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
         var onKill = new OnKillReputationDumpImporter();
+        var enchantProcs = new EnchantProcDumpImporter();
         var playerCreate = new PlayerCreateDumpImporter();
         var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
@@ -439,6 +442,7 @@ public static partial class ContentImporterCli
         var battlegrounds = new BattlegroundDumpImporter();
         var spawnGroups = new SpawnGroupDumpImporter();
         var pools = new PoolDumpImporter();
+        var pets = new PetDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -457,6 +461,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             onKill.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            enchantProcs.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -535,6 +544,12 @@ public static partial class ContentImporterCli
             pools.Read(reader);
         }
 
+        // pet_levelstats and petcreateinfo_spell (classic-db and vmangos column names).
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            pets.Read(reader);
+        }
+
         IReadOnlyList<string> appliedStatsMigrations = [];
         if (a.Value("--player-stats-migrations-dir") is { } statsMigrationsDirectory)
         {
@@ -596,6 +611,7 @@ public static partial class ContentImporterCli
         GameObjectLootImportReport objectReport = objects.BuildReport();
         ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
         ReputationOnKillImportReport onKillReport = onKill.BuildReport();
+        EnchantProcImportReport enchantProcReport = enchantProcs.BuildReport();
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
         PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
@@ -608,6 +624,7 @@ public static partial class ContentImporterCli
         BattlegroundImportReport battlegroundReport = battlegrounds.BuildReport();
         SpawnGroupImportReport spawnGroupReport = spawnGroups.BuildReport();
         PoolImportReport poolReport = pools.BuildReport();
+        PetImportReport petReport = pets.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -621,6 +638,7 @@ public static partial class ContentImporterCli
                     objectReport = await objects.WriteAsync(db, replace, token).ConfigureAwait(false);
                     itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
                     onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    enchantProcReport = await enchantProcs.WriteAsync(db, replace, token).ConfigureAwait(false);
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
@@ -635,6 +653,7 @@ public static partial class ContentImporterCli
                     battlegroundReport = await battlegrounds.WriteAsync(db, replace, token).ConfigureAwait(false);
                     spawnGroupReport = await spawnGroups.WriteAsync(db, replace, token).ConfigureAwait(false);
                     poolReport = await pools.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    petReport = await pets.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -647,6 +666,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(objectReport.Warnings);
         warnings.AddRange(itemQuestReport.Warnings);
         warnings.AddRange(onKillReport.Warnings);
+        warnings.AddRange(enchantProcReport.Warnings);
         warnings.AddRange(playerReport.Warnings);
         warnings.AddRange(startActionReport.Warnings);
         warnings.AddRange(locationReport.Warnings);
@@ -657,6 +677,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(battlegroundReport.Warnings);
         warnings.AddRange(spawnGroupReport.Warnings);
         warnings.AddRange(poolReport.Warnings);
+        warnings.AddRange(petReport.Warnings);
         if (poolReport.RowsOutsidePatch > 0)
         {
             warnings.Add($"pool tables: {poolReport.RowsOutsidePatch} vmangos row(s) outside patch 10 dropped");
@@ -688,6 +709,8 @@ public static partial class ContentImporterCli
         skipped["game_event_creature_orphans"] = gameEventReport.OrphanCreatureRows;
         skipped["game_event_gameobject_orphans"] = gameEventReport.OrphanGameObjectRows;
         AddEventOrphanWarning(warnings, gameEventReport);
+        imported["spell_proc_item_enchant"] = enchantProcReport.ProcEnchants;
+        imported["spell_enchant_charges"] = enchantProcReport.EnchantCharges;
         imported["game_weather"] = worldState.Weather.Count;
         imported["exploration_basexp"] = worldState.BaseXp.Count;
         imported["world_safe_locs"] = graveyardReport.SafeLocs;
@@ -727,6 +750,9 @@ public static partial class ContentImporterCli
         imported[PoolDataModule.GameObjectTable] = poolReport.GameObjects;
         imported[PoolDataModule.GameObjectTemplateTable] = poolReport.GameObjectTemplates;
         imported[PoolDataModule.PoolPoolTable] = poolReport.PoolPools;
+        imported["pet_levelstats"] = petReport.LevelStats;
+        imported["petcreateinfo_spell"] = petReport.CreateSpells;
+        skipped["pet_levelstats_rows"] = petReport.SkippedRows;
         skipped["npc_service_rows"] = npcReport.Skipped;
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
@@ -1159,6 +1185,8 @@ public static partial class ContentImporterCli
                 ("areatrigger_involvedrelation", await db.Set<AreaTriggerQuestRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("game_tele", await db.Set<GameTeleRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("totem_spell", await db.Set<TotemSpellRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("pet_levelstats", await db.Set<PetLevelStatsRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("petcreateinfo_spell", await db.Set<PetCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)

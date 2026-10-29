@@ -18,7 +18,7 @@ unfinished parts documented as limits).
 | [Exit codes](reference/exit-codes.md) | The process exit codes of the daemons and the content importer (supervisors must not restart on 78). **Generated.** |
 | [Database schema reference](reference/schema.md) | Every schema version of the auth, characters and world databases, which module owns it, and which modules clean up on character delete. **Generated.** |
 | [Rule engine vocabulary](reference/rules.md) | Every rule host, event, action and target id with its parameters, and how a rule row is evaluated. **Generated.** |
-| [Logging](ops/logging.md) | The `Logging:ArcaneCore` provider: colour or plain console, rolling text file, JSON lines, what reloads live, and the fail-closed checks. |
+| [Logging](ops/logging.md) | The `Logging:ArcaneCore` provider: colour or plain console, one rolling log file (text or JSON lines), what reloads live, and the fail-closed checks. |
 | [Observability](ops/observability.md) | The client-rejection log, the duplicate outbound packet detector and slow-tick host/GC/subsystem attribution, with their `Ops:Observability` and `Ops:Watchdog:HostLoad` keys. |
 | [Server metrics](ops/metrics.md) | The `Ops:Metrics` export of both daemons to Prometheus and/or an OpenTelemetry collector (off by default): the series, per-opcode traffic, scraping both daemons and the Grafana dashboard. |
 | [Database upgrade tooling](ops/database-upgrade.md) | The `arcane-db` runbook: status, plan, upgrade, backups, exit codes and the `Database:Upgrade` policy. |

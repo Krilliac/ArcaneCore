@@ -31,6 +31,7 @@ param(
     [switch] $Once
 )
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'OpsEnv.ps1')
+. (Join-Path (Split-Path -Parent $PSScriptRoot) 'live\LiveEnv.ps1')
 if ([string]::IsNullOrWhiteSpace($ProfileDir)) {
     $ProfileDir = Get-OpsRequiredEnv -Name 'ARCANECORE_LIVE_PROFILE' -Purpose 'the live server profile directory that holds appsettings.json'
 }
@@ -138,25 +139,35 @@ function Restart-SupervisedService([string] $svcName, [string] $reason) {
         }
         $logDir = Join-Path $ProfileDir 'logs'
         if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
-        $logFile = Join-Path $logDir ("{0}-supervised.log" -f $svcName.ToLowerInvariant())
+        # One log file in the configured format (Logging:ArcaneCore:Format): .jsonl for Json, .log for Text. The format is computed once and
+        # set explicitly below, so the extension and the daemon's format cannot disagree; the deprecated Json:Path is removed, not set.
+        $logFormat = Get-LiveLogFormat -LiveProfile $ProfileDir
+        $logExt = if ($logFormat -eq 'Json') { 'jsonl' } else { 'log' }
+        $logFile = Join-Path $logDir ("{0}-supervised.{1}" -f $svcName.ToLowerInvariant(), $logExt)
         $psi = [System.Diagnostics.ProcessStartInfo]::new('dotnet', "`"$dll`"")
         $psi.WorkingDirectory = $ProfileDir
         $psi.UseShellExecute = $true
         $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Normal
+        $envPrevFormat = $env:Logging__ArcaneCore__Format
         $envPrevEnabled = $env:Logging__ArcaneCore__File__Enabled
         $envPrevPath = $env:Logging__ArcaneCore__File__Path
+        $envPrevJsonPath = $env:Logging__ArcaneCore__Json__Path
         $envPrevLive = $env:ARCANECORE_LIVE_SERVER
         try {
+            $env:Logging__ArcaneCore__Format = $logFormat
             $env:Logging__ArcaneCore__File__Enabled = 'true'
             $env:Logging__ArcaneCore__File__Path = $logFile
+            Remove-Item Env:Logging__ArcaneCore__Json__Path -ErrorAction SilentlyContinue
             # A supervised restart is a live-server launcher (deploy-live.py opens this console with -Supervise): the World refuses the
             # map feed's packet tools whenever this is 1, whatever the profile says (docs/areas/map-feed.md, "Never on the live server").
             # Set on every supervised restart, live or not: the only effect is that the packet tools stay off.
             $env:ARCANECORE_LIVE_SERVER = '1'
             $proc = [System.Diagnostics.Process]::Start($psi)
         } finally {
+            $env:Logging__ArcaneCore__Format = $envPrevFormat
             $env:Logging__ArcaneCore__File__Enabled = $envPrevEnabled
             $env:Logging__ArcaneCore__File__Path = $envPrevPath
+            $env:Logging__ArcaneCore__Json__Path = $envPrevJsonPath
             $env:ARCANECORE_LIVE_SERVER = $envPrevLive
         }
         if ($null -ne $proc) {

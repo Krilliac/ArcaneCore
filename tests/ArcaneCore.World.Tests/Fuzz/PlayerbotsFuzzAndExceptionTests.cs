@@ -199,6 +199,16 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid(o => o.ChaseReplanYards = 0.4f);
         AssertInvalid(o => o.ChaseReplanYards = 101f);
         AssertInvalid(o => o.ChaseReplanYards = float.NaN);
+        AssertInvalid(o => o.CornerClearanceYards = 0.4f);
+        AssertInvalid(o => o.CornerClearanceYards = 5.1f);
+        AssertInvalid(o => o.CornerClearanceYards = float.NaN);
+        AssertInvalid(o => o.CornerClearanceYards = float.PositiveInfinity);
+        AssertInvalid(o => o.CornerCentringMaxYards = -0.1f);
+        AssertInvalid(o => o.CornerCentringMaxYards = 10.1f);
+        AssertInvalid(o => o.CornerCentringMaxYards = float.NaN);
+        AssertInvalid(o => o.CornerTurnLeadYards = -0.1f);
+        AssertInvalid(o => o.CornerTurnLeadYards = 6.1f);
+        AssertInvalid(o => o.CornerTurnLeadYards = float.NaN);
         AssertInvalid(o => o.SlowThinkLogMs = -1);
         AssertInvalid(o => o.SlowThinkLogMs = 60001);
         AssertInvalid(o => o.MaxThinkSearchNodes = 500);
