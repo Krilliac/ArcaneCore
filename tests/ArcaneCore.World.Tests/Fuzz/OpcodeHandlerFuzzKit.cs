@@ -569,6 +569,10 @@ internal sealed class HandlerFuzzStats(WorldOpcode opcode, string kind)
 /// <summary>Static helpers of the opcode handler fuzz: encodings, the allowed-outcome rule, invariants, formatting.</summary>
 internal static class HandlerFuzzKit
 {
+    internal const uint FixtureCreatureEntry = 910100;
+    internal const uint FixtureGameObjectEntry = 910200;
+    internal const uint FixtureSpawn = 910300;
+
     internal static readonly byte[] ByteValues = [0, 1, 0x7F, 0x80, 0xFF];
 
     internal static readonly ushort[] UInt16Values = [0, 1, 0x7FFF, 0x8000, 0xFFFF];
@@ -919,6 +923,12 @@ internal static class HandlerFuzzKit
         if (NearestCreature(primary) is { } creature)
         {
             guids.Add(("nearest creature", creature.Guid.Value));
+        }
+
+        ObjectGuid chest = ObjectGuid.WithEntry(HighGuid.GameObject, FixtureGameObjectEntry, FixtureSpawn);
+        if (primary.Map?.FindObject(chest) is not null)
+        {
+            guids.Add(("fixture gameobject", chest.Value));
         }
 
         Item? item = primary.Inventory.AllItems.FirstOrDefault();

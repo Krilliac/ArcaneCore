@@ -3,13 +3,21 @@ using System.Globalization;
 using System.Net.Sockets;
 using System.Text;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.GameObjects;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Tests.Creatures;
+using ArcaneCore.World.Tests.GameObjects;
 using ArcaneCore.World.Tests.Items;
 using Xunit;
 using Xunit.Abstractions;
@@ -154,9 +162,37 @@ internal sealed class HandlerFuzzRun
         itemContent.Templates.Templates.Add(new ItemTemplate { Entry = PotionEntry, Class = 0, Name = "Fuzz Potion", DisplayId = 1, Quality = 1, Stackable = 20, BuyPrice = 100, SellPrice = 25 });
         itemContent.Templates.Templates.Add(new ItemTemplate { Entry = SwordEntry, Class = 2, SubClass = 7, Name = "Fuzz Sword", DisplayId = 2, Quality = 1, InventoryType = 13, BuyPrice = 1000, SellPrice = 250, MaxDurability = 40 });
         itemContent.Templates.Templates.Add(new ItemTemplate { Entry = BagEntry, Class = 1, Name = "Fuzz Bag", DisplayId = 3, Quality = 1, InventoryType = 18, ContainerSlots = 6 });
-        using (itemContent.Use())
+
+        // One creature that offers every service (gossip, quests, vendor, trainer, flight master, banker, innkeeper, repair, stable master,
+        // auctioneer, tabard designer, petitioner) and one chest, both a few yards from the human start (-8949.95, -132.49).
+        var npc = new CreatureTemplate
         {
-            _host = WorldTestHost.Start();
+            Entry = HandlerFuzzKit.FixtureCreatureEntry, Name = "Fuzz Servant", MinLevel = 5, MaxLevel = 5, DisplayIds = [49], Faction = 35,
+            MinLevelHealth = 100, MaxLevelHealth = 100,
+            NpcFlags = (uint)(NpcFlags.Gossip | NpcFlags.QuestGiver | NpcFlags.Vendor | NpcFlags.FlightMaster | NpcFlags.Trainer | NpcFlags.Innkeeper
+                | NpcFlags.Banker | NpcFlags.Petitioner | NpcFlags.TabardDesigner | NpcFlags.Auctioneer | NpcFlags.StableMaster | NpcFlags.Repair),
+        };
+        var npcSpawn = new CreatureSpawn { Guid = HandlerFuzzKit.FixtureSpawn, Entry = HandlerFuzzKit.FixtureCreatureEntry, MapId = 0, X = -8946f, Y = -132f, Z = 83.5f };
+        var creatureContext = new CreatureTestContext(new CreatureContent([npc], [npcSpawn], [], [], []));
+        var chest = new GameObjectTemplate
+        {
+            Entry = HandlerFuzzKit.FixtureGameObjectEntry, Type = (uint)GameObjectType.Chest, DisplayId = 10, Name = "Fuzz Chest", Data = new uint[GameObjectTemplate.DataCount],
+        };
+        var chestSpawn = new GameObjectSpawn { Guid = HandlerFuzzKit.FixtureSpawn, Entry = HandlerFuzzKit.FixtureGameObjectEntry, MapId = 0, X = -8948f, Y = -132.5f, Z = 83.5f };
+        var gameObjectContext = new GameObjectTestContext(new GameObjectContent([chest], [chestSpawn], [], [], []), LootContent.Empty);
+        CreatureTestStore.Current.Value = creatureContext;
+        GameObjectTestStore.Current.Value = gameObjectContext;
+        try
+        {
+            using (itemContent.Use())
+            {
+                _host = WorldTestHost.Start();
+            }
+        }
+        finally
+        {
+            CreatureTestStore.Current.Value = null;
+            GameObjectTestStore.Current.Value = null;
         }
 
         _host.World.WorldTick += _ => Interlocked.Increment(ref _ticks);
