@@ -219,4 +219,6 @@ instead of crashing. Even `CreateOnly` creates a missing database and a fresh sc
 (or `Database:Upgrade:ValidateOnly`) plus `arcane-db upgrade` is the retail-like pair, and startup seeding is serialized
 under the component schema lock (and skipped in validate-only mode).
 
+The content importer (`arcane-content-importer`) does not read `Database:Upgrade`; it has its own gate. `refresh` refuses a world whose schema is behind the importer's unless `--migrate` is given. `import`, `import-dbc`, `import-map-dbc`, `proc-events` and `spell-threat` use the same gate in its `CreateOnly` form: they still create a database that holds no schema, but refuse to upgrade an existing one (exit 3, nothing written) unless `--migrate` is given. Production worlds migrate through `arcane-db upgrade`; pass `--migrate` only for a throwaway or staging world.
+
 Characters schema v60 (`character_ownership`) is forward-only: roll back by restoring the pre-upgrade backup. How to clear a stuck ownership row is in `docs/CHARACTER_FENCING_ACCEPTANCE.md` (Operations).
