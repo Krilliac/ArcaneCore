@@ -163,6 +163,20 @@ public sealed class UnreachableTargetTests
     }
 
     [Fact]
+    public void AStuckChaserStandingAtTheWall_RefreshesItsLeash_YetStillEvadesViaTheUnreachableTimer()
+    {
+        using Fight f = Start();
+        Pull(f, f.Player);
+
+        Run(f.World, 7000); // standing at the wall since ~1 s: the 5 s chase timer has refreshed the leash clock
+        Assert.True(f.System.GetLeashFacts(f.Wolf, f.Player)!.Value.ClockAgeSeconds <= 2);
+
+        Run(f.World, 17300); // 24.3 s in: the unreachable-target timer (24 s) has just evaded home
+        Assert.True(f.Wolf.IsInEvadeMode);
+        Assert.Equal(MovementGeneratorType.Home, f.Wolf.Motion.CurrentType);
+    }
+
+    [Fact]
     public void AnotherTargetOnTheList_IsNotASwitch_TheUnreachableVictimIsKept()
     {
         // vmangos keeps the unreachable victim on the threat list (only Alterac Valley drops it, Creature.cpp:1026-1027) and the whole

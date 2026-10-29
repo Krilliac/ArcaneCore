@@ -592,6 +592,219 @@ public sealed class PlayerbotExploreTests
         static bool IsShortenedRay(Vector3 end) => RayYards(end) is > 10f and < PlayerbotBrain.ExploreLegYards - 1f;
     }
 
+    /// <summary>
+    /// Pocket, canyon or slope: every compass ray is cut to 6 yards, so the planner refuses all of them and the bot stood
+    /// <c>moving:no dest:none</c> until the stall watch gave Explore up. When the map's pathfinder can pick mesh points
+    /// (<see cref="IMeshPointQuery"/>) the wander must fall back to a reachable one instead of turning rays forever.
+    /// </summary>
+    [Fact]
+    public async Task WanderRaysAllRefused_TakesAReachableMeshPoint()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } };
+        var brain = new PlayerbotBrain(session, options);
+        var meshPoint = new Vector3(125f, 100f, 83.53f);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new BendMeshPathfinder(6f, meshPoint));
+
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var origin = new Vector2(player.X, player.Y);
+                PlayerbotRoute? walked = null;
+                for (int think = 0; think < 6 && walked is null; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    explore.Invoke(brain, [player, 500u]);
+                    if (routeField.GetValue(brain) is PlayerbotRoute route) walked = route;
+                }
+
+                Assert.NotNull(walked);
+                Vector3 end = walked!.Points[^1];
+                Assert.True(Vector2.Distance(origin, new(end.X, end.Y)) >= PlayerbotStallWatch.ProgressYards,
+                    "the leg must move the bot by the stall watch's own progress");
+                Assert.True(Vector2.Distance(new(meshPoint.X, meshPoint.Y), new(end.X, end.Y)) <= 1f,
+                    $"the leg should end at the mesh point, not at {end}");
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// The mesh-point plans are synchronous world-thread searches: a think that already spent its optional budget (15 ms) takes none, not even
+    /// the first. The same pocket as <see cref="WanderRaysAllRefused_TakesAReachableMeshPoint"/>, with the think's clock past the budget.
+    /// </summary>
+    [Fact]
+    public async Task WanderRaysAllRefused_WithTheThinkBudgetSpent_PlansNoMeshPoint()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } };
+        var brain = new PlayerbotBrain(session, options);
+        var meshPoint = new Vector3(125f, 100f, 83.53f);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new BendMeshPathfinder(6f, meshPoint));
+
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                var clock = new PlayerbotThinkProbeTests.ManualClock();
+                var probe = new PlayerbotThinkProbe(clock);
+                probe.Begin();
+                try
+                {
+                    clock.Advance(20); // past the 15 ms optional budget
+                    Assert.False(brain.HasOptionalThinkBudget(15.0));
+                    for (int think = 0; think < 6; think++)
+                    {
+                        session.ManagedBudget = new ManagedActionBudget(2);
+                        explore.Invoke(brain, [player, 500u]);
+                    }
+
+                    Assert.Null(routeField.GetValue(brain));
+                }
+                finally { probe.End(); }
+
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// The mesh-point fallback keeps to the bot's home like the rays do: a sample beyond the explore radius, or (for a zone-clipped home)
+    /// outside the zone, is not taken. The lone mesh point lies 25 yd east; the home is centred on the bot.
+    /// </summary>
+    [Theory]
+    [InlineData(true, 40u, 500f, true)]    // zone-clipped, the point is in the home's zone (Westfall): taken
+    [InlineData(true, 10u, 500f, false)]   // zone-clipped, the point is over the border (Duskwood): refused
+    [InlineData(false, 10u, 500f, true)]   // not zone-clipped: the zone is not judged
+    [InlineData(false, 40u, 20f, false)]   // radius 20 yd, explore radius 16 yd: 25 yd out is beyond it
+    public async Task WanderMeshPoint_KeepsToTheHomeRadiusAndZone(bool zoneClipped, uint zoneAtPoint, float radius, bool taken)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        var meshPoint = new Vector3(125f, 100f, 83.53f);
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new BendMeshPathfinder(6f, meshPoint));
+                // Zone 40 up to x 110 (the home's centre at x 100), zone `zoneAtPoint` beyond it.
+                var lookup = new PlayerbotZoneLookup((x, y, z) => x <= 110f ? 40u : zoneAtPoint);
+                brain.Home = new PlayerbotHomeArea(player.MapId, new Vector3(100f, 100f, 83.53f), radius, "Westfall", zoneClipped, zoneClipped ? lookup : null);
+
+                MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                FieldInfo routeField = typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                PlayerbotRoute? walked = null;
+                for (int think = 0; think < 8 && walked is null; think++)
+                {
+                    session.ManagedBudget = new ManagedActionBudget(2);
+                    explore.Invoke(brain, [player, 500u]);
+                    if (routeField.GetValue(brain) is PlayerbotRoute route && route.Points[^1].X > 120f) walked = route;
+                }
+
+                if (taken) Assert.NotNull(walked);
+                else Assert.Null(walked);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>A stall give-up on Explore starts a new refusal episode: the next refusal is traced again.</summary>
+    [Fact]
+    public async Task GiveUpOnExplore_ClearsTheRefusalTracedFlag()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                FieldInfo traced = typeof(PlayerbotBrain).GetField("_exploreRefusalTraced", BindingFlags.Instance | BindingFlags.NonPublic)!;
+                brain.HoldGoalForTests(PlayerbotGoalKind.Explore, 0, 0);
+                traced.SetValue(brain, true);
+                brain.GiveUpStalledGoal(player);
+                Assert.False((bool)traced.GetValue(brain)!);
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>
+    /// GiveUpStalledGoal presets the refusal count to 3 for Explore. Refusals were only traced at count 1, so after any give-up
+    /// every later refusal was silent and the stall diagnostics showed a bare <c>moving:no dest:none</c>.
+    /// </summary>
+    [Fact]
+    public async Task WanderRefusedAfterGiveUp_IsTraced()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var brain = new PlayerbotBrain(session, new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } });
+        try
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, 83.53f, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new ShortOpenGroundPathfinder(0f));
+                typeof(PlayerbotBrain).GetField("_exploreRefusals", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(brain, 3);
+
+                session.ManagedBudget = new ManagedActionBudget(2);
+                typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(brain, [player, 500u]);
+
+                Assert.Null(typeof(PlayerbotBrain).GetField("_route", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(brain));
+                Assert.Contains("wander-refused", brain.FormatDiagnosticSnapshot(player));
+                return true;
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>Every ray is cut to <c>rayYards</c>; only a path to the mesh point is complete. The mesh point is what the query offers.</summary>
+    private sealed class BendMeshPathfinder(float rayYards, Vector3 meshPoint) : IPathfinder, IMeshPointQuery
+    {
+        public bool Enabled => true;
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            if (Vector2.Distance(new(end.X, end.Y), new(meshPoint.X, meshPoint.Y)) <= 1f)
+                return PathResult.StraightLine(start, end, PathType.Normal);
+            float dx = end.X - start.X, dy = end.Y - start.Y;
+            float distance = MathF.Sqrt((dx * dx) + (dy * dy));
+            if (!float.IsFinite(distance) || distance <= rayYards + 0.05f)
+                return PathResult.StraightLine(start, end, PathType.Normal);
+            float scale = rayYards / distance;
+            return PathResult.StraightLine(start, new Vector3(start.X + (dx * scale), start.Y + (dy * scale), end.Z), PathType.Normal | PathType.Incomplete);
+        }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+        {
+            point = meshPoint;
+            return true;
+        }
+
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => MeshRaycastResult.Unavailable(end);
+    }
+
     /// <summary>Completes a ray of at most <paramref name="openYards"/> and records each requested end.</summary>
     private sealed class RecordingShortOpenPathfinder(float openYards) : IPathfinder
     {
