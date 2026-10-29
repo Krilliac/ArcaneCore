@@ -65,8 +65,10 @@ public static class SyntheticQuestContent
             ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
             var baseline = new HashSet<string>(StringComparer.Ordinal)
             {
-                // The tables WorldDbInitializer seeds on every world database, the Warden scans (world 49) included.
+                // The tables WorldDbInitializer seeds on every world database, the Warden scans (world 49) and the
+                // bot holiday flavours (world 62) included.
                 "player_create_info", "race_info", "class_info", ArcaneCore.Data.World.Warden.WardenDataModule.Table,
+                ArcaneCore.Data.World.WorldState.HolidayFlavourDataModule.Table,
                 WorldDbContext.Schema.VersionTable,
             };
             var tables = db.Model.GetEntityTypes()
