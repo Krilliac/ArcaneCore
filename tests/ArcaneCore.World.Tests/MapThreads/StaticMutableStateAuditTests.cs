@@ -52,7 +52,9 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
 
         ["ArcaneCore.World.Playerbots.Control.BotController.s_sequence"] = "control event sequence, Interlocked.Increment and Interlocked.Read",
         ["ArcaneCore.World.Playerbots.Groups.PlayerbotWorldBossMeters._active"] = "gauge value, Volatile.Write by the coordinator and Volatile.Read by the meter callback",
+        ["ArcaneCore.World.Playerbots.ElevatorRegions.s_knownBox"] = "Volatile reference to an immutable per-tuning-generation box; a racing rebuild only recomputes the same rows",
         ["ArcaneCore.World.Playerbots.PlayerbotShip.DockComputeCount"] = "process-wide counter, Interlocked",
+        ["ArcaneCore.World.Playerbots.PlayerbotShipNetwork.s_classicBox"] = "Volatile reference to an immutable per-tuning-generation box; a racing rebuild only recomputes the same map",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_paths"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_cornersShaped"] = "process-wide counter, Interlocked",
         ["ArcaneCore.World.Playerbots.PlayerbotPathShaping.s_fallbacks"] = "process-wide counter, Interlocked",
