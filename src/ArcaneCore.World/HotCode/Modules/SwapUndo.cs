@@ -10,9 +10,10 @@ internal static class SwapSlots
     public const string SpellScripts = "spell-scripts";
     public const string InstanceScripts = "instance-scripts";
     public const string EventAi = "eventai";
+    public const string SpellHandlers = "spell-handlers";
     public const string Commands = "commands";
 
-    public static IReadOnlyList<string> InCommitOrder { get; } = [Opcodes, CreatureAi, ScriptHooks, SpellScripts, InstanceScripts, EventAi, Commands];
+    public static IReadOnlyList<string> InCommitOrder { get; } = [Opcodes, CreatureAi, ScriptHooks, SpellScripts, InstanceScripts, EventAi, SpellHandlers, Commands];
 }
 
 /// <summary>

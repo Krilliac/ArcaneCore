@@ -231,7 +231,10 @@ public sealed class SpellScriptHotSwapTests
         Assert.True(kit.System.HasBuiltInEffectHandler(SpellEffectName.TeleportUnits)); // as after a restart without the module
         Assert.True(kit.System.HasBuiltInEffectHandler(SpellEffectName.Summon));
 
-        // Replacing the chained wrapper outright is still a replacement.
+        // Replacing the chained wrapper blind is refused (SpellScriptChainGuardTests); replacing it after reading it is still a replacement.
+        Assert.Throws<InvalidOperationException>(() => kit.System.RegisterEffect(SpellEffectName.TeleportUnits, static _ => { }));
+        Assert.True(kit.System.HasBuiltInEffectHandler(SpellEffectName.TeleportUnits));
+        _ = kit.System.GetEffectHandler(SpellEffectName.TeleportUnits);
         kit.System.RegisterEffect(SpellEffectName.TeleportUnits, static _ => { });
         Assert.False(kit.System.HasBuiltInEffectHandler(SpellEffectName.TeleportUnits));
     }
