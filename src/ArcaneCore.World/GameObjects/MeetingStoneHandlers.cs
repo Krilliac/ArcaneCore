@@ -74,7 +74,7 @@ public sealed class MeetingStoneHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "meeting stone status request requires an empty body");
+            MalformedPacket.Throw("meeting stone status request requires an empty body");
         }
 
         if (session.Services.GetService<MeetingStoneFeature>()?.Queue is { } queue)

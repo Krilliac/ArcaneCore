@@ -17,6 +17,7 @@ public sealed class WorldStateReadSnapshotTests : IAsyncLifetime
 {
     private readonly TestDatabases _databases = new();
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task ScourgeAndWarEffortLoadsReadWhileAnotherConnectionHoldsTheWriteLock()
     {

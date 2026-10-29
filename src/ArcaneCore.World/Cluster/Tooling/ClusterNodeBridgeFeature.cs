@@ -389,7 +389,6 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("cluster.bridge", ex);
                 AnomalyLedger.Shared.Report("cluster", "gateway-fault", "node-bridge", $"error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
                 logger.LogFault("cluster.bridge", ex, "ClusterNodeBridgeFeature monitor iteration faulted");
             }

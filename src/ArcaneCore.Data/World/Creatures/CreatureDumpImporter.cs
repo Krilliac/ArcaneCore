@@ -48,7 +48,7 @@ public sealed record CreatureImportReport(
     /// <summary><c>creature_equip_template</c> rows (item entries per equipment id; world schema 56).</summary>
     public int Equipment { get; init; }
 
-    /// <summary><c>creature_immunities</c> rows (static creature immunity sets; world schema 57).</summary>
+    /// <summary><c>creature_immunities</c> rows (static creature immunity sets; world schema 60).</summary>
     public int Immunities { get; init; }
 
     /// <summary><c>creature_spawn_entry</c> rows (the entries a spawn can become; vmangos <c>id2</c> ... <c>id5</c> included).</summary>
@@ -109,6 +109,7 @@ public sealed class CreatureDumpImporter
     private bool _sawVendorTemplateIdColumn;
     private bool _sawEquipmentTemplateIdColumn;
     private bool _sawEquipTemplateTable;
+    private bool _sawResistanceColumns;
     private readonly Dictionary<uint, (uint Probability, CreatureEquipmentRow Row)> _equipment = [];
     private bool _sawImmunityTable;
     private bool _sawImmunityMaskColumns;
@@ -156,6 +157,44 @@ public sealed class CreatureDumpImporter
 
     /// <summary>The dump carried a <c>creature_equip_template</c> table.</summary>
     public bool HasEquipTemplateTable => _sawEquipTemplateTable;
+
+    /// <summary>The dump's creature_template carries the magic resistance columns (cmangos <c>Resistance*</c>, vmangos <c>*_res</c>).</summary>
+    public bool HasResistanceColumns => _sawResistanceColumns;
+
+    /// <summary>
+    /// Content refresh of the creature template magic resistances (world schema 60): set the six resistance columns of the templates
+    /// already in the world from the dump, so a database upgraded to 57 gets the values without a full reimport. Runs only when the dump
+    /// carried the columns. Runs inside the caller's <see cref="Content.Import.ImportTransaction"/>. Returns the templates changed.
+    /// </summary>
+    public async Task<int> RefreshResistancesAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        if (!_sawResistanceColumns || _templates.Count == 0)
+        {
+            return 0;
+        }
+
+        int changed = 0;
+        foreach (CreatureTemplateRow template in await db.Set<CreatureTemplateRow>().ToListAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (!_templates.TryGetValue(template.Entry, out var source))
+            {
+                continue;
+            }
+
+            CreatureTemplateRow s = source.Row;
+            if ((template.HolyRes, template.FireRes, template.NatureRes, template.FrostRes, template.ShadowRes, template.ArcaneRes)
+                != (s.HolyRes, s.FireRes, s.NatureRes, s.FrostRes, s.ShadowRes, s.ArcaneRes))
+            {
+                (template.HolyRes, template.FireRes, template.NatureRes, template.FrostRes, template.ShadowRes, template.ArcaneRes)
+                    = (s.HolyRes, s.FireRes, s.NatureRes, s.FrostRes, s.ShadowRes, s.ArcaneRes);
+                changed++;
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return changed;
+    }
 
     /// <summary>The <c>creature_equip_template</c> rows that would be written (for inspection and tests).</summary>
     public IReadOnlyCollection<CreatureEquipmentRow> EquipmentSnapshot() => [.. _equipment.Values.Select(e => e.Row)];
@@ -205,7 +244,7 @@ public sealed class CreatureDumpImporter
     public IReadOnlyCollection<CreatureImmunityRow> ImmunitySnapshot() => [.. _immunities.Values];
 
     /// <summary>
-    /// Content refresh of creature immunities (world schema 57): replace <c>creature_immunities</c> with the rows read (a dump that carries the table with no valid rows empties it), and set
+    /// Content refresh of creature immunities (world schema 60): replace <c>creature_immunities</c> with the rows read (a dump that carries the table with no valid rows empties it), and set
     /// <c>creature_template.MechanicImmuneMask</c> / <c>SchoolImmuneMask</c> of the templates already in the world from the dump. Each half runs only when
     /// the dump carried it (the table; the template columns), so a dump without either leaves the world as it is. Runs inside the caller's
     /// <see cref="Content.Import.ImportTransaction"/>. Returns the immunity rows written and the templates changed.
@@ -769,6 +808,7 @@ public sealed class CreatureDumpImporter
         _sawVendorTemplateIdColumn |= row.Has("VendorTemplateId") || row.Has("vendor_id");
         _sawEquipmentTemplateIdColumn |= row.Has("EquipmentTemplateId") || row.Has("equipment_id");
         _sawImmunityMaskColumns |= row.Has("MechanicImmuneMask") || row.Has("mechanic_immune_mask") || row.Has("SchoolImmuneMask") || row.Has("school_immune_mask");
+        _sawResistanceColumns |= row.Has("ResistanceFire") || row.Has("fire_res") || row.Has("ResistanceHoly") || row.Has("holy_res");
         bool vmangos = row.Has("level_min");
         SetDialect(vmangos ? CreatureDumpDialect.VMangos : CreatureDumpDialect.CMangos);
 
@@ -831,6 +871,12 @@ public sealed class CreatureDumpImporter
             MinLevelMana = U32(row, "MinLevelMana"),
             MaxLevelMana = U32(row, "MaxLevelMana"),
             Armor = U32(row, "Armor"),
+            HolyRes = I32(row, "ResistanceHoly", "holy_res"),
+            FireRes = I32(row, "ResistanceFire", "fire_res"),
+            NatureRes = I32(row, "ResistanceNature", "nature_res"),
+            FrostRes = I32(row, "ResistanceFrost", "frost_res"),
+            ShadowRes = I32(row, "ResistanceShadow", "shadow_res"),
+            ArcaneRes = I32(row, "ResistanceArcane", "arcane_res"),
             MinMeleeDamage = F32(row, 0f, "MinMeleeDmg"),
             MaxMeleeDamage = F32(row, 0f, "MaxMeleeDmg"),
             MinRangedDamage = F32(row, 0f, "MinRangedDmg"),
@@ -1348,6 +1394,19 @@ public sealed class CreatureDumpImporter
         => string.IsNullOrEmpty(raw) ? 0 : (int)double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
 
     private static uint U32(DumpRow row, params ReadOnlySpan<string> names) => U32Or(row, 0, names);
+
+    /// <summary>A signed integer column (a resistance may be negative); absent or empty = 0.</summary>
+    private static int I32(DumpRow row, params ReadOnlySpan<string> names)
+    {
+        string? raw = Get(row, names);
+        if (string.IsNullOrEmpty(raw))
+        {
+            return 0;
+        }
+
+        double value = double.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
+        return value <= int.MinValue ? int.MinValue : value >= int.MaxValue ? int.MaxValue : (int)value;
+    }
 
     private static uint U32Or(DumpRow row, uint fallback, params ReadOnlySpan<string> names)
     {

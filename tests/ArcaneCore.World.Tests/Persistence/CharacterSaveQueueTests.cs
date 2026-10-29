@@ -1544,6 +1544,7 @@ public sealed class CharacterSaveQueueTests
         Assert.Empty(kit.Store.Saved);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task Stop_WithALockedDatabase_RetriesUntilTheLaneStalls_ThenRefuses_AndNamesAll()
     {
@@ -1597,6 +1598,7 @@ public sealed class CharacterSaveQueueTests
         Assert.Equal(0, drain.Saves.Refused);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task Stop_ABusyLockThatClearsAfterOneBusyTimeout_LandsEverySnapshot()
     {

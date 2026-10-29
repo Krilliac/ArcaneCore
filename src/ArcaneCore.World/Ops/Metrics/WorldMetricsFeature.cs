@@ -3,6 +3,7 @@ using System.Diagnostics.Metrics;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.Metrics;
@@ -71,6 +72,10 @@ public sealed class WorldMetricsFeature(IServiceProvider services, ILogger<World
             "Creature path requests put off to a later update because the per-update search budget was spent.");
         _meter.CreateObservableCounter("arcanecore.creature.path.home_teleports", () => SafeObserve(() => CreaturePathStats.HomeTeleports, 0L), "{creature}",
             "Evade returns done by teleport because no whole mesh path led home.");
+        _meter.CreateObservableCounter("arcanecore.creature.drape.shared", () => SafeObserve(() => SharedDrapeStats.Hits, 0L), "{path}",
+            "Creature leg ground drapes answered from loaded tiles outside the world's serial gate.");
+        _meter.CreateObservableCounter("arcanecore.creature.drape.gate_fallbacks", () => SafeObserve(() => SharedDrapeStats.Fallbacks, 0L), "{path}",
+            "Creature leg ground drapes that needed a tile or navmesh lookup the shared drape may not do and ran again inside the serial gate.");
         _meter.CreateObservableGauge("arcanecore.world.sessions", () => SafeObserve(() => sessions?.Count ?? 0, 0), "{session}", "Authenticated world sessions.");
         _meter.CreateObservableGauge("arcanecore.playerbots.split_brain", () => SafeObserve(() => services.GetService<Bots.ManagedBotRegistry>()?.SplitBrain == true ? 1 : 0, 0), "{state}",
             "1 while this world stopped writing playerbot rows because another world process changed them (split brain), otherwise 0.");

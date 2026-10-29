@@ -55,13 +55,13 @@ public sealed record CreatureTemplate
 
     /// <summary>
     /// vmangos <c>mechanic_immune_mask</c> / cmangos <c>MechanicImmuneMask</c>: bit <c>mechanic - 1</c> set for every Spell.dbc mechanic the creature is
-    /// immune to (vmangos Creature::IsImmuneToSpell, Creature.cpp:2445). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 57).
+    /// immune to (vmangos Creature::IsImmuneToSpell, Creature.cpp:2445). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 60).
     /// </summary>
     public uint MechanicImmuneMask { get; init; }
 
     /// <summary>
     /// vmangos <c>school_immune_mask</c> / cmangos <c>SchoolImmuneMask</c>: bit <c>school</c> set for every spell school the creature is immune to
-    /// (Creature.cpp:2448, :2460). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 57).
+    /// (Creature.cpp:2448, :2460). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 60).
     /// </summary>
     public uint SchoolImmuneMask { get; init; }
 
@@ -105,6 +105,38 @@ public sealed record CreatureTemplate
     public uint MaxLevelMana { get; init; }
 
     public uint Armor { get; init; }
+
+    /// <summary>Magic resistance of the holy school (vmangos <c>holy_res</c>, cmangos <c>ResistanceHoly</c>); kept for the importer, but the unit field stays 0 for holy (<see cref="ResistanceOf"/>).</summary>
+    public int HolyRes { get; init; }
+
+    /// <summary>Fire resistance (vmangos <c>fire_res</c>, cmangos <c>ResistanceFire</c>); negative = vulnerable.</summary>
+    public int FireRes { get; init; }
+
+    /// <summary>Nature resistance (vmangos <c>nature_res</c>, cmangos <c>ResistanceNature</c>).</summary>
+    public int NatureRes { get; init; }
+
+    /// <summary>Frost resistance (vmangos <c>frost_res</c>, cmangos <c>ResistanceFrost</c>).</summary>
+    public int FrostRes { get; init; }
+
+    /// <summary>Shadow resistance (vmangos <c>shadow_res</c>, cmangos <c>ResistanceShadow</c>).</summary>
+    public int ShadowRes { get; init; }
+
+    /// <summary>Arcane resistance (vmangos <c>arcane_res</c>, cmangos <c>ResistanceArcane</c>).</summary>
+    public int ArcaneRes { get; init; }
+
+    /// <summary>
+    /// The create resistance written to the unit field of a spell school (1 holy .. 6 arcane); 0 for holy and for any other index, because
+    /// the holy field is held at 0 (vmangos Creature.cpp:606-611 sets it from the template, UpdateResistances then reports 0 for holy).
+    /// </summary>
+    public int ResistanceOf(int school) => school switch
+    {
+        2 => FireRes,
+        3 => NatureRes,
+        4 => FrostRes,
+        5 => ShadowRes,
+        6 => ArcaneRes,
+        _ => 0,
+    };
 
     public float MinMeleeDamage { get; init; }
 

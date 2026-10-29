@@ -12,7 +12,7 @@ namespace ArcaneCore.Data.Tests;
 
 /// <summary>
 /// <c>creature_immunities</c> and <c>creature_template.MechanicImmuneMask</c> / <c>SchoolImmuneMask</c> (<see cref="CreatureImmunityDataModule"/>,
-/// world schema 57): the importer reads the cmangos table and both dialects' template masks, the store loads them into
+/// world schema 60): the importer reads the cmangos table and both dialects' template masks, the store loads them into
 /// <see cref="CreatureContent"/>, an existing world upgrades from 56 and <c>RefreshImmunitiesAsync</c> backfills it. Rows are hand-written in the
 /// classic-db / vmangos layouts; no GPL rows are copied.
 /// </summary>
@@ -44,7 +44,7 @@ public sealed class CreatureImmunityImportTests
     [Fact]
     public void WorldStep_IsTheImmunityTableAndTheTwoMaskColumns()
     {
-        Assert.Equal(57, CreatureImmunityDataModule.Version);
+        Assert.Equal(60, CreatureImmunityDataModule.Version);
         SchemaStep step = Assert.Single(WorldDbContext.Schema.Steps, s => s.Version == CreatureImmunityDataModule.Version);
         Assert.Equal(["creature_immunities"], step.Changes.OfType<CreateTableChange>().Select(c => c.Table));
         Assert.Equal(
@@ -160,7 +160,7 @@ public sealed class CreatureImmunityImportTests
             await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
         }
 
-        Assert.True(first.Ddl >= 3, $"the 56 -> 57 step issued {first.Ddl} DDL statement(s)");
+        Assert.True(first.Ddl >= 3, $"the 59 -> 60 step issued {first.Ddl} DDL statement(s)");
 
         var second = new CommandTap();
         await using (WorldDbContext db = SchemaProbe.CreateWith<WorldDbContext>(cs, second))

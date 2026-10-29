@@ -1,8 +1,10 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
+using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.SpellRules;
@@ -23,6 +25,13 @@ public sealed class ResistRollTests
         target.Level = 60;
         target.SetInt32(UpdateFields.UnitFieldResistances + (int)SpellSchool.Fire, fireResistance);
         return (kit, caster, target);
+    }
+
+    /// <summary>A level-60 creature whose template makes it vulnerable to fire: only a negative create resistance does (Patch 1.9.0).</summary>
+    private static Creature Vulnerable(int fireResistance)
+    {
+        var template = new CreatureTemplate { Entry = 990_302, Name = "Vulnerable", MinLevel = 60, MaxLevel = 60, MinLevelHealth = 10_000, MaxLevelHealth = 10_000, DisplayIds = [1], Faction = 35, FireRes = fireResistance };
+        return new Creature(template.Entry, template, null, new CreatureContent([template], [], [], [], []), new Random(1));
     }
 
     private static SpellInfo Fire(uint id = 1) => RuleTestKit.Magic(id, SpellSchool.Fire);
@@ -64,7 +73,8 @@ public sealed class ResistRollTests
     [Fact]
     public void ANegativeResistance_AddsDamage_EvenForSpellsThatCannotBeResisted()
     {
-        (SpellTestKit kit, Player caster, Player target) = Setup(-150); // -150 / 300 skill = -0.5
+        (SpellTestKit kit, Player caster, _) = Setup(0);
+        Creature target = Vulnerable(-150); // -150 / 300 skill = -0.5
         using (kit)
         {
             var rules = new VanillaSpellCombatRules();
@@ -79,7 +89,8 @@ public sealed class ResistRollTests
     [Fact]
     public void DealDirectDamage_AddsTheVulnerabilityBonusBeforeAbsorbs()
     {
-        (SpellTestKit kit, Player caster, Player target) = Setup(-150);
+        (SpellTestKit kit, Player caster, _) = Setup(0);
+        Creature target = Vulnerable(-150);
         using (kit)
         {
             kit.System.CombatRules = new VanillaSpellCombatRules();

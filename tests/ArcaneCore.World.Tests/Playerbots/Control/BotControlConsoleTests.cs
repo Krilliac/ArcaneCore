@@ -188,6 +188,7 @@ public sealed class BotControlConsoleTests
         await ExecAsync(world, ".botctl release Botlaa");
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task Interact_Gossip_Menu_Quest_Buy_Sell_Train_RoundTrip()
     {

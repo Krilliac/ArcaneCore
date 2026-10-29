@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Items;
 
 namespace ArcaneCore.Game.Items;
@@ -107,7 +108,8 @@ public sealed class EquipmentStatsApplier : IItemStatsApplier
         int[] resistances = [t.Armor, t.HolyRes, t.FireRes, t.NatureRes, t.FrostRes, t.ShadowRes, t.ArcaneRes];
         for (int school = 0; school < resistances.Length; school++)
         {
-            if (resistances[school] != 0)
+            // The holy field stays 0 (vmangos Player::UpdateResistances, StatSystem.cpp:117-126); the item tooltip still shows the stat.
+            if (resistances[school] != 0 && school != (int)SpellSchool.Holy)
             {
                 int field = UpdateFields.UnitFieldResistances + school;
                 player.SetUInt32(field, Add(player.GetUInt32(field), resistances[school] * sign));

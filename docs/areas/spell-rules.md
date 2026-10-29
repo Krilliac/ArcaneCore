@@ -31,7 +31,7 @@ References (`<refs-root>`): **vmangos** is primary; **mangos-classic** and **cla
 | `WorldBossLevelDiff` | 3 | Levels a world boss counts above its target (`World.cpp:744`): the spell hit and resist level difference, and (through `CombatEnvironment.WorldBossLevelDiff`) the defense skill-up of a world boss's white swing. Limit: the melee hit table's skill maximum (`MeleeHitTable.SkillMaxForLevel`, reached through the shared `CombatHooks`) and stealth detection still use the constant 3 |
 | `CreatureSpellCrit` | false | Creatures that are not player-owned never crit with spells (`Unit.cpp:5216-5219`); true restores a 5% crit |
 | `ResistTablePath` | unset | File with the retail partial-resist outcome table (`Unit.cpp:1885-1918`); unset uses the quarter-step approximation |
-| `IgnoreHolyResistance` | false | vmangos resists holy damage (`Unit.cpp:1936-1946`); true is the cmangos rule (`Unit.cpp:3917`) |
+| `IgnoreHolyResistance` | false | vmangos resists holy only through the innate level resist, its holy field stays 0 (`Unit.cpp:1936-1946`); true is the cmangos rule (`Unit.cpp:3917`) |
 | `DiminishingReturns` | true | Crowd-control diminishing returns |
 | `DiminishingResetMs` | 15000 | Window from the end of the last aura of a group to the level reset (patch 1.4.0: "within 15 seconds of the *end* of the duration"; `Unit.cpp:7630`) |
 | `DiminishingResetSweepMs` | 0 | 0 resets as soon as the window has passed (retail, patch 1.4.0). A positive value only resets on the clock's multiples of it, so the reset lands 15 to 15 + sweep seconds after the end (the unsourced "15-20 s, checked every 5 s" reading of Classic Era: set 5000) |
@@ -86,7 +86,7 @@ returns. Features of this area live in namespace `ArcaneCore.World.Spells` so th
 - `ISpellCritSource.Flat` gives every unit 5% crit until the stats lane merges the intellect-based chance
   (`Unit.cpp:2597-2640`, marked "must be checked" by vmangos). Crit on a sitting victim uses the stand state only.
 - Creature immunity data: `CreatureDataImmunities` (installed by `CreatureDataImmunityModule`) serves `creature_template.MechanicImmuneMask` /
-  `SchoolImmuneMask` and the active `creature_immunities` set (world schema 57; see `content-import.md`). A dump that carries both (a cmangos / ClassicDB dump does) gets the union.
+  `SchoolImmuneMask` and the active `creature_immunities` set (world schema 60; see `content-import.md`). A dump that carries both (a cmangos / ClassicDB dump does) gets the union.
   Rows of type school (2) count as the template school mask (harmful spells of the school and its damage), type damage (3) absorbs damage of the school (spell hits, melee and every other absorb path, as mangos-classic Unit::IsImmuneToDamage) without making harmful spells of the school immune,
   type dispel (4), effect (0) and state (1) are checked for spells from others, type mechanic (5) joins the mechanic mask. mangos-classic applies a
   school row to positive spells too and blocks self-casts for every row type; ArcaneCore deliberately keeps the vmangos reading (school rows harmful only, self-casts exempt for all rows, dispel rows included) for both sources. State rows are checked for every effect with an aura name.
@@ -98,7 +98,7 @@ returns. Features of this area live in namespace `ArcaneCore.World.Spells` so th
 
 ## Provenance and open questions
 
-- Holy: vmangos resists holy damage, cmangos ignores holy resistance ("since beta stages"); the primary reference wins
+- Holy: vmangos keeps the holy resistance field at 0 (holy is only resisted by the innate level resist), cmangos ignores holy resistance ("since beta stages"); the primary reference wins
   and `IgnoreHolyResistance` selects the other. Which one is real retail is not provable offline.
 - The 22% hit floor comes from one vmangos duel test; cmangos floors the final chance at 1%.
 - Polymorph, Mind Control, Sleep and Banish are not binary in the vmangos list, so resistance does not lower their hit

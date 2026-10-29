@@ -465,6 +465,12 @@ public static partial class ContentImporterCli
                         counts["creature_template (MechanicImmuneMask, SchoolImmuneMask)"] = immunityTemplates;
                     }
 
+                    int resistChanged = await relays.RefreshResistancesAsync(db, token).ConfigureAwait(false);
+                    if (relays.HasResistanceColumns)
+                    {
+                        counts["creature_template (magic resistances)"] = resistChanged;
+                    }
+
                     await relays.ReplaceScriptDevContentAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshMovementScriptIdsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshSpellScriptTargetsAsync(db, token).ConfigureAwait(false);

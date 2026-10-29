@@ -104,6 +104,24 @@ public sealed class CreatureTemplateRow
 
     public uint Armor { get; set; }
 
+    /// <summary>Holy resistance. Added by <see cref="CreatureResistanceDataModule"/>.</summary>
+    public int HolyRes { get; set; }
+
+    /// <summary>Fire resistance. Added by <see cref="CreatureResistanceDataModule"/>.</summary>
+    public int FireRes { get; set; }
+
+    /// <summary>Nature resistance. Added by <see cref="CreatureResistanceDataModule"/>.</summary>
+    public int NatureRes { get; set; }
+
+    /// <summary>Frost resistance. Added by <see cref="CreatureResistanceDataModule"/>.</summary>
+    public int FrostRes { get; set; }
+
+    /// <summary>Shadow resistance. Added by <see cref="CreatureResistanceDataModule"/>.</summary>
+    public int ShadowRes { get; set; }
+
+    /// <summary>Arcane resistance. Added by <see cref="CreatureResistanceDataModule"/>.</summary>
+    public int ArcaneRes { get; set; }
+
     public float MinMeleeDamage { get; set; }
 
     public float MaxMeleeDamage { get; set; }

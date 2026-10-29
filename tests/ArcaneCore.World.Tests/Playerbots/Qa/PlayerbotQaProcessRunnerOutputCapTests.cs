@@ -5,6 +5,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.Qa;
 
 /// <summary>#219: a child that prints past the 8 MiB cap must fail at once with the cap error, not sit on a full pipe until the timeout and be reported as a timeout.</summary>
+[Trait("Category", "Timing")]
 public sealed class PlayerbotQaProcessRunnerOutputCapTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(20);

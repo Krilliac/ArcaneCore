@@ -41,6 +41,7 @@ public sealed class PlayerbotChatWorldTests
         }
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task AStrangersWhisper_GetsABuiltinAnswerFromTheBotsState_ByDefault()
     {
@@ -58,6 +59,7 @@ public sealed class PlayerbotChatWorldTests
         Assert.Empty(client.Calls);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task ASayLineNamingTheBot_IsAnsweredOutLoud_AndOneThatDoesNotIsIgnored()
     {
