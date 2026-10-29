@@ -82,7 +82,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
    - `tests/ArcaneCore.Data.Tests/Spells`: schema upgrade, stores, DBC importer on SQLite, MariaDB and PostgreSQL.
    - `tests/ArcaneCore.World.Tests/Spells`: loopback end to end.
 3. With a client:
-   - Run `arcane-spell-import <WoW 1.12.1>/Data/DBFilesClient` after extracting the DBCs the client actually uses: each file from `patch-2.MPQ` if it has it, else `patch.MPQ`, else `dbc.MPQ` (the base archive holds older copies of some files, e.g. `SpellShapeshiftForm.dbc`). `D:efsient-dbc-5875-effective` holds verified extractions.
+   - Run `arcane-spell-import <WoW 1.12.1>/Data/DBFilesClient` after extracting the DBCs the client actually uses: each file from `patch-2.MPQ` if it has it, else `patch.MPQ`, else `dbc.MPQ` (the base archive holds older copies of some files, e.g. `SpellShapeshiftForm.dbc`). The effective client DBC set (`client-dbc-5875-effective` under the refs directory) holds verified extractions.
    - Fill `playercreateinfo_spell` from classic-db (M8 importer) or by hand.
    - Log in: the spellbook shows the starting spells.
    - Cast a spell with a cast time and watch the cast bar, the GCD and the cooldown.
@@ -133,9 +133,32 @@ instead of by editing `SpellSystem.Effects.cs` / `SpellSystem.Auras.cs`:
 - `SpellHandlerModules.BuiltIn` finds every module of the Game assembly by reflection, ordered by full type name
   (ordinal). The `SpellSystem` constructor applies them after the built-in tables. Another assembly (or a test) uses
   `SpellSystem.RegisterModules(Assembly)` / `RegisterModules(IEnumerable<Type>)`; `SpellSystem.Modules` lists what ran.
+- Packs and hot modules: `SpellFeature.Attach` applies `SpellHandlerModules.Discover(CodeAssemblies)` over the world's startup code set
+  (`WorldCodeAssemblies.Startup`: World plus the built-in packs such as Playerbots; assembly name, then full type name) through
+  `SpellSystem.RegisterModules(CodeAssemblies)`, after every handler the feature installs itself, so a pack's handler modules are applied
+  like Game's. A pack module that claims a handler installed before `SpellFeature.Attach` (the built-ins, an earlier module, the seams the feature
+  installs first) fails startup; a feature that attaches later (e.g. `TotemFeature`) calls `RegisterEffect` over a module's handler and replaces it silently
+  (only a script-wrapped handler is guarded, below). A `.hotmodule` assembly's `ISpellHandlerModule` types are a
+  module slot (`spell-handlers`, `ModuleGameSeams`): load applies them, reload takes the old version's handlers out first (only while they are still
+  the installed ones) and applies the new, unload removes them, and a module that claims an installed handler rolls the whole swap back.
+  Unloading or reloading a module first removes the live auras of its aura types (their holders go whole, while the module's handler is still installed, so
+  the stat changes revert); a swap that fails afterwards is rolled back without bringing those auras back.
+  Limit: only the effect and aura tables are undone; what a module installs through other seams (observers, cast checks) stays until restart.
+  Limit: a hot module whose effect handler a spell script has wrapped (`ExecuteEffects`) cannot be reloaded, because the guard makes the module's
+  `RegisterEffect` throw over the wrapper, so the swap rolls back every time; unloading it leaves the wrapper (which keeps the module's `AssemblyLoadContext`
+  alive) installed. Limit: the `spell-handlers` slot runs after the `spell-scripts` slot, so a module's own script `ExecuteEffects` is not wrapped until the
+  next `ScriptsChanged`.
+- A spell script chain is guarded: `RegisterEffect` over the handler the spell script dispatcher wrapped (Dummy, ScriptEffect, Dispel, and any
+  effect a script declares in `ExecuteEffects`) throws unless the caller read it first with `GetEffectHandler` and calls it from the new handler,
+  so a later feature cannot silently drop the script hooks.
+- Effects with a handler since the wiring review (vmangos SpellEffects.cpp table): HEAL_MECHANICAL 75 (`EffectHealMechanical` :1835, `DealHeal` only: no crit,
+  no heal proc (the hit fires the plain proc with amount 0), no assist threat (`HealingOrigin.NoThreat`); a cast that is not triggered still puts the caster in
+  combat with an in-combat ally, as any assist does, Spell.cpp:1713-1718; the one Spell.dbc user is Mechanical Patch Kit 15057), EVADE 21 and NOSTALRIUS 131
+  (empty bodies; Evade (DND) 108 is the one user of 21). Effects 126, 127 (`EffectUnused`) and 132, 133 (past the end of vmangos's table) stay unregistered.
 - Fail closed: a module that replaces a handler installed before it ran (built-in, an earlier module, or a seam
   registration), is applied twice, is abstract or lacks the constructor makes startup throw naming the module and the
-  effect or aura. Nothing is skipped silently. `RegisterEffect` / `RegisterAura` called directly still replace, as before.
+  effect or aura. Nothing is skipped silently. `RegisterEffect` / `RegisterAura` called directly replace the handler (the module path is the one that fails closed); `RegisterEffect` over a script-wrapped
+  handler throws, as above.
 
 Delivered handlers (reference: vmangos `src/game/Spells`; only the 1.12.1 branch of its `#if` blocks counts, build 5875):
 
@@ -191,7 +214,6 @@ Why those were not done here (each needs a system that is another area's or a de
 - Proc auras need the proc system; damage, absorb, reflect and immunity auras need the damage and hit-result
   pipeline to read them; silence, pacify, disarm, fear and confuse need the cast and movement gates.
 - Spell power and healing bonuses do not exist, so `MOD_DAMAGE_DONE` and friends would be write-only.
-- `POWER_DRAIN` stays unregistered: `QuestRewardEffectCapabilityTests` uses it as the "no handler" sentinel.
 
 Conflicts to resolve at integration: the stats area (`stats-combat-formulas`) may introduce a modifier ledger that owns
 the stat and resistance fields; `StatAuras` then moves onto it (it is the only writer of those fields from auras here).
