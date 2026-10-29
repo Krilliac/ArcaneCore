@@ -27,6 +27,7 @@ public sealed class SpellProcFeature : IWorldFeature
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<SpellProcFeature> _logger;
+    private readonly HashSet<MapCombat> _subscribed = new(ReferenceEqualityComparer.Instance);
 
     public SpellProcFeature(IServiceProvider services, ILogger<SpellProcFeature> logger)
     {
@@ -47,6 +48,7 @@ public sealed class SpellProcFeature : IWorldFeature
         SpellFeature spells = _services.GetRequiredService<SpellFeature>();
         spells.System.ProcEvents = Table;
         world.MapCreated += Subscribe;
+        world.MapUnloading += Unsubscribe;
         foreach (Map map in world.Maps)
         {
             Subscribe(map);
@@ -65,12 +67,26 @@ public sealed class SpellProcFeature : IWorldFeature
         _logger.LogInformation("loaded {Count} spell proc event conditions", content.Count);
     }
 
+    /// <summary>
+    /// Follow a map's kills once: a map reached through both <see cref="WorldRuntime.MapCreated"/> and the attach-time map walk is not
+    /// subscribed twice (a second subscription would fire every KILL proc twice).
+    /// </summary>
     private void Subscribe(Map map)
     {
-        if (map.FindUpdater<MapCombat>() is { } combat)
+        if (map.FindUpdater<MapCombat>() is { } combat && _subscribed.Add(combat))
         {
             SpellFeature spells = _services.GetRequiredService<SpellFeature>();
             combat.UnitKilled += spells.System.OnUnitKilled;
+        }
+    }
+
+    /// <summary>An unloading map's combat is released, so this feature does not keep the dead map's combat followed (as <c>SpellFeature.UnsubscribeCombat</c>).</summary>
+    private void Unsubscribe(Map map)
+    {
+        if (map.FindUpdater<MapCombat>() is { } combat && _subscribed.Remove(combat))
+        {
+            SpellFeature spells = _services.GetRequiredService<SpellFeature>();
+            combat.UnitKilled -= spells.System.OnUnitKilled;
         }
     }
 

@@ -4,15 +4,13 @@ Generated from the rule primitives and hosts of the Game assembly (`RuleVocabula
 
 ## Hosts
 
-No host is registered in this build, so every `rule` row is rejected with "host N is not registered". The host ids are reserved as follows.
-
 | `host` | Name | Registered | Owner kinds | Capabilities |
 | ---: | --- | --- | --- | --- |
 | 1 | bot | no | - | - |
 | 2 | creature | no | - | - |
 | 3 | gameobject | no | - | - |
 | 4 | areatrigger | no | - | - |
-| 5 | world_event | no | - | - |
+| 5 | world_event | yes | 0 Global, 3 GameEvent | Speak |
 | 6 | map | no | - | - |
 | 7 | economy | no | - | - |
 
@@ -79,7 +77,11 @@ Ids below 1000000 are shipped or converted content; server-authored rows use 100
 
 ## events
 
-None in this build (each host brings its own events).
+| Id | Name | Host | Parameters | Description |
+| ---: | --- | --- | --- | --- |
+| 1 | `world_event.started` | world_event | 1 `mode` (Int): 0 every start, 1 only a fresh start, 2 only a resume after a restart. | The game event started (a restart that only resumes an event that was running counts as a start of mode 0 and 2). |
+| 2 | `world_event.stopped` | world_event | - | The game event stopped. |
+| 3 | `world_event.update` | world_event | - | Fires on every world tick while the game event runs; give the rule the repeatable flag and a cooldown to run it on a period. |
 
 ## actions
 
@@ -89,6 +91,8 @@ None in this build (each host brings its own events).
 | 2 | `start_rule_list` | shared | 1 `list_id` (RuleListId): rule_list.id. | Start a rule list for the subject: its actions up to the first delay run now, the rest later; a list already running restarts. |
 | 3 | `say` | shared | 1 `text_id` (TextId): rule_text.id. | The subject says a rule_text (its type picks say, yell, emote or whisper) to the target. |
 | 4 | `cast` | shared | 1 `spell_id` (SpellId): The spell.<br>2 `cast_flags` (NonNegative): Host-defined cast flags (0 = a normal cast). | The subject casts a spell on the target. |
+| 100 | `world_event.start_event` | world_event | 1 `event_id` (Int): game_event.entry. | Start another game event (GameEventService.StartEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event is stopped again by its own window. |
+| 101 | `world_event.stop_event` | world_event | 1 `event_id` (Int): game_event.entry. | Stop a game event (GameEventService.StopEvent). It does not change the event's schedule, so use it on serverside events (schedule_type 0); a scheduled event inside its window is started again by the schedule. |
 
 ## targets
 

@@ -36,7 +36,7 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// <para>
 /// <b>Who queues.</b> Every <see cref="ScanMs"/> each free bot (autonomous, not in a real player's party, not in or waiting for a bot-led
 /// group, in no group, alive, out of combat, in no queue, no deserter, on a map of <see cref="PlayerbotOptions.AllowedMaps"/>) is looked
-/// over: the battleground types it may join (<see cref="PlayerbotBattlegroundBrackets.Eligible"/>: Warsong Gulch and Arathi Basin only,
+/// over: the battleground types it may join (<see cref="PlayerbotBattlegroundBrackets.Eligible"/>: Warsong Gulch, Arathi Basin and Alterac Valley,
 /// the level within the template, the objective content loaded, a battlemaster of its faction within
 /// <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/>), and whether it goes (<see cref="PlayerbotBattlegroundDemand.Pick"/>: a real
 /// player's queue first, else the per-minute chance, under the caps). The snapshot the caps read is rebuilt at every scan from the
@@ -48,7 +48,7 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// state says (the bot's queue slots, its invitation, the match it is bound to): walk to the battlemaster
 /// (<see cref="PlayerbotBattlegroundAI.Travel"/>), CMSG_BATTLEMASTER_HELLO and CMSG_BATTLEMASTER_JOIN (vmangos BattleGroundHandler.cpp:40-264),
 /// wait in the queue doing what the brain does, answer the invitation with CMSG_BATTLEFIELD_PORT (enter, or leave when the invited match
-/// already holds <see cref="PlayerbotBattlegroundOptions.MaxBotsPerBattleground"/> bots; BattleGroundHandler.cpp:361-507), leave the queue
+/// already holds the effective cap (<see cref="PlayerbotBattlegroundOptions.MaxBotsPerBattleground"/>, raised for a type whose template minimum needs more) of bots; BattleGroundHandler.cpp:361-507), leave the queue
 /// after <see cref="PlayerbotBattlegroundOptions.MaxQueueWaitMinutes"/>, play the match (<see cref="PlayerbotBattlegroundAI.Play"/>), and
 /// leave it with CMSG_LEAVE_BATTLEFIELD once it is over (BattleGroundHandler.cpp:510-525; vmangos BattleBotAI.cpp:461-485 leaves on the
 /// ended scoreboard). The server answers these as it answers any client; the coordinator reads the outcome from the manager, as a client
@@ -170,6 +170,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             _refusedMasters.Clear();
             _stalledMasters.Clear();
             _scanElapsed = ScanMs;
+            _raiseWarned = null;
             _world = null;
         }
     }
@@ -358,7 +359,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         var lines = new List<string>
         {
             string.Create(CultureInfo.InvariantCulture,
-                $"Bot battlegrounds: {(o.Enabled ? "enabled" : "disabled")}, chance {o.QueueChancePerMinute}/min, at most {o.MaxBotsPerBattleground} bots per battleground; {_tracked.Count} bots busy; queued {Totals.Queued}, entered {Totals.Entered}, left {Totals.Left}, declined {Totals.Declined}, queues given up {Totals.QueueTimeouts}."),
+                $"Bot battlegrounds: {(o.Enabled ? "enabled" : "disabled")}, chance {o.QueueChancePerMinute}/min, at most {o.MaxBotsPerBattleground} bots per battleground{RaisedCaps(o)}; {_tracked.Count} bots busy; queued {Totals.Queued}, entered {Totals.Entered}, left {Totals.Left}, declined {Totals.Declined}, queues given up {Totals.QueueTimeouts}."),
         };
         foreach (Tracked t in _tracked.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
             lines.Add(string.Create(CultureInfo.InvariantCulture,
@@ -367,6 +368,56 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"refused {type}: {why}"));
         foreach (string line in Events.TakeLast(5)) lines.Add("last: " + line);
         return lines;
+    }
+
+    /// <summary>
+    /// The status line's note of the types whose cap <c>RaiseCapToFillTemplate</c> raises now (<see cref="PlayerbotBattlegroundDemand.IsRaised"/>),
+    /// e.g. <c> (AlteracValley raised to 80 to fill the template)</c>; empty when no loaded template is raised.
+    /// </summary>
+    private string RaisedCaps(PlayerbotBattlegroundOptions o)
+    {
+        if (Feature()?.Manager is not { } manager) return string.Empty;
+        string raised = RaisedList(manager, o);
+        return raised.Length == 0 ? string.Empty : $" ({raised} to fill the template)";
+    }
+
+    /// <summary>Each loaded type whose cap is raised and its new cap, e.g. <c>AlteracValley raised to 80</c>; empty when none is.</summary>
+    private static string RaisedList(BattlegroundManager manager, PlayerbotBattlegroundOptions o)
+    {
+        List<string>? raised = null;
+        foreach (BattlegroundType type in PlayerbotBattlegroundBrackets.Types)
+            if (manager.TemplateOf(type) is { } template && PlayerbotBattlegroundDemand.IsRaised(template, o.MaxBotsPerBattleground, o.RaiseCapToFillTemplate))
+                (raised ??= []).Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{type} raised to {PlayerbotBattlegroundDemand.EffectiveCap(template, o.MaxBotsPerBattleground, o.RaiseCapToFillTemplate)}"));
+        return raised is null ? string.Empty : string.Join(", ", raised);
+    }
+
+    /// <summary>
+    /// What the last <see cref="WarnRaisedCaps"/> looked at (the cap, the option and the three templates, by reference: a content reload
+    /// replaces them); null before the first scan.
+    /// </summary>
+    private (int Cap, bool Raise, BattlegroundTemplate? Wsg, BattlegroundTemplate? Ab, BattlegroundTemplate? Av)? _raiseWarned;
+
+    /// <summary>The warnings logged about a configured cap that <c>RaiseCapToFillTemplate</c> overrides (status and tests).</summary>
+    internal int RaiseWarnings { get; private set; }
+
+    /// <summary>
+    /// One warning when the configured <c>MaxBotsPerBattleground</c> is overridden for some type: at the first scan after the world starts
+    /// (the templates are loaded), and again whenever a <c>.reload config</c> (or a template reload) changes the cap or which types are
+    /// raised. A reload that changes neither does not repeat it.
+    /// </summary>
+    private void WarnRaisedCaps(BattlegroundManager manager, PlayerbotBattlegroundOptions o)
+    {
+        var key = (o.MaxBotsPerBattleground, o.RaiseCapToFillTemplate, manager.TemplateOf(BattlegroundType.WarsongGulch),
+            manager.TemplateOf(BattlegroundType.ArathiBasin), manager.TemplateOf(BattlegroundType.AlteracValley));
+        if (_raiseWarned is { } last && last.Cap == key.Item1 && last.Raise == key.Item2 && ReferenceEquals(last.Wsg, key.Item3)
+            && ReferenceEquals(last.Ab, key.Item4) && ReferenceEquals(last.Av, key.Item5)) return;
+        _raiseWarned = key;
+        string raised = RaisedList(manager, o);
+        if (raised.Length == 0) return;
+        RaiseWarnings++;
+        logger.LogWarning("World:Playerbots:Battlegrounds:MaxBotsPerBattleground = {Cap} is below twice a template's MinPlayersPerTeam; RaiseCapToFillTemplate overrides it: {Raised} (2 x MaxPlayersPerTeam). Set RaiseCapToFillTemplate = false to keep the configured cap.",
+            o.MaxBotsPerBattleground, raised);
     }
 
     // --- the queue machine, every tick ----------------------------------------------------------------------------------
@@ -442,7 +493,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             QueueSlot = state.SlotOf(queue) >= 0,
             InvitedInstance = invited,
             MatchHoldsCap = invited != 0 && PlayerbotBattlegroundDemand.MustDecline(BotsIn(manager.GetBattleground(invited, t.Type), invited, t.BotId, player.Guid),
-                _options.Battlegrounds.MaxBotsPerBattleground),
+                CapOf(manager, t.Type)),
             QueuedTooLong = t.Phase == PlayerbotBattlegroundPhase.Queued
                 && unchecked(Now - t.QueuedSinceMs) >= (uint)Math.Clamp(_options.Battlegrounds.MaxQueueWaitMinutes, 1, 240) * 60_000u,
             Taken = !bot.Free || InOtherGroup(player),
@@ -473,7 +524,13 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             foreach (ObjectGuid guid in match.Players)
                 if (guid != exceptGuid && world.FindOnlinePlayer(guid) is { Session: WorldSession { IsManaged: true } }) count++;
         foreach (Tracked other in _tracked.Values)
-            if (other.BotId != except && other.Phase == PlayerbotBattlegroundPhase.Entering && other.InstanceId == instanceId) count++;
+        {
+            if (other.BotId == except || other.Phase != PlayerbotBattlegroundPhase.Entering || other.InstanceId != instanceId) continue;
+            // A bot that has arrived is already counted as a participant above while its tracker is still Entering.
+            if (match is not null && _bots.TryGetValue(other.BotId, out PlayerbotBattlegroundBot arrived) && arrived.Session.Player is { } arrivedPlayer
+                && match.PlayerTeam(arrivedPlayer.Guid) is not null) continue;
+            count++;
+        }
         return count;
     }
 
@@ -534,7 +591,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 if (facts.MatchHoldsCap && facts.InvitedInstance != 0)
                 {
                     Totals = (Totals.Queued, Totals.Entered, Totals.Left, Totals.Declined + 1, Totals.QueueTimeouts);
-                    Note($"{t.Name} declines {t.Type} match {facts.InvitedInstance}: it holds {_options.Battlegrounds.MaxBotsPerBattleground} bots already");
+                    Note($"{t.Name} declines {t.Type} match {facts.InvitedInstance}: it holds {CapOf(feature.Manager, t.Type)} bots already");
                 }
                 else if (facts.QueuedTooLong)
                 {
@@ -731,8 +788,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         AssignRoles(feature);
 
         PlayerbotBattlegroundOptions options = _options.Battlegrounds;
+        WarnRaisedCaps(manager, options);
         float chance = PlayerbotBattlegroundDemand.ChancePerThink(options.QueueChancePerMinute, sinceMs);
-        bool anyRealWaiting = _demand.AnyRealWaiting || (options.PreferFillingRealPlayerQueues && options.QueueChancePerMinute > 0f && _demand.AnyBotWaiting);
+        // Also every free bot is looked over while a raised type's preparing or running match has a slot open that bots should fill.
+        bool anyRealWaiting = _demand.AnyRealWaiting || (options.PreferFillingRealPlayerQueues && options.QueueChancePerMinute > 0f && _demand.AnyBotWaiting)
+            || _demand.AnyFillNeed(manager.TemplateOf, options);
         bool checkedRefusalsThisScan = false;
         foreach (PlayerbotBattlegroundBot bot in _orderedBots)
         {
@@ -757,6 +817,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             };
             _tracked[bot.BotId] = tracked;
             _demand.AddBotCommitted(choice.Type, choice.Bracket, player.Team);
+            _demand.AddBotPending(choice.Type, choice.Bracket, player.Team);
             Note($"{player.Name} goes to the {choice.Type} battlemaster {master.Name}");
         }
     }
@@ -811,6 +872,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         return !feature.IsDeserter(player);
     }
 
+    /// <summary>The bot cap of one type's matches: the configured cap, raised to 2 x the template maximum when it cannot start the type (<see cref="PlayerbotBattlegroundDemand.EffectiveCap"/>).</summary>
+    private int CapOf(BattlegroundManager manager, BattlegroundType type)
+        => manager.TemplateOf(type) is { } template
+            ? PlayerbotBattlegroundDemand.EffectiveCap(template, _options.Battlegrounds.MaxBotsPerBattleground, _options.Battlegrounds.RaiseCapToFillTemplate)
+            : _options.Battlegrounds.MaxBotsPerBattleground;
+
     private void Refused(BattlegroundType type, PlayerbotBattlegroundRefusal why)
     {
         // Logged once per type and reason: a level out of range or no battlemaster in reach is an ordinary per-bot fact.
@@ -843,25 +910,43 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         }
 
         foreach (Tracked t in _tracked.Values)
-            if (t.Phase is PlayerbotBattlegroundPhase.Travel or PlayerbotBattlegroundPhase.Join or PlayerbotBattlegroundPhase.Queued
-                or PlayerbotBattlegroundPhase.Invited or PlayerbotBattlegroundPhase.Entering)
-                _demand.AddBotCommitted(t.Type, t.Bracket, t.Team);
+        {
+            if (t.Phase is not (PlayerbotBattlegroundPhase.Travel or PlayerbotBattlegroundPhase.Join or PlayerbotBattlegroundPhase.Queued
+                or PlayerbotBattlegroundPhase.Invited or PlayerbotBattlegroundPhase.Entering)) continue;
+            // An Entering bot that already participates is counted with its running match below.
+            if (t.Phase == PlayerbotBattlegroundPhase.Entering && t.InstanceId != 0 && manager.GetBattleground(t.InstanceId, t.Type) is { } entered
+                && _bots.TryGetValue(t.BotId, out PlayerbotBattlegroundBot enteredBot) && enteredBot.Session.Player is { } enteredPlayer
+                && entered.PlayerTeam(enteredPlayer.Guid) is not null) continue;
+            _demand.AddBotCommitted(t.Type, t.Bracket, t.Team);
+            // Not invited yet: the match's invited count does not hold it, so it is subtracted from the open slots it will take.
+            if (t.Phase is PlayerbotBattlegroundPhase.Travel or PlayerbotBattlegroundPhase.Join or PlayerbotBattlegroundPhase.Queued)
+                _demand.AddBotPending(t.Type, t.Bracket, t.Team);
+        }
 
-        int cap = _options.Battlegrounds.MaxBotsPerBattleground;
         foreach (Battleground match in manager.RunningBattlegrounds)
         {
             if (!PlayerbotBattlegroundBrackets.Supported(match.Type) || match.Status == BattlegroundStatus.WaitLeave) continue;
             _demand.AddMatchInBracket(match.Type, match.Bracket);
             if (!match.HasFreeSlots) continue;
             int bots = 0;
+            bool real = false;
             foreach ((ObjectGuid guid, Team team) in match.Participants())
             {
-                if (_world.FindOnlinePlayer(guid) is not { Session: WorldSession { IsManaged: true } }) continue;
+                if (_world.FindOnlinePlayer(guid) is not { Session: WorldSession { IsManaged: true } })
+                {
+                    real = true;
+                    continue;
+                }
+
                 bots++;
                 _demand.AddBotCommitted(match.Type, match.Bracket, team);
             }
 
-            if (bots >= cap) _demand.BlockBracket(match.Type, match.Bracket);
+            if (bots >= CapOf(manager, match.Type)) _demand.BlockBracket(match.Type, match.Bracket);
+            // The slots the server's queue fills while the match prepares or runs (BattlegroundQueue.CheckFreeSlots, vmangos FillPlayersToBG):
+            // FreeSlotsForTeam is the template maximum less the invited, and 0 outside WaitJoin and InProgress.
+            _demand.AddOpenSlots(match.Type, match.Bracket, Team.Alliance, (int)Math.Min(match.FreeSlotsForTeam(Team.Alliance), int.MaxValue), real);
+            _demand.AddOpenSlots(match.Type, match.Bracket, Team.Horde, (int)Math.Min(match.FreeSlotsForTeam(Team.Horde), int.MaxValue), real);
         }
     }
 

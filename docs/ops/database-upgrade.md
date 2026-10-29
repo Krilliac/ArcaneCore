@@ -34,6 +34,8 @@ It prints fields using the generated build-5875 WoWDBDefs layout; `File` can be 
 
 World schema 57 adds the six creature magic resistance columns to `creature_template`, all 0 after the upgrade. Run the content importer's `refresh` ([content import](../areas/content-import.md)) with a ClassicDB, cmangos or vmangos dump once after step 6 to fill them: the report line `creature_template (magic resistances)` counts the templates changed. A dump without the resistance columns leaves them as they are.
 
+World schema 62 adds `holiday_flavour` (how bots tell each festival). The step creates the table empty; the next world daemon start fills an empty table with the shipped rows (the world database initializer), so there is nothing to apply by hand. A table that already has rows is left alone, and `sql/content/world/<provider>/0002_holiday_flavour.sql` is only for an operator who wants to reset or edit the shipped rows.
+
 Configuration is the `Database` section the daemons use (`appsettings.json` next to the tool, an extra file with
 `--config <file>`, or environment variables such as `Database__Characters__ConnectionString`); keep passwords in the
 environment, not on the command line. Every line the tool prints is scrubbed of passwords.
@@ -218,5 +220,7 @@ A refused start prints one line (`database schema refused: ...`, passwords remov
 instead of crashing. Even `CreateOnly` creates a missing database and a fresh schema, which retail never does; `Never`
 (or `Database:Upgrade:ValidateOnly`) plus `arcane-db upgrade` is the retail-like pair, and startup seeding is serialized
 under the component schema lock (and skipped in validate-only mode).
+
+The content importer (`arcane-content-importer`) does not read `Database:Upgrade`; it has its own gate. `refresh` refuses a world whose schema is behind the importer's unless `--migrate` is given. `import`, `import-dbc`, `import-map-dbc`, `proc-events` and `spell-threat` use the same gate in its `CreateOnly` form: they still create a database that holds no schema, but refuse to upgrade an existing one (exit 3, nothing written) unless `--migrate` is given. Production worlds migrate through `arcane-db upgrade`; pass `--migrate` only for a throwaway or staging world.
 
 Characters schema v60 (`character_ownership`) is forward-only: roll back by restoring the pre-upgrade backup. How to clear a stuck ownership row is in `docs/CHARACTER_FENCING_ACCEPTANCE.md` (Operations).

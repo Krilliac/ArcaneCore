@@ -12,7 +12,7 @@ namespace ArcaneCore.Data.Npc;
 
 public sealed record NpcImportReport(
     int NpcGossips, int GossipMenus, int GossipOptions, int NpcTexts, int Vendors, int Trainers,
-    int Replaced, int Skipped, IReadOnlyList<string> Diagnostics, int VendorTemplates, int PointsOfInterest = 0);
+    int Replaced, int Skipped, IReadOnlyList<string> Diagnostics, int VendorTemplates, int PointsOfInterest = 0, int TextBroadcasts = 0);
 
 /// <summary>
 /// Maps the existing CMaNGOS NPC service tables into the already-owned EF entities. Reflection is
@@ -33,12 +33,14 @@ public sealed class NpcDumpImporter
     private readonly Dictionary<(uint, uint, uint), GossipMenu> _menus = [];
     private readonly Dictionary<(uint, uint), GossipMenuOption> _options = [];
     private readonly Dictionary<uint, NpcTextRow> _texts = [];
+    private readonly Dictionary<uint, NpcTextBroadcastRow> _textBroadcasts = [];
     private readonly Dictionary<(uint, uint), VendorItem> _vendors = [];
     private readonly Dictionary<(uint, uint), VendorTemplateItemRow> _vendorTemplates = [];
     private readonly Dictionary<(uint, uint), TrainerSpell> _trainers = [];
     private readonly Dictionary<uint, PointOfInterest> _pois = [];
     private readonly List<string> _diagnostics = [];
     private bool _sawVendorTemplateTable;
+    private bool _sawTextBroadcastTable;
     private bool _vendorTemplateTableRejected;
     private readonly HashSet<(string Table, IReadOnlyList<string> Columns)> _validatedLayouts = [];
     private static readonly ConcurrentDictionary<Type, Dictionary<string, PropertyInfo>> PropertyCache = new();
@@ -105,6 +107,14 @@ public sealed class NpcDumpImporter
                     // vmangos/cmangos points_of_interest: map markers for gossip options (action_poi_id). Coordinates are world x/y and may be negative.
                     case "points_of_interest": { PointOfInterest x = ConvertModel<PointOfInterest>(row, allowNegativeFloats: true); RequirePositive(x.Entry, table, "entry"); Put(_pois, x, v => v.Entry); break; }
                     case "npc_text": { NpcTextRow x = ConvertModel<NpcTextRow>(row); RequirePositive(x.Id, table, "ID"); Put(_texts, x, v => v.Id); break; }
+                    case NpcTextBroadcastDataModule.Table:
+                    {
+                        NpcTextBroadcastRow x = ConvertModel<NpcTextBroadcastRow>(row);
+                        RequirePositive(x.Id, table, "Id");
+                        _sawTextBroadcastTable = true;
+                        Put(_textBroadcasts, x, v => v.Id);
+                        break;
+                    }
                     case "npc_vendor": { VendorItem x = ConvertModel<VendorItem>(row); RequirePositive(x.Entry, table, "entry"); RequirePositive(x.Item, table, "item"); Put(_vendors, x, v => (v.Entry, v.Item)); break; }
                     case "npc_vendor_template": { VendorTemplateItemRow x = ConvertModel<VendorTemplateItemRow>(row); RequirePositive(x.Entry, table, "entry"); RequirePositive(x.Item, table, "item"); Put(_vendorTemplates, x, v => (v.Entry, v.Item)); break; }
                     case "npc_trainer":
@@ -133,9 +143,23 @@ public sealed class NpcDumpImporter
     public IReadOnlyCollection<GossipMenuOption> ScriptedOptions => [.. _options.Values.Where(o => o.ActionScriptId != 0)];
 
     public NpcImportReport BuildReport() => new(_gossip.Count, _menus.Count, _options.Count, _texts.Count,
-        _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics], _vendorTemplates.Count, _pois.Count);
+        _vendors.Count, _trainers.Count, _replaced, _skipped, [.. _diagnostics], _vendorTemplates.Count, _pois.Count, _textBroadcasts.Count);
 
     public bool SawVendorTemplateTable => _sawVendorTemplateTable;
+
+    /// <summary>
+    /// The text ids that <c>npc_gossip</c> and <c>gossip_menu</c> rows read from this dump name but neither <c>npc_text</c> nor
+    /// <c>npc_text_broadcast_text</c> has, ascending. Id 0 means no text and is not listed.
+    /// </summary>
+    public IReadOnlyList<uint> UnresolvedTextIds() =>
+    [
+        .. _gossip.Values.Select(g => g.TextId).Concat(_menus.Values.Select(m => m.TextId))
+            .Where(id => id != 0 && !_texts.ContainsKey(id) && !_textBroadcasts.ContainsKey(id))
+            .Distinct().Order(),
+    ];
+
+    /// <summary>The dump held at least one <c>npc_text_broadcast_text</c> row.</summary>
+    public bool SawTextBroadcastTable => _sawTextBroadcastTable;
 
     /// <summary>The dump's npc_vendor_template lacked required columns and was skipped (see <see cref="NpcImportReport.Diagnostics"/>).</summary>
     public bool VendorTemplateTableRejected => _vendorTemplateTableRejected;
@@ -161,6 +185,18 @@ public sealed class NpcDumpImporter
         return _vendorTemplates.Count;
     }
 
+    /// <summary>
+    /// Refresh the broadcast-text form of the NPC texts (world schema 60) without touching the inline texts. A dump with no
+    /// <c>npc_text_broadcast_text</c> row leaves the table as it is.
+    /// </summary>
+    public async Task<int> RefreshTextBroadcastsAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        if (!_sawTextBroadcastTable) return 0;
+        await db.Set<NpcTextBroadcastRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _textBroadcasts.Values, 2000, cancellationToken).ConfigureAwait(false);
+        return _textBroadcasts.Count;
+    }
+
     public async Task<NpcImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(db);
@@ -180,6 +216,7 @@ public sealed class NpcDumpImporter
                     await db.Set<GossipMenu>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<GossipMenuOption>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<NpcTextRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<NpcTextBroadcastRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<VendorItem>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<VendorTemplateItemRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<TrainerSpell>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
@@ -190,6 +227,7 @@ public sealed class NpcDumpImporter
                 await InsertBatchedAsync(db, _menus.Values, batchSize, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _options.Values, batchSize, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _texts.Values, batchSize, ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _textBroadcasts.Values, batchSize, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _vendors.Values, batchSize, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _vendorTemplates.Values, batchSize, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _trainers.Values, batchSize, ct).ConfigureAwait(false);
@@ -325,6 +363,7 @@ public sealed class NpcDumpImporter
     {
         ["npc_gossip"] = typeof(NpcGossip), ["gossip_menu"] = typeof(GossipMenu),
         ["gossip_menu_option"] = typeof(GossipMenuOption), ["npc_text"] = typeof(NpcTextRow),
+        [NpcTextBroadcastDataModule.Table] = typeof(NpcTextBroadcastRow),
         ["npc_vendor"] = typeof(VendorItem), ["npc_vendor_template"] = typeof(VendorTemplateItemRow), ["npc_trainer"] = typeof(TrainerSpell),
         ["points_of_interest"] = typeof(PointOfInterest),
     };
@@ -340,6 +379,7 @@ public sealed class NpcDumpImporter
         ["gossip_menu"] = ["entry", "text_id", "condition_id"],
         ["gossip_menu_option"] = ["menu_id", "id", "option_icon", "option_text", "option_id", "npc_option_npcflag", "action_menu_id", "action_poi_id", "box_coded", "box_text", "condition_id"],
         ["npc_text"] = ["ID", "text0_0", "text0_1", "lang0", "prob0", "em0_0", "em0_1", "em0_2", "em0_3", "em0_4", "em0_5"],
+        [NpcTextBroadcastDataModule.Table] = ["Id", "Prob0", "BroadcastTextId0"],
         ["npc_vendor"] = ["entry", "item", "maxcount", "incrtime", "slot", "condition_id"],
         ["npc_vendor_template"] = ["entry", "item", "maxcount", "incrtime", "slot", "condition_id"],
         ["npc_trainer"] = ["entry", "spell", "spellcost", "reqskill", "reqskillvalue", "reqlevel"],

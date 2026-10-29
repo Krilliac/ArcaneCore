@@ -90,7 +90,7 @@ public sealed class RuleCommandsTests
         Assert.Equal(4, all.Length);
 
         string[] creature = await ConsoleAsync(host, ".rules check creature 99");
-        Assert.Equal(["rule 5: host 2 is not registered (registered: none) [creature entry 99]", "1 rejected row(s)."], creature[1..]);
+        Assert.Equal(["rule 5: host 2 is not registered (registered: 5 world_event) [creature entry 99]", "1 rejected row(s)."], creature[1..]);
         Assert.Equal("No rejected rule row matches.", (await ConsoleAsync(host, ".rules check creature 98"))[1]);
         Assert.StartsWith("Unknown rule host 'dragon'. Hosts: bot, creature,", (await ConsoleAsync(host, ".rules check dragon"))[0], StringComparison.Ordinal);
         Assert.StartsWith("Syntax:", (await ConsoleAsync(host, ".rules check creature x"))[0], StringComparison.Ordinal);
@@ -102,7 +102,7 @@ public sealed class RuleCommandsTests
         await using WorldTestHost host = WorldTestHost.Start();
 
         string[] lines = await ConsoleAsync(host, ".rules vocab");
-        Assert.Equal("6 primitive(s).", lines[^1]);
+        Assert.Equal("11 primitive(s).", lines[^1]);
         Assert.Contains(lines, l => l.StartsWith("action 4 cast(spell_id:SpellId, cast_flags:NonNegative) [shared]: ", StringComparison.Ordinal));
 
         string[] bot = await ConsoleAsync(host, ".rules vocab bot");

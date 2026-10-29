@@ -222,6 +222,12 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // Taxi, then dead, before either branch (vmangos SpellHandler.cpp:163-174), so a lootable item gets the same reply as a gift.
+        if (RefuseWhileFlyingOrDead(player, item))
+        {
+            return;
+        }
+
         // Opening a lockbox or clam uses up the item (or one of its stack); same refusal as a gift.
         if (ItemHandlers.RefuseIfOffered(session, player, item, score: false))
         {
@@ -232,20 +238,28 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     }
 
     /// <summary>The refusals before the wrapped branch, in vmangos order (SpellHandler.cpp:163-174): on a taxi, then dead.</summary>
-    private static void OpenGift(Player player, Item gift)
+    private static bool RefuseWhileFlyingOrDead(Player player, Item item)
     {
         if ((player.UnitFlags & UnitFlags.TaxiFlight) != 0)
         {
-            player.Inventory.SendEquipError(InventoryResult.CantDoRightNow, gift, null);
-            return;
+            player.Inventory.SendEquipError(InventoryResult.CantDoRightNow, item, null);
+            return true;
         }
 
         if (!player.IsAlive)
         {
-            player.Inventory.SendEquipError(InventoryResult.YouAreDead, gift, null);
-            return;
+            player.Inventory.SendEquipError(InventoryResult.YouAreDead, item, null);
+            return true;
         }
 
-        player.Inventory.OpenGift(gift);
+        return false;
+    }
+
+    private static void OpenGift(Player player, Item gift)
+    {
+        if (!RefuseWhileFlyingOrDead(player, gift))
+        {
+            player.Inventory.OpenGift(gift);
+        }
     }
 }

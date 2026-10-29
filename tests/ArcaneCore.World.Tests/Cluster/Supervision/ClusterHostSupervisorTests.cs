@@ -348,6 +348,305 @@ public sealed class ClusterHostSupervisorTests : IDisposable
         Assert.Equal(0, snapshot.RestartCount);
     }
 
+    [Fact]
+    public void PlanStartAll_AccumulatesCountAndMemory_AcrossCandidates()
+    {
+        var options = new ClusterSupervisorOptions
+        {
+            MaxConcurrentProcesses = 4,
+            MaxTotalAllocatedMemoryMb = 700,
+            MinFreeMemoryReserveMb = 1_000,
+        };
+        options.Processes["realm"] = new SupervisedProcessConfig { Name = "realm", Role = SupervisedRoles.Realm, ExecutablePath = "x", RequiredMemoryMb = 300, StartOrder = 0 };
+        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 300, StartOrder = 1 };
+        options.Processes["w-a"] = new SupervisedProcessConfig { Name = "w-a", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 200, MapAssignments = [0], StartOrder = 2 };
+        options.Processes["w-b"] = new SupervisedProcessConfig { Name = "w-b", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [0], StartOrder = 3 };
+        options.Processes["w-c"] = new SupervisedProcessConfig { Name = "w-c", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [0], StartOrder = 4 };
+        options.Processes["w-d"] = new SupervisedProcessConfig { Name = "w-d", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [1], StartOrder = 5 };
+        options.Processes["w-e"] = new SupervisedProcessConfig { Name = "w-e", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 10, MapAssignments = [2], StartOrder = 6 };
+
+        using var mux = new SupervisedOutputMultiplexer(TextWriter.Null);
+        using var supervisor = new ClusterHostSupervisor(options, new FakeSupervisedProcessLauncher(), mux, new FakeCapacityProbe(availableMemoryMb: 100_000));
+
+        SupervisorStartPlan plan = supervisor.PlanStartAll();
+
+        // realm + gateway use 600 of 700 MiB; w-a (200) would reach 800 and is denied, so its map 0 stays free for w-b; w-c wants map 0 again;
+        // w-d is the fourth process; w-e would be the fifth.
+        Assert.Equal(["realm", "gateway", "w-b", "w-d"], plan.Admitted);
+        Assert.Equal(["w-a", "w-c", "w-e"], plan.Denied.Select(d => d.Name));
+        Assert.Contains("MaxTotalAllocatedMemoryMb", plan.Denied[0].Reason);
+        Assert.Contains("map 0", plan.Denied[1].Reason);
+        Assert.Contains("MaxConcurrentProcesses", plan.Denied[2].Reason);
+
+        // Planning launches nothing.
+        Assert.All(supervisor.GetSnapshots(), s => Assert.Equal(SupervisedProcessState.Stopped, s.State));
+
+        // The free-memory reserve is applied cumulatively against the one probe read.
+        var reserve = new ClusterSupervisorOptions { MinFreeMemoryReserveMb = 500 };
+        reserve.Processes["one"] = new SupervisedProcessConfig { Name = "one", Role = SupervisedRoles.Realm, ExecutablePath = "x", RequiredMemoryMb = 300 };
+        reserve.Processes["two"] = new SupervisedProcessConfig { Name = "two", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 300 };
+        using var reserveMux = new SupervisedOutputMultiplexer(TextWriter.Null);
+        using var reserveSupervisor = new ClusterHostSupervisor(reserve, new FakeSupervisedProcessLauncher(), reserveMux, new FakeCapacityProbe(availableMemoryMb: 1_000));
+        SupervisorStartPlan reservePlan = reserveSupervisor.PlanStartAll();
+        Assert.Equal(["one"], reservePlan.Admitted); // 1000 - 300 - 300 = 400 < 500
+        Assert.Contains("MinFreeMemoryReserveMb", Assert.Single(reservePlan.Denied).Reason);
+    }
+
+    [Fact]
+    public async Task ChildExit78_IsFaulted_NotRestarted()
+    {
+        var launcher = new FakeSupervisedProcessLauncher();
+        var options = new ClusterSupervisorOptions();
+        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1 };
+        var delays = new ConcurrentQueue<int>();
+        var console = new StringWriter();
+        using var mux = new SupervisedOutputMultiplexer(console);
+        await using var supervisor = new ClusterHostSupervisor(
+            options,
+            launcher,
+            mux,
+            new FakeCapacityProbe(availableMemoryMb: 16_384),
+            delayAsync: (ts, _) =>
+            {
+                delays.Enqueue((int)ts.TotalMilliseconds);
+                return Task.CompletedTask;
+            });
+
+        FakeSupervisedProcess first = launcher.PreCreateProcess(index: 0);
+        await supervisor.StartProcessAsync("gateway");
+        await first.WaitForStartSignalAsync();
+        first.SimulateUnexpectedExit(exitCode: ArcaneCore.Kernel.Ops.ExitCodes.InvalidConfiguration);
+
+        SupervisedProcessSnapshot snapshot = await WaitForStateAsync(supervisor, "gateway", SupervisedProcessState.Faulted);
+        Assert.Equal(SupervisedProcessState.Faulted, snapshot.State);
+        Assert.Equal(78, snapshot.LastExitCode);
+        Assert.Equal(1, snapshot.Incarnation); // never relaunched
+        Assert.Equal(0, snapshot.RestartCount);
+        Assert.Empty(delays);
+        Assert.Contains("invalid configuration", console.ToString());
+    }
+
+    [Fact]
+    public void BuildStartInfo_MarksSupervisedChildEnvironment()
+    {
+        var cfg = new SupervisedProcessConfig { Name = "worker:EK", Role = SupervisedRoles.Worker, ExecutablePath = "dotnet", Arguments = "--info" };
+
+        System.Diagnostics.ProcessStartInfo info = SystemProcessSupervisedLauncher.BuildStartInfo(cfg);
+
+        Assert.Equal("ARCANECORE_SUPERVISED_CHILD", SupervisedChild.EnvironmentVariable);
+        Assert.Equal("worker:EK", info.Environment[SupervisedChild.EnvironmentVariable]);
+    }
+
+    [Fact]
+    public async Task StartOrder_DecidesLaunchDrainAndAdmissionOrder_NotTheSortedKeyOrder()
+    {
+        // Configuration binding enumerates keys sorted (gateway, realm, worker-EK); StartOrder is what the supervisor follows.
+        ClusterSupervisorOptions Build(int max)
+        {
+            var o = new ClusterSupervisorOptions { MaxConcurrentProcesses = max, MinFreeMemoryReserveMb = 0 };
+            o.Processes["realm"] = new SupervisedProcessConfig { Name = "realm", Role = SupervisedRoles.Realm, ExecutablePath = "x", RequiredMemoryMb = 1, StartOrder = 0 };
+            o.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1, StartOrder = 1 };
+            o.Processes["worker-EK"] = new SupervisedProcessConfig { Name = "worker-EK", Role = SupervisedRoles.Worker, ExecutablePath = "x", RequiredMemoryMb = 1, StartOrder = 2 };
+            return o;
+        }
+
+        var launcher = new OrderRecordingLauncher();
+        using var mux = new SupervisedOutputMultiplexer(TextWriter.Null);
+        await using var supervisor = new ClusterHostSupervisor(Build(9), launcher, mux, new FakeCapacityProbe(availableMemoryMb: 16_384));
+
+        Assert.Equal(["realm", "gateway", "worker-EK"], supervisor.PlanStartAll().Admitted);
+        Assert.Equal(["realm", "gateway", "worker-EK"], supervisor.GetSnapshots().Select(s => s.Name));
+
+        await supervisor.StartAllAsync();
+        Assert.Equal(["realm", "gateway", "worker-EK"], launcher.Launched.ToArray());
+
+        await supervisor.DrainAndStopAsync();
+        Assert.Equal(["worker-EK", "gateway", "realm"], launcher.Drained.ToArray());
+
+        // With room for two, the highest StartOrder is the one denied.
+        using var mux2 = new SupervisedOutputMultiplexer(TextWriter.Null);
+        await using var limited = new ClusterHostSupervisor(Build(2), new OrderRecordingLauncher(), mux2, new FakeCapacityProbe(availableMemoryMb: 16_384));
+        SupervisorStartPlan plan = limited.PlanStartAll();
+        Assert.Equal(["realm", "gateway"], plan.Admitted);
+        Assert.Equal("worker-EK", Assert.Single(plan.Denied).Name);
+    }
+
+    [Fact]
+    public async Task PlanStartAll_DoesNotCountRunningProcessesAgainstTheProbedReserve()
+    {
+        var options = new ClusterSupervisorOptions { MinFreeMemoryReserveMb = 500 };
+        options.Processes["one"] = new SupervisedProcessConfig { Name = "one", Role = SupervisedRoles.Realm, ExecutablePath = "x", RequiredMemoryMb = 300, StartOrder = 0 };
+        options.Processes["two"] = new SupervisedProcessConfig { Name = "two", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 300, StartOrder = 1 };
+        using var mux = new SupervisedOutputMultiplexer(TextWriter.Null);
+        await using var supervisor = new ClusterHostSupervisor(options, new OrderRecordingLauncher(), mux, new FakeCapacityProbe(availableMemoryMb: 1_000));
+        await supervisor.StartProcessAsync("one");
+
+        // "one" is running, so its 300 MiB is already missing from the 1000 MiB the probe reports: 1000 - 300 = 700 >= 500.
+        SupervisorStartPlan plan = supervisor.PlanStartAll();
+
+        Assert.Equal(["one", "two"], plan.Admitted);
+        Assert.Empty(plan.Denied);
+    }
+
+    [Fact]
+    public async Task Drain_WhenTheCallersTokenFires_StillKillsTheChild_AndDoesNotThrow()
+    {
+        var launcher = new OrderRecordingLauncher { DrainWaitsForToken = true };
+        var options = new ClusterSupervisorOptions();
+        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1 };
+        using var mux = new SupervisedOutputMultiplexer(TextWriter.Null);
+        await using var supervisor = new ClusterHostSupervisor(options, launcher, mux, new FakeCapacityProbe(availableMemoryMb: 16_384));
+        await supervisor.StartProcessAsync("gateway");
+
+        using var cts = new CancellationTokenSource();
+        Task drain = supervisor.DrainAndStopAsync(cts.Token);
+        await cts.CancelAsync();
+        await drain;
+
+        Assert.Equal(1, launcher.Killed);
+        Assert.Equal(SupervisedProcessState.Drained, supervisor.GetSnapshot("gateway").State);
+    }
+
+    [Fact]
+    public async Task Drain_WhenTheKillLeavesTheChildRunning_IsFaulted_Reports_AndDoesNotThrow()
+    {
+        var launcher = new SurvivorLauncher();
+        var options = new ClusterSupervisorOptions();
+        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1 };
+        var console = new StringWriter();
+        using var mux = new SupervisedOutputMultiplexer(console);
+        await using var supervisor = new ClusterHostSupervisor(options, launcher, mux, new FakeCapacityProbe(availableMemoryMb: 16_384));
+        await supervisor.StartProcessAsync("gateway");
+
+        SupervisedProcessSnapshot snapshot = await supervisor.DrainProcessAsync("gateway");
+
+        Assert.Equal(SupervisedProcessState.Faulted, snapshot.State);
+        Assert.Equal(SupervisedProcessState.Faulted, supervisor.GetSnapshot("gateway").State);
+        Assert.True(launcher.Process.KillCalls >= 1);
+        Assert.Contains("still running after its drain timeout", console.ToString());
+        Assert.True(launcher.Process.Disposed); // the wrapper is disposed (outside the gate) even though it survived
+    }
+
+    private sealed class SurvivorLauncher : ISupervisedProcessLauncher
+    {
+        public SurvivorProcess Process { get; } = new();
+
+        public ISupervisedProcess Launch(SupervisedProcessConfig config) => Process;
+    }
+
+    /// <summary>A child the OS refuses to kill: it never drains, and KillOwnedProcess leaves HasExited false.</summary>
+    private sealed class SurvivorProcess : ISupervisedProcess
+    {
+        private int _killCalls;
+        private int _disposed;
+
+        public int KillCalls => Volatile.Read(ref _killCalls);
+
+        public bool Disposed => Volatile.Read(ref _disposed) != 0;
+
+        public int ProcessId => 4242;
+
+        public bool HasExited => false;
+
+        public int? ExitCode => null;
+
+        public event Action<string, bool>? OutputLineReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public Task<int> WaitForExitAsync(CancellationToken ct = default) => new TaskCompletionSource<int>().Task.WaitAsync(ct);
+
+        public Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default) => Task.FromResult(false);
+
+        public void KillOwnedProcess() => Interlocked.Increment(ref _killCalls);
+
+        public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
+    }
+
+    private sealed class OrderRecordingLauncher : ISupervisedProcessLauncher
+    {
+        public ConcurrentQueue<string> Launched { get; } = new();
+
+        public ConcurrentQueue<string> Drained { get; } = new();
+
+        public bool DrainWaitsForToken { get; init; }
+
+        private int _killed;
+
+        public int Killed => Volatile.Read(ref _killed);
+
+        public ISupervisedProcess Launch(SupervisedProcessConfig config)
+        {
+            Launched.Enqueue(config.Name);
+            return new Child(this, config.Name);
+        }
+
+        private sealed class Child(OrderRecordingLauncher owner, string name) : ISupervisedProcess
+        {
+            private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public int ProcessId => 1;
+
+            public bool HasExited => _exit.Task.IsCompleted;
+
+            public int? ExitCode => _exit.Task.IsCompleted ? _exit.Task.Result : null;
+
+            public event Action<string, bool>? OutputLineReceived
+            {
+                add { }
+                remove { }
+            }
+
+            public Task<int> WaitForExitAsync(CancellationToken ct = default) => _exit.Task.WaitAsync(ct);
+
+            public Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default)
+            {
+                owner.Drained.Enqueue(name);
+                if (owner.DrainWaitsForToken)
+                {
+                    return WaitForTokenAsync(ct);
+                }
+
+                _exit.TrySetResult(0);
+                return Task.FromResult(true);
+            }
+
+            private static async Task<bool> WaitForTokenAsync(CancellationToken ct)
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                return true;
+            }
+
+            public void KillOwnedProcess()
+            {
+                Interlocked.Increment(ref owner._killed);
+                _exit.TrySetResult(-1);
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+    }
+
+    private static async Task<SupervisedProcessSnapshot> WaitForStateAsync(ClusterHostSupervisor supervisor, string name, SupervisedProcessState state)
+    {
+        for (int i = 0; i < 500; i++)
+        {
+            SupervisedProcessSnapshot snapshot = supervisor.GetSnapshot(name);
+            if (snapshot.State == state)
+            {
+                return snapshot;
+            }
+
+            await Task.Delay(10);
+        }
+
+        return supervisor.GetSnapshot(name);
+    }
+
     private sealed class FakeCapacityProbe : IClusterCapacityProbe
     {
         public FakeCapacityProbe(long availableMemoryMb)

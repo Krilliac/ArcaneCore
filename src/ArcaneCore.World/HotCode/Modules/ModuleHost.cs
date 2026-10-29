@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Scripting;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Protocol;
@@ -442,6 +443,11 @@ public sealed class ModuleHost
             fields.Add(new("spell_scripts", game.SpellScripts.Count.ToString(CultureInfo.InvariantCulture)));
         }
 
+        if (game.SpellHandlerTypes.Count != 0)
+        {
+            fields.Add(new("spell_handler_modules", game.SpellHandlerTypes.Count.ToString(CultureInfo.InvariantCulture)));
+        }
+
         if (game.InstanceScripts.Count != 0)
         {
             fields.Add(new("instance_scripts", string.Join(' ', game.InstanceScripts.Keys.Order().Select(id => id.ToString(CultureInfo.InvariantCulture)))));
@@ -779,12 +785,14 @@ public sealed class ModuleHost
             {
                 SpellScripts = Discover("spell scripts", () => SpellScriptRegistry.CreateScripts(assembly)),
                 InstanceScripts = Discover("instance scripts", () => InstanceScriptRegistry.DiscoverFactories([assembly])),
+                SpellHandlerTypes = Discover("spell handler modules", () => SpellHandlerModules.Discover(assembly)),
             };
             EventAiHandlerSet eventAi = Discover("EventAI handlers", () => EventAiRegistry.DiscoverHandlers([assembly]));
             game = game with { EventAiEvents = eventAi.Events, EventAiActions = eventAi.Actions };
-            if ((game.SpellScripts.Count != 0 || game.InstanceScripts.Count != 0 || game.HasEventAi) && _seams is null)
+            if ((game.SpellScripts.Count != 0 || game.InstanceScripts.Count != 0 || game.HasEventAi || game.SpellHandlerTypes.Count != 0) && _seams is null)
             {
-                throw new ModuleRejectedException("this server does not offer spell scripts, instance scripts or EventAI handlers to modules");
+                throw new ModuleRejectedException("this server does not offer spell scripts, instance scripts or EventAI handlers to modules"
+                    + (game.SpellHandlerTypes.Count != 0 ? " (or spell handler modules)" : string.Empty));
             }
 
             if (fresh.Count == 0 && roots.Count == 0 && game.IsEmpty)

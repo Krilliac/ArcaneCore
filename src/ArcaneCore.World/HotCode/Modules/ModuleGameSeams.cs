@@ -6,6 +6,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Scripting;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using Microsoft.Extensions.Logging;
 
@@ -58,11 +59,14 @@ internal sealed record ModuleGameParts(
     /// <summary>The module's EventAI action handlers (<see cref="EventAiRegistry.DiscoverHandlers"/>).</summary>
     public IReadOnlyList<EventAiActionHandler> EventAiActions { get; init; } = [];
 
+    /// <summary>The module's <see cref="ISpellHandlerModule"/> types (<see cref="SpellHandlerModules.Discover(System.Reflection.Assembly)"/>).</summary>
+    public IReadOnlyList<Type> SpellHandlerTypes { get; init; } = [];
+
     public bool HasCreatureAi => AiEntries.Count != 0 || AiNames.Count != 0;
 
     public bool HasEventAi => EventAiEvents.Count != 0 || EventAiActions.Count != 0;
 
-    public bool IsEmpty => !HasCreatureAi && Hooks.Count == 0 && SpellScripts.Count == 0 && InstanceScripts.Count == 0 && !HasEventAi;
+    public bool IsEmpty => !HasCreatureAi && Hooks.Count == 0 && SpellScripts.Count == 0 && InstanceScripts.Count == 0 && !HasEventAi && SpellHandlerTypes.Count == 0;
 }
 
 internal sealed class CollectingAiRegistry : ICreatureAiRegistry
@@ -132,6 +136,7 @@ public sealed class ModuleGameSeams
     private readonly Func<SpellScriptRegistry?> _spellScripts;
     private readonly Func<InstanceScriptRegistry?> _instanceScripts;
     private readonly Func<EventAiRegistry?> _eventAi;
+    private readonly Func<SpellSystem?> _spellHandlers;
     private readonly EventAiRespawnPolicy _eventAiRespawn;
     private readonly Func<Task>? _waitBetweenEventAiBatches;
     private readonly Lock _eventAiGate = new();
@@ -155,6 +160,7 @@ public sealed class ModuleGameSeams
     /// <param name="spellScripts">The live spell script registry; omitted or returning null, a module with a spell script is rejected.</param>
     /// <param name="instanceScripts">The instance script registry the instance manager creates instance data from; omitted or null rejects a module with an instance script.</param>
     /// <param name="eventAi">The EventAI handler registry running creatures use; omitted or null rejects a module with an EventAI handler.</param>
+    /// <param name="spellHandlers">The live spell system a module's <see cref="ISpellHandlerModule"/> types are applied to; omitted or returning null, a module with a handler module is rejected.</param>
     /// <param name="eventAiRespawn">How fast creatures bound to a changed EventAI event handler are respawned (default <see cref="EventAiRespawnPolicy.Default"/>).</param>
     /// <param name="waitBetweenEventAiBatches">Replaces the delay between EventAI respawn batches (tests).</param>
     public ModuleGameSeams(
@@ -169,8 +175,10 @@ public sealed class ModuleGameSeams
         Func<InstanceScriptRegistry?>? instanceScripts = null,
         Func<EventAiRegistry?>? eventAi = null,
         EventAiRespawnPolicy? eventAiRespawn = null,
-        Func<Task>? waitBetweenEventAiBatches = null)
+        Func<Task>? waitBetweenEventAiBatches = null,
+        Func<SpellSystem?>? spellHandlers = null)
     {
+        _spellHandlers = spellHandlers ?? (static () => null);
         _eventAiRespawn = eventAiRespawn ?? EventAiRespawnPolicy.Default;
         _waitBetweenEventAiBatches = waitBetweenEventAiBatches;
         _spellScripts = spellScripts ?? (static () => null);
@@ -280,6 +288,22 @@ public sealed class ModuleGameSeams
             }
         }
 
+        if (old.SpellHandlerTypes.Count != 0 || added.SpellHandlerTypes.Count != 0)
+        {
+            SpellSystem? handlers = _spellHandlers();
+            if (handlers is null)
+            {
+                if (added.SpellHandlerTypes.Count != 0)
+                {
+                    return "spell handler modules are not available on this server";
+                }
+            }
+            else if (handlers.ValidateModuleSwap(old.SpellHandlerTypes, added.SpellHandlerTypes) is { } handlerError)
+            {
+                return handlerError;
+            }
+        }
+
         return null;
     }
 
@@ -347,6 +371,16 @@ public sealed class ModuleGameSeams
         }
 
         inject?.Invoke(SwapSlots.EventAi);
+
+        if ((old.SpellHandlerTypes.Count != 0 || added.SpellHandlerTypes.Count != 0)
+            && Required(_spellHandlers(), added.SpellHandlerTypes.Count != 0, "the spell system") is { } handlers)
+        {
+            SpellSystem.ModuleCheckpoint saved = handlers.SaveModules();
+            undo.Add(SwapSlots.SpellHandlers, () => handlers.RestoreModules(saved));
+            handlers.CommitModuleSwap(old.SpellHandlerTypes, added.SpellHandlerTypes); // throws when a new module replaces an installed handler
+        }
+
+        inject?.Invoke(SwapSlots.SpellHandlers);
     }
 
     /// <summary>The registry, or null when it is gone and the slot only removes; throws when it is gone and the slot adds.</summary>

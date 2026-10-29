@@ -68,6 +68,7 @@ public sealed partial class GuildManager
             return;
         }
 
+        Npc.InteractingCancels?.Invoke(player); // vmangos HandleTabardVendorActivateOpcode, NPCHandler.cpp:58-59
         player.Session.Send(WorldOpcode.MsgTabardvendorActivate, GuildEmblemPackets.BuildTabardVendorActivate(npc));
     }
 

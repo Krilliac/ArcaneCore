@@ -82,7 +82,7 @@ internal readonly record struct PlayerbotBattlegroundFacts
     /// <summary>The instance the bot is invited to for the type (0: none).</summary>
     public uint InvitedInstance { get; init; }
 
-    /// <summary>The invited match already holds <c>MaxBotsPerBattleground</c> bots (<see cref="PlayerbotBattlegroundDemand.MustDecline"/>).</summary>
+    /// <summary>The invited match already holds the effective cap of bots (<c>MaxBotsPerBattleground</c>, raised for a type whose template minimum needs more; <see cref="PlayerbotBattlegroundDemand.MustDecline"/>).</summary>
     public bool MatchHoldsCap { get; init; }
 
     /// <summary>The bot waited <c>MaxQueueWaitMinutes</c> in the queue.</summary>

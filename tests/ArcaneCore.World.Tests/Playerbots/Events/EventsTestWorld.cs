@@ -101,6 +101,7 @@ internal sealed class EventsTestWorld : IAsyncDisposable
             services.AddSingleton<ICreatureDataStore>(content);
             services.AddSingleton<IQuestContentStore>(content);
             services.AddSingleton<IGameEventDataStore>(content);
+            services.AddSingleton<ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore>(new ShippedHolidayFlavourStore());
             services.AddSingleton<IOptions<PlayerbotOptions>>(Microsoft.Extensions.Options.Options.Create(options));
         });
         await world.UseFlatFloorAsync();

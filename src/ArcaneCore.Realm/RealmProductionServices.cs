@@ -30,6 +30,7 @@ public static class RealmProductionServices
         services.Configure<RealmConsoleOptions>(configuration.GetSection(RealmConsoleOptions.SectionName));
         services.TryAddSingleton(_ => ConsoleInputSource.Default());
         services.TryAddSingleton(TimeProvider.System);
+        services.AddHostedService<SupervisedChildDrain>(); // a child of the cluster host supervisor stops gracefully on its stdin "drain" line or EOF
         services.AddHostedService<RealmConsole>(); // typed commands at the console window, off when stdin is redirected (docs/areas/server-console.md)
         services.AddRealmWatchdog(configuration);
         // Ops:Metrics, off by default (docs/ops/metrics.md). The Realm role binds Ops:Metrics:RealmPrometheusPrefix (default port 9465),

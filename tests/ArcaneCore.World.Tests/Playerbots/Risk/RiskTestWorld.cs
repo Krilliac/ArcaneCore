@@ -10,6 +10,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Tests.Playerbots.Risk;
@@ -58,14 +59,23 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     /// above its retreat threshold now and then.
     /// </param>
     /// <param name="dataDirectory">A map data directory (its <c>maps</c> folder holds terrain tiles the test wrote); null: no terrain data.</param>
+    /// <param name="spellRandom">
+    /// The spell system's rolls (spell hit and resist, SpellCombatRules.SpellHitResult; dispel, feign and heartbeat breaks). Default: a
+    /// <see cref="Random"/> on a fixed seed, for the reason <paramref name="dice"/> has one: on <see cref="Random.Shared"/> a 1-in-25 resist of
+    /// the kite's first Hamstring cost the warrior a global cooldown and shifted its whole kite 1.5 s later (PlayerbotKiteRangedWorldTests).
+    /// </param>
+    /// <param name="clockStartMs">
+    /// The manual clock's first reading (<see cref="WorldRuntime.UseManualClockFrom"/>); null: the wall-clock time the set-up took
+    /// (<see cref="WorldRuntime.UseManualClock"/>), so the phase of the spell batch window against the think tick differs between runs.
+    /// </param>
     public static async Task<RiskTestWorld> StartAsync(Action<PlayerbotOptions>? configure = null, CreatureAiContent? ai = null,
-        bool aggroOnSight = false, ICombatRandom? dice = null, string? dataDirectory = null)
+        bool aggroOnSight = false, ICombatRandom? dice = null, string? dataDirectory = null, Random? spellRandom = null, long? clockStartMs = null)
     {
         WorldTestHost host = WorldTestHost.Start(configure: dataDirectory is null ? null : options => options.Maps.DataDirectory = dataDirectory,
             configureServices: services =>
         {
             if (ai is not null) services.AddSingleton<ICreatureDataStore>(new AiStore(ai));
-            services.AddSingleton<IWorldFeature, ManualClock>();
+            services.AddSingleton<IWorldFeature>(new ManualClock(clockStartMs));
             services.AddSingleton(new FactionTemplateCatalog(
             [
                 new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 12),   // human player
@@ -82,6 +92,7 @@ internal sealed class RiskTestWorld : IAsyncDisposable
         {
             Player player = session.Player!;
             player.Map!.Combat.Random = dice ?? new SeededDice(7);
+            session.Services.GetRequiredService<SpellFeature>().System.Random = spellRandom ?? new Random(7);
             WorldCollision.Of(host.World).Install(lineOfSight: new FlatGround(player.Z));
             if (player.Map!.FindUpdater<CreatureMapSystem>() is { } existing)
                 return aggroOnSight ? throw new InvalidOperationException("the map already has a creature system: aggroOnSight cannot apply") : existing;
@@ -124,10 +135,16 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     public Task<T> OnWorldAsync<T>(Func<T> action) => Host.OnWorldAsync(action);
 
     /// <summary>Spawned creatures become visible to the bot on the next world update.</summary>
+    /// <remarks>
+    /// The waiting ticks move no game time (<c>AdvanceClockAsync(0)</c>: one whole tick, map update included, with a zero diff). The look
+    /// is a world command, and a command posted while the world thread is still running the spawn's tick's commands runs in that same
+    /// drain, before the map update that shows the spawn; that happens or not with thread-pool timing, so a wait that advanced a think's
+    /// 100 ms moved a pinned clock (a kite test's phase 350 started at 50 on hosted CI, RiskTestWorldClockTests).
+    /// </remarks>
     public async Task SeeAsync(params Creature[] creatures)
     {
         for (int i = 0; i < 20 && !await OnWorldAsync(() => creatures.All(c => Player.VisibleObjects.Contains(c.Guid))); i++)
-            await Host.World.AdvanceClockAsync(ThinkMs);
+            await Host.World.AdvanceClockAsync(0);
         if (!await OnWorldAsync(() => creatures.All(c => Player.VisibleObjects.Contains(c.Guid))))
             throw new InvalidOperationException("the bot does not see the spawned creatures");
     }
@@ -182,9 +199,13 @@ internal sealed class RiskTestWorld : IAsyncDisposable
             => Task.FromResult(new CreatureContent([], [], [], [], [], ai));
     }
 
-    private sealed class ManualClock : IWorldFeature
+    private sealed class ManualClock(long? startMs) : IWorldFeature
     {
-        public void Attach(WorldRuntime world) => world.UseManualClock();
+        public void Attach(WorldRuntime world)
+        {
+            if (startMs is { } start) world.UseManualClockFrom(start);
+            else world.UseManualClock();
+        }
     }
 
     private sealed class FlatGround(float z) : ILineOfSight

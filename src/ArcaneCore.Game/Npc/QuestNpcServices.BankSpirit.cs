@@ -95,6 +95,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player); // vmangos HandleSpiritHealerActivateOpcode, NPCHandler.cpp:425-426
         Deps.Resurrection?.ResurrectAtSpiritHealer(player);
     }
 
