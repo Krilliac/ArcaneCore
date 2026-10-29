@@ -1,7 +1,9 @@
 using System.Globalization;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
+using ArcaneCore.Realm.Protocol;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -19,7 +21,7 @@ namespace ArcaneCore.Realm.Ops.ServerConsole;
 /// </para>
 /// </summary>
 public sealed class RealmConsoleCommands(
-    IServiceScopeFactory scopes, Func<int> activeSessions, TimeProvider time, IHostApplicationLifetime lifetime)
+    IServiceScopeFactory scopes, Func<int> activeSessions, TimeProvider time, IHostApplicationLifetime lifetime, RealmLivenessOptions? liveness = null)
 {
     /// <summary>The prefix of every output line.</summary>
     public const string Prefix = "[console] ";
@@ -27,6 +29,7 @@ public sealed class RealmConsoleCommands(
     private readonly IServiceScopeFactory _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
     private readonly Func<int> _activeSessions = activeSessions ?? throw new ArgumentNullException(nameof(activeSessions));
     private readonly TimeProvider _time = time ?? throw new ArgumentNullException(nameof(time));
+    private readonly RealmLivenessOptions _liveness = liveness ?? new RealmLivenessOptions();
     private readonly IHostApplicationLifetime _lifetime = lifetime ?? throw new ArgumentNullException(nameof(lifetime));
     private readonly DateTimeOffset _started = (time ?? throw new ArgumentNullException(nameof(time))).GetUtcNow();
 
@@ -102,10 +105,14 @@ public sealed class RealmConsoleCommands(
     {
         IReadOnlyList<RealmEntry> realms = await LoadRealmsAsync(cancellationToken).ConfigureAwait(false);
         say($"{realms.Count} realm(s)");
+        DateTimeOffset now = _time.GetUtcNow();
         foreach (RealmEntry realm in realms)
         {
+            // What a client below the realm's lock level is sent, now (RealmListProjection); flags is what the row stores.
+            RealmView view = RealmListProjection.Evaluate(realm, AccountSecurity.Player, now, _liveness);
+            string beat = view.HeartbeatAge is { } age ? string.Create(CultureInfo.InvariantCulture, $"{age.TotalSeconds:0}s ago") : "none";
             say(string.Create(CultureInfo.InvariantCulture,
-                $"id {realm.Id}  {realm.Name}  {realm.Address}  type {realm.Type}  flags {realm.Flags}  population {realm.Population:0.##}  category {realm.Category}"));
+                $"id {realm.Id}  {realm.Name}  {realm.Address}  type {realm.Type}  flags {realm.Flags}  population {realm.Population:0.##}  category {realm.Category}  state {realm.State}  heartbeat {beat}  wire {view.Flags}  lock {realm.AllowedSecurityLevel}"));
         }
     }
 

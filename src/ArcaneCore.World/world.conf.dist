@@ -19387,6 +19387,23 @@ World.Playerbots.Qa.TickHangWarmupMinutes = 5
 #----------------------------------------------------------------------------
 
 #
+#    World.Realm.HeartbeatIntervalSeconds
+#        Description: Seconds between the heartbeats this world writes into its realm-list row while
+#                     its loop is ticking (ArcaneCore-specific; vmangos has no liveness check). The
+#                     logon daemon shows the realm offline once the last beat is older than
+#                     Realm:Liveness:HeartbeatStaleSeconds (default 60, which must be at least three
+#                     times this interval). A beat is written only if the world loop started a tick
+#                     since the last one, so a hung or stalled loop stops beating while the process
+#                     is still up. Needs World:Realm:Id above 0.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldrealm
+#
+World.Realm.HeartbeatIntervalSeconds = 10
+
+#
 #    World.Realm.Id
 #        Description: The realm-list id this world serves (vmangos RealmID; mangosd.conf.dist.in
 #                     ships 1). The world clears its Offline flag at start and sets it at a clean

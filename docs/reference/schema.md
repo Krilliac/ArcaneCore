@@ -9,7 +9,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 
 | Component | Current version | Version-1 base tables |
 |---|---|---|
-| `auth` | 6 | `account`, `realmlist` |
+| `auth` | 7 | `account`, `realmlist` |
 | `characters` | 66 | `characters` |
 | `world` | 59 | `player_create_info`, `race_info`, `class_info` |
 
@@ -22,6 +22,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 4 | `Auth.Playerbots.ManagedPlayerbotProvisionDataModule` | creates `managed_playerbot_provision` |
 | 5 | `Auth.AccountLoginSecurityDataModule` | adds columns `account.LockFlags`, `account.SecurityInfo`, `account.LastIp` |
 | 6 | `Auth.AccountLoginInfoDataModule` | adds columns `account.LastLoginUtc`, `account.LastOs`, `account.LastPlatform`, `account.LastLocale`, `account.LastBuild` |
+| 7 | `Auth.RealmLivenessDataModule` | creates `realmcharacters`; adds columns `realmlist.State`, `realmlist.HeartbeatUtc`, `realmlist.AllowedSecurityLevel` |
 
 ## `characters`
 

@@ -66,6 +66,41 @@ public sealed class LogonHandshakeTests
     }
 
     [Fact]
+    public async Task RealmListPacket_CarriesOfflineForStaleRow()
+    {
+        var now = new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero);
+        var realms = new InMemoryRealmStore([
+            new RealmEntry { Id = 1, Name = "Fresh", Address = "127.0.0.1:8085", State = RealmRuntimeState.Online, HeartbeatUtc = now.UtcDateTime.AddSeconds(-5) },
+            new RealmEntry { Id = 2, Name = "Hung", Address = "127.0.0.1:8086", State = RealmRuntimeState.Online, HeartbeatUtc = now.UtcDateTime.AddSeconds(-120), Flags = RealmFlags.NewPlayers },
+            new RealmEntry { Id = 3, Name = "Restarting", Address = "127.0.0.1:8087", State = RealmRuntimeState.Restarting, HeartbeatUtc = now.UtcDateTime.AddSeconds(-1) },
+        ]);
+
+        List<WireRealm> rows = await ReadRealmListAsync(realms, new FrozenClock(now.ToUnixTimeSeconds()), counts: null, accountId: 0);
+
+        Assert.Equal(RealmFlags.None, rows[0].Flags);
+        Assert.Equal(RealmFlags.NewPlayers | RealmFlags.Offline, rows[1].Flags);
+        Assert.Equal(RealmFlags.Invalid, rows[2].Flags);
+    }
+
+    [Fact]
+    public async Task RealmListPacket_CarriesCharacterCount()
+    {
+        var now = new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero);
+        var realms = new InMemoryRealmStore([
+            new RealmEntry { Id = 1, Name = "One", Address = "127.0.0.1:8085" },
+            new RealmEntry { Id = 2, Name = "Two", Address = "127.0.0.1:8086" },
+        ]);
+        var counts = new InMemoryCountStore();
+        await counts.SetCountAsync(1, 7, 2);
+        await counts.SetCountAsync(1, 8, 9); // another account's count is not this account's
+
+        List<WireRealm> rows = await ReadRealmListAsync(realms, new FrozenClock(now.ToUnixTimeSeconds()), counts, accountId: 7);
+
+        Assert.Equal(2, rows[0].Characters);
+        Assert.Equal(0, rows[1].Characters);
+    }
+
+    [Fact]
     public async Task UnknownAccount_AutocreatesWhenPasswordEqualsUsername()
     {
         var accounts = new InMemoryAccountStore();
@@ -285,7 +320,7 @@ public sealed class LogonHandshakeTests
 
     private static async Task<NetworkStream> StartSessionAsync(
         IAccountStore accounts, IRealmStore realms, bool autocreate, AuthOptions? options = null,
-        string endpoint = "test", TimeProvider? clock = null)
+        string endpoint = "test", TimeProvider? clock = null, RealmLivenessOptions? liveness = null, IRealmCharacterCountStore? counts = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -299,13 +334,74 @@ public sealed class LogonHandshakeTests
             var session = new LogonSession(
                 stream, accounts, realms,
                 options ?? new AuthOptions { AutocreateAccounts = autocreate },
-                NullLogger.Instance, endpoint, timeProvider: clock);
+                NullLogger.Instance, endpoint, timeProvider: clock, liveness: liveness, characterCounts: counts);
             await session.RunAsync(CancellationToken.None);
         });
 
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port);
         return client.GetStream();
+    }
+
+    private static async Task<List<WireRealm>> ReadRealmListAsync(
+        InMemoryRealmStore realms, TimeProvider clock, IRealmCharacterCountStore? counts, int accountId)
+    {
+        byte[] salt = WowSrp6.GenerateSalt();
+        BigInteger verifier = WowSrp6.ComputeVerifier(salt, Username, Password);
+        var accounts = new InMemoryAccountStore();
+        await accounts.CreateAsync(new Account
+        {
+            Id = accountId,
+            Username = Username,
+            Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(verifier, WowSrp6.KeyLength),
+        });
+
+        await using NetworkStream client = await StartSessionAsync(accounts, realms, autocreate: false, clock: clock, counts: counts);
+        await SendAsync(client, BuildChallenge(Username, Password));
+        ChallengeReply challenge = await ReadChallengeReplyAsync(client);
+        ClientSession session = ClientSession.Compute(Username, Password, salt, challenge.B);
+        await SendAsync(client, BuildProof(session));
+        ProofReply proof = await ReadProofReplyAsync(client);
+        Assert.Equal((byte)AuthResult.Success, proof.Result);
+        await SendAsync(client, BuildRealmListRequest());
+
+        byte[] head = await ReadExactAsync(client, 3);
+        byte[] body = await ReadExactAsync(client, BinaryPrimitives.ReadUInt16LittleEndian(head.AsSpan(1, 2)));
+        int count = body[4];
+        int offset = 5;
+        var rows = new List<WireRealm>();
+        for (int i = 0; i < count; i++)
+        {
+            offset += 4; // type
+            var flags = (RealmFlags)body[offset++];
+            int nameEnd = Array.IndexOf(body, (byte)0, offset);
+            string name = Encoding.ASCII.GetString(body, offset, nameEnd - offset);
+            offset = nameEnd + 1;
+            offset = Array.IndexOf(body, (byte)0, offset) + 1; // address
+            offset += 4; // population
+            byte characters = body[offset++];
+            offset += 2; // category, unused
+            rows.Add(new WireRealm(name, flags, characters));
+        }
+
+        return rows;
+    }
+
+    private sealed record WireRealm(string Name, RealmFlags Flags, byte Characters);
+
+    private sealed class InMemoryCountStore : IRealmCharacterCountStore
+    {
+        private readonly Dictionary<(int Realm, int Account), int> _counts = [];
+
+        public Task<IReadOnlyDictionary<int, int>> GetCountsAsync(int accountId, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyDictionary<int, int>>(_counts.Where(c => c.Key.Account == accountId).ToDictionary(c => c.Key.Realm, c => c.Value));
+
+        public Task SetCountAsync(int realmId, int accountId, int count, CancellationToken cancellationToken = default)
+        {
+            _counts[(realmId, accountId)] = count;
+            return Task.CompletedTask;
+        }
     }
 
     // --- request builders --------------------------------------------------------

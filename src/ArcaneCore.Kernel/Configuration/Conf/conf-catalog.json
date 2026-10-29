@@ -8440,6 +8440,41 @@
       "isCollection": false
     },
     {
+      "path": "Realm:Liveness:HeartbeatStaleSeconds",
+      "section": "Realm:Liveness",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "60",
+      "defaultEntries": [],
+      "daemons": "Realm",
+      "reload": "start",
+      "meaning": "Seconds without a heartbeat after which a world that claims to be running is shown offline. Default 60. Must be at least three times `World:Realm:HeartbeatIntervalSeconds` (a missed beat or two never flips the realm) and above five times `Ops:Watchdog:TickMonitor:HangMs` in seconds (a slow tick is a hang for the watchdog long before it is an outage here). 0 turns the heartbeat check off (the state and the lock level still apply).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#realmliveness",
+      "isCollection": false
+    },
+    {
+      "path": "Realm:Liveness:RestartingAs",
+      "section": "Realm:Liveness",
+      "type": "RestartingRealmDisplay",
+      "kind": "scalar",
+      "elementType": "RestartingRealmDisplay",
+      "enumValues": [
+        "Invalid",
+        "Offline"
+      ],
+      "default": "Invalid",
+      "defaultEntries": [],
+      "daemons": "Realm",
+      "reload": "start",
+      "meaning": "What a realm shows while its world counts down to a restart and still serves: `Invalid` (red name, still selectable, the retail-emulator convention, unverified in the 1.12.1 client binary) or `Offline` (grey, not selectable). Default Invalid. Values: `Invalid`, `Offline`.",
+      "allowed": "Invalid | Offline",
+      "docs": "docs/reference/configuration.md#realmliveness",
+      "isCollection": false
+    },
+    {
       "path": "Realms:Seed",
       "section": "Realms",
       "type": "List<RealmSeedEntry>",
@@ -24119,6 +24154,22 @@
       "meaning": "Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
+      "path": "World:Realm:HeartbeatIntervalSeconds",
+      "section": "World:Realm",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "10",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Seconds between the heartbeats this world writes into its realm-list row while its loop is ticking (ArcaneCore-specific; vmangos has no liveness check). The logon daemon shows the realm offline once the last beat is older than `Realm:Liveness:HeartbeatStaleSeconds` (default 60, which must be at least three times this interval). A beat is written only if the world loop started a tick since the last one, so a hung or stalled loop stops beating while the process is still up. Needs `World:Realm:Id` above 0.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldrealm",
       "isCollection": false
     },
     {
