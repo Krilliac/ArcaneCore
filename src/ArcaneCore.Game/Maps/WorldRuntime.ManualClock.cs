@@ -11,7 +11,6 @@ public sealed partial class WorldRuntime
     // Manual clock (test seam, see UseManualClock): game time advances only through AdvanceClockAsync.
     private bool _manualClock;
     private uint _manualStepMs;
-    private long _manualNowMs;
     private long _manualTick; // world thread only
     private readonly List<ManualAdvance> _manualAdvances = []; // world thread only
 
@@ -19,12 +18,15 @@ public sealed partial class WorldRuntime
     /// Milliseconds since the world started, wrapping like vmangos WorldTimer::getMSTime.
     /// This is the clock movement timestamps and create blocks carry.
     /// </summary>
-    public uint NowMs => _manualClock
-        ? unchecked((uint)Interlocked.Read(ref _manualNowMs))
-        : unchecked((uint)_clock.ElapsedMilliseconds);
+    public uint NowMs => Clock.NowMs;
 
     /// <summary>Time since the world was created (does not wrap, unlike <see cref="NowMs"/>).</summary>
-    public TimeSpan Uptime => _manualClock ? TimeSpan.FromMilliseconds(Interlocked.Read(ref _manualNowMs)) : _clock.Elapsed;
+    public TimeSpan Uptime => TimeSpan.FromMilliseconds(Clock.ElapsedMs);
+
+    /// <summary>
+    /// The world's game clock: tick number, tick-start milliseconds, game UTC. <see cref="NowMs"/> and <see cref="Uptime"/> forward to it.
+    /// </summary>
+    public WorldClock Clock { get; }
 
     /// <summary>Whether <see cref="UseManualClock"/> froze the simulation clock.</summary>
     public bool IsManualClock => _manualClock;
@@ -37,15 +39,53 @@ public sealed partial class WorldRuntime
     /// never do). Otherwise the world thread ticks every <see cref="WorldRuntimeOptions.TickIntervalMs"/> of wall time with a zero diff,
     /// so sessions and <see cref="InvokeAsync{T}"/> keep working while the simulation stands still. Call before <see cref="Start"/>.
     /// </summary>
-    public void UseManualClock(uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs: null);
+    public void UseManualClock(uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs: null, startUtc: null);
 
     /// <summary>
     /// <see cref="UseManualClock"/> starting at <paramref name="startAtMs"/> instead of the wall-clock reading so far, for tests
     /// that compare whole runs (the reading so far depends on how long the set-up took, so every timestamp of a run would shift).
     /// </summary>
-    public void UseManualClockFrom(long startAtMs, uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs);
+    public void UseManualClockFrom(long startAtMs, uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs, startUtc: null);
 
-    private void UseManualClockCore(uint stepMs, long? startAtMs)
+    /// <summary>
+    /// <see cref="UseManualClockFrom(long, uint)"/> that also pins game UTC (<see cref="WorldClock.UtcNow"/>) to
+    /// <paramref name="startUtc"/> at <paramref name="startAtMs"/>, so wall-date logic is reproducible.
+    /// </summary>
+    public void UseManualClockFrom(long startAtMs, DateTimeOffset? startUtc, uint stepMs = 50) => UseManualClockCore(stepMs, startAtMs, startUtc);
+
+    /// <summary>
+    /// Opt-in deterministic clock for callers that drive <see cref="RunTick(uint)"/> directly (no world thread, so <see cref="Start"/> refuses):
+    /// every tick advances <see cref="NowMs"/>, <see cref="Uptime"/> and game UTC by exactly its diff, from <paramref name="startAtMs"/>.
+    /// Call before the first tick.
+    /// </summary>
+    public void UseSteppedClock(long startAtMs = 0, DateTimeOffset? startUtc = null)
+    {
+        if (_thread is not null || _manualClock)
+        {
+            throw new InvalidOperationException("the stepped clock must be chosen before the world starts and excludes the manual clock");
+        }
+
+        Clock.UseGameDriven(WorldClockMode.Stepped, startAtMs, startUtc);
+    }
+
+    /// <summary>
+    /// Manual clock only: run exactly <paramref name="ticks"/> ticks of the configured step (a zero count is a barrier: it completes
+    /// after one zero-diff tick, once everything queued before it has run). Completes on the world thread after the last tick.
+    /// </summary>
+    public Task AdvanceTicksAsync(int ticks)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(ticks);
+        if (!_manualClock)
+        {
+            throw new InvalidOperationException("the world clock is not manual");
+        }
+
+        long ms = (long)ticks * _manualStepMs;
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(ms, (long)uint.MaxValue, nameof(ticks));
+        return AdvanceClockAsync((uint)ms);
+    }
+
+    private void UseManualClockCore(uint stepMs, long? startAtMs, DateTimeOffset? startUtc)
     {
         if (_thread is not null)
         {
@@ -59,7 +99,7 @@ public sealed partial class WorldRuntime
 
         _manualStepMs = stepMs;
         // Continue from the current reading, so values cached by features that attached earlier never run backwards.
-        Interlocked.Exchange(ref _manualNowMs, startAtMs ?? _clock.ElapsedMilliseconds);
+        Clock.UseGameDriven(WorldClockMode.Manual, startAtMs ?? _clock.ElapsedMilliseconds, startUtc);
         _manualClock = true;
     }
 

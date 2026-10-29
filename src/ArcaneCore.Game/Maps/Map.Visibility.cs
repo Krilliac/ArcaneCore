@@ -434,7 +434,12 @@ public sealed partial class Map
     private bool ShouldScanVisibleSet(Player player)
     {
         VisibleSetCheckState state = _visibleSetChecks.GetOrCreateValue(player);
-        state.Updates++;
+        // Deterministic clock: a zero-diff (idle or held) tick is not an update, so the backstop does not depend on wall-time wakes.
+        if (!_world.Clock.IsDeterministic || _world.Clock.DiffMs > 0)
+        {
+            state.Updates++;
+        }
+
         if (state.Epoch == _removalEpoch && state.Updates % VisibleSetBackstopInterval != 0)
         {
             return false;
