@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Tests;
 public sealed class WorldTestHostManualClockTests
 {
     [Fact]
-    public async Task ASentPacket_IsAnsweredAfterTheBarrierAndOneStep_AndTheStepIsExactlyOneStepOfGameTime()
+    public async Task ASentPacket_IsAnsweredByAStep_AndTheStepAdvancesExactlyOneStepOfGameTime()
     {
         await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual());
         WorldTestClient client = await host.EnterWorldAsync("clockacct", "Clocky");
@@ -16,7 +16,7 @@ public sealed class WorldTestHostManualClockTests
         long gameBefore = host.World.Clock.ElapsedMs;
 
         await client.SendAsync(WorldOpcode.CmsgPlayedTime, []);
-        await host.StepAsync(1); // the barrier waits for the packet to arrive, then the step handles it
+        await host.StepAsync(1); // delivery barrier, then one step. The reply would also come from the zero-diff wall wakes of the manual world, so this does not pin the barrier itself
 
         await client.ReadUntilAsync(WorldOpcode.SmsgPlayedTime);
         Assert.Equal(gameBefore + 50, host.World.Clock.ElapsedMs);
