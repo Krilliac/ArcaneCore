@@ -26,6 +26,7 @@ public sealed partial class GroupManager(SocialContext context)
     private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingPetAuras = [];
     private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingAuras = [];
     private uint _nextId = 1;
+    private readonly Dictionary<ObjectGuid, long> _readyAnswerAt = [];
 
     /// <summary>
     /// Optional durable block allocator for group IDs when cluster ID range reservation is enabled.
@@ -50,6 +51,9 @@ public sealed partial class GroupManager(SocialContext context)
 
     /// <summary>Clock seam for deterministic offline-leader tests; world time in Unix seconds.</summary>
     internal Func<long> UnixSecondsClock { get; set; } = static () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+    /// <summary>Monotonic millisecond clock seam for the ready-check answer rate limit.</summary>
+    internal Func<long> MillisecondsClock { get; set; } = Kernel.Logging.Clock.Milliseconds;
 
     /// <summary>A member was added; the first is the leader when the group is created (world thread; instance binds follow it).</summary>
     public event Action<Group, ObjectGuid>? MemberAdded;
@@ -591,13 +595,48 @@ public sealed partial class GroupManager(SocialContext context)
         {
             if (group.IsLeaderOrAssistant(player.Guid))
             {
+                foreach (GroupMemberSlot member in group.Members)
+                {
+                    _readyAnswerAt.Remove(member.Guid); // a new check: every member may answer at once
+                }
+
                 Broadcast(group, WorldOpcode.MsgRaidReadyCheck, []);
             }
         }
-        else if (context.World.FindOnlinePlayer(group.LeaderGuid) is { } leader)
+        else if (AdmitReadyAnswer(player.Guid) && context.World.FindOnlinePlayer(group.LeaderGuid) is { } leader)
         {
             leader.Session.Send(WorldOpcode.MsgRaidReadyCheck, GroupPackets.BuildReadyCheckResponse(player.Guid, answer.Value));
         }
+    }
+
+    /// <summary>
+    /// vmangos forwards every answer to the leader, pending check or not (GroupHandler.cpp HandleRaidReadyCheckOpcode), so answers are
+    /// still forwarded, but at most one per member per World:Social:ReadyCheckAnswerIntervalMs, so a member cannot spam the leader.
+    /// </summary>
+    private bool AdmitReadyAnswer(ObjectGuid member)
+    {
+        int interval = context.Options.ReadyCheckAnswerIntervalMs;
+        if (interval <= 0)
+        {
+            return true;
+        }
+
+        long now = MillisecondsClock();
+        if (_readyAnswerAt.TryGetValue(member, out long last) && now - last < interval)
+        {
+            return false;
+        }
+
+        if (_readyAnswerAt.Count >= 4096)
+        {
+            foreach (ObjectGuid stale in _readyAnswerAt.Where(e => now - e.Value >= interval).Select(e => e.Key).ToList())
+            {
+                _readyAnswerAt.Remove(stale);
+            }
+        }
+
+        _readyAnswerAt[member] = now;
+        return true;
     }
 
     /// <summary>

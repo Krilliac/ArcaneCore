@@ -17,7 +17,8 @@ namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
 /// The trainers and vendors a bot saves for, read once from the world data: class trainers by class, Mounts trainers by race, and the
-/// vendors that stock a mount (<see cref="PlayerbotMountRules.IsMountItem"/>) with each of their mounts. One index serves every bot of
+/// vendors that stock a mount (<see cref="PlayerbotMountRules.IsMountItem"/>) with each of their mounts, plus every item entry any vendor with a spawn stocks (<see cref="IsVendorStocked"/>; the auction house bot
+/// never buys those at the house). One index serves every bot of
 /// a world (a bot asks it; nothing is copied per bot) and is rebuilt only when the creature content, its definitions version, the NPC
 /// template overrides or the spell table change. Built lazily on the first ask, on the world thread, never per think: the rows are the
 /// imported <c>npc_trainer</c> / <c>npc_vendor</c> rows and the creature spawns, so no world-DB query is made.
@@ -61,6 +62,14 @@ internal sealed class PlayerbotServiceIndex
 
     /// <summary>Distinct vendors of <see cref="MountOffers"/> (tests and inspection).</summary>
     internal int MountVendorCount { get; private set; }
+
+    private readonly HashSet<uint> _vendorStocked = [];
+
+    /// <summary>Whether any vendor creature template with at least one spawn stocks item <paramref name="entry"/> (any item, not only mounts).</summary>
+    internal bool IsVendorStocked(uint entry) => _vendorStocked.Contains(entry);
+
+    /// <summary>How many distinct item entries <see cref="IsVendorStocked"/> is true for (tests and inspection).</summary>
+    internal int VendorStockedCount => _vendorStocked.Count;
 
     /// <summary>Class trainers of one class that teach something, the one with most offers first (the entry breaks ties).</summary>
     internal IReadOnlyList<Site> ClassTrainers(byte @class) => _classTrainers.TryGetValue(@class, out Site[]? sites) ? sites : None;
@@ -130,13 +139,15 @@ internal sealed class PlayerbotServiceIndex
             }
 
             if ((flags & NpcFlags.Vendor) == 0) continue;
+            IReadOnlyList<VendorItem> stock = services.Npcs.VendorItems(template.Entry);
+            if (stock.Count == 0 || Spawns(template.Entry) is not { Length: > 0 } vendorSpawns) continue;
             Site? vendorSite = null;
-            foreach (VendorItem item in services.Npcs.VendorItems(template.Entry))
+            foreach (VendorItem item in stock)
             {
+                _vendorStocked.Add(item.Item);
                 if (items.Find(item.Item) is not { } itemTemplate || !PlayerbotMountRules.IsMountItem(itemTemplate, _store)) continue;
                 if (vendorSite is null)
                 {
-                    if (Spawns(template.Entry) is not { Length: > 0 } vendorSpawns) break;
                     vendorSite = new Site(template.Entry, TrainerType.Class, 0, 0, template.Faction, factionId, 0, vendorSpawns);
                     vendorCount++;
                 }

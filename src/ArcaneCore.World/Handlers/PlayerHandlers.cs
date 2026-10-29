@@ -132,9 +132,10 @@ public sealed class PlayerHandlers : IOpcodeHandlerGroup
         bool accepted = summons is not null
             ? summons.Charms.HandleSetActiveMover(player, guid, summons)
             : guid.IsEmpty || guid == player.Guid;
-        if (!accepted)
+        if (!accepted && ClientWarningGates.TryEnter(session, "active-mover", out int suppressed))
         {
-            session.Logger.LogWarning("[{Endpoint}] active mover 0x{Guid:X16} is not the mover of {Player}", session.RemoteEndpoint, guid.Value, player.Name);
+            session.Logger.LogWarning("[{Endpoint}] active mover 0x{Guid:X16} is not the mover of {Player} ({Suppressed} more since the last line)",
+                session.RemoteEndpoint, guid.Value, player.Name, suppressed);
         }
     }
 }

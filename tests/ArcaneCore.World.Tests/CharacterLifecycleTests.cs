@@ -1,6 +1,10 @@
 using System.Buffers.Binary;
 using System.Text;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Maps.Terrain;
+using ArcaneCore.Game.Tests.GridTerrain;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Protocol;
 using Xunit;
 
@@ -99,6 +103,60 @@ public sealed class CharacterLifecycleTests
         Assert.Equal(WorldOpcode.SmsgCharacterLoginFailed, op);
         Assert.Equal((byte)CharResult.CharLoginNoCharacter, payload[0]);
     }
+
+    /// <summary>
+    /// An underground city (Undercity lies about 100 yards under Tirisfal) on a map with terrain but no vmaps: the server used to snap a
+    /// living, non-falling player to the terrain surface on its first movement block and save that, so the relog put the character
+    /// somewhere the client never was. The position must survive the round trip exactly.
+    /// </summary>
+    [Fact]
+    public async Task UndergroundPlayer_OnATerrainOnlyMap_KeepsItsZAcrossMoveLogoutRelog()
+    {
+        const float X = 30f, Y = -30f, Ground = 20f, Underground = Ground - 60f;
+        string dataDir = Path.Combine(Path.GetTempPath(), "arcanecore-undermap-relog-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dataDir, "maps"));
+        try
+        {
+            File.WriteAllBytes(Path.Combine(dataDir, "maps", TerrainTile.FileName(0, 31, 32)), new MapFileBuilder { GridHeight = Ground }.Build());
+            await using var host = WorldTestHost.Start(configure: options => { options.Maps.DataDirectory = dataDir; options.LogoutDelayMs = 300; });
+            byte[] key = await host.AddAccountAsync(Account);
+            await using WorldTestClient client = await host.ConnectAsync();
+            await client.AuthenticateAsync(Account, key);
+            await client.CreateCharacterAsync(CharName);
+            Account account = (await host.Accounts.FindByUsernameAsync(Account))!;
+            CharacterRecord record = (await host.Characters.GetByAccountAsync(account.Id)).Single();
+            record.MapId = 0;
+            record.X = X;
+            record.Y = Y;
+            record.Z = Underground;
+            record.Orientation = 0f;
+
+            await client.LoginAsync((ulong)record.Id);
+            Assert.Equal(Underground, VerifyWorldZ(client));
+
+            // One non-falling movement block at the player's own position (it is standing still).
+            var writer = new PacketWriter(48);
+            new MovementInfo { Flags = MovementFlags.None, Time = 100_000, X = X, Y = Y, Z = Underground, Orientation = 0f }.Write(writer);
+            await client.SendAsync(WorldOpcode.MsgMoveStop, writer.ToArray());
+            await client.CollectAsync();
+            Assert.Equal(Underground, await host.PlayerStateAsync(CharName, p => p.Z));
+            Assert.True(await host.PlayerStateAsync(CharName, p => p.UndermapRecallArmed), "a free move arms the under-map recall");
+
+            await client.SendAsync(WorldOpcode.CmsgLogoutRequest, []);
+            await client.ReadUntilAsync(WorldOpcode.SmsgLogoutComplete);
+            await WorldTestHost.WaitForAsync(() => host.World.OnlinePlayerCount == 0, "player left the world");
+
+            await client.LoginAsync((ulong)record.Id);
+            Assert.Equal(Underground, VerifyWorldZ(client));
+        }
+        finally
+        {
+            if (Directory.Exists(dataDir)) Directory.Delete(dataDir, recursive: true);
+        }
+    }
+
+    private static float VerifyWorldZ(WorldTestClient client)
+        => BinaryPrimitives.ReadSingleLittleEndian(client.LoginPacket(WorldOpcode.SmsgLoginVerifyWorld).AsSpan(12, 4));
 
     private static byte[] BuildCreate(string name, byte race, byte cls, byte gender)
     {

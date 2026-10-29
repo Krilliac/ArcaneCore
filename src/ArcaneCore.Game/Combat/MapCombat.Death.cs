@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Combat;
@@ -146,13 +147,13 @@ public sealed partial class MapCombat
     /// <summary>
     /// vmangos Player::SpawnCorpseBones (ObjectAccessor::ConvertCorpseForPlayer): a resurrected player's corpse is no longer
     /// resurrectable. Here the corpse simply leaves the world; only a removed insignia leaves bones (<see cref="ConvertCorpseToBones"/>).
+    /// Does nothing unless the player is alive, so a resurrection that did not complete never leaves a dead ghost without a corpse.
     /// </summary>
     public void SpawnCorpseBones(Player player)
     {
-        if (player.Combat.Corpse is { } corpse)
+        if (IsAliveState(player))
         {
-            RemoveCorpse(corpse);
-            player.Combat.Corpse = null;
+            RemoveResurrectedCorpse(player);
         }
     }
 
@@ -170,7 +171,7 @@ public sealed partial class MapCombat
             ResurrectPlayer(player, 0f, applySickness: false);
             if (!IsAliveState(player))
             {
-                return; // a quest settlement holds the player: nothing is resurrected
+                return; // a quest settlement holds the player (or the state never changed): nothing is resurrected
             }
         }
 
@@ -195,6 +196,11 @@ public sealed partial class MapCombat
         }
 
         ResurrectPlayer(player, CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
+        if (!IsAliveState(player))
+        {
+            return false;
+        }
+
         SpawnCorpseBones(player);
         return true;
     }
@@ -209,10 +215,9 @@ public sealed partial class MapCombat
     internal void ResurrectFromTransport(Player player)
     {
         ResurrectPlayer(player, 1.0f, applySickness: false);
-        if (player.Combat.Corpse is { } corpse)
+        if (IsAliveState(player))
         {
-            RemoveCorpse(corpse);
-            player.Combat.Corpse = null;
+            RemoveResurrectedCorpse(player);
         }
     }
 
@@ -294,8 +299,12 @@ public sealed partial class MapCombat
         // ResurrectPlayer(InBattleGround() ? 1.0f : 0.5f) (MiscHandler.cpp:599): bound to a match, or on a battleground map.
         bool inBattleground = match is not null || player.Map?.Template is { IsBattleground: true };
         ResurrectPlayer(player, inBattleground ? 1.0f : CombatConstants.CorpseReclaimRestorePercent, applySickness: false);
-        RemoveCorpse(corpse);
-        c.Corpse = null;
+        if (!IsAliveState(player))
+        {
+            return false;
+        }
+
+        RemoveResurrectedCorpse(player);
         return true;
     }
 
@@ -428,26 +437,205 @@ public sealed partial class MapCombat
             return;
         }
 
+        // Atomic (vmangos Player::ResurrectPlayer runs to its end, Player.cpp:4638-4667): past the quest-settlement check nothing below
+        // throws. A fault in a step is recorded once and the remaining steps still run; the player ends fully alive, or still fully
+        // dead when the step that sets Alive fails. Alive never keeps PLAYER_FLAGS_GHOST or the ghost aura.
+        Action<Player, ResurrectStep>? inject = ResurrectFaultInjection;
         bool wasGhost = (player.Flags & PlayerFlags.Ghost) != 0;
-        SetDeathState(player, DeathState.Alive);
-        Hooks.RemoveGhostForm(player);
-        SetGhost(player, false, wasGhost);
-        player.SetRooted(false);
-        player.SetByte(UpdateFields.PlayerFieldBytes, 0, (byte)(player.GetByte(UpdateFields.PlayerFieldBytes, 0) & ~FieldByteReleaseTimer));
-        player.SetUInt32(UpdateFields.PlayerSelfResSpell, 0); // "clear self-resurrection state after resurrection by another way"
+
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.InterruptCasts);
+            // "Interrupt resurrect spells": InterruptSpellsCastedOnMe(false, true) (vmangos Player.cpp:4641, killDelayed = false,
+            // interruptPositiveSpells = true; Unit.h:1145). Like vmangos it matches casts by the player's unit target only.
+            SpellMitigation?.InterruptSpellsCastedOnMe(player, interruptPositiveSpells: true, onlyIfNotStalked: false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogResurrectFault("combat.resurrect.interrupt-casts", ex, player);
+        }
+
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.SetAlive);
+            SetDeathState(player, DeathState.Alive);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogResurrectFault("combat.resurrect.set-alive", ex, player);
+        }
+
+        if (!IsAliveState(player))
+        {
+            return; // the state never changed: the player stays fully dead/ghost with its corpse
+        }
+
+        bool ghostFormRemoved = true;
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.RemoveGhostForm);
+            Hooks.RemoveGhostForm(player);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            ghostFormRemoved = false;
+            LogResurrectFault("combat.resurrect.remove-ghost-form", ex, player);
+        }
+
+        if (!ghostFormRemoved && SpellMitigation is { } spells)
+        {
+            // the hook failed: strip both ghost auras directly (Player.cpp:4645 RemoveGhostForm)
+            try
+            {
+                spells.RemoveAuras(player, CombatConstants.GhostSpellId);
+                spells.RemoveAuras(player, CombatConstants.WispGhostSpellId);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                LogResurrectFault("combat.resurrect.remove-ghost-aura", ex, player);
+            }
+        }
+
+        bool ghostFlagCleared = true;
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.ClearGhostFlag);
+            SetGhost(player, false, wasGhost);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            ghostFlagCleared = false;
+            LogResurrectFault("combat.resurrect.clear-ghost-flag", ex, player);
+        }
+
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.Unroot);
+            player.SetRooted(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogResurrectFault("combat.resurrect.unroot", ex, player);
+        }
+
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.ClearReleaseTimer);
+            player.SetByte(UpdateFields.PlayerFieldBytes, 0, (byte)(player.GetByte(UpdateFields.PlayerFieldBytes, 0) & ~FieldByteReleaseTimer));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogResurrectFault("combat.resurrect.clear-release-timer", ex, player);
+        }
+
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.ClearSelfResSpell);
+            player.SetUInt32(UpdateFields.PlayerSelfResSpell, 0); // "clear self-resurrection state after resurrection by another way"
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogResurrectFault("combat.resurrect.clear-self-res-spell", ex, player);
+        }
 
         if (restorePercent > 0f)
         {
-            RestoreFraction(player, restorePercent);
+            try
+            {
+                inject?.Invoke(player, ResurrectStep.RestoreVitals);
+                RestoreFraction(player, restorePercent);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                LogResurrectFault("combat.resurrect.restore-vitals", ex, player);
+                player.Health = Math.Max(player.Health, Math.Max(1u, (uint)(player.MaxHealth * restorePercent)));
+            }
         }
 
-        UpdatePvpContested(player, false, overriding: true); // vmangos Player::SetDeathState: alive again clears contested PvP (Player.cpp:1576)
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.ClearPvpContested);
+            UpdatePvpContested(player, false, overriding: true); // vmangos Player::SetDeathState: alive again clears contested PvP (Player.cpp:1576)
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogResurrectFault("combat.resurrect.clear-pvp-contested", ex, player);
+        }
+
+        if ((player.Flags & PlayerFlags.Ghost) != 0 || (!ghostFlagCleared && wasGhost))
+        {
+            // backstop: Alive must not keep the ghost flag, and the client must be told to land-walk even when removing the ghost
+            // aura already cleared the flag (GhostAuras.ApplyGhost) before SetGhost failed
+            player.Flags &= ~PlayerFlags.Ghost;
+            try
+            {
+                SendGhostMovement(player, false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                LogResurrectFault("combat.resurrect.ghost-movement", ex, player);
+            }
+        }
+
         player.Combat.DeathTimer = 0;
         player.Combat.ResurrectedUnflushed = true;
         player.NeedsVisibilityUpdate = true;
         player.LastEnvironmentalDeath = null; // observation-only: a death source no brain recorded must not label the next death
         player.LastMissingCasterPeriodicDeath = false;
-        Hooks.OnResurrected(player, applySickness);
+
+        try
+        {
+            inject?.Invoke(player, ResurrectStep.OnResurrected);
+            Hooks.OnResurrected(player, applySickness);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            LogResurrectFault("combat.resurrect.on-resurrected", ex, player);
+        }
+    }
+
+    private void LogResurrectFault(string site, Exception ex, Player player)
+        => _map.Logger.LogFault(site, ex, "resurrection step failed for player {Player} (guid={Guid}); the resurrection continues", player.Name, player.Guid.Low);
+
+    /// <summary>The steps of <see cref="ResurrectPlayer"/>, in order; the argument of <see cref="ResurrectFaultInjection"/>.</summary>
+    internal enum ResurrectStep
+    {
+        InterruptCasts,
+        SetAlive,
+        RemoveGhostForm,
+        ClearGhostFlag,
+        Unroot,
+        ClearReleaseTimer,
+        ClearSelfResSpell,
+        RestoreVitals,
+        ClearPvpContested,
+        OnResurrected,
+        RemoveCorpse,
+    }
+
+    /// <summary>Test-only seam: invoked at the start of each <see cref="ResurrectStep"/> inside its guard, so a throw behaves like the step failing. Production never sets it.</summary>
+    internal Action<Player, ResurrectStep>? ResurrectFaultInjection { get; set; }
+
+    /// <summary>
+    /// The corpse of a player that is alive again leaves the world (vmangos SpawnCorpseBones, bones are not modelled). A fault is
+    /// recorded and the corpse stays referenced and in the world (as after a transport revive) until the next death replaces it or a
+    /// later <see cref="SpawnCorpseBones"/> removes it.
+    /// </summary>
+    internal void RemoveResurrectedCorpse(Player player)
+    {
+        if (player.Combat.Corpse is { } corpse)
+        {
+            try
+            {
+                ResurrectFaultInjection?.Invoke(player, ResurrectStep.RemoveCorpse);
+                RemoveCorpse(corpse);
+                player.Combat.Corpse = null;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                LogResurrectFault("combat.resurrect.remove-corpse", ex, player);
+            }
+        }
     }
 
     /// <summary>

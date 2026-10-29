@@ -85,6 +85,14 @@ public sealed class LogonHardeningTests
     }
 
     [Fact]
+    public void LogSafe_RejectsANegativeMaxLength_EvenForAnEmptyValue()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => LogSafe.Escape("abc", -1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => LogSafe.Escape(null, -1));
+        Assert.Equal("...", LogSafe.Escape("abc", 0));
+    }
+
+    [Fact]
     public void ShippedRealmConfig_DoesNotAutocreateAccounts()
     {
         string? dir = AppContext.BaseDirectory;

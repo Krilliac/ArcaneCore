@@ -242,7 +242,7 @@ public sealed class AttackSpeedTests
     {
         using var kit = Kit();
         Player player = NewPlayer(kit);
-        (Player target, _) = kit.AddPlayer(2, 20);
+        (Player target, _) = kit.AddHostilePlayer(2, 20);
         target.Health = 5000;
         Equip(player, Gun);
         Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(Bullet, 20, out _));

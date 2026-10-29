@@ -10,6 +10,10 @@
        facility (ArcaneCore.Kernel.Diagnostics.Invariant). -->
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
   </ItemGroup>
 

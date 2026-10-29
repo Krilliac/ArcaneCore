@@ -103,6 +103,8 @@ public static class WorldConfigKeys
         Live("MaxCommandsPerTick", o => o.MaxCommandsPerTick, (o, v) => o.MaxCommandsPerTick = v,
             value => value > 0 ? null : "must be positive"),
         LiveNonNegative("CommandTimeBudgetMs", o => o.CommandTimeBudgetMs, (o, v) => o.CommandTimeBudgetMs = v),
+        // AccountDataFeature reads it at each account data or tutorial write (0 = write every change at once).
+        LiveNonNegative("AccountDataWriteIntervalMs", o => o.AccountDataWriteIntervalMs, (o, v) => o.AccountDataWriteIntervalMs = v),
         LiveNonNegative("CharactersPerRealm", o => o.CharactersPerRealm, (o, v) => o.CharactersPerRealm = v),
         Live("Motd", o => o.Motd, (o, v) => o.Motd = v),
         LiveNonNegative("ListenRangeSay", o => o.ListenRangeSay, (o, v) => o.ListenRangeSay = v),
@@ -148,6 +150,11 @@ public static class WorldConfigKeys
 
         // Opt-in channel-join cap (security hardening lane; 0 = unlimited, the retail behaviour): ChannelManager reads it at each join.
         LiveSocialCount("MaxJoinedChannels", o => o.MaxJoinedChannels, (o, v) => o.MaxJoinedChannels = v),
+        // Not vmangos keys: channel name and password length caps (0 = none), read at each join or password change.
+        LiveSocialCount("MaxChannelNameLength", o => o.MaxChannelNameLength, (o, v) => o.MaxChannelNameLength = v),
+        LiveSocialCount("MaxChannelPassphraseLength", o => o.MaxChannelPassphraseLength, (o, v) => o.MaxChannelPassphraseLength = v),
+        // Not a vmangos key: the ready-check answer rate limit (0 = off), read at each answer.
+        LiveSocialCount("ReadyCheckAnswerIntervalMs", o => o.ReadyCheckAnswerIntervalMs, (o, v) => o.ReadyCheckAnswerIntervalMs = v),
         // vmangos Group.OfflineLeaderDelay (World.cpp:811): seconds before an offline group leader yields; 0 disables. GroupManager reads it at each tick.
         LiveSocialCount("OfflineLeaderDelaySeconds", o => o.OfflineLeaderDelaySeconds, (o, v) => o.OfflineLeaderDelaySeconds = v),
         // Not a vmangos key: the switch for its custom "World"/"China" channel names, read when a channel is created.
@@ -773,6 +780,31 @@ public static class WorldConfigKeys
             v => v is >= 1 and <= PlayerbotEconomyOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotEconomyOptions.MaxVisitIntervalMinutes}"),
         LivePlayerbots("Economy:BankDeposit", o => o.Economy.BankDeposit, (o, v) => o.Economy.BankDeposit = v),
         LivePlayerbots("Economy:BuyBankSlots", o => o.Economy.BuyBankSlots, (o, v) => o.Economy.BuyBankSlots = v),
+        LivePlayerbots("Economy:BuyReagents", o => o.Economy.BuyReagents, (o, v) => o.Economy.BuyReagents = v),
+        LivePlayerbots("Economy:MoneyGoal", o => o.Economy.MoneyGoal, (o, v) => o.Economy.MoneyGoal = v),
+        LivePlayerbotsValue("Economy:MoneyGoalCopperPerLevel", o => o.Economy.MoneyGoalCopperPerLevel, (o, v) => o.Economy.MoneyGoalCopperPerLevel = v,
+            v => v is >= 0 and <= 100000 ? null : "must be 0..100000"),
+        LivePlayerbotsValue("Economy:MaxBuyoutsPerHour", o => o.Economy.MaxBuyoutsPerHour, (o, v) => o.Economy.MaxBuyoutsPerHour = v,
+            v => v is >= 0 and <= 100 ? null : "must be 0..100"),
+        LivePlayerbotsValue("Economy:MaxListingsPerHour", o => o.Economy.MaxListingsPerHour, (o, v) => o.Economy.MaxListingsPerHour = v,
+            v => v is >= 0 and <= 100 ? null : "must be 0..100"),
+        LivePlayerbotsValue("Economy:HouseBuyoutsPerHour", o => o.Economy.HouseBuyoutsPerHour, (o, v) => o.Economy.HouseBuyoutsPerHour = v,
+            v => v is >= 0 and <= 100000 ? null : "must be 0..100000"),
+        LivePlayerbotsValue("Economy:HouseListingsPerHour", o => o.Economy.HouseListingsPerHour, (o, v) => o.Economy.HouseListingsPerHour = v,
+            v => v is >= 0 and <= 100000 ? null : "must be 0..100000"),
+        LivePlayerbots("Economy:ListSurplusConsumables", o => o.Economy.ListSurplusConsumables, (o, v) => o.Economy.ListSurplusConsumables = v),
+        LivePlayerbotsValue("Economy:ConsumableKeepCount", o => o.Economy.ConsumableKeepCount, (o, v) => o.Economy.ConsumableKeepCount = v,
+            v => v is >= 1 and <= 200 ? null : "must be 1..200"),
+        LivePlayerbotsValue("Economy:ListMarkupPercentCommon", o => o.Economy.ListMarkupPercentCommon, (o, v) => o.Economy.ListMarkupPercentCommon = v,
+            v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
+        LivePlayerbotsValue("Economy:ListMarkupPercentUncommon", o => o.Economy.ListMarkupPercentUncommon, (o, v) => o.Economy.ListMarkupPercentUncommon = v,
+            v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
+        LivePlayerbotsValue("Economy:ListMarkupPercentRare", o => o.Economy.ListMarkupPercentRare, (o, v) => o.Economy.ListMarkupPercentRare = v,
+            v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
+        LivePlayerbotsValue("Economy:ListMarkupPercentEpic", o => o.Economy.ListMarkupPercentEpic, (o, v) => o.Economy.ListMarkupPercentEpic = v,
+            v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
+        LivePlayerbotsValue("Economy:BuyBelowAskPercent", o => o.Economy.BuyBelowAskPercent, (o, v) => o.Economy.BuyBelowAskPercent = v,
+            v => v is >= 1 and <= 99 ? null : "must be 1..99"),
         // Not vmangos keys: how bots plan their money and ride (docs/areas/playbots-economy.md). PlayerbotBudget and PlayerbotMount read the
         // shared PlayerbotOptions.Budget / Mounts at every decision.
         LivePlayerbots("Budget:Enabled", o => o.Budget.Enabled, (o, v) => o.Budget.Enabled = v),

@@ -286,7 +286,8 @@ public sealed class ChargeEffectTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
-        (Player target, _) = kit.AddPlayer(2, 20, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 20, 0);
         kit.Spellbook.Teach(caster, Charge);
         WorldCollision.Of(kit.World).Install(new Obstacles { Floor = _ => Z }, new FixedPath { Type = PathType.NoPath });
 
@@ -310,7 +311,8 @@ public sealed class ChargeEffectTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
-        (Player target, _) = kit.AddPlayer(2, 20, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 20, 0);
         kit.Spellbook.Teach(caster, Charge);
         WorldCollision.Of(kit.World).Install(new Obstacles { Floor = _ => Z }, new FixedPath { Type = PathType.Incomplete });
 
@@ -331,7 +333,8 @@ public sealed class ChargeEffectTests
         var nav = new NavMeshPathfinder(fixture.Directory);
         Assert.True(nav.LoadTile(0, 31, 31));
         (Player caster, _) = kit.AddPlayer(1, casterX, 5);
-        (Player target, _) = kit.AddPlayer(2, 20, 5);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 20, 5);
         target.Relocate(20, 5, Z - aboveMesh, 0, 1);
         kit.Spellbook.Teach(caster, Charge);
         WorldCollision.Of(kit.World).Install(new Obstacles { Floor = x => x < 15 ? Z : Z - aboveMesh }, nav);
@@ -364,7 +367,7 @@ public sealed class ChargeEffectTests
         // straight line: the spline launches, the caster moves, and the melee start and the stun are not for nothing.
         using var wet = new Locomotion.HazardTestKit(ArcaneCore.Game.Maps.Terrain.LiquidTypeFlags.Water, ChargeSpells());
         Player swimmer = wet.AddPlayer(1, Locomotion.HazardTestKit.Ground, out FakeSession swimmerSession);
-        Player prey = wet.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        Player prey = wet.AddHostilePlayer(2, Locomotion.HazardTestKit.Ground, out _);
         prey.Relocate(Locomotion.HazardTestKit.X + 10, Locomotion.HazardTestKit.Y, Locomotion.HazardTestKit.Ground, 0, 1);
         wet.Kit.Spellbook.Teach(swimmer, Charge);
         WorldCollision.Of(wet.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
@@ -379,7 +382,7 @@ public sealed class ChargeEffectTests
 
         using var dry = new Locomotion.HazardTestKit(null, ChargeSpells());
         Player walker = dry.AddPlayer(1, Locomotion.HazardTestKit.Ground, out _);
-        Player dryPrey = dry.AddPlayer(2, Locomotion.HazardTestKit.Ground, out _);
+        Player dryPrey = dry.AddHostilePlayer(2, Locomotion.HazardTestKit.Ground, out _);
         dryPrey.Relocate(Locomotion.HazardTestKit.X + 10, Locomotion.HazardTestKit.Y, Locomotion.HazardTestKit.Ground, 0, 1);
         dry.Kit.Spellbook.Teach(walker, Charge);
         WorldCollision.Of(dry.Kit.World).Install(pathfinder: new FixedPath { Type = PathType.NoPath });
@@ -459,7 +462,8 @@ public sealed class ChargeEffectTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
-        (Player target, _) = kit.AddPlayer(2, 20, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 20, 0);
         kit.Spellbook.Teach(caster, Charge);
         kit.Spellbook.Teach(caster, Blink);
         caster.SetRooted(true);
@@ -475,7 +479,8 @@ public sealed class ChargeEffectTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
-        (Player target, _) = kit.AddPlayer(2, 20, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 20, 0);
         kit.Spellbook.Teach(caster, Charge);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
@@ -766,7 +771,8 @@ public sealed class ChargeEffectTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, FaceTeleport);
 
         caster.SetRooted(true);

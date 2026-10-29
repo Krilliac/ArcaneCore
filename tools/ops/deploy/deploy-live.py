@@ -401,8 +401,13 @@ def main() -> int:
             # (docs/areas/map-feed.md, "Never on the live server"); launch-daemon.ps1 and server-status.ps1 -Supervise set it too.
             env["ARCANECORE_LIVE_SERVER"] = "1"
             if args.visible_consoles:
+                # log_text() and the deploy log checks read this file as text lines (" WARN ", "Started managed playerbot"), so this
+                # run pins the one log file to the Text format whatever the profile's Logging:ArcaneCore:Format says. With Format
+                # set the path is File:Path alone; the deprecated Json:Path alias is not set, so the daemon has no deprecated key to warn about.
+                env["Logging__ArcaneCore__Format"] = "Text"
                 env["Logging__ArcaneCore__File__Enabled"] = "true"
                 env["Logging__ArcaneCore__File__Path"] = str(log_path(name))
+                env.pop("Logging__ArcaneCore__Json__Path", None)  # an inherited legacy alias would only draw a deprecation warning
                 log_path(name).parent.mkdir(exist_ok=True)
                 return subprocess.Popen(["dotnet", str(dll)], cwd=profile, env=env, close_fds=True,
                                         creationflags=subprocess.CREATE_NEW_CONSOLE | LIVE_PRIORITY)

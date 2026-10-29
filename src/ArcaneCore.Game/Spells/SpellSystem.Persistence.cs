@@ -178,7 +178,7 @@ public sealed partial class SpellSystem
 
             state ??= GetOrCreateState(unit);
             uint until = (uint)Math.Min(uint.MaxValue, now + remaining);
-            Dictionary<uint, uint> table = cooldown.Kind == SpellCooldownKind.Spell ? state.SpellCooldowns : state.CategoryCooldowns;
+            WakingTimerMap<uint> table = cooldown.Kind == SpellCooldownKind.Spell ? state.SpellCooldowns : state.CategoryCooldowns;
             table[cooldown.Id] = Math.Max(until, table.GetValueOrDefault(cooldown.Id));
             if (cooldown.ItemId != 0 || cooldown.Category != 0 || cooldown.SpellId != 0)
             {
