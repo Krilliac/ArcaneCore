@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Kernel.Characters;
 
@@ -34,7 +33,7 @@ public sealed class StopDrainBudget
     private readonly Lock _gate = new();
     private long _beginTimestamp; // 0: not started
     private long _stalledTicks; // wall ticks covered by attempts that ended without success, since the last success (or Begin); a union, not a sum
-    private long _coveredUntil; // Stopwatch timestamp up to which failed coverage is already in _stalledTicks
+    private long _coveredUntil; // Time timestamp up to which failed coverage is already in _stalledTicks
     private int _inFlight; // attempts running now (diagnostics only: never consulted by Refuse or Exhausted)
     private int _succeeded;
     private int _failed;
@@ -43,6 +42,12 @@ public sealed class StopDrainBudget
 
     /// <summary>How much stalled time exhausts the lane.</summary>
     public TimeSpan StallBudget { get; init; } = DefaultStallBudget;
+
+    /// <summary>
+    /// The clock the attempts are timed by (the system clock). Tests step a manual one: on the wall clock a loaded runner's sleeps overshoot,
+    /// and a 60 ms attempt measured long enough to exhaust a 100 ms budget on its own.
+    /// </summary>
+    public TimeProvider Time { get; init; } = TimeProvider.System;
 
     /// <summary>Names the lane in refusals and in <see cref="Describe"/>.</summary>
     public string Name { get; init; } = "stop drain";
@@ -69,7 +74,7 @@ public sealed class StopDrainBudget
                 return;
             }
 
-            _beginTimestamp = Math.Max(1, Stopwatch.GetTimestamp());
+            _beginTimestamp = Math.Max(1, Time.GetTimestamp());
             _stalledTicks = 0;
             _succeeded = 0;
             _failed = 0;
@@ -190,7 +195,7 @@ public sealed class StopDrainBudget
         lock (_gate)
         {
             _inFlight++;
-            return new Attempt(this, Stopwatch.GetTimestamp());
+            return new Attempt(this, Time.GetTimestamp());
         }
     }
 
@@ -200,13 +205,13 @@ public sealed class StopDrainBudget
 
     private bool ExhaustedLocked() => _beginTimestamp != 0 && StalledMsLocked() >= StallBudget.TotalMilliseconds;
 
-    private double StalledMsLocked() => _beginTimestamp == 0 ? 0 : _stalledTicks * 1000.0 / Stopwatch.Frequency; // completed failures only: a running attempt is unknown until its verdict
+    private double StalledMsLocked() => _beginTimestamp == 0 ? 0 : _stalledTicks * 1000.0 / Time.TimestampFrequency; // completed failures only: a running attempt is unknown until its verdict
 
     private void Finish(long start, bool landed)
     {
         lock (_gate)
         {
-            long now = Stopwatch.GetTimestamp();
+            long now = Time.GetTimestamp();
             _inFlight--;
             if (landed)
             {

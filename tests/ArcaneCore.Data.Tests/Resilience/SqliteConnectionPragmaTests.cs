@@ -460,7 +460,7 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         var postgres = new DbContextOptionsBuilder<CharacterDbContext>();
         DataServiceCollectionExtensions.ConfigureProvider(postgres, new DatabaseConnectionOptions
         {
-            Provider = DatabaseProvider.PostgreSql, ConnectionString = "Host=127.0.0.1;Port=1;Database=arcane;Username=arcane;Password=arcane;",
+            Provider = DatabaseProvider.PostgreSql, ConnectionString = $"Host=127.0.0.1;Port={ClosedLoopbackPort.Next()};Database=arcane;Username=arcane;Password=arcane;",
         });
         Assert.DoesNotContain(Interceptors(postgres), interceptor => interceptor is SqliteConnectionPragmaInterceptor);
 
@@ -476,7 +476,7 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
         var maria = new DbContextOptionsBuilder<CharacterDbContext>();
         Assert.ThrowsAny<Exception>(() => DataServiceCollectionExtensions.ConfigureProvider(maria, new DatabaseConnectionOptions
         {
-            Provider = DatabaseProvider.MariaDb, ConnectionString = "Server=127.0.0.1;Port=1;Database=arcane;User=arcane;Password=arcane;Connect Timeout=1;",
+            Provider = DatabaseProvider.MariaDb, ConnectionString = $"Server=127.0.0.1;Port={ClosedLoopbackPort.Next()};Database=arcane;User=arcane;Password=arcane;Connect Timeout=1;",
         }));
         Assert.DoesNotContain(Interceptors(maria), interceptor => interceptor is SqliteConnectionPragmaInterceptor);
     }

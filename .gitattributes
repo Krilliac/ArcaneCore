@@ -1,2 +1,4 @@
 # Update files are applied by hand with sqlite3/psql/mysql and hashed by the golden tests: keep LF on every checkout.
 sql/updates/** text eol=lf
+# Shell scripts run under Linux bash (CI, Node1 WSL), which rejects CR line ends.
+*.sh text eol=lf

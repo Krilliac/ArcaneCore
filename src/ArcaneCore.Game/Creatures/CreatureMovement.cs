@@ -62,6 +62,11 @@ internal interface ICreatureMover
     void TeleportHome(Creature creature, float x, float y, float z, float orientation)
         => creature.Relocate(x, y, z, orientation, creature.Movement.Time);
 
+    /// <summary>vmangos Creature::UpdateLeashExtensionTime: the creature cannot leash for now. The default (a mover without a leash) does nothing.</summary>
+    void ExtendLeash(Creature creature)
+    {
+    }
+
     /// <summary>A uniform random number in [0, 1).</summary>
     double NextDouble();
 

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace ArcaneCore.Protocol;
@@ -182,8 +183,22 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     public ReadOnlySpan<byte> ReadToEnd()
     {
         ReadOnlySpan<byte> slice = _data.Slice(_position);
+        Trace(PacketReadKind.ToEnd, _position, slice.Length, true);
         _position = _data.Length;
         return slice;
+    }
+
+    /// <summary>
+    /// Report one primitive read to the test seam (<see cref="PacketReadTrace"/>). With no tracer begun anywhere in the process
+    /// this is one static int load and a not-taken branch; it never allocates.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void Trace(PacketReadKind kind, int offset, int width, bool ok)
+    {
+        if (PacketReadTrace.Active)
+        {
+            PacketReadTrace.Record(kind, offset, width, ok);
+        }
     }
 
     // --- non-throwing surface --------------------------------------------------------
@@ -192,10 +207,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (Remaining < 1)
         {
+            Trace(PacketReadKind.Byte, _position, 1, false);
             value = 0;
             return false;
         }
 
+        Trace(PacketReadKind.Byte, _position, 1, true);
         value = _data[_position];
         _position++;
         return true;
@@ -205,10 +222,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (Remaining < 2)
         {
+            Trace(PacketReadKind.UInt16, _position, 2, false);
             value = 0;
             return false;
         }
 
+        Trace(PacketReadKind.UInt16, _position, 2, true);
         value = BinaryPrimitives.ReadUInt16LittleEndian(_data.Slice(_position, 2));
         _position += 2;
         return true;
@@ -218,15 +237,18 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (Remaining < 4)
         {
+            Trace(PacketReadKind.UInt32, _position, 4, false);
             value = 0;
             return false;
         }
 
+        Trace(PacketReadKind.UInt32, _position, 4, true);
         value = BinaryPrimitives.ReadUInt32LittleEndian(_data.Slice(_position, 4));
         _position += 4;
         return true;
     }
 
+    /// <summary>Records once, as a <see cref="PacketReadKind.UInt32"/> (it goes through <see cref="TryReadUInt32"/>).</summary>
     public bool TryReadInt32(out int value)
     {
         bool ok = TryReadUInt32(out uint raw);
@@ -238,10 +260,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (Remaining < 8)
         {
+            Trace(PacketReadKind.UInt64, _position, 8, false);
             value = 0;
             return false;
         }
 
+        Trace(PacketReadKind.UInt64, _position, 8, true);
         value = BinaryPrimitives.ReadUInt64LittleEndian(_data.Slice(_position, 8));
         _position += 8;
         return true;
@@ -251,10 +275,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (Remaining < 4)
         {
+            Trace(PacketReadKind.Single, _position, 4, false);
             value = 0;
             return false;
         }
 
+        Trace(PacketReadKind.Single, _position, 4, true);
         value = BinaryPrimitives.ReadSingleLittleEndian(_data.Slice(_position, 4));
         _position += 4;
         return true;
@@ -268,6 +294,7 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (Remaining < 4)
         {
+            Trace(PacketReadKind.FiniteSingle, _position, 4, false);
             value = 0f;
             return false;
         }
@@ -275,10 +302,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         float candidate = BinaryPrimitives.ReadSingleLittleEndian(_data.Slice(_position, 4));
         if (!float.IsFinite(candidate))
         {
+            Trace(PacketReadKind.FiniteSingle, _position, 4, false);
             value = 0f;
             return false;
         }
 
+        Trace(PacketReadKind.FiniteSingle, _position, 4, true);
         value = candidate;
         _position += 4;
         return true;
@@ -286,11 +315,14 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
 
     /// <summary>
     /// Read three finite world coordinates (x, y, z) within [-64000, 64000]; on failure the cursor stays where it was.
+    /// The trace records three <see cref="PacketReadKind.FiniteSingle"/> events (width 4 each) on success and a single
+    /// failed <see cref="PacketReadKind.FiniteSingle"/> event of width 12 on failure (short payload, non-finite or out of range).
     /// </summary>
     public bool TryReadFiniteCoordinates(out float x, out float y, out float z)
     {
         if (Remaining < 12)
         {
+            Trace(PacketReadKind.FiniteSingle, _position, 12, false);
             x = y = z = 0f;
             return false;
         }
@@ -301,10 +333,14 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         if (!float.IsFinite(cx) || !float.IsFinite(cy) || !float.IsFinite(cz)
             || MathF.Abs(cx) > 64_000f || MathF.Abs(cy) > 64_000f || MathF.Abs(cz) > 64_000f)
         {
+            Trace(PacketReadKind.FiniteSingle, _position, 12, false);
             x = y = z = 0f;
             return false;
         }
 
+        Trace(PacketReadKind.FiniteSingle, _position, 4, true);
+        Trace(PacketReadKind.FiniteSingle, _position + 4, 4, true);
+        Trace(PacketReadKind.FiniteSingle, _position + 8, 4, true);
         x = cx;
         y = cy;
         z = cz;
@@ -318,6 +354,7 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         value = 0;
         if (Remaining < 1)
         {
+            Trace(PacketReadKind.PackedGuid, _position, 1, false);
             return false;
         }
 
@@ -325,6 +362,7 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         int needed = System.Numerics.BitOperations.PopCount(mask);
         if (Remaining < 1 + needed)
         {
+            Trace(PacketReadKind.PackedGuid, _position, 1 + needed, false);
             return false;
         }
 
@@ -338,6 +376,7 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         }
 
         Debug.Assert(at == _position + 1 + needed, "packed GUID consumed exactly its mask's bytes");
+        Trace(PacketReadKind.PackedGuid, _position, 1 + needed, true);
         _position = at;
         return true;
     }
@@ -346,10 +385,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (count < 0 || count > Remaining)
         {
+            Trace(PacketReadKind.Bytes, _position, count, false);
             value = default;
             return false;
         }
 
+        Trace(PacketReadKind.Bytes, _position, count, true);
         value = _data.Slice(_position, count);
         _position += count;
         return true;
@@ -359,9 +400,11 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (count < 0 || count > Remaining)
         {
+            Trace(PacketReadKind.Skip, _position, count, false);
             return false;
         }
 
+        Trace(PacketReadKind.Skip, _position, count, true);
         _position += count;
         return true;
     }
@@ -371,6 +414,7 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (max < 0 || Remaining < 4)
         {
+            Trace(PacketReadKind.Count, _position, 4, false);
             count = 0;
             return false;
         }
@@ -378,10 +422,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         uint raw = BinaryPrimitives.ReadUInt32LittleEndian(_data.Slice(_position, 4));
         if (raw > (uint)max)
         {
+            Trace(PacketReadKind.Count, _position, 4, false);
             count = 0;
             return false;
         }
 
+        Trace(PacketReadKind.Count, _position, 4, true);
         count = (int)raw;
         _position += 4;
         return true;
@@ -392,10 +438,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
     {
         if (max < 0 || Remaining < 1 || _data[_position] > max)
         {
+            Trace(PacketReadKind.ByteCount, _position, 1, false);
             count = 0;
             return false;
         }
 
+        Trace(PacketReadKind.ByteCount, _position, 1, true);
         count = _data[_position];
         _position++;
         return true;
@@ -430,10 +478,12 @@ public ref struct PacketReader(ReadOnlySpan<byte> data)
         int length = end < 0 ? rest.Length : end;
         if (maxBytes < 0 || length > maxBytes)
         {
+            Trace(PacketReadKind.CString, _position, length, false);
             value = default;
             return false;
         }
 
+        Trace(PacketReadKind.CString, _position, end < 0 ? length : length + 1, true);
         value = rest.Slice(0, length);
         _position += end < 0 ? length : length + 1;
         return true;

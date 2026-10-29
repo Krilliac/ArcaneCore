@@ -88,12 +88,21 @@ jobs:
       # Directory.Build.props sets TreatWarningsAsErrors=true, so a warning fails the build.
       # The whole solution is built in every job so warnings anywhere still fail CI.
       - name: Build
+        id: build
         run: dotnet build ArcaneCore.slnx -c Release --no-restore
 
       - name: Test
         # Projects within a job run serially: first-time EF fixture startup has a bounded
         # deadline and must not compete with the crypto suite and provider matrix.
-        run: dotnet test tests/ci/${{ matrix.suite }}.slnf -c Release --no-build -m:1 --verbosity normal --logger trx --results-directory TestResults
+        # Tests tagged [Trait("Category", "Timing")] are left to the next step.
+        run: dotnet test tests/ci/${{ matrix.suite }}.slnf -c Release --no-build -m:1 --verbosity normal --filter "Category!=Timing" --logger trx --results-directory TestResults
+
+      # The timing-sensitive tests, serially (no parallel test collections). A test that fails gets one isolated rerun: passing it
+      # prints "FLAKY (passed on rerun)" and records it in timing-logs/flake-ledger.txt; failing it again fails the job, and so does a
+      # timing stage that runs 0 tests. Its .trx files stay out of TestResults so a flaky first failure does not redden the test report.
+      - name: Timing tests (serial, one rerun per failure)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash tools/ops/ci/test-stages.sh --stage timing --logs timing-logs tests/ci/${{ matrix.suite }}.slnf
 
       # The .trx results feed test-report.yml, which posts the summary on the PR (a workflow_run job, so a fork PR gets one too).
       - name: Upload test results
@@ -102,6 +111,16 @@ jobs:
         with:
           name: test-results-${{ matrix.suite }}${{ matrix.batch != '0' && '-batched' || '' }}
           path: TestResults/**/*.trx
+          if-no-files-found: warn
+          retention-days: 7
+
+      # Timing-stage logs, .trx files, reruns, summary and flake ledger (not test-results-*, which test-report.yml publishes).
+      - name: Upload timing-stage results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: timing-gate-${{ matrix.suite }}${{ matrix.batch != '0' && '-batched' || '' }}
+          path: timing-logs/
           if-no-files-found: warn
           retention-days: 7
 

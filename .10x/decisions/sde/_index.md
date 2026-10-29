@@ -4,7 +4,7 @@ Source: [plan](../../reviews/2026-10-22-refactor-audit-plan.md), [findings](../.
 
 ## Observations
 
-- [DISCOVERED] The error idiom is `catch when (ex is not OutOfMemoryException)`, then `FaultLedger.Shared.Record` with a dotted key and `LogFault` with a dashed tag. Recording both is deliberate. A shared boundary helper was rejected (#43, #55; refuted #4, #68, #89).
+- [DISCOVERED] The error idiom is `catch when (ex is not OutOfMemoryException)`, then one `LogFault("site", ex, ...)`. `LogFault` already calls `FaultLedger.Record` (`FaultLedger.cs` `Log`), so a `Record` + `LogFault` pair under the same key counts one fault twice (#1618). The earlier rule that recording both is deliberate (#43, #55) is superseded: one `LogFault` per fault, and a separate `Record` only under a different, deliberately distinct key. A shared boundary helper was rejected (#43, #55; refuted #4, #68, #89).
 - [DISCOVERED] Some renames compile cleanly and still break behaviour. Watch for:
   - reflection in tests (`_procDepth`, `UnloadGrid`)
   - the `MapUpdateDiagnostics` switch on type names

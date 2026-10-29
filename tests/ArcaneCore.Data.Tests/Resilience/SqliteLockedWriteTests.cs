@@ -250,7 +250,7 @@ public sealed class SqliteLockedWriteTests : IDisposable
         var postgres = new DbContextOptionsBuilder<CharacterDbContext>();
         DataServiceCollectionExtensions.ConfigureProvider(postgres, new DatabaseConnectionOptions
         {
-            Provider = DatabaseProvider.PostgreSql, ConnectionString = "Host=127.0.0.1;Port=1;Database=arcane;Username=arcane;Password=arcane;",
+            Provider = DatabaseProvider.PostgreSql, ConnectionString = $"Host=127.0.0.1;Port={ClosedLoopbackPort.Next()};Database=arcane;Username=arcane;Password=arcane;",
         }, interceptor);
         Assert.Contains(interceptor, Interceptors(postgres));
 

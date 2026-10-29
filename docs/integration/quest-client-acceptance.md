@@ -178,7 +178,7 @@ client-valid guide/target/faction/display/content rows, and an actual build-5875
 must right-click the guide and complete the menu/details/accept/reward flow. The mock's
 direct details request does not prove that normal UI path.
 
-The mock's `self-test` still uses a 60-second deadline, ephemeral ports and automatic
+The mock's `self-test` still uses a bounded deadline (a 180-second scenario hang guard), ephemeral ports and automatic
 database cleanup, so it cannot host this manual session. The executable also offers
 `client-fixture` for a disposable manual fixture and `live`, `starting-zone` and
 `playbot` clients for owned loopback servers. Synthetic fixture faction/display IDs
