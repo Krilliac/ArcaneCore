@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Kernel.Logging;
 
 namespace ArcaneCore.World.Gm.Core;
 
@@ -18,14 +19,17 @@ public static class GmCommandLog
         => options.LogCommands && command.RequiredLevel(options) > 0;
 
     /// <summary>The audit line of a command typed at the server console (no player, no account, no position).</summary>
-    public static string DescribeConsole(string commandText) => $"Command: {commandText} [Console]";
+    public static string DescribeConsole(string commandText) => $"Command: {Safe(commandText)} [Console]";
 
     /// <summary>The audit line of a stripped developer opcode a staff session sent (dropped unread, no effect).</summary>
     public static string DescribeDevOpcode(string opcodeName, int accountId, string playerName, int length)
         => string.Create(CultureInfo.InvariantCulture,
-            $"Command: dev-opcode {opcodeName} [Player: {playerName} (Account: {accountId}) {length} bytes, dropped unread]");
+            $"Command: dev-opcode {Safe(opcodeName)} [Player: {Safe(playerName)} (Account: {accountId}) {length} bytes, dropped unread]");
 
     public static string Describe(string commandText, int accountId, string playerName, uint mapId, float x, float y, float z, string selection)
         => string.Create(CultureInfo.InvariantCulture,
-            $"Command: {commandText} [Player: {playerName} (Account: {accountId}) X: {x} Y: {y} Z: {z} Map: {mapId} Selected: {selection}]");
+            $"Command: {Safe(commandText)} [Player: {Safe(playerName)} (Account: {accountId}) X: {x} Y: {y} Z: {z} Map: {mapId} Selected: {Safe(selection)}]");
+
+    /// <summary>Client-typed text for an audit line: control, format and line-separator characters become visible escapes (CWE-117), nothing is cut.</summary>
+    private static string Safe(string text) => LogSafe.Escape(text, int.MaxValue);
 }
