@@ -26,6 +26,8 @@
     <PackageVersion Include="Microsoft.Extensions.Logging" Version="9.0.21" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.21" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- Pomelo 9.0.0 brings MySqlConnector 2.4.0; GHSA-473q-m89c-ghf8 (password sent before the TLS certificate is verified) is fixed in 2.6.1. -->
+    <PackageVersion Include="MySqlConnector" Version="2.6.1" />
     <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
     <PackageVersion Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />

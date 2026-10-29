@@ -36,6 +36,11 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
     private readonly Dictionary<int, Entry> _entries = [];
     private readonly HashSet<int> _gmStables = [];
 
+    // Slot purchases whose database write was issued but whose world-thread continuation (charge or take back) has not run yet, per
+    // character. Kept outside the entries so it survives Forget. A load issued while one is outstanding is queued behind that write and
+    // reads the purchased slot, which nobody has paid for yet: its state is never installed (see LoadAsync).
+    private readonly Dictionary<int, int> _unchargedPurchases = [];
+
     /// <summary>The characters-database stable; without one every request is refused.</summary>
     public IPetStableStore? Store { get; set; }
 
@@ -162,17 +167,38 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
 
             int id = Id(player);
             byte slots = (byte)(state.PurchasedSlots + 1);
-            player.Money -= price;
-            MoneyChanged?.Invoke(player);
+            // Charged only once the slot is saved, so a failed write has nothing to refund and a save taken while the write is in
+            // flight never holds the deducted money. If the player can no longer pay at commit (spent it, logged out, or a quest
+            // settlement holds the character), the saved slot is taken back instead.
+            _unchargedPurchases[id] = _unchargedPurchases.GetValueOrDefault(id) + 1;
             Write(player, id, async ct => { await store.SetPurchasedSlotsAsync(id, slots, ct).ConfigureAwait(false); return true; },
-                _ => { SetState(id, state with { PurchasedSlots = slots }); Send(player, StableResult.SuccessBuySlot); },
-                () =>
+                _ =>
                 {
-                    // The slot was not saved: give the money back.
-                    player.Money += price;
-                    MoneyChanged?.Invoke(player);
-                });
+                    PurchaseSettled(id);
+                    if (!TryCharge(player, price))
+                    {
+                        TakeSlotBack(player, id, store, state.PurchasedSlots);
+                        return;
+                    }
+
+                    SetState(id, state with { PurchasedSlots = slots });
+                    Send(player, StableResult.SuccessBuySlot);
+                },
+                () => PurchaseSettled(id));
         });
+    }
+
+    private void PurchaseSettled(int id)
+    {
+        int left = _unchargedPurchases.GetValueOrDefault(id) - 1;
+        if (left > 0)
+        {
+            _unchargedPurchases[id] = left;
+        }
+        else
+        {
+            _unchargedPurchases.Remove(id);
+        }
     }
 
     /// <summary>vmangos SendStablePet: u64 npc, u8 count, u8 bought slots, then per pet u32 number, u32 entry, u32 level, cstring name, u32 loyalty, u8 slot (1 = current).</summary>
@@ -282,6 +308,58 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         });
     }
 
+    /// <summary>Deduct <paramref name="price"/> through the settlement-guarded setter, clamped to 0..MaxMoney; false (untouched) when the player cannot pay now.</summary>
+    private bool TryCharge(Player player, uint price)
+    {
+        if (!player.IsInWorld || !player.CanMutateQuestSettlementState || player.Money < price)
+        {
+            return false;
+        }
+
+        player.Money = (uint)Math.Clamp((long)player.Money - price, 0, ArcaneCore.Game.Economy.EconomyOptions.MaxMoney);
+        MoneyChanged?.Invoke(player);
+        return true;
+    }
+
+    /// <summary>
+    /// Undo a saved slot purchase that could not be charged. The entry is dropped (as TakeOut does) instead of being marked busy: after a
+    /// logout and relogin the current entry is a new one whose load was queued behind the purchase but ahead of this revert, so it holds the
+    /// purchased slot, and an old continuation must not install it. The next use reloads, queued behind the revert.
+    /// </summary>
+    private void TakeSlotBack(Player player, int id, IPetStableStore store, byte before)
+    {
+        _entries.Remove(id);
+
+        if (player.IsInWorld)
+        {
+            Send(player, StableResult.ErrMoney);
+        }
+
+        _ = RevertSlotsAsync(id, store, before);
+    }
+
+    /// <summary>Writes the slot count back, retrying once; a revert that still fails leaves a saved slot nobody paid for, so it is reported to the anomaly ledger.</summary>
+    private async Task RevertSlotsAsync(int id, IPetStableStore store, byte slots)
+    {
+        for (int attempt = 1; attempt <= 2; attempt++)
+        {
+            try
+            {
+                await summons.QueueSerializedWriteAsync(id, async ct => { await store.SetPurchasedSlotsAsync(id, slots, ct).ConfigureAwait(false); return true; }).ConfigureAwait(false);
+                return;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("pet.stable", ex);
+                _logger.LogFault("pet-stable", ex, "pet stable slot rollback failed for character {CharacterId} (attempt {Attempt})", id, attempt);
+                if (attempt == 2)
+                {
+                    AnomalyLedger.Shared.Report("pet", "stable-rollback-failed", $"character {id}", $"slot purchase saved but not paid for and the rollback to {slots} failed twice: {ex.Message}", AnomalySeverity.Error);
+                }
+            }
+        }
+    }
+
     private bool Allowed(Player player, ObjectGuid npc)
         => player.Class == Class.Hunter && player.IsInWorld
             && (npc == player.Guid ? _gmStables.Contains(Id(player)) : IsStableMaster is { } check && check(player, npc));
@@ -342,10 +420,10 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
         }
 
         entry.Busy = true;
-        _ = LoadAsync(player, id, entry, store, next);
+        _ = LoadAsync(player, id, entry, store, next, behindUnchargedPurchase: _unchargedPurchases.ContainsKey(id), answerWhenDropped: failWhenBusy);
     }
 
-    private async Task LoadAsync(Player player, int id, Entry entry, IPetStableStore store, Action<PetStableState> next)
+    private async Task LoadAsync(Player player, int id, Entry entry, IPetStableStore store, Action<PetStableState> next, bool behindUnchargedPurchase, bool answerWhenDropped)
     {
         PetStableState? loaded = null;
         try
@@ -368,11 +446,29 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
                 return;
             }
 
-            entry.State = loaded;
             foreach (StabledPet stabled in loaded.Pets)
             {
                 summons.ReservePetNumber(stabled.Pet.PetNumber);
             }
+
+            if (behindUnchargedPurchase)
+            {
+                // Queued behind a slot purchase that was not yet charged: it read the purchased slot, which may be taken back. Whatever
+                // order the continuations run in, drop the entry so the next use reloads after the purchase is settled.
+                if (ReferenceEquals(_entries.GetValueOrDefault(id), entry))
+                {
+                    _entries.Remove(id);
+                }
+
+                if (answerWhenDropped)
+                {
+                    Send(player, StableResult.ErrStable);
+                }
+
+                return;
+            }
+
+            entry.State = loaded;
 
             if (player.IsInWorld && ReferenceEquals(_entries.GetValueOrDefault(id), entry))
             {

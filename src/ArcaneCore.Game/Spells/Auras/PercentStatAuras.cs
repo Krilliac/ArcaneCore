@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Stats;
 
 namespace ArcaneCore.Game.Spells;
@@ -239,7 +240,9 @@ public sealed class PercentStatAuras : ISpellHandlerModule
         int current = unit.GetInt32(field);
         int pre = current - ledger.Applied(group);
         int baseValue = unit is Player player && ledger.BasePct(group) != 1.0f ? player.StatState.ItemResistance(school) : 0;
-        int value = Math.Max(0, Modified(ledger, group, pre, baseValue));
+        // The same floor as the resist chance: 0, unless the creature's own (template) resistance is negative (then none).
+        int floor = SpellResistance.Floor(unit is ArcaneCore.Game.Creatures.Creature creature ? creature.CreateResistance(school) : 0);
+        int value = Math.Max(floor, Modified(ledger, group, pre, baseValue));
         ledger.SetApplied(group, value - pre);
         if (value != current)
         {

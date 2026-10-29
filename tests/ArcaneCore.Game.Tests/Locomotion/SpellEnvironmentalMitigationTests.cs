@@ -118,17 +118,16 @@ public sealed class SpellEnvironmentalMitigationTests
     }
 
     [Fact]
-    public void ANegativeResistance_AddsDamage()
+    public void ANegativeResistanceOnAPlayer_CountsAsZero_NoBonusDamage()
     {
         using SpellTestKit kit = Kit();
         (Player player, FakeSession session, _) = Setup(kit);
 
-        // -150 / (60 x 5 skill) = -0.5: half again as much (SpellCaster.cpp:900-907, Unit.cpp:1948-1953, Player.cpp:752).
+        // A curse can take the field below 0, but a player has no negative base resistance, so the total counts as 0 (Patch 1.9.0).
         Resistance(player, SpellSchool.Fire, -150);
 
-        Assert.Equal(150u, EnvironmentalDamage.Apply(kit.World, player, EnvironmentalDamageType.Lava, 100));
-        Assert.Equal(ExpectedLog(player.Guid.Value, EnvironmentalDamageType.Lava, 150, 0, -50), Assert.Single(Logs(session)));
-        Assert.Equal(850u, player.Health);
+        Assert.Equal(100u, EnvironmentalDamage.Apply(kit.World, player, EnvironmentalDamageType.Lava, 100));
+        Assert.Equal(900u, player.Health);
     }
 
     [Fact]

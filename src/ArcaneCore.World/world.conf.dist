@@ -7624,10 +7624,12 @@ SpellRules.FrostShockDiminishesAsRoot = false
 #
 #    SpellRules.IgnoreHolyResistance
 #        Description: Whether holy resistance is ignored when resisting damage. Retail (vmangos
-#                     Unit::CalculateDamageAbsorbAndResist, Unit.cpp:1936-1946): false, holy is
-#                     resisted like any magic school. true reproduces cmangos-classic
+#                     Unit::CalculateDamageAbsorbAndResist, Unit.cpp:1936-1946): false; vmangos
+#                     holds the holy resistance field at 0 (Player::UpdateResistances), so holy is
+#                     only resisted through the level-based innate resist of higher-level creatures.
+#                     true reproduces cmangos-classic
 #                     (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely
-#                     ignore holy resistance value").
+#                     ignore holy resistance value") and also drops that innate part.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -18410,8 +18412,9 @@ World.Playerbots.Social.WarMode.RemoveCaps = true
 #    World.Playerbots.StallSeconds
 #        Description: Seconds of world time a living bot may go without any progress (it moved less
 #                     than 10 yards and its level, experience, money, bags, quest log and spells did
-#                     not change) before it reports a stall in .playerbot list and gives up its goal
-#                     (PlayerbotStallWatch; 10..86400).
+#                     not change, and it took no target's health to a new low) before it reports a
+#                     stall in .playerbot list and gives up its goal (PlayerbotStallWatch;
+#                     10..86400).
 #        Type: int
 #        Default: 120
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18568,6 +18571,18 @@ World.Playerbots.ThinkIntervalMs = 500
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ThinkStarvedGapMs = 10000
+
+#
+#    World.Playerbots.Travel.AreaTriggers
+#        Description: Let bots walk into same-map teleport triggers as a leg (Teldrassil's Darnassus
+#                     and Rut'theran portals; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.AreaTriggers = true
 
 #
 #    World.Playerbots.Travel.Boats

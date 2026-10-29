@@ -102,30 +102,64 @@ public sealed class ItemMiscHandlers : IOpcodeHandlerGroup
         player.Inventory.TryReadItem(bag, slot);
     }
 
-    /// <summary>CMSG_AUTOBANK_ITEM: u8 bag, u8 slot.</summary>
+    /// <summary>
+    /// CMSG_AUTOBANK_ITEM: u8 bag, u8 slot (vmangos ItemHandler.cpp HandleAutoBankItemOpcode). An item offered in the open trade is
+    /// refused and scored like the sibling inventory moves (<see cref="ItemHandlers.RefuseIfOffered(WorldSession, Player, Item, bool)"/>);
+    /// vmangos has no such check. Away from a banker the move itself answers TooFarAwayFromBank first, unscored.
+    /// </summary>
     private static void HandleAutoBankItem(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
         byte bag = reader.ReadByte();
         byte slot = reader.ReadByte();
-        player.Inventory.AutoBankItem(bag, slot);
+        PlayerInventory inventory = player.Inventory;
+        if (inventory.BankUsable && inventory.GetItem(bag, slot) is { } item && ItemHandlers.RefuseIfOffered(session, player, item))
+        {
+            return;
+        }
+
+        inventory.AutoBankItem(bag, slot);
     }
 
-    /// <summary>CMSG_AUTOSTORE_BANK_ITEM: u8 bag, u8 slot.</summary>
+    /// <summary>
+    /// CMSG_AUTOSTORE_BANK_ITEM: u8 bag, u8 slot (vmangos ItemHandler.cpp HandleAutoStoreBankItemOpcode). An offered source is refused and
+    /// scored; a bank stack whose automatic inventory destination would top up an offered stack is refused unscored, because the client
+    /// cannot see where CanStoreItem(NullBag, NullSlot) merges it.
+    /// </summary>
     private static void HandleAutoStoreBankItem(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
         byte bag = reader.ReadByte();
         byte slot = reader.ReadByte();
-        player.Inventory.AutoStoreBankItem(bag, slot);
+        PlayerInventory inventory = player.Inventory;
+        if (inventory.BankUsable && inventory.GetItem(bag, slot) is { } item
+            && (ItemHandlers.RefuseIfOffered(session, player, item)
+                || (InventorySlots.IsBankPos(bag, slot)
+                    && ItemHandlers.RefuseIfStoredOntoOffered(session, player, item.Template, item.Count, item, InventorySlots.NullBag, InventorySlots.NullSlot))))
+        {
+            return;
+        }
+
+        inventory.AutoStoreBankItem(bag, slot);
     }
 
-    /// <summary>CMSG_AUTOEQUIP_ITEM_SLOT: u64 item guid, u8 destination slot.</summary>
+    /// <summary>
+    /// CMSG_AUTOEQUIP_ITEM_SLOT: u64 item guid, u8 destination slot (vmangos ItemHandler.cpp HandleAutoEquipItemSlotOpcode). An offered
+    /// item is refused and scored; an offered item in the destination (swapped out) is refused unscored.
+    /// </summary>
     private static void HandleAutoEquipItemSlot(WorldSession session, Player player, byte[] payload)
     {
         var reader = new PacketReader(payload);
         ObjectGuid guid = new(reader.ReadUInt64());
         byte slot = reader.ReadByte();
-        player.Inventory.AutoEquipItemSlot(guid, slot);
+        PlayerInventory inventory = player.Inventory;
+        if (InventorySlots.IsEquipmentPos(InventorySlots.Bag0, slot)
+            && ((inventory.GetItemByGuid(guid) is { } item && ItemHandlers.RefuseIfOffered(session, player, item))
+                || (inventory.GetItem(InventorySlots.Bag0, slot) is { } equipped && ItemHandlers.RefuseIfOffered(session, player, equipped, score: false))))
+        {
+            return;
+        }
+
+        inventory.AutoEquipItemSlot(guid, slot);
     }
 }

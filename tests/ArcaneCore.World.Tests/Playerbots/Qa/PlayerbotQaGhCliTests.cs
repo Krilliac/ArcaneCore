@@ -699,6 +699,7 @@ public sealed class PlayerbotQaGhCliTests : IDisposable
         Assert.NotEmpty(result.StdOut.Trim());
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task RealRunner_KillsAChildAtTheTimeout()
     {

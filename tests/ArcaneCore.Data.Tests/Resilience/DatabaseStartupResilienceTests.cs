@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Resilience;
 using ArcaneCore.Data.Schema;
@@ -25,7 +23,7 @@ public sealed class DatabaseStartupResilienceTests
     [Fact]
     public async Task ClosedPort_IsRetriedThenExitsUnreachable_WithoutLeakingThePassword()
     {
-        int port = FreePort();
+        int port = ClosedLoopbackPort.Next();
         var log = new ListLogger();
         await using ServiceProvider provider = Build(
             log,
@@ -181,15 +179,6 @@ public sealed class DatabaseStartupResilienceTests
         services.AddAuthDatabase(config);
         services.AddDatabaseResilience(config);
         return services.BuildServiceProvider();
-    }
-
-    private static int FreePort()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
     }
 
     private sealed class ListLogger : ILoggerProvider, ILogger

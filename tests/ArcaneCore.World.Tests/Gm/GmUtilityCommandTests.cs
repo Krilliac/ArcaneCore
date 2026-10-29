@@ -23,6 +23,7 @@ public sealed class GmUtilityCommandTests
         }
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task Dismount_RepliesWhenNotMounted_AndClearsTheMount()
     {

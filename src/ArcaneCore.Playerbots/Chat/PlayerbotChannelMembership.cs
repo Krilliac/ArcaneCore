@@ -85,6 +85,18 @@ internal sealed class PlayerbotChannelMembership
         foreach (PlayerbotChannelBot bot in bots)
         {
             Player player = bot.Player;
+
+            // A 1.12 client keeps its channels for the whole flight and updates the local ones once it is off the taxi, so a bot in the air
+            // is left as it is (its state too: the landing zone differs from the recorded one, which makes the next pass change it).
+            // Reference: vmangos Player::UpdateZone (src/game/Objects/Player.cpp) skips UpdateLocalChannels while IsTaxiFlying(),
+            // "we don't change channels in preBC". This guard is wider: it also holds wanted-set changes (LookingForGroup, speech off)
+            // until the bot lands.
+            if (PlayerbotTaxi.IsFlying(player))
+            {
+                if (_states.TryGetValue(bot.Id, out State? flying)) flying.SeenMs = nowMs;
+                continue;
+            }
+
             uint map = player.MapId;
             if (_states.TryGetValue(bot.Id, out State? state) && ReferenceEquals(state.Player, player) && state.Zone == player.ZoneId
                 && state.Map == map && state.Wanted == wanted && nowMs - state.CheckedMs < RecheckMs)

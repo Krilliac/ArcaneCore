@@ -1,4 +1,7 @@
 using System.Numerics;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using Xunit;
 
@@ -68,5 +71,97 @@ public sealed class PlayerbotCaveGroundTests
         Assert.Equal(BotZ - 1f, grounded.Z);
         Assert.Equal(ungrounded.X, grounded.X);
         Assert.Equal(ungrounded.Y, grounded.Y);
+    }
+
+    /// <summary>
+    /// Live 2026-10-27 (issues #1442, #1567, Timbermaw Hold): the wander leg looked for the floor under its goal from 22 yards over the
+    /// bot, which inside a tunnel starts in the rock over it and meets the roof, so the leg was planned toward the roof and refused.
+    /// The floor 1 yard under the bot and the roof 12 yards over it: the leg has to be asked for the floor.
+    /// </summary>
+    [Fact]
+    public async Task PlanWander_InsideATunnel_AsksForTheFloor_NotTheRoof()
+    {
+        var recording = new RecordingPathfinder();
+        PlanOutcome outcome = await PlanWanderAsync(new SurfacesLos(99f, 112f), recording);
+
+        Assert.Equal(PlanOutcome.Route, outcome);
+        Assert.NotEmpty(recording.Ends);
+        Assert.Equal(99f, recording.Ends[0].Z);
+    }
+
+    /// <summary>Open ground whose only surface is a slope 15 yards over the bot: the leg still climbs onto it (the old snap's job).</summary>
+    [Fact]
+    public async Task PlanWander_TowardAHillsideRisingAboveTheBot_StillSnapsOntoIt()
+    {
+        var recording = new RecordingPathfinder();
+        PlanOutcome outcome = await PlanWanderAsync(new SurfacesLos(BotZ + 15f), recording);
+
+        Assert.Equal(PlanOutcome.Route, outcome);
+        Assert.NotEmpty(recording.Ends);
+        Assert.Equal(BotZ + 15f, recording.Ends[0].Z);
+    }
+
+    /// <summary>
+    /// A hillside floor 15 yards over the bot that the region graph puts in another walking component (a ledge across a cliff) is not
+    /// snapped onto: the goal point stays where it was. The same hillside in the bot's own component is snapped onto.
+    /// </summary>
+    [Fact]
+    public void GroundNear_HillsideInAnotherWalkingComponent_IsNotSnappedOnto()
+    {
+        const float hillside = BotZ + 15f;
+        static float Hill(float x, float y, float probeFrom) => hillside;
+        Vector3 point = new(48f, 0f, BotZ);
+
+        Assert.Equal(point, PlayerbotNavigation.GroundNear(Hill, floor => floor.Z < hillside, BotZ, point));
+        Assert.Equal(hillside, PlayerbotNavigation.GroundNear(Hill, floor => floor.Z >= hillside, BotZ, point).Z);
+    }
+
+    private static async Task<PlanOutcome> PlanWanderAsync(ILineOfSight los, IPathfinder pathfinder)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = false } };
+        var brain = new PlayerbotBrain(session, options);
+        try
+        {
+            return await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                player.SetPosition(100f, 100f, BotZ, 0f);
+                WorldCollision.Of(host.World).Install(lineOfSight: los, pathfinder: pathfinder);
+                TileWait wait = default;
+                return PlayerbotNavigation.PlanWander(player, new Vector3(148f, 100f, BotZ), options, ref wait, host.World.NowMs, out _);
+            });
+        }
+        finally { brain.Stop(); session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>Model surfaces at fixed heights: a probe returns the highest one that is not over it and within the search distance.</summary>
+    private sealed class SurfacesLos(params float[] surfaces) : ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+        {
+            float? best = null;
+            foreach (float surface in surfaces)
+                if (surface <= z && surface >= z - maxSearchDistance && (best is null || surface > best)) best = surface;
+            return best;
+        }
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        { info = default; return false; }
+    }
+
+    private sealed class RecordingPathfinder : IPathfinder
+    {
+        public List<Vector3> Ends { get; } = [];
+        public bool Enabled => true;
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            Ends.Add(end);
+            return PathResult.StraightLine(start, end, PathType.Normal);
+        }
     }
 }

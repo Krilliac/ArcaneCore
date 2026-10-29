@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells.Rules;
@@ -508,6 +509,11 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(spell);
         bool canResist = spell.School != SpellSchool.Normal && !IsBinary(spell) && !spell.IgnoresResistances();
+        if (ReferenceEquals(caster, target) && spell.IsHellfire)
+        {
+            canResist = false; // a warlock cannot resist its own Hellfire (Patch 1.9.0; vmangos lets it, retail wins)
+        }
+
         return RollResist(system, caster, target, spell.School, damage, canResist, periodic ? spell : null);
     }
 
@@ -589,7 +595,9 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(target);
         int resistance = target.GetInt32(UpdateFields.UnitFieldResistances + (int)school);
         int levelDiff = target.EffectiveLevelAgainst(caster, options.WorldBossLevelDiff) - caster.EffectiveLevelAgainst(target, options.WorldBossLevelDiff);
-        return SpellResistance.Chance(resistance, penetration, MeleeHitTable.SkillMaxForLevel(caster, target), caster.Level, levelDiff, innateResists && target is not Player);
+        // Only the unit's own create resistance can make it vulnerable; a resistance aura alone cannot take the total below 0 (Patch 1.9.0).
+        int baseResistance = target is Creature creature ? creature.CreateResistance((int)school) : 0;
+        return SpellResistance.Chance(resistance, penetration, MeleeHitTable.SkillMaxForLevel(caster, target), caster.Level, levelDiff, innateResists && target is not Player, baseResistance);
     }
 
     /// <summary>Binary spells are all-or-nothing, see <see cref="SpellBinary.IsBinary"/>.</summary>

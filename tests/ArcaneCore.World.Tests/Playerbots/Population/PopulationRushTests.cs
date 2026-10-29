@@ -329,6 +329,11 @@ public sealed class PopulationRushTests
             Assert.Equal("halted", ended.State);
             Assert.Equal(2, ended.Created);
             Assert.Contains("MaxBots", ended.Reason);
+            // The rush counts a bot when it is created; it is Running once its login has gone through, which on a loaded machine can
+            // trail the rush's end. The cap holds whatever the state: never more than two bots at all, and both of them reach Running.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(30);
+            while (world.RunningCount < 2 && DateTime.UtcNow < deadline) await Task.Delay(50);
+            Assert.Equal(2, world.Bots.Snapshot().Count());
             Assert.Equal(2, world.RunningCount);
         }
 

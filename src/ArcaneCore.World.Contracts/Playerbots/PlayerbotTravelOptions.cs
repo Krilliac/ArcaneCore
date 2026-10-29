@@ -16,6 +16,9 @@ public sealed class PlayerbotTravelOptions
     /// <summary>Let bots ride the boats (Menethil - Auberdine, Menethil - Theramore, Auberdine - Rut'theran, Booty Bay - Ratchet; on by default).</summary>
     public bool Boats { get; set; } = true;
 
+    /// <summary>Let bots walk into same-map teleport triggers as a leg (Teldrassil's Darnassus and Rut'theran portals; on by default).</summary>
+    public bool AreaTriggers { get; set; } = true;
+
     /// <summary>Let Horde bots ride the zeppelins (Orgrimmar - Undercity, Orgrimmar - Grom'gol, Undercity - Grom'gol; on by default).</summary>
     public bool Zeppelins { get; set; } = true;
 

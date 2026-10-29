@@ -62,6 +62,9 @@ public sealed class PlayerbotMountTests
         spells.Store = new SpellStore([.. spells.Store.All.Where(s => s.Id != MountFixture.MountSpell), new SpellInfo
         {
             Id = MountFixture.MountSpell, Attributes = attributes,
+            // Permanent like the real mount spells. Without a duration the aura gets the 300 ms floor for sub-200 ms durations (SpellAuraHolder), and the
+            // bot dismounts on its own after 300 ms of world time, which a loaded host's test steps outlast.
+            Duration = new SpellDuration(-1, 0, -1),
             Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.Mounted, MiscValue = (int)MountFixture.MountCreature }, new(), new()],
         }], [], []);
     }
@@ -248,6 +251,23 @@ public sealed class PlayerbotMountTests
     private static PlayerbotRoute LongRoute(Player player, float yards = 200)
         => new([new Vector3(player.X, player.Y, player.Z), new Vector3(player.X + yards, player.Y, player.Z)], yards);
 
+    /// <summary>What a mount-up that did not happen saw: the bot's state that gates it and the mount driver's own fields.</summary>
+    internal static string MountState(WorldTestHost host, WorldSession session, Player p)
+    {
+        object driver = PlayerbotMount.For(session);
+        string fields = string.Join(", ", driver.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .Select(f => f.Name + "=" + f.GetValue(driver)));
+        SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+        return $"now={session.World.NowMs} stand={p.StandState} unit={p.UnitFlags} move={p.Movement.Flags} map={(p.Map is null ? "none" : p.MapId)} "
+            + $"outdoors={p.Map?.Collision.IsOutdoors(p.X, p.Y, p.Z)} pendingGo={spells.HasPendingGo(p)} alive={p.IsAlive} at={p.X:F1},{p.Y:F1},{p.Z:F1} "
+            + $"mountItems={p.Inventory.GetItemCount(98003)} bagsLoaded={p.Inventory.IsLoaded} settling={p.IsQuestSettlementPending} combat={p.Combat.IsInCombat}; {fields}";
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldSession, string> MountStates = new();
+
+    /// <summary>The <see cref="MountState"/> after the last <see cref="TryMountAsync"/> of <paramref name="session"/> (for a failure message).</summary>
+    private static string? LastMountState(WorldSession session) => MountStates.TryGetValue(session, out string? state) ? state : null;
+
     private static async Task<(bool Took, bool Mounted, int Failures)> TryMountAsync(WorldTestHost host, WorldSession session, Action<Player>? arrange = null,
         SpellAttributes attributes = 0, ILineOfSight? los = null)
     {
@@ -270,8 +290,22 @@ public sealed class PlayerbotMountTests
             took = await host.OnWorldAsync(() => PlayerbotMount.BeforeStep(session, session.Player!, LongRoute(session.Player!), options));
         }
 
-        return await host.OnWorldAsync(() => (took, MountService.IsMounted(session.Player!), PlayerbotMount.For(session).Failures));
+        (bool, bool, int) result = await host.OnWorldAsync(() => (took, MountService.IsMounted(session.Player!), PlayerbotMount.For(session).Failures));
+        MountStates.AddOrUpdate(session, await host.OnWorldAsync(() => MountState(host, session, session.Player!)));
+        return result;
     }
+
+    /// <summary>The synthetic mount-up is permanent: the bot is still mounted a second of world time later, well past the 300 ms floor of a duration-less aura.</summary>
+    [Fact]
+    public async Task TheMountUp_Lasts_PastTheShortAuraFloor()
+        => await RunAsync(new MountFixture(), async (host, session) =>
+        {
+            (_, bool mounted, _) = await TryMountAsync(host, session);
+            Assert.True(mounted, LastMountState(session));
+            uint at = await host.OnWorldAsync(() => host.World.NowMs);
+            await host.WaitForWorldAsync(() => unchecked((int)(host.World.NowMs - at)) >= 1000, "a second of world time");
+            Assert.True(await host.OnWorldAsync(() => MountService.IsMounted(session.Player!)), await host.OnWorldAsync(() => MountState(host, session, session.Player!)));
+        });
 
     [Fact]
     public async Task LongLegOutdoors_MountsThroughTheRealItemUsePath()
@@ -286,7 +320,7 @@ public sealed class PlayerbotMountTests
             try
             {
                 (bool took, bool mounted, int failures) = await TryMountAsync(host, session);
-                Assert.True(mounted);
+                Assert.True(mounted, LastMountState(session));
                 Assert.False(took); // mounted at once: the step walks on
                 Assert.Equal(0, failures);
             }
@@ -432,20 +466,22 @@ public sealed class PlayerbotMountTests
             try
             {
                 await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(MountFixture.TrainerGuid), "trainer visible");
+                string afterStep = string.Empty;
                 await host.OnWorldAsync(() =>
                 {
                     InstallMountSpell(host);
                     Player player = session.Player!;
                     player.Inventory.AddItem(98003, 1, out _);
                     session.ManagedBudget = new ManagedActionBudget(5);
-                    PlayerbotMount.BeforeStep(session, player, LongRoute(player), new PlayerbotOptions { Enabled = true });
+                    bool took = PlayerbotMount.BeforeStep(session, player, LongRoute(player), new PlayerbotOptions { Enabled = true });
+                    afterStep = $"took={took}; " + MountState(host, session, player);
                     return true;
                 });
                 await SpellBatchGoneAsync(host, session);
                 await host.OnWorldAsync(() =>
                 {
                     Player player = session.Player!;
-                    Assert.True(MountService.IsMounted(player));
+                    Assert.True(MountService.IsMounted(player), afterStep + " || later: " + MountState(host, session, player));
                     session.ManagedBudget = new ManagedActionBudget(5);
                     var writer = new PacketWriter(8);
                     writer.WriteUInt64(MountFixture.TrainerGuid.Value);
@@ -570,7 +606,7 @@ public sealed class PlayerbotMountTests
         {
             (bool took, bool battle, int fails) = await TryMountAsync(host, session, p => { host.WorldServices.GetRequiredService<SpellFeature>().Spellbook.LearnSpell(p, MountFixture.MountSpell); p.SetByte(UpdateFields.UnitFieldBytes1, 2, 17); }); // battle stance
             Assert.Equal((false, 0), (took, fails));
-            Assert.True(battle);
+            Assert.True(battle, LastMountState(session));
         });
     }
 

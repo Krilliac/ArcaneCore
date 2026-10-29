@@ -441,9 +441,13 @@ public sealed class TickWatchdogFeatureTests
         TickMonitor monitor = host.WorldServices.GetRequiredService<TickMonitor>();
         Assert.NotNull(monitor.HangDetail);
 
-        var slow = new SyntheticSlowFeature(80);
+        // Wait for a slow tick the feature caused, not for any slow tick: on a loaded machine an ordinary tick also crosses the slow-tick
+        // line (one of 11 ms in commands was recorded first). The feature's 250 ms stay far above what load makes of an ordinary tick, so
+        // its tick is the slowest one the hang detail reports.
+        var slow = new SyntheticSlowFeature(250);
         host.World.Updated += slow.OnUpdate;
-        await WorldTestHost.WaitForAsync(() => host.World.Stats.SlowTicks(TimeSpan.FromSeconds(60)).Count > 0, "a recorded slow tick");
+        await WorldTestHost.WaitForAsync(() => host.World.Stats.SlowTicks(TimeSpan.FromSeconds(60)).Any(t => t.TopFeatures.Any(f => f.Name == "SyntheticSlowFeature")),
+            "a recorded slow tick of the synthetic feature");
         host.World.Updated -= slow.OnUpdate;
 
         string detail = monitor.HangDetail!(false);
@@ -457,11 +461,11 @@ public sealed class TickWatchdogFeatureTests
         Assert.Contains("save queue depth ", detail);
         Assert.Contains("oldest pending ", detail);
 
-        // The slowest recorded body is at least the 80 ms the feature slept.
+        // The slowest recorded body is at least the 250 ms the feature slept.
         SlowTickInfo worst = host.World.Stats.SlowTicks(TimeSpan.FromSeconds(60))[0];
-        Assert.True(worst.DurationMicros >= 70_000, $"slow tick {worst.DurationMicros} us");
+        Assert.True(worst.DurationMicros >= 240_000, $"slow tick {worst.DurationMicros} us");
         Assert.Equal("SyntheticSlowFeature", worst.TopFeatures[0].Name);
-        Assert.True(worst.TopFeatures[0].Micros >= 70_000);
+        Assert.True(worst.TopFeatures[0].Micros >= 240_000);
     }
 
     [Fact]

@@ -481,6 +481,7 @@ public sealed class PlayerbotRunClearWorldTests
     /// A survivor that stands on the exit point while its trigger does not fire (the bot never reports a move onto it) is within WalkTo's arrival
     /// distance, which used to reset the give-up count on every think and hold it there for good: it must give up on the exit and retreat.
     /// </summary>
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task AWipeSurvivorStandingOnAnExitThatNeverFires_GivesUpOnTheExitAndRetreats()
     {

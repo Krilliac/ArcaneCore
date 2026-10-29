@@ -324,14 +324,17 @@ public sealed class SqliteWriteGateFairnessTests
         Assert.Null(gate.Current);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task ATimedOutWaiter_ReturnsNull_WithinItsBound_AndLeavesTheQueue()
     {
-        SqliteWriteGate gate = NewGate();
+        // Real time, but a 60 s poll: a 300 ms bound must be honoured by the wake slice (Math.Min(remaining, poll)). A slice of the whole poll
+        // would take 60 s and an instant null about 0, so the bounds below separate both from a right answer by far more than a loaded
+        // machine's scheduling delay (the old 1 s poll left 200 ms between a right answer and the bug).
+        SqliteWriteGate gate = SqliteWriteGate.CreateIsolated(Path.Combine(Path.GetTempPath(), "gate-fair-" + Guid.NewGuid().ToString("N") + ".db"), LongPollClock.Instance);
         SqliteWriteGate.Hold h = gate.Enter(0, "H", 0)!;
         long timeouts = gate.TimeoutsTotal;
-        // Each wait is timed inside its own task, so pool scheduling delay is excluded. A 300 ms bound must be honoured by the 1 s wake slice
-        // (Math.Min(remaining, 1000)): a fixed 1 s slice would take about 1000 ms, an instant null would take about 0.
+        // Each wait is timed inside its own task, so pool scheduling delay is excluded.
         (SqliteWriteGate.Hold? Hold, double Ms) asyncResult = await Task.Run(async () =>
         {
             long start = Stopwatch.GetTimestamp();
@@ -346,13 +349,25 @@ public sealed class SqliteWriteGateFairnessTests
         });
         Assert.Null(asyncResult.Hold);
         Assert.Null(syncResult.Hold);
-        Assert.InRange(asyncResult.Ms, 250, 800);
-        Assert.InRange(syncResult.Ms, 250, 800);
+        Assert.InRange(asyncResult.Ms, 300, 20_000); // never before the bound: the gate gives up only once the clock says 300 ms passed
+        Assert.InRange(syncResult.Ms, 300, 20_000);
         Assert.Equal(0, gate.Waiting);
         Assert.Equal(timeouts + 2, gate.TimeoutsTotal);
         h.Release();
         SqliteWriteGate.Hold? fresh = gate.Enter(0, "fresh", 0);
         Assert.NotNull(fresh);
         fresh.Release();
+    }
+
+    /// <summary>The system clock with a 60 s poll (see <see cref="ATimedOutWaiter_ReturnsNull_WithinItsBound_AndLeavesTheQueue"/>).</summary>
+    private sealed class LongPollClock : IWriteGateClock
+    {
+        public static readonly LongPollClock Instance = new();
+
+        public double NowMs => SystemWriteGateClock.Instance.NowMs;
+
+        public double PausedMs => SystemWriteGateClock.Instance.PausedMs;
+
+        public int PollMs => 60_000;
     }
 }

@@ -10,6 +10,12 @@ public static class SpellResistance
     public const float MaxChance = 0.75f;
 
     /// <summary>
+    /// The lowest total resistance a unit can have: 0 when its own create resistance is not negative, no floor (<see cref="int.MinValue"/>)
+    /// when it is (vmangos Unit::GetTotalResistanceValue). The resist chance and the percent-aura field refresh share this rule.
+    /// </summary>
+    public static int Floor(int baseResistance) => baseResistance < 0 ? int.MinValue : 0;
+
+    /// <summary>
     /// The resist chance of damage against a victim: positive 0..0.75, or negative -0.75..0 for a
     /// vulnerability (the victim has negative resistance).
     /// </summary>
@@ -19,8 +25,15 @@ public static class SpellResistance
     /// <param name="casterLevel">The caster's own level (the conversion divides by it).</param>
     /// <param name="innateLevelDiff">Victim level minus caster level as each sees the other (boss-relative).</param>
     /// <param name="applyInnate">Whether the creature innate resistance applies (creature victim, damage rather than hit).</param>
-    public static float Chance(int victimResistance, int penetration, int skillMax, int casterLevel, int innateLevelDiff, bool applyInnate)
+    /// <param name="baseResistance">
+    /// The victim's own (create) resistance in the school, before any aura. A resistance aura (Curse of the Elements, Curse of Shadow)
+    /// cannot push the total below 0 unless this base is itself negative: a real vulnerability only comes from the unit (Patch 1.9.0;
+    /// vmangos Unit::GetTotalResistanceValue concept). A player has 0.
+    /// </param>
+    public static float Chance(int victimResistance, int penetration, int skillMax, int casterLevel, int innateLevelDiff, bool applyInnate, int baseResistance = 0)
     {
+        victimResistance = Math.Max(victimResistance, Floor(baseResistance));
+
         float resistance = victimResistance + penetration;
 
         // 1.12: penetration alone can never push a non-negative resistance below zero (:896-898).
