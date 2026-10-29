@@ -22859,7 +22859,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400).",
+      "meaning": "Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change, and it took no target's health to a new low) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
