@@ -831,6 +831,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             snapshot = entry.ToSnapshot();
         }
 
+        // A second DrainProcessAsync on an entry that ended Faulted finds no process and marks it Drained (follow-up: keep Faulted until reconciled).
         // Outside _gate: the wrapper's Dispose kills again and can block (up to the confirm timeout) when a kill was refused; no one else may wait on that.
         toDispose?.Dispose();
         return snapshot;

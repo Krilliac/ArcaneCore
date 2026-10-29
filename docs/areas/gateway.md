@@ -197,8 +197,10 @@ recovery).
     that exists today.
   - `IRealmAuthorityLeaseStore` has only an in-memory implementation and no DI registration. The `.cluster leases` summary
     therefore always shows the fallback owner (combined, or the character ownership epoch), never a realm lease token.
-- **The M15.4 host supervisor is a library, not a host.** `ClusterHostSupervisor` (process admission, merged console, restart
-  backoff) is exercised only by its tests. No daemon or tool constructs it or binds its options (the Cluster:Supervisor section,
-  including the per-process console switch described in the [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)),
-  so those keys are read by nothing, and they are not in the conf catalog. `MinClusterProcesses` is declared but not
-  enforced by admission.
+- **The M15.4 host supervisor is hosted as an opt-in mode, with gaps.** `Cluster:Supervisor:Enabled` runs `ArcaneCore.World` as the
+  supervisor only (see "Running under the host supervisor" above and the
+  [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)); the `Cluster:Supervisor` keys are in the conf
+  catalog and `MinClusterProcesses` is enforced when the supervisor starts. Not built: the coordinator role, restart
+  reconciliation (the owned-pid set is in memory and does not survive a supervisor restart, so children of a dead supervisor
+  are not found again), and placement of new or empty maps onto workers. A second drain of an entry that ended Faulted (a kill the
+  OS refused) marks it Drained again; that is not yet reconciled.
