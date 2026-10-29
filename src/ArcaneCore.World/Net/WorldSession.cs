@@ -317,6 +317,10 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         ObserveOutbound(opcode, payload);
+        if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Outbound(opcode, payload);
+        }
 
         if (_remoteOutput is not null)
         {
@@ -443,6 +447,10 @@ public sealed partial class WorldSession : IPlayerSession
                 RecordHandlerLatency(packet.Handler.Opcode, handlerStart);
 
                 LogIfSlowPacket(packet.Handler.Opcode, handlerStart);
+                if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+                {
+                    sessionTrace.Handled(packet.Handler.Opcode, handlerStart, packet.ReceivedMs);
+                }
             }
             catch (Exception ex) when (IsMalformed(ex))
             {
@@ -830,7 +838,13 @@ public sealed partial class WorldSession : IPlayerSession
                 return true;
             }
 
+            long traceStart = Volatile.Read(ref _sessionTrace) is null ? 0 : Stopwatch.GetTimestamp();
             await handler.Session!(this, payload).ConfigureAwait(false);
+            if (traceStart != 0 && Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+            {
+                sessionTrace.Handled(opcode, traceStart, 0);
+            }
+
             return true;
         }
         catch (Exception ex) when (IsMalformed(ex))
@@ -1123,6 +1137,11 @@ public sealed partial class WorldSession : IPlayerSession
             _packetCapture?.Stop(); // the writer drains in the background; the lock is not held for the disk
             _packetCapture = null;
             _outbound.Writer.TryComplete();
+        }
+
+        if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Disconnected(this);
         }
 
         _registry.Unregister(this);

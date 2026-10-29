@@ -49,6 +49,7 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
         // The anticheat checks the acknowledgement's clock and starts a new baseline after the launch (docs/areas/anticheat.md).
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: true);
+        session.SessionTrace?.Ack(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement.Time, knockback: true);
         MovementHandlers.ApplyObserved(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement);
         antiCheat?.AfterMovement(player);
         player.Locomotion.ResetFall();

@@ -3680,6 +3680,94 @@ Diagnostics.PacketCapture.Enabled = false
 #
 Diagnostics.PacketCapture.MaxBytes = 67108864
 
+#----------------------------------------------------------------------------
+# Diagnostics:SessionTrace
+#----------------------------------------------------------------------------
+
+#
+#    Diagnostics.SessionTrace.BurstLines
+#        Description: Lines one trace may write in a burst (the capacity of its token bucket, full
+#                     when the trace starts). Default 200.
+#        Type: int
+#        Default: 200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnosticssessiontrace
+#
+Diagnostics.SessionTrace.BurstLines = 200
+
+#
+#    Diagnostics.SessionTrace.DefaultMinutes
+#        Description: Minutes a trace runs when on is given no minutes. Clamped to 1 to MaxMinutes.
+#                     Default 30.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnosticssessiontrace
+#
+Diagnostics.SessionTrace.DefaultMinutes = 30
+
+#
+#    Diagnostics.SessionTrace.Enabled
+#        Description: Permit a Game Master to start session traces. When false, .debug trace session
+#                     ... on is refused and nothing is ever written. Default true.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnosticssessiontrace
+#
+Diagnostics.SessionTrace.Enabled = true
+
+#
+#    Diagnostics.SessionTrace.LinesPerSecond
+#        Description: Lines per second one trace may write on average (the refill rate of its token
+#                     bucket); lines over the budget are dropped and counted. Default 50.
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnosticssessiontrace
+#
+Diagnostics.SessionTrace.LinesPerSecond = 50
+
+#
+#    Diagnostics.SessionTrace.MaxMinutes
+#        Description: Longest a trace may run in minutes; a longer request is clamped and the reply
+#                     says so. Default 240.
+#        Type: int
+#        Default: 240
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnosticssessiontrace
+#
+Diagnostics.SessionTrace.MaxMinutes = 240
+
+#
+#    Diagnostics.SessionTrace.MaxTracedCharacters
+#        Description: Most characters that can be traced at the same time; turning a further one on
+#                     is refused. Re-tracing a traced character is not a further one. Default 16.
+#        Type: int
+#        Default: 16
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnosticssessiontrace
+#
+Diagnostics.SessionTrace.MaxTracedCharacters = 16
+
+#
+#    Diagnostics.SessionTrace.SlowHandlerMicroseconds
+#        Description: A packet handler is logged (handled line) only when it ran longer than this
+#                     many microseconds. Default 1000.
+#        Type: int
+#        Default: 1000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnosticssessiontrace
+#
+Diagnostics.SessionTrace.SlowHandlerMicroseconds = 1000
+
 ###############################################################################
 # ECONOMY
 ###############################################################################

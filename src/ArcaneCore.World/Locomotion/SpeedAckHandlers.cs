@@ -54,6 +54,7 @@ public sealed class SpeedAckHandlers : IOpcodeHandlerGroup
         // The anticheat checks the acknowledgement's clock (docs/areas/anticheat.md).
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: false);
+        session.SessionTrace?.Ack(session, player, SpeedPackets.AckOpcode(type), ack.Movement.Time, knockback: false);
         UnitSpeed.SetReal(player, type, ack.Speed);
         MovementHandlers.ApplyObserved(session, player, SpeedPackets.AckOpcode(type), ack.Movement);
         antiCheat?.AfterMovement(player);

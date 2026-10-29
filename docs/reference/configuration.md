@@ -33,6 +33,7 @@ How to read the tables:
 - [`Database`](#database)
 - [`Diagnostics`](#diagnostics)
 - [`Diagnostics:PacketCapture`](#diagnosticspacketcapture)
+- [`Diagnostics:SessionTrace`](#diagnosticssessiontrace)
 - [`Economy`](#economy)
 - [`Enchanting`](#enchanting)
 - [`GameObjects`](#gameobjects)
@@ -480,6 +481,18 @@ How to read the tables:
 | `Diagnostics:PacketCapture:Directory` | `string` | `"packet-captures"` | - | Directory for new traces; generated filenames do not include player input. |
 | `Diagnostics:PacketCapture:Enabled` | `bool` | `false` | - | Permit an Administrator to start a session capture. Default false. |
 | `Diagnostics:PacketCapture:MaxBytes` | `long` | `67108864` | - | Maximum bytes in one trace, including its header; a full trace stops automatically. A trace also stops when the disk writer falls 8192 records behind. Records are written by a background writer and the file is finished asynchronously after a stop; the server drains open traces at shutdown. |
+
+## `Diagnostics:SessionTrace`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Diagnostics:SessionTrace:BurstLines` | `int` | `200` | - | Lines one trace may write in a burst (the capacity of its token bucket, full when the trace starts). Default 200. |
+| `Diagnostics:SessionTrace:DefaultMinutes` | `int` | `30` | - | Minutes a trace runs when `on` is given no minutes. Clamped to 1 to `MaxMinutes`. Default 30. |
+| `Diagnostics:SessionTrace:Enabled` | `bool` | `true` | - | Permit a Game Master to start session traces. When false, `.debug trace session ... on` is refused and nothing is ever written. Default true. |
+| `Diagnostics:SessionTrace:LinesPerSecond` | `int` | `50` | - | Lines per second one trace may write on average (the refill rate of its token bucket); lines over the budget are dropped and counted. Default 50. |
+| `Diagnostics:SessionTrace:MaxMinutes` | `int` | `240` | - | Longest a trace may run in minutes; a longer request is clamped and the reply says so. Default 240. |
+| `Diagnostics:SessionTrace:MaxTracedCharacters` | `int` | `16` | - | Most characters that can be traced at the same time; turning a further one on is refused. Re-tracing a traced character is not a further one. Default 16. |
+| `Diagnostics:SessionTrace:SlowHandlerMicroseconds` | `int` | `1000` | - | A packet handler is logged (`handled` line) only when it ran longer than this many microseconds. Default 1000. |
 
 ## `Economy`
 

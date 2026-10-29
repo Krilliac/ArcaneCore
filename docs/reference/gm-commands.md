@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 399 |
-| `Administrator` | 6 | 599 |
+| `GameMaster` | 3 | 401 |
+| `Administrator` | 6 | 601 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -92,6 +92,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug lift resume` | 6 | Administrator | stored level through the map | Syntax: .debug lift resume [#guid] Continue a frozen elevator from where it stands at its previous speed and resend it to the players who have it. A player standing on the lift during the resend gets the car destroyed and recreated under them; the client behaviour is unverified. |
 | `.debug lift speed` | 6 | Administrator | stored level through the map | Syntax: .debug lift speed #factor [#guid] Run the elevator at #factor times its speed (0.1 to 10; the reply says when it was clamped) on the server and resend it. Players who have it keep the normal speed on their clients (they see it out of sync) until .debug lift reset. Refused for map-wide trams (Deeprun Tram). |
 | `.debug lift reset` | 6 | Administrator | stored level through the map | Syntax: .debug lift reset [#guid] Put the elevator back on its normal schedule (the time since it was created) and resend it to the players who have it. A player standing on the lift during the resend gets the car destroyed and recreated under them; the client behaviour is unverified. |
+| `.debug trace` ... | 3 | GameMaster | declared retail level | Syntax: .debug trace session [$name] on\|off [#minutes] Per-session diagnostics traces. |
+| `.debug trace session` ... | 3 | GameMaster | declared retail level | Syntax: .debug trace session [$name] on\|off [#minutes] Turn the per-session trace of an online character on (for #minutes, default Diagnostics:SessionTrace:DefaultMinutes, at most MaxMinutes) or off. Without a name the selected player, or you, is traced. The trace writes the character's packets, movement, auras, deaths and anti-cheat verdicts to the log category ArcaneCore.SessionTrace, and survives a relog until it is turned off or runs out. |
+| `.debug trace session list` | 3 | GameMaster | declared retail level | Syntax: .debug trace session list List the session traces that are on: character, guid, endpoint, minutes left, lines written and dropped. |
 | `.debug gc` | 3 | GameMaster | declared retail level | Syntax: .debug gc Print the garbage collector's state: the last ephemeral, full blocking and background collection (pauses, promoted bytes, heap and fragmentation per generation), memory load, collection counts, total pause time, and the GC mode. |
 | `.debug gccollect` | 6 | Administrator | declared retail level | Syntax: .debug gccollect Force a full blocking, compacting garbage collection (including the large object heap) and show the heap before and after and how long it paused the server. Use sparingly on a live server. |
 | `.debug selfcheck` | 3 | GameMaster | declared retail level | Syntax: .debug selfcheck Inspect process and world health: thread-pool starvation, GC memory load, fault ledger signatures with source locations, invariant failures, world tick position/scheduler and database circuit breakers. |
