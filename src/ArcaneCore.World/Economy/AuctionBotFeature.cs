@@ -43,6 +43,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     private ItemsFeature? _items;
     private Timer? _timer;
     private IItemTemplateStore? _poolSource;
+    private ArcaneCore.Game.Npc.NpcStore? _vendorSource;
     private LootContent? _lootSource;
     private AuctionBotPlanner? _planner;
     private AuctionBotLootSources? _loot;
@@ -756,6 +757,20 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
     }
 
+    /// <summary>
+    /// The items a vendor sells, which <see cref="AuctionBotPricing"/> values at the vendor price: the direct <c>npc_vendor</c> rows plus the shared
+    /// <c>npc_vendor_template</c> stock that <c>NpcStore</c> merges into every vendor window.
+    /// </summary>
+    internal static HashSet<uint> VendorItemSet(ArcaneCore.Game.Npc.NpcStore? npcs)
+        => npcs is null ? [] : [.. npcs.Content.VendorItems.Select(v => v.Item), .. npcs.Content.VendorTemplateItems.Select(v => v.Item)];
+
+    /// <summary>
+    /// Whether the planner (and with it the pricing built from the vendor set) must be rebuilt: the item store changed, or the NPC store did
+    /// (<c>.reload npc_vendor</c> and the other NPC tables swap the whole <c>NpcStore</c>), or there is no planner yet.
+    /// </summary>
+    internal static bool PlannerIsStale(IItemTemplateStore store, IItemTemplateStore? poolSource, ArcaneCore.Game.Npc.NpcStore? npcs, ArcaneCore.Game.Npc.NpcStore? vendorSource, bool hasPlanner)
+        => !hasPlanner || !ReferenceEquals(store, poolSource) || !ReferenceEquals(npcs, vendorSource);
+
     private AuctionBotPlanner? EnsurePlanner()
     {
         if (_items is null || _items.LoadedStore is not ItemTemplateStore store || ReferenceEquals(store, ItemTemplateStore.Empty))
@@ -769,13 +784,15 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             return null;
         }
 
-        if (!ReferenceEquals(store, _poolSource) || _planner is null)
+        ArcaneCore.Game.Npc.NpcStore? npcs = services.GetService<QuestNpcFeature>()?.Services?.Npcs;
+        if (PlannerIsStale(store, _poolSource, npcs, _vendorSource, _planner is not null))
         {
-            HashSet<uint> vendorItems = services.GetService<QuestNpcFeature>()?.Services?.Npcs.Content.VendorItems.Select(v => v.Item).ToHashSet() ?? [];
+            HashSet<uint> vendorItems = VendorItemSet(npcs);
             var pricing = new AuctionBotPricing(Options, vendorItems);
             var pool = new AuctionBotItemPool(store.All, Options, pricing);
             _planner = new AuctionBotPlanner(Options, pricing, pool, _random) { Overrides = new Dictionary<uint, AuctionBotItemOverride>(_overrides) };
             _poolSource = store;
+            _vendorSource = npcs;
             _lootSource = null;
             logger.LogInformation("AHBot item pool: {Count} items ({Qualities})", pool.Count,
                 string.Join(", ", pool.CountByQuality().OrderBy(p => p.Key).Select(p => $"quality {p.Key}: {p.Value}")));

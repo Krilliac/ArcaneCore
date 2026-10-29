@@ -84,7 +84,7 @@ internal sealed record BoostEnvironment(
             CharacterBoostOptions.Bind(services.GetService<IConfiguration>()), suffixes);
     }
 
-    /// <summary>The last sources set with the content objects it was built from; a content reload replaces those objects, so a hit is always current.</summary>
+    /// <summary>The last sources set with the content objects it was built from. The NPC, quest, loot and event objects are replaced on a reload, so a hit on those is current; the creature content is not (see <see cref="CachedSources"/>).</summary>
     private sealed record SourcesCache(NpcStore Npcs, QuestStore Quests, LootContent Loot, GameEventRows Events, CreatureContent Creatures, HashSet<uint> Sources, HashSet<uint> QuestOnly);
 
     private static SourcesCache? _sourcesCache;
@@ -92,7 +92,7 @@ internal sealed record BoostEnvironment(
     /// <summary>
     /// The obtainable-item set, built once per content load instead of once per command (it walks every vendor row, quest and loot
     /// row). The cached set is shared and never mutated after <see cref="BoostItemSources.Build"/> returns. Keyed by reference
-    /// identity of the five content objects (the event rows and creature content are replaced, not mutated, on a reload); the swap of the single immutable record is atomic.
+    /// identity of the five content objects. The NPC, quest, loot and event objects are replaced on a reload. The creature content is mutated in place (<c>.reload creature_template</c> goes through <c>CreatureContent.SwapDefinitions</c> and bumps <c>DefinitionsVersion</c>), so its reference never changes and a template-only reload does not rebuild this set; that is correct today because <c>BoostEventBinding.From</c> reads only spawns, which that reload leaves alone. A use of template fields in the binding must add <c>DefinitionsVersion</c> to <see cref="SourcesCache"/>. The swap of the single immutable record is atomic.
     /// </summary>
     private static (HashSet<uint> Sources, HashSet<uint> QuestOnly) CachedSources(NpcStore npcs, QuestStore quests, LootContent loot, GameEventRows events, CreatureContent creatures)
     {
