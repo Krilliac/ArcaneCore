@@ -249,11 +249,13 @@ internal static class PopulationBandPlanner
 
     /// <summary>
     /// World-thread planner: every level and location in a fitting zone is tested before creation. An unsafe least-assigned
-    /// zone never monopolizes the next attempt; when both teams are enabled, the other team is considered as well.
+    /// zone never monopolizes the next attempt; when both teams are enabled, the other team is considered as well. With a zone
+    /// <paramref name="value"/> (and its <paramref name="weights"/>), a band at the level cap tries the valued zones before the others.
     /// </summary>
     internal static PopulationPlan? PlanSafe(PlayerbotPopulationOptions options, int[] desired, int[] have, int alliance, int horde,
         PopulationRaceClassCache cache, PopulationZoneAtlas atlas, IReadOnlyDictionary<uint, int> assigned, bool boostAvailable,
-        Random random, Func<WorldSafeLoc, byte, uint, bool> safe)
+        Random random, Func<WorldSafeLoc, byte, uint, bool> safe, PopulationZoneValue? value = null, PopulationValueWeights? weights = null,
+        Func<uint, int>? trouble = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(safe);
@@ -286,7 +288,13 @@ internal static class PopulationBandPlanner
                         if (unplaceable.Contains((band, team, faction))) continue;
                         int minLevel = boostAvailable ? options.Bands[band].MinLevel : 1;
                         int maxLevel = boostAvailable ? options.Bands[band].MaxLevel : 1;
-                        PopulationSafeSelection? selected = atlas.PickSafe(minLevel, maxLevel, team, rule,
+                        // A band at the level cap has no zone that fits it for long: send it to the zones with the most to offer first.
+                        PopulationSafeSelection? selected = value is not null && weights is not null && boostAvailable
+                            && options.Bands[band].MinLevel >= PlayerbotPopulationOptions.MaxLevel
+                            ? atlas.PickValued(PopulationBotProfile.Fresh(minLevel, team, race, cls), rule, value, weights, assigned, random,
+                                (location, level) => safe(location, checked((byte)level), faction), trouble: trouble)
+                            : null;
+                        selected ??= atlas.PickSafe(minLevel, maxLevel, team, rule,
                             assigned, random, (location, level) => safe(location, checked((byte)level), faction));
                         if (selected is not null)
                             return new PopulationPlan(band, team, race, cls, selected.Placement, selected.Level);

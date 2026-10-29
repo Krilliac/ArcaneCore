@@ -417,7 +417,66 @@ internal sealed class PopulationZoneAtlas
     internal PopulationSafeSelection? PickValued(PopulationBotProfile bot, PopulationLevelRule rule, PopulationZoneValue value,
         PopulationValueWeights w, IReadOnlyDictionary<uint, int> assigned, Random random, Func<WorldSafeLoc, int, bool> safe,
         Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null, IList<ZoneScore>? ranked = null)
-        => throw new NotImplementedException();
+    {
+        ArgumentNullException.ThrowIfNull(bot);
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(w);
+        ArgumentNullException.ThrowIfNull(assigned);
+        ArgumentNullException.ThrowIfNull(random);
+        ArgumentNullException.ThrowIfNull(safe);
+        IReadOnlyList<ZoneScore> ranking = Rank(bot, rule, value, w, assigned, vetoed, trouble);
+        if (ranked is not null)
+            foreach (ZoneScore score in ranking) ranked.Add(score);
+        if (ranking.Count == 0) return null;
+
+        int top = Math.Min(w.TopZones, ranking.Count);
+        var pool = new List<ZoneScore>(ranking.Take(top));
+        var rest = new List<ZoneScore>(ranking.Skip(top));
+        while (true)
+        {
+            if (pool.Count == 0)
+            {
+                if (rest.Count == 0) return null;
+                (pool, rest) = (rest, pool);
+            }
+
+            double total = 0;
+            var weights = new double[pool.Count];
+            for (int i = 0; i < weights.Length; i++)
+            {
+                double room = w.ZoneSoftCap > 0 ? 1.0 - (double)assigned.GetValueOrDefault(pool[i].ZoneId) / w.ZoneSoftCap : 1.0;
+                weights[i] = pool[i].Total * Math.Max(room, 0.0);
+                total += weights[i];
+            }
+
+            int chosen = pool.Count - 1;
+            if (total > 0)
+            {
+                double draw = random.NextDouble() * total;
+                for (int i = 0; i < weights.Length; i++)
+                {
+                    draw -= weights[i];
+                    if (draw < 0) { chosen = i; break; }
+                }
+            }
+            else
+            {
+                chosen = random.Next(pool.Count);
+            }
+
+            PopulationZone zone = _byId[pool[chosen].ZoneId];
+            pool.RemoveAt(chosen);
+            IReadOnlyList<WorldSafeLoc> locations = zone.LocationsFor(bot.Team);
+            int first = random.Next(locations.Count);
+            for (int place = 0; place < locations.Count; place++)
+            {
+                WorldSafeLoc location = locations[(first + place) % locations.Count];
+                int low = zone.LowestLevelAt(location, bot.Team, rule);
+                if (low > bot.Level || !safe(location, bot.Level)) continue;
+                return new PopulationSafeSelection(new PopulationPlacement(zone, location, low, bot.Level), bot.Level);
+            }
+        }
+    }
 
     /// <summary>
     /// The zones the bot may be sent to for their value, best first: eligible (open to the team, with a location for it, not vetoed, with
@@ -426,5 +485,28 @@ internal sealed class PopulationZoneAtlas
     /// </summary>
     internal IReadOnlyList<ZoneScore> Rank(PopulationBotProfile bot, PopulationLevelRule rule, PopulationZoneValue value, PopulationValueWeights w,
         IReadOnlyDictionary<uint, int> assigned, Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null)
-        => throw new NotImplementedException();
+    {
+        ArgumentNullException.ThrowIfNull(bot);
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(w);
+        ArgumentNullException.ThrowIfNull(assigned);
+        bool capped = bot.Level >= PlayerbotPopulationOptions.MaxLevel;
+        var scores = new List<ZoneScore>();
+        foreach (PopulationZone zone in _zones)
+        {
+            if (!zone.OpenTo(bot.Team) || zone.LocationsFor(bot.Team).Count == 0 || vetoed?.Invoke(zone.ZoneId) == true) continue;
+            int inZone = assigned.GetValueOrDefault(zone.ZoneId);
+            if (w.ZoneSoftCap > 0 && inZone >= w.ZoneSoftCap) continue;
+            if (!HasRoom(zone, bot.Team, bot.Level, bot.Level, assigned)) continue;
+            bool reaches = Fits(zone, bot.Level, bot.Team, rule)
+                || (capped && zone.MaxLevel >= bot.Level - w.CapReach && zone.LocationsFor(bot.Team).Any(l => zone.LowestLevelAt(l, bot.Team, rule) <= bot.Level));
+            if (!reaches) continue;
+            ZoneScore score = PopulationZoneScoring.Score(zone, value.Find(zone.ZoneId), bot, w, trouble?.Invoke(zone.ZoneId) ?? 0, inZone);
+            if (score.Valued && score.Total > 0) scores.Add(score);
+        }
+
+        scores.Sort(static (a, b) => { int c = b.Total.CompareTo(a.Total); return c != 0 ? c : a.ZoneId.CompareTo(b.ZoneId); });
+        return scores;
+    }
 }
