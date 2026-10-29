@@ -302,11 +302,6 @@ internal sealed class SpellSweepRunner
     }
 
     /// <summary>
-    /// One cast of the scene's spell, resolved: with spell batching on (<see cref="SpellSystem.SpellBatchWindowMs"/>, which
-    /// ARCANECORE_TEST_SPELL_BATCH_MS sets for the whole test run) a non-triggered go that passes its check answers CastOk but only goes off
-    /// at the next batch boundary, so the sweep waits for it (<see cref="SettleBatch"/>) before any check reads what the cast did.
-    /// </summary>
-    /// <summary>
     /// A next-swing spell (Heroic Strike, Cleave, Maul) only queues on the cast: its power and cooldown are taken when the melee swing
     /// casts it (vmangos Spell::cast, Spell.cpp:3695 and 3716, from Unit::AttackerStateUpdate, Unit.cpp:2250-2254). Delivers that swing;
     /// null when the spell is not a next-swing one or the swing cast it, else the swing's refusal.
@@ -323,6 +318,11 @@ internal sealed class SpellSweepRunner
         return swing == SpellCastResult.CastOk ? null : swing;
     }
 
+    /// <summary>
+    /// One cast of the scene's spell, resolved: with spell batching on (<see cref="SpellSystem.SpellBatchWindowMs"/>, which
+    /// ARCANECORE_TEST_SPELL_BATCH_MS sets for the whole test run) a non-triggered go that passes its check answers CastOk but only goes off
+    /// at the next batch boundary, so the sweep waits for it (<see cref="SettleBatch"/>) before any check reads what the cast did.
+    /// </summary>
     private SpellCastResult Cast(SweepScene scene, bool triggered)
     {
         SpellCastResult result = _probe.Cast(_rig.System, scene.Caster, scene.Spell.Id, scene.Targets, triggered);
