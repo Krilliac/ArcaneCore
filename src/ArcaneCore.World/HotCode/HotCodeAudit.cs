@@ -20,7 +20,7 @@ namespace ArcaneCore.World.HotCode;
 /// counted as <c>hotcode.audit-report</c>.
 /// </para>
 /// </summary>
-public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = null, ILogger? logger = null)
+public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = null, ILogger? logger = null, FaultLedger? ledger = null)
 {
     private static readonly ConcurrentDictionary<string, Appender> Appenders = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
     private static readonly TimeSpan DefaultFlushBudget = TimeSpan.FromSeconds(10);
@@ -46,7 +46,7 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
         }
 
         string line = $"{_clock():O}\t{kind}\t{detail.ReplaceLineEndings(" ")}{Environment.NewLine}";
-        Appenders.GetOrAdd(Path.GetFullPath(path!), static full => new Appender(full)).Enqueue(line, logger);
+        Appenders.GetOrAdd(Path.GetFullPath(path!), static full => new Appender(full)).Enqueue(line, logger, ledger);
     }
 
     /// <summary>Wait until every line queued so far (by any instance on this path) is written. Not for the world thread.</summary>
@@ -56,7 +56,7 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
         {
             if (!appender.FlushAsync().Wait(FlushTimeout))
             {
-                RecordFlushTimeout(Path.GetFullPath(path!), FlushTimeout, logger);
+                RecordFlushTimeout(Path.GetFullPath(path!), FlushTimeout, logger, ledger);
             }
         }
     }
@@ -67,15 +67,15 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
         Task[] pending = [.. Appenders.Values.Select(a => a.FlushAsync())];
         if (!Task.WaitAll(pending, DefaultFlushBudget))
         {
-            RecordFlushTimeout("all audit files", DefaultFlushBudget, null);
+            RecordFlushTimeout("all audit files", DefaultFlushBudget, null, null);
         }
     }
 
     /// <summary>The flush gave up waiting (a wedged disk): the queued lines may be lost, so the timeout is counted, not silent.</summary>
-    private static void RecordFlushTimeout(string target, TimeSpan budget, ILogger? logger)
+    private static void RecordFlushTimeout(string target, TimeSpan budget, ILogger? logger, FaultLedger? ledger)
     {
         var ex = new TimeoutException($"hot-code audit flush of {target} did not finish within {budget.TotalSeconds:0.###} s");
-        FaultLedger.Shared.Record("hotcode.audit-flush", ex);
+        (ledger ?? FaultLedger.Shared).Record("hotcode.audit-flush", ex);
         try
         {
             if (logger is not null)
@@ -89,7 +89,7 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
         }
         catch (Exception reportEx) when (reportEx is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("hotcode.audit-report", reportEx);
+            (ledger ?? FaultLedger.Shared).Record("hotcode.audit-report", reportEx);
         }
     }
 
@@ -108,9 +108,17 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
 
         private int _started;
         private ILogger? _logger; // the latest instance that has one supplies it (every instance on the path shares this writer)
+        private FaultLedger? _ledger; // likewise the latest instance that names a ledger; null counts into FaultLedger.Shared
 
-        public void Enqueue(string line, ILogger? logger)
+        private FaultLedger Ledger => Volatile.Read(ref _ledger) ?? FaultLedger.Shared;
+
+        public void Enqueue(string line, ILogger? logger, FaultLedger? ledger)
         {
+            if (ledger is not null)
+            {
+                Volatile.Write(ref _ledger, ledger);
+            }
+
             if (logger is not null)
             {
                 Volatile.Write(ref _logger, logger);
@@ -159,7 +167,7 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
         private void ReportDrop()
         {
             var ex = new InvalidOperationException($"hot-code audit queue for {fullPath} is full; an audit line was dropped");
-            FaultLedger.Shared.Record("hotcode.audit-dropped", ex);
+            Ledger.Record("hotcode.audit-dropped", ex);
             try
             {
                 if (Volatile.Read(ref _logger) is { } log)
@@ -173,7 +181,7 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
             }
             catch (Exception reportEx) when (reportEx is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("hotcode.audit-report", reportEx);
+                Ledger.Record("hotcode.audit-report", reportEx);
             }
         }
 
@@ -230,7 +238,7 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
         /// <summary>Count and log a failed write. Reporting must never end the writer loop: a throwing logger or console is swallowed (the fault is already counted).</summary>
         private void ReportWriteFailure(Exception ex)
         {
-            FaultLedger.Shared.Record("hotcode.audit-write", ex);
+            Ledger.Record("hotcode.audit-write", ex);
             try
             {
                 if (Volatile.Read(ref _logger) is { } log)
@@ -244,7 +252,7 @@ public sealed class HotCodeAudit(string? path, Func<DateTimeOffset>? clock = nul
             }
             catch (Exception reportEx) when (reportEx is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("hotcode.audit-report", reportEx);
+                Ledger.Record("hotcode.audit-report", reportEx);
             }
         }
 

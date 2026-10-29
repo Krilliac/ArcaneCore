@@ -59,6 +59,7 @@ public static class WorldServiceCollectionExtensions
         // Slow-update thresholds live in their own vmangos-named section (docs/areas/ops-perf.md).
         services.PostConfigure<WorldRuntimeOptions>(o => configuration.GetSection(PerformanceLogOptions.SectionName).Bind(o.Perf));
         services.Configure<Bans.BanOptions>(configuration.GetSection(Bans.BanOptions.SectionName));
+        services.Configure<RealmList.RealmStatusOptions>(configuration.GetSection(RealmList.RealmStatusOptions.SectionName)); // the realm-list row (online/offline, population)
         services.Configure<Game.AntiCheat.AntiCheatOptions>(configuration.GetSection(Game.AntiCheat.AntiCheatOptions.SectionName));
         services.Configure<AntiCheat.PacketHeuristics.PacketHeuristicsOptions>(configuration.GetSection(AntiCheat.PacketHeuristics.PacketHeuristicsOptions.SectionName));
         services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));
@@ -91,6 +92,11 @@ public static class WorldServiceCollectionExtensions
             sp.GetRequiredService<IOptions<WorldRuntimeOptions>>().Value,
             sp.GetRequiredService<ICharacterSaveQueue>(),
             sp.GetRequiredService<ILogger<WorldRuntime>>()));
+
+        // Registered before WorldHost: the realm-list row says Starting (offline) while the world and then the listener start, and the liveness
+        // writer keeps beating off the world thread (docs/ops/realm-liveness.md). Inert without an auth database, with World:Realm:Id 0, or as a gateway worker.
+        services.AddSingleton<RealmList.RealmLivenessService>();
+        services.AddHostedService(sp => sp.GetRequiredService<RealmList.RealmLivenessService>());
 
         // Order matters: the world starts before the listener and stops after it.
         services.AddHostedService<WorldHost>();

@@ -36,6 +36,24 @@ public sealed class RuleCatalogTests
         Assert.Contains("3 rules (0 disabled)", catalog.Summary, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RuleAndTextIds_AreAcceptedInsideTheNamedSubBands_AndRejectedPastThem()
+    {
+        RuleCatalog catalog = Build(new RuleContent
+        {
+            Rules = [Rule(RuleIdBands.CustomStart), Rule(RuleIdBands.EventAi), Rule(RuleIdBands.DbScripts + 1), Rule(RuleIdBands.End - 1), Rule(1_500_000_000)],
+            Actions = [RecordOf(RuleIdBands.CustomStart, 1), RecordOf(RuleIdBands.EventAi, 1), RecordOf(RuleIdBands.DbScripts + 1, 1), RecordOf(RuleIdBands.End - 1, 1)],
+            Texts = [new RuleTextRecord { Id = RuleIdBands.SmartAi, ContentDefault = "ok" }, new RuleTextRecord { Id = 1_500_000_000, ContentDefault = "too high" }],
+        });
+
+        Assert.Equal(4, catalog.RuleCount);
+        Assert.Equal([1_500_000_000], catalog.Rejected.Where(r => r.Table == "rule").Select(r => r.Id));
+        RuleRejection text = Assert.Single(catalog.Rejected, r => r.Table == "rule_text");
+        Assert.Equal(1_500_000_000, text.Id);
+        Assert.Contains("past the named converter sub-bands", text.Reason, StringComparison.Ordinal);
+        Assert.Contains(RuleIdBands.SmartAi, catalog.Texts.Keys);
+    }
+
     public static TheoryData<string, RuleRecord, string, string> BadRules() => new()
     {
         { "unknown host", Rule(1) with { Host = 9 }, "rule", "host 9 is not registered" },

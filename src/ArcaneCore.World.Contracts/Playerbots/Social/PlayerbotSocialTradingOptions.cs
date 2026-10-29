@@ -13,10 +13,10 @@ public sealed class PlayerbotSocialTradingOptions
     /// <summary>Master switch (on by default). Off stops the trade desk quoting and agreeing deals and cancels every window it drives at its next pass.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default).</summary>
+    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default).</summary>
     public bool AnswerTrades { get; set; } = true;
 
-    /// <summary>Accept gift windows (an empty bot side) from partners the rules allow (on by default).</summary>
+    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. Accept gift windows (an empty bot side) from partners the rules allow (on by default).</summary>
     public bool AcceptGifts { get; set; } = true;
 
     /// <summary>The seconds one trade may take from the initiate to the close, a running settlement not counted (10..300, default 45).</summary>
@@ -31,10 +31,10 @@ public sealed class PlayerbotSocialTradingOptions
     /// <summary>The trust (permille) below which a partner's deals are capped at a quarter of the deal maximum (0..1000, default 350).</summary>
     public int LowTrustPermille { get; set; } = 350;
 
-    /// <summary>The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100).</summary>
+    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100).</summary>
     public int GiftMinValueCopper { get; set; } = 100;
 
-    /// <summary>The gifts one bot accepts from one partner in an hour (0..120, default 10).</summary>
+    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. The gifts one bot accepts from one partner in an hour (0..120, default 10).</summary>
     public int MaxGiftsReceivedPerHour { get; set; } = 10;
 
     /// <summary>Fixed-price deals (<c>World:Playerbots:Social:Trading:Deals</c>).</summary>
@@ -88,10 +88,10 @@ public sealed class PlayerbotSocialTradingDealsOptions
     /// <summary>The ask markup in percent for a partner the bot dislikes, scaled by the negative affinity (0..200, default 25).</summary>
     public int DislikeMarkupPercent { get; set; } = 25;
 
-    /// <summary>The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk.</summary>
+    /// <summary>Not yet implemented: the price book is not built, so nothing reads this key. The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk.</summary>
     public int PriceBookHours { get; set; } = 24;
 
-    /// <summary>The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk.</summary>
+    /// <summary>Not yet implemented: the price book is not built, so nothing reads this key. The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk.</summary>
     public int PriceBookMinSellers { get; set; } = 3;
 
     /// <summary>A counter-offer the bot accepts: at most this share under its ask when selling (never under the vendor value); one counter per deal, then it holds its price (0..50, default 10).</summary>
@@ -118,13 +118,13 @@ public sealed class PlayerbotSocialTradingDealsOptions
 /// <summary><c>World:Playerbots:Social:Trading:Gifts</c>: a bot hands an item it cannot use to a groupmate it is an upgrade for.</summary>
 public sealed class PlayerbotSocialTradingGiftsOptions
 {
-    /// <summary>Group gifts after a run (on by default).</summary>
+    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. Group gifts after a run (on by default).</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15).</summary>
+    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15).</summary>
     public int GiftClaimSeconds { get; set; } = 15;
 
-    /// <summary>The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts).</summary>
+    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts).</summary>
     public int MaxGiftValueCopper { get; set; } = 5000;
 
     public void Validate()

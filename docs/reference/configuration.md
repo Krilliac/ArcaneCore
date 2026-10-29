@@ -60,6 +60,7 @@ How to read the tables:
 - [`Quests`](#quests)
 - [`Ranged`](#ranged)
 - [`Realm:Console`](#realmconsole)
+- [`Realm:Liveness`](#realmliveness)
 - [`Realms`](#realms)
 - [`Reputation`](#reputation)
 - [`Resilience`](#resilience)
@@ -99,6 +100,7 @@ How to read the tables:
 - [`World:PacketHeuristics`](#worldpacketheuristics)
 - [`World:Playerbots`](#worldplayerbots)
 - [`World:Playerbots:Qa`](#worldplayerbotsqa)
+- [`World:Realm`](#worldrealm)
 - [`World:RemoteAdmin`](#worldremoteadmin)
 - [`World:Social`](#worldsocial)
 - [`World:Social:WriteQueue`](#worldsocialwritequeue)
@@ -558,8 +560,9 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `HotReload:ApplyConfigFileChanges` | `bool` | `false` | - | Apply an edit of world.conf or appsettings*.json while the world runs: once the edits settle, the configuration is re-read through the same pipeline as `.reload config` (live keys change on the world thread, restart keys keep their value and are logged), whether or not `Commands` is on. Default false, the retail behaviour: vmangos has no file watcher, a mangosd.conf edit applies only through `.reload config` (ServerCommands.cpp:1016). True is an opt-in ArcaneCore convenience. Needs the host's file watching (`hostBuilder:reloadConfigOnChange`, default true). Read once when the world starts. |
 | `HotReload:BuildTimeoutMs` | `int` | `60000` | - | How long a candidate may take to build (database read plus indexing) before the reload is abandoned. 0 = no limit. |
-| `HotReload:Commands` | `bool` | `false` | - | The one switch for live reload. Default false: a production server does not carry the reload machinery (vmangos registers the `reload` root, Chat.cpp:1212, but ArcaneCore's operator-initiated hot reload is a development tool, so it is opt-in). When false the reload coordinator is not built, no reloadable is registered and the `.reload` root does not exist (the chat reply is "There is no such command"). A development server turns it on with `HotReload:Commands=true`. Read once when the world starts. |
+| `HotReload:Commands` | `bool` | `false` | - | The one switch for live reload. Default false: a production server does not carry the reload machinery (vmangos registers the `reload` root, Chat.cpp:1212, but ArcaneCore's operator-initiated hot reload is a development tool, so it is opt-in). When false the reload coordinator is not built, no reloadable is registered and the `.reload` root does not exist (the chat reply is "There is no such command"); `ApplyConfigFileChanges` then runs the config reload on a coordinator of its own that holds only `config`. A development server turns it on with `HotReload:Commands=true`. Read once when the world starts. |
 | `HotReload:CommitTimeoutMs` | `int` | `30000` | - | How long to wait for the world thread to run the swap before abandoning the reload. A swap that has not started by then is cancelled and never runs later. 0 = no limit. |
 | `HotReload:EmptyTables` | `EmptyTablePolicy` | `Retail` | - | What a reload does when item_template, game_tele or areatrigger_teleport comes back empty. Default Retail: vmangos clears the loaded rows first (ObjectMgr.cpp:3817, 10468, 7708), so the table ends up empty. Values: `Retail`, `KeepLoaded`. |
 | `HotReload:NegativeNumbers` | `InvalidNumberPolicy` | `Retail` | - | What `.reload config` does with a negative interval or range. Default Retail: vmangos logs an error and uses the default (World.cpp:2949-2977 setConfigPos/setConfigMin). Values: `Retail`, `Reject`. |
@@ -865,6 +868,13 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Realm:Console:Enabled` | `bool` | `true` | - | Accept typed console commands (help, info, realmlist, online, account ..., quit) when standard input is an interactive console. Never starts a reader when input is redirected (services, tests, deploy scripts). Default on. |
+
+## `Realm:Liveness`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Realm:Liveness:HeartbeatStaleSeconds` | `int` | `60` | - | Seconds without a heartbeat after which a world that claims to be running is shown offline. Default 60. Must be at least three times `World:Realm:HeartbeatIntervalSeconds` (a missed beat or two never flips the realm) and above five times `Ops:Watchdog:TickMonitor:HangMs` in seconds (a slow tick is a hang for the watchdog long before it is an outage here). 0 turns the heartbeat check off (the state and the lock level still apply). |
+| `Realm:Liveness:RestartingAs` | `RestartingRealmDisplay` | `Invalid` | - | What a realm shows while its world counts down to a restart and still serves: `Invalid` (red name, still selectable, the retail-emulator convention, unverified in the 1.12.1 client binary) or `Offline` (grey, not selectable). Default Invalid. Values: `Invalid`, `Offline`. |
 
 ## `Realms`
 
@@ -1885,7 +1895,6 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:AffinityPerTrade` | `int` | `3` | live | Affinity gained when a trade with the bot completes (0..30). |
 | `World:Playerbots:Social:Memory:AffinityPerTradeScam` | `int` | `-15` | live | Affinity change toward a partner who changed a deal's value after matching it (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerWatchedDie` | `int` | `-12` | live | Affinity change toward a same-faction bystander who watched the bot die without helping (-100..0). |
-| `World:Playerbots:Social:Memory:AnswerHelpEnabled` | `bool` | `true` | live | Let a managed bot that is asked for help join the fight, by its helpfulness and its liking for the asker. |
 | `World:Playerbots:Social:Memory:BystanderMinHealthPercent` | `int` | `50` | live | The least health percent a bystander needs to count as able to help (1..100). |
 | `World:Playerbots:Social:Memory:BystanderMinSeconds` | `int` | `5` | live | The shortest low-health window, in seconds, in which a bystander's inaction counts (1..60). |
 | `World:Playerbots:Social:Memory:BystanderRadiusYards` | `int` | `30` | live | How close, in yards, a unit must stay to the bot through its low-health window to count as a bystander (5..60). |
@@ -1921,8 +1930,8 @@ How to read the tables:
 | `World:Playerbots:Social:Rivalry:Emotes:RudeRequiresOptIn` | `bool` | `false` | live | Send rude emotes only to real players who whispered "rivals on" (off by default: they go to every real rival who has not opted out). |
 | `World:Playerbots:Social:Rivalry:Enabled` | `bool` | `true` | live | The master switch (on by default). Off: the lane sends nothing and an emote is answered as before the stance existed. Recorded opt-outs are kept. |
 | `World:Playerbots:Social:Rivalry:Safeguards:SafeAreas` | `string` | `"35,392,976,2255,2361,2268"` | live | Area ids (comma separated; the sub-zone a character stands in, not its zone) where no rude emote is sent, on top of every capital city, which is always quiet. The default is the six neutral towns with a guard post for both factions: 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook, 2361 Nighthaven and 2268 Light's Hope Chapel. Empty keeps only the capitals. |
-| `World:Playerbots:Social:Trading:AcceptGifts` | `bool` | `true` | live | Accept gift windows (an empty bot side) from partners the rules allow (on by default). |
-| `World:Playerbots:Social:Trading:AnswerTrades` | `bool` | `true` | live | Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default). |
+| `World:Playerbots:Social:Trading:AcceptGifts` | `bool` | `true` | live | Not yet implemented: no code reads this key, so changing it has no effect. Accept gift windows (an empty bot side) from partners the rules allow (on by default). |
+| `World:Playerbots:Social:Trading:AnswerTrades` | `bool` | `true` | live | Not yet implemented: no code reads this key, so changing it has no effect. Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default). |
 | `World:Playerbots:Social:Trading:Deals:BuyMaxPremiumPercent` | `int` | `50` | live | The most a buying bot pays over the item's reference price in percent; never more than the reference divided by 0.67 (0..100, default 50). |
 | `World:Playerbots:Social:Trading:Deals:CounterTolerancePercent` | `int` | `10` | live | A counter-offer the bot accepts: at most this share under its ask when selling (never under the vendor value); one counter per deal, then it holds its price (0..50, default 10). |
 | `World:Playerbots:Social:Trading:Deals:DealMinutes` | `int` | `5` | live | The minutes an agreed deal stays open (1..60, default 5). |
@@ -1931,13 +1940,13 @@ How to read the tables:
 | `World:Playerbots:Social:Trading:Deals:FriendDiscountPercent` | `int` | `20` | live | The ask discount in percent for a friend at full affinity, scaled by the bot's giving affinity (0..100, default 20). |
 | `World:Playerbots:Social:Trading:Deals:MaxDealCopper` | `int` | `500000` | live | The most a single deal may be worth in copper (0..100000000, default 500000 = 50 g; 0 disables deals). |
 | `World:Playerbots:Social:Trading:Deals:PairCooldownMinutes` | `int` | `10` | live | The minutes a pair waits after a deal expired, was declined or was cancelled before a new one (0..1440, default 10). |
-| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk. |
-| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk. |
+| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | Not yet implemented: the price book is not built, so nothing reads this key. The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk. |
+| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | Not yet implemented: the price book is not built, so nothing reads this key. The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk. |
 | `World:Playerbots:Social:Trading:Enabled` | `bool` | `true` | live | Master switch (on by default). Off stops the trade desk quoting and agreeing deals and cancels every window it drives at its next pass. |
-| `World:Playerbots:Social:Trading:GiftMinValueCopper` | `int` | `100` | live | The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100). |
-| `World:Playerbots:Social:Trading:Gifts:Enabled` | `bool` | `true` | live | Group gifts after a run (on by default). |
-| `World:Playerbots:Social:Trading:Gifts:GiftClaimSeconds` | `int` | `15` | live | The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15). |
-| `World:Playerbots:Social:Trading:Gifts:MaxGiftValueCopper` | `int` | `5000` | live | The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts). |
+| `World:Playerbots:Social:Trading:GiftMinValueCopper` | `int` | `100` | live | Not yet implemented: no code reads this key, so changing it has no effect. The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100). |
+| `World:Playerbots:Social:Trading:Gifts:Enabled` | `bool` | `true` | live | Not yet implemented: no code reads this key, so changing it has no effect. Group gifts after a run (on by default). |
+| `World:Playerbots:Social:Trading:Gifts:GiftClaimSeconds` | `int` | `15` | live | Not yet implemented: no code reads this key, so changing it has no effect. The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15). |
+| `World:Playerbots:Social:Trading:Gifts:MaxGiftValueCopper` | `int` | `5000` | live | Not yet implemented: no code reads this key, so changing it has no effect. The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts). |
 | `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperPerAccount` | `int` | `20000` | live | The copper one real account, all its characters together, may receive from all bots per UTC day (0..100000000, default 20000 = 2 g). |
 | `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperPerBot` | `int` | `20000` | live | The copper one bot may give real players per UTC day, gifts and discounts counted (0..100000000, default 20000 = 2 g). |
 | `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperServer` | `int` | `2000000` | live | The copper all bots together may give real players per UTC day (0..1000000000, default 2000000 = 200 g). |
@@ -1945,7 +1954,7 @@ How to read the tables:
 | `World:Playerbots:Social:Trading:Limits:MaxTradesPerAccountPerHour` | `int` | `10` | live | The trades all bots together may complete toward one real account in an hour (0..120, default 10). |
 | `World:Playerbots:Social:Trading:Limits:MaxTradesPerBotPerHour` | `int` | `6` | live | The trades one bot may complete with real players in an hour (0..120, default 6). |
 | `World:Playerbots:Social:Trading:LowTrustPermille` | `int` | `350` | live | The trust (permille) below which a partner's deals are capped at a quarter of the deal maximum (0..1000, default 350). |
-| `World:Playerbots:Social:Trading:MaxGiftsReceivedPerHour` | `int` | `10` | live | The gifts one bot accepts from one partner in an hour (0..120, default 10). |
+| `World:Playerbots:Social:Trading:MaxGiftsReceivedPerHour` | `int` | `10` | live | Not yet implemented: no code reads this key, so changing it has no effect. The gifts one bot accepts from one partner in an hour (0..120, default 10). |
 | `World:Playerbots:Social:Trading:NinjaMemoryDays` | `int` | `14` | live | The days a bot gives a partner who looted ninja-style no group gifts and asks more (0..365, default 14). |
 | `World:Playerbots:Social:Trading:ScamMemoryDays` | `int` | `30` | live | The days a bot refuses every trade and gift from a partner who scammed it (0..365, default 30; 0 forgets at once, the scam still costs affinity and trust). |
 | `World:Playerbots:Social:Trading:TradeTimeoutSeconds` | `int` | `45` | live | The seconds one trade may take from the initiate to the close, a running settlement not counted (10..300, default 45). |
@@ -2015,6 +2024,14 @@ How to read the tables:
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
 | `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
 | `World:Playerbots:Qa:TickHangWarmupMinutes` | `int` | `5` | - | Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5). |
+
+## `World:Realm`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Realm:HeartbeatIntervalSeconds` | `int` | `10` | - | Seconds between the heartbeats this world writes into its realm-list row while its loop is ticking (ArcaneCore-specific; vmangos has no liveness check). The logon daemon shows the realm offline once the last beat is older than `Realm:Liveness:HeartbeatStaleSeconds` (default 60, which must be at least three times this interval). A beat is written only if the world loop started a tick since the last one, so a hung or stalled loop stops beating while the process is still up. Needs `World:Realm:Id` above 0. |
+| `World:Realm:Id` | `int` | `1` | - | The realm-list id this world serves (vmangos RealmID; mangosd.conf.dist.in ships 1). The world clears its Offline flag at start and sets it at a clean stop, so the realm list shows the realm offline while the world is down. 0 = this world does not write the realm list (ArcaneCore-specific: vmangos refuses to start without a RealmID, Master.cpp:475-480). |
+| `World:Realm:PlayerLimit` | `int` | `100` | - | The population formula's player limit (vmangos PlayerLimit, default 100, SystemConfig.h:91): the realm list's population hint is 2 x sessions / PlayerLimit, written when a session is added (World.cpp:340-353). 0 = the population is never written (vmangos skips it when the limit is 0). ArcaneCore has no login queue, so only the hint reads this value. |
 
 ## `World:RemoteAdmin`
 

@@ -50,6 +50,29 @@ public sealed class ItemUseFailureFeedbackTests
     }
 
     [Fact]
+    public async Task Dead_player_use_item_replies_you_are_dead_and_does_not_cast()
+    {
+        FailureItemContent content = new();
+        await using WorldTestHost host = FailureItemContent.Start(content);
+        await using WorldTestClient client = await host.EnterWorldAsync("ITEMDEAD", "Itemdead");
+        await client.CollectAsync();
+        var item = await FailureItemContent.PositionAsync(host, "Itemdead", 99021);
+        await host.OnWorldAsync(() =>
+        {
+            var player = host.World.FindOnlinePlayer("Itemdead")!;
+            player.Map!.Combat.KillPlayer(player);
+        });
+        await client.CollectAsync();
+
+        // vmangos HandleUseItemOpcode -> CanUseItem -> EQUIP_ERR_YOU_ARE_DEAD (SpellHandler.cpp:73-78, Player.cpp:10032).
+        await client.SendAsync(WorldOpcode.CmsgUseItem, [item.Bag, item.Slot, 0, 0, 0]);
+        byte[] failure = await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure);
+        Assert.Equal((byte)InventoryResult.YouAreDead, failure[0]);
+        Assert.Equal(item.Guid, BinaryPrimitives.ReadUInt64LittleEndian(failure.AsSpan(1)));
+        Assert.DoesNotContain((await client.CollectAsync()).Select(p => p.Opcode), op => op is WorldOpcode.SmsgSpellStart or WorldOpcode.SmsgSpellGo);
+    }
+
+    [Fact]
     public async Task Peaceful_item_in_combat_returns_not_in_combat_feedback_without_payment()
     {
         FailureItemContent content = new(includePeacefulItem: true);

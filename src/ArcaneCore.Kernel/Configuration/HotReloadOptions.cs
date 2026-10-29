@@ -1,10 +1,10 @@
 namespace ArcaneCore.Kernel.Configuration;
 
 /// <summary>
-/// The <c>HotReload</c> configuration section. Live reload is operator-initiated only (the
-/// <c>.reload</c> chat commands, like vmangos' <c>reload</c> command tree); nothing reloads by
-/// itself, and every default below keeps the process behaving exactly as it did without this
-/// feature.
+/// The <c>HotReload</c> configuration section. Content reload is operator-initiated only (the
+/// <c>.reload</c> chat commands, like vmangos' <c>reload</c> command tree). The one automatic path, off by default, is
+/// <see cref="ApplyConfigFileChanges"/>: an edited configuration file is applied through the same
+/// <c>.reload config</c> pipeline (docs/guide/configuration.md, "Reloading").
 /// </summary>
 public sealed class HotReloadOptions
 {
@@ -15,10 +15,21 @@ public sealed class HotReloadOptions
     /// reload machinery (vmangos registers the <c>reload</c> root, Chat.cpp:1212, but ArcaneCore's
     /// operator-initiated hot reload is a development tool, so it is opt-in). When false the
     /// reload coordinator is not built, no reloadable is registered and the <c>.reload</c> root does
-    /// not exist (the chat reply is "There is no such command"). A development server turns it on
+    /// not exist (the chat reply is "There is no such command"); <see cref="ApplyConfigFileChanges"/> then runs the config reload on a
+    /// coordinator of its own that holds only <c>config</c>. A development server turns it on
     /// with <c>HotReload:Commands=true</c>. Read once when the world starts.
     /// </summary>
     public bool Commands { get; set; }
+
+    /// <summary>
+    /// Apply an edit of world.conf or appsettings*.json while the world runs: once the edits settle, the configuration is
+    /// re-read through the same pipeline as <c>.reload config</c> (live keys change on the world thread, restart keys keep
+    /// their value and are logged), whether or not <see cref="Commands"/> is on. Default false, the retail behaviour: vmangos has no
+    /// file watcher, a mangosd.conf edit applies only through <c>.reload config</c> (ServerCommands.cpp:1016). True is an opt-in
+    /// ArcaneCore convenience. Needs the host's file watching (<c>hostBuilder:reloadConfigOnChange</c>, default true). Read once when
+    /// the world starts.
+    /// </summary>
+    public bool ApplyConfigFileChanges { get; set; }
 
     /// <summary>How long a candidate may take to build (database read plus indexing) before the reload is abandoned. 0 = no limit.</summary>
     public int BuildTimeoutMs { get; set; } = 60_000;

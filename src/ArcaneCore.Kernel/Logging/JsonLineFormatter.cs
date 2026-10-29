@@ -98,7 +98,7 @@ public static class JsonLineFormatter
         for (int i = 0; i < text.Length; i++)
         {
             char c = text[i];
-            if (c >= 0x20 && c != '"' && c != '\\')
+            if (c >= 0x20 && c != '"' && c != '\\' && !(c >= 0x7F && c <= 0x9F) && c != (char)0x2028 && c != (char)0x2029)
             {
                 continue;
             }
@@ -123,8 +123,10 @@ public static class JsonLineFormatter
                     buffer.Append("\\t");
                     break;
                 default:
-                    buffer.Append("\\u00");
-                    buffer.Append(HexDigit(c >> 4));
+                    buffer.Append("\\u");
+                    buffer.Append(HexDigit((c >> 12) & 0xF));
+                    buffer.Append(HexDigit((c >> 8) & 0xF));
+                    buffer.Append(HexDigit((c >> 4) & 0xF));
                     buffer.Append(HexDigit(c & 0xF));
                     break;
             }

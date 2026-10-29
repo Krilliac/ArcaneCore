@@ -66,7 +66,9 @@ public sealed class HotCodeAuditTests : IDisposable
         Assert.DoesNotContain("lost", text, StringComparison.Ordinal);
     }
 
-    private static long Faults(string site) => FaultLedger.Shared.Snapshot().Where(s => s.Site == site).Sum(s => s.Count);
+    private static long Faults(string site) => Faults(FaultLedger.Shared, site);
+
+    private static long Faults(FaultLedger ledger, string site) => ledger.Snapshot().Where(s => s.Site == site).Sum(s => s.Count);
 
     /// <summary>Wedges the writer of the given path in front of its next disk append until <see cref="WriterGate.Release"/> runs.</summary>
     private sealed class WriterGate : IDisposable
@@ -142,9 +144,8 @@ public sealed class HotCodeAuditTests : IDisposable
         string path = Path.Combine(_dir, "full.log");
         using var gate = new WriterGate(path);
         var logger = new CapturingLogger();
-        var audit = new HotCodeAudit(path, logger: logger) { FlushTimeout = TimeSpan.FromMilliseconds(300) };
-        long droppedBefore = Faults("hotcode.audit-dropped");
-        long flushBefore = Faults("hotcode.audit-flush");
+        var ledger = new FaultLedger(); // private to this audit: other tests' faults on the process-wide ledger cannot reach the counts below
+        var audit = new HotCodeAudit(path, logger: logger, ledger: ledger) { FlushTimeout = TimeSpan.FromMilliseconds(300) };
 
         audit.Record("test", "wedge");
         await gate.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -159,14 +160,14 @@ public sealed class HotCodeAuditTests : IDisposable
             }
         });
         await producer.WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.Equal(Extra, Faults("hotcode.audit-dropped") - droppedBefore);
+        Assert.Equal(Extra, Faults(ledger, "hotcode.audit-dropped"));
         Assert.Contains(logger.Entries, e => e.Message.Contains("queue", StringComparison.Ordinal) && e.Message.Contains("full", StringComparison.Ordinal));
 
         // The barrier cannot even be queued: the flush must still give up inside its budget and be counted.
         var watch = Stopwatch.StartNew();
         await Task.Run(audit.Flush).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(8), $"flush took {watch.Elapsed}");
-        Assert.Equal(1, Faults("hotcode.audit-flush") - flushBefore);
+        Assert.Equal(1, Faults(ledger, "hotcode.audit-flush"));
 
         gate.Release();
         new HotCodeAudit(path).Flush(); // a later flush (the pending barrier may follow it) completes once the writer is free

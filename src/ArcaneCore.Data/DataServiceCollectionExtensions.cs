@@ -54,6 +54,7 @@ public static class DataServiceCollectionExtensions
 
         services.AddScoped<IAccountStore, EfAccountStore>();
         services.AddScoped<IRealmStore, EfRealmStore>();
+        services.AddScoped<IRealmStatusStore, EfRealmStatusStore>(); // the world daemon's online/offline and population writes
         services.AddSingleton<AuthDbInitializer>();
         DataModules.AddServices(services, DatabaseComponent.Auth);
         return services;

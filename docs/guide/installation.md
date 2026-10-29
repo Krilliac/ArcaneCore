@@ -66,6 +66,16 @@ The world daemon is found through the realm list. On first start an empty realm 
 (name, `Address` as `ip:port` of the world daemon, type, flags, population, category). The shipped seed points at `127.0.0.1:8085`; change the
 address to the one clients will use. Ports and bind addresses are `Auth:Port`, `Auth:BindAddress`, `World:Port` and `World:BindAddress`.
 
+The world daemon keeps its own row current, as vmangos mangosd does: `World:Realm:Id` (default 1, vmangos `RealmID`) names the row. The row says
+offline while the world is starting and until it accepts connections, online while its loop is ticking, and offline again when it stops cleanly.
+A world that dies or hangs without saying so is shown offline once its heartbeat (`World:Realm:HeartbeatIntervalSeconds`, default 10) is older than
+`Realm:Liveness:HeartbeatStaleSeconds` (default 60), and a realm shows red while a `.server restart` countdown runs; the realm list also carries
+the account's character count per realm, which the client shows as a green realm name ([realm list liveness](../ops/realm-liveness.md)). Each new
+session writes the population hint, 2 x sessions / `World:Realm:PlayerLimit` (default 100, vmangos `PlayerLimit`). A world with no matching row logs
+a warning and runs on; `World:Realm:Id = 0` turns the writes off. A gateway worker (`Cluster:Worker:Enabled`) does not write the row; in that
+topology the operator owns the row ([gateway](../areas/gateway.md)). If the world and logon daemons run on different hosts, keep their clocks
+synchronised (NTP): the heartbeat is compared across them.
+
 ## 5. Create an account
 
 Accounts are not created automatically: the shipped `Auth:AutocreateAccounts` is `false`, and the feature is a development convenience, not retail

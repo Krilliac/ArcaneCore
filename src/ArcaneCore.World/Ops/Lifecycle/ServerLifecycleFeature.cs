@@ -30,12 +30,21 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
     private TimerRun? _run; // world thread decides start and end; StopAsync only reads it
     private int _runIds;
     private bool _stopIssued;
+    private ShutdownMask _announcedMask;
+    private bool _announcedPending;
 
     /// <summary>A countdown is pending or the stop has been issued (readiness probes report draining).</summary>
     public bool IsDraining => _countdown.IsPending || _countdown.StopRequested;
 
     /// <summary>Raised on the world thread when the process must stop, with the exit code.</summary>
     public event Action<int>? StopRequested;
+
+    /// <summary>
+    /// Raised on the world thread when a countdown starts, changes its kind, or ends without stopping (cancelled): the mask of the
+    /// pending request and whether one is pending. Not raised for the one-second advances, nor when the countdown expires (that is a stop,
+    /// <see cref="StopRequested"/>). Subscribers must not block: record the state and hand any I/O to another thread.
+    /// </summary>
+    public event Action<ShutdownMask, bool>? CountdownChanged;
 
     public void Attach(WorldRuntime world) => _world = world;
 
@@ -171,6 +180,7 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
     // leave a pending countdown without a timer.
     private void AfterChange()
     {
+        RaiseCountdownChanged();
         if (_countdown.StopRequested && !_stopIssued)
         {
             _stopIssued = true;
@@ -214,6 +224,32 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
         {
             _run = null;
             run.Cancel();
+        }
+    }
+
+    private void RaiseCountdownChanged()
+    {
+        if (_countdown.StopRequested)
+        {
+            return; // the countdown expired: the stop follows, and the last announced state stands until the world reports it stopped
+        }
+
+        bool pending = _countdown.IsPending;
+        ShutdownMask mask = pending ? _countdown.Mask : ShutdownMask.None;
+        if (pending == _announcedPending && mask == _announcedMask)
+        {
+            return;
+        }
+
+        _announcedPending = pending;
+        _announcedMask = mask;
+        try
+        {
+            CountdownChanged?.Invoke(mask, pending);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            logger.LogFault("lifecycle.countdown-changed", ex, "A countdown subscriber failed");
         }
     }
 
