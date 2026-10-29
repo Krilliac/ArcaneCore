@@ -37,7 +37,8 @@ public sealed class CastBarStunInterruptTests
     private static (Player Caster, Player Victim) Pair(SpellTestKit kit)
     {
         (Player caster, _) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(caster);
+        (Player victim, _) = kit.AddHostilePlayer(2, 2);
         kit.Spellbook.Teach(caster, Flagged, Unflagged);
         return (caster, victim);
     }

@@ -297,13 +297,14 @@ public sealed partial class CreatureMapSystem
 
     private void LogPathJobSummary()
     {
-        if (_pathJobs is not { } jobs || _clockMs - _lastPathJobLogMs < 60_000 || PathJobsSubmitted == _lastLoggedSubmitted)
+        if (_pathJobs is not { } jobs || _clockMs - _lastPathJobLogMs < 60_000 || PathJobsSubmitted == _lastLoggedSubmitted && WanderJobsSubmitted == _lastLoggedWanderSubmitted)
         {
             return;
         }
 
         _lastPathJobLogMs = _clockMs;
         _lastLoggedSubmitted = PathJobsSubmitted;
+        _lastLoggedWanderSubmitted = WanderJobsSubmitted;
         NavJobTotals totals = jobs.Totals;
         NavJobTotals window = totals - _lastPathJobLogTotals;
         _lastPathJobLogTotals = totals;
@@ -311,8 +312,9 @@ public sealed partial class CreatureMapSystem
         double queueMs = window.Completed + window.Canceled + window.Skipped > 0
             ? window.QueueTicks * 1000.0 / Stopwatch.Frequency / (window.Completed + window.Canceled + window.Skipped) : 0;
         _logger.LogInformation(
-            "Creature path jobs on map {MapId}: submitted {Submitted}, applied {Applied}, stale {Stale}, canceled {Canceled}, waits {Waits}, rejected {Rejected}, in flight {InFlight} ({Pending} pending); pool ({Threads} threads, last minute, all maps): completed {Completed}, canceled {PoolCanceled}, faulted {Faulted}, queued {Queued}, avg search {AvgMs:F2} ms, avg queue wait {QueueMs:F1} ms, slowest search {MaxMs:F1} ms",
+            "Creature path jobs on map {MapId}: submitted {Submitted}, applied {Applied}, stale {Stale}, canceled {Canceled}, waits {Waits}, rejected {Rejected}, in flight {InFlight} ({Pending} pending); pool ({Threads} threads, last minute, all maps): completed {Completed}, canceled {PoolCanceled}, faulted {Faulted}, queued {Queued}, avg search {AvgMs:F2} ms, avg queue wait {QueueMs:F1} ms, slowest search {MaxMs:F1} ms; wander jobs: submitted {WSubmitted}, applied {WApplied}, stale {WStale}, canceled {WCanceled}, waits {WWaits}, throttled {WThrottled}, no point {WNoPoint}, rejected {WRejected}, in flight {WInFlight}",
             Map.MapId, PathJobsSubmitted, PathJobsApplied, PathJobsStale, PathJobsCanceled, PathJobWaits, PathJobsRejected, _creaturePathJobs.Count, _pathJobsPending,
-            jobs.Threads, window.Completed, window.Canceled, window.Faulted, jobs.Queued, avgMs, queueMs, totals.MaxComputeTicks * 1000.0 / Stopwatch.Frequency);
+            jobs.Threads, window.Completed, window.Canceled, window.Faulted, jobs.Queued, avgMs, queueMs, totals.MaxComputeTicks * 1000.0 / Stopwatch.Frequency,
+            WanderJobsSubmitted, WanderJobsApplied, WanderJobsStale, WanderJobsCanceled, WanderJobWaits, WanderJobsThrottled, WanderJobsNoPoint, WanderJobsRejected, _wanderJobs.Count);
     }
 }

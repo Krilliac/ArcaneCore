@@ -6,6 +6,8 @@ dumps are a second accepted layout. The dumps are GPL-3 data with Blizzard copyr
 `COPYRIGHT.md`): they are read from wherever the developer keeps them, never committed, and the importer refuses to write a
 database or report inside a git work tree unless git ignores the path.
 
+World schema v60 adds `npc_text_broadcast_text` (`Id`, `Prob0..7`, `BroadcastTextId0..7`; `NpcTextBroadcastDataModule`), the form of an NPC greeting whose eight weighted variants are `broadcast_text` ids (classic-db, mangos-classic `src/game/Globals/ObjectMgr.cpp:5624-5684`; vmangos has no such table). Import reads it with the other NPC tables, and `refresh` replaces it (a dump without the table leaves it alone) and reports its count. The NPC content store turns a row into the same eight-variant text an inline `npc_text` row gives: the variant's text is the broadcast male (`Text`) and female (`Text1`) text, its language is `LanguageID`, and `EmoteID1..3` with `EmoteDelay1..3` are its three emote/delay pairs. Two deliberate divergences from mangos-classic: an inline `npc_text` row with the same id wins (mangos-classic `:5653-5655` overwrites it with the broadcast row and logs "Overwriting."; z2815 has no id in both tables), and a variant whose broadcast id is 0 or has no `broadcast_text` row gets probability 0 (mangos-classic `:5659, :5674-5682` keeps the probability and sends empty text, which can pick a blank variant). An id found in neither table still answers with the default greeting.
+
 World schema v56 adds `creature_equip_template` (`Entry`, `EquipEntry1..3`, item entries for the main hand, off hand and ranged slot) and `creature_template.EquipmentTemplateId`
 (`CreatureEquipmentDataModule`). The importer reads ClassicDB/cmangos `EquipmentTemplateId` and `equipentry1..3`, and the vmangos `equipment_id` with its `item1..3` rows (patch range containing 10; of several
 probability rows of one id the most probable is kept, since one id holds one set). `refresh` replaces the table and updates the template links, and reports
@@ -17,6 +19,8 @@ A running game event's `equipment_id` is a `creature_equip_template` entry too a
 `refresh` from the z2815 dump (see the PR description for the exact commands); until then its creatures hold nothing, as before.
 
 World schema v53 adds `npc_vendor_template` and `creature_template.VendorTemplateId` (vmangos `vendor_id`). Import reads the shared stock and link. The standard deploy migrates with `arcane-db upgrade` first and then runs `refresh` without `--migrate` (which refuses an older schema); `refresh --migrate` upgrades and refreshes in one step. Refresh replaces the shared stock and updates the links without replacing direct `npc_vendor` rows, and reports the number of links it changed. An `npc_vendor_template` table missing a required column (for example `slot` or `condition_id`) is skipped with a warning, not an abort. Vendor list order and buying follow vmangos `ObjectMgr::LoadVendorTemplates`, `Creature::GetVendorTemplateItems` and `WorldSession::SendListInventory`.
+
+`points_of_interest` (the gossip map markers a guard option shows through `action_poi_id`) is read by the NPC importer from the same dump as the gossip tables; coordinates may be negative, and a row with entry 0 is skipped with a warning. The table already existed in the world schema, so there is no schema step. `import` writes it (`replace` clears it first); `refresh` does not touch it.
 
 ## Delivered
 
@@ -285,7 +289,7 @@ were copied into the implementation.
 |---|---|
 | `plan <dump>...` | reads the dumps and prints, per table an importer reads, dialect, rows, keys, duplicates, mapped and not-imported columns; then the tables no importer reads yet and the statements not applied. Writes no database. |
 | `import <dump>...` | the scan above, then `CreatureDumpImporter`, `GameObjectLootDumpImporter` and `ItemQuestDumpImporter` inside one `ImportTransaction`. `--replace` empties the importers' tables first; without it a key conflict fails and nothing changes. `--dry-run` reads and counts, writes nothing. `--dbc-dir <DBFilesClient>` also reads `Lock.dbc` (game object locks). `--quest-xp derived|none` (default derived, see below). |
-| `import-dbc <dir>` | the five spell DBCs through `SpellDbcImporter` / `EfSpellContentStore` (what `arcane-spell-import` does). With `Map.dbc` and `AreaTable.dbc` (and `WMOAreaTable.dbc`) in the directory it also fills `map_template`, `area_template` and `wmo_area_template` the way `import-map-dbc` does, but only when they are empty (a world with rows keeps them). It fills `areatrigger_template`, `taxi_nodes` and `taxi_path` from `AreaTrigger.dbc`, `TaxiNodes.dbc` and `TaxiPath.dbc` the same way (only when empty); `refresh <dump> --dbc-dir <dir>` rewrites them. |
+| `import-dbc <dir>` | the five spell DBCs through `SpellDbcImporter` / `EfSpellContentStore` (what `arcane-spell-import` does). With `Map.dbc` and `AreaTable.dbc` (and `WMOAreaTable.dbc`) in the directory it also fills `map_template`, `area_template` and `wmo_area_template` the way `import-map-dbc` does, but only when they are empty (a world with rows keeps them). It fills `areatrigger_template`, `taxi_nodes`, `taxi_path` and `race_taxi_start` from `AreaTrigger.dbc`, `TaxiNodes.dbc`, `TaxiPath.dbc` and `ChrRaces.dbc` (field 14, the starting flight-path mask) the same way (only when empty); `refresh <dump> --dbc-dir <dir>` rewrites them. |
 | `refresh-portals <dump>...` | Replace only `areatrigger_teleport` in an existing current-schema world, including required item, quest and condition fields. It leaves `game_tele`, area-trigger quest relations and other content untouched. The source must contain portal rows; `--dry-run` counts them without writing. |
 | `verify` | table counts and spawns whose template does not exist (entry 0 is reported as a note, see Limits). An empty `map_template`, `area_template`, `areatrigger_template`, `taxi_nodes` or `taxi_path` is a problem (exit 6) that names the command filling it: without them the World skips every instance portal and `.gps` keeps the login zone. |
 
@@ -376,6 +380,10 @@ feature reads:
   with the dump's rows for build 5875 in one transaction, by column name for both the classic-db and the vmangos layout; vmangos rows whose
   build range misses 5875 are dropped and counted. `--cooldown-unit seconds` reads classic-db dumps before z2829, whose `Cooldown` is in
   seconds; `--dry-run` parses and counts without a database. Two kept rows for one spell are an error. See [procs](procs.md).
+- **Spell threat.** `spell-threat <dump>... --database <file>` (or `--provider`/`--connection-string`) replaces `spell_threat` with the dump's
+  rows for build 5875 in one transaction, by column name for both the classic-db (`entry, Threat, multiplier, ap_bonus`) and the vmangos
+  layout; vmangos rows whose build range misses 5875 are dropped and counted, a non-zero `ap_bonus` or two rows for one spell is an error.
+  `--dry-run` parses and counts without a database. A running world applies the rows with `.reload spell_threats`. See [threat](threat.md).
 - **Refresh an existing world.** `refresh <dump>... --database <file> [--dbc-dir <dir>]` brings a world that an older importer built up
   to the tables the current world reads, and touches nothing else (creatures, objects, items, quests, loot and NPC services stay as they
   are). Inside one transaction it empties and refills, only when the inputs carry them: `world_safe_locs` and `game_graveyard_zone`

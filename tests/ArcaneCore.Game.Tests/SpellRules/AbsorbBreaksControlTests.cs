@@ -43,7 +43,8 @@ public sealed class AbsorbBreaksControlTests
     private static (Player Attacker, Player Victim) Pair(SpellTestKit kit)
     {
         (Player attacker, _) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(attacker);
+        (Player victim, _) = kit.AddHostilePlayer(2, 2);
         victim.Health = victim.MaxHealth = 1000;
         return (attacker, victim);
     }

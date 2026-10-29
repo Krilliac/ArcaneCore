@@ -118,7 +118,8 @@ public sealed class AuraAndTargetingModTests
         using SpellTestKit kit = Kit();
         CasterSpellModules.Register(kit.System);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         var sink = new RecordingSink();
         kit.System.Damage = sink;
         kit.Spellbook.Teach(caster, DrainLife);
@@ -137,7 +138,8 @@ public sealed class AuraAndTargetingModTests
     {
         using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         target.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
         target.SetUInt32(UpdateFields.UnitFieldMaxpower1, 100);
         target.SetUInt32(UpdateFields.UnitFieldPower1, 100);

@@ -158,6 +158,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         long t = Stopwatch.GetTimestamp();
         using (Serial())
         {
+            SweepWanderJobs();
             SweepPathJobs();
             RunDeferredMoves();
             SendCatchUpMoves();
@@ -1202,7 +1203,7 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
             return;
         }
 
-        bool timePerCreature = Map.IsCollectingDiagnostics;
+        bool timePerCreature = Map.IsCollectingDiagnostics || TimeRandomMotion;
         long motionStart = timePerCreature ? Stopwatch.GetTimestamp() : 0;
         try
         {
@@ -1227,12 +1228,17 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         if (timePerCreature)
         {
             long motionTicks = Math.Max(1L, Stopwatch.GetTimestamp() - motionStart);
-            _timing.Motion += motionTicks;
-            if (motionTicks > _timing.SlowestCreatureTicks)
+            RandomMotionTicksTotal += motionTicks;
+            RandomMotionCalls++;
+            if (Map.IsCollectingDiagnostics)
             {
-                _timing.SlowestCreatureTicks = motionTicks;
-                _timing.SlowestEntry = creature.Entry;
-                _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+                _timing.Motion += motionTicks;
+                if (motionTicks > _timing.SlowestCreatureTicks)
+                {
+                    _timing.SlowestCreatureTicks = motionTicks;
+                    _timing.SlowestEntry = creature.Entry;
+                    _timing.SlowestGenerator = creature.Motion.Top?.GetType();
+                }
             }
         }
     }

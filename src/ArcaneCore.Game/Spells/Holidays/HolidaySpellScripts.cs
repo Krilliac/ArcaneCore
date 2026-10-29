@@ -10,7 +10,7 @@ internal static class HolidayCasts
         => context.System.CastSpell(unit, spellId, SpellCastTargets.ForSelf(), triggered);
 
     public static void On(SpellEffectContext context, Unit caster, Unit target, uint spellId)
-        => context.System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        => context.System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(target.Guid, context.Cast), triggered: true);
 
     public static bool Male(Unit unit) => unit.Gender == Gender.Male;
 }

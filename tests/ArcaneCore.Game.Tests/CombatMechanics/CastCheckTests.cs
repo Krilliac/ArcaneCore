@@ -64,7 +64,8 @@ public sealed class CastCheckTests
         {
             Kit = new SpellTestKit([.. Spells()]);
             (Caster, _) = Kit.AddPlayer(1);
-            (Target, _) = Kit.AddPlayer(2, 3, 0);
+            SpellTestKit.FlagForPvp(Caster);
+            (Target, _) = Kit.AddHostilePlayer(2, 3, 0);
             GeneralCastChecks.Install(Kit.System);
             Kit.Spellbook.Teach(Caster, CastTimeCharge);
             Kit.World.RunTick(0);

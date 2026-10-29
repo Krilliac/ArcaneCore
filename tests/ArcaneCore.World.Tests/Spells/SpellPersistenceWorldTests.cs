@@ -203,7 +203,8 @@ public sealed class SpellPersistenceWorldTests
     public async Task MeleeDamage_PushesBackACastInProgress()
     {
         await using var host = WorldTestHost.Start();
-        await using WorldTestClient attackerClient = await host.EnterWorldAsync("MELEE", "Melee");
+        await using WorldTestClient attackerClient = await host.EnterWorldAsync("MELEE", "Melee", race: 2);
+        await SpellTestServices.FlagForPvpAsync(host, "Melee");
         await using WorldTestClient casterClient = await host.EnterWorldAsync("PUSHED", "Pushed");
         Player attacker = await host.PlayerAsync("Melee");
         Player caster = await host.PlayerAsync("Pushed");

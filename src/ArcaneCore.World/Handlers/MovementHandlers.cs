@@ -193,7 +193,9 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             && !movement.HasFlag(MovementFlags.FallingFar) && !movement.HasFlag(MovementFlags.OnTransport)
             && (player.UnitFlags & (UnitFlags.RemoveClientControl | UnitFlags.Stunned | UnitFlags.Confused | UnitFlags.Fleeing)) == 0)
         {
+            // vmangos stores o = 0 (Player.h:1786); keeping the client's facing only changes where a recalled player looks.
             player.LastSafePosition = (player.MapId, movement.X, movement.Y, movement.Z + 5.0f, movement.Orientation);
+            player.UndermapRecallArmed = true;
         }
         if (!relay || session.IsInChaosProbe)
         {

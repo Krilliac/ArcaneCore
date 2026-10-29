@@ -2149,7 +2149,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         // Resting is standing still by design: health or mana rising above the best seen during the rest is its progress.
         ulong vitals = (ulong)player.Health + (player.PowerType == PowerType.Mana ? ArcaneCore.Game.Spells.SpellSystem.GetPower(player, PowerType.Mana) : 0u);
         _restMark = _goal == PlayerbotGoalKind.Rest ? Math.Max(_restMark, vitals) : 0;
-        return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells, _restMark);
+        PlayerbotThinkProbe.Phase("stall hits");
+        return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells, _restMark,
+            _killObserver?.ProgressHitsBy(player) ?? 0);
     }
 
     /// <summary>
