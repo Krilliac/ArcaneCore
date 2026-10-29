@@ -281,6 +281,24 @@ public sealed class PetStableTests
         Assert.Equal(5, cancels);
     }
 
+    [Fact] // the .stable command is not an NPC interaction (vmangos SendStablePet); a dead player's stable request returns before NPCHandler.cpp:623
+    public void StableRequests_DoNotEndInteractingAuras_ForTheGmStableOrADeadPlayer()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, _, _) = Stable(kit);
+        (Player hunter, _) = Hunter(kit);
+        int cancels = 0;
+        stable.InteractingCancels = _ => cancels++;
+
+        stable.OpenAsGm(hunter);
+        Assert.Equal(0, cancels);
+
+        hunter.Health = 0;
+        Assert.False(hunter.IsAlive);
+        stable.HandleStable(hunter, StableMaster);
+        Assert.Equal(0, cancels);
+    }
+
     [Fact]
     public async Task BuySlot_GivesTheMoneyBack_WhenTheSlotIsNotSaved()
     {

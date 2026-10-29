@@ -104,10 +104,12 @@ public sealed partial class QuestNpcServices
     public Func<IReadOnlyCollection<uint>>? ScriptCreditedQuests { get; set; }
 
     /// <summary>
-    /// Ends the player's channel and auras that carry INTERACTING_CANCELS (0x400; Feign Death among them) once an NPC passed the
-    /// interactable check. vmangos HandleGossipHelloOpcode (NPCHandler.cpp:354-355), HandleGossipSelectOptionOpcode (:376-377),
-    /// SendListInventory (ItemHandler.cpp:720-721) and HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:66-67) all do it, and the
-    /// interaction then proceeds. Unset: nothing is cancelled. Set by QuestNpcFeature when the spell system is available.
+    /// Ends the player's channel and auras that carry INTERACTING_CANCELS (0x400; Feign Death among them). Each site runs it where vmangos
+    /// does, which is mostly after the NPC passed the interactable check (HandleGossipHelloOpcode NPCHandler.cpp:354-355, SendListInventory
+    /// ItemHandler.cpp:720-721, HandleBattlemasterHelloOpcode BattleGroundHandler.cpp:66-67, the trainer, spirit healer, binder, stable and
+    /// repair handlers) and the interaction then proceeds. The exception is HandleGossipSelectOptionOpcode (NPCHandler.cpp:376-377): it
+    /// cancels right after the coded-option check, before the NPC is looked up. Unset: nothing is cancelled. Set by QuestNpcFeature when
+    /// the spell system is available.
     /// </summary>
     public Action<Player>? InteractingCancels { get; set; }
 
@@ -205,13 +207,15 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        // vmangos HandleGossipSelectOptionOpcode (NPCHandler.cpp:376-377): right after the coded-option check and before the NPC is looked up,
+        // so a select for an unreachable or non-interactable NPC still ends the channel and the INTERACTING auras.
+        InteractingCancels?.Invoke(player);
         if (InteractableNpc(player, guid, NpcFlags.None) is not { } npc)
         {
             LogMissing("GossipSelectOption", guid);
             return;
         }
 
-        InteractingCancels?.Invoke(player);
         PauseInteractionMovement(player, npc);
         OnGossipSelect(s, npc, listId);
         Flush(s);
