@@ -307,8 +307,9 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     /// <summary>
     /// Manual clock: the zero-advance barrier. Waits until every packet any client of this host has sent has been dispatched by its
-    /// session (queued for the world thread or handled by the read loop), then runs one zero-diff tick so the commands and session
-    /// queues posted so far have run. Game time does not move. Called first by every other advancing member.
+    /// session (queued for the world thread or handled by the read loop), then runs one zero-diff tick: the commands posted so far run, and each
+    /// session's queue is processed up to <see cref="WorldSessionOptions.MaxWorldPacketsPerTick"/> packets in that tick (a deeper queue needs more ticks).
+    /// Game time does not move. Called first by every other advancing member.
     /// </summary>
     public async Task SettleAsync(TimeSpan? hangGuard = null)
     {
