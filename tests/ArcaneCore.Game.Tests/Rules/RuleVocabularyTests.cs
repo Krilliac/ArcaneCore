@@ -7,15 +7,15 @@ namespace ArcaneCore.Game.Tests.Rules;
 public sealed class RuleVocabularyTests
 {
     [Fact]
-    public void Default_HoldsTheSharedPrimitives_AndNoHost()
+    public void Default_HoldsTheSharedPrimitives_AndTheShippedHosts()
     {
         RuleVocabulary vocabulary = RuleVocabulary.Default;
 
-        Assert.Empty(vocabulary.Hosts);
+        Assert.Contains("world_event", vocabulary.Hosts.Select(h => h.Name));
+        IReadOnlyList<RulePrimitiveInfo> shared = [.. vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Any)];
         Assert.Equal(
             ["action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "target 1 self", "target 2 invoker"],
-            vocabulary.Primitives.Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
-        Assert.All(vocabulary.Primitives, p => Assert.Equal(RuleHostKind.Any, p.Host));
+            shared.Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
         Assert.All(vocabulary.Primitives, p => Assert.True(p.IsBuiltIn));
         Assert.All(vocabulary.Primitives, p => Assert.False(string.IsNullOrWhiteSpace(p.Description)));
     }
