@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.World.Economy;
 using Xunit;

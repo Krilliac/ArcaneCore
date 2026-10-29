@@ -6,6 +6,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
 using Microsoft.EntityFrameworkCore;
