@@ -422,11 +422,15 @@ internal sealed class PopulationZoneAtlas
     /// A placement for a bot in one of the best valued zones for it (see <see cref="Rank"/>): a weighted draw among the top
     /// <c>TopZones</c> by total value, scaled down as the zone fills towards <c>ZoneSoftCap</c>, then a safe location of the zone the bot's
     /// level takes. A zone with no safe location is dropped and the draw repeats, first over the rest of the top zones, then over the rest
-    /// of the ranking. <paramref name="ranked"/> receives the ranking when given. Null when no valued zone is safe.
+    /// of the ranking. <paramref name="ranked"/> receives the ranking when given; <paramref name="minTotal"/> keeps the zones worth less out
+    /// of both (see <see cref="Rank"/>). A caller that picks for many bots with the same ranking passes it as <paramref name="precomputed"/>
+    /// (the ranking of <see cref="Rank"/> for the same arguments; <paramref name="vetoed"/>, <paramref name="trouble"/> and <paramref name="minTotal"/> are then not read).
+    /// Null when no valued zone is safe.
     /// </summary>
     internal PopulationSafeSelection? PickValued(PopulationBotProfile bot, PopulationLevelRule rule, PopulationZoneValue value,
         PopulationValueWeights w, IReadOnlyDictionary<uint, int> assigned, Random random, Func<WorldSafeLoc, int, bool> safe,
-        Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null, IList<ZoneScore>? ranked = null)
+        Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null, IList<ZoneScore>? ranked = null, double minTotal = double.NegativeInfinity,
+        IReadOnlyList<ZoneScore>? precomputed = null)
     {
         ArgumentNullException.ThrowIfNull(bot);
         ArgumentNullException.ThrowIfNull(rule);
@@ -434,7 +438,7 @@ internal sealed class PopulationZoneAtlas
         ArgumentNullException.ThrowIfNull(assigned);
         ArgumentNullException.ThrowIfNull(random);
         ArgumentNullException.ThrowIfNull(safe);
-        IReadOnlyList<ZoneScore> ranking = Rank(bot, rule, value, w, assigned, vetoed, trouble);
+        IReadOnlyList<ZoneScore> ranking = precomputed ?? Rank(bot, rule, value, w, assigned, vetoed, trouble, minTotal);
         if (ranked is not null)
             foreach (ZoneScore score in ranking) ranked.Add(score);
         if (ranking.Count == 0) return null;
@@ -491,10 +495,11 @@ internal sealed class PopulationZoneAtlas
     /// <summary>
     /// The zones the bot may be sent to for their value, best first: eligible (open to the team, with a location for it, not vetoed, with
     /// room, under the soft cap, and fitting the bot's level, or for a level-capped bot reaching it within <c>CapReach</c>), valued and
-    /// with a total above 0.
+    /// with a total above 0 and at least <paramref name="minTotal"/> (a move for value passes the total of the zone the bot leaves, scaled,
+    /// so it never lands in a zone worth less than the one it is in).
     /// </summary>
     internal IReadOnlyList<ZoneScore> Rank(PopulationBotProfile bot, PopulationLevelRule rule, PopulationZoneValue value, PopulationValueWeights w,
-        IReadOnlyDictionary<uint, int> assigned, Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null)
+        IReadOnlyDictionary<uint, int> assigned, Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null, double minTotal = double.NegativeInfinity)
     {
         ArgumentNullException.ThrowIfNull(bot);
         ArgumentNullException.ThrowIfNull(rule);
@@ -510,7 +515,7 @@ internal sealed class PopulationZoneAtlas
             if (!HasRoom(zone, bot.Team, bot.Level, bot.Level, assigned)) continue;
             if (!Fits(zone, bot.Level, bot.Team, rule) && !CapReaches(zone, bot.Level, bot.Team, rule, w.CapReach)) continue;
             ZoneScore score = PopulationZoneScoring.Score(zone, value.Find(zone.ZoneId), bot, w, trouble?.Invoke(zone.ZoneId) ?? 0, inZone);
-            if (score.Valued && score.Total > 0) scores.Add(score);
+            if (score.Valued && score.Total > 0 && score.Total >= minTotal) scores.Add(score);
         }
 
         scores.Sort(static (a, b) => { int c = b.Total.CompareTo(a.Total); return c != 0 ? c : a.ZoneId.CompareTo(b.ZoneId); });

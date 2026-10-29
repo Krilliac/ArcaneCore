@@ -268,6 +268,9 @@ internal static class PopulationBandPlanner
         // class, so a second race of the same faction, or another class, would only repeat the same failed search. The team is
         // part of the key because an incomplete catalog gives faction 0 to races of both teams.
         var unplaceable = new HashSet<(int Band, Team Team, uint Faction)>();
+        // The ranking of a capped band's fresh bot, per (team, race, class, level): it depends on nothing else that changes inside this call, and
+        // the call runs on the world thread, so each distinct key costs one Rank however many times the search comes back to it.
+        var rankings = new Dictionary<(Team Team, byte Race, byte Class, int Level), IReadOnlyList<ZoneScore>>();
         foreach (Team team in teams)
             foreach (int band in Enumerable.Range(0, options.Bands.Length)
                 .Where(i => deficits[i] > 0 && (boostAvailable || options.Bands[i].MinLevel <= 1))
@@ -289,11 +292,16 @@ internal static class PopulationBandPlanner
                         int minLevel = boostAvailable ? options.Bands[band].MinLevel : 1;
                         int maxLevel = boostAvailable ? options.Bands[band].MaxLevel : 1;
                         // A band at the level cap has no zone that fits it for long: send it to the zones with the most to offer first.
-                        PopulationSafeSelection? selected = value is not null && weights is not null && boostAvailable
-                            && options.Bands[band].MinLevel >= PlayerbotPopulationOptions.MaxLevel
-                            ? atlas.PickValued(PopulationBotProfile.Fresh(minLevel, team, race, cls), rule, value, weights, assigned, random,
-                                (location, level) => safe(location, checked((byte)level), faction), trouble: trouble)
-                            : null;
+                        PopulationSafeSelection? selected = null;
+                        if (value is not null && weights is not null && boostAvailable && options.Bands[band].MinLevel >= PlayerbotPopulationOptions.MaxLevel)
+                        {
+                            PopulationBotProfile profile = PopulationBotProfile.Fresh(minLevel, team, race, cls);
+                            if (!rankings.TryGetValue((team, race, cls, minLevel), out IReadOnlyList<ZoneScore>? ranking))
+                                rankings[(team, race, cls, minLevel)] = ranking = atlas.Rank(profile, rule, value, weights, assigned, trouble: trouble);
+                            selected = atlas.PickValued(profile, rule, value, weights, assigned, random,
+                                (location, level) => safe(location, checked((byte)level), faction), trouble: trouble, precomputed: ranking);
+                        }
+
                         selected ??= atlas.PickSafe(minLevel, maxLevel, team, rule,
                             assigned, random, (location, level) => safe(location, checked((byte)level), faction));
                         if (selected is not null)

@@ -383,7 +383,7 @@ public sealed class PlayerbotPopulationOptions
     /// <summary>The minutes (0..1440) a level-capped bot stays in a zone before the low-value check may move it.</summary>
     public int ValueRelocateMinStayMinutes { get; set; } = 30;
 
-    /// <summary>The percentage (0..100) of the best zone's value under which a level-capped bot's own zone is left for the best one. 0 turns the check off.</summary>
+    /// <summary>The percentage (0..100) of the best zone's value under which a level-capped bot's own zone is left, for a zone worth at least 100 / this percentage times its own (50 = twice as much). 0 turns the check off.</summary>
     public int ValueRelocateBelowPct { get; set; } = 50;
 
     /// <summary>The most bots (0..200) the low-value check looks at in one pass of the relocation sweep. 0 turns the check off.</summary>
