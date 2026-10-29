@@ -300,23 +300,34 @@ internal sealed class PlayerbotGratitudeLane
         _doneScratch.Clear();
         foreach ((Guid botId, Tip tip) in _tips)
             if (!Step(pass, recorder, botId, tip)) _doneScratch.Add(botId);
-        foreach (Guid botId in _doneScratch) _tips.Remove(botId);
+        foreach (Guid botId in _doneScratch)
+        {
+            if (_tips.Remove(botId, out Tip? ended)) PlayerbotTradeOwners.Of(ended.Session)?.Release(ended.Bot, PlayerbotTradeOwner.Tip);
+        }
     }
 
     /// <summary>Drop every tip under way and close the windows they opened (the feature is switched off, detached or stopped).</summary>
     internal void CancelAllTips()
     {
         if (_tips.Count == 0) return;
-        foreach (Tip tip in _tips.Values) Cancel(tip);
+        foreach (Tip tip in _tips.Values)
+        {
+            Cancel(tip);
+            PlayerbotTradeOwners.Of(tip.Session)?.Release(tip.Bot, PlayerbotTradeOwner.Tip);
+        }
+
         _tips.Clear();
     }
 
-    // Close the bot's trade window if it is the tip's: a dropped tip never leaves the helper looking at a stalled window.
+    // Close the bot's trade window if it is the tip's: a dropped tip never leaves the helper looking at a stalled window, and never touches another driver's window.
     private static void Cancel(Tip tip)
     {
+        PlayerbotTradeOwners? owners = PlayerbotTradeOwners.Of(tip.Session);
         EconomyFeature? economy = tip.Session.Services.GetService<EconomyFeature>();
-        if (economy?.TradeOf(tip.Bot) is { Settling: false } trade && trade.OtherSide(tip.Bot).Player.Guid == tip.Helper)
+        TradeSession? trade = economy?.TradeOf(tip.Bot);
+        if (trade is { Settling: false } && owners?.Is(tip.Bot, PlayerbotTradeOwner.Tip, tip.Helper, trade) != false && trade.OtherSide(tip.Bot).Player.Guid == tip.Helper)
             PlayerbotSocialPackets.Send(tip.Session, WorldOpcode.CmsgCancelTrade, []);
+        owners?.Release(tip.Bot, PlayerbotTradeOwner.Tip);
     }
 
     // True while the tip is still under way. Every other path cancels the window first.
@@ -337,7 +348,9 @@ internal sealed class PlayerbotGratitudeLane
         }
 
         TradeSession? trade = economy.TradeOf(self);
-        if (trade is not null) tip.Seen = true;
+        PlayerbotTradeOwners? owners = PlayerbotTradeOwners.Of(bot.Session);
+        // Only the tip's own window counts as seen: another driver's window completing (a gift, a desk deal) is never a paid tip.
+        if (trade is not null && owners?.Is(self, PlayerbotTradeOwner.Tip, tip.Helper, trade) != false && trade.OtherSide(self).Player.Guid == tip.Helper) tip.Seen = true;
         else if (tip.Seen)
         {
             // The window closed. A completed trade (the bot's own trade status, noted by its party AI) is a paid tip; otherwise the helper said no.
@@ -364,14 +377,17 @@ internal sealed class PlayerbotGratitudeLane
         {
             if (tip.LastInitiateMs == 0 || pass.NowMs - tip.LastInitiateMs >= TradeRetryMs)
             {
+                if (owners?.TryClaim(self, PlayerbotTradeOwner.Tip, helper.Guid, null) == false) return true; // another driver holds the slot: wait, bounded by TipWaitMs
                 tip.LastInitiateMs = pass.NowMs;
-                PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(helper.Guid.Value));
+                if (!PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(helper.Guid.Value)))
+                    owners?.Release(self, PlayerbotTradeOwner.Tip);
+                else owners?.Of(self, economy.TradeOf(self));
             }
 
             return true;
         }
 
-        if (!trade.Involves(helper)) return false; // busy with somebody else: the tip is dropped, that trade is left alone
+        if (owners?.Is(self, PlayerbotTradeOwner.Tip, tip.Helper, trade) == false || !trade.Involves(helper)) return true; // another driver's window, or somebody else's: wait, bounded by TipWaitMs; that trade is left alone
         if (!trade.Opened || trade.Settling) return true;
         TradeSide mine = trade.SideOf(self);
         if (mine.Gold != tip.Copper) PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgSetTradeGold, BitConverter.GetBytes(tip.Copper));

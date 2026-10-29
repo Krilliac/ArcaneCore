@@ -138,6 +138,10 @@ These keys are **not** in the generated configuration catalog: the catalog cover
 (`ConfigDaemon` has no Gateway value), and there is no `gateway.conf.dist` or `--check-config` for the gateway yet. The
 source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `ConfigExceptionTable.UncataloguedSourceRoots`.
 
+## Running under the host supervisor
+
+The gateway, the worker and a standby worker can be launched and watched by the host supervisor instead of by hand: start `ArcaneCore.World` with `Cluster:Supervisor:Enabled` true and list each child under `Cluster:Supervisor:Processes` (keys without `:`, for example `worker-EK`), each with its own configuration and its own `Cluster:Worker:Enabled`. The supervisor process builds no world and opens no database or listener; it refuses to start with fewer than `Cluster:Supervisor:MinClusterProcesses` admissible processes, does not restart a child that exits 78, and a child cannot itself run as a supervisor. See the M15.4 section of [CLUSTERING_DESIGN.md](../CLUSTERING_DESIGN.md).
+
 ## Where things run
 
 | Concern | Runs on | Note |
@@ -240,8 +244,10 @@ recovery).
     that exists today.
   - `IRealmAuthorityLeaseStore` has only an in-memory implementation and no DI registration. The `.cluster leases` summary
     therefore always shows the fallback owner (combined, or the character ownership epoch), never a realm lease token.
-- **The M15.4 host supervisor is a library, not a host.** `ClusterHostSupervisor` (process admission, merged console, restart
-  backoff) is exercised only by its tests. No daemon or tool constructs it or binds its options (the Cluster:Supervisor section,
-  including the per-process console switch described in the [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)),
-  so those keys are read by nothing, and they are not in the conf catalog. `MinClusterProcesses` is declared but not
-  enforced by admission.
+- **The M15.4 host supervisor is hosted as an opt-in mode, with gaps.** `Cluster:Supervisor:Enabled` runs `ArcaneCore.World` as the
+  supervisor only (see "Running under the host supervisor" above and the
+  [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)); the `Cluster:Supervisor` keys are in the conf
+  catalog and `MinClusterProcesses` is enforced when the supervisor starts. Not built: the coordinator role, restart
+  reconciliation (the owned-pid set is in memory and does not survive a supervisor restart, so children of a dead supervisor
+  are not found again), and placement of new or empty maps onto workers. A second drain of an entry that ended Faulted (a kill the
+  OS refused) marks it Drained again; that is not yet reconciled.

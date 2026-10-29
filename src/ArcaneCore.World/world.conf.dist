@@ -1816,6 +1816,87 @@ Cluster.NodeBridge.Enabled = false
 Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;social|Social|127.0.0.1:19085|-;coordinator|Coordinator|127.0.0.1:19086|-;supervisor|Supervisor|127.0.0.1:19087|-"
 
 #----------------------------------------------------------------------------
+# Cluster:Supervisor
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Supervisor.Enabled
+#        Description: Runs this World process as the host supervisor only (default: false): it
+#                     launches and watches the configured Processes and starts no world, database,
+#                     listener or feature. Off, a World start is unchanged.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.Enabled = false
+
+#
+#    Cluster.Supervisor.MaxConcurrentProcesses
+#        Description: Maximum number of concurrent supervised child processes allowed on this host
+#                     (default: 9).
+#        Type: int
+#        Default: 9
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.MaxConcurrentProcesses = 9
+
+#
+#    Cluster.Supervisor.MaxTotalAllocatedMemoryMb
+#        Description: Optional cap on the sum of SupervisedProcessConfig.RequiredMemoryMb across all
+#                     active supervised processes.
+#        Type: long?
+#        Default: (not set)
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+# Cluster.Supervisor.MaxTotalAllocatedMemoryMb =
+
+#
+#    Cluster.Supervisor.MinClusterProcesses
+#        Description: Minimum number of supervised processes a supervisor start must be able to
+#                     admit (realm, gateway and one worker; default: 3). A start that can admit
+#                     fewer launches nothing and refuses with a message naming this key.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.MinClusterProcesses = 3
+
+#
+#    Cluster.Supervisor.MinFreeMemoryReserveMb
+#        Description: Minimum free host memory reserve in MiB that must remain after admitting a
+#                     child process (default: 1024 MiB).
+#        Type: long
+#        Default: 1024
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.MinFreeMemoryReserveMb = 1024
+
+#
+#    Cluster.Supervisor.Processes
+#        Description: Supervised process definitions, started in ascending
+#                     SupervisedProcessConfig.StartOrder (ties by key), keyed by a configuration key
+#                     that must not contain : (e.g. worker-EK); the display name may, via
+#                     SupervisedProcessConfig.Name (worker:EK).
+#        Type: Dictionary<string, SupervisedProcessConfig>
+#        Default: (empty)
+#        Allowed: a map: one key per entry name; each entry is a group of keys
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+# Empty by default.
+# Cluster.Supervisor.Processes.<Name> =
+
+#----------------------------------------------------------------------------
 # Cluster:Worker
 #----------------------------------------------------------------------------
 
@@ -18322,6 +18403,31 @@ World.Playerbots.Social.Trading.AcceptGifts = true
 World.Playerbots.Social.Trading.AnswerTrades = true
 
 #
+#    World.Playerbots.Social.Trading.Deals.BuyMaxPremiumPercent
+#        Description: The most a buying bot pays over the item's reference price in percent; never
+#                     more than the reference divided by 0.67 (0..100, default 50).
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.BuyMaxPremiumPercent = 50
+
+#
+#    World.Playerbots.Social.Trading.Deals.CounterTolerancePercent
+#        Description: A counter-offer the bot accepts: at most this share under its ask when selling
+#                     (never under the vendor value); one counter per deal, then it holds its price
+#                     (0..50, default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.CounterTolerancePercent = 10
+
+#
 #    World.Playerbots.Social.Trading.Deals.DealMinutes
 #        Description: The minutes an agreed deal stays open (1..60, default 5).
 #        Type: int
@@ -18394,7 +18500,7 @@ World.Playerbots.Social.Trading.Deals.PairCooldownMinutes = 10
 #
 #    World.Playerbots.Social.Trading.Deals.PriceBookHours
 #        Description: The hours an auction house observation is kept in the price book (1..720,
-#                     default 24).
+#                     default 24). Read by the price book (design lane T1), not yet by the desk.
 #        Type: int
 #        Default: 24
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18406,7 +18512,8 @@ World.Playerbots.Social.Trading.Deals.PriceBookHours = 24
 #
 #    World.Playerbots.Social.Trading.Deals.PriceBookMinSellers
 #        Description: The distinct seller accounts an item needs before an auction house reading
-#                     prices a deal (1..20, default 3).
+#                     prices a deal (1..20, default 3). Read by the price book (design lane T1), not
+#                     yet by the desk.
 #        Type: int
 #        Default: 3
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18417,8 +18524,8 @@ World.Playerbots.Social.Trading.Deals.PriceBookMinSellers = 3
 
 #
 #    World.Playerbots.Social.Trading.Enabled
-#        Description: Master switch (on by default). Once the trade desk lands (a later P4 step),
-#                     off will cancel every window it drives at its next pass; no effect until then.
+#        Description: Master switch (on by default). Off stops the trade desk quoting and agreeing
+#                     deals and cancels every window it drives at its next pass.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false

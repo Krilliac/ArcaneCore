@@ -238,6 +238,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player); // vmangos HandleRepairItemOpcode, NPCHandler.cpp:1012-1013
         if (Deps.Items is not { } items)
         {
             return;
@@ -276,6 +277,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player);
         PauseInteractionMovement(player, npc);
         var entries = new List<VendorListEntry>();
         float discount = PriceDiscount(player, npc);

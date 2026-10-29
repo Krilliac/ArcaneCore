@@ -2,13 +2,15 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 
 /// <summary>
 /// <c>World:Playerbots:Social:Trading</c>: bots answering trade windows, fixed-price deals, group gifts and the outflow limits (P4a). On by default.
-/// The keys are live (a change applies without a restart), but until the trade desk and deal steps land in later P4 steps nothing reads them except
-/// <see cref="ScamMemoryDays"/> and <see cref="NinjaMemoryDays"/>. It will run only while <c>World:Playerbots:Enabled</c>, the social feature and the economy are on; the deal talk and the "anyone need"
-/// lines also need <c>World:Playerbots:Chat:Enabled</c>. The scam and ninja memory of a partner is kept in the bot's trade ledger (counts and times only).
+/// The keys are live (a change applies without a restart). The trade desk (<c>PlayerbotTradeDesk</c>) reads <see cref="Enabled"/>, <see cref="LowTrustPermille"/>,
+/// <see cref="TradeTimeoutSeconds"/> and every key of <see cref="Deals"/> (except the price book keys, read by the price book of design lane T1, not yet built) and <see cref="Limits"/>;
+/// <see cref="ScamMemoryDays"/> and <see cref="NinjaMemoryDays"/> are read by the trade ledger. The gift keys (<see cref="AnswerTrades"/>, <see cref="AcceptGifts"/>, <see cref="GiftMinValueCopper"/>,
+/// <see cref="MaxGiftsReceivedPerHour"/>, <see cref="Gifts"/>) are read by later P4 steps and nothing yet. The desk runs only while <c>World:Playerbots:Enabled</c> is on; the deal talk
+/// also needs <c>World:Playerbots:Chat:Enabled</c> and the bot voice. The scam and ninja memory of a partner is kept in the bot's trade ledger (counts and times only).
 /// </summary>
 public sealed class PlayerbotSocialTradingOptions
 {
-    /// <summary>Master switch (on by default). Once the trade desk lands (a later P4 step), off will cancel every window it drives at its next pass; no effect until then.</summary>
+    /// <summary>Master switch (on by default). Off stops the trade desk quoting and agreeing deals and cancels every window it drives at its next pass.</summary>
     public bool Enabled { get; set; } = true;
 
     /// <summary>Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default).</summary>
@@ -62,7 +64,10 @@ public sealed class PlayerbotSocialTradingOptions
     }
 }
 
-/// <summary><c>World:Playerbots:Social:Trading:Deals</c>: a bot completes its own WTS post at a fixed price through the trade window.</summary>
+/// <summary>
+/// <c>World:Playerbots:Social:Trading:Deals</c>: a bot completes its own WTS or WTB post at a fixed price through the trade window. Read by
+/// <c>PlayerbotTradeDesk</c> (every key but the price book ones).
+/// </summary>
 public sealed class PlayerbotSocialTradingDealsOptions
 {
     /// <summary>Fixed-price WTS completion (on by default).</summary>
@@ -83,11 +88,17 @@ public sealed class PlayerbotSocialTradingDealsOptions
     /// <summary>The ask markup in percent for a partner the bot dislikes, scaled by the negative affinity (0..200, default 25).</summary>
     public int DislikeMarkupPercent { get; set; } = 25;
 
-    /// <summary>The hours an auction house observation is kept in the price book (1..720, default 24).</summary>
+    /// <summary>The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk.</summary>
     public int PriceBookHours { get; set; } = 24;
 
-    /// <summary>The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3).</summary>
+    /// <summary>The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk.</summary>
     public int PriceBookMinSellers { get; set; } = 3;
+
+    /// <summary>A counter-offer the bot accepts: at most this share under its ask when selling (never under the vendor value); one counter per deal, then it holds its price (0..50, default 10).</summary>
+    public int CounterTolerancePercent { get; set; } = 10;
+
+    /// <summary>The most a buying bot pays over the item's reference price in percent; never more than the reference divided by 0.67 (0..100, default 50).</summary>
+    public int BuyMaxPremiumPercent { get; set; } = 50;
 
     public void Validate()
     {
@@ -99,6 +110,8 @@ public sealed class PlayerbotSocialTradingDealsOptions
         PlayerbotTradingRange.Check(section, DislikeMarkupPercent, 0, 200, nameof(DislikeMarkupPercent));
         PlayerbotTradingRange.Check(section, PriceBookHours, 1, 720, nameof(PriceBookHours));
         PlayerbotTradingRange.Check(section, PriceBookMinSellers, 1, 20, nameof(PriceBookMinSellers));
+        PlayerbotTradingRange.Check(section, CounterTolerancePercent, 0, 50, nameof(CounterTolerancePercent));
+        PlayerbotTradingRange.Check(section, BuyMaxPremiumPercent, 0, 100, nameof(BuyMaxPremiumPercent));
     }
 }
 
@@ -122,7 +135,7 @@ public sealed class PlayerbotSocialTradingGiftsOptions
     }
 }
 
-/// <summary><c>World:Playerbots:Social:Trading:Limits</c>: rate limits and the daily outflow caps. War Mode never lifts them.</summary>
+/// <summary><c>World:Playerbots:Social:Trading:Limits</c>: rate limits and the daily outflow caps, read by <c>PlayerbotTradeDesk</c>. War Mode never lifts them.</summary>
 public sealed class PlayerbotSocialTradingLimitsOptions
 {
     /// <summary>The trades one bot may complete with real players in an hour (0..120, default 6).</summary>

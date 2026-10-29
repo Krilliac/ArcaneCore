@@ -79,6 +79,7 @@ public sealed class WiringAuditTests
             Assert.NotNull(services.GetRequiredService<UnhandledOpcodeTracker>());
             string[] hosted = [.. services.GetServices<IHostedService>().Select(s => s.GetType().Name)];
             Assert.Contains("WorldConsole", hosted);
+            Assert.Contains("SupervisedChildDrain", hosted);
             Assert.Contains("MetricsHost", hosted);
             Assert.Contains("WorldHost", hosted);
             Assert.Contains("WorldServer", hosted);

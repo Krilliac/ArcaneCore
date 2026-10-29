@@ -33,7 +33,7 @@ public sealed partial class SpellSystem
     /// </summary>
     public bool ImmunityEnforcement { get; set; } = true;
 
-    /// <summary>The static immunities of creatures (creature data area); null means none.</summary>
+    /// <summary>The static immunities of creatures: <see cref="Rules.Immunity.CreatureDataImmunities"/> from the built-in <see cref="Rules.Immunity.CreatureDataImmunityModule"/> (wrapped by script modules); null means none.</summary>
     public ICreatureImmunityProvider? CreatureImmunities { get; set; }
 
     /// <summary>

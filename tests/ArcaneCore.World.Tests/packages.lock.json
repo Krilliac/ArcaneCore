@@ -365,6 +365,9 @@
           "ArcaneCore.Game": "[1.0.0, )"
         }
       },
+      "supervisedchildfixture": {
+        "type": "Project"
+      },
       "wowworldmessages.vanilla": {
         "type": "Project"
       },

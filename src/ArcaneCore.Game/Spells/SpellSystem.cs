@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Ranged;
@@ -982,14 +983,24 @@ public sealed partial class SpellSystem
             return;
         }
 
-        if (cast.Caster is Player && cast.Timer != 0 && cast.HasMoved
+        // vmangos Spell::update (Spell.cpp:4027-4057): a spell with HIDE_CHANNEL_BAR never move-cancels, and Stuck (Hearthstone-style
+        // unstuck) is exempt while the player is falling far.
+        if (cast.Caster is Player mover && cast.Timer != 0 && !cast.Spell.HidesChannelBar && cast.HasMoved
+            && (cast.Spell.Effects[0].Effect != SpellEffectName.Stuck || !mover.Movement.HasFlag(MovementFlags.FallingFar))
             && (cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement)
                 || cast.Spell.AuraInterruptFlags.HasFlag(SpellAuraInterruptFlags.Moving)
                 || cast.Spell.ChannelInterruptFlags.HasFlag(SpellAuraInterruptFlags.Moving)))
         {
             // vmangos Spell::update: channels always cancel; casts only with the movement interrupt flag.
-            if (cast.State == SpellCastState.Casting
-                || (!cast.IsTriggered && cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement)))
+            if (cast.State == SpellCastState.Casting)
+            {
+                if (!ChannelSurvivesMoveBecauseSelfRooted(cast.Spell, mover))
+                {
+                    Cancel(cast);
+                    return;
+                }
+            }
+            else if (!cast.IsTriggered && cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement))
             {
                 Cancel(cast);
                 return;
@@ -1132,6 +1143,28 @@ public sealed partial class SpellSystem
         return target.IsAlive ? !cast.Spell.IsDeathOnly : cast.Spell.CanTargetDead;
     }
 
+    /// <summary>
+    /// vmangos Spell::update (Spell.cpp:4031-4049): a channel with an ApplyAura ModRoot or ModStun effect aimed at its own caster
+    /// (TARGET_UNIT_CASTER in TargetA) does not cancel on movement while the caster has the Root movement flag or a root change still
+    /// awaiting its client acknowledgement (HasPendingMovementChange(ROOT)), because the player may move a little before the root is
+    /// acknowledged. The first such effect decides; a root aimed at another unit does not qualify.
+    /// </summary>
+    private static bool ChannelSurvivesMoveBecauseSelfRooted(SpellInfo spell, Player caster)
+    {
+        IReadOnlyList<SpellEffectInfo> effects = spell.Effects;
+        for (int i = 0; i < effects.Count; i++)
+        {
+            SpellEffectInfo effect = effects[i];
+            if (effect.Effect == SpellEffectName.ApplyAura
+                && (effect.AuraType == AuraType.ModRoot || effect.AuraType == AuraType.ModStun)
+                && effect.TargetA == SpellImplicitTarget.UnitCaster)
+            {
+                return caster.Movement.HasFlag(MovementFlags.Root) || caster.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root);
+            }
+        }
+
+        return false;
+    }
     /// <summary>
     /// vmangos SpellAuraHolder::UpdateHolder (SpellAuras.cpp:7338-7376): while the channel's aura sits on its channel target,
     /// the channel is interrupted when the combat distance passes the spell's maximum range times 1.33 for a hostile target, or

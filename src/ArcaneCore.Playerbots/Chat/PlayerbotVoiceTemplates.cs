@@ -76,6 +76,21 @@ internal static class PlayerbotVoiceTemplates
             "{price}, im at {place}", "still have it, {price}, in {place}", "{price} for the {item}, in {place} now",
         ],
         ["voice.reply.wts.gone"] = ["sorry, sold it", "gone, sorry", "dont have it anymore, sorry"],
+        ["voice.reply.wtb"] =
+        [
+            "ill pay {price} for {count} {item}", "{price} for {count} {item}, deal?", "can pay {price} for {count} {item}", "{count} {item} for {price}, ok?",
+            "i pay {price} for {count} {item}",
+        ],
+
+        // --- a quoted deal: the desk (PlayerbotTradeDesk) agreed, held its price, or could not take the deal -------------------------------
+        ["voice.deal.agreed"] =
+        [
+            "deal, {price} for {item}, im in {place}, open trade", "ok, {price} for {item}. open trade, im in {place}", "deal! {price}, open trade with me in {place}",
+            "sure, {price} for {item}, trade me in {place}", "k deal, {price}, im at {place}, open trade",
+        ],
+        ["voice.deal.counter.no"] = ["sorry, {price} is my price", "sorry, cant go lower than {price}", "{price} is what i can do, sorry", "sorry, {price} or no deal"],
+        ["voice.deal.refused"] = ["sorry, cant do that deal right now", "sorry, not right now", "cant right now, sorry", "sorry, cant trade right now"],
+        ["voice.deal.off"] = ["deal is off, sorry", "sorry, deal is off", "deal off, sorry", "cant do it anymore, sorry"],
 
         // --- trade --------------------------------------------------------------------------------------------------------------
         ["voice.wts"] =

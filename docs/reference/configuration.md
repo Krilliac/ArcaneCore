@@ -27,6 +27,7 @@ How to read the tables:
 - [`Cluster:Fencing`](#clusterfencing)
 - [`Cluster:Node`](#clusternode)
 - [`Cluster:NodeBridge`](#clusternodebridge)
+- [`Cluster:Supervisor`](#clustersupervisor)
 - [`Cluster:Worker`](#clusterworker)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
@@ -321,6 +322,17 @@ How to read the tables:
 |---|---|---|---|---|
 | `Cluster:NodeBridge:Enabled` | `bool` | `false` | - | `true` starts the node bridge: the World connects to each endpoint in `Endpoints`, logs node connection events and heartbeats, and syncs live worker placement. `false`, the default, does nothing at all: no sockets, no log lines, no background task. Read once when the daemon starts. |
 | `Cluster:NodeBridge:Endpoints` | `string` | `"worker:EK\|Worker\|127.0.0.1:19081\|0;worker:Kalimdor\|Worker\|127.0.0.1:19082\|1;worker:instances\|Worker\|127.0.0.1:19083\|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway\|Gateway\|127.0.0.1:19084\|-;social\|Social\|127.0.0.1:19085\|-;coordinator\|Coordinator\|127.0.0.1:19086\|-;supervisor\|Supervisor\|127.0.0.1:19087\|-"` | - | The nodes the bridge monitors, as `;`-separated entries of `nodeId\|role\|host:port\|maps`, where `maps` is a comma list of map ids or `-` for a realm-wide node. The default is the seven local nodes: worker:EK 19081, worker:Kalimdor 19082, worker:instances 19083, gateway 19084, social 19085, coordinator 19086, supervisor 19087. A blank value means the seven default nodes. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set, replaces it but does not turn the bridge on (a warning is logged when `Enabled` is false). Only read when `Enabled` is true. |
+
+## `Cluster:Supervisor`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Supervisor:Enabled` | `bool` | `false` | - | Runs this World process as the host supervisor only (default: false): it launches and watches the configured `Processes` and starts no world, database, listener or feature. Off, a World start is unchanged. |
+| `Cluster:Supervisor:MaxConcurrentProcesses` | `int` | `9` | - | Maximum number of concurrent supervised child processes allowed on this host (default: 9). |
+| `Cluster:Supervisor:MaxTotalAllocatedMemoryMb` | `long?` | `null` | - | Optional cap on the sum of `SupervisedProcessConfig.RequiredMemoryMb` across all active supervised processes. |
+| `Cluster:Supervisor:MinClusterProcesses` | `int` | `3` | - | Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3). A start that can admit fewer launches nothing and refuses with a message naming this key. |
+| `Cluster:Supervisor:MinFreeMemoryReserveMb` | `long` | `1024` | - | Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB). |
+| `Cluster:Supervisor:Processes` | `Dictionary<string, SupervisedProcessConfig>` | `{}` | - | Supervised process definitions, started in ascending `SupervisedProcessConfig.StartOrder` (ties by key), keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`). |
 
 ## `Cluster:Worker`
 
@@ -1911,15 +1923,17 @@ How to read the tables:
 | `World:Playerbots:Social:Rivalry:Safeguards:SafeAreas` | `string` | `"35,392,976,2255,2361,2268"` | live | Area ids (comma separated; the sub-zone a character stands in, not its zone) where no rude emote is sent, on top of every capital city, which is always quiet. The default is the six neutral towns with a guard post for both factions: 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook, 2361 Nighthaven and 2268 Light's Hope Chapel. Empty keeps only the capitals. |
 | `World:Playerbots:Social:Trading:AcceptGifts` | `bool` | `true` | live | Accept gift windows (an empty bot side) from partners the rules allow (on by default). |
 | `World:Playerbots:Social:Trading:AnswerTrades` | `bool` | `true` | live | Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default). |
+| `World:Playerbots:Social:Trading:Deals:BuyMaxPremiumPercent` | `int` | `50` | live | The most a buying bot pays over the item's reference price in percent; never more than the reference divided by 0.67 (0..100, default 50). |
+| `World:Playerbots:Social:Trading:Deals:CounterTolerancePercent` | `int` | `10` | live | A counter-offer the bot accepts: at most this share under its ask when selling (never under the vendor value); one counter per deal, then it holds its price (0..50, default 10). |
 | `World:Playerbots:Social:Trading:Deals:DealMinutes` | `int` | `5` | live | The minutes an agreed deal stays open (1..60, default 5). |
 | `World:Playerbots:Social:Trading:Deals:DislikeMarkupPercent` | `int` | `25` | live | The ask markup in percent for a partner the bot dislikes, scaled by the negative affinity (0..200, default 25). |
 | `World:Playerbots:Social:Trading:Deals:Enabled` | `bool` | `true` | live | Fixed-price WTS completion (on by default). |
 | `World:Playerbots:Social:Trading:Deals:FriendDiscountPercent` | `int` | `20` | live | The ask discount in percent for a friend at full affinity, scaled by the bot's giving affinity (0..100, default 20). |
 | `World:Playerbots:Social:Trading:Deals:MaxDealCopper` | `int` | `500000` | live | The most a single deal may be worth in copper (0..100000000, default 500000 = 50 g; 0 disables deals). |
 | `World:Playerbots:Social:Trading:Deals:PairCooldownMinutes` | `int` | `10` | live | The minutes a pair waits after a deal expired, was declined or was cancelled before a new one (0..1440, default 10). |
-| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | The hours an auction house observation is kept in the price book (1..720, default 24). |
-| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). |
-| `World:Playerbots:Social:Trading:Enabled` | `bool` | `true` | live | Master switch (on by default). Once the trade desk lands (a later P4 step), off will cancel every window it drives at its next pass; no effect until then. |
+| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk. |
+| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk. |
+| `World:Playerbots:Social:Trading:Enabled` | `bool` | `true` | live | Master switch (on by default). Off stops the trade desk quoting and agreeing deals and cancels every window it drives at its next pass. |
 | `World:Playerbots:Social:Trading:GiftMinValueCopper` | `int` | `100` | live | The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100). |
 | `World:Playerbots:Social:Trading:Gifts:Enabled` | `bool` | `true` | live | Group gifts after a run (on by default). |
 | `World:Playerbots:Social:Trading:Gifts:GiftClaimSeconds` | `int` | `15` | live | The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15). |

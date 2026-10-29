@@ -363,6 +363,7 @@ public sealed partial class EconomyFeature
         trade.Settling = true;
         if (aActor is null || bActor is null || !Start([aActor, bActor], [], outcome =>
             {
+                if (outcome == EconomyOutcome.After) trade.Completed = true;
                 CloseTrade(trade);
                 if (outcome == EconomyOutcome.After)
                 {
