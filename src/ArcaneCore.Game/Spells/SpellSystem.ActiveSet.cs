@@ -164,9 +164,20 @@ public sealed partial class SpellSystem
         _allDetached++;
         if (_allDetached > 64 && _allDetached * 8 > _all.Count)
         {
+            // Keep the audit's place: resetting it to 0 would starve the tail of the list when states churn faster than one rotation.
+            int position = Math.Min(_auditPosition, _all.Count);
+            int keptBefore = 0;
+            for (int i = 0; i < position; i++)
+            {
+                if (!_all[i].Detached)
+                {
+                    keptBefore++;
+                }
+            }
+
             _all.RemoveAll(IsDetachedState);
             _allDetached = 0;
-            _auditPosition = 0;
+            _auditPosition = keptBefore;
         }
     }
 
