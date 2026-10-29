@@ -13,7 +13,21 @@ namespace ArcaneCore.Realm.Protocol;
 /// </summary>
 public static class RealmListWriter
 {
+    /// <summary>The same count for every realm (kept for callers that have no per-realm source).</summary>
     public static ReadOnlyMemory<byte> Build(IReadOnlyList<RealmEntry> realms, byte charactersPerRealm)
+        => Build(realms, _ => charactersPerRealm);
+
+    /// <summary>
+    /// The account's character count comes from <paramref name="charactersByRealm"/> (realm id to count; a realm without an entry shows 0,
+    /// vmangos AuthSocket.cpp:1062-1070). The wire field is a byte: a count above 255 is sent as 255 (the client reads a byte; ten is the most a character screen lists).
+    /// </summary>
+    public static ReadOnlyMemory<byte> Build(IReadOnlyList<RealmEntry> realms, IReadOnlyDictionary<int, int> charactersByRealm)
+    {
+        ArgumentNullException.ThrowIfNull(charactersByRealm);
+        return Build(realms, realmId => charactersByRealm.TryGetValue(realmId, out int count) ? (byte)Math.Clamp(count, 0, byte.MaxValue) : (byte)0);
+    }
+
+    private static ReadOnlyMemory<byte> Build(IReadOnlyList<RealmEntry> realms, Func<int, byte> charactersFor)
     {
         ArgumentNullException.ThrowIfNull(realms);
         // The count is a u8 on the wire; a larger list would wrap into a corrupt reply, so fail closed.
@@ -34,7 +48,7 @@ public static class RealmListWriter
             body.WriteCString(realm.Name);
             body.WriteCString(realm.Address);
             body.WriteSingle(realm.Population);
-            body.WriteByte(charactersPerRealm);
+            body.WriteByte(charactersFor(realm.Id));
             body.WriteByte(realm.Category);
             body.WriteByte(0x00); // unused (realm id placeholder in 1.x layout)
         }

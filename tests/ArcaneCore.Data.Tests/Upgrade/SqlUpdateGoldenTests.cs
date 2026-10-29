@@ -208,12 +208,13 @@ public sealed class SqlUpdateGoldenTests
         string root = Path.Combine(Path.GetTempPath(), "arcane-sqlupdates-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // Export onto a copy of the committed tree without its step files (a baseline stays at the version it was released at;
-            // later versions are step files), so the export has to write them again.
+            // Export onto a copy of the committed tree without its newest step files (a baseline stays at the version it was released at, and a
+            // released step file is kept: the export regenerates only the newest version's files), so the export has to write them again.
+            string newest = UpdateScriptWriter.StepPrefix(AuthDbContext.Schema.CurrentVersion);
             string committed = Path.Combine(SqlUpdateTestKit.Root, "auth");
             foreach (string source in Directory.EnumerateFiles(committed, "*", SearchOption.AllDirectories))
             {
-                if (source.EndsWith(".sql", StringComparison.Ordinal) && !Path.GetFileName(source).StartsWith("base_", StringComparison.Ordinal))
+                if (source.EndsWith(".sql", StringComparison.Ordinal) && Path.GetFileName(source).StartsWith(newest, StringComparison.Ordinal))
                 {
                     continue;
                 }

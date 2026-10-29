@@ -1,6 +1,6 @@
 {
   "component": "auth",
-  "version": 6,
+  "version": 7,
   "providers": {
     "mariadb": {
       "tables": [
@@ -9,10 +9,11 @@
         {"name":"auth_schema","columns":[["Id","int",false],["Version","int",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"ip_banned","columns":[["Ip","varchar(45)",false],["BanDate","bigint",false],["UnbanDate","bigint",false],["BannedBy","varchar(50)",false],["BanReason","varchar(255)",false]],"primaryKey":["Ip"],"indexes":[]},
         {"name":"managed_playerbot_provision","columns":[["BotId","char(36)",false],["AccountId","int",false],["AccountName","varchar(16)",false],["CreatedUnix","bigint",false]],"primaryKey":["BotId"],"indexes":[{"name":"IX_managed_playerbot_provision_AccountId","unique":true,"columns":["AccountId"]}]},
-        {"name":"realmlist","columns":[["Id","int",false],["Name","varchar(64)",false],["Address","varchar(64)",false],["Type","int unsigned",false],["Flags","tinyint unsigned",false],["Population","float",false],["Category","tinyint unsigned",false]],"primaryKey":["Id"],"indexes":[]}
+        {"name":"realmcharacters","columns":[["RealmId","int",false],["AccountId","int",false],["NumChars","int",false]],"primaryKey":["RealmId","AccountId"],"indexes":[{"name":"IX_realmcharacters_AccountId","unique":false,"columns":["AccountId"]}]},
+        {"name":"realmlist","columns":[["Id","int",false],["Name","varchar(64)",false],["Address","varchar(64)",false],["Type","int unsigned",false],["Flags","tinyint unsigned",false],["Population","float",false],["Category","tinyint unsigned",false],["State","tinyint unsigned",false],["HeartbeatUtc","datetime(6)",true],["AllowedSecurityLevel","tinyint unsigned",false]],"primaryKey":["Id"],"indexes":[]}
       ],
       "previous": [
-        {"name":"account","columns":[["Id","int",false],["Username","varchar(16)",false],["Salt","varbinary(32)",false],["Verifier","varbinary(32)",false],["SessionKey","varbinary(40)",true],["Status","int",false],["Security","tinyint unsigned",false],["LockFlags","tinyint unsigned",false],["SecurityInfo","varchar(128)",false],["LastIp","varchar(45)",false]],"primaryKey":["Id"],"indexes":[{"name":"IX_account_Username","unique":true,"columns":["Username"]}]},
+        {"name":"account","columns":[["Id","int",false],["Username","varchar(16)",false],["Salt","varbinary(32)",false],["Verifier","varbinary(32)",false],["SessionKey","varbinary(40)",true],["Status","int",false],["Security","tinyint unsigned",false],["LockFlags","tinyint unsigned",false],["SecurityInfo","varchar(128)",false],["LastIp","varchar(45)",false],["LastLoginUtc","datetime(6)",true],["LastOs","varchar(4)",false],["LastPlatform","varchar(4)",false],["LastLocale","varchar(4)",false],["LastBuild","int",false]],"primaryKey":["Id"],"indexes":[{"name":"IX_account_Username","unique":true,"columns":["Username"]}]},
         {"name":"account_banned","columns":[["BanId","int",false],["AccountId","int",false],["BanDate","bigint",false],["UnbanDate","bigint",false],["BannedBy","varchar(50)",false],["BanReason","varchar(255)",false],["Active","tinyint(1)",false],["Realm","int",false]],"primaryKey":["BanId"],"indexes":[{"name":"IX_account_banned_AccountId_Active","unique":false,"columns":["AccountId","Active"]},{"name":"IX_account_banned_Active","unique":false,"columns":["Active"]}]},
         {"name":"auth_schema","columns":[["Id","int",false],["Version","int",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"ip_banned","columns":[["Ip","varchar(45)",false],["BanDate","bigint",false],["UnbanDate","bigint",false],["BannedBy","varchar(50)",false],["BanReason","varchar(255)",false]],"primaryKey":["Ip"],"indexes":[]},
@@ -27,10 +28,11 @@
         {"name":"auth_schema","columns":[["Id","integer",false],["Version","integer",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"ip_banned","columns":[["Ip","character varying(45)",false],["BanDate","bigint",false],["UnbanDate","bigint",false],["BannedBy","character varying(50)",false],["BanReason","character varying(255)",false]],"primaryKey":["Ip"],"indexes":[]},
         {"name":"managed_playerbot_provision","columns":[["BotId","uuid",false],["AccountId","integer",false],["AccountName","character varying(16)",false],["CreatedUnix","bigint",false]],"primaryKey":["BotId"],"indexes":[{"name":"IX_managed_playerbot_provision_AccountId","unique":true,"columns":["AccountId"]}]},
-        {"name":"realmlist","columns":[["Id","integer",false],["Name","character varying(64)",false],["Address","character varying(64)",false],["Type","bigint",false],["Flags","smallint",false],["Population","real",false],["Category","smallint",false]],"primaryKey":["Id"],"indexes":[]}
+        {"name":"realmcharacters","columns":[["RealmId","integer",false],["AccountId","integer",false],["NumChars","integer",false]],"primaryKey":["RealmId","AccountId"],"indexes":[{"name":"IX_realmcharacters_AccountId","unique":false,"columns":["AccountId"]}]},
+        {"name":"realmlist","columns":[["Id","integer",false],["Name","character varying(64)",false],["Address","character varying(64)",false],["Type","bigint",false],["Flags","smallint",false],["Population","real",false],["Category","smallint",false],["State","smallint",false],["HeartbeatUtc","timestamp with time zone",true],["AllowedSecurityLevel","smallint",false]],"primaryKey":["Id"],"indexes":[]}
       ],
       "previous": [
-        {"name":"account","columns":[["Id","integer",false],["Username","character varying(16)",false],["Salt","bytea",false],["Verifier","bytea",false],["SessionKey","bytea",true],["Status","integer",false],["Security","smallint",false],["LockFlags","smallint",false],["SecurityInfo","character varying(128)",false],["LastIp","character varying(45)",false]],"primaryKey":["Id"],"indexes":[{"name":"IX_account_Username","unique":true,"columns":["Username"]}]},
+        {"name":"account","columns":[["Id","integer",false],["Username","character varying(16)",false],["Salt","bytea",false],["Verifier","bytea",false],["SessionKey","bytea",true],["Status","integer",false],["Security","smallint",false],["LockFlags","smallint",false],["SecurityInfo","character varying(128)",false],["LastIp","character varying(45)",false],["LastLoginUtc","timestamp with time zone",true],["LastOs","character varying(4)",false],["LastPlatform","character varying(4)",false],["LastLocale","character varying(4)",false],["LastBuild","integer",false]],"primaryKey":["Id"],"indexes":[{"name":"IX_account_Username","unique":true,"columns":["Username"]}]},
         {"name":"account_banned","columns":[["BanId","integer",false],["AccountId","integer",false],["BanDate","bigint",false],["UnbanDate","bigint",false],["BannedBy","character varying(50)",false],["BanReason","character varying(255)",false],["Active","boolean",false],["Realm","integer",false]],"primaryKey":["BanId"],"indexes":[{"name":"IX_account_banned_AccountId_Active","unique":false,"columns":["AccountId","Active"]},{"name":"IX_account_banned_Active","unique":false,"columns":["Active"]}]},
         {"name":"auth_schema","columns":[["Id","integer",false],["Version","integer",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"ip_banned","columns":[["Ip","character varying(45)",false],["BanDate","bigint",false],["UnbanDate","bigint",false],["BannedBy","character varying(50)",false],["BanReason","character varying(255)",false]],"primaryKey":["Ip"],"indexes":[]},
@@ -45,10 +47,11 @@
         {"name":"auth_schema","columns":[["Id","INTEGER",false],["Version","INTEGER",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"ip_banned","columns":[["Ip","TEXT",false],["BanDate","INTEGER",false],["UnbanDate","INTEGER",false],["BannedBy","TEXT",false],["BanReason","TEXT",false]],"primaryKey":["Ip"],"indexes":[]},
         {"name":"managed_playerbot_provision","columns":[["BotId","TEXT",false],["AccountId","INTEGER",false],["AccountName","TEXT",false],["CreatedUnix","INTEGER",false]],"primaryKey":["BotId"],"indexes":[{"name":"IX_managed_playerbot_provision_AccountId","unique":true,"columns":["AccountId"]}]},
-        {"name":"realmlist","columns":[["Id","INTEGER",false],["Name","TEXT",false],["Address","TEXT",false],["Type","INTEGER",false],["Flags","INTEGER",false],["Population","REAL",false],["Category","INTEGER",false]],"primaryKey":["Id"],"indexes":[]}
+        {"name":"realmcharacters","columns":[["RealmId","INTEGER",false],["AccountId","INTEGER",false],["NumChars","INTEGER",false]],"primaryKey":["RealmId","AccountId"],"indexes":[{"name":"IX_realmcharacters_AccountId","unique":false,"columns":["AccountId"]}]},
+        {"name":"realmlist","columns":[["Id","INTEGER",false],["Name","TEXT",false],["Address","TEXT",false],["Type","INTEGER",false],["Flags","INTEGER",false],["Population","REAL",false],["Category","INTEGER",false],["State","INTEGER",false],["HeartbeatUtc","TEXT",true],["AllowedSecurityLevel","INTEGER",false]],"primaryKey":["Id"],"indexes":[]}
       ],
       "previous": [
-        {"name":"account","columns":[["Id","INTEGER",false],["Username","TEXT",false],["Salt","BLOB",false],["Verifier","BLOB",false],["SessionKey","BLOB",true],["Status","INTEGER",false],["Security","INTEGER",false],["LockFlags","INTEGER",false],["SecurityInfo","TEXT",false],["LastIp","TEXT",false]],"primaryKey":["Id"],"indexes":[{"name":"IX_account_Username","unique":true,"columns":["Username"]}]},
+        {"name":"account","columns":[["Id","INTEGER",false],["Username","TEXT",false],["Salt","BLOB",false],["Verifier","BLOB",false],["SessionKey","BLOB",true],["Status","INTEGER",false],["Security","INTEGER",false],["LockFlags","INTEGER",false],["SecurityInfo","TEXT",false],["LastIp","TEXT",false],["LastLoginUtc","TEXT",true],["LastOs","TEXT",false],["LastPlatform","TEXT",false],["LastLocale","TEXT",false],["LastBuild","INTEGER",false]],"primaryKey":["Id"],"indexes":[{"name":"IX_account_Username","unique":true,"columns":["Username"]}]},
         {"name":"account_banned","columns":[["BanId","INTEGER",false],["AccountId","INTEGER",false],["BanDate","INTEGER",false],["UnbanDate","INTEGER",false],["BannedBy","TEXT",false],["BanReason","TEXT",false],["Active","INTEGER",false],["Realm","INTEGER",false]],"primaryKey":["BanId"],"indexes":[{"name":"IX_account_banned_AccountId_Active","unique":false,"columns":["AccountId","Active"]},{"name":"IX_account_banned_Active","unique":false,"columns":["Active"]}]},
         {"name":"auth_schema","columns":[["Id","INTEGER",false],["Version","INTEGER",false]],"primaryKey":["Id"],"indexes":[]},
         {"name":"ip_banned","columns":[["Ip","TEXT",false],["BanDate","INTEGER",false],["UnbanDate","INTEGER",false],["BannedBy","TEXT",false],["BanReason","TEXT",false]],"primaryKey":["Ip"],"indexes":[]},
@@ -60,10 +63,13 @@
   "seeds": [],
   "files": {
     "mariadb/0006_AccountLoginInfoDataModule.sql": "7420b4d3b229a931cf9a618baa2330e05a513a7307144e9d6e6725027950b184",
+    "mariadb/0007_RealmLivenessDataModule.sql": "995d4a398cfc74afd93288b246c8e42e70ddbc67fb8e34e43e4d9d6110e5f096",
     "mariadb/base_v0005.sql": "73601929a1f6ea5b6c432414560e2a0b2465332c2c1f05d56a6fdb5b71081ccb",
     "postgresql/0006_AccountLoginInfoDataModule.sql": "4f92f82261119baace08569473eddbed77e114089b754c92eb9d5fab1a53abe5",
+    "postgresql/0007_RealmLivenessDataModule.sql": "1cca81e2883e477a629df1bfe07eec0315c7d7a70e52a072e4e6a45f8b8e5c34",
     "postgresql/base_v0005.sql": "05634eff236df86f585c4d6a64da2a62375eecf2d214408b0dcb77cd260b0315",
     "sqlite/0006_AccountLoginInfoDataModule.sql": "68941f0fa79b5b03e97488a8e83a97f0798d6b53b70aff2820398eb77b99a884",
+    "sqlite/0007_RealmLivenessDataModule.sql": "90859bb20bb4ed9def1a7f07ec0bda17f4d5a710b67ba87f5349381be0306cbe",
     "sqlite/base_v0005.sql": "0a25ead6b952b86a54283faf3df1178aeaac9745f3055f06be16fcfcf8caf486"
   }
 }

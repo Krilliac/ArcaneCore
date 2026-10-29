@@ -34,7 +34,7 @@ The realm has no world thread; commands run on the reader thread and open their 
 |---|---|
 | `help` | List the commands. |
 | `info` | Uptime, logon sessions and the realm count. |
-| `realmlist` | The realms as served to clients. |
+| `realmlist` | The realms as served to clients: stored flags, plus the world's state, its heartbeat age and the flags a player is sent now ([realm list liveness](../ops/realm-liveness.md)). |
 | `online` | Connected logon sessions. |
 | `account create <name> <password>` | Create an account (same logic as the `arcane-account` tool). |
 | `account set-password <name> <password>` | Change a password. |

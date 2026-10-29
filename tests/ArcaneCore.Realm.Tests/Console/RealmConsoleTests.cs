@@ -142,10 +142,24 @@ public sealed class RealmConsoleTests
         Assert.Equal(
             [
                 Prefix + "2 realm(s)",
-                Prefix + "id 1  Arcane  127.0.0.1:8085  type PvP  flags NewPlayers  population 1.5  category 1",
-                Prefix + "id 2  Second Realm  10.0.0.2:8085  type RP  flags Offline  population 0  category 5",
+                Prefix + "id 1  Arcane  127.0.0.1:8085  type PvP  flags NewPlayers  population 1.5  category 1  state Unknown  heartbeat none  wire NewPlayers  lock 0",
+                Prefix + "id 2  Second Realm  10.0.0.2:8085  type RP  flags Offline  population 0  category 5  state Unknown  heartbeat none  wire Offline  lock 0",
             ],
             lines);
+    }
+
+    [Fact]
+    public async Task RealmConsole_Realmlist_ShowsStateHeartbeatAgeAndTheFlagsClientsGet()
+    {
+        var rig = new Rig();
+        DateTime now = rig.Time.GetUtcNow().UtcDateTime;
+        rig.Realms.Add(new RealmEntry { Id = 1, Name = "Alive", Address = "a:1", Flags = RealmFlags.NewPlayers, State = RealmRuntimeState.Online, HeartbeatUtc = now.AddSeconds(-4) });
+        rig.Realms.Add(new RealmEntry { Id = 2, Name = "Hung", Address = "b:1", State = RealmRuntimeState.Online, HeartbeatUtc = now.AddSeconds(-90), AllowedSecurityLevel = 2 });
+
+        string[] lines = await rig.RunAsync("realmlist");
+
+        Assert.Equal(Prefix + "id 1  Alive  a:1  type Normal  flags NewPlayers  population 0  category 0  state Online  heartbeat 4s ago  wire NewPlayers  lock 0", lines[1]);
+        Assert.Equal(Prefix + "id 2  Hung  b:1  type Normal  flags None  population 0  category 0  state Online  heartbeat 90s ago  wire Offline  lock 2", lines[2]);
     }
 
     [Fact]

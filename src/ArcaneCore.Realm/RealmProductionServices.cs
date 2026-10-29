@@ -21,6 +21,7 @@ public static class RealmProductionServices
         services.Configure<AuthOptions>(configuration.GetSection(AuthOptions.SectionName));
         services.Configure<AutoPatchOptions>(configuration.GetSection(AutoPatchOptions.SectionName)); // logon auto-patcher, off by default
         services.Configure<RealmSeedOptions>(configuration.GetSection(RealmSeedOptions.SectionName));
+        services.Configure<RealmLivenessOptions>(configuration.GetSection(RealmLivenessOptions.SectionName)); // heartbeat staleness and the restart display (docs/ops/realm-liveness.md)
         services.AddNetProtection(configuration);
         services.AddAuthDatabase(configuration);
         services.AddRealmResilience(configuration); // after AddAuthDatabase: guards the auth stores (docs/ops/resilience.md)

@@ -1787,6 +1787,40 @@ Ops.Watchdog.TickMonitor.WarnIntervalSeconds = 30
 #
 Realm.Console.Enabled = true
 
+#----------------------------------------------------------------------------
+# Realm:Liveness
+#----------------------------------------------------------------------------
+
+#
+#    Realm.Liveness.HeartbeatStaleSeconds
+#        Description: Seconds without a heartbeat after which a world that claims to be running is
+#                     shown offline. Default 60. Must be at least three times
+#                     World:Realm:HeartbeatIntervalSeconds (a missed beat or two never flips the
+#                     realm) and above five times Ops:Watchdog:TickMonitor:HangMs in seconds (a slow
+#                     tick is a hang for the watchdog long before it is an outage here). 0 turns the
+#                     heartbeat check off (the state and the lock level still apply).
+#        Type: int
+#        Default: 60
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#realmliveness
+#
+Realm.Liveness.HeartbeatStaleSeconds = 60
+
+#
+#    Realm.Liveness.RestartingAs
+#        Description: What a realm shows while its world counts down to a restart and still serves:
+#                     Invalid (red name, still selectable, the retail-emulator convention,
+#                     unverified in the 1.12.1 client binary) or Offline (grey, not selectable).
+#                     Default Invalid. Values: Invalid, Offline.
+#        Type: RestartingRealmDisplay
+#        Default: Invalid
+#        Allowed: Invalid | Offline
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#realmliveness
+#
+Realm.Liveness.RestartingAs = Invalid
+
 ###############################################################################
 # REALMS
 ###############################################################################

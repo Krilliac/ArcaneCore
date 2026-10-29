@@ -1,8 +1,9 @@
 namespace ArcaneCore.World.RealmList;
 
 /// <summary>
-/// The world daemon's own row in the realm list (<c>realmlist</c> in the auth database), which <see cref="RealmStatusFeature"/> marks
-/// online at start, offline at a clean stop, and updates with the population (vmangos Master.cpp:215, :330; World.cpp:340-353).
+/// The world daemon's own row in the realm list (<c>realmlist</c> in the auth database), which <see cref="RealmLivenessService"/> keeps
+/// current (offline until the world accepts connections, online while its loop ticks, offline at a clean stop) and
+/// <see cref="RealmStatusFeature"/> updates with the population (vmangos Master.cpp:215, :330; World.cpp:340-353).
 /// </summary>
 public sealed class RealmStatusOptions
 {
@@ -21,4 +22,12 @@ public sealed class RealmStatusOptions
     /// (vmangos skips it when the limit is 0). ArcaneCore has no login queue, so only the hint reads this value.
     /// </summary>
     public int PlayerLimit { get; set; } = 100;
+
+    /// <summary>
+    /// Seconds between the heartbeats this world writes into its realm-list row while its loop is ticking (ArcaneCore-specific; vmangos
+    /// has no liveness check). The logon daemon shows the realm offline once the last beat is older than <c>Realm:Liveness:HeartbeatStaleSeconds</c>
+    /// (default 60, which must be at least three times this interval). A beat is written only if the world loop started a tick since the last
+    /// one, so a hung or stalled loop stops beating while the process is still up. Needs <c>World:Realm:Id</c> above 0.
+    /// </summary>
+    public int HeartbeatIntervalSeconds { get; set; } = 10;
 }
