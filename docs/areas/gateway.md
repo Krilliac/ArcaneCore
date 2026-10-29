@@ -81,6 +81,12 @@ Cluster.Worker.LinkSecret = "<long random string>"
 The World's own client listener (`World:Port`) stays open in worker mode; point the realm list at the gateway's port to
 send clients through the gateway.
 
+Realm liveness in this topology belongs to the operator, not to a world. A combined-mode world marks its realm-list row online at
+start and offline at stop (`World:Realm:Id`, [installation](../guide/installation.md) section 4, vmangos Master.cpp:215/:330). A worker
+does not: an active and a standby worker serve the same realm, so the old active world going offline after a handoff would hide a realm
+the promoted standby is serving, and the client-facing endpoint is the gateway, which has no realm-list writer. Set the row's flags with
+SQL (`realmlist.Flags`, Offline = 0x02) when the gateway itself is taken down.
+
 Worker mode makes character fencing **mandatory** (Tier 3b groundwork): with `Cluster:Worker:Enabled = true` the
 characters write fence is registered whatever `Cluster:Fencing:Enabled` says, and the World refuses to start unless
 `Cluster:Fencing:Enabled = true` too. Combined mode (worker off) is unchanged.

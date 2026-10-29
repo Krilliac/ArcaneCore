@@ -59,6 +59,7 @@ public static class WorldServiceCollectionExtensions
         // Slow-update thresholds live in their own vmangos-named section (docs/areas/ops-perf.md).
         services.PostConfigure<WorldRuntimeOptions>(o => configuration.GetSection(PerformanceLogOptions.SectionName).Bind(o.Perf));
         services.Configure<Bans.BanOptions>(configuration.GetSection(Bans.BanOptions.SectionName));
+        services.Configure<RealmList.RealmStatusOptions>(configuration.GetSection(RealmList.RealmStatusOptions.SectionName)); // the realm-list row (online/offline, population)
         services.Configure<Game.AntiCheat.AntiCheatOptions>(configuration.GetSection(Game.AntiCheat.AntiCheatOptions.SectionName));
         services.Configure<AntiCheat.PacketHeuristics.PacketHeuristicsOptions>(configuration.GetSection(AntiCheat.PacketHeuristics.PacketHeuristicsOptions.SectionName));
         services.Configure<Warden.WardenOptions>(configuration.GetSection(Warden.WardenOptions.SectionName));

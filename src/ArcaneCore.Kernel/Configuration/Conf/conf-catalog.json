@@ -5198,6 +5198,22 @@
       "isCollection": false
     },
     {
+      "path": "HotReload:ApplyConfigFileChanges",
+      "section": "HotReload",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "Apply an edit of world.conf or appsettings*.json while the world runs: once the edits settle, the configuration is re-read through the same pipeline as `.reload config` (live keys change on the world thread, restart keys keep their value and are logged), whether or not `Commands` is on. Default false, the retail behaviour: vmangos has no file watcher, a mangosd.conf edit applies only through `.reload config` (ServerCommands.cpp:1016). True is an opt-in ArcaneCore convenience. Needs the host's file watching (`hostBuilder:reloadConfigOnChange`, default true). Read once when the world starts.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#hotreload",
+      "isCollection": false
+    },
+    {
       "path": "HotReload:BuildTimeoutMs",
       "section": "HotReload",
       "type": "int",
@@ -5224,7 +5240,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The one switch for live reload. Default false: a production server does not carry the reload machinery (vmangos registers the `reload` root, Chat.cpp:1212, but ArcaneCore's operator-initiated hot reload is a development tool, so it is opt-in). When false the reload coordinator is not built, no reloadable is registered and the `.reload` root does not exist (the chat reply is \"There is no such command\"). A development server turns it on with `HotReload:Commands=true`. Read once when the world starts.",
+      "meaning": "The one switch for live reload. Default false: a production server does not carry the reload machinery (vmangos registers the `reload` root, Chat.cpp:1212, but ArcaneCore's operator-initiated hot reload is a development tool, so it is opt-in). When false the reload coordinator is not built, no reloadable is registered and the `.reload` root does not exist (the chat reply is \"There is no such command\"); `ApplyConfigFileChanges` then runs the config reload on a coordinator of its own that holds only `config`. A development server turns it on with `HotReload:Commands=true`. Read once when the world starts.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#hotreload",
       "isCollection": false
@@ -24103,6 +24119,38 @@
       "meaning": "Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbotsqa",
+      "isCollection": false
+    },
+    {
+      "path": "World:Realm:Id",
+      "section": "World:Realm",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "1",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The realm-list id this world serves (vmangos RealmID; mangosd.conf.dist.in ships 1). The world clears its Offline flag at start and sets it at a clean stop, so the realm list shows the realm offline while the world is down. 0 = this world does not write the realm list (ArcaneCore-specific: vmangos refuses to start without a RealmID, Master.cpp:475-480).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldrealm",
+      "isCollection": false
+    },
+    {
+      "path": "World:Realm:PlayerLimit",
+      "section": "World:Realm",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "100",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "The population formula's player limit (vmangos PlayerLimit, default 100, SystemConfig.h:91): the realm list's population hint is 2 x sessions / PlayerLimit, written when a session is added (World.cpp:340-353). 0 = the population is never written (vmangos skips it when the limit is 0). ArcaneCore has no login queue, so only the hint reads this value.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldrealm",
       "isCollection": false
     },
     {
