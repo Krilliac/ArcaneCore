@@ -69,11 +69,14 @@ internal static class WarsongGulchTestContent
     public static readonly (float X, float Y, float Z) AllianceFlag = (1540.42f, 1481.32f, 351.82f);
     public static readonly (float X, float Y, float Z) HordeFlag = (916.02f, 1434.40f, 345.41f);
 
-    public static void Register(IServiceCollection services)
+    public static void Register(IServiceCollection services) => Register(services, minPlayersPerTeam: 1, maxPlayersPerTeam: 10);
+
+    /// <summary>The same content with a Warsong Gulch template of <paramref name="minPlayersPerTeam"/> to <paramref name="maxPlayersPerTeam"/> players per team.</summary>
+    public static void Register(IServiceCollection services, uint minPlayersPerTeam, uint maxPlayersPerTeam)
     {
         services.AddSingleton<IMapDataStore>(new Maps());
         services.AddSingleton<IGraveyardDataStore>(new Graveyards());
-        services.AddSingleton<IBattlegroundContentStore>(new Battlegrounds());
+        services.AddSingleton<IBattlegroundContentStore>(new Battlegrounds(minPlayersPerTeam, maxPlayersPerTeam));
         var store = new Content();
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddScoped<IGameObjectDataStore>(_ => store);
@@ -169,10 +172,10 @@ internal static class WarsongGulchTestContent
             []));
     }
 
-    private sealed class Battlegrounds : IBattlegroundContentStore
+    private sealed class Battlegrounds(uint minPlayersPerTeam, uint maxPlayersPerTeam) : IBattlegroundContentStore
     {
         public Task<BattlegroundContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new BattlegroundContent(
-            [new BattlegroundTemplateRecord(2, 1, 10, 1, 60, 769, 770, 75, 0)],
+            [new BattlegroundTemplateRecord(2, minPlayersPerTeam, maxPlayersPerTeam, 1, 60, 769, 770, 75, 0)],
             [],
             [new BattlegroundEventIndex(AllianceStandSpawn, WarsongGulch.EventFlagAlliance, 0), new BattlegroundEventIndex(HordeStandSpawn, WarsongGulch.EventFlagHorde, 0)],
             [new BattlemasterRecord(AllianceMasterEntry, 2), new BattlemasterRecord(HordeMasterEntry, 2)]));
