@@ -1485,7 +1485,19 @@ internal sealed class PlayerbotGroupAI
         Goal = PlayerbotGoalKind.Loot;
         if (best > 4f)
         {
-            if (!WalkTo(player, new Vector3(nearest.X, nearest.Y, nearest.Z), interval, toward: false)) CountLootTry(nearest.Guid);
+            Vector3 corpseAt = new(nearest.X, nearest.Y, nearest.Z);
+            // A member's walks in and after the fight (to the leader, to its fight spot, then to the corpse) are the A, B, A pattern the loop
+            // watch gives up (PlayerbotMotion), and the places it refuses for a minute include the corpse: every walk to it was refused, the
+            // three tries were spent in three thinks, the member never looted its quest drop, and the group gave up as objective-missing.
+            // The corpse is a goal of its own, not the loop: its refusal is lifted, and each lift is a try, so a corpse the bot really
+            // loops on is still given up after three.
+            if (PlayerbotMotion.IsBlacklisted(player, corpseAt))
+            {
+                PlayerbotMotion.Unblacklist(player, corpseAt);
+                CountLootTry(nearest.Guid);
+            }
+
+            if (!WalkTo(player, corpseAt, interval, toward: false)) CountLootTry(nearest.Guid);
             return true;
         }
 

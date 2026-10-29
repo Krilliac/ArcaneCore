@@ -22,6 +22,7 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         List<CreatureMovementTemplateRow> entryPaths = await db.Set<CreatureMovementTemplateRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureModelInfoRow> models = await db.Set<CreatureModelInfoRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureEquipmentRow> equipment = await db.Set<CreatureEquipmentRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<CreatureImmunityRow> immunities = await db.Set<CreatureImmunityRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAddonRow> addons = await db.Set<CreatureAddonRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiScriptRow> scripts = await db.Set<CreatureAiScriptRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
         List<CreatureAiTextRow> texts = await db.Set<CreatureAiTextRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
@@ -84,7 +85,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
             scriptWaypoints.Select(DbScriptDataModule.ToWaypoint),
             links.Select(r => new CreatureLink(r.SlaveGuid, r.MasterGuid, r.Flags)),
             templateLinks.Select(r => new CreatureTemplateLink(r.SlaveEntry, r.MapId, r.MasterEntry, r.Flags, r.SearchRange)),
-            equipment.Select(e => new CreatureEquipment(e.Entry, e.EquipEntry1, e.EquipEntry2, e.EquipEntry3)))
+            equipment.Select(e => new CreatureEquipment(e.Entry, e.EquipEntry1, e.EquipEntry2, e.EquipEntry3)),
+            immunities.Select(i => new CreatureImmunity(i.Entry, i.SetId, (CreatureImmunityType)i.Type, i.Value)))
         {
             SpawnGroups = spawnGroups,
             Pools = pools,
@@ -129,6 +131,8 @@ public sealed class EfCreatureDataStore(WorldDbContext db) : ICreatureDataStore
         TrainerRace = r.TrainerRace,
         TrainerSpell = r.TrainerSpell,
         EquipmentTemplateId = r.EquipmentTemplateId,
+        MechanicImmuneMask = r.MechanicImmuneMask,
+        SchoolImmuneMask = r.SchoolImmuneMask,
         UnitFlags = r.UnitFlags,
         DynamicFlags = r.DynamicFlags,
         TypeFlags = r.TypeFlags,

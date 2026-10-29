@@ -155,8 +155,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 57 | `World.Creatures.CreatureResistanceDataModule` | adds columns `creature_template.HolyRes`, `creature_template.FireRes`, `creature_template.NatureRes`, `creature_template.FrostRes`, `creature_template.ShadowRes`, `creature_template.ArcaneRes` |
 | 58 | `World.Rules.RuleDataModule` | creates `rule`, `rule_action`, `rule_list`, `rule_list_action`, `rule_subject_filter`, `rule_text` |
 | 59 | `World.Rules.PlayerbotGoalDataModule` | creates `playerbot_goal` |
-| 60 | `World.Creatures.WorldSchemaGap60` | no changes |
-| 61 | `World.Creatures.WorldSchemaGap61` | no changes |
+| 60 | `Npc.NpcTextBroadcastDataModule` | creates `npc_text_broadcast_text` |
+| 61 | `World.Creatures.CreatureImmunityDataModule` | creates `creature_immunities`; adds columns `creature_template.MechanicImmuneMask`, `creature_template.SchoolImmuneMask` |
 | 62 | `World.Creatures.DbSpellScriptDataModule` | creates `dbscripts_on_spell` |
 | 63 | `Content.Spells.SpellEffectModDataModule` | creates `spell_effect_mod` |
 

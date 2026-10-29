@@ -370,6 +370,13 @@ public sealed partial class TeleportService
     public Func<Player, uint, bool>? BattlegroundEntryAllowed { get; set; }
 
     /// <summary>
+    /// Runs after a near teleport moved the player (vmangos Unit::TeleportPositionRelocation -> Player::SetPosition(..., teleport = true),
+    /// Unit.cpp:9855, whose positionChanged = teleport runs HandleInterruptsOnMovement, Player.cpp:5949-5958). Set by TeleportFeature; unset
+    /// does nothing. World thread.
+    /// </summary>
+    public Action<Player>? NearArrived { get; set; }
+
+    /// <summary>
     /// Start a teleport (vmangos <c>Player::TeleportTo</c>). Fails — returns false and changes
     /// nothing — for invalid coordinates (<c>MapManager::IsValidMapCoord</c>), a map that is not
     /// in the registry, a battleground map the player is not bound to (<see cref="BattlegroundEntryAllowed"/>),
@@ -895,6 +902,7 @@ public sealed partial class TeleportService
         player.ApplyMovement(arrived, _world.NowMs);
         // Unit::TeleportPositionRelocation -> Player::SetPosition(..., teleport = true) (Unit.cpp:9855): positionChanged ends a state emote.
         player.ClearEmoteState();
+        NearArrived?.Invoke(player);
         if (LocomotionStates.TryGet(player, out LocomotionState state))
         {
             state.ResetFall();

@@ -113,8 +113,8 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.World.Creatures.CreatureResistanceDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Creatures.CreatureResistanceDataModule.Version),
             (typeof(ArcaneCore.Data.World.Rules.RuleDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Rules.RuleDataModule.Version),
             (typeof(ArcaneCore.Data.World.Rules.PlayerbotGoalDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Rules.PlayerbotGoalDataModule.Version),
-            (typeof(WorldSchemaGap60), DatabaseComponent.World, 60),
-            (typeof(WorldSchemaGap61), DatabaseComponent.World, 61),
+            (typeof(ArcaneCore.Data.Npc.NpcTextBroadcastDataModule), DatabaseComponent.World, ArcaneCore.Data.Npc.NpcTextBroadcastDataModule.Version),
+            (typeof(ArcaneCore.Data.World.Creatures.CreatureImmunityDataModule), DatabaseComponent.World, ArcaneCore.Data.World.Creatures.CreatureImmunityDataModule.Version),
             (typeof(DbSpellScriptDataModule), DatabaseComponent.World, DbSpellScriptDataModule.Version),
             (typeof(ArcaneCore.Data.Content.Spells.SpellEffectModDataModule), DatabaseComponent.World, ArcaneCore.Data.Content.Spells.SpellEffectModDataModule.Version),
             (typeof(ItemCharacterDataModule), DatabaseComponent.Characters, 3),
@@ -207,12 +207,10 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         // CreatureScriptNameDataModule; world 44 the spawn-groups lane's SpawnGroupDataModule and world 45 the movement-scripts lane's MovementScriptDataModule (both allocated as 43, renumbered in wave 10); world 46 the pools lane's PoolDataModule (its v45 placeholder was removed at integration).
         // World 48 is PR #72's SmartScriptDataModule and world 49 PR #84's WardenDataModule (its v48 placeholder was removed at integration).
         // Characters 50 is PR #74's NightmareDragonsDataModule; PR #73's Reserved74SchemaGap hold was removed at integration.
-        // The spell-dbscripts lane holds world 60 and 61 open for the open PRs that claim them (#1711, #1701); its spell DB scripts are 62
-        // and spell_effect_mod 63. INTEGRATOR: drop the two placeholders (and these lines) once 60 and 61 are owned, or renumber down.
-        Assert.Equal([typeof(WorldSchemaGap60), typeof(WorldSchemaGap61)], DataModules.All.Where(m => m is IReservedSchemaGap).Select(m => m.GetType()));
+        Assert.DoesNotContain(DataModules.All, m => m is IReservedSchemaGap);
         Assert.Empty(CharacterDbContext.Schema.ReservedGapVersions);
-        Assert.Equal([60, 61], WorldDbContext.Schema.ReservedGapVersions);
-        Assert.Equal(63, WorldDbContext.Schema.CurrentVersion); // dbscripts_on_spell (62), spell_effect_mod (63), creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49), auction bot items (50), smart_scripts ConditionId (51), instance_encounter (52), npc_vendor_template and creature_template.VendorTemplateId (53), game_event_playerbot_* bot scenarios (54), wmo_area_template (55), creature_equip_template and creature_template.EquipmentTemplateId (56), creature_template magic resistances (57), the rule engine tables (58), playerbot_goal (59)
+        Assert.Empty(WorldDbContext.Schema.ReservedGapVersions);
+        Assert.Equal(63, WorldDbContext.Schema.CurrentVersion); // creature_template.ScriptName (43), spawn groups (44), movement scripts (45), pools (46), chat_word_filter (47), smart_scripts (48), warden_checks (49), auction bot items (50), smart_scripts ConditionId (51), instance_encounter (52), npc_vendor_template and creature_template.VendorTemplateId (53), game_event_playerbot_* bot scenarios (54), wmo_area_template (55), creature_equip_template and creature_template.EquipmentTemplateId (56), creature_template magic resistances (57), the rule engine tables (58), playerbot_goal (59), npc_text_broadcast_text (60), creature_immunities and creature_template.MechanicImmuneMask/SchoolImmuneMask (61), dbscripts_on_spell (62), spell_effect_mod (63)
         Assert.Equal(66, CharacterDbContext.Schema.CurrentVersion); // anticheat (41), instance script data (42), AQ state (43-44), Scourge (45), AQ gong (46), Scourge city attacks (47), STV fishing (48), elemental invasions (49), Nightmare dragons (50), drunk state (51), pet loyalty (52), Silithyst (53), server mail (54), auction bot custody (55), managed playerbot home (56), playerbot population members (57), playerbot home zone clip (58), managed playerbot set-asides (59), character ownership (60), character id ranges (61), cluster transfer journal (62), hunter pet stable (63), playerbot relations (64), cluster transfer state index (65), playerbot trade ledger (66)
         Assert.Equal(6, AuthDbContext.Schema.CurrentVersion); // realm PIN and integrity (5), account last-login info (6)
 
