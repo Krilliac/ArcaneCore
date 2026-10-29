@@ -759,6 +759,73 @@ public sealed class SpellActiveSetTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void TheAuditCursor_SurvivesACompactionOfTheStateList_SoTheTailIsStillHealed()
+    {
+        // _all = 100 churn units, then 40 keepers; the last keeper is the one that goes stale. Budget 8: after 16 ticks the cursor sits at
+        // entry 128, 11 short of the tail (entry 139). Dropping all 100 churn units detaches 65 entries before the cursor (the 65th triggers
+        // compaction: > 64 detached and > 1/8 of the list), leaving 75 live entries with the tail at 74. A cursor that is remapped sits at 63
+        // and reaches the tail within two ticks; a cursor reset to 0 needs 10.
+        const int churn = 100;
+        const int keepers = 40;
+        const int budget = 8;
+        using SpellTestKit kit = NewKit();
+        kit.System.ActiveSetAuditBudget = 0;
+        Player host = kit.AddPlayer(1).Player;
+        var churners = new List<Player>();
+        Player tail = host;
+        for (uint i = 0; i < churn + keepers; i++)
+        {
+            Player unit = AddCheapUnit(host.Map!, 1000 + i);
+            PassiveOn(kit, unit);
+            if (i < churn)
+            {
+                churners.Add(unit);
+            }
+
+            tail = unit;
+        }
+
+        SettleUntilIdle(kit);
+        kit.Advance(100);
+        Assert.Equal(0, kit.System.LastStatesVisited);
+
+        kit.System.ActiveSetAuditThrows = false;
+        kit.System.ActiveSetAuditBudget = budget;
+        for (int tick = 0; tick < 16; tick++)
+        {
+            kit.Advance(100); // 16 * 8 = 128 entries audited, all healthy
+        }
+
+        Assert.Equal(0, kit.System.ActiveSetStaleHeals);
+
+        // Make the tail stale: a cooldown written while its wake is ignored leaves a dormant-flagged state that is not dormant.
+        kit.System.DisabledWakeReasons = SpellWakeReason.Cooldown;
+        UnitSpellState tailState = kit.System.StateOf(tail);
+        Assert.False(tailState.IsActive);
+        tailState.SpellCooldowns[SpellTestKit.CooldownSpell] = kit.Now + 3_600_000;
+        Assert.False(tailState.IsActive);
+        Assert.False(kit.System.IsDormant(tailState));
+
+        // Drop the churn units: removing the passive wakes the state, and its next visit finds it idle and detaches it.
+        foreach (Player unit in churners)
+        {
+            kit.System.RemoveAuras(unit, SpellTestKit.Passive);
+        }
+
+        int ticksToHeal = 0;
+        while (kit.System.ActiveSetStaleHeals == 0 && ticksToHeal < 3)
+        {
+            kit.Advance(100);
+            ticksToHeal++;
+        }
+
+        output.WriteLine($"tracked {kit.System.LastStatesTracked}, staleHeals {kit.System.ActiveSetStaleHeals} after {ticksToHeal} ticks");
+        Assert.Equal(keepers, kit.System.TrackedUnitCount - (kit.System.GetState(host.Guid) is null ? 0 : 1));
+        Assert.True(kit.System.ActiveSetStaleHeals == 1, $"the audit did not heal the stale tail state within {ticksToHeal} ticks of the compaction; its cursor was not kept");
+        Assert.True(tailState.IsActive);
+    }
+
+    [Fact]
     public void AWakeDuringTheLoop_OfADormantStateBelowTheCursor_IsNotVisitedThisTick_AndIsVisitedNextTick()
     {
         using SpellTestKit kit = NewKit();
