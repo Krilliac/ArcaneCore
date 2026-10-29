@@ -15,6 +15,9 @@ public interface IWorldHeaderCrypt
 
     bool IsInitialized { get; }
 
+    /// <summary>The receive cipher's rolling state (index into the key, previous ciphertext byte) before the next <see cref="DecryptHeader"/>. Diagnostics only: reading it does not advance the state.</summary>
+    (byte Index, byte Previous) ReceivePosition { get; }
+
     /// <summary>Key the cipher with the SRP6 session key and engage it. Before this, headers travel in plaintext.</summary>
     void Initialize(byte[] sessionKey);
 

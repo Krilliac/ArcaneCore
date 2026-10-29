@@ -32,6 +32,9 @@ public sealed class WorldHeaderCrypt : IWorldHeaderCrypt
 
     public bool IsInitialized => _initialized;
 
+    /// <inheritdoc />
+    public (byte Index, byte Previous) ReceivePosition => (_recvIndex, _recvPrevious);
+
     int IWorldHeaderCrypt.OutgoingHeaderLength => OutgoingHeaderLength;
 
     int IWorldHeaderCrypt.IncomingHeaderLength => IncomingHeaderLength;
