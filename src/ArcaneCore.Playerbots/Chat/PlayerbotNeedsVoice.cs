@@ -891,9 +891,14 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
 
     private bool Answer(PlayerbotChat chat, PlayerbotVoiceOptions options, BotHeardLine line, Player player, PlayerbotPartyAI party)
     {
-        if (chat.Voice.Find(line.BotId, chat.NowMs, options.PostLifeSeconds * 1000L) is not { } post) return false;
+        PlayerbotVoicePost? found = chat.Voice.Find(line.BotId, chat.NowMs, options.PostLifeSeconds * 1000L);
+        PlayerbotTradeDesk? desk = services.GetService<ManagedPlayerbotFeature>()?.TradeDesk is { Enabled: true } running ? running : null;
+        bool quoted = desk?.StateOf(line.BotId, line.SenderGuid) == PlayerbotDealState.Quoted; // a deal quoted to this asker outlives the board call
+        if (found is null && !quoted) return false;
         if (player.Session is not WorldSession session || session.World.FindOnlinePlayer(line.SenderGuid) is not { } asker) return false;
         BotSpeech reply = BotSpeech.WhisperTo(line.SenderName, line.SenderGuid, string.Empty, "voice-reply", BotSpeechPriority.High) with { IsReply = true };
+        if (quoted && desk is not null && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text), chat, line, player, party, reply, asker) is { } answered) return answered;
+        if (found is not { } post) return false;
         switch (post.Kind)
         {
             case PlayerbotVoicePostKind.LookingForGroup when PlayerbotVoiceFacts.AsksInvite(line.Text):
@@ -926,15 +931,75 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
 
                 BotChatPersona persona = party.PersonaFor(player);
                 string place = persona.Subzone ?? persona.Zone ?? string.Empty;
+                if (desk is not null)
+                {
+                    // The desk's quote is the deal price: the whispered price IS what the bot will trade for.
+                    uint count = (uint)Math.Max(1, post.Count);
+                    PlayerbotDealQuote quote = desk.Quote(line.BotId, player, asker, PlayerbotDealRole.Seller, post.ItemEntry, count);
+                    if (!quote.Ok) return DealRefused(chat, line, player, party, reply, asker);
+                    if (PlayerbotDealRules.ParsePrice(line.Text) is not null
+                        && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text), chat, line, player, party, reply, asker) is { } countered) return countered;
+                    string goods = count > 1 ? Number(count) + " " + item : item;
+                    return Say(chat, line.BotId, player, party, reply, "voice.reply.wts", $"{asker.Name} asks about the {goods} you sell for {quote.PriceText}.",
+                        $"Tell {asker.Name} the price of {goods} is {quote.PriceText} and that you are in {place}.", persona,
+                        ("item", goods), ("price", quote.PriceText), ("place", place));
+                }
+
                 return Say(chat, line.BotId, player, party, reply, "voice.reply.wts", $"{asker.Name} asks about the {item} you sell for {post.Price}.",
                     $"Tell {asker.Name} the price of {item} is {post.Price} and that you are in {place}.", persona,
                     ("item", item), ("price", post.Price ?? string.Empty), ("place", place));
+            }
+
+            case PlayerbotVoicePostKind.Buying when desk is not null && post.What is { } wanted && PlayerbotVoiceFacts.AsksAbout(line.Text, wanted):
+            {
+                uint count = (uint)Math.Max(1, post.Count);
+                PlayerbotDealQuote quote = desk.Quote(line.BotId, player, asker, PlayerbotDealRole.Buyer, post.ItemEntry, count);
+                if (!quote.Ok) return DealRefused(chat, line, player, party, reply, asker);
+                if (PlayerbotDealRules.ParsePrice(line.Text) is not null
+                    && DealReply(desk.Hear(line.BotId, line.SenderGuid, line.Text), chat, line, player, party, reply, asker) is { } countered) return countered;
+                return Say(chat, line.BotId, player, party, reply, "voice.reply.wtb", $"{asker.Name} offers the {wanted} you want to buy for {quote.PriceText}.",
+                    $"Tell {asker.Name} you pay {quote.PriceText} for {Number(count)} {wanted}.", null,
+                    ("item", wanted), ("count", Number(count)), ("price", quote.PriceText));
             }
 
             default:
                 return false;
         }
     }
+
+    /// <summary>
+    /// The whisper for what the trade desk made of a quoted deal's partner line (<see cref="PlayerbotTradeDesk.Hear"/>): an agreement (where to meet, "open trade"), the held
+    /// price after a refused counter-offer, or a refusal. Null when the line was not about the deal: the caller goes on with the board call.
+    /// </summary>
+    private bool? DealReply(PlayerbotDealHeard heard, PlayerbotChat chat, BotHeardLine line, Player player, PlayerbotPartyAI party, BotSpeech reply, Player asker)
+    {
+        switch (heard.Kind)
+        {
+            case PlayerbotDealHeardKind.Agreed or PlayerbotDealHeardKind.CounterAgreed:
+            {
+                BotChatPersona persona = party.PersonaFor(player);
+                string place = persona.Subzone ?? persona.Zone ?? string.Empty;
+                string goods = heard.Count > 1 ? Number(heard.Count) + " " + heard.ItemName : heard.ItemName;
+                return Say(chat, line.BotId, player, party, reply, "voice.deal.agreed", $"{asker.Name} agreed to {heard.PriceText} for the {goods}.",
+                    $"Tell {asker.Name} the deal is on at {heard.PriceText} for {goods}, that you are in {place} and that they should open a trade.", persona,
+                    ("item", goods), ("price", heard.PriceText), ("place", place));
+            }
+
+            case PlayerbotDealHeardKind.CounterRefused:
+                return Say(chat, line.BotId, player, party, reply, "voice.deal.counter.no", $"{asker.Name} offered a lower price; you keep {heard.PriceText}.",
+                    $"Tell {asker.Name} your price stays {heard.PriceText}.", null, ("price", heard.PriceText));
+
+            case PlayerbotDealHeardKind.Refused:
+                return DealRefused(chat, line, player, party, reply, asker);
+
+            default:
+                return null;
+        }
+    }
+
+    private bool DealRefused(PlayerbotChat chat, BotHeardLine line, Player player, PlayerbotPartyAI party, BotSpeech reply, Player asker)
+        => Say(chat, line.BotId, player, party, reply, "voice.deal.refused", $"You cannot make that deal with {asker.Name} right now.",
+            $"Tell {asker.Name} you cannot do that deal right now.");
 
     // --- housekeeping ----------------------------------------------------------------------------------------------------
 

@@ -52,6 +52,9 @@ internal sealed class MageTravelFixture : ICreatureDataStore, INpcContentStore
     public const uint RuneOfTeleportation = 17031;
     public const uint RuneOfPortals = 17032;
     public const uint VendorEntry = 9551;
+
+    /// <summary>A plain tradeable good a bot can sell through the trade desk (reference price 1000 copper: its sell price).</summary>
+    public const uint DealGoods = 996_101;
     public const int CastMs = 300;
 
     /// <summary>A vendor stocking both runes stands two yards from the start.</summary>
@@ -81,6 +84,7 @@ internal sealed class MageTravelFixture : ICreatureDataStore, INpcContentStore
             new ItemTemplate { Entry = Hearthstone, Class = 15, Name = "Hearthstone", Stackable = 1, Bonding = 1, Spells = [new ItemSpell(HearthSpell, 0, 0, 0, -1, 0, -1)] },
             new ItemTemplate { Entry = RuneOfTeleportation, Class = 5, Name = "Rune of Teleportation", Stackable = 20, BuyPrice = 10 },
             new ItemTemplate { Entry = RuneOfPortals, Class = 5, Name = "Rune of Portals", Stackable = 20, BuyPrice = 20 },
+            new ItemTemplate { Entry = DealGoods, Class = 15, Name = "Feedeal Goods", DisplayId = 1, Quality = 1, SellPrice = 1000, BuyPrice = 4000, Stackable = 20 },
         ]);
         return items;
     }
