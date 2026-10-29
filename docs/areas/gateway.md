@@ -185,3 +185,16 @@ recovery).
   authenticated operator trigger are not built.
 - The link protocol lives in `ArcaneCore.World`, so the gateway references the whole World assembly; a shared protocol
   assembly is still to be split out.
+- **Cluster roles beyond combined and worker are not hosted.** The World daemon runs either combined or as a gateway worker
+  (Cluster:Worker). No daemon runs a social, economy or coordinator role, and nothing reads a node role. So the M15.2 pieces
+  that only matter in that topology are tested library code, not live:
+  - `ClusterRoleFeatureFilter` (keeps realm-singleton timers such as AutoBroadcast and the auction bot on one node) is never
+    constructed. Every feature attaches on every World process, which is correct for the single combined or worker process
+    that exists today.
+  - `IRealmAuthorityLeaseStore` has only an in-memory implementation and no DI registration. The `.cluster leases` summary
+    therefore always shows the fallback owner (combined, or the character ownership epoch), never a realm lease token.
+- **The M15.4 host supervisor is a library, not a host.** `ClusterHostSupervisor` (process admission, merged console, restart
+  backoff) is exercised only by its tests. No daemon or tool constructs it or binds its options (the Cluster:Supervisor section,
+  including the per-process console switch described in the [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)),
+  so those keys are read by nothing, and they are not in the conf catalog. `MinClusterProcesses` is declared but not
+  enforced by admission.
