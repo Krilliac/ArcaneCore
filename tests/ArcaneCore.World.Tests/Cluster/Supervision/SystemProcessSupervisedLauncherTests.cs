@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Tests.Cluster.Supervision;
 /// killed or its bounded lifetime (60 s) ends. It is never an ArcaneCore daemon, so nothing here can start a world, a realm or a database. These pin who owns a child
 /// and for how long: a pid leaves the owned set only when the OS reports the exit, and a kill always reaches a child that is still running.
 /// No test ever kills a process by pid (a pid can be reused by an unrelated process): a fixture left behind by a failing test ends by itself
-/// when its lifetime runs out, and the one test that makes the kill fail leaves its child to that bound.
+/// when its lifetime runs out, and the one test that makes the kill fail gives its child a 5 s lifetime instead.
 /// </summary>
 public sealed class SystemProcessSupervisedLauncherTests : IDisposable
 {
@@ -186,7 +186,8 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
             KillOverride = _ => { }, // the OS refused the kill
             KillConfirmTimeout = TimeSpan.FromMilliseconds(300),
         };
-        ISupervisedProcess p = launcher.Launch(FixtureConfig("kill-refused"));
+        // A short life: this child is never killed, and on Windows it holds the test runner's inherited std handles until it exits.
+        ISupervisedProcess p = launcher.Launch(FixtureConfig("kill-refused", "--lifetime-ms 5000"));
         int pid = p.ProcessId;
         p.KillOwnedProcess();
         Assert.False(p.HasExited);
