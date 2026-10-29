@@ -68,9 +68,10 @@ public sealed class GatewayWorkerEndpoint(
             acceptor is null ? null : acceptor.StopAsync).ConfigureAwait(false);
     }
 
-    /// <summary>Stop the link host first, then the acceptor; the acceptor is stopped even when the host's disposal throws.</summary>
+    /// <summary>Stop the link host first, then the acceptor; the acceptor is stopped even when the host's disposal throws. If both throw, both exceptions are kept (AggregateException).</summary>
     internal static async Task StopInOrderAsync(Func<ValueTask>? stopHost, Func<Task>? stopAcceptor)
     {
+        Exception? hostFailure = null;
         try
         {
             if (stopHost is not null)
@@ -78,12 +79,26 @@ public sealed class GatewayWorkerEndpoint(
                 await stopHost().ConfigureAwait(false);
             }
         }
-        finally
+        catch (Exception ex)
+        {
+            hostFailure = ex;
+        }
+
+        try
         {
             if (stopAcceptor is not null)
             {
                 await stopAcceptor().ConfigureAwait(false);
             }
+        }
+        catch (Exception ex) when (hostFailure is not null)
+        {
+            throw new AggregateException("the link host and the acceptor both failed to stop", hostFailure, ex);
+        }
+
+        if (hostFailure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(hostFailure).Throw();
         }
     }
 

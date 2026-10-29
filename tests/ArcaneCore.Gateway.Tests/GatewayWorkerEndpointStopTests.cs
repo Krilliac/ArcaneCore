@@ -47,6 +47,20 @@ public sealed class GatewayWorkerEndpointStopTests
     }
 
     [Fact]
+    public async Task StopInOrder_WhenBothThrow_KeepsBothExceptions()
+    {
+        AggregateException ex = await Assert.ThrowsAsync<AggregateException>(() =>
+            GatewayWorkerEndpoint.StopInOrderAsync(
+                () => throw new InvalidOperationException("host dispose failed"),
+                () => throw new TimeoutException("acceptor stop failed")));
+
+        Assert.Collection(
+            ex.InnerExceptions,
+            host => Assert.Equal("host dispose failed", host.Message),
+            acceptor => Assert.Equal("acceptor stop failed", acceptor.Message));
+    }
+
+    [Fact]
     public async Task StopInOrder_WithNothingToStop_Completes()
     {
         await GatewayWorkerEndpoint.StopInOrderAsync(null, null);

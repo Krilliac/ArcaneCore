@@ -75,6 +75,11 @@ public sealed class RealmAuthorityLeaseStoreContractTests : IAsyncLifetime
         // Scopes are independent.
         Assert.Equal(AuthorityLeaseOutcome.Granted, store.TryAcquire(RealmAuthorityScopes.Social, "node-b", Guid.NewGuid(), Ttl, T0).Outcome);
         Assert.True(store.ValidateFencingToken(RealmAuthorityScopes.Economy, "node-a", 1, T0.AddSeconds(12)));
+        // The incarnation-aware check: two processes configured with one node id cannot both pass.
+        Assert.True(store.ValidateFencingToken(RealmAuthorityScopes.Economy, "node-a", incarnation, 1, T0.AddSeconds(12)));
+        Assert.False(store.ValidateFencingToken(RealmAuthorityScopes.Economy, "node-a", Guid.NewGuid(), 1, T0.AddSeconds(12)));
+        Assert.False(store.ValidateFencingToken(RealmAuthorityScopes.Economy, "node-a", incarnation, 2, T0.AddSeconds(12)));
+        Assert.False(store.ValidateFencingToken(RealmAuthorityScopes.Economy, "node-a", incarnation, 1, T0 + Ttl + TimeSpan.FromSeconds(11)));
         Assert.Equal(1, store.GetHighWaterToken(RealmAuthorityScopes.Economy));
     }
 
@@ -210,12 +215,11 @@ public sealed class RealmAuthorityLeaseStoreContractTests : IAsyncLifetime
     }
 
     [Fact]
-    public void TheModule_RegistersOnlyTheConcreteStore_SoCombinedHasNoLeaseInterface()
+    public void TheModule_RegistersNothing_SoCombinedAddsNoLeaseServices()
     {
         var services = new ServiceCollection();
         new RealmAuthorityLeaseDataModule().AddServices(services);
 
-        Assert.Contains(services, d => d.ServiceType == typeof(EfRealmAuthorityLeaseStore));
-        Assert.DoesNotContain(services, d => d.ServiceType == typeof(IRealmAuthorityLeaseStore));
+        Assert.Empty(services);
     }
 }

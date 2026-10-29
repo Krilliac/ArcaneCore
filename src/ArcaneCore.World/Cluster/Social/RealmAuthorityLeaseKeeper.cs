@@ -14,8 +14,12 @@ namespace ArcaneCore.World.Cluster.Social;
 /// world, so losing a lease is fail-stop: the keeper logs it, records a fault, and asks the host to stop with exit code
 /// <see cref="ExitCodes.Failure"/>. The owner id is <c>Cluster:Worker:NodeId</c>. Open gap: storage writes are not checked against the fencing
 /// token at commit, so a partitioned former holder is bounded by this stop, not by the database.
+/// <para>Renewal starts as soon as the first lease is granted (inside <see cref="AcquireAtStartAsync"/>), so a slow start cannot outlast a lease.
+/// Every timer tick also judges the deadline on its own, so a renewal call that hangs in the store cannot hide an expiring lease: the node stops
+/// when the next tick would fall in the last half renewal interval before the lease lapses.</para>
 /// <para>Thread affinity: <see cref="AcquireAtStartAsync"/> and <see cref="ReleaseAllAsync"/> run on the host's start and stop; the renewal timer
-/// runs on the thread pool. The lease store is called synchronously off the world thread. All state is guarded by one lock.</para>
+/// runs on the thread pool, and its ticks may overlap a still-running store call. The lease store is called synchronously off the world thread.
+/// All state is guarded by one lock.</para>
 /// </summary>
 public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
 {
@@ -33,6 +37,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly IHostApplicationLifetime? _lifetime;
     private readonly TimeProvider _time;
+    private readonly Action<int> _setExitCode;
     private readonly Lock _gate = new();
     private readonly Dictionary<string, Held> _held = new(StringComparer.Ordinal);
     private Guid _incarnation;
@@ -47,7 +52,8 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
         IOptions<GatewayWorkerOptions> workerOptions,
         ILogger<RealmAuthorityLeaseKeeper> logger,
         IHostApplicationLifetime? lifetime = null,
-        TimeProvider? time = null)
+        TimeProvider? time = null,
+        Action<int>? setExitCode = null)
     {
         _store = store;
         _node = nodeOptions.Value;
@@ -55,7 +61,11 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
         _logger = logger;
         _lifetime = lifetime;
         _time = time ?? TimeProvider.System;
+        _setExitCode = setExitCode ?? (code => ExitCodes.Current = code); // the process exit code unless a test supplies its own sink
     }
+
+    /// <summary>The clock the leases are judged against (UTC).</summary>
+    public DateTimeOffset UtcNow => _time.GetUtcNow();
 
     /// <summary>The owner id this keeper leases under (<c>Cluster:Worker:NodeId</c>).</summary>
     public string NodeId => _nodeId;
@@ -100,6 +110,8 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
                     _held[scope] = new Held(lease.FencingToken, lease.ExpiresAtUtc);
                 }
 
+                StartRenewing(); // from the first grant on: the rest of the start (a wait for another scope, the attach) may take longer than a lease lives
+
                 _logger.LogInformation("Holding the {Scope} lease (fencing token {Token}) as {Node}", scope, lease.FencingToken, _nodeId);
             }
             else
@@ -114,8 +126,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
     private Task<AuthorityLeaseResult> TryAcquireAsync(string scope)
         => Task.Run(() => _store.TryAcquire(scope, _nodeId, _incarnation, _node.LeaseTtl, _time.GetUtcNow()));
 
-    /// <summary>Start the renewal timer (every <c>AuthorityLeaseRenewSeconds</c>); call once the world is running. Does nothing when no lease is held.</summary>
-    public void StartRenewing()
+    private void StartRenewing()
     {
         lock (_gate)
         {
@@ -128,28 +139,60 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
         }
     }
 
+    private bool NearDeadline(DateTimeOffset now, DateTimeOffset expiresAtUtc)
+        => now + _node.LeaseRenew >= expiresAtUtc - (_node.LeaseRenew / 2);
+
     private void RenewAll()
     {
         KeyValuePair<string, Held>[] held;
+        (string Scope, string Why)? doomed = null;
         lock (_gate)
         {
-            if (_renewing || _lost || _released)
+            if (_lost || _released)
             {
                 return;
             }
 
-            _renewing = true;
+            if (_renewing)
+            {
+                // The previous tick's store call is still running, so it has renewed nothing. Judge the deadline here instead of waiting for it.
+                DateTimeOffset now = _time.GetUtcNow();
+                foreach ((string scope, Held current) in _held)
+                {
+                    if (NearDeadline(now, current.ExpiresAtUtc))
+                    {
+                        doomed = (scope, "a renewal is still waiting on the store and the lease is about to lapse");
+                        break;
+                    }
+                }
+
+                if (doomed is null)
+                {
+                    return;
+                }
+            }
+            else
+            {
+                _renewing = true;
+            }
+
             held = [.. _held];
+        }
+
+        if (doomed is { } hung)
+        {
+            Lose(hung.Scope, hung.Why);
+            return;
         }
 
         try
         {
             foreach ((string scope, Held current) in held)
             {
-                DateTimeOffset now = _time.GetUtcNow();
+                DateTimeOffset started = _time.GetUtcNow();
                 try
                 {
-                    AuthorityLeaseResult result = _store.TryRenew(scope, _nodeId, _incarnation, current.Token, _node.LeaseTtl, now);
+                    AuthorityLeaseResult result = _store.TryRenew(scope, _nodeId, _incarnation, current.Token, _node.LeaseTtl, started);
                     if (result.Outcome == AuthorityLeaseOutcome.Renewed && result.Lease is { } renewed)
                     {
                         lock (_gate)
@@ -167,7 +210,9 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
                 {
                     // The store could not be reached. Keep going while the lease is still good after the next attempt, but decide before the lease can lapse:
                     // if the next tick would land in the last half interval before expiry (or after it), this is the last chance to stop cleanly.
-                    if (now + _node.LeaseRenew >= current.ExpiresAtUtc - (_node.LeaseRenew / 2))
+                    // The clock is read again: the failed call may have taken most of the interval.
+                    DateTimeOffset now = _time.GetUtcNow();
+                    if (NearDeadline(now, current.ExpiresAtUtc))
                     {
                         Lose(scope, $"the store failed ({ex.GetType().Name}: {ex.Message}) and the lease is about to lapse");
                         return;
@@ -201,7 +246,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
         string message = $"the {scope} realm authority lease of node {_nodeId} was lost: {why}; stopping, because the singletons it guards cannot be detached";
         _logger.LogCritical("{Message}", message);
         FaultLedger.Shared.Record("cluster.lease", new InvalidOperationException(message));
-        ExitCodes.Current = ExitCodes.Failure;
+        _setExitCode(ExitCodes.Failure);
         _lifetime?.StopApplication();
     }
 

@@ -66,14 +66,16 @@ public sealed class ClusterRoleFeatureFilter
     /// <summary>
     /// As <see cref="ShouldAttachFeature(Type, ClusterNodeRole, string, long?, DateTimeOffset)"/>, with the fencing token looked up per
     /// lease scope by <paramref name="tokenForScope"/> (a node holds one lease per realm singleton). A <see cref="ClusterNodeRole.MapWorker"/>
-    /// runs a realm singleton only while the store confirms <paramref name="nodeId"/> holds that scope's lease at <paramref name="nowUtc"/>.
+    /// runs a realm singleton only while the store confirms <paramref name="nodeId"/> holds that scope's lease at <paramref name="nowUtc"/>;
+    /// a non-empty <paramref name="ownerIncarnation"/> must also be the lease's holder incarnation (two processes with one node id cannot both pass).
     /// </summary>
     public bool ShouldAttachFeature(
         Type featureType,
         ClusterNodeRole role,
         string nodeId,
         Func<string, long?> tokenForScope,
-        DateTimeOffset nowUtc)
+        DateTimeOffset nowUtc,
+        Guid ownerIncarnation = default)
     {
         ArgumentNullException.ThrowIfNull(featureType);
         ArgumentNullException.ThrowIfNull(tokenForScope);
@@ -83,7 +85,8 @@ public sealed class ClusterRoleFeatureFilter
         }
 
         // AutoBroadcast is a realm-wide timer that sends to every player (docs/CLUSTERING_DESIGN.md:538-542):
-        // running it on every map worker would broadcast each message once per worker. It runs only on Combined or Social.
+        // running it on every map worker would broadcast each message once per worker. It runs on Combined, on Social, or on the
+        // one MapWorker that holds the social lease.
         if (featureType == typeof(AutoBroadcastFeature))
         {
             if (role == ClusterNodeRole.Combined)
@@ -96,11 +99,11 @@ public sealed class ClusterRoleFeatureFilter
                 return ValidateOptionalLease(RealmAuthorityScopes.Social, nodeId, tokenForScope(RealmAuthorityScopes.Social), nowUtc, requireLeaseWhenStorePresent: true);
             }
 
-            return role == ClusterNodeRole.MapWorker && HoldsLease(RealmAuthorityScopes.Social, nodeId, tokenForScope, nowUtc);
+            return role == ClusterNodeRole.MapWorker && HoldsLease(RealmAuthorityScopes.Social, nodeId, ownerIncarnation, tokenForScope, nowUtc);
         }
 
-        // AuctionBotFeature (and its periodic sell/buy/custody reconciliation timer) runs only on Combined or the
-        // fenced Economy authority (docs/CLUSTERING_DESIGN.md:484-528, 565).
+        // AuctionBotFeature (and its periodic sell/buy/custody reconciliation timer) runs only on Combined, the
+        // fenced Economy authority, or the one MapWorker that holds the economy lease (docs/CLUSTERING_DESIGN.md:484-528, 565).
         if (featureType == typeof(AuctionBotFeature))
         {
             if (role == ClusterNodeRole.Combined)
@@ -113,7 +116,7 @@ public sealed class ClusterRoleFeatureFilter
                 return ValidateOptionalLease(RealmAuthorityScopes.Economy, nodeId, tokenForScope(RealmAuthorityScopes.Economy), nowUtc, requireLeaseWhenStorePresent: true);
             }
 
-            return role == ClusterNodeRole.MapWorker && HoldsLease(RealmAuthorityScopes.Economy, nodeId, tokenForScope, nowUtc);
+            return role == ClusterNodeRole.MapWorker && HoldsLease(RealmAuthorityScopes.Economy, nodeId, ownerIncarnation, tokenForScope, nowUtc);
         }
 
         // Warden derives its RC4 streams from the 40-byte session key K and belongs on the connection owner
@@ -165,8 +168,17 @@ public sealed class ClusterRoleFeatureFilter
         return [.. featureTypes.Where(t => ShouldAttachFeature(t, role, nodeId, fencingToken, nowUtc))];
     }
 
-    private bool HoldsLease(string scope, string nodeId, Func<string, long?> tokenForScope, DateTimeOffset nowUtc)
-        => _leaseStore is not null && tokenForScope(scope) is { } token && _leaseStore.ValidateFencingToken(scope, nodeId, token, nowUtc);
+    private bool HoldsLease(string scope, string nodeId, Guid ownerIncarnation, Func<string, long?> tokenForScope, DateTimeOffset nowUtc)
+    {
+        if (_leaseStore is null || tokenForScope(scope) is not { } token)
+        {
+            return false;
+        }
+
+        return ownerIncarnation == Guid.Empty
+            ? _leaseStore.ValidateFencingToken(scope, nodeId, token, nowUtc)
+            : _leaseStore.ValidateFencingToken(scope, nodeId, ownerIncarnation, token, nowUtc);
+    }
 
     private bool ValidateOptionalLease(
         string scope,

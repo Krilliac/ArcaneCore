@@ -32,6 +32,19 @@ public sealed class ClusterRoleFeatureFilterMapWorkerTests
     }
 
     [Fact]
+    public void MapWorker_AttachesAuctionBot_OnlyForTheLeaseHoldingIncarnation()
+    {
+        var store = new InMemoryRealmAuthorityLeaseStore();
+        Guid holder = Guid.NewGuid();
+        long token = store.TryAcquire(RealmAuthorityScopes.Economy, "worker-1", holder, Ttl, Now).Lease!.FencingToken;
+        var filter = new ClusterRoleFeatureFilter(store);
+
+        Assert.True(filter.ShouldAttachFeature(typeof(AuctionBotFeature), ClusterNodeRole.MapWorker, "worker-1", _ => token, Now.AddSeconds(1), holder));
+        // A second process misconfigured with the same node id holds the token's number but not the lease.
+        Assert.False(filter.ShouldAttachFeature(typeof(AuctionBotFeature), ClusterNodeRole.MapWorker, "worker-1", _ => token, Now.AddSeconds(1), Guid.NewGuid()));
+    }
+
+    [Fact]
     public void MapWorker_AttachesAutoBroadcast_OnlyWithOwnValidSocialToken()
     {
         var store = new InMemoryRealmAuthorityLeaseStore();

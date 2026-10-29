@@ -3,7 +3,6 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Cluster.Social;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ArcaneCore.Data.Characters.Cluster;
 
@@ -68,10 +67,10 @@ public sealed class RealmAuthorityLeaseDataModule : IDataModule, ICharacterDataC
         });
     }
 
-    // The concrete store only: a Combined node registers no IRealmAuthorityLeaseStore, so nothing queries the table by default
-    // (AddClusterNodeRole adds the interface mapping for non-Combined roles).
+    // Registers nothing: only a node with a cluster role (Cluster:Node:Role other than Combined) uses the store, and AddClusterNodeRole registers it.
     public void AddServices(IServiceCollection services)
-        => services.TryAddSingleton<EfRealmAuthorityLeaseStore>();
+    {
+    }
 
     // Leases belong to nodes, not characters.
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
@@ -81,10 +80,22 @@ public sealed class RealmAuthorityLeaseDataModule : IDataModule, ICharacterDataC
 /// <summary>
 /// <see cref="IRealmAuthorityLeaseStore"/> over the characters database. Every call opens its own scope and context, so the store is a singleton
 /// that any thread may call; each decision is one conditional UPDATE inside a transaction, so two nodes on one database cannot both be granted.
-/// Fencing tokens are the row's high-water mark and only ever grow.
+/// Fencing tokens are the row's high-water mark and only ever grow. <paramref name="commandTimeout"/> bounds every database command (null: the provider
+/// default), so a hung database fails a renewal in time for the keeper to stop the node before the lease lapses.
 /// </summary>
-public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes) : IRealmAuthorityLeaseStore
+public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes, TimeSpan? commandTimeout = null) : IRealmAuthorityLeaseStore
 {
+    private CharacterDbContext Open(IServiceScope serviceScope)
+    {
+        CharacterDbContext db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        if (commandTimeout is { } timeout)
+        {
+            db.Database.SetCommandTimeout(timeout);
+        }
+
+        return db;
+    }
+
     public AuthorityLeaseResult TryAcquire(string scope, string ownerNodeId, Guid ownerIncarnation, TimeSpan ttl, DateTimeOffset nowUtc)
     {
         ValidateScopeAndOwner(scope, ownerNodeId);
@@ -92,7 +103,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes) : IR
         long expires = now + TtlMs(ttl);
         string incarnation = ownerIncarnation.ToString("D");
         using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        CharacterDbContext db = Open(serviceScope);
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
 
@@ -129,7 +140,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes) : IR
         long expires = now + TtlMs(ttl);
         string incarnation = ownerIncarnation.ToString("D");
         using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        CharacterDbContext db = Open(serviceScope);
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
 
@@ -156,7 +167,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes) : IR
         ValidateScopeAndOwner(scope, ownerNodeId);
         string incarnation = ownerIncarnation.ToString("D");
         using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        CharacterDbContext db = Open(serviceScope);
         using IDisposable exempt = CharacterWriteFence.Exempt();
         using var tx = db.Database.BeginTransaction();
 
@@ -179,10 +190,24 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes) : IR
             return false;
         long now = nowUtc.ToUnixTimeMilliseconds();
         using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        CharacterDbContext db = Open(serviceScope);
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return db.Set<RealmAuthorityLeaseRow>().AsNoTracking()
             .Any(r => r.Scope == scope && r.FencingToken == fencingToken && r.Active && r.ExpiresAtUnixMs > now && r.OwnerNode == ownerNodeId);
+    }
+
+    public bool ValidateFencingToken(string scope, string ownerNodeId, Guid ownerIncarnation, long fencingToken, DateTimeOffset nowUtc)
+    {
+        if (string.IsNullOrWhiteSpace(scope) || string.IsNullOrWhiteSpace(ownerNodeId) || fencingToken <= 0)
+            return false;
+        long now = nowUtc.ToUnixTimeMilliseconds();
+        string incarnation = ownerIncarnation.ToString("D");
+        using IServiceScope serviceScope = scopes.CreateScope();
+        CharacterDbContext db = Open(serviceScope);
+        using IDisposable exempt = CharacterWriteFence.Exempt();
+        return db.Set<RealmAuthorityLeaseRow>().AsNoTracking()
+            .Any(r => r.Scope == scope && r.FencingToken == fencingToken && r.Active && r.ExpiresAtUnixMs > now
+                && r.OwnerNode == ownerNodeId && r.OwnerIncarnation == incarnation);
     }
 
     public RealmAuthorityLease? GetCurrent(string scope, DateTimeOffset nowUtc)
@@ -190,7 +215,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes) : IR
         if (string.IsNullOrWhiteSpace(scope))
             return null;
         using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        CharacterDbContext db = Open(serviceScope);
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return Read(db, scope) is { } row ? ActiveLease(row, nowUtc.ToUnixTimeMilliseconds()) : null;
     }
@@ -200,7 +225,7 @@ public sealed class EfRealmAuthorityLeaseStore(IServiceScopeFactory scopes) : IR
         if (string.IsNullOrWhiteSpace(scope))
             return 0;
         using IServiceScope serviceScope = scopes.CreateScope();
-        CharacterDbContext db = serviceScope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        CharacterDbContext db = Open(serviceScope);
         using IDisposable exempt = CharacterWriteFence.Exempt();
         return Read(db, scope)?.FencingToken ?? 0;
     }

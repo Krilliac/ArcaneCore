@@ -162,7 +162,7 @@ public sealed class WorldHost(
                 if (role != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
                 {
                     await leaseKeeper.AcquireAtStartAsync(_incarnation, cancellationToken).ConfigureAwait(false);
-                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, DateTimeOffset.UtcNow);
+                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
                 }
 
                 // Features are singletons, so the scope hands out the same instances. Set first: a feature that attached before one that threw must still stop.
@@ -181,7 +181,6 @@ public sealed class WorldHost(
             world.Start();
             if (nodeOptions?.Value.Role is { } startedRole && startedRole != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
             {
-                leaseKeeper.StartRenewing();
                 LogNodeRole(startedRole, roleFilter, leaseKeeper);
             }
 
@@ -199,7 +198,7 @@ public sealed class WorldHost(
         {
             // A stop requested while the bots are restored (Ctrl-C, StopApplication) cancels this start; WorldStartup turns it into an orderly stop.
             await StopClaimWatchAsync().ConfigureAwait(false);
-            if (leaseKeeper is not null) await leaseKeeper.ReleaseAllAsync().ConfigureAwait(false); // a start that failed before the features attached still holds what it acquired
+            await ReleaseLeasesAfterFailedStartAsync().ConfigureAwait(false);
             if (_attached) await StopAfterFailedStartAsync().ConfigureAwait(false);
             throw;
         }
@@ -207,9 +206,21 @@ public sealed class WorldHost(
         {
             FaultLedger.Shared.Record("world-host.start", ex);
             await StopClaimWatchAsync().ConfigureAwait(false);
-            if (leaseKeeper is not null) await leaseKeeper.ReleaseAllAsync().ConfigureAwait(false);
+            await ReleaseLeasesAfterFailedStartAsync().ConfigureAwait(false);
             if (_attached) await StopAfterFailedStartAsync().ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// A start that failed before the features attached still holds the leases it acquired: give them back. Once features are attached the leases stay held
+    /// (their singletons, such as the auction bot timer, may be running) until <see cref="StopCoreAsync"/> has stopped the features and releases them itself.
+    /// </summary>
+    private async Task ReleaseLeasesAfterFailedStartAsync()
+    {
+        if (!_attached && leaseKeeper is not null)
+        {
+            await leaseKeeper.ReleaseAllAsync().ConfigureAwait(false);
         }
     }
 

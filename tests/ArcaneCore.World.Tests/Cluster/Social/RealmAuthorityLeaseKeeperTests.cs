@@ -11,15 +11,15 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Cluster.Social;
 
 /// <summary>The node lease keeper: takes the free realm singleton leases at start, renews them, and stops the process when one is lost.</summary>
-public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
+public sealed class RealmAuthorityLeaseKeeperTests
 {
     private const string Node = "worker-a";
     private readonly ManualTimeProvider _time = new(new DateTimeOffset(2026, 10, 29, 12, 0, 0, TimeSpan.Zero));
     private readonly InMemoryRealmAuthorityLeaseStore _inner = new();
     private readonly StopCounter _lifetime = new();
 
-    // The keeper sets the process exit code on a loss.
-    public void Dispose() => ExitCodes.Current = ExitCodes.Success;
+    // The keeper reports its exit code to a sink here instead of the process-global ExitCodes.Current, which other tests assert on in parallel.
+    private readonly List<int> _exitCodes = [];
 
     private RealmAuthorityLeaseKeeper Create(IRealmAuthorityLeaseStore? store = null)
         => new(store ?? _inner,
@@ -27,7 +27,14 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
             Options.Create(new GatewayWorkerOptions { Enabled = true, NodeId = Node }),
             NullLogger<RealmAuthorityLeaseKeeper>.Instance,
             _lifetime,
-            _time);
+            _time,
+            code =>
+            {
+                lock (_exitCodes)
+                {
+                    _exitCodes.Add(code);
+                }
+            });
 
     private static long ClusterLeaseFaults() => FaultLedger.Shared.Snapshot().Where(f => f.Site == "cluster.lease").Sum(f => f.Count);
 
@@ -80,7 +87,6 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
         var store = new ControlledStore(_inner);
         await using RealmAuthorityLeaseKeeper keeper = Create(store);
         await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
-        keeper.StartRenewing();
         long faultsBefore = ClusterLeaseFaults();
 
         _time.Advance(TimeSpan.FromSeconds(10));
@@ -92,7 +98,7 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
         _time.Advance(TimeSpan.FromSeconds(10));
 
         Assert.Equal(1, _lifetime.Stops);
-        Assert.Equal(ExitCodes.Failure, ExitCodes.Current);
+        Assert.Equal([ExitCodes.Failure], _exitCodes);
         Assert.True(ClusterLeaseFaults() > faultsBefore);
     }
 
@@ -102,7 +108,6 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
         var store = new ControlledStore(_inner);
         await using RealmAuthorityLeaseKeeper keeper = Create(store);
         await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
-        keeper.StartRenewing();
         DateTimeOffset expiry = _time.GetUtcNow().AddSeconds(30);
         store.ThrowOnRenew = true;
 
@@ -120,7 +125,6 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
         var store = new ControlledStore(_inner);
         await using RealmAuthorityLeaseKeeper keeper = Create(store);
         await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
-        keeper.StartRenewing();
 
         await keeper.ReleaseAllAsync();
         await keeper.ReleaseAllAsync();
@@ -131,6 +135,82 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
         Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Social));
         _time.Advance(TimeSpan.FromSeconds(30)); // the renewal timer is gone
         Assert.Equal(0, store.Renewals);
+    }
+
+    [Fact]
+    public async Task AcquireAtStart_StartsRenewingAtOnce_SoASlowStartCannotOutlastTheLease()
+    {
+        await using RealmAuthorityLeaseKeeper keeper = Create();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+
+        // The rest of the host start (attach, id allocators, the world thread) takes 25 s: longer than TTL - renew. Nobody calls anything on the keeper meanwhile.
+        _time.Advance(TimeSpan.FromSeconds(25));
+
+        Assert.Equal(0, _lifetime.Stops);
+        Assert.True(_inner.ValidateFencingToken(RealmAuthorityScopes.Social, Node, 1, _time.GetUtcNow()));
+        Assert.True(_inner.ValidateFencingToken(RealmAuthorityScopes.Economy, Node, 1, _time.GetUtcNow()));
+        Assert.Equal(1, keeper.TokenFor(RealmAuthorityScopes.Social));
+    }
+
+    [Fact]
+    public async Task FreshlyGrantedSocialLease_SurvivesTheEconomyPreviousIncarnationWait()
+    {
+        _inner.TryAcquire(RealmAuthorityScopes.Economy, Node, Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow()); // a crashed previous incarnation
+        await using RealmAuthorityLeaseKeeper keeper = Create();
+
+        Task acquire = keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await WaitUntilAsync(() => keeper.TokenFor(RealmAuthorityScopes.Social) is not null && _time.PendingTimers >= 2); // social held; sleeping on economy
+        _time.Advance(TimeSpan.FromSeconds(31));
+        await acquire.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Social was granted at the start and is 31 s old: without renewals during the wait it would have lapsed at 30 s.
+        Assert.Equal(1, keeper.TokenFor(RealmAuthorityScopes.Social));
+        Assert.True(_inner.ValidateFencingToken(RealmAuthorityScopes.Social, Node, 1, _time.GetUtcNow()));
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task RenewHangingInTheStore_StopsOnTime_NotWhenTheCallReturns()
+    {
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.BlockRenewals = true;
+
+        Task firstTick = Task.Run(() => _time.Advance(TimeSpan.FromSeconds(10))); // tick 1 enters the store and hangs
+        try
+        {
+            await WaitUntilAsync(() => store.BlockedRenewals == 1);
+            Assert.Equal(0, _lifetime.Stops);
+
+            _time.Advance(TimeSpan.FromSeconds(10)); // tick 2 at 20 s: the lease (valid to 30 s) is inside the last half interval, and the call has not returned
+
+            Assert.Equal(1, _lifetime.Stops);
+            Assert.False(firstTick.IsCompleted); // the stop did not wait for the hung call
+        }
+        finally
+        {
+            store.Release(); // never leave the hung call blocking a test thread
+        }
+
+        await firstTick.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(1, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task RenewFailingSlowly_JudgesTheDeadlineWithTheClockAfterTheCall()
+    {
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        // The call fails after 8 s: judged against the clock from before the call (10 s) the lease (valid to 30 s) looks safe, at 18 s it is not.
+        store.ThrowOnRenew = true;
+        store.OnRenew = () => _time.Advance(TimeSpan.FromSeconds(8));
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, _lifetime.Stops);
     }
 
     [Fact]
@@ -163,6 +243,12 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
         public bool RejectRenewals { get; set; }
         public bool ThrowOnRenew { get; set; }
         public bool ThrowOnRelease { get; set; }
+        public bool BlockRenewals { get; set; }
+        public Action? OnRenew { get; set; }
+        private readonly ManualResetEventSlim _gate = new(false);
+        private int _blocked;
+        public int BlockedRenewals => Volatile.Read(ref _blocked);
+        public void Release() => _gate.Set();
         public int Releases => Volatile.Read(ref _releases);
         public int Renewals => Volatile.Read(ref _renewals);
 
@@ -172,6 +258,14 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
         public AuthorityLeaseResult TryRenew(string scope, string ownerNodeId, Guid ownerIncarnation, long fencingToken, TimeSpan ttl, DateTimeOffset nowUtc)
         {
             Interlocked.Increment(ref _renewals);
+            if (BlockRenewals)
+            {
+                Interlocked.Increment(ref _blocked);
+                _gate.Wait();
+                return inner.TryRenew(scope, ownerNodeId, ownerIncarnation, fencingToken, ttl, nowUtc);
+            }
+
+            OnRenew?.Invoke();
             if (ThrowOnRenew)
             {
                 throw new InvalidOperationException("the characters database is unreachable");
@@ -195,6 +289,9 @@ public sealed class RealmAuthorityLeaseKeeperTests : IDisposable
 
         public bool ValidateFencingToken(string scope, string ownerNodeId, long fencingToken, DateTimeOffset nowUtc)
             => inner.ValidateFencingToken(scope, ownerNodeId, fencingToken, nowUtc);
+
+        public bool ValidateFencingToken(string scope, string ownerNodeId, Guid ownerIncarnation, long fencingToken, DateTimeOffset nowUtc)
+            => inner.ValidateFencingToken(scope, ownerNodeId, ownerIncarnation, fencingToken, nowUtc);
 
         public RealmAuthorityLease? GetCurrent(string scope, DateTimeOffset nowUtc) => inner.GetCurrent(scope, nowUtc);
 

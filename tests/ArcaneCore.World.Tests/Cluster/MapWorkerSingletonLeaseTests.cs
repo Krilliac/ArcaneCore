@@ -103,6 +103,27 @@ public sealed class MapWorkerSingletonLeaseTests
     }
 
     [Fact]
+    public async Task MapWorker_WhoseAfterStartWorkThrows_KeepsTheLeasesHeld_UntilItsFeaturesHaveStopped()
+    {
+        using var directory = new TempDirectory("arcanecore-leases-", sqlite: true);
+        string database = Path.Combine(directory.Path, "characters.db");
+        await EnsureSchemaAsync(database);
+        await using Kit kit = Kit.Create(database, ClusterNodeRole.MapWorker, startupWork: _ => throw new InvalidOperationException("after-start work failed"));
+        var heldWhileStopping = new List<(bool Social, bool Economy)>();
+        kit.Ordinary.OnStop = async () =>
+            heldWhileStopping.Add(((await ReadAsync(database, RealmAuthorityScopes.Social)).Active, (await ReadAsync(database, RealmAuthorityScopes.Economy)).Active));
+
+        InvalidOperationException failure = await Assert.ThrowsAsync<InvalidOperationException>(() => kit.Host.StartAsync(CancellationToken.None));
+
+        Assert.Equal("after-start work failed", failure.Message);
+        // The auction bot (a timer started by Attach) may still tick until its feature stops: the lease must still be ours when the features stop.
+        Assert.Equal([(true, true)], heldWhileStopping);
+        Assert.True(kit.Ordinary.Stopped);
+        Assert.False((await ReadAsync(database, RealmAuthorityScopes.Social)).Active); // and given back afterwards
+        Assert.False((await ReadAsync(database, RealmAuthorityScopes.Economy)).Active);
+    }
+
+    [Fact]
     public async Task Combined_AttachesEverything_AndTouchesNoLeaseRow()
     {
         using var directory = new TempDirectory("arcanecore-leases-", sqlite: true);
@@ -164,7 +185,7 @@ public sealed class MapWorkerSingletonLeaseTests
         public FeatureHost Features { get; }
         public OrdinaryFeature Ordinary { get; }
 
-        public static Kit Create(string database, ClusterNodeRole role)
+        public static Kit Create(string database, ClusterNodeRole role, Func<CancellationToken, Task>? startupWork = null)
         {
             var ordinary = new OrdinaryFeature();
             var services = new ServiceCollection();
@@ -187,11 +208,11 @@ public sealed class MapWorkerSingletonLeaseTests
             RealmAuthorityLeaseKeeper? keeper = role == ClusterNodeRole.Combined
                 ? null
                 : new RealmAuthorityLeaseKeeper(store, node, Options.Create(new GatewayWorkerOptions { Enabled = true, NodeId = Node }),
-                    NullLogger<RealmAuthorityLeaseKeeper>.Instance);
+                    NullLogger<RealmAuthorityLeaseKeeper>.Instance, setExitCode: _ => { });
             ClusterRoleFeatureFilter? filter = role == ClusterNodeRole.Combined ? null : new ClusterRoleFeatureFilter(store);
             var host = new WorldHost(runtime, saveQueue, new CharacterDirectory(), scopes, NullLogger<WorldHost>.Instance,
                 Options.Create(new CharacterFencingOptions { Enabled = false, OwnerNode = Node }),
-                roleFilter: filter, leaseKeeper: keeper, nodeOptions: node) { ListenerExpected = false };
+                roleFilter: filter, leaseKeeper: keeper, nodeOptions: node) { ListenerExpected = false, StartupWorkForTesting = startupWork };
             return new Kit(provider, runtime, host, store, provider.GetRequiredService<FeatureHost>(), ordinary);
         }
 
@@ -209,13 +230,18 @@ public sealed class MapWorkerSingletonLeaseTests
     {
         public bool Attached { get; private set; }
         public bool Stopped { get; private set; }
+        public Func<Task>? OnStop { get; set; }
 
         public void Attach(WorldRuntime world) => Attached = true;
 
-        public Task StopAsync()
+        public async Task StopAsync()
         {
+            if (OnStop is { } onStop)
+            {
+                await onStop();
+            }
+
             Stopped = true;
-            return Task.CompletedTask;
         }
     }
 }

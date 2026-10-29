@@ -24,7 +24,7 @@ public sealed class ClusterNodeHostingTests
         Assert.Null(services.GetService<ClusterRoleFeatureFilter>());
         Assert.Null(services.GetService<RealmAuthorityLeaseKeeper>());
         Assert.Null(services.GetService<IRealmAuthorityLeaseStore>()); // so `.cluster leases` queries no table
-        Assert.NotNull(services.GetService<EfRealmAuthorityLeaseStore>()); // the concrete store is there for a role that wants it
+        Assert.Null(services.GetService<EfRealmAuthorityLeaseStore>()); // Combined adds nothing but the options
     }
 
     [Fact]

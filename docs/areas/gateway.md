@@ -180,6 +180,19 @@ reads or writes it. Each grant raises the scope's fencing token, which never goe
 - **Commands.** `.cluster status` shows `nodeRole=` for a node that is not `Combined`; `.cluster leases` shows the durable holder of each scope; `.ahbot`
   says so when the bot does not run on this node.
 
+Mutual exclusion and its margin. A lease is valid until the time its holder last renewed it plus the TTL, and another node may take it the moment it
+lapses. The holder stops itself when the next tick would fall in the last half renewal interval before the lapse, so with the defaults (TTL 30 s, renewal
+10 s) a node whose renewals fail, or whose store call hangs, decides at 20 s after its last good renewal: **10 s before the lease lapses**. Every store
+command is bounded to a third of the renewal interval (3 s by default), so a failed call also reports within that bound; count the margin as 7 to 10 s.
+The singletons are stopped only if the whole shutdown (features stopped, saves drained) completes inside that margin; a shutdown that takes longer leaves
+a window in which the old and the new holder both run the auction bot or AutoBroadcast. A renewal the store refuses (the lease was already taken over)
+leaves no margin at all. Tune `Cluster:Node:AuthorityLeaseTtlSeconds` up if the shutdown of a busy node can take longer than 7 s.
+
+Lease expiry is judged against each node's wall clock (a node passes its own time to the store), so the nodes need clocks synchronised by NTP (or chrony).
+The skew a pair of nodes can tolerate is the margin minus the shutdown time: with the defaults and a shutdown of up to 5 s, a node that is ahead of
+the holder by more than about 5 s can take the lease while the holder is still stopping. Keep skew under 1 s (ordinary NTP does) and treat a node whose
+clock is not synchronised as unfit to run a map worker.
+
 Open gap: storage writes are not checked against the fencing token at commit, so a partitioned former holder is bounded by its own fail-stop, not by the
 database. A dedicated `Social` or `Economy` process is not built.
 
