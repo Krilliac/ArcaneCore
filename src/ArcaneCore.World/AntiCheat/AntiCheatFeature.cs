@@ -504,7 +504,7 @@ public sealed partial class AntiCheatFeature(IServiceProvider services, ILogger<
                 {
                     teleports.Teleports.TeleportCompleted += OnServerRelocation;
                     teleports.Teleports.FarTeleportExecuting += OnServerRelocation;
-                    teleports.Teleports.NearTeleportStarting += (player, _) => OnServerRelocation(player);
+                    teleports.Teleports.NearTeleportStarting += (player, _, _) => OnServerRelocation(player);
                 }
                 catch (InvalidOperationException)
                 {
