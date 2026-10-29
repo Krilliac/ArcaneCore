@@ -13,6 +13,7 @@ using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Pools;
+using ArcaneCore.Data.World.Threat;
 using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Data.World.WorldState;
@@ -60,7 +61,7 @@ public static partial class ContentImporterCli
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory; Map.dbc and
                                 AreaTable.dbc (and WMOAreaTable.dbc) there also fill map_template, area_template and
                                 wmo_area_template when those are empty (as import-map-dbc would); AreaTrigger.dbc,
-                                TaxiNodes.dbc and TaxiPath.dbc likewise fill areatrigger_template, taxi_nodes, taxi_path
+                                TaxiNodes.dbc, TaxiPath.dbc and ChrRaces.dbc likewise fill areatrigger_template, taxi_nodes, taxi_path, race_taxi_start
           import-map-dbc <Map.dbc> <AreaTable.dbc> [<WMOAreaTable.dbc>]
                                 import every map and area (map_template, area_template) using the build-5875
                                 layouts; --dump <file> takes the dungeon columns (player limit, reset delay, ghost
@@ -75,6 +76,10 @@ public static partial class ContentImporterCli
                                 family masks) with the dump's rows for build 5875; vmangos rows outside
                                 the build range are dropped (--cooldown-unit ms|seconds: classic-db dumps
                                 before z2829 store seconds; --dry-run writes nothing)
+          spell-threat <dump>... replace spell_threat (flat spell threat and threat multipliers) with the dump's
+                                rows for build 5875: classic-db (entry, Threat, multiplier, ap_bonus) or vmangos
+                                (threat, multiplier, inverse_effect_mask, build_min, build_max); a non-zero ap_bonus is
+                                refused (--dry-run writes nothing)
           refresh <dump>...     replace, in one transaction, only the world tables a world built by an older importer
                                 lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
                                 exploration_basexp and game_weather, areatrigger_tavern, instance_encounter (the dungeon
@@ -85,7 +90,7 @@ public static partial class ContentImporterCli
                                 gossip_texts) in creature_ai_texts by entry and the script_waypoint/waypoint_path copies in
                                 creature_movement_template (their path namespaces only), the ships' gameobject_template rows (type 15;
                                 other objects are left alone), and from --dbc-dir: areatrigger_template (AreaTrigger.dbc),
-                                taxi_nodes (TaxiNodes.dbc) and taxi_path (TaxiPath.dbc); WorldSafeLocs.dbc there adds the safe
+                                taxi_nodes (TaxiNodes.dbc), taxi_path (TaxiPath.dbc) and race_taxi_start (ChrRaces.dbc); WorldSafeLocs.dbc there adds the safe
                                 locations the dump lacks, TaxiPathNode.dbc there checks every ship's route; Map.dbc and
                                 AreaTable.dbc there (both or neither) replace map_template (every map, the dungeon columns
                                 from the dump's instance_template) and area_template (every area).
@@ -163,6 +168,7 @@ public static partial class ContentImporterCli
                 "verify" => await VerifyAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "class-masks" => ClassMasks(arguments, output),
                 "proc-events" => await ProcEventsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
+                "spell-threat" => await SpellThreatAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh" => await RefreshAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh-portals" => await RefreshPortalsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
@@ -331,6 +337,58 @@ public static partial class ContentImporterCli
         }
 
         o.WriteLine($"{counts}, {written} imported; a running world picks them up with .reload spell_proc_event");
+        return ExitCodes.Ok;
+    }
+
+    // --- spell-threat ------------------------------------------------------------------------
+
+    /// <summary>
+    /// <c>spell-threat</c>: <see cref="SpellThreatDumpImporter"/> from the command line. The whole dump is parsed (and the build filter applied)
+    /// before any database is opened, and the table is replaced in one transaction, so a malformed dump changes nothing.
+    /// </summary>
+    private static async Task<int> SpellThreatAsync(CliArguments a, TextWriter o, CancellationToken ct)
+    {
+        RequireInputs(a);
+        bool dryRun = a.Flag("--dry-run");
+        Target? target = dryRun && a.Value("--database") is null && a.Value("--provider") is null ? null : ResolveTarget(a);
+        if (!dryRun)
+        {
+            GuardPath(target!.FilePath);
+        }
+
+        (IReadOnlyList<DumpInput> inputs, _) = OpenInputs(a.Positional);
+        SpellThreatParseResult result;
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            result = SpellThreatDumpImporter.Parse(reader);
+        }
+
+        if (result.RowsRead == 0)
+        {
+            throw new CliException(ExitCodes.Schema, "the dump has no spell_threat rows (is it a classic-db or vmangos world dump?)");
+        }
+
+        string counts = $"spell_threat: {result.RowsRead} row(s) read, {result.RowsFilteredByBuild} outside build {SpellThreatDumpImporter.SupportedBuild}";
+        if (dryRun)
+        {
+            o.WriteLine($"{counts}, {result.Content.Count} to import (dry run: no database written)");
+            return ExitCodes.Ok;
+        }
+
+        o.WriteLine($"target: {target!.Describe}");
+        int written;
+        try
+        {
+            await using WorldDbContext db = OpenWorld(target);
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            written = await SpellThreatDumpImporter.ImportAsync(db, result.Content, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
+        {
+            throw DatabaseError(ex, target);
+        }
+
+        o.WriteLine($"{counts}, {written} imported; a running world picks them up with .reload spell_threats");
         return ExitCodes.Ok;
     }
 
@@ -650,6 +708,7 @@ public static partial class ContentImporterCli
         imported["npc_vendor"] = npcReport.Vendors;
         imported["npc_vendor_template"] = npcReport.VendorTemplates;
         imported["npc_trainer"] = npcReport.Trainers;
+        imported["points_of_interest"] = npcReport.PointsOfInterest;
         imported["conditions"] = conditionsReport.Conditions;
         imported["battleground_template"] = battlegroundReport.Templates;
         imported["creature_battleground"] = battlegroundReport.CreatureEvents;
@@ -834,6 +893,7 @@ public static partial class ContentImporterCli
         IReadOnlyList<AreaTriggerTemplateRow>? triggers = ReadOptionalDbc(directory, "AreaTrigger.dbc", "areatrigger_template", AreaTriggerDbcReader.Load, dbcWarnings);
         IReadOnlyList<TaxiNode>? taxiNodes = ReadOptionalDbc(directory, "TaxiNodes.dbc", "taxi_nodes", NpcServiceDbcReaders.LoadTaxiNodes, dbcWarnings);
         IReadOnlyList<TaxiPath>? taxiPaths = ReadOptionalDbc(directory, "TaxiPath.dbc", "taxi_path", NpcServiceDbcReaders.LoadTaxiPaths, dbcWarnings);
+        IReadOnlyList<RaceTaxiStart>? raceTaxiStarts = ReadOptionalDbc(directory, "ChrRaces.dbc", "race_taxi_start", NpcServiceDbcReaders.LoadRaceTaxiStarts, dbcWarnings);
         var kept = new List<string>();
         var imported = new List<string>();
 
@@ -896,6 +956,19 @@ public static partial class ContentImporterCli
                     {
                         await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
                         imported.Add($"Imported {taxiPaths.Count} taxi paths (taxi_path) from TaxiPath.dbc.");
+                    }
+                }
+
+                if (raceTaxiStarts is not null)
+                {
+                    if (await db.Set<RaceTaxiStart>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("race_taxi_start");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, raceTaxiStarts, token).ConfigureAwait(false);
+                        imported.Add($"Imported {raceTaxiStarts.Count} race starting flight masks (race_taxi_start) from ChrRaces.dbc.");
                     }
                 }
             }, ct).ConfigureAwait(false);

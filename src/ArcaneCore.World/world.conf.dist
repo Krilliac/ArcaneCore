@@ -13893,12 +13893,27 @@ World.Playerbots.Economy.BankDeposit = true
 World.Playerbots.Economy.BuyBankSlots = true
 
 #
+#    World.Playerbots.Economy.BuyBelowAskPercent
+#        Description: The most a bot pays per unit at the house (reagents and gear) as a percent of
+#                     the bot floor of that item, so no bot ever pays what a bot asks.
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.BuyBelowAskPercent = 50
+
+#
 #    World.Playerbots.Economy.BuyReagents
 #        Description: Buy the reagents of the recipes the bot wants to craft that it carries fewer
 #                     of than one craft uses at the faction auction house during a visit (on by
-#                     default): at most 2 auctions a visit, a buyout per unit of at most twice the
-#                     item's reference price, within the visit budget. Off: no reagent is searched
-#                     or bought. Reagents a wanted recipe uses are never listed either way.
+#                     default): at most 2 auctions a visit, within the visit budget. Guards: a
+#                     reagent a vendor stocks is never bought; an auction holds at most twice the
+#                     shortfall; a buyout per unit is at most BuyBelowAskPercent percent of the bot
+#                     floor of the item (an item with no vendor sell price is never bought). Off: no
+#                     reagent is searched or bought. Reagents a wanted recipe uses are never listed
+#                     either way.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -13984,6 +13999,54 @@ World.Playerbots.Economy.HouseListingsPerHour = 400
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.ListChancePerVisit = 50
+
+#
+#    World.Playerbots.Economy.ListMarkupPercentCommon
+#        Description: The bot floor of a common (white) item as a percent of its vendor sell price
+#                     (never below the reference price or the vendor floor after the cut).
+#        Type: int
+#        Default: 500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ListMarkupPercentCommon = 500
+
+#
+#    World.Playerbots.Economy.ListMarkupPercentEpic
+#        Description: The bot floor of an epic or better item as a percent of its vendor sell price
+#                     (never below the reference price or the vendor floor after the cut).
+#        Type: int
+#        Default: 10000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ListMarkupPercentEpic = 10000
+
+#
+#    World.Playerbots.Economy.ListMarkupPercentRare
+#        Description: The bot floor of a rare (blue) item as a percent of its vendor sell price
+#                     (never below the reference price or the vendor floor after the cut).
+#        Type: int
+#        Default: 800
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ListMarkupPercentRare = 800
+
+#
+#    World.Playerbots.Economy.ListMarkupPercentUncommon
+#        Description: The bot floor of an uncommon (green) item as a percent of its vendor sell
+#                     price (never below the reference price or the vendor floor after the cut).
+#        Type: int
+#        Default: 300
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ListMarkupPercentUncommon = 300
 
 #
 #    World.Playerbots.Economy.ListSurplusConsumables

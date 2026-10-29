@@ -1052,7 +1052,7 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         {
             _ = PlayerbotAuctionPricing.ReferencePerUnit(itemTpl);
             _ = PlayerbotAuctionPricing.VendorFloorPerUnit(itemTpl.SellPrice, 0.05f);
-            _ = PlayerbotAuctionPricing.StartBid((uint)rng.Next(10, 50000));
+            _ = PlayerbotAuctionPricing.StartBid((uint)rng.Next(10, 50000), (uint)rng.Next(0, 5000), 1u);
             _ = PlayerbotEconomyPlanner.VisitBudget((uint)rng.Next(0, 100000), econOpts.BuyUpgradeBudgetFraction);
             _ = PlayerbotEconomyPlanner.Remaining(1000u, (uint)rng.Next(0, 2000));
             _ = PlayerbotEconomyPlanner.TryParseAuctionSubject("Outbid: Linen Cloth", out _, out _);

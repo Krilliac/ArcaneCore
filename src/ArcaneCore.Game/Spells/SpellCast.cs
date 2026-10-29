@@ -29,7 +29,7 @@ public sealed class SpellCast
         {
             Mask = targets.Mask, Unit = targets.Unit, GameObject = targets.GameObject,
             Item = targets.Item, Corpse = targets.Corpse, Source = targets.Source,
-            Dest = targets.Dest, Text = targets.Text,
+            Dest = targets.Dest, Text = targets.Text, FromClient = targets.FromClient,
         };
         IsTriggered = triggered;
         TriggeringSpell = triggeringSpell;

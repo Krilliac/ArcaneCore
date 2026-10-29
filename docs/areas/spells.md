@@ -59,6 +59,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
 - `SpellHandlers`: CMSG_CAST_SPELL, CMSG_CANCEL_CAST, CMSG_CANCEL_AURA and CMSG_CANCEL_CHANNELLING.
 - `SpellbookCache`: an in-memory spellbook with ordered write-through to `character_spell`.
 - `SpellCommands`: `.learn`, `.unlearn`, `.unaura` (GameMaster), `.cast` and `.cooldown` (Administrator).
+- Explicit hostile target gate (`SpellSystem.CheckCast`, vmangos `Spell::CheckCast`, Spell.cpp:5592-5612 with `IsExplicitNegativeTarget`, SpellEntry.h:258-270): a spell whose effect TargetA is TARGET_UNIT_ENEMY or TARGET_LOCATION_CASTER_TARGET_POSITION needs an explicit unit target that `ISpellTargetRelations.IsHostile` accepts, else BAD_TARGETS. A cast the client sent is always checked, and so is a triggered cast whose target the client named: an item's later on-use spells carry the client block (`SpellCastTargets.FromClient`, copied into `SpellCast` so the landing re-check sees it), and a script or trigger effect that re-aims at the parent's client-chosen unit builds its block with `SpellCastTargets.ForUnit(guid, parentCast)`, which inherits the flag (the `TriggerSpell` effect and the script casts that re-wrap the effect target).
 
 ## Discrepancies (servers win)
 
@@ -328,3 +329,4 @@ stores the rows. Game object script targets and the other script target modes re
   the integration candidate; non-player transfers remain unsupported.
 - Trainers and the trainer spell list (the NPC area, through `SpellSystem.LearnSpell`).
 - The remaining effect and aura types, which are logged once as unsupported (see the ranking in "Handler modules and spell breadth").
+- Limits of the explicit hostile target gate (see "Implemented"). A triggered cast whose target the server chose on its own (procs, aura triggers, boss and instance scripts, casts from an aura holder) is not checked, although vmangos checks triggered casts too; this keeps server-internal triggers working. Script casts that do not receive the parent cast (for example from an aura or observer callback) do not inherit the client origin. `IsHostile` requires a living target, while vmangos calls `IsValidAttackTarget` with checkAlive=false, so a dead explicit target is refused here; for a game object caster the stand-in relation uses the same rule, which is stricter than vmangos. A client cast through `CMSG_USE_ITEM` for the later on-use spells is covered by a unit test of `CastSpell` with a parsed block, not by a packet-level test.
