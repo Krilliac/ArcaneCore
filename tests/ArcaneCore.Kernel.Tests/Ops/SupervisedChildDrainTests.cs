@@ -17,11 +17,21 @@ public sealed class SupervisedChildDrainTests
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
 
+    static SupervisedChildDrainTests()
+    {
+        // The CI runners have two cores and the Kernel suite runs many classes at once, some of which block pool threads: with the default minimum the
+        // host start/stop continuations here can wait seconds for a worker (the Linux failures were a 10 s stall, then an empty or missing result).
+        ThreadPool.GetMinThreads(out int workers, out int io);
+        ThreadPool.SetMinThreads(Math.Max(workers, 32), Math.Max(io, 32));
+    }
+
     private sealed class BlockingReader : TextReader
     {
         private readonly BlockingCollection<string?> _lines = [];
 
         public void Post(string? line) => _lines.Add(line);
+
+        public int Pending => _lines.Count;
 
         public override string? ReadLine() => _lines.Take();
     }
@@ -66,15 +76,13 @@ public sealed class SupervisedChildDrainTests
     [InlineData(5, "failure")]
     public async Task SupervisedChildDrain_Stopping_AnnouncesIntentAndCode(int code, string intent)
     {
-        int saved = ExitCodes.Current;
         var reader = new BlockingReader();
         var output = new StringWriter();
         var lifetime = new FakeLifetime();
-        var drain = new SupervisedChildDrain(ProtocolSource(reader, output), lifetime, NullLoggerFactory.Instance);
+        var drain = new SupervisedChildDrain(ProtocolSource(reader, output), lifetime, NullLoggerFactory.Instance, exitCode: () => code); // not the process-global ExitCodes.Current
         try
         {
             await drain.StartAsync(CancellationToken.None);
-            ExitCodes.Current = code;
 
             lifetime.StopApplication(); // returns before the line is written: the write is off the calling (world) thread
 
@@ -83,7 +91,6 @@ public sealed class SupervisedChildDrainTests
         }
         finally
         {
-            ExitCodes.Current = saved;
             reader.Post(null);
             await drain.StopAsync(CancellationToken.None);
         }
@@ -138,7 +145,7 @@ public sealed class SupervisedChildDrainTests
         var reader = new BlockingReader();
         var output = new BlockedWriter();
         var lifetime = new FakeLifetime();
-        var drain = new SupervisedChildDrain(ProtocolSource(reader, output), lifetime, NullLoggerFactory.Instance);
+        var drain = new SupervisedChildDrain(ProtocolSource(reader, output), lifetime, NullLoggerFactory.Instance, exitCode: () => ExitCodes.Success);
         try
         {
             await drain.StartAsync(CancellationToken.None);
@@ -297,6 +304,18 @@ public sealed class SupervisedChildDrainTests
         await Task.Delay(100);
         reader.Post("drain");
 
-        await run.WaitAsync(Bound); // the host stopped inside the drain window
+        try
+        {
+            await run.WaitAsync(Bound); // the host stopped inside the drain window
+        }
+        catch (TimeoutException)
+        {
+            IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+            SupervisedChildDrain? drain = host.Services.GetServices<IHostedService>().OfType<SupervisedChildDrain>().FirstOrDefault();
+            throw new TimeoutException(
+                $"the host did not stop within {Bound.TotalSeconds:0} s of the drain line (pool threads={ThreadPool.ThreadCount}, queued={ThreadPool.PendingWorkItemCount}): started={lifetime.ApplicationStarted.IsCancellationRequested}, "
+                + $"stopping={lifetime.ApplicationStopping.IsCancellationRequested}, readerAttached={drain?.ReaderThread is not null}, "
+                + $"readerAlive={drain?.ReaderThread?.IsAlive}, linesStillQueued={reader.Pending}, runStatus={run.Status}");
+        }
     }
 }

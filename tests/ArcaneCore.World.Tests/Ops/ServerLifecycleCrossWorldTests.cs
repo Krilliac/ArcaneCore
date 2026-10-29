@@ -13,6 +13,7 @@ namespace ArcaneCore.World.Tests.Ops;
 /// <c>.server shutdown|restart #delay #exitcode #realmid</c>: a GM on one world server stops or restarts another through the cluster host
 /// supervisor. The request leaves as one protocol line on stdout; without a supervisor the command says so and does nothing.
 /// </summary>
+[Collection(ExitCodesCollection.Name)]
 public sealed class ServerLifecycleCrossWorldTests
 {
     private static async Task<string> CommandAsync(WorldTestClient client, string line)

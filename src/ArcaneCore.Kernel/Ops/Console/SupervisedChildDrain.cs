@@ -12,7 +12,7 @@ namespace ArcaneCore.Kernel.Ops.ServerConsole;
 /// the daemon consoles (<c>WorldConsole</c>, <c>RealmConsole</c>, which stay off on redirected input) never see the line as a command.
 /// <para>Thread affinity: <see cref="StartAsync"/>/<see cref="StopAsync"/> on the host thread; the handlers run on the reader thread.</para>
 /// </summary>
-public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplicationLifetime lifetime, ILoggerFactory loggerFactory, ISupervisedLifecycleRequestHandler? lifecycle = null) : IHostedService
+public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplicationLifetime lifetime, ILoggerFactory loggerFactory, ISupervisedLifecycleRequestHandler? lifecycle = null, Func<int>? exitCode = null) : IHostedService
 {
     /// <summary>Environment variable the supervisor sets on every child (its value is the child's process name).</summary>
     public const string EnvironmentVariable = "ARCANECORE_SUPERVISED_CHILD";
@@ -23,6 +23,7 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
     private readonly ILogger _logger = loggerFactory.CreateLogger("ArcaneCore.SupervisedChild");
     private ConsoleLineReader? _reader;
     private CancellationTokenRegistration _stoppingRegistration;
+    private readonly Func<int> _exitCode = exitCode ?? (() => ExitCodes.Current);
     private Task _announcement = Task.CompletedTask;
 
     /// <summary>The longest <see cref="StopAsync"/> waits for the stopping announcement to be written.</summary>
@@ -88,9 +89,10 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
             return; // no per-run token, nothing the supervisor could trust
         }
 
-        int code = ExitCodes.Current;
+        int code = _exitCode();
         string line = SupervisorProtocol.FormatStopping(source.SupervisorToken, SupervisorProtocol.IntentFor(code), code);
-        _announcement = Task.Run(() =>
+        // A dedicated thread, not the pool: the announcement must not wait behind (or be starved by) blocked pool threads during a shutdown.
+        _announcement = Task.Factory.StartNew(() =>
         {
             try
             {
@@ -101,7 +103,7 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
             {
                 _logger.LogDebug("the stopping announcement could not be written: {Reason}", ex.GetType().Name);
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
     private void Stop(string reason)
@@ -116,7 +118,7 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
         _reader?.Stop();
         try
         {
-            await _announcement.WaitAsync(AnnouncementWait, cancellationToken).ConfigureAwait(false);
+            await _announcement.WaitAsync(AnnouncementWait).ConfigureAwait(false); // bounded by its own timeout; a cancelled shutdown token must not turn this into an exception
         }
         catch (TimeoutException)
         {

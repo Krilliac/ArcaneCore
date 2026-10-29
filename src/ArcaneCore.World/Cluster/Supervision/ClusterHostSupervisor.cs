@@ -406,24 +406,27 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
                 return; // not redirected or no associated process
             }
 
-            try
-            {
-                stdin.WriteLine(SupervisedChildDrain.DrainLine);
-                stdin.Flush();
-            }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
-            {
-                // The child does not read stdin, or already closed it (a second drain request).
-            }
-            finally
+            lock (_stdinSync) // one writer at a time with TrySendLine
             {
                 try
                 {
-                    stdin.Close();
+                    stdin.WriteLine(SupervisedChildDrain.DrainLine);
+                    stdin.Flush();
                 }
-                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
                 {
-                    // Already closed.
+                    // The child does not read stdin, or already closed it (a second drain request).
+                }
+                finally
+                {
+                    try
+                    {
+                        stdin.Close();
+                    }
+                    catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                    {
+                        // Already closed.
+                    }
                 }
             }
         }

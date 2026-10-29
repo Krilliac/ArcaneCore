@@ -77,7 +77,8 @@ public sealed class SupervisorProtocolChannel
             _draining = true;
         }
 
-        ThreadPool.UnsafeQueueUserWorkItem(static channel => channel.Drain(), this, preferLocal: false);
+        // A dedicated thread for the burst: the writes must not queue behind blocked pool threads.
+        _ = Task.Factory.StartNew(Drain, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
     private void Drain()

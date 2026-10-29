@@ -37,7 +37,7 @@ public sealed class CompositeHeartbeatSink(IReadOnlyList<IHeartbeatSink> sinks) 
             if (!call(sink))
             {
                 delivered = false;
-                error ??= sink.LastError ?? sink.Description + " failed";
+                error ??= sink.LastError ?? (sink.Description + " failed");
             }
         }
 
