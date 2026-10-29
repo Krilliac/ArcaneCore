@@ -158,9 +158,8 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   asked unit. Going alone says nothing. `CallForHelpEnabled` off means the bot never asks (and so blames nobody).
 - *Watched me die.* If the bot dies in the window (not a duel, window at least `BystanderMinSeconds`), each asked candidate that still
   qualifies at death and never helped gets WatchedMeDie (`AffinityPerWatchedDie`). A bot that went alone blames nobody.
-- *Answering* (`AnswerHelpEnabled`): the answer probability is `helpfulness * (1 + affinity / 100)` clamped to 0..1 as a hash of the
-  answering bot, the asker and the call (`PlayerbotCallForHelp.Answers`). The function is in place and tested, but the answer is not wired to
-  the brain's assist lane yet (that moves to P2); nothing acts on a help emote today.
+- *Answering* (`AnswerHelp`, in the Helping lane below): the answer probability is `helpfulness * (1 + affinity / 100)` clamped to 0..1 as a hash of the
+  answering bot, the asker and the call (`PlayerbotCallForHelp.Answers`). The old Memory AnswerHelpEnabled key never had a reader and was removed; `AnswerHelp` is the only switch.
 
 **Forgiveness, caps, bad group behaviour, reliability and War Mode** (all in `PlayerbotSocialMemory`, all live):
 
