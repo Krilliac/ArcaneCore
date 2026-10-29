@@ -205,6 +205,23 @@ public sealed class NpcBankSpiritServiceTests
         Assert.Contains(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgUpdateAuraDuration);
     }
 
+    [Fact] // NPCHandler.cpp:425-426: after GetNPCIfCanInteractWith passes
+    public void SpiritHealerActivate_EndsInteractingAuras_OnlyForAReachableHealer()
+    {
+        using var rig = new SpiritRig();
+        int cancels = 0;
+        rig.Kit.Services.InteractingCancels = _ => cancels++;
+        rig.KillAndRelease();
+
+        rig.Kit.Npc = rig.Kit.Npc with { X = rig.Kit.Player.X + 30 };
+        rig.Kit.Services.SpiritHealerActivate(rig.Kit.Player, rig.Kit.Npc.Guid);
+        Assert.Equal(0, cancels);
+
+        rig.Kit.Npc = rig.Kit.Npc with { X = rig.Kit.Player.X + 1 };
+        rig.Kit.Services.SpiritHealerActivate(rig.Kit.Player, rig.Kit.Npc.Guid);
+        Assert.Equal(1, cancels);
+    }
+
     [Fact]
     public void SpiritHealerActivate_BelowSicknessLevel_OnlyResurrects()
     {

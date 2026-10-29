@@ -90,7 +90,7 @@ Every row is implemented on `main`. No area is client-accepted: each root `MILES
 | Runtime core and sessions | `src/ArcaneCore.World/Net`, `src/ArcaneCore.Kernel` | Opcode registry, session states, world tick, update fields, chat, GM commands. Implemented, not client-accepted ([M5](../MILESTONE_M5.md), [M5 acceptance procedure](M5_ACCEPTANCE.md)). |
 | Realm and login | `src/ArcaneCore.Realm` | SRP login and realm list. Autopatcher exists, off by default (`AutoPatchOptions`). |
 | Teleports | `src/ArcaneCore.Game/Teleport` | Near and far teleports, area triggers. Scope and gaps: [grid-terrain](integration/grid-terrain.md). |
-| Content import | `src/ArcaneCore.Data/Content/Import/Cli` (commands), `tools/ArcaneCore.ContentImporter` (13-line host), `src/ArcaneCore.Data/ClientData` | Commands include `plan`, `import`, `import-dbc`, `import-map-dbc`, `verify`, `class-masks`, `proc-events`, `refresh` and `refresh-portals`. |
+| Content import | `src/ArcaneCore.Data/Content/Import/Cli` (commands), `tools/ArcaneCore.ContentImporter` (13-line host), `src/ArcaneCore.Data/ClientData` | Commands include `plan`, `import`, `import-dbc`, `import-map-dbc`, `verify`, `class-masks`, `proc-events`, `spell-threat`, `refresh` and `refresh-portals`. |
 | Items | `src/ArcaneCore.Game/Items` | Inventory, equipment, item use. Scope and gaps: [items](integration/items.md). |
 | Creatures and game objects | `src/ArcaneCore.Game/Creatures`, `src/ArcaneCore.Game/GameObjects`, `src/ArcaneCore.Game/Loot` | Spawns, queries, waypoints, respawn, loot. Scope and gaps: [creatures](integration/creatures.md). |
 | Combat and AI | `src/ArcaneCore.Game/Combat`, `src/ArcaneCore.Game/Creatures/AI` | Hit table, threat, regen, death and ghost, EventAI and SmartAI (slices 1-3d; game objects through `SmartGameObjectAi`). Scope and gaps: [combat](integration/combat.md). |
@@ -130,9 +130,9 @@ closed. Open work 3 lists the gaps from [gateway.md](areas/gateway.md#not-done-y
 |---|---|---|---|
 | M15.0 | `42f7cf9e3`, `8b801352e`, `1fbf3d37a`, `361a19dd3`, `ab0378823` | Reputation fencing, schema authority, durable ID block allocators, session generation claims, character flush barrier. | Merged. Closure not independently verified (unverified). |
 | M15.1 | `379768eed` | Roles, readiness and gateway-worker transport. | Merged. Open gap (gateway.md): real-client acceptance of the gateway path has not been run. Closure criteria: design doc. |
-| M15.2 | `7ef7ae3aa` | Presence directory, cross-worker social router, fenced economy lease. | Merged. Closure not independently verified (unverified). |
+| M15.2 | `7ef7ae3aa` | Presence directory, cross-worker social router, fenced economy lease. | Merged. Closure not independently verified (unverified). Open gap (gateway.md): the role-scoped feature filter and the realm authority lease store are not hosted; no daemon runs a social or economy role. |
 | M15.3 | `c6f749c98` | Continent leases, instance placement, character handoff. | Merged. Open gap (gateway.md): the handoff moves ownership and saved state but still disconnects the client; the seamless reroute is not built. Closure criteria: design doc. |
-| M15.4 | `38caa3a00` | Host supervisor, capacity admission, console multiplexer. | Merged. Closure not independently verified (unverified). |
+| M15.4 | `38caa3a00` | Host supervisor, capacity admission, console multiplexer. | Merged as a library only. Open gap (gateway.md): no daemon or tool hosts the supervisor or binds its options. Closure not independently verified (unverified). |
 | M15.5 | `f3d42215d` | CLI maintenance guard, content revision compatibility, rollback coordinator, diagnostics. | Merged. Open gap (gateway.md): the gateway has no conf catalog entry or metrics. Closure criteria: design doc. |
 | M15.6 | `86a30ffcc` | Battleground matchmaking, world-state broadcast, LFG directory, GM command routing, SOAP lease fencing. | Merged. Open gap (gateway.md): the design targets Warden on the gateway; it runs on the worker. Closure criteria: design doc. |
 | All | `d1feacfce` | Integration merge of M15.0 to M15.6. | Merged. |

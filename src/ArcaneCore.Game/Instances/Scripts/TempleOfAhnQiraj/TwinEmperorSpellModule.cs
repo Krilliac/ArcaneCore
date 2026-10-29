@@ -27,6 +27,15 @@ public sealed class TwinEmperorSpellModule : ISpellHandlerModule
     {
         public uint MechanicImmuneMask(Unit unit) => previous?.MechanicImmuneMask(unit) ?? 0;
 
+        // The members the encounter does not change pass through, so the data provider it wraps keeps serving them.
+        public uint DamageImmuneMask(Unit unit) => previous?.DamageImmuneMask(unit) ?? 0;
+
+        public uint DispelImmuneMask(Unit unit) => previous?.DispelImmuneMask(unit) ?? 0;
+
+        public bool IsImmuneToEffect(Unit unit, SpellEffectName effect) => previous?.IsImmuneToEffect(unit, effect) ?? false;
+
+        public bool IsImmuneToAuraState(Unit unit, AuraType aura) => previous?.IsImmuneToAuraState(unit, aura) ?? false;
+
         public uint SchoolImmuneMask(Unit unit)
         {
             uint inherited = previous?.SchoolImmuneMask(unit) ?? 0;

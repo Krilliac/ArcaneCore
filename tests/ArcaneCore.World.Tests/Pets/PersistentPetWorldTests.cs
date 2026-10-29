@@ -19,6 +19,30 @@ public sealed class PersistentPetWorldTests
         Assert.NotNull(pets.Service.SavePersistence);
     }
 
+    [Fact]
+    public async Task StopAsync_UnsubscribesTheLoginAndLogoutHandlers()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IPersistentPetStore>(new MemoryPetStore()));
+
+        var feature = host.WorldServices.GetRequiredService<ArcaneCore.World.Pets.PersistentPetFeature>();
+        int loggedIn = Subscribers(host.World, "PlayerLoggedIn");
+        int loggingOut = Subscribers(host.World, "PlayerLoggingOut");
+
+        await feature.StopAsync();
+
+        Assert.Equal(loggedIn - 1, Subscribers(host.World, "PlayerLoggedIn"));
+        Assert.Equal(loggingOut - 1, Subscribers(host.World, "PlayerLoggingOut"));
+    }
+
+    // A field-like event's backing field carries the event's name; its invocation list is the subscriber count.
+    private static int Subscribers(object owner, string eventName)
+    {
+        System.Reflection.FieldInfo field = owner.GetType().GetField(eventName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException($"no backing field for {eventName}");
+        return (field.GetValue(owner) as Delegate)?.GetInvocationList().Length ?? 0;
+    }
+
     private sealed class MemoryPetStore : IPersistentPetStore
     {
         public Task<PersistentPetSnapshot?> LoadCurrentAsync(int characterId, CancellationToken cancellationToken = default)

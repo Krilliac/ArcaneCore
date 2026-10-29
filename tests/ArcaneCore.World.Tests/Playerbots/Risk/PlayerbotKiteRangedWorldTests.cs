@@ -104,16 +104,27 @@ public sealed class PlayerbotKiteRangedWorldTests
             + $"retreat {world.Brain.Risk.Retreat.Active}";
 
     /// <summary>
+    /// The first think's place in the 400 ms spell batch window (retail's, <c>ARCANECORE_TEST_SPELL_BATCH_MS=400</c>): every 50 ms manual-clock
+    /// step of it, so a kite that only works at some phases of the batch boundary against the 100 ms think cannot pass by the luck of the
+    /// set-up's wall-clock time. 10 000 is a multiple of the window.
+    /// </summary>
+    public static TheoryData<int> BatchPhases() => [0, 50, 100, 150, 200, 250, 300, 350];
+
+    /// <summary>
     /// W1: a warrior at 45% health with a bow and arrows and Hamstring, a melee creature on it. Over the first eight seconds it is outside
     /// melee reach for most of the sampled ticks (it used to step out, fire at most once and walk back in: an out-and-back every step),
-    /// and the creature takes damage while the warrior is out of reach, which only a shot can deal.
+    /// and the creature takes damage while the warrior is out of reach, which only a shot can deal. The clock starts at a pinned phase of
+    /// the batch window and the spell rolls are seeded (<see cref="RiskTestWorld.StartAsync"/>): on unseeded rolls the first Hamstring was
+    /// resisted 1 time in 25 (a 96% magic hit), the warrior then waited out the global cooldown in melee and recast it, and the same kite
+    /// ran 1.5 s later, out of reach for only 37 of the 80 ticks.
     /// </summary>
-    [Fact]
-    public async Task AHurtWarriorWithABow_StaysAtRange_AndShoots_InsteadOfOscillatingToMelee()
+    [Theory]
+    [MemberData(nameof(BatchPhases))]
+    public async Task AHurtWarriorWithABow_StaysAtRange_AndShoots_InsteadOfOscillatingToMelee(int phaseMs)
     {
         ItemTestContent items = Content();
         using IDisposable scope = items.Use();
-        RiskTestWorld world = await RiskTestWorld.StartAsync();
+        RiskTestWorld world = await RiskTestWorld.StartAsync(clockStartMs: 10_000 + phaseMs);
         await using (world)
         {
             Creature mob = await world.OnWorldAsync(() => world.Spawn(RiskTestWorld.Template(MobEntry, health: 400, minDamage: 1, maxDamage: 2, runSpeed: 1.0f), 2, 0));
@@ -140,6 +151,7 @@ public sealed class PlayerbotKiteRangedWorldTests
             spellSystem.SpellHit += onHit;
             uint lastHealth = await world.OnWorldAsync(() => mob.Health);
             float lastGap = await world.OnWorldAsync(() => Gap(world, mob));
+            Assert.Equal((uint)phaseMs, await world.OnWorldAsync(() => world.Session.World.NowMs % 400));
             try
             {
                 await world.ThinkUntilAsync(8_000, () => false, each: () =>

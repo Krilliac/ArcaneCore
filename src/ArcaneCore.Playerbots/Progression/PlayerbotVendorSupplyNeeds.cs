@@ -27,6 +27,9 @@ internal sealed class PlayerbotVendorSupplyNeeds
     /// <summary>Per reagent item of a wanted recipe (crafting or enchanting): the largest count one such recipe uses.</summary>
     private readonly Dictionary<uint, uint> _reagents = [];
 
+    /// <summary>Per reagent item of a wanted recipe, the largest count one craft uses (as of the last <see cref="Refresh"/>).</summary>
+    internal IReadOnlyDictionary<uint, uint> Reagents => _reagents;
+
     private bool _hasBook;
 
     /// <summary>The time-to-live backstop of a read: a change no stamp covers (a skill rank, an honor rank) is seen within it.</summary>

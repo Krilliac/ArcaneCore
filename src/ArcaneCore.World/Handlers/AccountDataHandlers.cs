@@ -11,7 +11,9 @@ namespace ArcaneCore.World.Handlers;
 /// Server-side storage of the client's settings blobs and tutorial flags (vmangos
 /// MiscHandler.cpp HandleUpdateAccountData / HandleRequestAccountData, CharacterHandler.cpp
 /// HandleTutorial*). Both belong to the account, so they run on the session task, which owns
-/// <see cref="WorldSession.Settings"/>, and write through to the characters database.
+/// <see cref="WorldSession.Settings"/>, and write through to the characters database: an unchanged value is not written, and writes
+/// go through the world-lifetime, per-account throttled <see cref="AccountDataFeature"/>, which flushes held values when the session ends
+/// and when the world stops. The warnings a client can trigger are throttled per session.
 /// </summary>
 public sealed class AccountDataHandlers : IOpcodeHandlerGroup
 {
@@ -37,7 +39,11 @@ public sealed class AccountDataHandlers : IOpcodeHandlerGroup
 
         if (type >= AccountSettings.DataTypeCount)
         {
-            session.Logger.LogWarning("[{Endpoint}] account data type {Type} out of range", session.RemoteEndpoint, type);
+            if (ClientWarningGates.TryEnter(session, "account-data-type", out int suppressed))
+            {
+                session.Logger.LogWarning("[{Endpoint}] account data type {Type} out of range ({Suppressed} more since the last line)", session.RemoteEndpoint, type, suppressed);
+            }
+
             return;
         }
 
@@ -49,15 +55,41 @@ public sealed class AccountDataHandlers : IOpcodeHandlerGroup
         else if (size > AccountDataCompression.MaxDecompressedSize
             || !AccountDataCompression.TryDecompress(compressed, (int)size, out data))
         {
-            session.Logger.LogWarning("[{Endpoint}] rejected account data type {Type} ({Size} bytes declared)",
-                session.RemoteEndpoint, type, size);
+            if (ClientWarningGates.TryEnter(session, "account-data-rejected", out int suppressed))
+            {
+                session.Logger.LogWarning("[{Endpoint}] rejected account data type {Type} ({Size} bytes declared; {Suppressed} more since the last line)",
+                    session.RemoteEndpoint, type, size, suppressed);
+            }
+
+            return;
+        }
+
+        // Unchanged (same blob, or an erase of nothing): no write.
+        AccountDataEntry? current = session.Settings.Data[type];
+        if (data.Length == 0 ? current is null : current is not null && current.Data.AsSpan().SequenceEqual(data))
+        {
             return;
         }
 
         var entry = new AccountDataEntry((uint)DateTimeOffset.UtcNow.ToUnixTimeSeconds(), data);
         session.Settings.Data[type] = data.Length == 0 ? null : entry;
-        await session.Services.GetRequiredService<IAccountDataStore>()
-            .SaveDataAsync(session.AccountId, (int)type, entry).ConfigureAwait(false);
+        await SaveDataAsync(session, (int)type, entry).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Through the world-lifetime <see cref="AccountDataFeature"/> (its own scope per write, throttled, drained at session end and world
+    /// stop). A host without the feature or a store (a bare test host) writes inline to the session's own store on the session task,
+    /// which owns that scope, so the session's context is never used from another thread.
+    /// </summary>
+    private static Task SaveDataAsync(WorldSession session, int type, AccountDataEntry entry)
+    {
+        if (session.Services.GetService<AccountDataFeature>() is { IsAttached: true } feature)
+        {
+            feature.SaveData(session.AccountId, type, entry, session.World.Options.AccountDataWriteIntervalMs);
+            return Task.CompletedTask;
+        }
+
+        return session.Services.GetRequiredService<IAccountDataStore>().SaveDataAsync(session.AccountId, type, entry);
     }
 
     /// <summary>CMSG_REQUEST_ACCOUNT_DATA: u32 type → SMSG_UPDATE_ACCOUNT_DATA with the stored blob.</summary>
@@ -67,7 +99,11 @@ public sealed class AccountDataHandlers : IOpcodeHandlerGroup
         uint type = reader.ReadUInt32();
         if (type >= AccountSettings.DataTypeCount)
         {
-            session.Logger.LogWarning("[{Endpoint}] account data type {Type} out of range", session.RemoteEndpoint, type);
+            if (ClientWarningGates.TryEnter(session, "account-data-type", out int suppressed))
+            {
+                session.Logger.LogWarning("[{Endpoint}] account data type {Type} out of range ({Suppressed} more since the last line)", session.RemoteEndpoint, type, suppressed);
+            }
+
             return Task.CompletedTask;
         }
 
@@ -112,6 +148,14 @@ public sealed class AccountDataHandlers : IOpcodeHandlerGroup
     }
 
     private static Task SaveTutorialsAsync(WorldSession session)
-        => session.Services.GetRequiredService<IAccountDataStore>()
-            .SaveTutorialsAsync(session.AccountId, session.Settings.Tutorials);
+    {
+        uint[] tutorials = [.. session.Settings.Tutorials];
+        if (session.Services.GetService<AccountDataFeature>() is { IsAttached: true } feature)
+        {
+            feature.SaveTutorials(session.AccountId, tutorials, session.World.Options.AccountDataWriteIntervalMs);
+            return Task.CompletedTask;
+        }
+
+        return session.Services.GetRequiredService<IAccountDataStore>().SaveTutorialsAsync(session.AccountId, tutorials);
+    }
 }

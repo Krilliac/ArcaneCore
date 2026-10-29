@@ -49,6 +49,70 @@ public sealed class PlayerbotEconomyOptions
     /// </summary>
     public bool BuyBankSlots { get; set; } = true;
 
+    /// <summary>
+    /// Buy the reagents of the recipes the bot wants to craft that it carries fewer of than one craft uses at the faction auction house during a
+    /// visit (on by default): at most 2 auctions a visit, within the visit budget. Guards: a reagent a vendor stocks is never bought; an auction
+    /// holds at most twice the shortfall; a buyout per unit is at most <see cref="BuyBelowAskPercent"/> percent of the bot floor of the item
+    /// (an item with no vendor sell price is never bought). Off: no reagent is searched or bought. Reagents a wanted recipe uses are never listed either way.
+    /// </summary>
+    public bool BuyReagents { get; set; } = true;
+
+    /// <summary>The bot floor of a common (white) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut).</summary>
+    public int ListMarkupPercentCommon { get; set; } = 500;
+
+    /// <summary>The bot floor of an uncommon (green) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut).</summary>
+    public int ListMarkupPercentUncommon { get; set; } = 300;
+
+    /// <summary>The bot floor of a rare (blue) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut).</summary>
+    public int ListMarkupPercentRare { get; set; } = 800;
+
+    /// <summary>The bot floor of an epic or better item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut).</summary>
+    public int ListMarkupPercentEpic { get; set; } = 10000;
+
+    /// <summary>The most a bot pays per unit at the house (reagents and gear) as a percent of the bot floor of that item, so no bot ever pays what a bot asks.</summary>
+    public int BuyBelowAskPercent { get; set; } = 50;
+
+    /// <summary>The markup percent for an item of <paramref name="quality"/>: poor and common use the common one, then uncommon, rare, and epic or above.</summary>
+    public int ListMarkupPercentFor(uint quality) => quality switch
+    {
+        <= 1 => ListMarkupPercentCommon,
+        2 => ListMarkupPercentUncommon,
+        3 => ListMarkupPercentRare,
+        _ => ListMarkupPercentEpic,
+    };
+
+    /// <summary>
+    /// A bot short of money lists every visit and gets 3 more listing slots (on by default). Short means its budget reserves more than it
+    /// has, or its money is below MoneyGoalCopperPerLevel times its level. It only raises listing, and never when
+    /// ListChancePerVisit or MaxListingsPerBot is 0.
+    /// </summary>
+    public bool MoneyGoal { get; set; } = true;
+
+    /// <summary>The money floor per character level of the money goal, in copper (0..100000); 0: only what the budget reserves counts.</summary>
+    public int MoneyGoalCopperPerLevel { get; set; } = 500;
+
+    /// <summary>The most auctions one bot buys out, reagents and upgrades together, in any 60 minutes of world time (0..100); 0 buys nothing.</summary>
+    public int MaxBuyoutsPerHour { get; set; } = 6;
+
+    /// <summary>The most auctions one bot lists in any 60 minutes of world time (0..100); 0 lists nothing.</summary>
+    public int MaxListingsPerHour { get; set; } = 10;
+
+    /// <summary>
+    /// The most auctions all bots together buy out at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot buy there. A soft limit: a buyout counts when the house confirms it, so bots with buyouts in flight together can overshoot it by their number.
+    /// </summary>
+    public int HouseBuyoutsPerHour { get; set; } = 200;
+
+    /// <summary>
+    /// The most auctions all bots together list at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot list there. A soft limit: a listing counts when the house confirms it, so bots with listings in flight together can overshoot it by their number.
+    /// </summary>
+    public int HouseListingsPerHour { get; set; } = 400;
+
+    /// <summary>List stacks of consumables (food, drink, potions, bandages, elixirs, scrolls) beyond the keep count (on by default).</summary>
+    public bool ListSurplusConsumables { get; set; } = true;
+
+    /// <summary>Per consumable entry, the count (1..200) a bot always keeps before a stack of it is surplus.</summary>
+    public int ConsumableKeepCount { get; set; } = 20;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Economy";
@@ -58,5 +122,18 @@ public sealed class PlayerbotEconomyOptions
             throw new InvalidOperationException($"{section}: BuyUpgradeBudgetFraction must be 0..1.");
         if (VisitIntervalMinutes is < 1 or > MaxVisitIntervalMinutes)
             throw new InvalidOperationException($"{section}: VisitIntervalMinutes must be 1..{MaxVisitIntervalMinutes}.");
+        if (MoneyGoalCopperPerLevel is < 0 or > 100000) throw new InvalidOperationException($"{section}: MoneyGoalCopperPerLevel must be 0..100000.");
+        if (MaxBuyoutsPerHour is < 0 or > 100) throw new InvalidOperationException($"{section}: MaxBuyoutsPerHour must be 0..100.");
+        if (MaxListingsPerHour is < 0 or > 100) throw new InvalidOperationException($"{section}: MaxListingsPerHour must be 0..100.");
+        if (HouseBuyoutsPerHour is < 0 or > 100000) throw new InvalidOperationException($"{section}: HouseBuyoutsPerHour must be 0..100000.");
+        if (HouseListingsPerHour is < 0 or > 100000) throw new InvalidOperationException($"{section}: HouseListingsPerHour must be 0..100000.");
+        if (ConsumableKeepCount is < 1 or > 200) throw new InvalidOperationException($"{section}: ConsumableKeepCount must be 1..200.");
+        foreach ((string name, int value) in new[]
+        {
+            (nameof(ListMarkupPercentCommon), ListMarkupPercentCommon), (nameof(ListMarkupPercentUncommon), ListMarkupPercentUncommon),
+            (nameof(ListMarkupPercentRare), ListMarkupPercentRare), (nameof(ListMarkupPercentEpic), ListMarkupPercentEpic),
+        })
+            if (value is < 100 or > 100000) throw new InvalidOperationException($"{section}: {name} must be 100..100000.");
+        if (BuyBelowAskPercent is < 1 or > 99) throw new InvalidOperationException($"{section}: BuyBelowAskPercent must be 1..99.");
     }
 }

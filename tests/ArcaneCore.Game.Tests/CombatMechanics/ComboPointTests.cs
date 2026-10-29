@@ -71,8 +71,8 @@ public sealed class ComboPointTests
             Kit = new SpellTestKit([.. Spells()]);
             (Rogue, _) = Kit.AddPlayer(1);
             Rogue.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Rogue);
-            (Enemy, _) = Kit.AddPlayer(2, 3, 0);
-            (OtherEnemy, _) = Kit.AddPlayer(3, 0, 3);
+            (Enemy, _) = Kit.AddHostilePlayer(2, 3, 0);
+            (OtherEnemy, _) = Kit.AddHostilePlayer(3, 0, 3);
             (Warrior, _) = Kit.AddPlayer(4, 0, -3);
             Warrior.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warrior);
             Combos = new ComboPointService(Kit.System, (_, guid) => Kit.World.FindOnlinePlayer(guid));
@@ -170,7 +170,8 @@ public sealed class ComboPointTests
         // vmangos Player::SetComboPoints writes only when ObjectAccessor::GetUnit finds the target.
         using var kit = new SpellTestKit();
         (Player rogue, _) = kit.AddPlayer(1);
-        (Player enemy, _) = kit.AddPlayer(2, 3, 0);
+        SpellTestKit.FlagForPvp(rogue);
+        (Player enemy, _) = kit.AddHostilePlayer(2, 3, 0);
         var combos = new ComboPointService(kit.System, (_, _) => null);
 
         combos.AddComboPoints(rogue, enemy, 3);

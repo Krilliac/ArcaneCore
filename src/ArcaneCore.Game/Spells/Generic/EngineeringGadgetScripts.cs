@@ -9,7 +9,7 @@ internal static class GadgetCasts
 {
     /// <summary><c>caster->CastSpell(target, spellId, true, castItem)</c>.</summary>
     public static void Cast(SpellEffectContext context, Unit caster, Unit target, uint spellId, Items.Item? castItem = null)
-        => context.System.CastCustomSpell(caster, spellId, ReferenceEquals(caster, target) ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(target.Guid),
+        => context.System.CastCustomSpell(caster, spellId, ReferenceEquals(caster, target) ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(target.Guid, context.Cast),
             null, castItem: castItem);
 
     public static int Roll(SpellEffectContext context, int maxExclusive) => context.System.Random.Next(maxExclusive);

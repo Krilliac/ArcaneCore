@@ -12,6 +12,7 @@ using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Runtime.CompilerServices;
 
 namespace ArcaneCore.Game.Teleport;
 
@@ -48,6 +49,8 @@ public enum TeleportStage
 /// </summary>
 public sealed partial class TeleportService
 {
+    private static readonly ConditionalWeakTable<WorldRuntime, TeleportService> s_registered = new();
+
     private readonly WorldRuntime _world;
     private readonly Action<Player> _beforeAddToMap;
     private readonly Action<Player> _afterAddToMap;
@@ -68,6 +71,17 @@ public sealed partial class TeleportService
         _afterAddToMap = afterAddToMap;
         _logger = logger ?? NullLogger.Instance;
         _world.WorldTick += OnWorldTick;
+        s_registered.AddOrUpdate(world, this);
+    }
+
+    /// <summary>
+    /// The teleport service of <paramref name="world"/> (the latest one constructed over it), or null when none exists. Lets a movement
+    /// observer, which has no service provider, start a near teleport (the under-map fall recall). World thread.
+    /// </summary>
+    public static TeleportService? Of(WorldRuntime world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        return s_registered.TryGetValue(world, out TeleportService? service) ? service : null;
     }
 
     private void OnWorldTick(uint diffMs)
@@ -227,9 +241,10 @@ public sealed partial class TeleportService
 
     /// <summary>
     /// Raised on the world thread when a same-map teleport starts, before MSG_MOVE_TELEPORT_ACK goes out (vmangos Player::TeleportTo near
-    /// branch: a pet farther from the destination than the grid activation distance is unsummoned temporarily, Player.cpp:1911-1921).
+    /// branch: a pet farther from the destination than the grid activation distance is unsummoned temporarily unless
+    /// <see cref="TeleportOptions.NotUnsummonPet"/> is set, Player.cpp:1911-1921). The third argument is the options of the teleport.
     /// </summary>
-    public event Action<Player, TeleportDestination>? NearTeleportStarting;
+    public event Action<Player, TeleportDestination, TeleportOptions>? NearTeleportStarting;
 
     /// <summary>
     /// Raised on the world thread after <see cref="TeleportCompleted"/> when the teleport scheduled vmangos' DELAYED_CAST_HONORLESS_TARGET:
@@ -355,6 +370,13 @@ public sealed partial class TeleportService
     public Func<Player, uint, bool>? BattlegroundEntryAllowed { get; set; }
 
     /// <summary>
+    /// Runs after a near teleport moved the player (vmangos Unit::TeleportPositionRelocation -> Player::SetPosition(..., teleport = true),
+    /// Unit.cpp:9855, whose positionChanged = teleport runs HandleInterruptsOnMovement, Player.cpp:5949-5958). Set by TeleportFeature; unset
+    /// does nothing. World thread.
+    /// </summary>
+    public Action<Player>? NearArrived { get; set; }
+
+    /// <summary>
     /// Start a teleport (vmangos <c>Player::TeleportTo</c>). Fails — returns false and changes
     /// nothing — for invalid coordinates (<c>MapManager::IsValidMapCoord</c>), a map that is not
     /// in the registry, a battleground map the player is not bound to (<see cref="BattlegroundEntryAllowed"/>),
@@ -421,7 +443,7 @@ public sealed partial class TeleportService
                 }
             }
 
-            NearTeleportStarting?.Invoke(player, destination);
+            NearTeleportStarting?.Invoke(player, destination, options);
             MovementInfo moved = player.Movement;
             moved.X = x;
             moved.Y = y;
@@ -880,6 +902,7 @@ public sealed partial class TeleportService
         player.ApplyMovement(arrived, _world.NowMs);
         // Unit::TeleportPositionRelocation -> Player::SetPosition(..., teleport = true) (Unit.cpp:9855): positionChanged ends a state emote.
         player.ClearEmoteState();
+        NearArrived?.Invoke(player);
         if (LocomotionStates.TryGet(player, out LocomotionState state))
         {
             state.ResetFall();
