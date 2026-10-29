@@ -22,6 +22,7 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
     private const int Scans = 2_000;
 
     /// <param name="botLevel">2: all 64 are beyond the bot's strength; 20: none is (the scan's cost without strong hazards).</param>
+    [Trait("Category", "Timing")]
     [Theory]
     [InlineData((byte)2)]
     [InlineData((byte)20)]
@@ -81,6 +82,7 @@ public sealed class PlayerbotStrongHazardCostTests(ITestOutputHelper output)
         Assert.True(micros < 2_000, $"{micros:F1} us per scan");
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task OneHundredOrdinaryHostiles_ComputeEachMeleeExposureOncePerScan()
     {

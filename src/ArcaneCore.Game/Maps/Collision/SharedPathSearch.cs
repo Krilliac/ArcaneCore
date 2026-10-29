@@ -88,6 +88,19 @@ public interface ISharedMeshPointQuery
     MeshRaycastResult? RaycastShared(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null);
 }
 
+/// <summary>
+/// The mesh floor query (<see cref="IMeshFloorQuery"/>) a map thread may make outside the world's serial gate: over the loaded tiles, under
+/// the pathfinder's shared read lock, like <see cref="ISharedMeshPointQuery"/>.
+/// </summary>
+public interface ISharedMeshFloorQuery
+{
+    /// <summary>
+    /// <see cref="IMeshFloorQuery.TryGetMeshFloor"/> from any thread with the same answer; null when the owner has not looked the map's
+    /// mesh up yet, or the map has none (the owner's answer then comes from the fallback pathfinder), so the caller must ask the owner.
+    /// </summary>
+    bool? TryGetMeshFloorShared(uint mapId, float x, float y, float z, float below, float above, out float height);
+}
+
 /// <summary>How a <see cref="NavJob"/> ended.</summary>
 public enum NavJobStatus
 {

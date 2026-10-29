@@ -97,6 +97,7 @@ public sealed class CodexNetAuthWorldTests
 
     // --- finding 2: admission caps through the real listener ---------------------------------
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task StalledConnections_CannotExceedTheCap_AndTheirSlotsComeBack()
     {

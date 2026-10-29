@@ -57,7 +57,7 @@ public sealed class NpcServiceHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length < 12)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "gossip select requires at least 12 bytes");
+            MalformedPacket.Throw("gossip select requires at least 12 bytes");
         }
 
         var reader = new PacketReader(payload);
@@ -68,7 +68,7 @@ public sealed class NpcServiceHandlers : IOpcodeHandlerGroup
         {
             if (payload[^1] != 0 || reader.Remaining > MaxGossipCode + 1 || Array.IndexOf(payload, (byte)0, 12) != payload.Length - 1)
             {
-                throw new ArgumentOutOfRangeException(nameof(payload), "gossip code must be one terminated string");
+                MalformedPacket.Throw("gossip code must be one terminated string");
             }
 
             code = reader.ReadCString();
@@ -175,7 +175,7 @@ public sealed class NpcServiceHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length < 16)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "taxi express requires at least 16 bytes");
+            MalformedPacket.Throw("taxi express requires at least 16 bytes");
         }
 
         var reader = new PacketReader(payload);
@@ -184,7 +184,7 @@ public sealed class NpcServiceHandlers : IOpcodeHandlerGroup
         uint count = reader.ReadUInt32();
         if (count > QuestNpcServices.MaxExpressNodes || payload.Length != 16 + ((int)count * 4))
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "taxi express node count does not match the payload");
+            MalformedPacket.Throw("taxi express node count does not match the payload");
         }
 
         uint[] nodes = new uint[count];
@@ -207,7 +207,7 @@ public sealed class NpcServiceHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != expected)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), $"NPC service request requires exactly {expected} bytes");
+            MalformedPacket.Throw($"NPC service request requires exactly {expected} bytes");
         }
     }
 }

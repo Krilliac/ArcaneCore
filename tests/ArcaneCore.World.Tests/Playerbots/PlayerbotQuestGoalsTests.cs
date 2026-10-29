@@ -1487,7 +1487,14 @@ public sealed class PlayerbotQuestGoalsTests
                 ReturnQuest = QuestInteractionFixture.QuestId,
             };
 
-            Assert.True(goals.Update(player, 500));
+            // The quest phase's 25 ms wall budget skips the ring fallback once spent; on a loaded runner the first planning call alone
+            // spent it and the turn-in was refused. A probe on a manual clock holds the phase's time still: what is tested is the ring.
+            var probe = new PlayerbotThinkProbe(new PlayerbotThinkProbeTests.ManualClock());
+            probe.Begin();
+            bool advanced;
+            try { advanced = goals.Update(player, 500); }
+            finally { probe.End(); }
+            Assert.True(advanced);
             Assert.False(capture.Any(PlayerbotAnomalies.Key("quest", "turnin-refused")), capture.Describe());
             return true;
         });

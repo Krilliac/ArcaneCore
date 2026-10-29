@@ -64,8 +64,7 @@ internal sealed class PlayerbotPvpKillFeed : IDisposable
             // Every map is detached even if one throws (a map torn down meanwhile): try per map, then clear.
             foreach (Map map in _maps)
             {
-                try { map.Combat.UnitKilled -= _onKilled; }
-                catch (Exception ex) when (ex is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.pvp-feed", ex); }
+                Detach(map);
             }
 
             _maps.Clear();
@@ -76,8 +75,8 @@ internal sealed class PlayerbotPvpKillFeed : IDisposable
     {
         lock (_gate)
         {
-            if (_disposed || !_maps.Add(map)) return;
-            map.Combat.UnitKilled += _onKilled;
+            if (_disposed || map.FindUpdater<MapCombat>() is not { } combat || !_maps.Add(map)) return;
+            combat.UnitKilled += _onKilled;
         }
     }
 
@@ -85,9 +84,31 @@ internal sealed class PlayerbotPvpKillFeed : IDisposable
     {
         lock (_gate)
         {
-            if (!_maps.Remove(map)) return;
-            try { map.Combat.UnitKilled -= _onKilled; }
-            catch (Exception ex) when (ex is not OutOfMemoryException) { FaultLedger.Shared.Record("playerbot.pvp-feed", ex); } // the unload goes on
+            if (!_maps.Remove(map))
+            {
+                return;
+            }
+
+            Detach(map); // the unload goes on whatever the detach does
+        }
+    }
+
+    /// <summary>Test seam: runs first in every detach of a map, inside its fault guard (a test makes one map's detach fail).</summary>
+    internal Action<Map>? BeforeDetach { get; set; }
+
+    private void Detach(Map map)
+    {
+        try
+        {
+            BeforeDetach?.Invoke(map);
+            if (map.FindUpdater<MapCombat>() is { } combat)
+            {
+                combat.UnitKilled -= _onKilled;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("playerbot.pvp-feed", ex); // no logger on this type
         }
     }
 

@@ -55,11 +55,38 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        string reason = BattlegroundManager.TypeOfMap(mapId) == BattlegroundType.None
-            ? "Attempt to queue for invalid BG type"
-            : "Attempt to queue for BG through invalid creature";
-        session.Logger.LogWarning("[{Endpoint}] PassiveAnticheat: {Reason} (CMSG_BATTLEFIELD_JOIN map {Map}) by {Player}",
-            session.RemoteEndpoint, reason, mapId, player.Name);
+        bool invalidType = BattlegroundManager.TypeOfMap(mapId) == BattlegroundType.None;
+        string reason = invalidType ? "Attempt to queue for invalid BG type" : "Attempt to queue for BG through invalid creature";
+
+        // Every packet is a passive anticheat event in the anomaly ledger (vmangos reports a passive action per packet); the warning line
+        // is throttled per session so a client sending this at frame rate cannot flood the log.
+        AnomalyLedger.Shared.Report("anticheat", "battlefield-join", $"character {player.Guid.Low}",
+            $"CMSG_BATTLEFIELD_JOIN map {mapId}: {reason}");
+        JoinLogState state = JoinLogs.GetValue(session, static _ => new JoinLogState());
+        long now = Environment.TickCount64;
+        if (state.Logged && now - state.LastMs < JoinLogWindowMs)
+        {
+            state.Suppressed++;
+            return;
+        }
+
+        session.Logger.LogWarning("[{Endpoint}] PassiveAnticheat: {Reason} (CMSG_BATTLEFIELD_JOIN map {Map}) by {Player}; {Suppressed} more suppressed",
+            session.RemoteEndpoint, reason, mapId, player.Name, state.Suppressed);
+        state.Logged = true;
+        state.LastMs = now;
+        state.Suppressed = 0;
+    }
+
+    /// <summary>The window in which a session logs at most one CMSG_BATTLEFIELD_JOIN warning.</summary>
+    internal const long JoinLogWindowMs = 60_000;
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldSession, JoinLogState> JoinLogs = new();
+
+    private sealed class JoinLogState
+    {
+        public bool Logged { get; set; }
+        public long LastMs { get; set; }
+        public long Suppressed { get; set; }
     }
 
     /// <summary>

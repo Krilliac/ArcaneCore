@@ -47,8 +47,9 @@ public sealed class SpellRuleOptions
 
     /// <summary>
     /// Whether holy resistance is ignored when resisting damage. Retail (vmangos Unit::CalculateDamageAbsorbAndResist,
-    /// Unit.cpp:1936-1946): false, holy is resisted like any magic school. true reproduces cmangos-classic
-    /// (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely ignore holy resistance value").
+    /// Unit.cpp:1936-1946): false; vmangos holds the holy resistance field at 0 (Player::UpdateResistances), so holy is only
+    /// resisted through the level-based innate resist of higher-level creatures. true reproduces cmangos-classic
+    /// (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely ignore holy resistance value") and also drops that innate part.
     /// </summary>
     public bool IgnoreHolyResistance { get; init; }
 
