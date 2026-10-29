@@ -43,7 +43,7 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
         {
             // The 5875 request always has the three-byte item prefix and the
             // two-byte target mask, even for SELF (wow_messages 1.12).
-            if (payload.Length < 5 || !player.IsAlive)
+            if (payload.Length < 5)
             {
                 return;
             }
@@ -62,6 +62,14 @@ public sealed class ItemHandlers : IOpcodeHandlerGroup
             if (item is null)
             {
                 player.Inventory.SendEquipError(InventoryResult.ItemNotFound, null, null);
+                return;
+            }
+
+            // vmangos HandleUseItemOpcode (SpellHandler.cpp:73-78) asks CanUseItem, which answers EQUIP_ERR_YOU_ARE_DEAD for a dead
+            // player (Player.cpp:10032-10033), and replies with SendEquipError: a dead player is told, not dropped.
+            if (!player.IsAlive)
+            {
+                player.Inventory.SendEquipError(InventoryResult.YouAreDead, item, null);
                 return;
             }
 
