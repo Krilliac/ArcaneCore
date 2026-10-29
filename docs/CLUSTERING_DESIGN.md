@@ -318,6 +318,9 @@ process. A launch, heartbeat, or signal alone is not readiness or completed drai
 
 ### Host supervisor and console layout (M15.4)
 
+Status: the supervisor exists as a tested library only. No daemon or tool hosts it or binds the keys below, and no
+World role other than combined and worker exists yet; see [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond).
+
 A single clustered host runs **3 executables** across **6 to 9 OS processes**:
 `ArcaneCore.Realm`, `ArcaneCore.World` (selected by role: `combined | gateway | worker | social | coordinator`),
 and the host supervisor (`ClusterHostSupervisor` in `src/ArcaneCore.World/Cluster/Supervision/`).
