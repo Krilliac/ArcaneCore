@@ -306,8 +306,11 @@ formula or the count) is TrinityCore's/AzerothCore's dynamic respawn rate. `Crea
   script (`RespawnDelayOnceSeconds`) or a battleground (`RespawnDelayOverrideSeconds`) chose.
 - **Game objects** (`GameObjectMapSystem.Despawn`, `ScaleRespawnDelayMs`), with `IncludeGameObjects`: herb and mineral nodes (a chest whose
   lock has a herbalism or mining skill case) and quest objects (a chest with a quest or quest loot, a goober with a quest). The delay is scaled both when the object despawns and when a pool brings a member in (`IPoolHost.SpawnMember`), counting the players around the member that will spawn. This is deliberately asymmetric with creatures: creature pools hold rare spots and stay unscaled, game object pools are the rotating herb and ore nodes whose contention this solves. Never: other
-  objects, spawn-group members, durable instance chests. Object respawn times are not stored in the database (only in memory while the grid
-  is unloaded, and for durable chests, which are excluded).
+  objects, spawn-group members, durable instance chests. Object respawn times are stored in `gameobject_respawn` (characters schema 67,
+  `GameObjectRespawnDataModule`, vmangos `MapPersistentState::SaveGORespawnTime`): saved when the object despawns, restored when its grid or
+  instance map loads, deleted when it respawns or its instance is removed. Not stored: negative `spawntimesecs`, pool and spawn-group members,
+  battleground maps, and durable instance chests (their consumed state is in `loot_state`). The persistence follows the creature feature
+  (`GameObjectRespawnFeature`, `GameObjectRespawnQueue`), without a `Persist` switch: it is on whenever the characters database is present.
 - **Persistence:** `RespawnAtMs` is set to the scaled time before `SaveRespawnOnDeath`, so `creature_respawn` stores the scaled time and a
   restart does not reset it. No schema change.
 - **DynamicRate:** when `World:Respawn:Dynamic:Enabled` is on, `Creatures:Respawn:DynamicRate` no longer applies to any creature, including the ones this feature excludes (elites when `IncludeElitesAndRares` is off, pool and spawn-group members, scripted delays); with it off, `DynamicRate` runs exactly as before.
