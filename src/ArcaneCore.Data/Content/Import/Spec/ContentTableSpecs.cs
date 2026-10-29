@@ -276,6 +276,9 @@ public static class ContentTableSpecs
         // spell_threat: SpellThreatDumpImporter reads by name; classic-db has Threat/ap_bonus (ap_bonus must be zero), vmangos threat/inverse_effect_mask and the build range.
         new("spell_threat", [new KeyColumn("entry")], ["Threat", "threat", "multiplier", "ap_bonus", "inverse_effect_mask", "build_min", "build_max"], s_buildRangeSignatures),
         new("world_safe_locs_facing", [new KeyColumn("id")], ["orientation"], []),
+        // pet_levelstats: classic-db keys it by creature_entry, vmangos by entry (PetDumpImporter).
+        new("pet_levelstats", [new KeyColumn("entry", "creature_entry"), new KeyColumn("level")], [], [], PetDumpImporter.ReadsLevelColumn),
+        new("petcreateinfo_spell", [new KeyColumn("entry")], [], [], PetDumpImporter.ReadsSpellColumn),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =
