@@ -210,9 +210,19 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
                     throw new InvalidOperationException("injected");
                 }
             }, null)));
-        // The cast pipeline counts it in the ledger (spell.script) and lets it out of CastSpell: both reach the report, both gate.
-        Assert.Contains(result.Violations, v => v.Category == SweepCategory.Exception && v.Detail.StartsWith("InvalidOperationException at", StringComparison.Ordinal));
-        Assert.Contains(result.Violations, v => v.Category == SweepCategory.LoggedFault && v.Detail.Contains(":System.InvalidOperationException", StringComparison.Ordinal));
+        // The cast pipeline counts it in the ledger (spell.script) and lets it out of Cast. Without spell batching that is out of CastSpell,
+        // into the sweep: both reach the report, both gate. With batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the go is held to the batch
+        // boundary and runs inside the world tick, where the batch flush catches it so the rest of the batch still goes off (SpellSystem.GoHeld)
+        // and counts it again (spell.batch): the second signal is that ledger record instead, and it gates too.
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.LoggedFault && v.Detail.StartsWith("spell.script:System.InvalidOperationException", StringComparison.Ordinal));
+        if (SpellSystem.DefaultSpellBatchWindowMs == 0)
+        {
+            Assert.Contains(result.Violations, v => v.Category == SweepCategory.Exception && v.Detail.StartsWith("InvalidOperationException at", StringComparison.Ordinal));
+        }
+        else
+        {
+            Assert.Contains(result.Violations, v => v.Category == SweepCategory.LoggedFault && v.Detail.StartsWith("spell.batch:System.InvalidOperationException", StringComparison.Ordinal));
+        }
     }
 
     /// <summary>
