@@ -177,7 +177,8 @@ public sealed class RaidBossScriptTests
         raid.Map.Combat.Kill(raid.Tank, controller);
         Assert.True((orb.Flags & GameObjectFlags.NoInteract) == 0);
         Assert.True(raid.Data.OnGameObjectUse(raid.Tank, orb));
-        Assert.Equal((19832u, raid.Boss.Guid), Assert.Single(casts));
+        // vmangos GOHello_go_orb_of_domination: Mind Exhaustion (23958) on the user first, then Possess (19832) on Razorgore.
+        Assert.Equal(new (uint, ObjectGuid)[] { (BlackwingLairInstance.MindExhaustion, raid.Tank.Guid), (19832u, raid.Boss.Guid) }, casts);
     }
 
     [Fact]
