@@ -11,6 +11,7 @@ using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Tuning;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
@@ -86,17 +87,22 @@ internal sealed class TramNetwork
 {
     private enum TramSide : byte { Unknown, Stormwind, Ironforge }
 
-    /// <summary>The Deeprun Tram map.</summary>
-    public const uint TramMapId = 369;
+    /// <summary>
+    /// The Deeprun Tram map (369), the <c>playerbot_tram_network</c> row of the active tuning catalog; <see cref="uint.MaxValue"/>, a map that
+    /// does not exist, when no row is good (no tram network is built and no map is the tram's).
+    /// </summary>
+    public static uint TramMapId => TuningCatalog.Active.Tram?.MapId ?? uint.MaxValue;
 
-    /// <summary>An exit counts as an entrance's way back when it lands within this of the entrance (13 and 13 yards in classic-db).</summary>
-    public const float PairYards = 60f;
+    /// <summary>An exit counts as an entrance's way back when it lands within this of the entrance (13 and 13 yards in classic-db; row value 60).</summary>
+    public static float PairYards => TuningCatalog.Active.Tram?.PairYards ?? 0f;
 
     private static readonly ConditionalWeakTable<IReadOnlyCollection<AreaTriggerTemplate>, Box> Cache = [];
 
-    private sealed class Box(TramNetwork? network)
+    private sealed class Box(TramNetwork? network, long generation)
     {
         public TramNetwork? Network { get; } = network;
+
+        public long Generation { get; } = generation;
     }
 
     private TramNetwork(TramPlatform a, TramPlatform b) => Platforms = [a, b];
@@ -111,7 +117,11 @@ internal sealed class TramNetwork
     {
         ArgumentNullException.ThrowIfNull(maps);
         IReadOnlyCollection<AreaTriggerTemplate> triggers = maps.AreaTriggers;
-        return Cache.GetValue(triggers, t => new Box(Build(t, maps.FindAreaTriggerTeleport))).Network;
+        long generation = TuningCatalog.Active.Generation;
+        if (Cache.TryGetValue(triggers, out Box? cached) && cached.Generation == generation) return cached.Network;
+        var built = new Box(Build(triggers, maps.FindAreaTriggerTeleport), generation);
+        Cache.AddOrUpdate(triggers, built);
+        return built.Network;
     }
 
     /// <summary>
@@ -120,16 +130,24 @@ internal sealed class TramNetwork
     /// <see cref="PairYards"/> of that entrance.
     /// </summary>
     public static TramNetwork? Build(IEnumerable<AreaTriggerTemplate> triggers, Func<uint, AreaTriggerTeleport?> teleportOf)
+        => Build(triggers, teleportOf, TuningCatalog.Active);
+
+    /// <summary><see cref="Build(IEnumerable{AreaTriggerTemplate}, Func{uint, AreaTriggerTeleport?})"/> under the tram row of <paramref name="catalog"/>.</summary>
+    public static TramNetwork? Build(IEnumerable<AreaTriggerTemplate> triggers, Func<uint, AreaTriggerTeleport?> teleportOf, TuningCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(triggers);
         ArgumentNullException.ThrowIfNull(teleportOf);
+        ArgumentNullException.ThrowIfNull(catalog);
+        if (catalog.Tram is not { } tram) return null;
+        uint tramMap = tram.MapId;
+        float pairYards = tram.PairYards;
         var entrances = new List<(AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)>();
         var exits = new List<(AreaTriggerTemplate Trigger, AreaTriggerTeleport Teleport)>();
         foreach (AreaTriggerTemplate trigger in triggers.OrderBy(t => t.Id))
         {
             if (teleportOf(trigger.Id) is not { } teleport) continue;
-            if (trigger.MapId != TramMapId && teleport.TargetMap == TramMapId) entrances.Add((trigger, teleport));
-            else if (trigger.MapId == TramMapId && teleport.TargetMap != TramMapId) exits.Add((trigger, teleport));
+            if (trigger.MapId != tramMap && teleport.TargetMap == tramMap) entrances.Add((trigger, teleport));
+            else if (trigger.MapId == tramMap && teleport.TargetMap != tramMap) exits.Add((trigger, teleport));
         }
 
         if (entrances.Count != 2 || entrances[0].Trigger.MapId != entrances[1].Trigger.MapId) return null;
@@ -141,7 +159,7 @@ internal sealed class TramNetwork
                 .OrderBy(e => Vector3.DistanceSquared(landing, new Vector3(e.Trigger.X, e.Trigger.Y, e.Trigger.Z)))
                 .Select(e => ((AreaTriggerTemplate, AreaTriggerTeleport)?)e).FirstOrDefault();
             if (exit is not { } way || way.Teleport.TargetMap != entrance.MapId
-                || Vector2.Distance(new(way.Teleport.TargetX, way.Teleport.TargetY), new(entrance.X, entrance.Y)) > PairYards)
+                || Vector2.Distance(new(way.Teleport.TargetX, way.Teleport.TargetY), new(entrance.X, entrance.Y)) > pairYards)
                 return null;
             platforms.Add(new TramPlatform(entrance, into, way.Trigger, way.Teleport));
         }
@@ -377,7 +395,7 @@ internal static partial class PlayerbotTram
         => map.MapId == TramNetwork.TramMapId && (IsTraveling(player) || IsGhostWithBodyOnTramMap(player));
 
     private static bool IsGhostWithBodyOnTramMap(Player player)
-        => !player.IsAlive && (player.Flags & PlayerFlags.Ghost) != 0 && player.Combat.Corpse is { MapId: TramNetwork.TramMapId };
+        => !player.IsAlive && (player.Flags & PlayerFlags.Ghost) != 0 && player.Combat.Corpse is { } corpse && corpse.MapId == TramNetwork.TramMapId;
 
     /// <summary>The reason the bot's last trip failed (inspection), null after a trip that arrived.</summary>
     internal static string? LastFailure(Player player)

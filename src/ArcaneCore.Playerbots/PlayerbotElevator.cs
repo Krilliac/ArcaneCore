@@ -9,6 +9,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Terrain;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Tuning;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Transports;
 using ArcaneCore.Protocol;
@@ -92,7 +93,8 @@ internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Lo
     public const float MatchYards = 30f;
 
     /// <summary>
-    /// The one hand-written part, kept to the regions the data cannot give. The lifts, their cars, levels and timings come from the world
+    /// The one hand-written part, kept to the regions the data cannot give; it is data, the <c>playerbot_elevator_region</c> rows of the active tuning
+    /// catalog (<see cref="TuningCatalog.Active"/>, in id order; the first row whose centre is within <see cref="MatchYards"/> of a lift is its row). The lifts, their cars, levels and timings come from the world
     /// database and TransportAnimation.dbc (<see cref="ElevatorNetwork.Build"/>); which AreaTable region lies above and which below does
     /// not: the terrain's area map is flat (one area per 33-yard cell, the same above and below a cliff), and it does not follow the cliffs
     /// (measured on the 5875 terrain and AreaTable.dbc, <c>PlayerbotElevatorRealTerrainTests</c>: Thousand Needles' "The Great Lift" area,
@@ -102,16 +104,33 @@ internal sealed record ElevatorRegions(uint MapId, Vector2 At, ElevatorRegion Lo
     /// are the client's AreaTable.dbc (5875): 17 The Barrens, 400 Thousand Needles, 484 Freewind Post (in 400), 215 Mulgore, 1638 Thunder
     /// Bluff, 85 Tirisfal Glades, 1497 Undercity. A lift without a row joins nothing and no bot is sent to it.
     /// </summary>
-    public static readonly ElevatorRegions[] Known =
-    [
-        new(1, new Vector2(-4668f, -1839f), new ElevatorRegion(400), new ElevatorRegion(17), MesaTop: false, "the Great Lift"),
-        new(1, new Vector2(-5391f, -2497f), new ElevatorRegion(400), new ElevatorRegion(400, 484), MesaTop: true, "the Freewind Post lift"),
-        new(1, new Vector2(-1297f, 188f), new ElevatorRegion(215), new ElevatorRegion(1638), MesaTop: true, "the Thunder Bluff lift"),
-        new(1, new Vector2(-1033f, -39f), new ElevatorRegion(215), new ElevatorRegion(1638), MesaTop: true, "the Thunder Bluff lift"),
-        new(0, new Vector2(1596f, 292f), new ElevatorRegion(1497), new ElevatorRegion(85), MesaTop: false, "the Undercity lift", VaultLow: true),
-        new(0, new Vector2(1544f, 241f), new ElevatorRegion(1497), new ElevatorRegion(85), MesaTop: false, "the Undercity lift", VaultLow: true),
-        new(0, new Vector2(1595f, 189f), new ElevatorRegion(1497), new ElevatorRegion(85), MesaTop: false, "the Undercity lift", VaultLow: true),
-    ];
+    public static ElevatorRegions[] Known
+    {
+        get
+        {
+            TuningCatalog active = TuningCatalog.Active;
+            KnownBox? box = Volatile.Read(ref s_knownBox);
+            if (box is null || box.Generation != active.Generation)
+            {
+                box = new KnownBox(active.Generation, From(active));
+                Volatile.Write(ref s_knownBox, box);
+            }
+
+            return box.Rows;
+        }
+    }
+
+    /// <summary>The regions of <paramref name="catalog"/>'s <c>playerbot_elevator_region</c> rows, in id order.</summary>
+    internal static ElevatorRegions[] From(TuningCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        return [.. catalog.Elevators.Select(r => new ElevatorRegions(r.MapId, new Vector2(r.X, r.Y),
+            new ElevatorRegion(r.LowZone, r.LowArea), new ElevatorRegion(r.HighZone, r.HighArea), r.MesaTop, r.Name, r.VaultLow))];
+    }
+
+    private static KnownBox? s_knownBox;
+
+    private sealed record KnownBox(long Generation, ElevatorRegions[] Rows);
 
     /// <summary>True when <paramref name="at"/> on <paramref name="mapId"/> is an enclosed vault lift (<see cref="VaultLow"/>: Undercity).</summary>
     public static bool IsVaultLift(uint mapId, Vector3 at)

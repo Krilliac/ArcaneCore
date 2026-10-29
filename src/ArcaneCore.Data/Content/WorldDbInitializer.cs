@@ -147,6 +147,9 @@ public sealed class WorldDbInitializer(IServiceProvider services, ILogger<WorldD
                 {
                     await db.SaveChangesAsync(ct).ConfigureAwait(false);
                 }
+
+                // The shipped tuning rows (Kernel TuningDefaults; also sql/content/world/*/0003_tuning_tables.sql), into each empty table only.
+                await new World.Tuning.EfTuningContentStore(db).SeedEmptyTablesAsync(ArcaneCore.Kernel.Tuning.TuningDefaults.Content, ct).ConfigureAwait(false);
             }).ConfigureAwait(false);
     }
 }

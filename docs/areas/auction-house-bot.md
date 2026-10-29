@@ -18,6 +18,7 @@ and checked by `check-config` (`AuctionBotConfigChecks`).
 - **Item pool.** cMaNGOS draws its "profession" items from crafted items. ArcaneCore draws them from every item template that passes
   the cMaNGOS filters: no bind-on-pickup or quest items, no lootable or conjured items, and a non-zero `Value<Quality>` percent for
   the item's class. It also applies `MaxRequiredLevel`, the item-level cap (`MaxRequiredLevel` + 5 below 60) and `Blacklist`.
+- **Value and loot tables.** The percent per quality and item class and the loot source settings below live in the `auction_bot_value` and `auction_bot_loot` rows ([tuning tables](tuning-tables.md)); the `Value<Quality>` and `Loot<Source>` keys are deprecated overrides (empty by default; a set key wins and logs a startup warning). `.reload tuning` applies edited rows.
 - **Loot sources.** Each sell pass also rolls loot tables (cMaNGOS `AddLootToItemMap`). There are nine sources: creature loot split by
   creature rank (`LootCreatureNormal`, `Elite`, `RareElite`, `WorldBoss`, `Rare`), plus `LootDisenchant`, `LootFishing`,
   `LootGameobject` and `LootSkinning`. Each setting is "minTables, maxTables, minRolls, maxRolls". Quest drops and rows behind a
