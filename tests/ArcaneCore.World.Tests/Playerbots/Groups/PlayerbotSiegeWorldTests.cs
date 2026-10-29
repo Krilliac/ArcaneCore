@@ -1334,9 +1334,16 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
     private static int StalemateRunCount() => StalemateRuns().Count();
 
+    /// <summary>
+    /// A guard that runs at the waiting leader from its spawn point is fought by the leader at its waypoint (the leader's AI takes it as its target and its melee hits it), the guard comes all the way (it never evades on the way in),
+    /// and the step then moves on without a denial. The attacker comes to the leader here, so neither the answer leash (an attacker beyond it is not followed:
+    /// <see cref="AnAttackerThatKitesBeyondTheLeash_IsNotFollowedFurther_TheLeaderReturnsToTheWaypoint_NoDenial"/>) nor the loop watch's refusal of the waypoint (a chase out and back:
+    /// <see cref="AKiterAtTheLeashEdge_SteppingInAndOutSeveralTimes_NeverResetsTheLagHold_NorBlacklistsTheWaypoint_NorTripsTheRejectionGuard"/>) is reached; the bound on the leader's distance and the
+    /// no-refusal check below only guard against a regression.
+    /// </summary>
     [Theory]
     [MemberData(nameof(StalemateRuns))]
-    public async Task AnAttackerComingToTheWaitingLeader_IsFought_TheLeaderStaysWithinTheLeash_NoDenialNoRefusedWaypoint(int run)
+    public async Task AnAttackerComingToTheWaitingLeader_IsFoughtAtTheWaypoint_AndTheStepMovesOn_NoDenial(int run)
     {
         (GroupTestWorld world, PlayerbotSiege siege, PlayerbotSiegeRaid raid) = await StalemateFixture();
         await using GroupTestWorld _ = world;
@@ -1351,15 +1358,25 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         }
 
         int stepAtPush = -1;
-        bool sent = false, refused = false;
+        bool sent = false, refused = false, targeted = false, hit = false, evaded = false, onLeader = false;
+        Creature? probe = null;
         float worstOff = 0f;
         var trail = new List<string>();
         uint began = Now(world);
         bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 250_000, () =>
         {
+            Player leader = Leader(world, raid);
+            // Read before the top-up: the probe was at full health after the last one, so less now is damage dealt during this tick, by its victim's side.
+            if (probe is not null && siege.Step == stepAtPush)
+            {
+                evaded |= probe.IsEvading;
+                onLeader |= ReferenceEquals(probe.Combat.Victim, leader);
+                targeted |= ReferenceEquals(raid.Group!.Members.First(m => m.BotId == leaderBot).AI?.TargetUnit, probe);
+                hit |= ReferenceEquals(leader.Combat.Victim, probe) && probe.Health < probe.MaxHealth;
+            }
+
             TopUpGuards(world, raid);
             TopUpMembers(world, raid); // nobody dies: the only trigger is the guard sent at the leader
-            Player leader = Leader(world, raid);
             if (raid.Push == PlayerbotSiegePush.Stalemate && stepAtPush < 0) { stepAtPush = siege.Step; }
             if (stepAtPush < 0) return false;
             Hold();
@@ -1367,9 +1384,10 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} sent={sent} push={raid.Push} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} x={leader.X - Origin.X:F1} lagSince={raid.LagSinceMs} off={worstOff:F1}");
             // The members stay behind, fighting at the start (the lag hold of a pushing leader at its waypoint runs, about 110 yards); once the leader has waited 5 s a guard (the one farthest along x) turns on the leader, as the guard of a member that
             // died does. It runs at the leader from afar, and the leader must fight it at the waypoint.
-            // Where the guards are by then is not this test's to wait for: a guard that chased the leader to the waypoint is still on it unless its soft leash fired during the chase, and since #1630 that is a coin toss (a melee chaser
-            // standing at the leader refreshes its leash clock every 5 s, so the clock is under 5 s old when the leader walks off; the chase to the waypoint takes about 15 s against the 12 s of the leash; and an in-area member listed above
-            // the leader within 110% of its threat keeps the leader the victim, vmangos ThreatContainer::selectNextVictim). So every guard is sent back to its spawn point first, and the probe runs at the leader from there, 100 yards out.
+            // Where the guards are by then is not this test's to wait for: a guard that chased the leader to the waypoint is still on it unless its soft leash fired during the chase, and since #1630 that is a coin toss (a chaser whose
+            // spline is finalized, melee or ranged, refreshes its leash clock every 5 s, and so does every hit on it, so the clock is under 5 s old when the leader walks off; the chase to the waypoint takes about 15 s against the 12 s
+            // of the leash; and an in-area member listed above the leader within 110% of its threat keeps the leader the victim, vmangos ThreatContainer::selectNextVictim). So every guard is sent back to its spawn point first, and the
+            // probe runs at the leader from there, 100 yards out; it must arrive without evading, which the assertions below check.
             if (!sent && raid.AtWaypoint && raid.PushInForce != PlayerbotSiegePush.None && raid.LagSinceMs != 0 && unchecked(Now(world) - raid.LagSinceMs) > 5_000
                 && leader.Map?.FindUpdater<CreatureMapSystem>() is { } system
                 && system.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive).OrderByDescending(g => MathF.Abs(g.X - leader.X)).FirstOrDefault() is { } guard)
@@ -1378,6 +1396,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 ResetGuardToHome(system, guard, Now(world));
                 system.AttackStart(guard, leader);
                 guard.Combat.Threat.AddThreat(leader, 100_000f);
+                probe = guard;
                 sent = true;
             }
 
@@ -1390,13 +1409,20 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             return siege.Step > stepAtPush || raid.PushDeniedStep == stepAtPush || raid.Retreats > 0;
         });
 
-        string story = $"run {run}: done={done} sent={sent} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} refused={refused} worstOff={worstOff:F1} retreats={raid.Retreats} {raid.LastFacts}"
+        string story = $"run {run}: done={done} sent={sent} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} refused={refused} worstOff={worstOff:F1} retreats={raid.Retreats} "
+            + $"probe: onLeader={onLeader} evaded={evaded}; leader: targeted={targeted} hit={hit} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail);
         Assert.True(sent, "the probe never fired: " + story);
         Assert.True(done && siege.Step > stepAtPush, "the step did not move: " + story);
+        // The probe came all the way: it turned on the leader and never evaded on its run in from its spawn point.
+        Assert.True(onLeader, "the probe never had the leader as its victim: " + story);
+        Assert.False(evaded, "the probe evaded before the step moved: " + story);
+        // The leader answered it at the waypoint before the step moved: its AI took the probe as its target and its melee hit it.
+        Assert.True(targeted, "the waiting leader never took the probe as its target: " + story);
+        Assert.True(hit, "the waiting leader never hit the probe: " + story);
         Assert.NotEqual(stepAtPush, raid.PushDeniedStep);
         Assert.False(refused, "the loop watch refused the waypoint: " + story);
-        Assert.True(worstOff <= PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards, "the leader went past the leash: " + story);
+        Assert.True(worstOff <= PlayerbotSiegeCommander.SiegeAnswerLeashYards + PlayerbotSiegeCommander.WaypointYards, "the leader went farther from its waypoint than an answer may take it: " + story);
     }
 
     /// <summary>One line of what the waiting leader and its attacker are doing (the failure story of the answer tests).</summary>
