@@ -443,7 +443,6 @@ a.unhandled-effect	14792	EnchantHeldItem
 a.unhandled-effect	14847	EnchantItem
 a.unhandled-effect	1492	GuaranteeHit
 a.unhandled-effect	15036	EnchantHeldItem
-a.unhandled-effect	15057	HealMechanical
 a.unhandled-effect	15340	EnchantItem
 a.unhandled-effect	15389	EnchantItem
 a.unhandled-effect	15391	EnchantItem
@@ -970,7 +969,6 @@ a.unhandled-other	17673	dummy:Dummy
 a.unhandled-other	17678	dummy:Dummy
 a.unhandled-other	17744	dummy:Dummy
 a.unhandled-other	17748	dummy:Dummy
-a.unhandled-other	17770	dummy:Dummy
 a.unhandled-other	17816	dummy:Dummy
 a.unhandled-other	18113	dummy:Dummy
 a.unhandled-other	18139	script:ScriptEffect
@@ -1098,7 +1096,6 @@ a.unhandled-other	2096	no-consumer:Dummy
 a.unhandled-other	21051	no-consumer:Dummy
 a.unhandled-other	21052	dummy:Dummy
 a.unhandled-other	21094	no-consumer:Dummy
-a.unhandled-other	21147	dummy:Dummy
 a.unhandled-other	21157	dummy:Dummy
 a.unhandled-other	21157	no-consumer:Dummy
 a.unhandled-other	21171	no-consumer:Dummy
@@ -1135,7 +1132,6 @@ a.unhandled-other	21917	dummy:Dummy
 a.unhandled-other	21934	dummy:Dummy
 a.unhandled-other	21960	dummy:Dummy
 a.unhandled-other	21965	dummy:Dummy
-a.unhandled-other	21977	dummy:Dummy
 a.unhandled-other	22008	no-consumer:OverrideClassScripts
 a.unhandled-other	22050	dummy:Dummy
 a.unhandled-other	22147	dummy:Dummy
@@ -1210,7 +1206,6 @@ a.unhandled-other	23390	dummy:Dummy
 a.unhandled-other	23397	no-consumer:OverrideClassScripts
 a.unhandled-other	23398	no-consumer:OverrideClassScripts
 a.unhandled-other	23407	dummy:Dummy
-a.unhandled-other	23424	dummy:Dummy
 a.unhandled-other	23427	no-consumer:Dummy
 a.unhandled-other	23439	dummy:Dummy
 a.unhandled-other	23445	no-consumer:Dummy
@@ -1291,7 +1286,6 @@ a.unhandled-other	24765	no-consumer:Dummy
 a.unhandled-other	24768	no-consumer:Dummy
 a.unhandled-other	24770	no-consumer:Dummy
 a.unhandled-other	24772	no-consumer:Dummy
-a.unhandled-other	24781	dummy:Dummy
 a.unhandled-other	24782	no-consumer:Dummy
 a.unhandled-other	24783	no-consumer:Dummy
 a.unhandled-other	24784	no-consumer:Dummy
@@ -1393,7 +1387,6 @@ a.unhandled-other	26080	dummy:Dummy
 a.unhandled-other	26101	script:ScriptEffect
 a.unhandled-other	26104	dummy:Dummy
 a.unhandled-other	26127	no-consumer:OverrideClassScripts
-a.unhandled-other	26137	script:ScriptEffect
 a.unhandled-other	26182	script:ScriptEffect
 a.unhandled-other	26183	dummy:Dummy
 a.unhandled-other	26205	script:ScriptEffect
@@ -1407,7 +1400,6 @@ a.unhandled-other	26264	script:ScriptEffect
 a.unhandled-other	26271	dummy:Dummy
 a.unhandled-other	26340	dummy:Dummy
 a.unhandled-other	26368	script:ScriptEffect
-a.unhandled-other	26374	dummy:Dummy
 a.unhandled-other	26380	dummy:Dummy
 a.unhandled-other	26385	no-consumer:Dummy
 a.unhandled-other	26388	no-consumer:Dummy
@@ -1421,14 +1413,10 @@ a.unhandled-other	26410	script:ScriptEffect
 a.unhandled-other	26412	script:ScriptEffect
 a.unhandled-other	26414	script:ScriptEffect
 a.unhandled-other	26447	dummy:Dummy
-a.unhandled-other	26469	script:ScriptEffect
 a.unhandled-other	26471	dummy:Dummy
 a.unhandled-other	26479	script:ScriptEffect
 a.unhandled-other	26489	no-consumer:Dummy
-a.unhandled-other	26528	script:ScriptEffect
 a.unhandled-other	26531	script:ScriptEffect
-a.unhandled-other	26532	script:ScriptEffect
-a.unhandled-other	26541	script:ScriptEffect
 a.unhandled-other	26545	dummy:Dummy
 a.unhandled-other	26553	dummy:Dummy
 a.unhandled-other	26569	dummy:Dummy
@@ -1484,8 +1472,6 @@ a.unhandled-other	27573	no-consumer:Dummy
 a.unhandled-other	27573	script:ScriptEffect
 a.unhandled-other	27575	no-consumer:Dummy
 a.unhandled-other	27600	script:ScriptEffect
-a.unhandled-other	2763	script:ScriptEffect
-a.unhandled-other	2765	script:ScriptEffect
 a.unhandled-other	27651	dummy:Dummy
 a.unhandled-other	27678	dummy:Dummy
 a.unhandled-other	27731	dummy:Dummy
@@ -1530,9 +1516,7 @@ a.unhandled-other	28078	no-consumer:Dummy
 a.unhandled-other	28082	script:ScriptEffect
 a.unhandled-other	28083	dummy:Dummy
 a.unhandled-other	28087	dummy:Dummy
-a.unhandled-other	28098	dummy:Dummy
 a.unhandled-other	28108	dummy:Dummy
-a.unhandled-other	28110	dummy:Dummy
 a.unhandled-other	28116	script:ScriptEffect
 a.unhandled-other	28117	script:ScriptEffect
 a.unhandled-other	28126	no-consumer:Dummy
@@ -1643,7 +1627,6 @@ a.unhandled-other	29285	script:ScriptEffect
 a.unhandled-other	29286	dummy:Dummy
 a.unhandled-other	29287	script:ScriptEffect
 a.unhandled-other	29288	dummy:Dummy
-a.unhandled-other	29313	script:ScriptEffect
 a.unhandled-other	29336	script:ScriptEffect
 a.unhandled-other	29357	dummy:Dummy
 a.unhandled-other	29379	script:ScriptEffect
@@ -1720,7 +1703,6 @@ a.unhandled-other	4131	dummy:Dummy
 a.unhandled-other	4132	dummy:Dummy
 a.unhandled-other	4319	dummy:Dummy
 a.unhandled-other	4539	no-consumer:Dummy
-a.unhandled-other	456	script:ScriptEffect
 a.unhandled-other	469	dummy:Dummy
 a.unhandled-other	482	dummy:Dummy
 a.unhandled-other	4983	dummy:Dummy
@@ -1755,7 +1737,6 @@ a.unhandled-other	6119	dummy:Dummy
 a.unhandled-other	6120	dummy:Dummy
 a.unhandled-other	6123	dummy:Dummy
 a.unhandled-other	6124	dummy:Dummy
-a.unhandled-other	6147	script:ScriptEffect
 a.unhandled-other	6154	dummy:Dummy
 a.unhandled-other	6184	dummy:Dummy
 a.unhandled-other	6196	no-consumer:Dummy
@@ -1866,7 +1847,6 @@ a.unhandled-other	8655	dummy:Dummy
 a.unhandled-other	8673	dummy:Dummy
 a.unhandled-other	8675	no-consumer:Dummy
 a.unhandled-other	8734	no-consumer:Dummy
-a.unhandled-other	8856	script:ScriptEffect
 a.unhandled-other	8878	no-consumer:Dummy
 a.unhandled-other	8894	dummy:Dummy
 a.unhandled-other	8912	dummy:Dummy
