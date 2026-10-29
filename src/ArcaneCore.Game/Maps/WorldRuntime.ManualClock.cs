@@ -65,6 +65,11 @@ public sealed partial class WorldRuntime
             throw new InvalidOperationException("the stepped clock must be chosen before the world starts and excludes the manual clock");
         }
 
+        if (Clock.TickNumber != 0)
+        {
+            throw new InvalidOperationException("the stepped clock must be chosen before the first tick");
+        }
+
         Clock.UseGameDriven(WorldClockMode.Stepped, startAtMs, startUtc);
     }
 
@@ -90,6 +95,11 @@ public sealed partial class WorldRuntime
         if (_thread is not null)
         {
             throw new InvalidOperationException("the manual clock must be chosen before the world starts");
+        }
+
+        if (Clock.Mode == WorldClockMode.Stepped)
+        {
+            throw new InvalidOperationException("the manual clock excludes the stepped clock");
         }
 
         if (stepMs == 0)

@@ -112,4 +112,41 @@ public sealed class WorldClockTests
         Assert.Equal(1000, time.TimestampFrequency);
         Assert.Equal(anchor.AddMilliseconds(2500), time.GetUtcNow());
     }
+
+    [Fact]
+    public void SteppedClock_AfterTheFirstTick_Throws_AndKeepsTheClockRunning()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        world.UseSteppedClock(startAtMs: 1000);
+        world.RunTick(50);
+
+        Assert.Throws<InvalidOperationException>(() => world.UseSteppedClock(startAtMs: 5000));
+        Assert.Equal(1050u, world.NowMs);
+        world.RunTick(50);
+        Assert.Equal(1100u, world.NowMs);
+    }
+
+    [Fact]
+    public void ManualClock_AfterTheSteppedClock_Throws_AndTheSteppedClockStays()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        world.UseSteppedClock(startAtMs: 1000);
+
+        Assert.Throws<InvalidOperationException>(() => world.UseManualClock());
+        Assert.Throws<InvalidOperationException>(() => world.UseManualClockFrom(0));
+        Assert.Equal(WorldClockMode.Stepped, world.Clock.Mode);
+        Assert.False(world.IsManualClock);
+        world.RunTick(50);
+        Assert.Equal(1050u, world.NowMs);
+    }
+
+    [Fact]
+    public void SteppedClock_AfterTheManualClock_Throws()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        world.UseManualClock();
+
+        Assert.Throws<InvalidOperationException>(() => world.UseSteppedClock());
+        Assert.Equal(WorldClockMode.Manual, world.Clock.Mode);
+    }
 }
