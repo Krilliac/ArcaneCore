@@ -108,6 +108,9 @@ public sealed class GameObjectSpellEffects(Func<Map, GameObjectMapSystem?> syste
         return (caster.X + (distance * MathF.Cos(angle)), caster.Y + (distance * MathF.Sin(angle)), caster.Z);
     }
 
+    /// <summary>Evil Twin, the debuff that refuses player summons.</summary>
+    private const uint EvilTwin = 23445;
+
     /// <summary>
     /// SPELL_EFFECT_SUMMON_PLAYER (Spell::EffectSummonPlayer, SpellEffects.cpp:4783-4800): a player target is offered a summon to a point beside
     /// the ritual (the cast's ritual object target) or beside the caster.
@@ -115,6 +118,12 @@ public sealed class GameObjectSpellEffects(Func<Map, GameObjectMapSystem?> syste
     private void EffectSummonPlayer(SpellEffectContext context)
     {
         if (context.Target is not Player target)
+        {
+            return;
+        }
+
+        // vmangos SpellEffects.cpp:4791-4793: Evil Twin (23445, the Zul'Gurub trinket's failure) makes the player ignore a summon.
+        if (context.System.HasAura(target, EvilTwin))
         {
             return;
         }

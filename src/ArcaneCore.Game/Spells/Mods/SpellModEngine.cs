@@ -12,6 +12,9 @@ public sealed partial class SpellModEngine : ISpellModEngine
     /// <summary>Removes the aura of a mod that ran out of charges; set by <see cref="SpellModModule"/>.</summary>
     internal Action<Player, uint>? RemoveAura { get; set; }
 
+    /// <summary>The built-in ward mods (<see cref="HardcodedMods"/>), set when the module attaches them; the Improved Fire Ward script reads it.</summary>
+    internal HardcodedMods? Wards { get; set; }
+
     /// <summary>
     /// The operations vmangos reads with no spell (so no charge is touched): Player::AddGCD, AddCooldown, CalcThreat,
     /// SpellEntry::CalculateDuration, the aura constructors (charges, activation time, speed/haste/attack power amounts) and the

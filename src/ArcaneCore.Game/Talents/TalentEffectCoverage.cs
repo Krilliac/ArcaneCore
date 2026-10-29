@@ -173,6 +173,17 @@ public static class TalentEffectCoverage
         new(ExternalReaderKind.DummySpell, SpellSystem.SpiritOfRedemptionTalent, 0, "Spells/SpellSystem.SpiritOfRedemption.cs",
             @"HasAura\(priest, SpiritOfRedemptionTalent\)"),
 
+        // Healing done bonus of the totems and idols (SpellBonusModule.OverrideClassScriptHealingBonus, vmangos SpellCaster.cpp:1497-1500).
+        new(ExternalReaderKind.ClassScript, 3736, 0, "Spells/Casters/Bonus/SpellBonusModule.cs", @"case 3736: // Increased Lesser Healing Wave"),
+        new(ExternalReaderKind.ClassScript, 4415, 0, "Spells/Casters/Bonus/SpellBonusModule.cs", @"case 4415: // Increased Rejuvenation Healing"),
+
+        // Loatheb's Corrupted Mind (CorruptedMindCastCheck, vmangos Spell.cpp:5412) and Nefarian's Berserk (BerserkNoShapeshiftCheck, Spell.cpp:6435).
+        new(ExternalReaderKind.ClassScript, 4327, 0, "Spells/Checks/CorruptedMindCastCheck.cs", @"MiscValue: CorruptedMindClassScript"),
+        new(ExternalReaderKind.ClassScript, 3654, 0, "Spells/Generic/NefarianAndIllusionAuras.cs", @"HasAura\(context\.Caster, NefarianBerserkModule\.Berserk\)"),
+
+        // Evil Twin: the summon player effect refuses the player who has it (GameObjectSpellEffects.EffectSummonPlayer, SpellEffects.cpp:4791).
+        new(ExternalReaderKind.DummySpell, 23445, 0, "GameObjects/GameObjectSpellEffects.cs", @"HasAura\(target, EvilTwin\)"),
+
         // Demonic Sacrifice: removed when a demon is summoned (SummonService) and kept through death (ResurrectEffects).
         new(ExternalReaderKind.ClassScript, (uint)DemonicSacrificeScript.ClassScriptMisc, 0, "Pets/SummonService.Demons.cs",
             @"a\.MiscValue == DemonicSacrificeScript\.ClassScriptMisc"),
