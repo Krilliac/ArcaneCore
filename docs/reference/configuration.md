@@ -329,12 +329,20 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `Cluster:Supervisor:CrashLoopMaxRestarts` | `int` | `5` | - | How many times a child may be restarted within `CrashLoopWindowSeconds` before the supervisor gives up on it (default 5; 1 to 1000): that many restarts are allowed, and the next failure inside the window (the one after the last allowed restart) leaves it Faulted and is recorded in the fault and anomaly ledgers. A restart request (exit code 2) after a healthy run does not count. |
+| `Cluster:Supervisor:CrashLoopWindowSeconds` | `int` | `300` | - | The window the crash-loop count is taken over, in seconds (default 300; 10 to 86400). |
 | `Cluster:Supervisor:Enabled` | `bool` | `false` | - | Runs this World process as the host supervisor only (default: false): it launches and watches the configured `Processes` and starts no world, database, listener or feature. Off, a World start is unchanged. |
+| `Cluster:Supervisor:HangCaptureDirectory` | `string` | `"logs/supervisor-captures"` | - | Where hang captures (stack reports and dumps) are written (default `logs/supervisor-captures`); relative to the working directory. |
+| `Cluster:Supervisor:HangCaptureTimeoutSeconds` | `int` | `300` | - | The longest a hang capture may take before the supervisor drains and kills the child anyway, in seconds (default 300; 1 to 3600). |
+| `Cluster:Supervisor:HealthyUptimeSeconds` | `int` | `120` | - | A child that ran this many seconds (default 120; 1 to 86400) before it exited is healthy: its restart backoff starts over at the minimum and an exit-code-2 restart is not a crash-loop failure. |
 | `Cluster:Supervisor:MaxConcurrentProcesses` | `int` | `9` | - | Maximum number of concurrent supervised child processes allowed on this host (default: 9). |
 | `Cluster:Supervisor:MaxTotalAllocatedMemoryMb` | `long?` | `null` | - | Optional cap on the sum of `SupervisedProcessConfig.RequiredMemoryMb` across all active supervised processes. |
 | `Cluster:Supervisor:MinClusterProcesses` | `int` | `3` | - | Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3). A start that can admit fewer launches nothing and refuses with a message naming this key. |
 | `Cluster:Supervisor:MinFreeMemoryReserveMb` | `long` | `1024` | - | Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB). |
 | `Cluster:Supervisor:Processes` | `Dictionary<string, SupervisedProcessConfig>` | `{}` | - | Supervised process definitions, started in ascending `SupervisedProcessConfig.StartOrder` (ties by key), keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`). |
+| `Cluster:Supervisor:RestartDelayMs` | `int` | `0` | - | Milliseconds the supervisor waits before it relaunches a child that exited with the restart code 2 (default 0; 0 to 600000). Crashes use the backoff instead. |
+| `Cluster:Supervisor:StackCaptureTool` | `string` | `""` | - | The dotnet-stack executable for `HangCapture=Stacks` (default empty: none; required when any child uses Stacks). |
+| `Cluster:Supervisor:StopWhenBelowMinimum` | `bool` | `true` | - | Stop everything when fewer than `MinClusterProcesses` children are left running (default true): the rest are drained and the supervisor exits 0 when every stop was deliberate and 1 when a child was given up on. Off, the supervisor keeps the remaining children running. |
 
 ## `Cluster:Worker`
 

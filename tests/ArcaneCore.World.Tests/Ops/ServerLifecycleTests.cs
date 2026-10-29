@@ -8,6 +8,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Ops;
 
 /// <summary>.server shutdown/restart on a real world thread and real sessions.</summary>
+[Collection(ExitCodesCollection.Name)]
 public sealed class ServerLifecycleTests
 {
     private static async Task<string> CommandAsync(WorldTestClient client, string line)

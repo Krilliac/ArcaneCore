@@ -15,6 +15,8 @@
     Shows players, sessions and maps, the save queue, caught faults / invariant failures / unhandled client opcodes, and tick rate, mean and p95 tick time over the refresh window (from the
     arcanecore_world_tick_duration histogram deltas). Without metrics it says so instead of inventing numbers.
   - Realm metrics: scraped from Ops:Metrics:RealmPrometheusPrefix (default http://localhost:9465/metrics/) when Ops:Metrics is enabled.
+  The World executable also has a built-in opt-in supervisor with the same recovery rules (Cluster:Supervisor:Enabled; see docs/CLUSTERING_DESIGN.md);
+  this script remains the supervisor for the live profile.
   Type console commands in the World and Realm windows (docs/areas/server-console.md); this window displays status (and supervises when -Supervise is passed).
 .EXAMPLE
   pwsh -NoExit -File tools/ops/diag/server-status.ps1 -Profile $env:ARCANECORE_LIVE_PROFILE -Supervise

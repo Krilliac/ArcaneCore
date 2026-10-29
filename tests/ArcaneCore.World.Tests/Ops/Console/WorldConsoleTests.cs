@@ -26,6 +26,7 @@ namespace ArcaneCore.World.Tests.Ops.ServerConsole;
 /// The world daemon's console (docs/areas/server-console.md): typed GM commands run on the world thread as the console invoker
 /// (Administrator, no character) against a real in-process world, real sessions and in-memory stores.
 /// </summary>
+[Collection(ExitCodesCollection.Name)]
 public sealed class WorldConsoleTests
 {
     private const string Prefix = WorldConsoleExecutor.Prefix;

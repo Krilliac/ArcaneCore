@@ -240,9 +240,9 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.server` ... | 0 | Player | stored level through the map | Server status. |
 | `.server info` | 0 | Player | stored level through the map | Syntax: .server info Display the server version, the players online and the uptime. |
 | `.server motd` | 0 | Player | stored level through the map | Syntax: .server motd Show the server message of the day. |
-| `.server shutdown` ... | 6 | Administrator | stored level through the map | Syntax: .server shutdown [cancel \| #delay [#exitcode]] — stop the server after #delay seconds. |
+| `.server shutdown` ... | 6 | Administrator | stored level through the map | Syntax: .server shutdown [cancel \| #delay [#exitcode [#realmid]]] — stop the server after #delay seconds. With #realmid, ask the cluster host supervisor to stop that world server instead (same host only; needs the supervisor and its realm ids, otherwise nothing is done). |
 | `.server shutdown cancel` | 6 | Administrator | stored level through the map | Syntax: .server shutdown cancel — abort the pending countdown. |
-| `.server restart` ... | 6 | Administrator | stored level through the map | Syntax: .server restart [cancel \| #delay [#exitcode]] — restart the server after #delay seconds (exit code 2 for a supervisor). |
+| `.server restart` ... | 6 | Administrator | stored level through the map | Syntax: .server restart [cancel \| #delay [#exitcode [#realmid]]] — restart the server after #delay seconds (exit code 2 for a supervisor). With #realmid, ask the cluster host supervisor to restart that world server instead (same host only; needs the supervisor and its realm ids, otherwise nothing is done). |
 | `.server restart cancel` | 6 | Administrator | stored level through the map | Syntax: .server restart cancel — abort the pending countdown. |
 | `.server idleshutdown` ... | 6 | Administrator | stored level through the map | Syntax: .server idleshutdown [cancel \| #delay [#exitcode]] — stop when no sessions remain. |
 | `.server idleshutdown cancel` | 6 | Administrator | stored level through the map | Syntax: .server idleshutdown cancel — abort the pending countdown. |

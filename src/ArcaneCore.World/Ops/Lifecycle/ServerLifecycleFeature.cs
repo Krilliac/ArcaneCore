@@ -3,6 +3,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
@@ -21,7 +22,7 @@ namespace ArcaneCore.World.Ops.Lifecycle;
 /// existing <c>WorldHost.StopAsync</c> order (world stop and final save, features, save queue),
 /// so no second shutdown path exists.
 /// </summary>
-public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<ServerLifecycleFeature> logger) : IWorldFeature
+public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<ServerLifecycleFeature> logger) : IWorldFeature, ISupervisedLifecycleRequestHandler
 {
     private readonly ShutdownCountdown _countdown = new();
     private readonly CancellationTokenSource _stopTimer = new();
@@ -46,6 +47,44 @@ public sealed class ServerLifecycleFeature(IServiceProvider services, ILogger<Se
     public event Action<ShutdownMask, bool>? CountdownChanged;
 
     public void Attach(WorldRuntime world) => _world = world;
+
+    /// <summary>
+    /// A lifecycle command the supervisor forwarded from another world (a GM's cross-world <c>.server shutdown|restart</c>). Called on the supervisor
+    /// line-reader thread: the command runs through the normal <see cref="Request"/> on the world thread.
+    /// </summary>
+    void ISupervisedLifecycleRequestHandler.Request(SupervisorLifecycleRequest request)
+    {
+        if (_world is not { } world)
+        {
+            logger.LogWarning("Ignored a forwarded lifecycle {Action} from {By}: the world is not running yet.", request.Action, request.By);
+            return;
+        }
+
+        ShutdownMask mask = request.Action == SupervisorLifecycleAction.Restart ? ShutdownMask.Restart : ShutdownMask.None;
+        byte code = (byte)Math.Clamp(request.ExitCode, 0, ExitCodes.MaxRequested);
+        world.Post(() => Request(request.DelaySeconds, mask, code, request.By));
+    }
+
+    /// <summary>The supervisor's answer to a request this world issued: told to the staff, so the GM who issued it learns whether it went anywhere.</summary>
+    void ISupervisedLifecycleRequestHandler.Result(SupervisorLifecycleResult result)
+    {
+        string text = result.Status switch
+        {
+            SupervisorLifecycleStatus.Forwarded => $"The supervisor forwarded the lifecycle request for realm {result.RealmId} (by {result.By}).",
+            SupervisorLifecycleStatus.UnknownRealm => $"The supervisor does not know realm {result.RealmId}; the lifecycle request by {result.By} was not delivered.",
+            _ => $"The supervisor refused the lifecycle request for realm {result.RealmId} by {result.By}.",
+        };
+        AnnounceSeverity severity = result.Status == SupervisorLifecycleStatus.Forwarded ? AnnounceSeverity.Info : AnnounceSeverity.Warning;
+        logger.LogInformation("{Result}", text);
+        try
+        {
+            Announcer()?.Announce(AnnounceCategory.Shutdown, severity, text, null, dedupKey: "shutdown-cross-world");
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("lifecycle.cross-world-result", ex);
+        }
+    }
 
     public async Task StopAsync()
     {

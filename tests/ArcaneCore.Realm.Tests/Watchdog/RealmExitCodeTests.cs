@@ -13,6 +13,7 @@ namespace ArcaneCore.Realm.Tests.Watchdog;
 /// restarts on 1 brings the realm back)". Regression: Program.cs returned 0 after RunAsync, so systemd
 /// Restart=on-failure treated the stop as clean and the logon service stayed down.
 /// </summary>
+[Collection(ExitCodesCollection.Name)]
 public sealed class RealmExitCodeTests
 {
     [Fact]

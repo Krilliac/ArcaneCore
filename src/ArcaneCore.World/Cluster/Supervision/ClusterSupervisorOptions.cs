@@ -125,6 +125,40 @@ public sealed class SupervisedProcessConfig
     /// </summary>
     public int StartOrder { get; set; }
 
+    /// <summary>
+    /// Seconds without a world-tick heartbeat after which the supervisor treats a beating-then-silent child as hung and drains, kills and relaunches it
+    /// (default 120; 0 turns hang detection off; otherwise 30 to 3600). The watch is armed by the child's first <c>alive</c> beat and is suspended while
+    /// the child has announced that it is stopping.
+    /// </summary>
+    public int HangTimeoutSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// Seconds after launch (default 300; 30 to 86400) before a child that has never sent an <c>alive</c> beat gets one warning that hang detection is not
+    /// armed. A child that starts slowly is never killed for silence before its first beat.
+    /// </summary>
+    public int HeartbeatGraceSeconds { get; set; } = 300;
+
+    /// <summary>Milliseconds a hung child gets to drain on the supervisor's drain request before it is killed (default 15000; 1 to 600000).</summary>
+    public int HangDrainTimeoutMs { get; set; } = 15_000;
+
+    /// <summary>
+    /// Milliseconds a child that announced its stop may take to exit before the supervisor kills it (default 0, which means <see cref="DrainTimeoutMs"/>;
+    /// otherwise 1 to 600000). The kill is classified by what the child announced (restart relaunches at once, shutdown stays down).
+    /// </summary>
+    public int StopGraceMs { get; set; }
+
+    /// <summary>What the supervisor captures from a hung child before it drains it: <c>None</c> (default), <c>Stacks</c> or <c>Dump</c> (a full memory dump, which holds secrets).</summary>
+    public SupervisedHangCaptureMode HangCapture { get; set; } = SupervisedHangCaptureMode.None;
+
+    /// <summary>
+    /// The realm id this child serves (default 0: none). The supervisor routes a GM's cross-world <c>.server shutdown|restart #delay #exitcode #realmid</c>
+    /// to the child with that id, and tells every child its own id so it can tell a local request from a remote one. Unique per supervisor.
+    /// </summary>
+    public int RealmId { get; set; }
+
+    /// <summary>The per-supervisor secret the supervisor puts in the child's environment; set by the supervisor at each launch, never read from configuration.</summary>
+    internal string? ProtocolToken { get; set; }
+
     /// <summary>Upper bound of <see cref="DrainTimeoutMs"/> (10 minutes): the host's shutdown time is sized from the sum of these.</summary>
     public const int MaxDrainTimeoutMs = 600_000;
 
@@ -146,6 +180,18 @@ public sealed class SupervisedProcessConfig
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' DrainTimeoutMs must be at most {MaxDrainTimeoutMs} (10 minutes).");
         if (RequiredMemoryMb < 0)
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' RequiredMemoryMb must be non-negative.");
+        if (HangTimeoutSeconds != 0 && HangTimeoutSeconds is < 30 or > 3600)
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' HangTimeoutSeconds must be 0 (off) or 30 to 3600 (was {HangTimeoutSeconds}).");
+        if (HeartbeatGraceSeconds is < 30 or > 86_400)
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' HeartbeatGraceSeconds must be 30 to 86400 (was {HeartbeatGraceSeconds}).");
+        if (HangDrainTimeoutMs is <= 0 or > MaxDrainTimeoutMs)
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' HangDrainTimeoutMs must be 1 to {MaxDrainTimeoutMs} (was {HangDrainTimeoutMs}).");
+        if (StopGraceMs is < 0 or > MaxDrainTimeoutMs)
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' StopGraceMs must be 0 (use DrainTimeoutMs) or 1 to {MaxDrainTimeoutMs} (was {StopGraceMs}).");
+        if (!Enum.IsDefined(HangCapture))
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' HangCapture is not one of None, Stacks, Dump.");
+        if (RealmId < 0)
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' RealmId must not be negative (was {RealmId}); 0 means none.");
     }
 }
 
@@ -184,6 +230,39 @@ public sealed class ClusterSupervisorOptions
     public long? MaxTotalAllocatedMemoryMb { get; set; }
 
     /// <summary>
+    /// How many times a child may be restarted within <see cref="CrashLoopWindowSeconds"/> before the supervisor gives up on it (default 5; 1 to 1000): that many
+    /// restarts are allowed, and the next failure inside the window (the one after the last allowed restart) leaves it Faulted and is recorded in the fault and anomaly ledgers. A restart request (exit code 2) after a healthy run does not count.
+    /// </summary>
+    public int CrashLoopMaxRestarts { get; set; } = 5;
+
+    /// <summary>The window the crash-loop count is taken over, in seconds (default 300; 10 to 86400).</summary>
+    public int CrashLoopWindowSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// A child that ran this many seconds (default 120; 1 to 86400) before it exited is healthy: its restart backoff starts over at the minimum and an
+    /// exit-code-2 restart is not a crash-loop failure.
+    /// </summary>
+    public int HealthyUptimeSeconds { get; set; } = 120;
+
+    /// <summary>Milliseconds the supervisor waits before it relaunches a child that exited with the restart code 2 (default 0; 0 to 600000). Crashes use the backoff instead.</summary>
+    public int RestartDelayMs { get; set; }
+
+    /// <summary>
+    /// Stop everything when fewer than <see cref="MinClusterProcesses"/> children are left running (default true): the rest are drained and the supervisor exits
+    /// 0 when every stop was deliberate and 1 when a child was given up on. Off, the supervisor keeps the remaining children running.
+    /// </summary>
+    public bool StopWhenBelowMinimum { get; set; } = true;
+
+    /// <summary>Where hang captures (stack reports and dumps) are written (default <c>logs/supervisor-captures</c>); relative to the working directory.</summary>
+    public string HangCaptureDirectory { get; set; } = "logs/supervisor-captures";
+
+    /// <summary>The longest a hang capture may take before the supervisor drains and kills the child anyway, in seconds (default 300; 1 to 3600).</summary>
+    public int HangCaptureTimeoutSeconds { get; set; } = 300;
+
+    /// <summary>The dotnet-stack executable for <c>HangCapture=Stacks</c> (default empty: none; required when any child uses Stacks).</summary>
+    public string StackCaptureTool { get; set; } = string.Empty;
+
+    /// <summary>
     /// Supervised process definitions, started in ascending <see cref="SupervisedProcessConfig.StartOrder"/> (ties by key), keyed by a configuration key that must not contain <c>:</c>
     /// (e.g. <c>worker-EK</c>); the display name may, via <see cref="SupervisedProcessConfig.Name"/> (<c>worker:EK</c>).
     /// </summary>
@@ -205,6 +284,11 @@ public sealed class ClusterSupervisorOptions
         {
             yield return $"{SectionName}:Processes drain timeouts add up to {TotalDrainBudget.TotalMinutes:0.#} min, but the host's shutdown timeout is capped at {MaxShutdown.TotalMinutes:0} min; the children last in the drain order can be killed before their DrainTimeoutMs elapses.";
         }
+
+        if (Enabled && Processes.Values.Any(p => p.HangCapture == SupervisedHangCaptureMode.Dump))
+        {
+            yield return $"{SectionName}:Processes:<key>:HangCapture is Dump: a dump of a hung child is written to {HangCaptureDirectory}, and it holds everything in that process's memory (session keys, password hashes in flight, chat). Keep the directory private and delete the dumps when the hang is understood.";
+        }
     }
 
     /// <summary>
@@ -225,8 +309,23 @@ public sealed class ClusterSupervisorOptions
             problems.Add($"{section}:MaxTotalAllocatedMemoryMb must be unset or greater than 0 (was {MaxTotalAllocatedMemoryMb}).");
         if (Enabled && Processes.Count < MinClusterProcesses)
             problems.Add($"{section}:Processes defines {Processes.Count} process(es) but {section}:MinClusterProcesses is {MinClusterProcesses}.");
+        if (CrashLoopMaxRestarts is < 1 or > 1000)
+            problems.Add($"{section}:CrashLoopMaxRestarts must be 1 to 1000 (was {CrashLoopMaxRestarts}).");
+        if (CrashLoopWindowSeconds is < 10 or > 86_400)
+            problems.Add($"{section}:CrashLoopWindowSeconds must be 10 to 86400 (was {CrashLoopWindowSeconds}).");
+        if (HealthyUptimeSeconds is < 1 or > 86_400)
+            problems.Add($"{section}:HealthyUptimeSeconds must be 1 to 86400 (was {HealthyUptimeSeconds}).");
+        if (RestartDelayMs is < 0 or > SupervisedProcessConfig.MaxDrainTimeoutMs)
+            problems.Add($"{section}:RestartDelayMs must be 0 to {SupervisedProcessConfig.MaxDrainTimeoutMs} (was {RestartDelayMs}).");
+        if (HangCaptureTimeoutSeconds is < 1 or > 3600)
+            problems.Add($"{section}:HangCaptureTimeoutSeconds must be 1 to 3600 (was {HangCaptureTimeoutSeconds}).");
+        if (Processes.Values.Any(p => p.HangCapture != SupervisedHangCaptureMode.None) && string.IsNullOrWhiteSpace(HangCaptureDirectory))
+            problems.Add($"{section}:HangCaptureDirectory must be set when a process has HangCapture Stacks or Dump.");
+        if (Processes.Values.Any(p => p.HangCapture == SupervisedHangCaptureMode.Stacks) && string.IsNullOrWhiteSpace(StackCaptureTool))
+            problems.Add($"{section}:StackCaptureTool must name the dotnet-stack executable when a process has HangCapture Stacks.");
 
         var mapOwners = new Dictionary<uint, string>();
+        var realmOwners = new Dictionary<int, string>();
         var nameOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach ((string key, SupervisedProcessConfig config) in Processes)
         {
@@ -251,12 +350,26 @@ public sealed class ClusterSupervisorOptions
                     DrainTimeoutMs = config.DrainTimeoutMs,
                     RequiredMemoryMb = config.RequiredMemoryMb,
                     StartOrder = config.StartOrder,
+                    HangTimeoutSeconds = config.HangTimeoutSeconds,
+                    HeartbeatGraceSeconds = config.HeartbeatGraceSeconds,
+                    HangDrainTimeoutMs = config.HangDrainTimeoutMs,
+                    StopGraceMs = config.StopGraceMs,
+                    HangCapture = config.HangCapture,
+                    RealmId = config.RealmId,
                 };
                 effective.Validate();
             }
             catch (InvalidOperationException ex)
             {
                 problems.Add($"{section}:Processes:{key}: {ex.Message}");
+            }
+
+            if (config.RealmId > 0)
+            {
+                if (realmOwners.TryGetValue(config.RealmId, out string? realmOwner))
+                    problems.Add($"{section}:Processes:{key}:RealmId {config.RealmId} is already used by '{realmOwner}'; realm ids must be unique.");
+                else
+                    realmOwners[config.RealmId] = key;
             }
 
             if (!string.IsNullOrWhiteSpace(config.Role) && !SupervisedRoles.IsKnown(config.Role))
