@@ -580,7 +580,7 @@ public sealed class PlayerbotThinkLanesTests
 
     /// <summary>Three scripted bots named <c>prefix</c> + a/b/c, a <paramref name="boundMs"/> starvation bound and <paramref name="budgetMs"/> as the fixed think budget.</summary>
     private static async Task<(WorldTestHost Host, ManagedPlayerbotFeature Feature, AnomalyCapture Capture, Dictionary<string, int> Thinks)> StartAsync(
-        double budgetMs, int boundMs, double burnMs, string prefix, Action<PlayerbotOptions>? configure = null)
+        double budgetMs, int boundMs, double burnMs, string prefix, Action<PlayerbotOptions>? configure = null, Func<string, IPlayerbotController>? controllerFor = null)
     {
         var accounts = new InMemoryAccountStore();
         var characters = new InMemoryCharacterStore();
@@ -601,7 +601,7 @@ public sealed class PlayerbotThinkLanesTests
             string name = $"{prefix}{(char)('a' + i)}";
             Guid id = Assert.IsType<Guid>((await feature.CreateAsync(name, 1, 1)).BotId);
             names[id] = name;
-            Assert.True((await feature.StartScriptedAsync(id.ToString(), new Burn(burnMs))).Success);
+            Assert.True((await feature.StartScriptedAsync(id.ToString(), controllerFor?.Invoke(name) ?? new Burn(burnMs))).Success);
         }
 
         return (host, feature, capture, thinks);
@@ -927,6 +927,89 @@ public sealed class PlayerbotThinkLanesTests
             Assert.True(thinksAfter >= thinksBefore + 9, $"the bots thought {thinksAfter - thinksBefore} times after the stall, not three more cycles");
             (int after, string described) = await host.World.InvokeAsync(() => (capture.Notices.Count, capture.Describe()));
             Assert.True(after == before, $"{after - before} bots were reported starved by a world stall: {described}");
+        }
+        finally
+        {
+            capture.Dispose();
+            await feature.ShutdownBeforeWorldStopAsync();
+            await host.DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// A scripted controller that sleeps <c>ms</c> on the first think after <c>Stall.Armed</c> is set (any of the bots sharing it) and logs, per think,
+    /// the bot and its smoothed think gap (<see cref="PlayerbotMotion.ThinkGapMs"/>, noted before the controller runs), so a test knows which bots
+    /// thought after the long one in the same tick and how long their gap read.
+    /// </summary>
+    private sealed class StallOnce(Stall shared, string name, int ms) : IPlayerbotController
+    {
+        public void Tick(PlayerbotControllerContext context, uint elapsedMs)
+        {
+            lock (shared.Log) shared.Log.Add((name, context.Player is { } player ? PlayerbotMotion.ThinkGapMs(player) : 0u));
+            if (Interlocked.CompareExchange(ref shared.Armed, 0, 1) != 1) return;
+            Interlocked.Increment(ref shared.Stalled);
+            lock (shared.Log) shared.Log.Add(("<stall>", 0));
+            Thread.Sleep(ms);
+            lock (shared.Log) shared.Log.Add(("<end>", 0));
+        }
+
+        public void Detached(Guid botId) { }
+    }
+
+    private sealed class Stall
+    {
+        public int Armed;
+        public int Stalled;
+        public readonly List<(string Name, uint Gap)> Log = [];
+    }
+
+    [Fact]
+    public async Task ALongThink_IsNotCountedAsSilenceOfTheBotsThoughtAfterItInTheSameTick()
+    {
+        // One bot thinks for 2.5 s (a stall: past the 1 s threshold, credited once, at the long think, to the feature's stalled total). A bot thought after
+        // it in that tick waited through it, and its gap starts at its own think (the live clock), so the stall is in that gap, where the credit takes it
+        // out. Counted from the tick start (a clock that does not move inside the tick) the bot's gap would start before the long think and the stall would
+        // reach it a tick later, after the credit was already used up: in the gap, the main pass that feeds the motion lease, the report pass and the
+        // silence the first lane yields to.
+        var shared = new Stall();
+        var (host, feature, capture, thinks) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 1500, burnMs: 0, "Aftbot",
+            controllerFor: name => new StallOnce(shared, name, 2500));
+        try
+        {
+            // A measured pass and every bot primed.
+            DateTime deadline = DateTime.UtcNow.AddSeconds(40);
+            while (DateTime.UtcNow < deadline && !await host.World.InvokeAsync(() => feature.MainPassMs > 0 && thinks.Count == 3 && thinks.Values.All(n => n >= 5)))
+                await Task.Delay(50);
+            Assert.True(await host.World.InvokeAsync(() => thinks.Count == 3 && thinks.Values.All(n => n >= 5)), "the bots did not warm up");
+
+            // Armed on the world thread, in the commands phase: the first bot of the next think pass is the long one, the other two follow in that tick.
+            await host.World.InvokeAsync(() => { Volatile.Write(ref shared.Armed, 1); return true; });
+            deadline = DateTime.UtcNow.AddSeconds(60);
+            while (DateTime.UtcNow < deadline && Volatile.Read(ref shared.Stalled) == 0) await Task.Delay(20);
+            Assert.Equal(1, Volatile.Read(ref shared.Stalled));
+            // Until the next tick has thought the bots again.
+            while (DateTime.UtcNow < deadline && await host.World.InvokeAsync(() =>
+            {
+                lock (shared.Log) { int end = shared.Log.FindIndex(e => e.Name == "<end>"); return end < 0 ? 0 : shared.Log.Count - end; }
+            }) < 12) await Task.Delay(50);
+
+            (string Name, uint Gap)[] log;
+            lock (shared.Log) log = [.. shared.Log];
+            int stall = Array.FindIndex(log, e => e.Name == "<stall>");
+            int end = Array.FindIndex(log, e => e.Name == "<end>");
+            Assert.True(stall > 0 && end > stall && log.Length >= end + 10, "the stall did not happen or the bots did not think after it");
+            string[] sameTick = [log[stall - 1].Name, log[end + 1].Name, log[end + 2].Name];
+            Assert.Equal(3, sameTick.Distinct().Count()); // the two other bots thought after the long one
+            foreach (string follower in sameTick.Skip(1))
+            {
+                // The bot waited through the long think, so its gap in that tick is long (a quarter of 2.5 s in the smoothing); the next tick adds a gap
+                // of about a tick, so the smoothed gap falls. Counted from the tick start, the long think reaches it a tick late instead.
+                uint first = log[Array.FindIndex(log, end + 1, e => e.Name == follower)].Gap;
+                uint next = log.Skip(end + 3).First(e => e.Name == follower).Gap;
+                Assert.True(first > 400, $"{follower} read no long gap in the tick of the long think: {first} ms");
+                Assert.True((long)next - first < 100, $"{follower}'s think gap went from {first} to {next} ms after the long think of a bot before it in the same tick: " + string.Join(' ', log.Skip(stall - 1).Take(14)));
+            }
+
         }
         finally
         {

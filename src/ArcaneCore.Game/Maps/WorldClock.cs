@@ -63,6 +63,12 @@ public sealed class WorldClock
     /// <summary><see cref="ElapsedMs"/> wrapped to 32 bits like vmangos WorldTimer::getMSTime (movement timestamps, create blocks).</summary>
     public uint NowMs => unchecked((uint)ElapsedMs);
 
+    /// <summary>
+    /// <see cref="NowMs"/> read live: on the real clock the stopwatch right now (it moves inside a tick, wrapping like <see cref="NowMs"/>), in the
+    /// deterministic modes the tick-start game time. For measuring wall time spent inside one tick (think gaps and stalls), never for game logic.
+    /// </summary>
+    public uint LiveNowMs => Mode == WorldClockMode.Realtime ? unchecked((uint)_stopwatch.ElapsedMilliseconds) : NowMs;
+
     /// <summary>Game time as UTC: the anchor plus <see cref="ElapsedMs"/>.</summary>
     public DateTimeOffset UtcNow => new(Volatile.Read(ref _utcOffsetTicks) + ElapsedMs * TicksPerMs, TimeSpan.Zero);
 
