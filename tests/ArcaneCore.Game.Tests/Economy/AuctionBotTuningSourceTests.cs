@@ -41,6 +41,19 @@ public sealed class AuctionBotTuningSourceTests
     }
 
     [Fact]
+    public void A_key_set_to_the_shipped_value_is_reported_as_identical()
+    {
+        var options = new AuctionBotOptions { ValueNormal = "100,100,0,100,0,100,100,100,0,100,0,100,100,100,0,100,100", LootSkinning = " 3, 5,50,50" };
+
+        Assert.Equal(
+            [
+                "AuctionHouseBot:ValueNormal is set to a value identical to the shipped auction_bot_value row; the key is deprecated, remove it.",
+                "AuctionHouseBot:LootSkinning is set to a value identical to the shipped auction_bot_loot row; the key is deprecated, remove it.",
+            ],
+            options.DeprecatedOverrides());
+    }
+
+    [Fact]
     public void A_key_that_is_set_overrides_its_row_and_is_reported()
     {
         TuningCatalog catalog = CatalogWith(c => c);

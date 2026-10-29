@@ -776,11 +776,11 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             return null;
         }
 
-        long tuning = TuningCatalog.Active.Generation;
-        if (tuning != _tuningGeneration)
+        TuningCatalog tuning = TuningCatalog.Active;
+        if (tuning.Generation != _tuningGeneration)
         {
             // .reload tuning swapped the auction_bot_value / auction_bot_loot rows: price and draw from the new ones.
-            _tuningGeneration = tuning;
+            _tuningGeneration = tuning.Generation;
             _planner = null;
             _loot = null;
         }
@@ -788,7 +788,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         if (!ReferenceEquals(store, _poolSource) || _planner is null)
         {
             HashSet<uint> vendorItems = services.GetService<QuestNpcFeature>()?.Services?.Npcs.Content.VendorItems.Select(v => v.Item).ToHashSet() ?? [];
-            var pricing = new AuctionBotPricing(Options, vendorItems);
+            var pricing = new AuctionBotPricing(Options, vendorItems, tuning);
             var pool = new AuctionBotItemPool(store.All, Options, pricing);
             _planner = new AuctionBotPlanner(Options, pricing, pool, _random) { Overrides = new Dictionary<uint, AuctionBotItemOverride>(_overrides) };
             _poolSource = store;
@@ -800,7 +800,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         if (services.GetService<GameObjectLootFeature>()?.LootContent is { } loot && (!ReferenceEquals(loot, _lootSource) || _loot is null))
         {
             CreatureWorldFeature? creatures = services.GetService<CreatureWorldFeature>();
-            _loot = new AuctionBotLootSources(loot, entry => creatures?.Content.FindTemplate(entry)?.Rank, Options, _random);
+            _loot = new AuctionBotLootSources(loot, entry => creatures?.Content.FindTemplate(entry)?.Rank, Options, _random, tuning);
             _lootSource = loot;
             logger.LogInformation("AHBot loot sources: {Sources}", string.Join(", ", _loot.Sources.Select(s => $"{s.Name}: {s.Tables.Count}")));
         }

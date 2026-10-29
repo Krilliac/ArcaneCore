@@ -230,30 +230,38 @@ public sealed class AuctionBotOptions
     public IReadOnlyList<string> DeprecatedOverrides()
     {
         var found = new List<string>();
-        void Check(string name, string? value, string table)
+        TuningCatalog shipped = TuningCatalog.Shipped;
+        void Check(string name, string? text, string table, bool identical)
         {
-            if (!string.IsNullOrWhiteSpace(value))
+            if (!string.IsNullOrWhiteSpace(text))
             {
-                found.Add($"{SectionName}:{name} is set and overrides the {table} rows; the key is deprecated, edit the rows (.reload tuning) and remove it.");
+                found.Add(identical
+                    ? $"{SectionName}:{name} is set to a value identical to the shipped {table} row; the key is deprecated, remove it."
+                    : $"{SectionName}:{name} is set and overrides the {table} rows; the key is deprecated, edit the rows (.reload tuning) and remove it.");
             }
         }
 
-        Check(nameof(ValuePoor), ValuePoor, "auction_bot_value");
-        Check(nameof(ValueNormal), ValueNormal, "auction_bot_value");
-        Check(nameof(ValueUncommon), ValueUncommon, "auction_bot_value");
-        Check(nameof(ValueRare), ValueRare, "auction_bot_value");
-        Check(nameof(ValueEpic), ValueEpic, "auction_bot_value");
-        Check(nameof(ValueLegendary), ValueLegendary, "auction_bot_value");
-        Check(nameof(ValueArtifact), ValueArtifact, "auction_bot_value");
-        Check(nameof(LootCreatureNormal), LootCreatureNormal, "auction_bot_loot");
-        Check(nameof(LootCreatureRare), LootCreatureRare, "auction_bot_loot");
-        Check(nameof(LootCreatureElite), LootCreatureElite, "auction_bot_loot");
-        Check(nameof(LootCreatureRareElite), LootCreatureRareElite, "auction_bot_loot");
-        Check(nameof(LootCreatureWorldBoss), LootCreatureWorldBoss, "auction_bot_loot");
-        Check(nameof(LootDisenchant), LootDisenchant, "auction_bot_loot");
-        Check(nameof(LootFishing), LootFishing, "auction_bot_loot");
-        Check(nameof(LootGameobject), LootGameobject, "auction_bot_loot");
-        Check(nameof(LootSkinning), LootSkinning, "auction_bot_loot");
+        void Value(string name, string? text, int quality)
+            => Check(name, text, "auction_bot_value", !string.IsNullOrWhiteSpace(text) && ParseValueList(text).SequenceEqual(shipped.ValueMatrix()[quality]));
+        void Loot(string name, string? text, string source)
+            => Check(name, text, "auction_bot_loot", !string.IsNullOrWhiteSpace(text) && ParseLootConfig(text).SequenceEqual(shipped.LootConfig(source)));
+
+        Value(nameof(ValuePoor), ValuePoor, 0);
+        Value(nameof(ValueNormal), ValueNormal, 1);
+        Value(nameof(ValueUncommon), ValueUncommon, 2);
+        Value(nameof(ValueRare), ValueRare, 3);
+        Value(nameof(ValueEpic), ValueEpic, 4);
+        Value(nameof(ValueLegendary), ValueLegendary, 5);
+        Value(nameof(ValueArtifact), ValueArtifact, 6);
+        Loot(nameof(LootCreatureNormal), LootCreatureNormal, "creature normal");
+        Loot(nameof(LootCreatureRare), LootCreatureRare, "creature rare");
+        Loot(nameof(LootCreatureElite), LootCreatureElite, "creature elite");
+        Loot(nameof(LootCreatureRareElite), LootCreatureRareElite, "creature rare elite");
+        Loot(nameof(LootCreatureWorldBoss), LootCreatureWorldBoss, "creature world boss");
+        Loot(nameof(LootDisenchant), LootDisenchant, "disenchant");
+        Loot(nameof(LootFishing), LootFishing, "fishing");
+        Loot(nameof(LootGameobject), LootGameobject, "gameobject");
+        Loot(nameof(LootSkinning), LootSkinning, "skinning");
         return found;
     }
 

@@ -26,7 +26,15 @@ public sealed class TuningContentReloadable(IServiceProvider services) : IConten
 
     private sealed class Candidate(TuningContent content, TuningCatalog catalog, bool keepEmpty) : ContentCandidate
     {
-        public override string Summary => catalog.Summary;
+        public override string Summary
+        {
+            get
+            {
+                IReadOnlyList<string> missing = TuningFeature.MissingTables(content);
+                return missing.Count == 0 ? catalog.Summary
+                    : $"{catalog.Summary}; empty tables, whose behaviour is off until the next restart reseeds them: {string.Join(", ", missing)}";
+            }
+        }
 
         public override IReadOnlyList<string> Validate()
         {

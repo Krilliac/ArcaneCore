@@ -8,11 +8,19 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Tuning;
 
+/// <summary>Tests that swap the process-wide <see cref="TuningCatalog"/> run alone, so no other class reads a swapped catalog.</summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class TuningCatalogCollection
+{
+    public const string Name = "TuningCatalog";
+}
+
 /// <summary>
 /// The tuning tables in the world daemon: <see cref="TuningFeature"/> seeds empty tables and loads the rows at start, and
 /// <c>.reload tuning</c> swaps a valid set in and rejects a set with any bad row (the active rows stay). Each test restores the
 /// catalog that was active, since it is process-wide.
 /// </summary>
+[Collection(TuningCatalogCollection.Name)]
 public sealed class TuningWorldTests
 {
     private sealed class MutableStore(TuningContent content) : ITuningContentStore
@@ -67,7 +75,7 @@ public sealed class TuningWorldTests
 
             Assert.Equal(1, store.SeedCalls);
             Assert.Equal(TuningDefaults.Content.RowCount, store.Content.RowCount);
-            Assert.Same(TuningCatalog.Active, feature.Catalog);
+            Assert.Equal(TuningDefaults.Content.RowCount, feature.Catalog.RowCount);
             Assert.Empty(feature.Catalog.Rejected);
             Assert.Equal(TuningCatalog.Shipped.ValueMatrix(), feature.Catalog.ValueMatrix());
         }
@@ -92,6 +100,13 @@ public sealed class TuningWorldTests
 
             Assert.Equal(ReloadStatus.Applied, result.Status);
             Assert.Equal(55u, TuningCatalog.Active.Value(0, 0));
+            Assert.DoesNotContain("empty tables", result.Message, StringComparison.Ordinal);
+
+            store.Content = TuningDefaults.Content with { Ships = [] };
+            ReloadResult emptied = await coordinator.ReloadAsync("tuning");
+            Assert.Equal(ReloadStatus.Applied, emptied.Status);
+            Assert.Contains("empty tables", emptied.Message, StringComparison.Ordinal);
+            Assert.Contains("playerbot_ship_route", emptied.Message, StringComparison.Ordinal);
         }
         finally
         {
