@@ -20,8 +20,14 @@ public sealed class PlayerbotEconomyPlannerTests
         uint buy = 0)
         => new() { Entry = entry, Name = $"item-{entry}", Class = (uint)itemClass, Quality = quality, SellPrice = sell, BuyPrice = buy, Bonding = bonding };
 
-    private static PlayerbotBagItem Bag(ItemTemplate template, uint guid = 1, uint count = 1, bool transferable = true, bool reserved = false)
-        => new(ObjectGuid.Item(guid), template, count, transferable, reserved);
+    private static PlayerbotBagItem Bag(ItemTemplate template, uint guid = 1, uint count = 1, bool transferable = true, bool reserved = false,
+        bool kept = false)
+        => new(ObjectGuid.Item(guid), template, count, transferable, reserved, kept);
+
+    private static ItemTemplate Consumable(uint entry = 6500, uint quality = 1, uint sell = 10)
+        => Template(entry, ItemClass.Consumable, quality, sell);
+
+    private static uint[] Guids(IEnumerable<PlayerbotBagItem> items) => items.Select(item => item.Guid.Low).Order().ToArray();
 
     private static PlayerbotAuctionRow Row(uint id, uint entry, uint buyout, ulong owner = Other, uint count = 1)
         => new(id, entry, 0, count, owner, 1, 1, buyout, 3_600_000, 0, 0);
@@ -1084,5 +1090,328 @@ public sealed class PlayerbotEconomyPlannerTests
         Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { BuyUpgradeBudgetFraction = float.NaN }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { VisitIntervalMinutes = 0 }.Validate());
         Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { VisitIntervalMinutes = PlayerbotEconomyOptions.MaxVisitIntervalMinutes + 1 }.Validate());
+    }
+
+    [Fact]
+    public void Options_MoneyGoalAndAuctionPaceDefaults_AreValid_AndEveryBoundIsEnforced()
+    {
+        var defaults = new PlayerbotEconomyOptions();
+        defaults.Validate();
+        Assert.True(defaults.MoneyGoal);
+        Assert.Equal(500, defaults.MoneyGoalCopperPerLevel);
+        Assert.Equal(6, defaults.MaxBuyoutsPerHour);
+        Assert.Equal(10, defaults.MaxListingsPerHour);
+        Assert.Equal(200, defaults.HouseBuyoutsPerHour);
+        Assert.Equal(400, defaults.HouseListingsPerHour);
+        Assert.True(defaults.ListSurplusConsumables);
+        Assert.Equal(20, defaults.ConsumableKeepCount);
+
+        // Both ends of every range are valid ...
+        new PlayerbotEconomyOptions
+        {
+            MoneyGoal = false, MoneyGoalCopperPerLevel = 0, MaxBuyoutsPerHour = 0, MaxListingsPerHour = 0, HouseBuyoutsPerHour = 0,
+            HouseListingsPerHour = 0, ListSurplusConsumables = false, ConsumableKeepCount = 1,
+        }.Validate();
+        new PlayerbotEconomyOptions
+        {
+            MoneyGoalCopperPerLevel = 100_000, MaxBuyoutsPerHour = 100, MaxListingsPerHour = 100, HouseBuyoutsPerHour = 100_000,
+            HouseListingsPerHour = 100_000, ConsumableKeepCount = 200,
+        }.Validate();
+
+        // ... and one step outside is refused.
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { MoneyGoalCopperPerLevel = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { MoneyGoalCopperPerLevel = 100_001 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { MaxBuyoutsPerHour = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { MaxBuyoutsPerHour = 101 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { MaxListingsPerHour = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { MaxListingsPerHour = 101 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { HouseBuyoutsPerHour = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { HouseBuyoutsPerHour = 100_001 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { HouseListingsPerHour = -1 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { HouseListingsPerHour = 100_001 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ConsumableKeepCount = 0 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new PlayerbotEconomyOptions { ConsumableKeepCount = 201 }.Validate());
+    }
+
+    // --- the money goal --------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void MoneyGoal_IsShortOfMoney_WhenTheBudgetReservesMoreThanTheBotHas()
+    {
+        Assert.True(PlayerbotEconomyPlanner.IsShortOfMoney(money: 100, reserved: 101, level: 1, copperPerLevel: 0));
+        Assert.False(PlayerbotEconomyPlanner.IsShortOfMoney(money: 100, reserved: 100, level: 1, copperPerLevel: 0), "reserved == money is not short");
+        Assert.False(PlayerbotEconomyPlanner.IsShortOfMoney(money: 100, reserved: 0, level: 1, copperPerLevel: 0));
+        Assert.True(PlayerbotEconomyPlanner.IsShortOfMoney(money: 0, reserved: 1, level: 60, copperPerLevel: 0));
+        Assert.False(PlayerbotEconomyPlanner.IsShortOfMoney(money: 0, reserved: 0, level: 60, copperPerLevel: 0), "nothing reserved, floor disabled");
+        // The reserve alone decides when the floor is met.
+        Assert.True(PlayerbotEconomyPlanner.IsShortOfMoney(money: 10_000, reserved: 10_001, level: 1, copperPerLevel: 500));
+    }
+
+    [Fact]
+    public void MoneyGoal_IsShortOfMoney_BelowTheFloorPerLevel_AndTheFloorBoundaryIsNotShort()
+    {
+        // Level 10 at 500 copper per level: the floor is 5000.
+        Assert.True(PlayerbotEconomyPlanner.IsShortOfMoney(money: 4_999, reserved: 0, level: 10, copperPerLevel: 500));
+        Assert.False(PlayerbotEconomyPlanner.IsShortOfMoney(money: 5_000, reserved: 0, level: 10, copperPerLevel: 500), "money == floor is not short");
+        Assert.False(PlayerbotEconomyPlanner.IsShortOfMoney(money: 5_001, reserved: 0, level: 10, copperPerLevel: 500));
+        // 0 copper per level disables the floor.
+        Assert.False(PlayerbotEconomyPlanner.IsShortOfMoney(money: 0, reserved: 0, level: 60, copperPerLevel: 0));
+        // The floor is computed wide: no uint overflow at the extremes.
+        Assert.False(PlayerbotEconomyPlanner.IsShortOfMoney(money: uint.MaxValue, reserved: 0, level: 60, copperPerLevel: 100_000));
+        Assert.True(PlayerbotEconomyPlanner.IsShortOfMoney(money: uint.MaxValue, reserved: 0, level: uint.MaxValue, copperPerLevel: 100_000));
+    }
+
+    [Fact]
+    public void ListingCap_MoneyGoalAddsThreeSlots_OnlyWhenTheOptionIsOn_NeverAboveTheCeiling_AndNeverFromZero()
+    {
+        Assert.Equal(3, PlayerbotEconomyPlanner.MoneyGoalExtraListings);
+        var options = new PlayerbotEconomyOptions { MaxListingsPerBot = 5, MoneyGoal = true };
+        Assert.Equal(5, PlayerbotEconomyPlanner.ListingCap(options, moneyGoal: false));
+        Assert.Equal(8, PlayerbotEconomyPlanner.ListingCap(options, moneyGoal: true));
+        options.MoneyGoal = false;
+        Assert.Equal(5, PlayerbotEconomyPlanner.ListingCap(options, moneyGoal: true));
+        Assert.Equal(5, PlayerbotEconomyPlanner.ListingCap(options, moneyGoal: false));
+
+        options.MoneyGoal = true;
+        options.MaxListingsPerBot = 0;
+        Assert.Equal(0, PlayerbotEconomyPlanner.ListingCap(options, moneyGoal: true));
+        options.MaxListingsPerBot = PlayerbotEconomyOptions.MaxListingsCeiling - 1;
+        Assert.Equal(PlayerbotEconomyOptions.MaxListingsCeiling, PlayerbotEconomyPlanner.ListingCap(options, moneyGoal: true));
+        options.MaxListingsPerBot = PlayerbotEconomyOptions.MaxListingsCeiling;
+        Assert.Equal(PlayerbotEconomyOptions.MaxListingsCeiling, PlayerbotEconomyPlanner.ListingCap(options, moneyGoal: true));
+        Assert.Equal(50, PlayerbotEconomyOptions.MaxListingsCeiling);
+    }
+
+    [Fact]
+    public void ListingCap_FreeListingSlots_UseTheMoneyGoalCap()
+    {
+        var options = new PlayerbotEconomyOptions { MaxListingsPerBot = 5 };
+        Assert.Equal(2, PlayerbotEconomyPlanner.FreeListingSlots(options, 3));
+        Assert.Equal(2, PlayerbotEconomyPlanner.FreeListingSlots(options, 3, moneyGoal: false));
+        Assert.Equal(5, PlayerbotEconomyPlanner.FreeListingSlots(options, 3, moneyGoal: true));
+        Assert.Equal(1, PlayerbotEconomyPlanner.FreeListingSlots(options, 7, moneyGoal: true));
+        Assert.Equal(0, PlayerbotEconomyPlanner.FreeListingSlots(options, 8, moneyGoal: true));
+        Assert.Equal(0, PlayerbotEconomyPlanner.FreeListingSlots(options, uint.MaxValue, moneyGoal: true));
+        options.MoneyGoal = false;
+        Assert.Equal(0, PlayerbotEconomyPlanner.FreeListingSlots(options, 5, moneyGoal: true));
+        options.MoneyGoal = true;
+        options.MaxListingsPerBot = 0;
+        Assert.Equal(0, PlayerbotEconomyPlanner.FreeListingSlots(options, 0, moneyGoal: true));
+    }
+
+    [Fact]
+    public void MoneyGoal_RollsToList_ListsWithoutDrawing_ButOnlyWhenListingIsAllowedAtAll()
+    {
+        var options = new PlayerbotEconomyOptions { ListChancePerVisit = 1, MaxListingsPerBot = 5, MoneyGoal = true };
+
+        // A roll of 99 fails a 1% chance, but the money goal lists anyway ...
+        Assert.False(PlayerbotEconomyPlanner.RollsToList(options, new FixedRandom(99)));
+        Assert.False(PlayerbotEconomyPlanner.RollsToList(options, new FixedRandom(99), moneyGoal: false));
+        Assert.True(PlayerbotEconomyPlanner.RollsToList(options, new FixedRandom(99), moneyGoal: true));
+
+        // ... without consuming a draw: the next value is the first value of a fresh source with the same seed.
+        var used = new Random(1234);
+        Assert.True(PlayerbotEconomyPlanner.RollsToList(options, used, moneyGoal: true));
+        Assert.Equal(new Random(1234).Next(), used.Next());
+
+        // Without the money goal the roll still draws exactly once (the draw order of the seeded tests).
+        var drawn = new Random(1234);
+        PlayerbotEconomyPlanner.RollsToList(options, drawn, moneyGoal: false);
+        var oneDraw = new Random(1234);
+        oneDraw.Next(100);
+        Assert.Equal(oneDraw.Next(), drawn.Next());
+
+        // The option off, a zero chance and zero slots keep the old answers.
+        options.MoneyGoal = false;
+        Assert.False(PlayerbotEconomyPlanner.RollsToList(options, new FixedRandom(99), moneyGoal: true));
+        options.MoneyGoal = true;
+        options.ListChancePerVisit = 0;
+        Assert.False(PlayerbotEconomyPlanner.RollsToList(options, new FixedRandom(0), moneyGoal: true));
+        options.ListChancePerVisit = 1;
+        options.MaxListingsPerBot = 0;
+        Assert.False(PlayerbotEconomyPlanner.RollsToList(options, new FixedRandom(0), moneyGoal: true));
+        options.MaxListingsPerBot = 5;
+        options.ListChancePerVisit = 100;
+        Assert.True(PlayerbotEconomyPlanner.RollsToList(options, new FixedRandom(99), moneyGoal: true));
+    }
+
+    // --- surplus consumables ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void SurplusConsumable_IsAConsumableStackWhoseOtherStacksHoldAtLeastTheKeepCount()
+    {
+        PlayerbotBagItem stack = Bag(Consumable(), count: 5);
+        Assert.True(PlayerbotEconomyPlanner.IsSurplusConsumable(stack, othersOfEntry: 20, keep: 20), "others == keep");
+        Assert.True(PlayerbotEconomyPlanner.IsSurplusConsumable(stack, othersOfEntry: 21, keep: 20));
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(stack, othersOfEntry: 19, keep: 20), "one short of the keep count");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(stack, othersOfEntry: 0, keep: 20));
+        // A consumable the bot uses is surplus beyond the keep count too.
+        Assert.True(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Consumable(), count: 5, kept: true), othersOfEntry: 20, keep: 20));
+    }
+
+    [Fact]
+    public void SurplusConsumable_NeverReservedUnlistableOrNonConsumableStacks()
+    {
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Consumable(), reserved: true), 100, 20), "reserved");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Consumable(), transferable: false), 100, 20), "not transferable");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Consumable(), count: 0), 100, 20), "empty stack");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Consumable(quality: 0)), 100, 20), "poor quality");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Consumable(sell: 0)), 100, 20), "no vendor price");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Consumable() with { StartQuest = 77 }), 100, 20), "quest starter");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Template(itemClass: ItemClass.TradeGoods, quality: 1)), 100, 20), "trade good");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Template(itemClass: ItemClass.Reagent, quality: 1)), 100, 20), "reagent");
+        Assert.False(PlayerbotEconomyPlanner.IsSurplusConsumable(Bag(Template()), 100, 20), "armor");
+    }
+
+    [Fact]
+    public void SurplusConsumable_Listables_KeepAtLeastTheKeepCountAcrossStacks_ListingTheSmallestStacksFirst()
+    {
+        ItemTemplate food = Consumable(entry: 6600);
+        PlayerbotBagItem five = Bag(food, guid: 1, count: 5);
+        PlayerbotBagItem ten = Bag(food, guid: 2, count: 10);
+        PlayerbotBagItem twenty = Bag(food, guid: 3, count: 20);
+
+        // 35 held, keep 20: the 5 and the 10 are surplus (15 over), the 20 stays; 20 are kept.
+        IReadOnlyList<PlayerbotBagItem> listed = PlayerbotEconomyPlanner.Listables([twenty, ten, five], _ => null, null, consumableKeep: 20);
+        Assert.Equal(new[] { five.Guid.Low, ten.Guid.Low }, Guids(listed));
+        Assert.True(35 - listed.Sum(item => (long)item.Count) >= 20);
+
+        // Exactly the keep count over: 20 + 20 with keep 20 lists one stack, never both.
+        IReadOnlyList<PlayerbotBagItem> two = PlayerbotEconomyPlanner.Listables([Bag(food, 1, 20), Bag(food, 2, 20)], _ => null, null, consumableKeep: 20);
+        Assert.Single(two);
+
+        // 20 + 19 with keep 20: listing the 19 leaves exactly 20, listing the 20 would leave 19; only the smaller is surplus.
+        IReadOnlyList<PlayerbotBagItem> nineteen = PlayerbotEconomyPlanner.Listables([Bag(food, 1, 20), Bag(food, 2, 19)], _ => null, null, consumableKeep: 20);
+        Assert.Equal(new[] { 2u }, Guids(nineteen));
+
+        // A single stack is never split, whatever its size.
+        Assert.Empty(PlayerbotEconomyPlanner.Listables([Bag(food, 1, 200)], _ => null, null, consumableKeep: 20));
+        // Another entry's stacks do not count toward this entry.
+        Assert.Empty(PlayerbotEconomyPlanner.Listables([Bag(food, 1, 5), Bag(Consumable(entry: 6601), 2, 50)], _ => null, null, consumableKeep: 20));
+    }
+
+    [Fact]
+    public void SurplusConsumable_Listables_KeptConsumablesBecomeListableOnlyAsSurplus_AndReservedNever()
+    {
+        ItemTemplate potion = Consumable(entry: 6700);
+        PlayerbotBagItem usedA = Bag(potion, guid: 1, count: 15, kept: true);
+        PlayerbotBagItem usedB = Bag(potion, guid: 2, count: 15, kept: true);
+
+        // Without the rule (keep 0) the consumables stay out of the listing, as before this change.
+        Assert.Empty(PlayerbotEconomyPlanner.Listables([usedA, usedB], _ => null));
+        Assert.Empty(PlayerbotEconomyPlanner.Listables([usedA, usedB], _ => null, null, consumableKeep: 0));
+        // With keep 20 and 30 held, one 15-stack is over: 15 left is not enough to list the other.
+        Assert.Empty(PlayerbotEconomyPlanner.Listables([usedA, usedB], _ => null, null, consumableKeep: 20));
+        Assert.Single(PlayerbotEconomyPlanner.Listables([usedA, usedB], _ => null, null, consumableKeep: 15));
+
+        // A reserved stack (a quest requirement) is never listed, however much the bot holds.
+        PlayerbotBagItem reserved = Bag(potion, guid: 3, count: 50, reserved: true);
+        PlayerbotBagItem plainA = Bag(potion, guid: 4, count: 30);
+        PlayerbotBagItem plainB = Bag(potion, guid: 5, count: 40);
+        IReadOnlyList<PlayerbotBagItem> listed = PlayerbotEconomyPlanner.Listables([reserved, plainA, plainB], _ => null, null, consumableKeep: 20);
+        Assert.DoesNotContain(reserved.Guid.Low, Guids(listed));
+        Assert.NotEmpty(listed);
+    }
+
+    [Fact]
+    public void SurplusConsumable_Listables_LeaveNonConsumablesAsTheyWere_AndNeverListUnpricedOrPoorConsumables()
+    {
+        ItemTemplate goods = Template(entry: 6800, itemClass: ItemClass.TradeGoods, quality: 1, sell: 100);
+        PlayerbotBagItem[] bag =
+        [
+            Bag(goods, 1, 3), Bag(Template(entry: 6801), 2), Bag(Template(entry: 6802, quality: 1), 3),
+            Bag(Consumable(entry: 6803, sell: 0), 4, 50), Bag(Consumable(entry: 6803, sell: 0), 5, 50),
+            Bag(Consumable(entry: 6804, quality: 0), 6, 50), Bag(Consumable(entry: 6804, quality: 0), 7, 50),
+        ];
+        uint[] without = Guids(PlayerbotEconomyPlanner.Listables(bag, _ => null));
+        uint[] with = Guids(PlayerbotEconomyPlanner.Listables(bag, _ => null, null, consumableKeep: 20));
+        // Guid 3 is a quality-1 (white) armor piece: IsListable never lists it, with or without the surplus rule.
+        Assert.Equal(new uint[] { 1, 2 }, without);
+        Assert.Equal(without, with);
+    }
+
+    [Fact]
+    public void IsCarried_CountsTheBackpackAndEquippedBags_NotGearTheBankOrBankBagContents()
+    {
+        Assert.True(PlayerbotEconomyPlanner.IsCarried(InventorySlots.Bag0, InventorySlots.ItemStart));
+        Assert.True(PlayerbotEconomyPlanner.IsCarried(InventorySlots.Bag0, (byte)(InventorySlots.ItemEnd - 1)));
+        Assert.False(PlayerbotEconomyPlanner.IsCarried(InventorySlots.Bag0, InventorySlots.ItemEnd), "the bank's loose slots");
+        Assert.False(PlayerbotEconomyPlanner.IsCarried(InventorySlots.Bag0, InventorySlots.Head), "worn gear");
+        Assert.False(PlayerbotEconomyPlanner.IsCarried(InventorySlots.Bag0, InventorySlots.BagStart), "the bag itself");
+        for (byte bag = InventorySlots.BagStart; bag < InventorySlots.BagEnd; bag++)
+            Assert.True(PlayerbotEconomyPlanner.IsCarried(bag, 0), $"contents of equipped bag {bag}");
+        for (byte bag = InventorySlots.BankBagStart; bag < InventorySlots.BankBagStart + 6; bag++)
+            Assert.False(PlayerbotEconomyPlanner.IsCarried(bag, 0), $"contents of bank bag {bag}");
+    }
+
+    // --- the hourly window -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void HourlyWindow_HasRoomUntilTheLimit_ThenNone()
+    {
+        var window = new PlayerbotHourlyWindow();
+        Assert.True(window.HasRoom(1_000, 3));
+        window.Note(1_000, 3);
+        window.Note(2_000, 3);
+        Assert.True(window.HasRoom(3_000, 3));
+        Assert.Equal(2, window.CountAt(3_000));
+        window.Note(3_000, 3);
+        Assert.False(window.HasRoom(3_000, 3));
+        Assert.Equal(3, window.CountAt(3_000));
+        Assert.True(window.HasRoom(3_000, 4), "a higher limit read live has room");
+    }
+
+    [Fact]
+    public void HourlyWindow_FreesAStampExactlyAtWindowMs()
+    {
+        Assert.Equal(3_600_000u, PlayerbotHourlyWindow.WindowMs);
+        var window = new PlayerbotHourlyWindow();
+        window.Note(5_000, 1);
+        Assert.False(window.HasRoom(5_000 + PlayerbotHourlyWindow.WindowMs - 1, 1), "one ms before the window ends");
+        Assert.Equal(1, window.CountAt(5_000 + PlayerbotHourlyWindow.WindowMs - 1));
+        Assert.True(window.HasRoom(5_000 + PlayerbotHourlyWindow.WindowMs, 1), "the stamp is free exactly WindowMs later");
+        Assert.Equal(0, window.CountAt(5_000 + PlayerbotHourlyWindow.WindowMs));
+    }
+
+    [Fact]
+    public void HourlyWindow_WorksAcrossTheUintWrap()
+    {
+        uint stamp = uint.MaxValue - 100;
+        var window = new PlayerbotHourlyWindow();
+        window.Note(stamp, 1);
+        uint justBefore = unchecked(stamp + PlayerbotHourlyWindow.WindowMs - 1);
+        uint freed = unchecked(stamp + PlayerbotHourlyWindow.WindowMs);
+        Assert.True(freed < stamp, "the clock wrapped");
+        Assert.False(window.HasRoom(justBefore, 1));
+        Assert.True(window.HasRoom(freed, 1));
+        Assert.Equal(0, window.CountAt(freed));
+
+        // A stamp taken after the wrap counts against the same limit.
+        window.Note(freed, 1);
+        Assert.False(window.HasRoom(unchecked(freed + 1), 1));
+    }
+
+    [Fact]
+    public void HourlyWindow_ALimitOfZeroOrLessNeverHasRoom()
+    {
+        var window = new PlayerbotHourlyWindow();
+        Assert.False(window.HasRoom(0, 0));
+        Assert.False(window.HasRoom(uint.MaxValue, 0));
+        Assert.False(window.HasRoom(0, -5));
+        window.Note(10, 0);
+        Assert.False(window.HasRoom(11, 0));
+        Assert.True(window.CountAt(11) <= 1, "a limit of 0 keeps at most one stamp");
+    }
+
+    [Fact]
+    public void HourlyWindow_StaysBounded_DroppingTheOldestStamp()
+    {
+        var window = new PlayerbotHourlyWindow();
+        for (uint t = 1; t <= 1_000; t++) window.Note(t, 3);
+        Assert.Equal(3, window.CountAt(1_000));
+        // The three newest stamps are 998, 999 and 1000: at 998 + WindowMs the oldest has gone, the other two have not.
+        Assert.Equal(2, window.CountAt(998 + PlayerbotHourlyWindow.WindowMs));
+        Assert.Equal(1, window.CountAt(999 + PlayerbotHourlyWindow.WindowMs));
+        Assert.Equal(0, window.CountAt(1_000 + PlayerbotHourlyWindow.WindowMs));
     }
 }

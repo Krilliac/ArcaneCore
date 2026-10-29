@@ -67,6 +67,9 @@ public sealed record PlayerbotInspection(string Name, PlayerbotGoalKind Goal, ui
     /// <summary>The money the bot saves for and what it may spend (<see cref="PlayerbotBudget.Report"/>: reserved lines with their costs, the riding plan, the next step).</summary>
     public string? Budget { get; init; }
 
+    /// <summary>The auction house visits: phase, time to the next visit, counters, the money goal and the hourly counts (<see cref="PlayerbotEconomy.Report"/>).</summary>
+    public string? Economy { get; init; }
+
     /// <summary>Compact summary of recent <c>bot-*</c> anomalies recorded for this bot (<see cref="PlayerbotAnomalyHistory"/>), or null when none.</summary>
     public string? Anomalies { get; init; }
 
@@ -134,6 +137,7 @@ internal static class PlayerbotInspector
             Home = brain.HomeDescription,
             Defend = brain.DefendReport,
             Budget = brain.BudgetReport(player),
+            Economy = brain.EconomyReport,
             Anomalies = recentAnomalies.Count == 0 ? null : PlayerbotAnomalyHistory.FormatInspectSummary(recentAnomalies, DateTimeOffset.UtcNow),
             RecentAnomalies = recentAnomalies,
         };
