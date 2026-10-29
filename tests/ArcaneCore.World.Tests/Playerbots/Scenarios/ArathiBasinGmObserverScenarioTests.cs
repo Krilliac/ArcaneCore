@@ -15,7 +15,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 
 /// <summary>
-/// A game master who enters a running Arathi Basin match with <c>.gm on</c> and <c>.goname &lt;participant&gt;</c> is bound to the match
+/// A game master who enters a running Arathi Basin match with GM mode on and <c>.goname &lt;participant&gt;</c> is bound to the match
 /// (BattlegroundFeature.BeginGmMove/CommitMove) but is never one of its participants. The match's broadcasts (Announce, PlaySoundToAll,
 /// UpdateWorldState) still have to reach that observer, and the observer still has to receive the match's initial world states on arrival
 /// (the resource maximum 1780 = 2000, ArathiBasin.WorldStateResourcesMax / MaxTeamScore), while it stays out of everything that counts or

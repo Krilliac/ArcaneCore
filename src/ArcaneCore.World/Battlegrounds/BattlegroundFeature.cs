@@ -777,8 +777,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     /// HandleMoveWorldportAckOpcode → <c>if (IsInvitedForBattleGroundInstance)</c> → <c>BattleGround::AddPlayer</c>); one bound by a GM command
     /// stays bound and outside the match as an observer (ArcaneCore rule: vmangos <c>BattleGround::SendPacketToAll</c>, BattleGround.cpp:475,
     /// serves only its player list, so a GM inside is served here): it is sent the match's initial world states on arrival and receives the
-    /// match's all-match broadcasts (<see cref="MatchRuntime"/> SendToAll), but is never counted, scored or rewarded. A bound non-participant
-    /// arriving on the match's map without a GM move record (a relog into it) takes the same tail and is treated the same way.
+    /// match's all-match broadcasts (<see cref="MatchRuntime"/> SendToAll), but is never counted, scored or rewarded. The same tail serves an
+    /// invitee whose entry was refused (it stays bound, outside the match). A relog does not reach it: logout clears the binding.
     /// </summary>
     internal void OnPlayerEnteredMap(Player player, Map map)
     {
