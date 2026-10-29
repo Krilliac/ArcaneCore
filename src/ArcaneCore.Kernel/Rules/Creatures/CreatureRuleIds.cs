@@ -147,10 +147,13 @@ public static class CreatureRuleIds
     /// <summary>The largest <c>creature_ai_scripts.id</c> the id scheme can carry.</summary>
     public const uint MaxConvertedSourceId = (1u << 30) - 1;
 
-    /// <summary>A positive EventAI text id (a <c>broadcast_text</c> id) is <c>rule_text.id</c> as it is, below this bound.</summary>
+    /// <summary>Converted texts live in the same band as converted rules: <c>rule_text.id = ConvertedTextIdBase + offset</c>, so everything at or above it is the converter's and nothing authored (below it) is ever touched.</summary>
+    public const int ConvertedTextIdBase = 1 << 30;
+
+    /// <summary>A positive EventAI text id (a <c>broadcast_text</c> id) has offset equal to the id, below this bound.</summary>
     public const int BroadcastTextIdLimit = 500_000;
 
-    /// <summary>A negative EventAI text id (<c>creature_ai_texts</c>, -N) becomes <c>rule_text.id = AiTextIdBase + N</c>, for N below <see cref="BroadcastTextIdLimit"/>.</summary>
+    /// <summary>A negative EventAI text id (<c>creature_ai_texts</c>, -N) has offset <c>AiTextIdBase + N</c>, for N below <see cref="BroadcastTextIdLimit"/>.</summary>
     public const int AiTextIdBase = 500_000;
 
     // --- the row marker --------------------------------------------------------------------------------------------------------

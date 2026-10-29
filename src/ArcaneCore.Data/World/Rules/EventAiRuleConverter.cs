@@ -205,17 +205,17 @@ public static class EventAiRuleConverter
     /// <summary>The <c>rule.id</c> a source row converts to.</summary>
     public static int RuleIdOf(uint sourceId) => checked(CreatureRuleIds.ConvertedRuleIdBase + (int)sourceId);
 
-    /// <summary>The <c>rule_text.id</c> an EventAI text reference converts to: a positive id is the broadcast text itself, a negative id <c>-N</c> is <c>AiTextIdBase + N</c>. Null when the id cannot be represented.</summary>
+    /// <summary>The <c>rule_text.id</c> an EventAI text reference converts to: the converted band plus the broadcast text id for a positive id, plus <c>AiTextIdBase + N</c> for a negative id <c>-N</c>. Null when the id cannot be represented.</summary>
     public static int? TextIdOf(int eventAiTextId)
     {
         if (eventAiTextId > 0 && eventAiTextId < CreatureRuleIds.BroadcastTextIdLimit)
         {
-            return eventAiTextId;
+            return CreatureRuleIds.ConvertedTextIdBase + eventAiTextId;
         }
 
         if (eventAiTextId < 0 && eventAiTextId > -CreatureRuleIds.AiTextIdBase)
         {
-            return CreatureRuleIds.AiTextIdBase - eventAiTextId;
+            return CreatureRuleIds.ConvertedTextIdBase + CreatureRuleIds.AiTextIdBase - eventAiTextId;
         }
 
         return null;
@@ -223,7 +223,7 @@ public static class EventAiRuleConverter
 
     /// <summary>The rule phase mask of an EventAI inverse phase mask, or null when the mask hides the row in every phase (the row is disabled).</summary>
     public static int? PhaseMaskOf(uint inversePhaseMask)
-        => inversePhaseMask == uint.MaxValue ? null : unchecked((int)(~inversePhaseMask));
+        => inversePhaseMask == uint.MaxValue ? null : inversePhaseMask == 0 ? 0 : unchecked((int)~inversePhaseMask);
 
     /// <summary>Converts every row of <paramref name="content"/>; texts and summon positions are looked up in it.</summary>
     public static EventAiConversion Convert(CreatureAiContent content)
@@ -397,6 +397,7 @@ public static class EventAiRuleConverter
             OwnerId = ruleId,
             Seq = 0,
             ActionType = CreatureRuleIds.ActionRow,
+            TargetType = CreatureRuleIds.TargetSelf,
             Param1 = (int)rowFlags,
             Param2 = converted.Count,
         });
@@ -480,7 +481,7 @@ public static class EventAiRuleConverter
 
         int[] source = [action.Param1, action.Param2, action.Param3];
         int[] parameters = new int[6];
-        short targetType = 0;
+        short targetType = CreatureRuleIds.TargetSelf; // every rule action names a target; the creature target also applies the row gate (random action, combat action)
         int targetParam1 = 0;
 
         switch (action.Type)

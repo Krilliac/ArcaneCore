@@ -25,6 +25,7 @@ internal sealed class CliArguments
         ["class-masks"] = ["--class-mask-file", "--dry-run"],
         ["proc-events"] = ["--database", "--provider", "--connection-string", "--cooldown-unit", "--dry-run", "--migrate"],
         ["spell-threat"] = ["--database", "--provider", "--connection-string", "--dry-run", "--migrate"],
+        ["convert-rules"] = ["--database", "--provider", "--connection-string", "--report", "--dry-run", "--migrate"],
         ["refresh"] = ["--database", "--provider", "--connection-string", "--dbc-dir", "--cooldown-unit", "--report", "--dry-run", "--migrate"],
         ["refresh-portals"] = ["--dialect", "--database", "--provider", "--connection-string", "--dry-run"],
     };

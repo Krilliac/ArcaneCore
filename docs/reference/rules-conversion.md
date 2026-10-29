@@ -12,12 +12,14 @@ The old executor stays in place: this change adds the host, the converter and th
 ## Running the converter
 
 ```
-ArcaneCore.ContentImporter convert-rules --db <connection>
+arcane-content-importer convert-rules --database <file> [--dry-run] [--report <file>]
 ```
 
 It reads the imported `creature_ai_scripts`, `creature_ai_texts`, `broadcast_text` and `creature_ai_summons` rows, deletes the rows of its own
 id bands in `rule`, `rule_action` and `rule_text` and writes the converted ones, so running it twice gives the same database. Every row it does
-not convert is printed with its `creature_ai_scripts.id` and the reason. The command exits non-zero when it wrote nothing or could not read the source.
+not convert is printed with its `creature_ai_scripts.id` and the reason (`--report` writes the whole list to a file outside the repository). A database
+without `creature_ai_scripts` rows is refused with exit code 3 and nothing is written; `--provider` and `--connection-string` select a MariaDB or
+PostgreSQL world instead of a SQLite file.
 
 ## Id scheme
 
@@ -27,12 +29,13 @@ All ids are a pure function of the source id, so a re-run writes the same ids an
 |---|---|---|
 | `rule.id` | `1073741824 + creature_ai_scripts.id` (`2^30` plus the source id) | `2^30` up to `2^31 - 1` |
 | `rule_action.rule_id` | the rule's id | same |
-| `rule_text.id` for a positive text id (a `broadcast_text` row) | the broadcast text id itself | 1 to 499999 |
-| `rule_text.id` for a negative text id `-N` (a `creature_ai_texts` row) | `500000 + N` | 500001 to 999999 |
+| `rule_text.id` for a positive text id (a `broadcast_text` row) | `2^30 +` the broadcast text id | `2^30 + 1` to `2^30 + 499999` |
+| `rule_text.id` for a negative text id `-N` (a `creature_ai_texts` row) | `2^30 + 500000 + N` | `2^30 + 500001` to `2^30 + 999999` |
 
-The id band of `rule` sits above the hand-written range (the design reserves the low ids for authored rules). Source ids reach into the millions,
-so a band below 1,000,000 does not fit; the converter reports a row whose source id is above `2^30 - 1`. A broadcast text id of 500000 or more,
-or a negative text id of `-500000` or less, cannot be represented and the row is reported.
+Everything at or above `2^30` in these tables is the converter's: the importer replaces exactly that band and never touches a row below it, where
+authored and shipped rules live (the design keeps ids below 1,000,000 for shipped content and 1,000,000 up to `2^30 - 1` for server-authored content).
+Source ids reach into the millions, so a band below 1,000,000 does not fit; the converter reports a row whose source id is above `2^30 - 1`. A
+broadcast text id of 500000 or more, or a negative text id of `-500000` or less, cannot be represented and the row is reported.
 
 ## Row layout
 
@@ -141,6 +144,8 @@ Event types 19, 20, 35 and 37 onward are not supported by the executor and are n
 Action parameters (`P1..P3`, as in `creature_ai_scripts.actionN_param1..3`) become `param1..` of the rule action. Where EventAI has a target
 parameter, it becomes the `target_type` (see Targets) and no longer takes a parameter slot. An action whose old handler ignored a target that did
 not resolve gets `target_param1 = 1` ("optional"): the action still runs.
+An action with no target in the table below ("none") is written with `creature.self`: every rule action names a target, and a creature target is also
+where the row's random-action and combat-action choice is applied to the action.
 
 | EventAI type | Creature action | Parameters | Target |
 |---|---|---|---|
