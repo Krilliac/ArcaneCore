@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Loot;
+using ArcaneCore.Kernel.Tuning;
 using ArcaneCore.Kernel.WorldData.Loot;
 
 namespace ArcaneCore.Game.Economy.AuctionBot;
@@ -19,7 +20,7 @@ public sealed class AuctionBotLootSources
     private readonly Random _random;
 
     /// <param name="rankOf">The creature_template rank of a creature entry (0 normal, 1 elite, 2 rare elite, 3 world boss, 4 rare), or null.</param>
-    public AuctionBotLootSources(LootContent content, Func<uint, uint?> rankOf, AuctionBotOptions options, Random random)
+    public AuctionBotLootSources(LootContent content, Func<uint, uint?> rankOf, AuctionBotOptions options, Random random, TuningCatalog? tuning = null)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(rankOf);
@@ -39,15 +40,15 @@ public sealed class AuctionBotLootSources
         uint[] Rank(uint rank) => byRank.TryGetValue(rank, out SortedSet<uint>? set) ? [.. set] : [];
         _sources =
         [
-            new("creature normal", LootTableKind.Creature, Rank(0), AuctionBotOptions.ParseLootConfig(options.LootCreatureNormal)),
-            new("creature elite", LootTableKind.Creature, Rank(1), AuctionBotOptions.ParseLootConfig(options.LootCreatureElite)),
-            new("creature rare elite", LootTableKind.Creature, Rank(2), AuctionBotOptions.ParseLootConfig(options.LootCreatureRareElite)),
-            new("creature world boss", LootTableKind.Creature, Rank(3), AuctionBotOptions.ParseLootConfig(options.LootCreatureWorldBoss)),
-            new("creature rare", LootTableKind.Creature, Rank(4), AuctionBotOptions.ParseLootConfig(options.LootCreatureRare)),
-            new("disenchant", LootTableKind.Disenchant, Tables(LootTableKind.Disenchant), AuctionBotOptions.ParseLootConfig(options.LootDisenchant)),
-            new("fishing", LootTableKind.Fishing, Tables(LootTableKind.Fishing), AuctionBotOptions.ParseLootConfig(options.LootFishing)),
-            new("gameobject", LootTableKind.GameObject, Tables(LootTableKind.GameObject), AuctionBotOptions.ParseLootConfig(options.LootGameobject)),
-            new("skinning", LootTableKind.Skinning, Tables(LootTableKind.Skinning), AuctionBotOptions.ParseLootConfig(options.LootSkinning)),
+            new("creature normal", LootTableKind.Creature, Rank(0), options.ParseLoot("creature normal", tuning)),
+            new("creature elite", LootTableKind.Creature, Rank(1), options.ParseLoot("creature elite", tuning)),
+            new("creature rare elite", LootTableKind.Creature, Rank(2), options.ParseLoot("creature rare elite", tuning)),
+            new("creature world boss", LootTableKind.Creature, Rank(3), options.ParseLoot("creature world boss", tuning)),
+            new("creature rare", LootTableKind.Creature, Rank(4), options.ParseLoot("creature rare", tuning)),
+            new("disenchant", LootTableKind.Disenchant, Tables(LootTableKind.Disenchant), options.ParseLoot("disenchant", tuning)),
+            new("fishing", LootTableKind.Fishing, Tables(LootTableKind.Fishing), options.ParseLoot("fishing", tuning)),
+            new("gameobject", LootTableKind.GameObject, Tables(LootTableKind.GameObject), options.ParseLoot("gameobject", tuning)),
+            new("skinning", LootTableKind.Skinning, Tables(LootTableKind.Skinning), options.ParseLoot("skinning", tuning)),
         ];
     }
 

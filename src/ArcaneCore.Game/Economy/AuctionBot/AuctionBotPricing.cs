@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Tuning;
 
 namespace ArcaneCore.Game.Economy.AuctionBot;
 
@@ -11,10 +12,10 @@ public sealed class AuctionBotPricing
     private readonly bool _vendorValue;
     private readonly uint _variance;
 
-    public AuctionBotPricing(AuctionBotOptions options, IReadOnlySet<uint>? vendorItems = null)
+    public AuctionBotPricing(AuctionBotOptions options, IReadOnlySet<uint>? vendorItems = null, TuningCatalog? tuning = null)
     {
         ArgumentNullException.ThrowIfNull(options);
-        _values = options.ParseValues();
+        _values = options.ParseValues(tuning);
         _vendorItems = vendorItems ?? new HashSet<uint>();
         _vendorValue = options.VendorValue;
         _variance = options.ValueVariance;

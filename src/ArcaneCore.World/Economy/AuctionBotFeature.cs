@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Tuning;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
@@ -53,6 +54,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     private bool _persistent;
     private bool _flushing;
     private int _houseAction = -1;
+    private long _tuningGeneration;
 
     public AuctionBotOptions Options { get; } = new();
 
@@ -435,6 +437,11 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             logger.LogWarning("AHBot: {Fix}", fix);
         }
 
+        foreach (string deprecated in Options.DeprecatedOverrides())
+        {
+            logger.LogWarning("AHBot: {Deprecated}", deprecated);
+        }
+
         return fixes;
     }
 
@@ -767,6 +774,15 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             }
 
             return null;
+        }
+
+        long tuning = TuningCatalog.Active.Generation;
+        if (tuning != _tuningGeneration)
+        {
+            // .reload tuning swapped the auction_bot_value / auction_bot_loot rows: price and draw from the new ones.
+            _tuningGeneration = tuning;
+            _planner = null;
+            _loot = null;
         }
 
         if (!ReferenceEquals(store, _poolSource) || _planner is null)
