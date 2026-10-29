@@ -47,6 +47,40 @@ public sealed class GossipDbScriptTests
     }
 
     [Fact]
+    public void SelectingAGuardOptionWithAPoi_SendsGossipPoiWithTheRowsCoordinatesAndName()
+    {
+        NpcContent content = NpcContent.Empty with
+        {
+            GossipMenuOptions =
+            [
+                new GossipMenuOption { MenuId = 0, Id = 0, OptionId = (byte)GossipOption.Gossip, NpcOptionNpcFlag = (uint)NpcFlags.Gossip,
+                    OptionText = "Auction House", ActionPoiId = 12 },
+                new GossipMenuOption { MenuId = 0, Id = 1, OptionId = (byte)GossipOption.Gossip, NpcOptionNpcFlag = (uint)NpcFlags.Gossip,
+                    OptionText = "No marker" },
+            ],
+            PointsOfInterest = [new PointOfInterest { Entry = 12, X = -9465.13f, Y = 64.5f, Icon = 7, Flags = 99, Data = 3, IconName = "Goldshire Auction House" }],
+        };
+        using var kit = new NpcServiceTestKit(NpcFlags.Gossip, content);
+
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+        kit.Drain();
+        kit.Services.GossipSelectOption(kit.Player, kit.Npc.Guid, 1, null);
+        Assert.False(kit.Sent(WorldOpcode.SmsgGossipPoi));
+        kit.Services.GossipHello(kit.Player, kit.Npc.Guid);
+        kit.Drain();
+        kit.Services.GossipSelectOption(kit.Player, kit.Npc.Guid, 0, null);
+
+        var r = new PacketReader(kit.Single(WorldOpcode.SmsgGossipPoi));
+        Assert.Equal(99u, r.ReadUInt32());
+        Assert.Equal(-9465.13f, r.ReadSingle());
+        Assert.Equal(64.5f, r.ReadSingle());
+        Assert.Equal(7u, r.ReadUInt32());
+        Assert.Equal(3u, r.ReadUInt32());
+        Assert.Equal("Goldshire Auction House", r.ReadCString());
+        Assert.Equal(0, r.Remaining);
+    }
+
+    [Fact]
     public void ShowingAMenuWhoseTextHasAScript_StartsIt_WithThePlayerAsTheSource()
     {
         NpcContent content = NpcContent.Empty with

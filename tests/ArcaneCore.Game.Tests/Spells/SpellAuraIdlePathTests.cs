@@ -86,6 +86,7 @@ public sealed class SpellAuraIdlePathTests
     public void AUnitWithOnlyPermanentPassives_RentsNoSnapshot_AndIsCountedAsIdleSkips()
     {
         using SpellTestKit kit = Kit();
+        kit.System.ActiveSetEnabled = false; // the active set stops visiting a passive-only unit, and this test counts a skip on every tick
         kit.System.SpellBatchWindowMs = 0;
         Player player = AddUnit(kit);
         CastSelf(kit, player, PassiveA);
@@ -292,9 +293,10 @@ public sealed class SpellAuraIdlePathTests
     }
 
     /// <summary>One run of the phased scenario: idle, timed aura added, expired (idle again), periodic aura added. Returns the trace and the snapshot counters.</summary>
-    private static (string Trace, long Rents, long Skips, int PassiveAnomalies) RunPhases(bool fastPath)
+    private static (string Trace, long Rents, long Skips, int PassiveAnomalies) RunPhases(bool fastPath, bool activeSet = false)
     {
         using SpellTestKit kit = Kit();
+        kit.System.ActiveSetEnabled = activeSet; // false for the skip-counting test: the active set stops visiting a passive-only unit every tick
         kit.System.SpellBatchWindowMs = 0;
         kit.System.AuraIdleFastPathEnabled = fastPath;
         Player player = AddUnit(kit);
@@ -327,8 +329,8 @@ public sealed class SpellAuraIdlePathTests
     [Fact]
     public void PhasedIdleTimedIdlePeriodic_GiveTheSameTraceWithAndWithoutTheFastPath()
     {
-        (string slow, long slowRents, long slowSkips, int slowAnomalies) = RunPhases(fastPath: false);
-        (string fast, long fastRents, long fastSkips, int fastAnomalies) = RunPhases(fastPath: true);
+        (string slow, long slowRents, long slowSkips, int slowAnomalies) = RunPhases(fastPath: false, activeSet: false);
+        (string fast, long fastRents, long fastSkips, int fastAnomalies) = RunPhases(fastPath: true, activeSet: false);
 
         Assert.True(GoldenPhased == slow, "golden no longer matches the always-snapshot run: " + slow);
         Assert.Equal(slow, fast);
@@ -337,6 +339,39 @@ public sealed class SpellAuraIdlePathTests
         Assert.Equal(0, fastAnomalies);
         Assert.True(fastSkips >= 20, $"idle skips {fastSkips}");
         Assert.True(fastRents < slowRents, $"rents fast {fastRents} slow {slowRents}");
+    }
+
+    [Fact]
+    public void WithTheActiveSet_APassiveOnlyUnit_RentsNoSnapshot_GetsNoFurtherVisits_AndKeepsTheGoldenPhasedTrace()
+    {
+        using (SpellTestKit kit = Kit())
+        {
+            kit.System.ActiveSetEnabled = true;
+            kit.System.SpellBatchWindowMs = 0;
+            Player player = AddUnit(kit);
+            CastSelf(kit, player, PassiveA);
+            CastSelf(kit, player, PassiveB);
+            UnitSpellState state = Assert.IsType<UnitSpellState>(kit.System.GetState(player.Guid));
+            kit.Advance(300);
+            Assert.True(kit.System.IsDormant(state));
+
+            long rentsBefore = kit.System.AuraSnapshotRents;
+            long skipsBefore = kit.System.AuraIdleSkips;
+            for (int tick = 0; tick < 20; tick++)
+            {
+                kit.Advance(100);
+                Assert.Equal(0, kit.System.LastStatesVisited);
+                Assert.Equal(1, kit.System.LastStatesTracked);
+            }
+
+            Assert.Equal(rentsBefore, kit.System.AuraSnapshotRents);
+            Assert.Equal(skipsBefore, kit.System.AuraIdleSkips);
+            Assert.Equal(2, state.Auras.Count);
+        }
+
+        (string trace, _, _, int anomalies) = RunPhases(fastPath: true, activeSet: true);
+        Assert.True(GoldenPhased == trace, "the active-set run no longer matches the golden phased trace: " + trace);
+        Assert.Equal(0, anomalies);
     }
 
     // GoldenPhased was captured by running RunPhases(fastPath: false) (AuraIdleFastPathEnabled = false: the original always-snapshot behaviour).

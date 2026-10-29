@@ -24,10 +24,10 @@ public sealed class LoggingConfigTests
             ("Logging:ArcaneCore:Timestamps", "Mars"),
             ("Logging:ArcaneCore:IncludeScopes", "maybe"),
             ("Logging:ArcaneCore:File:Enabled", "true"),
-            ("Logging:ArcaneCore:File:Path", ""),
+            ("Logging:ArcaneCore:File:Path", "   "),
             ("Logging:ArcaneCore:File:RollSizeMb", "-1"),
             ("Logging:ArcaneCore:File:Retain", "many"),
-            ("Logging:ArcaneCore:Json:QueueCapacity", "99999999"));
+            ("Logging:ArcaneCore:File:QueueCapacity", "99999999"));
 
         List<ConfigIssue> issues = [.. new LoggingConfigChecks().Check(configuration)];
 
@@ -37,13 +37,14 @@ public sealed class LoggingConfigTests
                 "Logging:ArcaneCore:Console:Mode",
                 "Logging:ArcaneCore:Console:QueueCapacity",
                 "Logging:ArcaneCore:File:Path",
+                "Logging:ArcaneCore:File:QueueCapacity",
                 "Logging:ArcaneCore:File:Retain",
                 "Logging:ArcaneCore:File:RollSizeMb",
                 "Logging:ArcaneCore:IncludeScopes",
-                "Logging:ArcaneCore:Json:QueueCapacity",
                 "Logging:ArcaneCore:Timestamps",
             ],
             keys);
+        Assert.Contains(issues, i => i.Key == "Logging:ArcaneCore:File:Path" && i.Problem.Contains("is empty", StringComparison.Ordinal));
         Assert.All(issues, i => Assert.Equal(ConfigSeverity.Error, i.Severity));
         Assert.Contains(issues, i => i.Key == "Logging:ArcaneCore:Console:Mode" && i.Fix.Contains("Color, Plain or Off", StringComparison.Ordinal));
         Assert.Equal("Logging__ArcaneCore__Console__Mode", issues.Single(i => i.Key == "Logging:ArcaneCore:Console:Mode").EnvironmentVariable);
@@ -53,13 +54,13 @@ public sealed class LoggingConfigTests
     public void Check_AcceptsTheShippedDefaults_AndADisabledSinkWithAnEmptyPath()
     {
         Assert.Empty(new LoggingConfigChecks().Check(Config()));
-        Assert.Empty(new LoggingConfigChecks().Check(Config(
+        Assert.Empty(Errors(new LoggingConfigChecks().Check(Config(
             ("Logging:ArcaneCore:Console:Mode", "plain"),
             ("Logging:ArcaneCore:File:Enabled", "false"),
             ("Logging:ArcaneCore:File:Path", ""),
             ("Logging:ArcaneCore:Json:Enabled", "true"),
             ("Logging:ArcaneCore:Json:Path", "logs/x.jsonl"),
-            ("Logging:ArcaneCore:Timestamps", "Local"))));
+            ("Logging:ArcaneCore:Timestamps", "Local")))));
     }
 
     [Fact]
@@ -74,94 +75,99 @@ public sealed class LoggingConfigTests
         options.Console.QueueCapacity = 0;
 
         var ex = Assert.Throws<OptionsValidationException>(() => LoggingConfigChecks.ThrowIfInvalid(options));
-        Assert.Equal(3, ex.Failures.Count());
-        Assert.Contains(ex.Failures, f => f.Contains("must differ", StringComparison.Ordinal));
+        // Format unset and both enabled: the Json file is the one written, so its tuning (Json:Retain) is in force; sharing a path is no longer an error
+        Assert.Equal(2, ex.Failures.Count());
         Assert.Contains(ex.Failures, f => f.Contains("Json:Retain", StringComparison.Ordinal));
         Assert.Contains(ex.Failures, f => f.Contains("Console:QueueCapacity", StringComparison.Ordinal));
         LoggingConfigChecks.ThrowIfInvalid(new ArcaneLoggingOptions());
     }
 
     /// <summary>
-    /// The IConfiguration check (check-config, exit 78) and the bound-options check (provider construction and reload) are one rule
-    /// set: a configuration that one rejects, the other rejects too. The text and JSON sinks sharing a file is the rule that used to
-    /// live only in <see cref="LoggingConfigChecks.ThrowIfInvalid"/>, so check-config passed and the host then crashed building the
-    /// provider; here both paths of the same path are tried, one spelled out in config and one from the sink's default.
+    /// The text and JSON sinks used to be rejected for sharing one file. A daemon now writes ONE log file, so enabling both on the
+    /// same path is not an error: both checks accept it and the plan holds a single file (Json, at the Json path).
     /// </summary>
     [Fact]
-    public void Check_AndThrowIfInvalid_BothRejectTheTextAndJsonSinksOnOneFile()
+    public void Check_AndThrowIfInvalid_AcceptBothEnabledOnOnePath_AsASingleFile()
     {
-        (string Key, string Value)[] explicitSame =
-        [
+        IConfiguration configuration = Config(
             ("Logging:ArcaneCore:File:Enabled", "true"),
             ("Logging:ArcaneCore:File:Path", "logs/world.log"),
             ("Logging:ArcaneCore:Json:Enabled", "true"),
-            ("Logging:ArcaneCore:Json:Path", "logs/world.log"),
-        ];
-        (string Key, string Value)[] defaultSame =
-        [
-            ("Logging:ArcaneCore:File:Enabled", "true"),
-            ("Logging:ArcaneCore:Json:Enabled", "true"),
-            ("Logging:ArcaneCore:Json:Path", "logs/arcanecore.log"), // the text sink's default path
-        ];
-        (string Key, string Value)[] differ =
-        [
-            ("Logging:ArcaneCore:File:Enabled", "true"),
-            ("Logging:ArcaneCore:File:Path", "logs/world.log"),
-            ("Logging:ArcaneCore:Json:Enabled", "true"),
-            ("Logging:ArcaneCore:Json:Path", "logs/world.jsonl"),
-        ];
-        (string Key, string Value)[] sameButOneDisabled =
-        [
-            ("Logging:ArcaneCore:File:Enabled", "false"),
-            ("Logging:ArcaneCore:File:Path", "logs/world.log"),
-            ("Logging:ArcaneCore:Json:Enabled", "true"),
-            ("Logging:ArcaneCore:Json:Path", "logs/world.log"),
-        ];
+            ("Logging:ArcaneCore:Json:Path", "logs/world.log"));
 
-        foreach ((string Key, string Value)[] rejected in new[] { explicitSame, defaultSame })
-        {
-            IConfiguration configuration = Config(rejected);
-            ConfigIssue issue = Assert.Single(new LoggingConfigChecks().Check(configuration));
-            Assert.Equal(ConfigSeverity.Error, issue.Severity);
-            Assert.Equal("Logging:ArcaneCore:Json:Path", issue.Key);
-            Assert.Contains("must differ", issue.Problem, StringComparison.Ordinal);
+        Assert.Empty(Errors(new LoggingConfigChecks().Check(configuration))); // the legacy-both warning is pinned in LoggingFormatWarningTests
+        LoggingConfigChecks.ThrowIfInvalid(Bind(configuration));
 
-            var ex = Assert.Throws<OptionsValidationException>(() => LoggingConfigChecks.ThrowIfInvalid(Bind(configuration)));
-            string failure = Assert.Single(ex.Failures);
-            Assert.Contains("Logging:ArcaneCore:Json:Path", failure, StringComparison.Ordinal);
-            Assert.Contains("must differ", failure, StringComparison.Ordinal);
-        }
-
-        foreach ((string Key, string Value)[] accepted in new[] { differ, sameButOneDisabled })
-        {
-            IConfiguration configuration = Config(accepted);
-            Assert.Empty(new LoggingConfigChecks().Check(configuration));
-            LoggingConfigChecks.ThrowIfInvalid(Bind(configuration));
-        }
+        LogFileSinkPlan plan = LogFileSinkPlan.Resolve(Bind(configuration));
+        Assert.True(plan.Enabled);
+        Assert.Equal(LogFileFormat.Json, plan.Format);
+        Assert.Equal("logs/world.log", plan.Path);
     }
 
-    /// <summary>Every rule the bound-options check knows is reported by the raw-configuration check with the same key, and vice versa.</summary>
+    /// <summary>Every rule the bound-options check knows is reported by the raw-configuration check with the same key, and vice versa; only the keys in force are checked.</summary>
     [Fact]
     public void Check_AndThrowIfInvalid_AgreeOnEveryRule()
     {
-        IConfiguration configuration = Config(
+        // Format=Json: the keys in force are File:*; the legacy Json:* values are ignored (only warned about), so they are not reported.
+        IConfiguration viaFile = Config(
+            ("Logging:ArcaneCore:Format", "Json"),
             ("Logging:ArcaneCore:Console:QueueCapacity", "0"),
             ("Logging:ArcaneCore:File:Enabled", "true"),
             ("Logging:ArcaneCore:File:Path", "logs/"),
             ("Logging:ArcaneCore:File:RollSizeMb", "-1"),
             ("Logging:ArcaneCore:File:Retain", "-3"),
             ("Logging:ArcaneCore:File:QueueCapacity", "1000001"),
-            ("Logging:ArcaneCore:Json:Enabled", "true"),
             ("Logging:ArcaneCore:Json:Path", " "),
             ("Logging:ArcaneCore:Json:QueueCapacity", "0"));
+        // Format unset, Json only: the legacy Json:* keys are the ones in force.
+        IConfiguration viaLegacyJson = Config(
+            ("Logging:ArcaneCore:Json:Enabled", "true"),
+            ("Logging:ArcaneCore:Json:Path", " "),
+            ("Logging:ArcaneCore:Json:RollSizeMb", "-2"),
+            ("Logging:ArcaneCore:Json:Retain", "-3"),
+            ("Logging:ArcaneCore:Json:QueueCapacity", "0"),
+            ("Logging:ArcaneCore:File:Retain", "-9"));
 
-        string[] checkKeys = [.. new LoggingConfigChecks().Check(configuration).Select(i => i.Key).Order(StringComparer.Ordinal)];
-        var ex = Assert.Throws<OptionsValidationException>(() => LoggingConfigChecks.ThrowIfInvalid(Bind(configuration)));
-        string[] throwKeys = [.. ex.Failures.Select(f => f[..f.IndexOf(' ', StringComparison.Ordinal)]).Order(StringComparer.Ordinal)];
+        foreach ((IConfiguration configuration, int expected) in new[] { (viaFile, 5), (viaLegacyJson, 4) })
+        {
+            string[] checkKeys = [.. Errors(new LoggingConfigChecks().Check(configuration)).Select(i => i.Key).Order(StringComparer.Ordinal)];
+            var ex = Assert.Throws<OptionsValidationException>(() => LoggingConfigChecks.ThrowIfInvalid(Bind(configuration)));
+            string[] throwKeys = [.. ex.Failures.Select(f => f[..f.IndexOf(' ', StringComparison.Ordinal)]).Order(StringComparer.Ordinal)];
 
-        Assert.Equal(7, checkKeys.Length);
-        Assert.Equal(checkKeys, throwKeys);
+            Assert.Equal(expected, checkKeys.Length);
+            Assert.Equal(checkKeys, throwKeys);
+        }
+
+        Assert.DoesNotContain(Errors(new LoggingConfigChecks().Check(viaFile)), i => i.Key.Contains(":Json:", StringComparison.Ordinal));
+        Assert.DoesNotContain(Errors(new LoggingConfigChecks().Check(viaLegacyJson)), i => i.Key.Contains(":File:", StringComparison.Ordinal));
     }
+
+    /// <summary>An enabled file whose path is only white space is an error under every format; a disabled one is not looked at.</summary>
+    [Theory]
+    [InlineData(null, "File", "Logging:ArcaneCore:File:Path")]
+    [InlineData("Text", "File", "Logging:ArcaneCore:File:Path")]
+    [InlineData("Json", "File", "Logging:ArcaneCore:File:Path")]
+    [InlineData(null, "Json", "Logging:ArcaneCore:Json:Path")]
+    public void Check_AndThrowIfInvalid_RejectAnAllWhitespacePath_OfTheEnabledFile(string? format, string section, string key)
+    {
+        var pairs = new List<(string, string)> { ($"Logging:ArcaneCore:{section}:Enabled", "true"), ($"Logging:ArcaneCore:{section}:Path", "  \t ") };
+        if (format is not null)
+        {
+            pairs.Add(("Logging:ArcaneCore:Format", format));
+        }
+
+        IConfiguration configuration = Config([.. pairs]);
+        ConfigIssue issue = Assert.Single(Errors(new LoggingConfigChecks().Check(configuration)));
+        Assert.Equal(key, issue.Key);
+        Assert.Contains("is empty", issue.Problem, StringComparison.Ordinal);
+        var ex = Assert.Throws<OptionsValidationException>(() => LoggingConfigChecks.ThrowIfInvalid(Bind(configuration)));
+        Assert.StartsWith(key + " ", Assert.Single(ex.Failures), StringComparison.Ordinal);
+
+        pairs[0] = ($"Logging:ArcaneCore:{section}:Enabled", "false");
+        Assert.Empty(Errors(new LoggingConfigChecks().Check(Config([.. pairs]))));
+    }
+
+    private static IEnumerable<ConfigIssue> Errors(IEnumerable<ConfigIssue> issues) => issues.Where(static i => i.Severity == ConfigSeverity.Error);
 
     private static ArcaneLoggingOptions Bind(IConfiguration configuration)
     {
@@ -232,7 +238,8 @@ public sealed class LoggingConfigTests
         Assert.Equal(DateTimeKind.Local, provider.Now().Kind);
         string text = output.ToString();
         Assert.Contains("Logging:ArcaneCore:Console:Mode changed to Plain", text, StringComparison.Ordinal);
-        Assert.Contains("Logging:ArcaneCore:File:Path option can't be changed at reload; still logs/arcanecore.log", text, StringComparison.Ordinal);
+        Assert.Contains("Logging:ArcaneCore:File:Path option can't be changed at reload;", text, StringComparison.Ordinal);
+        Assert.Contains("restart to apply elsewhere/world.log.", text, StringComparison.Ordinal);
         Assert.Contains("Logging:ArcaneCore:File:Enabled option can't be changed at reload; still False", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Json:", text, StringComparison.Ordinal);
 

@@ -67,6 +67,14 @@ public abstract partial class Unit : WorldObject
         _movement.Orientation = Orientation;
     }
 
+    /// <summary>
+    /// The unit's <see cref="Spells.SpellSystem"/> state while it has one (set by the spell system when it creates the state, cleared when
+    /// it forgets it). Lets world-object writes that the spell tick depends on (the map) wake the state (active set, SpellSystem.ActiveSet.cs).
+    /// </summary>
+    internal Spells.UnitSpellState? SpellState { get; set; }
+
+    private protected sealed override void OnMapWritten() => SpellState?.Wake(Spells.SpellWakeReason.MapChanged);
+
     public float WalkSpeed
     {
         get;

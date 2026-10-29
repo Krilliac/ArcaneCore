@@ -1,6 +1,7 @@
 using System.IO;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.World.Creatures;
@@ -115,6 +116,56 @@ public sealed class NpcDumpImporterTests : IAsyncLifetime
         Assert.False(importer.SawVendorTemplateTable);
         Assert.Equal(0, importer.BuildReport().VendorTemplates);
         Assert.Equal(1, importer.BuildReport().Skipped);
+    }
+
+    private const string PoiDump = """
+        INSERT INTO `points_of_interest` (`entry`,`x`,`y`,`icon`,`flags`,`data`,`icon_name`) VALUES
+        (1,-9465.13,64.0,7,99,0,'Goldshire Inn'),
+        (2,1583.5,-4417.25,6,99,0,'Orgrimmar Bank'),
+        (0,10,10,7,99,0,'Invalid');
+        """;
+
+    [Fact]
+    public void PointsOfInterestRowsAreRecognisedMappedAndCounted()
+    {
+        Assert.Contains("points_of_interest", NpcDumpImporter.TrackedTables);
+        foreach (string column in new[] { "entry", "x", "y", "icon", "flags", "data", "icon_name" })
+            Assert.True(NpcDumpImporter.ReadsColumn("points_of_interest", column), column);
+        Assert.False(NpcDumpImporter.ReadsColumn("points_of_interest", "unowned_column"));
+        Assert.True(ContentTableSpecs.Find("points_of_interest")!.IsMapped("icon_name"));
+
+        var importer = new NpcDumpImporter();
+        importer.Read(new StringReader(PoiDump));
+        NpcImportReport report = importer.BuildReport();
+        Assert.Equal(2, report.PointsOfInterest);
+        Assert.Equal(1, report.Skipped); // entry 0 is rejected like the other NPC tables
+    }
+
+    [Fact]
+    public async Task PointsOfInterestRoundTripThroughWorldStore_KeepingNegativeCoordinates()
+    {
+        DatabaseConnectionOptions connection = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        var importer = new NpcDumpImporter();
+        importer.Read(new StringReader(PoiDump));
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            await importer.WriteAsync(db, replace: true);
+        }
+
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(connection))
+        {
+            NpcContent content = await new EfNpcContentStore(db).LoadAsync();
+            Assert.Equal(2, content.PointsOfInterest.Count);
+            PointOfInterest inn = content.PointsOfInterest.Single(p => p.Entry == 1);
+            Assert.Equal(-9465.13f, inn.X);
+            Assert.Equal(64.0f, inn.Y);
+            Assert.Equal(7u, inn.Icon);
+            Assert.Equal(99u, inn.Flags);
+            Assert.Equal(0u, inn.Data);
+            Assert.Equal("Goldshire Inn", inn.IconName);
+            Assert.Equal(-4417.25f, content.PointsOfInterest.Single(p => p.Entry == 2).Y);
+        }
     }
 
     private readonly TestDatabases _databases = new();

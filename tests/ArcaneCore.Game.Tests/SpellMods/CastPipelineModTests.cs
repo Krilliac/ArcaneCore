@@ -236,7 +236,7 @@ public sealed class CastPipelineModTests
         (SpellTestKit kit, Player caster) = Setup(DurationMod);
         using (kit)
         {
-            (Player target, _) = kit.AddPlayer(2, 3, 0);
+            (Player target, _) = kit.AddHostilePlayer(2, 3, 0);
             kit.System.HandleCastRequest(caster, DotOfFamily, SpellCastTargets.ForUnit(target.Guid));
             FlushSpellBatch(kit);
 
@@ -252,8 +252,8 @@ public sealed class CastPipelineModTests
         (SpellTestKit kit, Player caster) = Setup(RangeMod);
         using (kit)
         {
-            (Player near, _) = kit.AddPlayer(2, 35, 0);
-            (Player far, _) = kit.AddPlayer(3, 45, 0);
+            (Player near, _) = kit.AddHostilePlayer(2, 35, 0);
+            (Player far, _) = kit.AddHostilePlayer(3, 45, 0);
 
             // 30 + 5 = 35 max (+ 1.25 leeway) against the combat distance (distance minus both combat reaches).
             Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, RangedBolt, SpellCastTargets.ForUnit(near.Guid)));
@@ -268,7 +268,7 @@ public sealed class CastPipelineModTests
         (SpellTestKit kit, Player caster) = Setup();
         using (kit)
         {
-            (Player near, _) = kit.AddPlayer(2, 38, 0);
+            (Player near, _) = kit.AddHostilePlayer(2, 38, 0);
 
             Assert.Equal(SpellCastResult.OutOfRange, kit.System.HandleCastRequest(caster, RangedBolt, SpellCastTargets.ForUnit(near.Guid)));
         }
@@ -280,7 +280,7 @@ public sealed class CastPipelineModTests
         (SpellTestKit kit, Player caster) = Setup(MeleeRangeMod);
         using (kit)
         {
-            (Player target, _) = kit.AddPlayer(2, 12, 0);
+            (Player target, _) = kit.AddHostilePlayer(2, 12, 0);
             target.Orientation = 0;
             caster.Orientation = 0;
 
@@ -295,7 +295,7 @@ public sealed class CastPipelineModTests
         (SpellTestKit kit, Player caster) = Setup();
         using (kit)
         {
-            (Player target, _) = kit.AddPlayer(2, 12, 0);
+            (Player target, _) = kit.AddHostilePlayer(2, 12, 0);
 
             Assert.Equal(SpellCastResult.OutOfRange, kit.System.HandleCastRequest(caster, MeleeStrike, SpellCastTargets.ForUnit(target.Guid)));
         }

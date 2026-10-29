@@ -28,7 +28,7 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10);
+        (Player target, _) = kit.AddHostilePlayer(2, 10);
         kit.Spellbook.Teach(caster, Zap);
 
         Assert.Equal(0u, new ArcaneCore.Game.Spells.Rules.SpellRuleOptions().SpellBatchWindowMs);
@@ -43,7 +43,7 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit(Window);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, FakeSession targetSession) = kit.AddPlayer(2, 10);
+        (Player target, FakeSession targetSession) = kit.AddHostilePlayer(2, 10);
         kit.Spellbook.Teach(caster, Zap);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Zap, SpellCastTargets.ForUnit(target.Guid)));
@@ -68,7 +68,8 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit(Window);
         (Player first, _) = kit.AddPlayer(1);
-        (Player second, _) = kit.AddPlayer(2, 10);
+        (Player second, _) = kit.AddHostilePlayer(2, 10);
+        FlagForPvp(first); // the second casts back at the first: opposing teams, both PvP flagged
         kit.Spellbook.Teach(first, Slay);
         kit.Spellbook.Teach(second, Slay);
 
@@ -85,7 +86,8 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit();
         (Player first, _) = kit.AddPlayer(1);
-        (Player second, _) = kit.AddPlayer(2, 10);
+        (Player second, _) = kit.AddHostilePlayer(2, 10);
+        FlagForPvp(first); // the second would be allowed to cast back, if it were still alive
         kit.Spellbook.Teach(first, Slay);
         kit.Spellbook.Teach(second, Slay);
 
@@ -101,7 +103,8 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit(Window);
         (Player stunner, _) = kit.AddPlayer(1);
-        (Player stunned, _) = kit.AddPlayer(2, 10);
+        (Player stunned, _) = kit.AddHostilePlayer(2, 10);
+        FlagForPvp(stunner); // the stunned player casts back at the stunner
         kit.Spellbook.Teach(stunner, StunSpell);
         kit.Spellbook.Teach(stunned, Zap);
 
@@ -118,7 +121,8 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit(Window);
         (Player kicker, _) = kit.AddPlayer(1);
-        (Player caster, _) = kit.AddPlayer(2, 10);
+        (Player caster, _) = kit.AddHostilePlayer(2, 10);
+        FlagForPvp(kicker); // the caster aims its bolt at the kicker
         kit.Spellbook.Teach(caster, SlowBolt);
         kit.Spellbook.Teach(kicker, Kick);
 
@@ -143,7 +147,7 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit(Window);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10);
+        (Player target, _) = kit.AddHostilePlayer(2, 10);
         kit.Spellbook.Teach(caster, Jab);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Jab, SpellCastTargets.ForUnit(target.Guid)));
@@ -214,7 +218,7 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit(Window);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 100);
+        (Player target, _) = kit.AddHostilePlayer(2, 100);
         kit.Spellbook.Teach(caster, Zap);
 
         Assert.Equal(SpellCastResult.OutOfRange, kit.System.HandleCastRequest(caster, Zap, SpellCastTargets.ForUnit(target.Guid)));
@@ -227,7 +231,7 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit(Window);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10);
+        (Player target, _) = kit.AddHostilePlayer(2, 10);
         kit.Spellbook.Teach(caster, Zap);
         kit.System.HandleCastRequest(caster, Zap, SpellCastTargets.ForUnit(target.Guid));
 
@@ -243,7 +247,7 @@ public sealed class SpellBatchingTests
     {
         using var kit = Kit(Window);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10);
+        (Player target, _) = kit.AddHostilePlayer(2, 10);
         kit.Spellbook.Teach(caster, Zap);
         kit.System.HandleCastRequest(caster, Zap, SpellCastTargets.ForUnit(target.Guid));
 

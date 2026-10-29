@@ -46,11 +46,11 @@ internal sealed class NpcServiceTestKit : IDisposable
 
     public NpcServiceTestKit(NpcFlags flags, NpcContent? content = null, QuestNpcDependencies? extra = null, float npcDistance = 1,
         bool hostile = false, uint mapId = 0, long now = 1_000, RepairCostTable? repair = null, BankBagSlotPriceTable? bankPrices = null,
-        Func<Player, byte, bool>? persistBankSlots = null, ItemTemplateStore? itemStore = null)
+        Func<Player, byte, bool>? persistBankSlots = null, ItemTemplateStore? itemStore = null, Race race = Race.Human)
     {
         Now = now;
         Map map = World.GetMap(mapId);
-        Player = TestWorld.CreatePlayer(1, 0, 0, Session, mapId);
+        Player = TestWorld.CreatePlayer(1, 0, 0, Session, mapId, race);
         ItemTemplateStore store = itemStore ?? Store;
         Player.Inventory.Templates = store;
         Player.Inventory.GuidAllocator = new ItemGuidAllocator();

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Data.Characters.Spells;
 using ArcaneCore.Data.Content.Spells;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,6 +15,22 @@ namespace ArcaneCore.World.Tests.Spells;
 /// </summary>
 internal sealed class SpellTestServices : IWorldTestServices
 {
+    /// <summary>
+    /// Make an online player a legitimate target of a harmful spell from a human caster (the explicit-target gate, vmangos Spell.cpp:5604-5610): the
+    /// caller creates it as a Horde race (<c>race: 2</c>), opposite the human caster's team, and this sets its PvP flag (an enemy player must be flagged).
+    /// </summary>
+    public static Task FlagForPvpAsync(WorldTestHost host, string character) => host.OnWorldAsync(() =>
+    {
+        Player player = host.World.FindOnlinePlayer(character) ?? throw new InvalidOperationException($"{character} is not online");
+        if (player.Team != Team.Horde)
+        {
+            throw new InvalidOperationException($"{character} is not Horde: create it with race: 2 so a human caster may attack it");
+        }
+
+        MapCombat.UpdatePvp(player, true);
+        return true;
+    });
+
     public const uint Heal = 9001;
     public const uint Bolt = 9002;
     public const uint Learnable = 9003;
