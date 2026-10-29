@@ -132,6 +132,17 @@ public sealed class WorldDbInitializer(IServiceProvider services, ILogger<WorldD
                     added = true;
                 }
 
+                // How bots tell each festival (World.WorldState.HolidayFlavourSeed), into an empty table only: nothing else installs the shipped rows.
+                if (!await db.Set<World.WorldState.HolidayFlavourRow>().AnyAsync(ct).ConfigureAwait(false))
+                {
+                    db.Set<World.WorldState.HolidayFlavourRow>().AddRange(World.WorldState.HolidayFlavourSeed.Rows.Select(r => new World.WorldState.HolidayFlavourRow
+                    {
+                        HolidayId = r.HolidayId, FlavourKey = r.FlavourKey, Name = r.Name, Emote1 = r.Emote1, Emote2 = r.Emote2, Emote3 = r.Emote3,
+                        Gather = (byte)(r.Gather ? 1 : 0),
+                    }));
+                    added = true;
+                }
+
                 if (added)
                 {
                     await db.SaveChangesAsync(ct).ConfigureAwait(false);
