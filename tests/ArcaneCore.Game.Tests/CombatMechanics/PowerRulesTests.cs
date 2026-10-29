@@ -196,6 +196,7 @@ public sealed class PowerRulesTests
         using WorldRuntime w = world;
         CombatEnvironment.Register(world, new CombatEnvironment(new CombatOptions { RateEnergy = 2.0f }, null));
         Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
+        player.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Energy); // only the energy power type regenerates energy (MapCombat.UpdatePlayerRegen)
         player.SetUInt32(UpdateFields.UnitFieldMaxpower1 + EnergyIndex, 100);
         player.SetUInt32(UpdateFields.UnitFieldPower1 + EnergyIndex, 0);
 

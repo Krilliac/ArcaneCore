@@ -53,7 +53,15 @@ public sealed partial class MapCombat
             }
         }
 
-        RegeneratePower(player, PowerType.Energy, power);
+        // vmangos regenerates the energy of every player (Player.cpp:2283), which is invisible while the maximum is 0 and,
+        // now that every player is created with the energy maximum, would send a hidden UNIT_FIELD_POWER4 update of every
+        // warrior, mage or priest for the first 10 s of each login. Only a player whose power is energy regenerates it: a
+        // shift to cat form zeroes the energy anyway (Unit::SetPowerType, Unit.cpp:4418-4420), so nothing observable differs.
+        if (player.PowerType == PowerType.Energy)
+        {
+            RegeneratePower(player, PowerType.Energy, power);
+        }
+
         RegeneratePower(player, PowerType.Mana, power);
         c.RegenTimer += CombatConstants.PlayerRegenIntervalMs;
     }
