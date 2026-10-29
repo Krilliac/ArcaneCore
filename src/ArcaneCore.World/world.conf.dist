@@ -13876,7 +13876,7 @@ World.Playerbots.CornerClearanceYards = 2
 #
 #    World.Playerbots.CornerTurnLeadYards
 #        Description: How far before a corner (yards, 0..6) PathShaping starts to turn it: the
-#                     tangent length of the arc that rounds a turn sharper than about 35 degrees. 0
+#                     tangent length of the arc that rounds a turn sharper than about 34 degrees. 0
 #                     turns rounding off; the lead is also held to 40% of the shorter leg beside the
 #                     corner.
 #        Type: float

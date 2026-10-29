@@ -974,14 +974,20 @@ internal static class PlayerbotNavigation
         {
             if (!trial && !chase && route.Navigated && player.Map is { } smoothMap && smoothMap.Collision.MeshPoints is not null)
             {
-                PlayerbotRoute smoothed = PlayerbotPathShaping.Shape(smoothMap, PlayerbotRouteSmoothing.VaryAndSmooth(
-                    player, smoothMap, route, varyLateral: !PlayerbotMotion.IsActive(player)), options);
-                if (!ReferenceEquals(smoothed, route)
-                    && risk?.Blocking(player, smoothed.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is null)
+                // Prefer the shaped route; when the risk check rejects it, fall back to the smoothed route, then to the raw route.
+                PlayerbotRoute smoothedOnly = PlayerbotRouteSmoothing.VaryAndSmooth(
+                    player, smoothMap, route, varyLateral: !PlayerbotMotion.IsActive(player));
+                PlayerbotRoute shaped = PlayerbotPathShaping.Shape(smoothMap, smoothedOnly, options);
+                foreach (PlayerbotRoute candidate in (PlayerbotRoute[])[shaped, smoothedOnly])
                 {
-                    smoothed.MeshEndedShort = route.MeshEndedShort;
-                    smoothed.MeshPoints ??= route.MeshPoints ?? smoothed.Points;
-                    route = smoothed;
+                    if (ReferenceEquals(candidate, route))
+                        continue;
+                    if (risk?.Blocking(player, candidate.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not null)
+                        continue;
+                    candidate.MeshEndedShort = route.MeshEndedShort;
+                    candidate.MeshPoints ??= route.MeshPoints ?? candidate.Points;
+                    route = candidate;
+                    break;
                 }
             }
 

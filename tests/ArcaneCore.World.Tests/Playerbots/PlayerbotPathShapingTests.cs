@@ -77,8 +77,8 @@ public sealed class PlayerbotPathShapingTests
             _output.WriteLine($"input max turn {inputTurn:F3} rad, shaped max turn {shapedTurn:F3} rad over {shaped.Count} points, rounded {stats.CornersRounded}");
 
             Assert.True(stats.CornersRounded >= 1, "the corner was not rounded");
-            Assert.True(shapedTurn <= PlayerbotPathShaping.MaxHeadingStepRadians + 0.02f,
-                $"max heading change {shapedTurn:F3} rad exceeds {PlayerbotPathShaping.MaxHeadingStepRadians} + 0.02");
+            Assert.True(shapedTurn <= PlayerbotPathShaping.MaxHeadingStepRadians + 1e-3f,
+                $"max heading change {shapedTurn:F3} rad exceeds {PlayerbotPathShaping.MaxHeadingStepRadians} + 1e-3");
             return true;
         });
     }
@@ -99,7 +99,7 @@ public sealed class PlayerbotPathShapingTests
             Assert.Equal(input[0], shaped[0]);
             Assert.Equal(input[^1], shaped[^1]);
             Assert.True(shaped.Count >= 5, $"expected the two tangent points and at least one arc point, got {shaped.Count} points");
-            Assert.True(shapedTurn <= PlayerbotPathShaping.MaxHeadingStepRadians + 0.02f, $"max heading change {shapedTurn:F3} rad");
+            Assert.True(shapedTurn <= PlayerbotPathShaping.MaxHeadingStepRadians + 1e-3f, $"max heading change {shapedTurn:F3} rad");
             // The arc starts the default 2.5 yd before the corner: its first point is on the incoming leg 2.5 yd short of the corner.
             Assert.InRange(Vector2.Distance(shaped[1].XY(), at(new(40f, 10f)).XY()), 2.5f - Tolerance, 2.5f + Tolerance);
             Assert.InRange(Vector2.Distance(shaped[^2].XY(), at(new(40f, 10f)).XY()), 2.5f - Tolerance, 2.5f + Tolerance);
@@ -121,7 +121,7 @@ public sealed class PlayerbotPathShapingTests
             LogCost("L corner short lead", world, stats, shaped);
 
             Assert.Equal(1, stats.CornersRounded);
-            Assert.True(MaxTurn(shaped) <= PlayerbotPathShaping.MaxHeadingStepRadians + 0.02f, $"max heading change {MaxTurn(shaped):F3} rad");
+            Assert.True(MaxTurn(shaped) <= PlayerbotPathShaping.MaxHeadingStepRadians + 1e-3f, $"max heading change {MaxTurn(shaped):F3} rad");
             // Every emitted point keeps the clearance from the wall corner, the two tangent points included.
             Assert.True(shaped.Count >= 5, $"expected the tangent points and at least one arc point, got {shaped.Count} points");
             for (int i = 1; i < shaped.Count - 1; i++)
@@ -259,7 +259,7 @@ public sealed class PlayerbotPathShapingTests
             _output.WriteLine("distances to the wall corner: " + string.Join(" ", shaped.Select(p => Vector2.Distance(p.XY(), wall).ToString("F2"))) + $"; required {required:F2}");
             for (int i = 1; i < shaped.Count - 1; i++)
                 Assert.True(Vector2.Distance(shaped[i].XY(), wall) >= required, $"point {i} {shaped[i]} is too close to the wall corner");
-            Assert.True(MaxTurn(shaped) <= PlayerbotPathShaping.MaxHeadingStepRadians + 0.02f);
+            Assert.True(MaxTurn(shaped) <= PlayerbotPathShaping.MaxHeadingStepRadians + 1e-3f);
             AssertInside(world, shaped);
             AssertSegmentsSafe(map, shaped);
             return true;
@@ -500,13 +500,7 @@ public sealed class PlayerbotPathShapingTests
             for (int i = 1; i < shaped.Count - 1; i++)
                 Assert.True(Vector2.Distance(shaped[i].XY(), wall) >= 2f - Tolerance, $"point {i} {shaped[i]} is {Vector2.Distance(shaped[i].XY(), wall):F2} yd from the wall corner");
             AssertInside(world, shaped);
-            for (int i = 1; i < shaped.Count; i++)
-            {
-                ShapeStats probe = default;
-                Assert.True(PlayerbotPathShaping.SegmentSafe(map, shaped[i - 1], shaped[i])
-                    || PlayerbotPathShaping.SegmentAcceptable(map, shaped[i - 1], shaped[i], shaped[i - 1], shaped[i], ref probe), $"leg {i - 1}->{i} is not safe");
-            }
-
+            AssertSegmentsSafe(map, shaped);
             Assert.Equal(input[0], shaped[0]);
             Assert.Equal(input[^1], shaped[^1]);
             return true;
@@ -635,10 +629,18 @@ public sealed class PlayerbotPathShapingTests
         const float allowedBound = PlayerbotPathShaping.MaxHeadingStepRadians - 1e-3f;
         const float slack = 0.3f;
         int finite = 0, infinite = 0, zero = 0;
-        for (float theta = 0.4f; theta <= 2.801f; theta += 0.2f)
+        for (int ti = 0; ti <= 12; ti++)
         {
-            for (float tauOld = -1.2f; tauOld <= 1.2001f; tauOld += 0.1f)
+            float theta = 0.4f + (ti * 0.2f);
+            for (int k = 0; k <= 24; k++)
             {
+                float tauOld = -1.2f + (k * 0.1f);
+
+                // The allowance jumps by 0.3 rad at |tau| = MaxHeadingStepRadians by design; a grid point on that edge lands on either side
+                // depending on the libm rounding of cos/sin/atan2, so it is not a stable check.
+                if (MathF.Abs(MathF.Abs(tauOld) - PlayerbotPathShaping.MaxHeadingStepRadians) < 1e-3f)
+                    continue;
+
                 foreach (float side in new[] { 1f, -1f })
                 {
                     // prevPrev -> prev along +x, prev -> v at heading tauOld (10 yd), the corner at v turns by side * theta.
@@ -650,9 +652,11 @@ public sealed class PlayerbotPathShapingTests
                     var dirOut = new Vector2(MathF.Cos(outHeading), MathF.Sin(outHeading));
                     Vector2 outward = -Vector2.Normalize(dirOut - dirIn);
 
-                    float allowed = MathF.Abs(tauOld) <= PlayerbotPathShaping.MaxHeadingStepRadians ? allowedBound : MathF.Abs(tauOld) + slack - 1e-3f;
+                    // The branch comes from the turn of the built points (atan2, as production computes it), not from the loop variable.
+                    float builtTurn = MathF.Abs(SignedTurn2(prevPrev.XY(), prev.XY(), v.XY()));
+                    float allowed = builtTurn <= PlayerbotPathShaping.MaxHeadingStepRadians ? allowedBound : builtTurn + slack - 1e-3f;
                     float pMax = PlayerbotPathShaping.MaxPushForNeighbour(prevPrev, prev, v, dirIn, outward, theta);
-                    string at = $"theta {theta:F2} tauOld {tauOld:F2} side {side}: pMax {pMax}";
+                    string at = $"theta {theta:F2} tauOld {tauOld:F2} (k {k}, built turn {builtTurn:F6}) side {side}: pMax {pMax}";
 
                     float TurnAtPrev(float push) => Turn2(prevPrev.XY(), prev.XY(), v.XY() + (outward * push));
                     if (float.IsPositiveInfinity(pMax))
@@ -671,7 +675,8 @@ public sealed class PlayerbotPathShapingTests
                     {
                         finite++;
                         Assert.True(pMax > 0f, at);
-                        Assert.InRange(TurnAtPrev(pMax) - allowed, -1e-4f, 1e-4f);
+                        float residual = TurnAtPrev(pMax) - allowed;
+                        Assert.True(residual >= -1e-4f && residual <= 1e-4f, $"{at}: turn at the cap minus allowed = {residual}");
                         Assert.True(TurnAtPrev(pMax * 0.5f) <= allowed + 1e-4f, $"{at}: half of it already exceeds");
                         Assert.True(TurnAtPrev((pMax * 1.2f) + 0.05f) > allowed, $"{at}: a larger push does not exceed");
                     }
@@ -681,6 +686,12 @@ public sealed class PlayerbotPathShapingTests
 
         _output.WriteLine($"grid: {finite} finite caps, {infinite} unbounded, {zero} zero");
         Assert.True(finite > 50 && zero > 0 && infinite > 0, "the grid must exercise all three cases");
+    }
+
+    private static float SignedTurn2(Vector2 a, Vector2 b, Vector2 c)
+    {
+        Vector2 u = Vector2.Normalize(b - a), w = Vector2.Normalize(c - b);
+        return MathF.Atan2((u.X * w.Y) - (u.Y * w.X), Vector2.Dot(u, w));
     }
 
     private static float Turn2(Vector2 a, Vector2 b, Vector2 c)
@@ -878,6 +889,320 @@ public sealed class PlayerbotPathShapingTests
             Assert.Equal(0, stats.FallbackRoom + stats.FallbackGround + stats.FallbackSegment);
             return true;
         }, floorAt: (x, y) => bumps.Floor(x, y));
+    }
+
+    [Fact]
+    public async Task ProbeSweep_OpenPlazaTurnAngles()
+    {
+        await RunAsync([new Rect(-60f, -60f, 60f, 60f)], (world, map, at) =>
+        {
+            const float A = PlayerbotPathShaping.MaxHeadingStepRadians;
+            var settings = PlayerbotPathShaping.Settings.From(new PlayerbotOptions());
+            int over = 0, created = 0, rounded = 0; float worst = 0f; string sample = "";
+            float[] legs = [3f, 4f, 6.25f, 10f, 20f];
+            foreach (float leg in legs)
+            {
+                for (float th = 0.62f; th < 3.10f; th += 0.0007f)
+                {
+                    for (int rot = 0; rot < 3; rot++)
+                    {
+                        float phi = rot * 0.7371f;
+                        Vector2 d0 = new(MathF.Cos(phi), MathF.Sin(phi));
+                        Vector2 d1 = new(MathF.Cos(phi + th), MathF.Sin(phi + th));
+                        List<Vector3> input = [at(-d0 * leg), at(Vector2.Zero), at(d1 * leg)];
+                        ShapeStats stats = default;
+                        IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, settings, ref stats);
+                        rounded += stats.CornersRounded;
+                        for (int j = 1; j < shaped.Count - 1; j++)
+                        {
+                            if (input.Contains(shaped[j])) continue;
+                            created++;
+                            float turn = Turn2(shaped[j - 1].XY(), shaped[j].XY(), shaped[j + 1].XY());
+                            worst = MathF.Max(worst, turn);
+                            if (turn > A + 1e-4f)
+                            {
+                                over++;
+                                if (sample.Length < 2000)
+                                    sample += $"leg {leg} th {th:F4} rot {rot} v{j}/{shaped.Count} turn {turn:F5}\n";
+                            }
+                        }
+                    }
+                }
+            }
+            _output.WriteLine($"created {created} rounded {rounded} over {over} worst {worst:F5}\n" + sample);
+            Assert.True(created > 0, "Expected created points in sweep");
+            Assert.True(rounded > 0, "Expected rounded corners in sweep");
+            Assert.True(over == 0, $"Sweep found {over} violations, worst turn {worst:F5} > {A + 1e-4f:F5}\n{sample}");
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task SeededWorldScaleFuzz_RandomGridAndPillarPaths_EndpointsUnchangedAndTurnsBounded()
+    {
+        float[] gridLines = [-40f, -20f, 0f, 20f, 40f];
+        List<Rect> rects = [];
+        foreach (float line in gridLines)
+        {
+            rects.Add(new Rect(-60f, line - 4f, 60f, line + 4f));
+            rects.Add(new Rect(line - 4f, -60f, line + 4f, 60f));
+        }
+
+        // Open plaza with isolated 8x8 pillar [26..34, 26..34]
+        rects.Add(new Rect(8f, 8f, 52f, 26f));
+        rects.Add(new Rect(8f, 34f, 52f, 52f));
+        rects.Add(new Rect(8f, 26f, 26f, 34f));
+        rects.Add(new Rect(34f, 26f, 52f, 34f));
+
+        // Feature regions: S-bends and gentle corner (triggers NeighbourCaps, NeighbourSplits, AutoRounded)
+        const float Ox = 100f, Oy = 0f; // Wide S-bend
+        rects.Add(new Rect(Ox - 1f, Oy - 10f, Ox + 10f, Oy));
+        rects.Add(new Rect(Ox + 10f, Oy - 10f, Ox + 14f, Oy + 15f));
+        rects.Add(new Rect(Ox + 14f, Oy + 5f, Ox + 26f, Oy + 15f));
+
+        const float Sx = 100f, Sy = 30f; // Short S-bend
+        rects.Add(new Rect(Sx - 1f, Sy - 10f, Sx + 10f, Sy));
+        rects.Add(new Rect(Sx + 10f, Sy - 10f, Sx + 13f, Sy + 15f));
+        rects.Add(new Rect(Sx + 13f, Sy + 3.5f, Sx + 26f, Sy + 15f));
+
+        const float Gx = 100f, Gy = 60f; // Gentle corner
+        rects.Add(new Rect(Gx - 1f, Gy - 8f, Gx + 6f, Gy));
+        rects.Add(new Rect(Gx + 6f, Gy - 8f, Gx + 16f, Gy + 8f));
+
+        Rect[] region = rects.ToArray();
+
+        await RunAsync(region, (world, map, at) =>
+        {
+            const int Seed = 20261028;
+            const int TotalPaths = 2000;
+            const float A = PlayerbotPathShaping.MaxHeadingStepRadians;
+            const float MaxAllowedTurn = A + 1e-4f;
+
+            var rng = new Random(Seed);
+            var settings = PlayerbotPathShaping.Settings.From(new PlayerbotOptions());
+            ShapeStats totalStats = default;
+            int totalEmittedVerticesChecked = 0;
+            int totalExceptionsEncountered = 0;
+
+            for (int pathIdx = 0; pathIdx < TotalPaths; pathIdx++)
+            {
+                List<Vector3> input = GenerateFuzzPath(rng, gridLines, at, pathIdx);
+                Assert.True(input.Count >= 3, "Input path must have at least 3 points");
+
+                ShapeStats stats = default;
+                IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, settings, ref stats);
+                totalStats.Add(in stats);
+
+                // Assert endpoints are unchanged
+                Assert.Equal(input[0], shaped[0]);
+                Assert.Equal(input[^1], shaped[^1]);
+
+                // Assert every emitted vertex turns at most A + 1e-4 unless an exception applies
+                for (int j = 1; j < shaped.Count - 1; j++)
+                {
+                    totalEmittedVerticesChecked++;
+                    float turn = Turn2(shaped[j - 1].XY(), shaped[j].XY(), shaped[j + 1].XY());
+                    if (turn > MaxAllowedTurn)
+                    {
+                        totalExceptionsEncountered++;
+                        Assert.True(ExceptionApplies(input, shaped, j, A),
+                            $"Path {pathIdx} (pattern {pathIdx % 6}) vertex {j} of {shaped.Count} at {shaped[j]} turned {turn:F4} rad > {MaxAllowedTurn:F4} rad without a documented exception (E1/E2).");
+
+                        // The "raised by at most 0.3 rad" clause: an emitted vertex already above A is raised by at most 0.3 radians.
+                        for (int k = 1; k < input.Count - 1; k++)
+                        {
+                            if (input[k] == shaped[j] && k + 1 < input.Count)
+                            {
+                                float emittedTurn = Turn2(shaped[j - 1].XY(), shaped[j].XY(), input[k + 1].XY());
+                                if (emittedTurn > A)
+                                    Assert.True(turn <= emittedTurn + 0.3f + 1e-4f, $"Vertex {j} turn {turn:F4} exceeded emittedTurn {emittedTurn:F4} + 0.3 rad");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            float exemptedFraction = (float)totalExceptionsEncountered / totalEmittedVerticesChecked;
+            _output.WriteLine($"Fuzz completed {TotalPaths} paths ({totalEmittedVerticesChecked} emitted vertices checked, "
+                + $"{totalExceptionsEncountered} exceptions validated). Shaped {totalStats.CornersShaped}, Rounded {totalStats.CornersRounded}, "
+                + $"NeighbourCaps {totalStats.NeighbourCaps}, Splits {totalStats.NeighbourSplits}, AutoRounded {totalStats.AutoRounded}, "
+                + $"Fallbacks {totalStats.Fallbacks}.");
+            _output.WriteLine($"Exempted fraction: {exemptedFraction:P2} ({totalExceptionsEncountered}/{totalEmittedVerticesChecked})");
+
+            Assert.InRange(exemptedFraction, 0.001f, 0.35f);
+            Assert.True(totalStats.CornersShaped > 0, "Expected corners to be shaped in fuzz test");
+            Assert.True(totalStats.CornersRounded > 0, "Expected corners to be rounded in fuzz test");
+            Assert.True(totalStats.NeighbourCaps > 0, $"Expected NeighbourCaps > 0, got {totalStats.NeighbourCaps}");
+            Assert.True(totalStats.NeighbourSplits > 0, $"Expected NeighbourSplits > 0, got {totalStats.NeighbourSplits}");
+            Assert.True(totalStats.AutoRounded > 0, $"Expected AutoRounded > 0, got {totalStats.AutoRounded}");
+            return true;
+        });
+    }
+
+    private static List<Vector3> GenerateFuzzPath(Random rng, float[] gridLines, Func<Vector2, Vector3> at, int pathIdx)
+    {
+        var local = new List<Vector2>();
+        int pattern = pathIdx % 6;
+
+        if (pattern == 0 || pattern == 1)
+        {
+            // Grid path: walking along corridors, turning at intersections around 12x12 pillars
+            int ix = rng.Next(gridLines.Length);
+            int iy = rng.Next(gridLines.Length);
+            float curX = gridLines[ix];
+            float curY = gridLines[iy];
+            local.Add(new Vector2(curX, curY));
+
+            int turns = rng.Next(2, 6);
+            bool movingX = rng.Next(2) == 0;
+
+            for (int t = 0; t < turns; t++)
+            {
+                if (movingX)
+                {
+                    int nextIx = rng.Next(gridLines.Length);
+                    while (nextIx == ix) nextIx = rng.Next(gridLines.Length);
+                    ix = nextIx;
+                    curX = gridLines[ix];
+                }
+                else
+                {
+                    int nextIy = rng.Next(gridLines.Length);
+                    while (nextIy == iy) nextIy = rng.Next(gridLines.Length);
+                    iy = nextIy;
+                    curY = gridLines[iy];
+                }
+
+                local.Add(new Vector2(curX, curY));
+                movingX = !movingX;
+            }
+        }
+        else if (pattern == 2)
+        {
+            // Pillar path: routing around the 8x8 isolated pillar in plaza [26..34, 26..34]
+            float clearance = 1.5f + ((float)rng.NextDouble() * 3.5f);
+            float minP = 26f - clearance;
+            float maxP = 34f + clearance;
+
+            Vector2[] corners = [new(minP, minP), new(maxP, minP), new(maxP, maxP), new(minP, maxP)];
+            int startCorner = rng.Next(4);
+            int count = rng.Next(3, 5);
+            int step = rng.Next(2) == 0 ? 1 : 3;
+
+            for (int i = 0; i < count; i++)
+            {
+                Vector2 c = corners[(startCorner + (i * step)) % 4];
+                float jx = ((float)rng.NextDouble() - 0.5f) * 1.0f;
+                float jy = ((float)rng.NextDouble() - 0.5f) * 1.0f;
+                local.Add(new Vector2(c.X + jx, c.Y + jy));
+            }
+        }
+        else if (pattern == 3)
+        {
+            // Tight / short-leg path: exercises short lead (< 2.5 yd) or tight turns (E1 triggers)
+            float baseX = gridLines[rng.Next(1, gridLines.Length - 1)];
+            float baseY = gridLines[rng.Next(1, gridLines.Length - 1)];
+            float shortLeg = 1.5f + ((float)rng.NextDouble() * 0.7f); // < 2.5 yd, so lead < 1 yd
+            float longLeg = 10f + ((float)rng.NextDouble() * 15f);
+
+            bool horizontalFirst = rng.Next(2) == 0;
+            float dir1 = rng.Next(2) == 0 ? 1f : -1f;
+            float dir2 = rng.Next(2) == 0 ? 1f : -1f;
+
+            if (horizontalFirst)
+            {
+                local.Add(new Vector2(baseX - (dir1 * shortLeg), baseY));
+                local.Add(new Vector2(baseX, baseY));
+                local.Add(new Vector2(baseX, baseY + (dir2 * longLeg)));
+
+                // Tail: continue in the same direction along the vertical corridor (never reverses 180 deg)
+                if (rng.Next(2) == 0)
+                {
+                    Vector2 last = local[^1];
+                    local.Add(new Vector2(last.X, last.Y + (dir2 * 5f)));
+                }
+            }
+            else
+            {
+                local.Add(new Vector2(baseX, baseY - (dir1 * longLeg)));
+                local.Add(new Vector2(baseX, baseY));
+                local.Add(new Vector2(baseX + (dir2 * shortLeg), baseY));
+
+                // Tail: continue in the same direction along the horizontal corridor (never reverses 180 deg)
+                if (rng.Next(2) == 0)
+                {
+                    Vector2 last = local[^1];
+                    local.Add(new Vector2(last.X + (dir2 * 5f), last.Y));
+                }
+            }
+        }
+        else if (pattern == 4)
+        {
+            // S-bends near walls: alternating between wide (NeighbourCaps) and short (NeighbourSplits)
+            bool isWide = rng.Next(2) == 0;
+
+            if (isWide)
+            {
+                // Wide S-bend at (Ox, Oy): capping second push -> NeighbourCaps
+                const float Ox = 100f, Oy = 0f;
+                float startX = (float)rng.NextDouble() * 3f;
+                float endX = 20f + ((float)rng.NextDouble() * 4f);
+                local.Add(new Vector2(Ox + startX, Oy));
+                local.Add(new Vector2(Ox + 10f, Oy));
+                local.Add(new Vector2(Ox + 14f, Oy + 5f));
+                local.Add(new Vector2(Ox + endX, Oy + 5f));
+            }
+            else
+            {
+                // Short S-bend at (Sx, Sy): split point on incoming leg -> NeighbourSplits
+                const float Sx = 100f, Sy = 30f;
+                float startX = (float)rng.NextDouble() * 3f;
+                float endX = 20f + ((float)rng.NextDouble() * 4f);
+                local.Add(new Vector2(Sx + startX, Sy));
+                local.Add(new Vector2(Sx + 10f, Sy));
+                local.Add(new Vector2(Sx + 13f, Sy + 3.5f));
+                local.Add(new Vector2(Sx + endX, Sy + 3.5f));
+            }
+        }
+        else
+        {
+            // Gentle corner at (Gx, Gy): 0.46 rad turn widened past 0.6 rad step by push -> AutoRounded
+            const float Gx = 100f, Gy = 60f;
+            float startX = (float)rng.NextDouble() * 2f;
+            local.Add(new Vector2(Gx + startX, Gy));
+            local.Add(new Vector2(Gx + 6f, Gy));
+            local.Add(new Vector2(Gx + 11f, Gy + 2.5f));
+        }
+
+        return local.Select(at).ToList();
+    }
+
+    private static bool ExceptionApplies(
+        IReadOnlyList<Vector3> input,
+        IReadOnlyList<Vector3> shaped,
+        int j,
+        float a)
+    {
+        Vector3 current = shaped[j];
+
+        // Exact match with an input corner (mesh corner kept unchanged)
+        for (int k = 1; k < input.Count - 1; k++)
+        {
+            if (input[k] == current)
+            {
+                float inputTurn = Turn2(input[k - 1].XY(), input[k].XY(), input[k + 1].XY());
+                // (E1) a corner sharper than A whose arc is not possible keeps a sharp turn
+                if (inputTurn > a - 1e-4f)
+                    return true;
+
+                // (E2) a mesh corner kept unchanged whose turn the previous corner's push widened past A and that cannot be rounded
+                if (shaped[j - 1] != input[k - 1])
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private void LogCost(string name, RegionWorld world, ShapeStats stats, IReadOnlyList<Vector3> shaped)

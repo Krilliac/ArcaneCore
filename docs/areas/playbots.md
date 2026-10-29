@@ -126,7 +126,7 @@ line of sight (`PlayerbotMoveCheck.LineClear`), and navmesh raycasts. After that
 agent radius, so a string-pulled corner sits against the post or wall it goes around. Shaping probes the mesh on both sides of
 a corner and moves it away from the obstacle on the inside of the turn until `CornerClearanceYards` (2) are kept, moves it toward the
 middle of a corridor bounded on both sides by at most `CornerCentringMaxYards` (4, 0 = off), and replaces a turn sharper than about
-35 degrees by an arc that starts `CornerTurnLeadYards` (2.5, 0 = off) before the corner. A corner moves only when the push fits the room
+34 degrees by an arc that starts `CornerTurnLeadYards` (2.5, 0 = off) before the corner. A corner moves only when the push fits the room
 on its outer side less half a yard (a doorway or bridge keeps its mesh position). When the full push's legs or ground fail, smaller
 pushes are tried down to half the clearance (counted as partial pushes), and every arc point keeps the clearance achieved at the corner.
 Every new leg must pass the chord check above (from either end, since a mesh ray that starts exactly on a mesh vertex can miss the leg
@@ -140,7 +140,7 @@ the incoming leg) turns at most about 34 degrees (0.6 radians; the tangent point
 before it was moved stays within it; a point already emitted that was within the bound is never pushed above it by the next corner
 (its push is cut, or the split point takes the turn); and a point already above the bound is pushed at most 0.3 radians further.
 A corner not sharper than the bound whose push would widen its turn past it is rounded instead. Three exceptions: a corner sharper than
-the bound whose arc is not possible (too little lead, no room, an arc point or chord that fails, the budget) keeps a sharp turn,
+the bound whose arc is not possible (too little lead, an arc radius below minimum, no room, an arc point or chord that fails, the budget) keeps a sharp turn,
 widened by its own push; a mesh corner kept unchanged can end up above the bound when the previous corner's push widened its turn and it
 cannot be rounded; and the heading at the start point relative to the bot's facing is not bounded. The
 start and the destination never move. Cost is bounded per plan: at most 12 corners, within 120 yards of the start, and the estimated

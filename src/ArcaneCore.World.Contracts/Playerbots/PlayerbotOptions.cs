@@ -127,7 +127,7 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// How far before a corner (yards, 0..6) <see cref="PathShaping"/> starts to turn it: the tangent length of the arc that rounds a
-    /// turn sharper than about 35 degrees. 0 turns rounding off; the lead is also held to 40% of the shorter leg beside the corner.
+    /// turn sharper than about 34 degrees. 0 turns rounding off; the lead is also held to 40% of the shorter leg beside the corner.
     /// </summary>
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 6 ('.' is the decimal point); 0 turns corner rounding off")]
     public float CornerTurnLeadYards { get; set; } = 2.5f;
