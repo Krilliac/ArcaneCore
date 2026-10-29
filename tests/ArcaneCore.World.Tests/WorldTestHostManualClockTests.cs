@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Tests;
 public sealed class WorldTestHostManualClockTests
 {
     [Fact]
-    public async Task ASentPacket_IsHandledOnTheNextStep_NotBefore()
+    public async Task ASentPacket_IsAnsweredAfterTheBarrierAndOneStep_AndTheStepIsExactlyOneStepOfGameTime()
     {
         await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual());
         WorldTestClient client = await host.EnterWorldAsync("clockacct", "Clocky");
