@@ -671,7 +671,6 @@ a.unhandled-effect	6296	EnchantItem
 a.unhandled-effect	6476	EnchantItem
 a.unhandled-effect	6570	EnchantItemTemporary
 a.unhandled-effect	6650	EnchantItemTemporary
-a.unhandled-effect	6757	CreateHouse
 a.unhandled-effect	6955	BindSight
 a.unhandled-effect	7022	BindSight
 a.unhandled-effect	7216	EnchantItem
@@ -858,7 +857,6 @@ a.unhandled-other	14915	no-consumer:Dummy
 a.unhandled-other	14928	dummy:Dummy
 a.unhandled-other	15050	dummy:Dummy
 a.unhandled-other	15064	no-consumer:Dummy
-a.unhandled-other	1509	script:ScriptEffect
 a.unhandled-other	1522	dummy:Dummy
 a.unhandled-other	15227	dummy:Dummy
 a.unhandled-other	1523	dummy:Dummy
@@ -971,7 +969,6 @@ a.unhandled-other	17744	dummy:Dummy
 a.unhandled-other	17748	dummy:Dummy
 a.unhandled-other	17816	dummy:Dummy
 a.unhandled-other	18113	dummy:Dummy
-a.unhandled-other	18139	script:ScriptEffect
 a.unhandled-other	18145	dummy:Dummy
 a.unhandled-other	18172	no-consumer:Dummy
 a.unhandled-other	1825	dummy:Dummy
@@ -1265,7 +1262,6 @@ a.unhandled-other	24592	script:ScriptEffect
 a.unhandled-other	24593	dummy:Dummy
 a.unhandled-other	24596	no-consumer:Dummy
 a.unhandled-other	24601	dummy:Dummy
-a.unhandled-other	24660	script:ScriptEffect
 a.unhandled-other	24663	script:ScriptEffect
 a.unhandled-other	24702	no-consumer:Dummy
 a.unhandled-other	24734	no-consumer:Dummy
@@ -1673,7 +1669,6 @@ a.unhandled-other	30868	no-consumer:Dummy
 a.unhandled-other	30869	no-consumer:Dummy
 a.unhandled-other	30870	no-consumer:Dummy
 a.unhandled-other	30871	no-consumer:Dummy
-a.unhandled-other	30882	script:ScriptEffect
 a.unhandled-other	31247	script:ScriptEffect
 a.unhandled-other	31309	no-consumer:Dummy
 a.unhandled-other	31313	script:ScriptEffect

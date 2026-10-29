@@ -121,3 +121,26 @@ public sealed class BeastmasterSpellScript : ISpellScript
         GmToggleSpells.Notify(player, on ? On : Off);
     }
 }
+
+/// <summary>
+/// GM Only OFF 1509 and GM Only ON 18139 (vmangos spell_special.cpp:118-153, spell_gm_off / spell_gm_on): Player::SetGameMaster(false / true,
+/// notify), the same state as <c>.gm on|off</c>. Needs a GameMaster.
+/// </summary>
+[SpellScript(1509, 18139)]
+public sealed class GmModeSpellScript : ISpellScript
+{
+    public const string On = "GM mode is ON", Off = "GM mode is OFF";
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (GmToggleSpells.Allowed(context, AccountSecurity.GameMaster) is not { } player)
+        {
+            return;
+        }
+
+        bool on = context.Spell.Id == 18139;
+        player.SetGameMaster(on);
+        GmToggleSpells.Notify(player, on ? On : Off);
+    }
+}

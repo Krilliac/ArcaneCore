@@ -250,4 +250,63 @@ public sealed class G1ScriptsTests
         kit.System.CastSpell(gm, 24675, SpellCastTargets.ForSelf(), triggered: true);
         Assert.False(gm.UnitFlags.HasFlag(UnitFlags.NotAttackable1));
     }
+
+    [Fact]
+    public void GmModeSpells_SwitchGameMasterMode_OnlyForAGameMaster()
+    {
+        using SpellTestKit kit = Kit(Script(1509), Script(18139));
+        (Player gm, _) = kit.AddPlayer(1, security: AccountSecurity.GameMaster);
+        (Player plain, _) = kit.AddPlayer(2, 2);
+
+        kit.System.CastSpell(plain, 18139, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.False(plain.IsGameMaster);
+
+        kit.System.CastSpell(gm, 18139, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.True(gm.IsGameMaster);
+        kit.System.CastSpell(gm, 1509, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.False(gm.IsGameMaster);
+    }
+
+    [Fact]
+    public void UnstablePower_DropsOneStackAndTheAuraWithTheLastOne()
+    {
+        SpellInfo stacking = Marker(UnstablePowerScript.UnstablePower) with { StackAmount = 3 };
+        using SpellTestKit kit = Kit(Script(24660), stacking);
+        (Player player, _) = kit.AddPlayer(1);
+        for (int i = 0; i < 3; i++) kit.System.AddAura(player, UnstablePowerScript.UnstablePower);
+        SpellAuraHolder holder = Assert.Single(kit.System.GetAuras(player), h => h.Spell.Id == UnstablePowerScript.UnstablePower);
+        Assert.Equal(3, holder.StackAmount);
+
+        kit.System.CastSpell(player, 24660, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(2, holder.StackAmount);
+        kit.System.CastSpell(player, 24660, SpellCastTargets.ForSelf(), triggered: true);
+        kit.System.CastSpell(player, 24660, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.False(kit.System.HasAura(player, UnstablePowerScript.UnstablePower));
+    }
+
+    [Fact]
+    public void TowerCaptureTest_MakesFriendlyPvpPlayersCastTowerCapture()
+    {
+        using SpellTestKit kit = Kit(Script(30882), Marker(TowerCaptureTestScript.TowerCapture));
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player pvp, _) = kit.AddPlayer(2, 5);
+        (Player passive, _) = kit.AddPlayer(3, 6);
+        (Player far, _) = kit.AddPlayer(4, 500);
+        pvp.Flags |= PlayerFlags.PvpDesired;
+        far.Flags |= PlayerFlags.PvpDesired;
+
+        kit.System.CastSpell(caster, 30882, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.True(kit.System.HasAura(pvp, TowerCaptureTestScript.TowerCapture));
+        Assert.False(kit.System.HasAura(passive, TowerCaptureTestScript.TowerCapture)); // PvP not desired on a normal realm
+        Assert.False(kit.System.HasAura(far, TowerCaptureTestScript.TowerCapture));    // beyond 100 yards
+    }
+
+    [Fact]
+    public void CreateHouse_HasAHandler()
+    {
+        using SpellTestKit kit = Kit();
+        Assert.True(kit.System.HasEffectHandler(SpellEffectName.CreateHouse));
+    }
 }
