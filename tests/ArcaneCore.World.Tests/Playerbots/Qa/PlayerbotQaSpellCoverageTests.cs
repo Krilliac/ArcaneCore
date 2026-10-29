@@ -20,8 +20,9 @@ namespace ArcaneCore.World.Tests.Playerbots.Qa;
 /// </summary>
 public sealed class PlayerbotQaSpellCoverageTests : IDisposable
 {
-    private const uint Fireball = 133, FrostNova = 122, NpcFireball = 9053, Teacher = 5001, Taught = 5002, Profession = 5003, PassiveTaught = 5004,
-        TeachesPassive = 5005;
+    // The ids sit above the Spell.dbc range: DeliberatelyInertSpells and QaSpellConsumers silence real ids (5001 and 5002 are listed).
+    private const uint Fireball = 133, FrostNova = 122, NpcFireball = 9053, Teacher = 995001, Taught = 995002, Profession = 995003, PassiveTaught = 995004,
+        TeachesPassive = 995005;
 
     private readonly string _directory = QaData.NewTempDirectory();
 
