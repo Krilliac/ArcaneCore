@@ -84,6 +84,15 @@ internal sealed class SpellSweepRunner
     /// <summary>The longest generic cast (cast time plus channel) the sweep waits out before calling the caster stuck.</summary>
     public const int MaxCastWaitMs = 60_000;
 
+    /// <summary>
+    /// The shortest aura the interrupt check (c) judges. Under spell batching what an action sets off (its cast's go, the swing a struck
+    /// unit answers with) resolves at the next batch boundary, up to one window later (retail and the CI batching leg: 400 ms), and an aura
+    /// at the 300 ms floor runs out first. Whether the check could judge a short aura would then depend on the window, so an aura shorter
+    /// than this (well over any window plus the settle tick) is "not-run:short-aura" with batching on or off, and every (c) line reads the
+    /// same in both modes. The expiry guard (not-run:expired) stays as the backstop for anything longer.
+    /// </summary>
+    public const int ShortestInterruptJudgedMs = 1_000;
+
     private static readonly (AuraType Type, UnitFlags Flag)[] FlagAuras =
     [
         (AuraType.ModStun, UnitFlags.Stunned),
@@ -530,6 +539,12 @@ internal sealed class SpellSweepRunner
 
                 bool expected = (flags & action.FlagsFor(unit)) != 0;
                 IReadOnlyList<SpellAuraHolder> held = _probe.Holders(_rig.System, unit, spell.Id);
+                if (held.Any(h => !h.IsPermanent && h.MaxDuration >= 0 && h.MaxDuration < ShortestInterruptJudgedMs))
+                {
+                    state = "not-run:short-aura";
+                    return;
+                }
+
                 if (!action.Perform(scene, unit))
                 {
                     state = "not-run:action-failed";
