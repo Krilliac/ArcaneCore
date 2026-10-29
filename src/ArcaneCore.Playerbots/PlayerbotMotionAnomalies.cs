@@ -43,6 +43,9 @@ namespace ArcaneCore.World.Playerbots;
 /// the packet said). Warning. Failure path only.</description></item>
 /// <item><term>start-blocked</term><description>a route could not be started: its first stretch is not walkable. Warning.</description></item>
 /// <item><term>route-blocked</term><description>a route being walked is no longer walkable ahead; the bot stopped. Warning.</description></item>
+/// <item><term>overspeed</term><description>a heartbeat step of at least <see cref="OverspeedMinAgeMs"/> covered more than
+/// <see cref="OverspeedFactor"/> times the flat distance the speed the bot is entitled to allows (<see cref="PlayerbotMotion.Speed"/> for
+/// the bot now, in the swim state the step was walked in). Warning. A compare per heartbeat.</description></item>
 /// </list>
 /// Nothing is checked while <see cref="WorldSession.IsInChaosProbe"/>. Thread affinity: world thread; a <see cref="MotionWatch"/> belongs to one bot.
 /// </summary>
@@ -91,6 +94,12 @@ internal static class PlayerbotMotionAnomalies
     /// <summary>Walking that ends this near where the window began is not progress.</summary>
     internal const float StuckYards = 1f;
 
+    /// <summary>A step shorter than this is not judged for its speed (a few ms of rounding is a large ratio).</summary>
+    internal const uint OverspeedMinAgeMs = 200;
+
+    /// <summary>A step covering more than this times the entitled speed is an overspeed.</summary>
+    internal const float OverspeedFactor = 1.05f;
+
     /// <summary>Segments shorter than this are not tested for a crossing.</summary>
     internal const float MinSegmentYards = 0.5f;
 
@@ -123,12 +132,13 @@ internal static class PlayerbotMotionAnomalies
         MoveRejected,
         StartBlocked,
         RouteBlocked,
+        Overspeed,
     }
 
     private static readonly string[] Names =
     [
         "airwalk", "under-map", "wall-crossed", "door-crossed", "position-jump", "non-finite-position", "lease-expired-midroute",
-        "stuck", "move-rejected", "start-blocked", "route-blocked",
+        "stuck", "move-rejected", "start-blocked", "route-blocked", "overspeed",
     ];
 
     /// <summary>The normalised ledger key of <paramref name="code"/> (tests).</summary>
@@ -296,13 +306,33 @@ internal static class PlayerbotMotionAnomalies
     /// now for <paramref name="nextPoint"/>): the stuck check every heartbeat, the ground and crossing checks once per sample.
     /// </summary>
     internal static void AfterHeartbeat(WorldSession session, Player player, Map map, PlayerbotMotion.MotionState state,
-        PlayerbotRoute route, Vector3 from, int fromNext, int nextPoint, Vector3 to, uint now)
+        PlayerbotRoute route, Vector3 from, int fromNext, int nextPoint, Vector3 to, uint now, uint ageMs = 0, bool swam = false)
     {
         MotionWatch watch = state.Watch;
         CheckStuck(session, player, watch, route, to, now);
+        CheckOverspeed(session, player, state, from, to, ageMs, swam, now);
         if (!watch.SampleDue(now) || session.IsInChaosProbe) return;
         CheckGround(player, map, watch, to, now);
         CheckCrossing(player, map, watch, route, fromNext, nextPoint, from, to, now);
+    }
+
+    /// <summary>
+    /// The step from <paramref name="from"/> to <paramref name="to"/> took <paramref name="ageMs"/> and was walked in the swim state
+    /// <paramref name="swam"/>: more than <see cref="OverspeedFactor"/> times the speed <see cref="PlayerbotMotion.Speed"/> gives the
+    /// bot now is reported. The motion state's own speed is not the yardstick (a fault in it is what this finds).
+    /// </summary>
+    internal static void CheckOverspeed(WorldSession session, Player player, PlayerbotMotion.MotionState state, Vector3 from, Vector3 to,
+        uint ageMs, bool swam, uint now)
+    {
+        if (ageMs < OverspeedMinAgeMs || session.IsInChaosProbe) return;
+        if (!PlayerbotMotion.Speed(player, state.MoveSpeedCap, swam, out float expected, out bool walk)) return;
+        float travelled = Vector2.Distance(new Vector2(from.X, from.Y), new Vector2(to.X, to.Y));
+        float actual = travelled / (ageMs / 1000f);
+        if (!(actual > OverspeedFactor * expected) || !state.Watch.Due(Code.Overspeed, now)) return;
+        Emit(player, Code.Overspeed,
+            string.Create(CultureInfo.InvariantCulture,
+                $"moved {actual:F2} yd/s, expected {expected:F2} yd/s (motion speed {state.Speed:F2}, run speed {UnitSpeed.Get(player, MoveType.Run):F2}, mounted {UnitSpeed.IsMounted(player)}, swimming {swam}, walk {walk}), {travelled:F2} yd in {ageMs} ms"),
+            AnomalySeverity.Warning);
     }
 
     /// <summary>Heartbeats went on for <see cref="StuckWindowMs"/> and the bot is where the window began.</summary>

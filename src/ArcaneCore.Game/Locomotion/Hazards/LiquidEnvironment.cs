@@ -65,7 +65,6 @@ public static class LiquidEnvironment
         const LiquidStatus inOrUnder = LiquidStatus.UnderWater | LiquidStatus.InWater;
         const LiquidStatus nearSurface = inOrUnder | LiquidStatus.WaterWalk;
         float collisionHeight = state.CollisionHeight;
-        float minSwimDepth = collisionHeight * 0.75f;
 
         if ((liquid.TypeFlags & LiquidTypeFlags.AllLiquids) != 0)
         {
@@ -88,8 +87,26 @@ public static class LiquidEnvironment
         }
 
         SetFlags(player, EnvironmentFlags.HighSea, (liquid.TypeFlags & LiquidTypeFlags.DeepWater) != 0);
-        SetFlags(player, EnvironmentFlags.HighLiquid, (res & inOrUnder) != 0 && liquid.Level > z + minSwimDepth);
+        SetFlags(player, EnvironmentFlags.HighLiquid, IsSwimDepth(res, liquid.Level, z, collisionHeight));
     }
+
+    /// <summary>
+    /// Whether a player of <paramref name="collisionHeight"/> standing at (<paramref name="x"/>, <paramref name="y"/>, <paramref name="z"/>)
+    /// is in swimmable water: the HighLiquid rule of <see cref="UpdateTerrainFlags"/> (vmangos Player::UpdateTerainEnvironmentFlags,
+    /// Player.cpp:20353-20420: the liquid asked at z + 0.01 with every liquid type, in or under the surface, and the surface above
+    /// z + three quarters of the collision height). Reads the map only; transports are the caller's business (a player aboard is
+    /// not in the liquid).
+    /// </summary>
+    public static bool IsSwimDepth(Map map, float x, float y, float z, float collisionHeight)
+    {
+        ArgumentNullException.ThrowIfNull(map);
+        LiquidStatus res = map.GetLiquidStatus(x, y, z + 0.01f, LiquidTypeFlags.AllLiquids, out LiquidData liquid);
+        return res != LiquidStatus.NoWater && IsSwimDepth(res, liquid.Level, z, collisionHeight);
+    }
+
+    /// <summary>The HighLiquid rule on an answer of <see cref="Map.GetLiquidStatus"/>; <see cref="UpdateTerrainFlags"/> and <see cref="IsSwimDepth(Map, float, float, float, float)"/> share it.</summary>
+    public static bool IsSwimDepth(LiquidStatus res, float liquidLevel, float z, float collisionHeight)
+        => (res & (LiquidStatus.UnderWater | LiquidStatus.InWater)) != 0 && liquidLevel > z + (collisionHeight * 0.75f);
 
     /// <summary>
     /// vmangos Player::SetEnvironmentFlags: change flags, and when they changed (a flag set that already is in the wanted state is
