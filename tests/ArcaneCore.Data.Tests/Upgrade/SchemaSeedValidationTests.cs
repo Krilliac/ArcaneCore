@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Schema.Upgrade;
@@ -38,11 +39,16 @@ public sealed class SchemaSeedValidationTests
         Assert.Throws<InvalidOperationException>(() => SchemaChangeDecider.ReadModel(db, Definition(wrongColumns)));
     }
 
+    // The model is the whole characters model, so every seeded row it declares (the ownership row and the realm authority lease scopes) must be declared by a step.
     private static SchemaDefinition Definition(EnsureRowChange seed) => new()
     {
         Component = "characters",
-        CurrentVersion = CharacterOwnershipDataModule.Version,
+        CurrentVersion = RealmAuthorityLeaseDataModule.Version,
         Version1Tables = ["characters"],
-        Steps = [new SchemaStep(CharacterOwnershipDataModule.Version, [seed])],
+        Steps =
+        [
+            new SchemaStep(CharacterOwnershipDataModule.Version, [seed]),
+            new SchemaStep(RealmAuthorityLeaseDataModule.Version, [.. new RealmAuthorityLeaseDataModule().SchemaChanges.OfType<EnsureRowChange>()]),
+        ],
     };
 }

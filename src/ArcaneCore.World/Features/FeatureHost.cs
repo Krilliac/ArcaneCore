@@ -193,6 +193,30 @@ public sealed class FeatureHost
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="feature"/> is in the world now: tracked by <see cref="AttachAll"/> and neither <see cref="FeatureState.Detached"/>
+    /// nor <see cref="FeatureState.Faulted"/>. False for a feature a role filter never admitted.
+    /// </summary>
+    public bool IsAttached(IWorldFeature feature)
+    {
+        lock (_gate)
+        {
+            return _entries.Any(e => ReferenceEquals(e.Feature, feature) && e.State is not (FeatureState.Detached or FeatureState.Faulted));
+        }
+    }
+
+    /// <summary>Whether <see cref="AttachAll"/> has run (shutdown then skips the features it never admitted).</summary>
+    public bool HasAttached
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _world is not null;
+            }
+        }
+    }
+
     /// <summary>Quiesce <paramref name="name"/>, then detach it at a tick boundary. Off the world thread; never throws for a feature failure.</summary>
     public Task<FeatureResult> DetachAsync(string name, HotSwapOrigin? origin = null)
         => Task.Run(() => RunAsync("detach", name, origin, DetachCoreAsync));

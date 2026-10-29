@@ -102,6 +102,7 @@ public static class WorldServiceCollectionExtensions
         services.AddHostedService<WorldHost>();
         services.AddHostedService<WorldServer>();
         Cluster.Gateway.GatewayWorkerServiceCollectionExtensions.AddGatewayWorker(services, configuration); // Cluster:Worker (Tier 3a), off by default: registers nothing
+        Cluster.Social.ClusterNodeHosting.AddClusterNodeRole(services, configuration); // Cluster:Node (M15.2), Combined by default: registers only the options
 
         services.AddOpsAnnouncer(configuration); // staff notices / world messages (World:Announce); the hot swap lanes report through it
 

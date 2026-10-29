@@ -161,6 +161,53 @@ The gateway, the worker and a standby worker can be launched and watched by the 
 | Warden | Worker | Its opcodes are forwarded unchanged; the worker starts Warden with the session key from the auth database. The design (section 5.2) puts Warden on the gateway; moving it is needed before 3b |
 | Account claim | Both | Gateway: one connection per account. Worker: the normal `SessionRegistry` claim |
 
+## Node role and realm authority leases
+
+`Cluster:Node:Role` says what this World process is. It is `Combined` by default: every feature runs here, as it always has, and nothing below is
+registered. The other value a World process can host is `MapWorker`; it needs `Cluster:Worker:Enabled` = true, because a map worker is the world a
+gateway links to. `Social`, `Economy` and `Gateway` are refused at start (exit 78), each with the missing piece named: auctions, mail and escrow live in
+the World process's memory (`EconomyFeature`), and AutoBroadcast's all-player broadcast only reaches the sessions of its own process, so a node with only
+that role would have nothing to serve.
+
+Two features are realm-wide singletons: the auction house bot (the `economy` scope) and AutoBroadcast (the `social` scope). On a `MapWorker` each one
+attaches only while this node holds the matching lease, and a node attaches nothing it cannot lease; the other node (or this one, after the holder's lease
+lapses and it restarts) runs it. Warden stays attached on a map worker, because the gateway passes the client stream through to it.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `Cluster:Node:Role` | `Combined` | `Combined` or `MapWorker` |
+| `Cluster:Node:AuthorityLeaseTtlSeconds` | 30 | A lease lapses this long after its last renewal (5 to 600) |
+| `Cluster:Node:AuthorityLeaseRenewSeconds` | 10 | Renewal interval (1 to a third of the TTL) |
+
+The owner id of a node's leases is its `Cluster:Worker:NodeId`. The leases are rows of `realm_authority_lease` in the characters database (characters
+schema 67), one per realm, next to `character_ownership`; the table is created empty by the schema upgrade on every world, and a `Combined` node never
+reads or writes it. Each grant raises the scope's fencing token, which never goes down, even across a release.
+
+- **Start.** Before it attaches features, the node takes each free lease. A lease held by another node is left alone and its singleton does not run
+  here. A lease still held under this node's own id (a crash that did not release) is waited out up to the TTL, then taken with a higher token.
+- **Renewal.** Every `AuthorityLeaseRenewSeconds`. The singletons cannot be detached from a running world, so a lost lease is fail-stop: the node logs it
+  at critical level, records a `cluster.lease` fault, and stops with exit code 1. A database error counts as a loss once the next attempt would fall in the
+  last half renewal interval before the lease lapses.
+- **Stop.** After the features stop, the node releases the leases it holds; one that cannot be released lapses by itself.
+- **Commands.** `.cluster status` shows `nodeRole=` for a node that is not `Combined`; `.cluster leases` shows the durable holder of each scope; `.ahbot`
+  says so when the bot does not run on this node.
+
+Mutual exclusion and its margin. A lease is valid until the time its holder last renewed it plus the TTL, and another node may take it the moment it
+lapses. The holder stops itself when the next tick would fall in the last half renewal interval before the lapse, so with the defaults (TTL 30 s, renewal
+10 s) a node whose renewals fail, or whose store call hangs, decides at 20 s after its last good renewal: **10 s before the lease lapses**. Every store
+command is bounded to a third of the renewal interval (3 s by default), so a failed call also reports within that bound; count the margin as 7 to 10 s.
+The singletons are stopped only if the whole shutdown (features stopped, saves drained) completes inside that margin; a shutdown that takes longer leaves
+a window in which the old and the new holder both run the auction bot or AutoBroadcast. A renewal the store refuses (the lease was already taken over)
+leaves no margin at all. Tune `Cluster:Node:AuthorityLeaseTtlSeconds` up if the shutdown of a busy node can take longer than 7 s.
+
+Lease expiry is judged against each node's wall clock (a node passes its own time to the store), so the nodes need clocks synchronised by NTP (or chrony).
+The skew a pair of nodes can tolerate is the margin minus the shutdown time: with the defaults and a shutdown of up to 5 s, a node that is ahead of
+the holder by more than about 5 s can take the lease while the holder is still stopping. Keep skew under 1 s (ordinary NTP does) and treat a node whose
+clock is not synchronised as unfit to run a map worker.
+
+Open gap: storage writes are not checked against the fencing token at commit, so a partitioned former holder is bounded by its own fail-stop, not by the
+database. A dedicated `Social` or `Economy` process is not built.
+
 ## Tests
 
 `tests/ArcaneCore.Gateway.Tests` (44 tests, run with `--filter`):

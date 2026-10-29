@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.Kernel.Characters;
@@ -354,5 +355,25 @@ public sealed class ClusterCommandTests
         string[] arcaneDiag = await LinesAsync(admin, ".arcane cluster diag");
         Assert.Single(arcaneDiag);
         Assert.StartsWith("cluster-diag realm=1 node=world-node-alpha", arcaneDiag[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Leases_ShowsDurableHolder_WhenStoreRegistered()
+    {
+        using var directory = new ArcaneCore.TestSupport.TempDirectory("arcanecore-leasecmd-", sqlite: true);
+        string database = System.IO.Path.Combine(directory.Path, "characters.db");
+        var dbOptions = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<ArcaneCore.Data.Characters.CharacterDbContext>().UseSqlite($"Data Source={database}").Options;
+        await using (var setup = new ArcaneCore.Data.Characters.CharacterDbContext(dbOptions))
+            await ArcaneCore.Data.Schema.SchemaBootstrapper.EnsureAsync(setup, ArcaneCore.Data.Characters.CharacterDbContext.Schema);
+        var scopes = new ServiceCollection().AddScoped(_ => new ArcaneCore.Data.Characters.CharacterDbContext(dbOptions)).BuildServiceProvider();
+        var durable = new ArcaneCore.Data.Characters.Cluster.EfRealmAuthorityLeaseStore(scopes.GetRequiredService<IServiceScopeFactory>());
+        durable.TryAcquire(RealmAuthorityScopes.Economy, "durable-node", Guid.NewGuid(), TimeSpan.FromMinutes(10), DateTimeOffset.UtcNow);
+
+        await using WorldTestHost host = StartWithClusterServices(leases: durable);
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADM", "Admiral");
+
+        string[] leasesLines = await LinesAsync(admin, ".cluster leases", 3);
+        Assert.Contains("economy=durable-node(token=1)", leasesLines[1], StringComparison.Ordinal);
+        Assert.DoesNotContain("social=durable-node", leasesLines[1], StringComparison.Ordinal); // the social scope has no holder in the table
     }
 }

@@ -378,10 +378,11 @@ public sealed class ClusterSocialAndEconomyAuthorityTests
         Assert.True(filter.ShouldAttachFeature(typeof(SpellFeature), ClusterNodeRole.Combined));
         Assert.True(filter.ShouldAttachFeature(typeof(ServerMailFeature), ClusterNodeRole.Combined));
 
-        // 2. MapWorker runs gameplay/map features (SpellFeature, ServerMailFeature), NOT AutoBroadcast, AuctionBot, or Warden.
+        // 2. MapWorker runs gameplay/map features (SpellFeature, ServerMailFeature) and Warden, and AutoBroadcast/AuctionBot only with their lease.
         Assert.False(filter.ShouldAttachFeature(typeof(AutoBroadcastFeature), ClusterNodeRole.MapWorker, "worker-1"));
         Assert.False(filter.ShouldAttachFeature(typeof(AuctionBotFeature), ClusterNodeRole.MapWorker, "worker-1"));
-        Assert.False(filter.ShouldAttachFeature(typeof(WardenFeature), ClusterNodeRole.MapWorker, "worker-1"));
+        // Warden stays on a map worker: the gateway passes the client stream through to it (Tier 3a), so the worker owns the Warden session.
+        Assert.True(filter.ShouldAttachFeature(typeof(WardenFeature), ClusterNodeRole.MapWorker, "worker-1"));
         Assert.True(filter.ShouldAttachFeature(typeof(SpellFeature), ClusterNodeRole.MapWorker, "worker-1"));
         Assert.True(filter.ShouldAttachFeature(typeof(ServerMailFeature), ClusterNodeRole.MapWorker, "worker-1"));
         Assert.False(filter.CanExecuteEconomyAuthorityTick(ClusterNodeRole.MapWorker, "worker-1", econLease.Lease!.FencingToken, BaseTime));
