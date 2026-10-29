@@ -158,7 +158,7 @@ public sealed record CrashDialogFacts
     /// <summary>The terminating-crash journal of this daemon (<see cref="CrashJournalPaths"/>), or null when none is configured.</summary>
     public string? JournalPath { get; init; }
 
-    /// <summary>The configured text log file (<c>Logging:ArcaneCore:File:Path</c> when enabled), or null.</summary>
+    /// <summary>The configured log file in either format (the resolved <c>Logging:ArcaneCore:File:Path</c>, see <c>LogFileSinkPlan</c>) when the file sink is enabled, or null.</summary>
     public string? LogPath { get; init; }
 
     /// <summary>Where the runtime writes a dump, or null when no dump is configured (<c>DOTNET_DbgEnableMiniDump</c>).</summary>
@@ -229,7 +229,7 @@ public static class CrashDialog
     /// <summary>Where the crash report file is written; null is <see cref="AppContext.BaseDirectory"/>, next to the crash journal.</summary>
     public static string? ReportDirectory { get; set; }
 
-    /// <summary>The configured text log file, shown in the dialog; set when the host starts.</summary>
+    /// <summary>The configured log file (text or JSON lines), shown in the dialog; set when the host starts.</summary>
     public static string? LogFilePath { get; set; }
 
     /// <summary>Whether a dialog opens: the option is on, the platform is Windows, and a person is at an interactive console session.</summary>

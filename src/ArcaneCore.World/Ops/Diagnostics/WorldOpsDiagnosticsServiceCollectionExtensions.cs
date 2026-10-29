@@ -19,7 +19,7 @@ public static class WorldOpsDiagnosticsServiceCollectionExtensions
     {
         var options = new OpsDiagnosticsOptions();
         configuration.GetSection(OpsDiagnosticsOptions.SectionName).Bind(options);
-        string logFile = configuration[ArcaneLoggingOptions.SectionName + ":File:Path"] ?? string.Empty;
+        string logFile = LogFileSinkPlan.Resolve(configuration).Path;
         services.AddSingleton(options);
         services.AddSingleton(sp => new AllocationProfiler(logger: sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.Diagnostics.Alloc")));
         services.AddSingleton(sp => new ProcessDumpService(

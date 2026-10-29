@@ -111,6 +111,29 @@ public enum NavJobStatus
 }
 
 /// <summary>
+/// The random-point half of a wander leg, carried by a <see cref="NavJob"/> so the worker picks the point and searches the path in one
+/// job: values only. The worker draws the point with <c>new Random(Seed)</c> through <see cref="ISharedMeshPointQuery"/>, so the point
+/// is a pure function of (seed, centre, radius, loaded navmesh).
+/// </summary>
+public sealed record NavJobPointPick(ISharedMeshPointQuery Points, Vector3 Center, float Radius, int Seed, PathOptions? PointOptions);
+
+/// <summary>What the point pick of a <see cref="NavJobPointPick"/> job came to; published with <see cref="NavJob.Status"/>.</summary>
+public enum NavJobPickOutcome
+{
+    /// <summary>No pick was made (an ordinary job, or the job has not run).</summary>
+    None = 0,
+
+    /// <summary>A point was picked and is the job's <see cref="NavJob.Destination"/>.</summary>
+    Picked = 1,
+
+    /// <summary>The mesh answered but holds no point within reach.</summary>
+    NoPoint = 2,
+
+    /// <summary>The owner has not looked the map's mesh up yet; the owner must pick.</summary>
+    MeshUnknown = 3,
+}
+
+/// <summary>
 /// One detached path query: values only (map id, endpoints, options) and the pathfinder to search. The worker never sees a creature, map
 /// or session. The owner polls <see cref="IsDone"/> on its own thread and validates the answer before it uses it (a result that no
 /// longer fits the request is dropped, never applied).
@@ -138,6 +161,30 @@ public sealed class NavJob
         if (TrackMissedTiles) _missed = [];
     }
 
+    /// <summary>
+    /// A job whose destination is a random point picked on the worker (<paramref name="pick"/>) and then searched from
+    /// <paramref name="start"/>. <see cref="Destination"/> is <c>pick.Center</c> until the worker writes the picked point.
+    /// </summary>
+    public NavJob(ISharedPathSearch pathfinder, uint mapId, Vector3 start, NavJobPointPick pick, PathOptions options, bool urgent = false)
+    {
+        ArgumentNullException.ThrowIfNull(pathfinder);
+        ArgumentNullException.ThrowIfNull(pick);
+        ArgumentNullException.ThrowIfNull(options);
+        Pathfinder = pathfinder;
+        MapId = mapId;
+        Start = start;
+        Pick = pick;
+        Destination = pick.Center;
+        Options = options;
+        Urgent = urgent;
+    }
+
+    /// <summary>The point pick this job makes before its search; null for an ordinary job.</summary>
+    public NavJobPointPick? Pick { get; }
+
+    /// <summary>What the pick came to; valid once the job is done (<see cref="NavJobPickOutcome.None"/> for an ordinary job).</summary>
+    public NavJobPickOutcome PickOutcome { get; internal set; }
+
     /// <summary>The worker reports the navigation tiles its search wanted and did not have (<see cref="MissedTiles"/>); needs an <see cref="ISharedTiledPathSearch"/>.</summary>
     public bool TrackMissedTiles { get; }
 
@@ -152,7 +199,7 @@ public sealed class NavJob
 
     public Vector3 Start { get; }
 
-    public Vector3 Destination { get; }
+    public Vector3 Destination { get; internal set; }
 
     public PathOptions Options { get; }
 
@@ -327,6 +374,25 @@ public sealed class NavJobSystem : IDisposable
         PathSearchTotals before = PathSearchCounters.Current;
         try
         {
+            if (job.Pick is { } pick)
+            {
+                // The point half of a wander leg: a pure function of (seed, centre, radius, loaded mesh). Written before Finish publishes the status.
+                var rng = new Random(pick.Seed);
+                bool? got = pick.Points.TryGetRandomPointAroundShared(job.MapId, pick.Center, pick.Radius, rng, pick.PointOptions, out Vector3 picked);
+                if (got is null || !got.Value)
+                {
+                    job.PickOutcome = got is null ? NavJobPickOutcome.MeshUnknown : NavJobPickOutcome.NoPoint;
+                    long skipCompute = Stopwatch.GetTimestamp() - taken;
+                    Account(skipCompute);
+                    Interlocked.Increment(ref _completed);
+                    job.Finish(NavJobStatus.Completed, null, PathSearchCounters.Current - before, skipCompute, queueTicks);
+                    return;
+                }
+
+                job.Destination = picked;
+                job.PickOutcome = NavJobPickOutcome.Picked;
+            }
+
             PathResult result = job.TrackMissedTiles && job.Pathfinder is ISharedTiledPathSearch tiled
                 ? tiled.FindPathShared(job.MapId, job.Start, job.Destination, job.Options, job.MissedList)
                 : job.Pathfinder.FindPathShared(job.MapId, job.Start, job.Destination, job.Options);

@@ -23,7 +23,8 @@ public sealed class ItemSpecialProcTests
         using var kit = new SpellTestKit(specialSpell, SpellTestKit.Spell(proc, SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy)) with
         { ProcChance = 100, StartRecoveryCategory = 0, StartRecoveryTime = 0 });
         (Player player, FakeSession session) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 2, 0);
+        SpellTestKit.FlagForPvp(player);
+        (Player victim, _) = kit.AddHostilePlayer(2, 2, 0);
         player.Inventory.Templates = new ItemTemplateStore([new ItemTemplate { Entry = 49522, Class = 2, SubClass = 7,
             InventoryType = 21, Delay = 1000, Stackable = 1, Spells = [new ItemSpell(proc, 2, 3, 0, 1000, 77, 1000)] }]);
         player.Inventory.GuidAllocator = new ItemGuidAllocator();
@@ -50,7 +51,8 @@ public sealed class ItemSpecialProcTests
             SpellTestKit.Spell(proc, SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy)) with
             { ProcChance = 100, StartRecoveryCategory = 0, StartRecoveryTime = 0 });
         (Player player, FakeSession session) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 2, 0);
+        SpellTestKit.FlagForPvp(player);
+        (Player victim, _) = kit.AddHostilePlayer(2, 2, 0);
         Item item = Equip(player, proc);
         session.Clear();
 
@@ -72,7 +74,8 @@ public sealed class ItemSpecialProcTests
         using var kit = new SpellTestKit(special, SpellTestKit.Spell(proc, SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy)) with
         { ProcChance = 100, StartRecoveryCategory = 0, StartRecoveryTime = 0 });
         (Player player, FakeSession session) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 2, 0);
+        SpellTestKit.FlagForPvp(player);
+        (Player victim, _) = kit.AddHostilePlayer(2, 2, 0);
         player.StatState.SetCanDualWield(true);
         player.Inventory.Requirements = new DualWielder();
         Item item = Equip(player, proc, InventorySlots.OffHand);
@@ -97,7 +100,8 @@ public sealed class ItemSpecialProcTests
         using var kit = new SpellTestKit(special, lethal, SpellTestKit.Spell(proc, SpellTestKit.Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.UnitEnemy)) with
         { ProcChance = 100, StartRecoveryCategory = 0, StartRecoveryTime = 0 });
         (Player player, FakeSession session) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 2, 0);
+        SpellTestKit.FlagForPvp(player);
+        (Player victim, _) = kit.AddHostilePlayer(2, 2, 0);
         Item item = Equip(player, proc);
         kit.System.CombatRules = new AlwaysMissRules();
         session.Clear();

@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,7 +40,7 @@ public sealed class MiscNoticeHandlers : IOpcodeHandlerGroup
         }
 
         session.Services.GetService<ILoggerFactory>()?.CreateLogger<MiscNoticeHandlers>().LogInformation("Player {Player} reported a {Kind}: [{Type}] {Content}", player.Name, suggestion ? "suggestion" : "bug",
-            Truncate(type, 64), Truncate(content, 2000));
+            LogSafe.Escape(type, 64), LogSafe.Escape(content, 2000)); // client text: CR/LF and control characters escaped (log forging)
     }
 
     internal static bool TryParseBug(byte[] payload, out bool suggestion, out string content, out string type)
@@ -61,6 +62,4 @@ public sealed class MiscNoticeHandlers : IOpcodeHandlerGroup
             return false;
         }
     }
-
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
 }

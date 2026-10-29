@@ -52,7 +52,8 @@ public sealed class SpellSeamTests
     private static (Player Caster, FakeSession Session, Player Target) Duel(SpellTestKit kit, float distance = 3)
     {
         (Player caster, FakeSession session) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, distance, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, distance, 0);
         kit.Spellbook.Teach(caster, NextSwing, NextSwingAlt, CastBolt, ChannelSpell, InstantHeal, DotSpell);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);
         kit.World.RunTick(0);

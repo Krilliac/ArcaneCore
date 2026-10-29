@@ -78,7 +78,21 @@ public sealed class SpellAura
     internal int UnitAmount { get; set; }
 
     /// <summary>Periodic interval in ms (Spell.dbc EffectAmplitude through SPELLMOD_ACTIVATION_TIME for the periodic types; 0 = not periodic).</summary>
-    public uint Amplitude { get; internal set; }
+    public uint Amplitude
+    {
+        get;
+        internal set
+        {
+            if (field != value)
+            {
+                field = value;
+                Holder?.NotifyChanged(); // IsPeriodic (read by HolderNeedsTick) follows the amplitude
+            }
+        }
+    }
+
+    /// <summary>The holder this aura was attached to by <see cref="SpellAuraHolder.SetAura"/> (null before that); lets a field write wake the target's spell state.</summary>
+    internal SpellAuraHolder? Holder { get; set; }
 
     /// <summary>Spell.dbc EffectMiscValue (power type for energize/mana auras).</summary>
     public int MiscValue { get; }
@@ -223,9 +237,31 @@ public sealed class SpellAuraHolder
     public bool IsPermanent { get; }
 
     /// <summary>Remaining ms (-1 when permanent).</summary>
-    public int Duration { get; internal set; }
+    public int Duration
+    {
+        get;
+        internal set
+        {
+            if (field != value)
+            {
+                field = value;
+                NotifyChanged();
+            }
+        }
+    }
 
-    public int MaxDuration { get; internal set; }
+    public int MaxDuration
+    {
+        get;
+        internal set
+        {
+            if (field != value)
+            {
+                field = value;
+                NotifyChanged();
+            }
+        }
+    }
 
     /// <summary>vmangos m_AuraDRLevel as its rate (GetDiminishingRate: 1, 1/2, 1/4), set by the diminishing-returns rule; scales the PvP heartbeat curve.</summary>
     internal float DiminishingRate { get; set; } = 1f;
@@ -237,10 +273,32 @@ public sealed class SpellAuraHolder
     internal int UndiminishedMaxDuration { get; set; }
 
     /// <summary>vmangos _heartBeatRandValue: the PvP heartbeat's draw in (0, 100), 0 when the holder has none.</summary>
-    internal float HeartbeatRandValue { get; set; }
+    internal float HeartbeatRandValue
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                NotifyChanged();
+            }
+        }
+    }
 
     /// <summary>vmangos _pveHeartBeatData->timer: ms to the next PvE heartbeat roll, -1 when the holder has none.</summary>
-    internal int PveHeartbeatTimer { get; set; } = -1;
+    internal int PveHeartbeatTimer
+    {
+        get;
+        set
+        {
+            if (field != value)
+            {
+                field = value;
+                NotifyChanged();
+            }
+        }
+    } = -1;
 
     /// <summary>vmangos _pveHeartBeatData->hitChance: the caster's spell hit chance against the target in 0-10000.</summary>
     internal int PveHeartbeatHitChance { get; set; }
@@ -268,7 +326,18 @@ public sealed class SpellAuraHolder
     /// <summary>Visible aura slot 0-47, or <see cref="NoSlot"/>.</summary>
     public byte Slot { get; internal set; } = NoSlot;
 
-    public byte StackAmount { get; internal set; } = 1;
+    public byte StackAmount
+    {
+        get;
+        internal set
+        {
+            if (field != value)
+            {
+                field = value;
+                NotifyChanged();
+            }
+        }
+    } = 1;
 
     /// <summary>
     /// Remaining proc charges (Spell.dbc procCharges at application; 0 = unlimited). Persisted; consumption belongs to the proc system. Every
@@ -312,7 +381,18 @@ public sealed class SpellAuraHolder
         Target.SetUInt32(index, (Target.GetUInt32(index) & ~(0xFFu << shift)) | (value << shift));
     }
 
-    public bool IsRemoved { get; internal set; }
+    public bool IsRemoved
+    {
+        get;
+        internal set
+        {
+            if (field != value)
+            {
+                field = value;
+                NotifyChanged();
+            }
+        }
+    }
 
     /// <summary>Whether <see cref="SpellSystem.AddAuraHolder"/> rejected this holder because the target's visible aura slots were full of more important auras (<see cref="VisibleSlotLimit"/>).</summary>
     public bool IsSlotLimited { get; internal set; }
@@ -324,7 +404,24 @@ public sealed class SpellAuraHolder
     internal bool RemovedByDeath => RemoveMode == AuraRemoveMode.Death;
 
     /// <summary>For an aura a party area aura put on a group member: the caster's source holder (vmangos AreaAura owner).</summary>
-    public SpellAuraHolder? AreaParent { get; internal set; }
+    public SpellAuraHolder? AreaParent
+    {
+        get;
+        internal set
+        {
+            if (!ReferenceEquals(field, value))
+            {
+                field = value;
+                NotifyChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// A field that <see cref="SpellSystem.HolderNeedsTick"/>, <see cref="SpellSystem.IsDormant"/> or the area-aura pass reads changed: wake the
+    /// target's spell state (active set). Cheap when the target has no state or the state is already active.
+    /// </summary>
+    internal void NotifyChanged() => Target.SpellState?.Wake(SpellWakeReason.HolderChanged);
 
     /// <summary>Whether this holder is a caster's own party area aura that spreads to its group.</summary>
     public bool IsAreaSource => AreaParent is null && CasterGuid == Target.Guid && Spell.HasEffect(SpellEffectName.ApplyAreaAuraParty);
@@ -381,7 +478,13 @@ public sealed class SpellAuraHolder
 
     internal void SetAura(SpellAura aura)
     {
-        _auras[aura.EffectIndex] = aura;
+        aura.Holder = this;
+        if (!ReferenceEquals(_auras[aura.EffectIndex], aura))
+        {
+            _auras[aura.EffectIndex] = aura;
+            NotifyChanged();
+        }
+
         _positive = null;
     }
 
