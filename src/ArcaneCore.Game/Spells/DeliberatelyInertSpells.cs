@@ -94,8 +94,7 @@ public static partial class DeliberatelyInertSpells
 
     private static InertSpell[] Build() =>
     [
-        // UnusedEffect (15)
-        new(108, R.UnusedEffect, "effect or aura Evade is unused in the reference cores", "vmangos SpellEffects.cpp:81 EffectEmpty (one spell: Evade (DND)); no core handles spell 108", "Evade"),
+        // UnusedEffect (14)
         new(978, R.UnusedEffect, "effect or aura SharePetTracking is unused in the reference cores", "vmangos SpellAuras.cpp:184 HandleUnused (useless); no core handles spell 978", "SharePetTracking"),
         new(1492, R.UnusedEffect, "effect or aura GuaranteeHit is unused in the reference cores", "vmangos SpellEffects.cpp:112 EffectUnused (unused from pre-1.2.1); no core handles spell 1492", "GuaranteeHit"),
         new(1941, R.UnusedEffect, "effect or aura PeriodicManaFunnel is unused in the reference cores", "vmangos SpellAuras.cpp:128 HandleUnused (obsolete?); no core handles spell 1941", "PeriodicManaFunnel"),
