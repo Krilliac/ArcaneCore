@@ -6,7 +6,8 @@
 # also fails it (a fix: delete the line). Refresh after a fix lane lands, from the repository root:
 #   ARCANECORE_TEST_DBC_DIR=<build-5875 DBFilesClient dir> ARCANECORE_SPELL_SWEEP_FULL=1 ARCANECORE_SPELL_SWEEP_WRITE_BASELINE=1 \
 #     dotnet test tests/ArcaneCore.World.Tests --filter "FullyQualifiedName~SpellContractSweepTests.Sweep_"
-# then review the diff of this file: every removed line should be a fix you expected, every added line a regression to explain.
+# The same run rewrites spell-contract-coverage.txt (which checks ran per spell; a check that stops running also fails the sweep).
+# Then review both diffs: every removed line here should be a fix you expected, every added line a regression to explain.
 # Known failure kept on purpose: Feign Death (5384) does not break on movement (c.interrupt-not-removed move); a fix lane owns it.
 a.error-log	10018	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	10253	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
@@ -2158,6 +2159,7 @@ f.cost-not-deducted	11021	Mana expected>=90
 f.cost-not-deducted	11444	Mana expected>=50
 f.cost-not-deducted	11974	Mana expected>=110
 f.cost-not-deducted	11980	Mana expected>=105
+f.cost-not-deducted	11990	Mana expected>=15
 f.cost-not-deducted	12040	Mana expected>=10
 f.cost-not-deducted	12096	Mana expected>=35
 f.cost-not-deducted	12098	Mana expected>=90
@@ -2173,27 +2175,41 @@ f.cost-not-deducted	13864	Mana expected>=60
 f.cost-not-deducted	15288	Mana expected>=90
 f.cost-not-deducted	15507	Mana expected>=5
 f.cost-not-deducted	15653	Mana expected>=90
+f.cost-not-deducted	15783	Mana expected>=8
 f.cost-not-deducted	15784	Mana expected>=10
 f.cost-not-deducted	15800	Mana expected>=95
 f.cost-not-deducted	15970	Mana expected>=90
 f.cost-not-deducted	1609	Rage expected>=200
 f.cost-not-deducted	16170	Mana expected>=10
+f.cost-not-deducted	16430	Mana expected>=10
 f.cost-not-deducted	17139	Mana expected>=110
 f.cost-not-deducted	17150	Mana expected>=90
+f.cost-not-deducted	17173	Mana expected>=75
+f.cost-not-deducted	17238	Mana expected>=75
+f.cost-not-deducted	17243	Mana expected>=75
+f.cost-not-deducted	17620	Mana expected>=75
 f.cost-not-deducted	17633	Mana expected>=10
+f.cost-not-deducted	17682	Mana expected>=75
 f.cost-not-deducted	1770	Energy expected>=10
 f.cost-not-deducted	18100	Mana expected>=10
 f.cost-not-deducted	18267	Mana expected>=105
+f.cost-not-deducted	18557	Mana expected>=75
 f.cost-not-deducted	19463	Mana expected>=90
 f.cost-not-deducted	20657	Mana expected>=90
 f.cost-not-deducted	20663	Mana expected>=90
 f.cost-not-deducted	20701	Mana expected>=200
+f.cost-not-deducted	20743	Mana expected>=75
+f.cost-not-deducted	20754	Mana expected>=15
 f.cost-not-deducted	20798	Mana expected>=50
 f.cost-not-deducted	20821	Mana expected>=90
+f.cost-not-deducted	21096	Mana expected>=8
 f.cost-not-deducted	22168	Mana expected>=5
 f.cost-not-deducted	22187	Mana expected>=110
 f.cost-not-deducted	22371	Mana expected>=5
 f.cost-not-deducted	22417	Mana expected>=10
+f.cost-not-deducted	22822	Mana expected>=8
+f.cost-not-deducted	22823	Mana expected>=8
+f.cost-not-deducted	24618	Mana expected>=75
 f.cost-not-deducted	2497	Mana expected>=9
 f.cost-not-deducted	2498	Mana expected>=14
 f.cost-not-deducted	2499	Mana expected>=21
@@ -2207,12 +2223,16 @@ f.cost-not-deducted	5605	Mana expected>=30
 f.cost-not-deducted	6154	Rage expected>=200
 f.cost-not-deducted	6742	Mana expected>=10
 f.cost-not-deducted	6950	Mana expected>=15
+f.cost-not-deducted	7290	Mana expected>=10
 f.cost-not-deducted	8362	Mana expected>=5
+f.cost-not-deducted	8364	Mana expected>=8
+f.cost-not-deducted	9373	Mana expected>=10
 f.cost-not-deducted	9591	Mana expected>=90
 f.cost-not-deducted	9616	Mana expected>=65
 f.cost-not-deducted	9654	Mana expected>=90
 f.cost-not-deducted	9771	Mana expected>=90
 f.cost-over-deducted	11431	Mana expected<=180
+f.cost-over-deducted	11433	Mana expected<=320
 f.cost-over-deducted	11642	Mana expected<=215
 f.cost-over-deducted	11824	Mana expected<=135
 f.cost-over-deducted	11829	Mana expected<=260
@@ -2267,6 +2287,8 @@ f.cost-over-deducted	20794	Mana expected<=260
 f.cost-over-deducted	20813	Mana expected<=260
 f.cost-over-deducted	20827	Mana expected<=260
 f.cost-over-deducted	20831	Mana expected<=150
+f.cost-over-deducted	21791	Mana expected<=200
+f.cost-over-deducted	21793	Mana expected<=200
 f.cost-over-deducted	22167	Mana expected<=215
 f.cost-over-deducted	22275	Mana expected<=260
 f.cost-over-deducted	22373	Mana expected<=280
@@ -2277,6 +2299,7 @@ f.cost-over-deducted	23202	Mana expected<=260
 f.cost-over-deducted	23206	Mana expected<=150
 f.cost-over-deducted	23381	Mana expected<=180
 f.cost-over-deducted	25263	Mana expected<=150
+f.cost-over-deducted	25817	Mana expected<=200
 f.cost-over-deducted	26194	Mana expected<=130
 f.cost-over-deducted	27567	Mana expected<=150
 f.cost-over-deducted	28447	Mana expected<=380

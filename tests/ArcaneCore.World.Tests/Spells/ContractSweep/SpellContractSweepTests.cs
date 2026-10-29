@@ -14,6 +14,7 @@ namespace ArcaneCore.World.Tests.Spells.ContractSweep;
 /// ratcheted against <c>spell-contract-baseline.txt</c>. Needs the client DBCs (ARCANECORE_TEST_DBC_DIR) and skips without them.
 /// Default selection: every player-castable spell plus a seeded sample of the rest; ARCANECORE_SPELL_SWEEP_FULL=1 sweeps all rows.
 /// </summary>
+[Collection(SpellContractSweepCollection.Name)]
 public sealed class SpellContractSweepTests(ITestOutputHelper output)
 {
     private static SpellStore SweepStore(IEnumerable<SpellInfo> spells) => new([.. spells, SweepHelperSpells.SelfDummySpell()], [], []);
@@ -35,12 +36,16 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
         output.WriteLine($"swept {result.Outcomes.Count} of {result.RowsTotal} rows in {result.Elapsed.TotalSeconds:F0} s; report {json} and {markdown}");
         output.WriteLine(SpellSweepReport.Summary(result, added, fixedKeys));
 
+        SpellSweepCoverage coverage = SpellSweepCoverage.Load(SpellSweepCoverage.SourcePath);
+        string[] coverageChanged = coverage.Compare(result.Outcomes);
+        output.WriteLine($"coverage: {coverageChanged.Length} swept spells changed which checks ran");
         if (Environment.GetEnvironmentVariable(SpellSweepBaseline.WriteVariable) == "1")
         {
             Assert.True(full, $"{SpellSweepBaseline.WriteVariable}=1 needs {SpellSweepCatalog.FullVariable}=1: a partial sweep would drop the other spells' lines");
             baseline.Write(result.Violations);
-            output.WriteLine($"baseline rewritten: {baseline.Path}");
-            (added, fixedKeys) = ([], []);
+            coverage.Write(result.Outcomes);
+            output.WriteLine($"baseline rewritten: {baseline.Path}; coverage rewritten: {coverage.Path}");
+            (added, fixedKeys, coverageChanged) = ([], [], []);
         }
 
         Assert.True(result.Outcomes.Count == selection.Count && selection.Count > 0, $"swept {result.Outcomes.Count} of {selection.Count} selected spells");
@@ -51,6 +56,8 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
         Assert.True(added.Length == 0, $"{added.Length} contract violations not in the baseline (regressions):\n" + string.Join('\n', added.Take(40)));
         Assert.True(fixedKeys.Length == 0, $"{fixedKeys.Length} baseline lines no longer happen: delete them from {SpellSweepBaseline.FileName} (the ratchet):\n"
             + string.Join('\n', fixedKeys.Take(40)));
+        Assert.True(coverageChanged.Length == 0, $"{coverageChanged.Length} spells changed which checks ran (a check that stops running is not a pass;"
+            + $" refresh {SpellSweepCoverage.FileName} only for an expected change):\n" + string.Join('\n', coverageChanged.Take(40)));
     }
 
     /// <summary>
@@ -74,7 +81,32 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
 
     // ---- the harness can fail ------------------------------------------------------------------------------------------
 
-    private const uint MoveBreaks = 990_950, ShortBuff = 990_951, StunNoClear = 990_952, StandBreaks = 990_953;
+    private const uint MoveBreaks = 990_950, ShortBuff = 990_951, StunNoClear = 990_952, StandBreaks = 990_953, CastBreaks = 990_954,
+        Cooled = 990_955, Costly = 990_956, Ranged = 990_957, Stacker = 990_958, MagicBuff = 990_959, Dispeller = 990_960, TickThrows = 990_961;
+
+    /// <summary>An instant (or <paramref name="castMs"/>) self Dummy with no aura.</summary>
+    private static SpellInfo SelfSpell(uint id, int castMs = 0) => new()
+    {
+        Id = id,
+        Name = "Sweep fault " + id,
+        RangeIndex = SpellConstants.RangeIndexSelfOnly,
+        Range = new SpellRange(0, 0),
+        CastTime = new SpellCastTime(castMs, 0, castMs),
+        SpellVisual = 1,
+        Effects = [new SpellEffectInfo { Effect = SpellEffectName.Dummy, BaseDice = 1, DieSides = 1, TargetA = SpellImplicitTarget.UnitCaster }, new(), new()],
+    };
+
+    /// <summary>A priest-family Magic dispel of any unit within 30 yards (the dispeller the sweep indexes for (i)).</summary>
+    private static SpellInfo DispelSpell() => new()
+    {
+        Id = Dispeller,
+        Name = "Sweep dispel",
+        SpellFamilyName = 6,
+        RangeIndex = 4,
+        Range = new SpellRange(0, 30),
+        SpellVisual = 1,
+        Effects = [new SpellEffectInfo { Effect = SpellEffectName.Dispel, BaseDice = 1, DieSides = 1, MiscValue = 1, TargetA = SpellImplicitTarget.Unit }, new(), new()],
+    };
 
     private static SpellInfo Aura(uint id, AuraType type, int durationMs, SpellAuraInterruptFlags flags = SpellAuraInterruptFlags.None) => new()
     {
@@ -88,9 +120,10 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
         Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, BaseDice = 1, DieSides = 1, TargetA = SpellImplicitTarget.UnitCaster, AuraType = type }, new(), new()],
     };
 
-    private static SweepResult RunFaults(SpellInfo spell, string contracts, ISweepActions? actions = null, ISweepProbe? probe = null, Action<SpellSweepRig>? arrange = null)
+    private static SweepResult RunFaults(SpellInfo spell, string contracts, ISweepActions? actions = null, ISweepProbe? probe = null,
+        Action<SpellSweepRig>? arrange = null, SpellInfo[]? extra = null)
     {
-        using var rig = new SpellSweepRig(SweepStore([spell]));
+        using var rig = new SpellSweepRig(SweepStore([spell, .. extra ?? []]));
         arrange?.Invoke(rig);
         rig.TakeFaults();
         SweepResult result = new SpellSweepRunner(rig, catalog: null, actions, probe) { Contracts = contracts }.Run([spell], 1, full: false);
@@ -166,7 +199,7 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void Harness_AnExceptionInAHandler_IsCaughtAsGating()
+    public void Harness_AnExceptionInAnApplyHandler_IsCaughtAsGating()
     {
         AuraType unhandled = AuraSupport.Entries.First(e => e.Level == AuraSupportLevel.Unsupported).Type;
         SweepResult result = RunFaults(Aura(StunNoClear, unhandled, 2_000), "aj", arrange: rig =>
@@ -177,7 +210,116 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
                     throw new InvalidOperationException("injected");
                 }
             }, null)));
-        Assert.Contains(result.Violations, v => v.Category is SweepCategory.Exception or SweepCategory.LoggedFault);
+        // The cast pipeline counts it in the ledger (spell.script) and lets it out of CastSpell: both reach the report, both gate.
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.Exception && v.Detail.StartsWith("InvalidOperationException at", StringComparison.Ordinal));
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.LoggedFault && v.Detail.Contains(":System.InvalidOperationException", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// A periodic handler that throws on every tick: the engine catches it into the fault ledger without logging (aura.tick), and the
+    /// sweep still reports it as a gating logged fault.
+    /// </summary>
+    [Fact]
+    public void Harness_AnExceptionCaughtIntoTheLedgerOnly_IsCaughtAsGating()
+    {
+        AuraType unhandled = AuraSupport.Entries.Where(e => e.Level == AuraSupportLevel.Unsupported).Skip(1).First().Type;
+        SpellInfo spell = Aura(TickThrows, unhandled, 3_000) with
+        {
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, BaseDice = 1, DieSides = 1, TargetA = SpellImplicitTarget.UnitCaster, AuraType = unhandled, Amplitude = 1_000 }, new(), new()],
+        };
+        SweepResult result = RunFaults(spell, "bj", arrange: rig =>
+            rig.System.RegisterAura(unhandled, new AuraHandler(null, (_, _, _) => throw new InvalidOperationException("injected tick"))));
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.LoggedFault && v.Detail.StartsWith("aura.tick:System.InvalidOperationException", StringComparison.Ordinal));
+    }
+
+    /// <summary>An exception out of a driver (here an interrupt action) is a gating exception of the spell, and the sweep goes on.</summary>
+    [Fact]
+    public void Harness_AnExceptionOutOfTheSweep_IsCaughtAsGating()
+    {
+        SweepResult result = RunFaults(Aura(StandBreaks, AuraType.Dummy, 30_000, (SpellAuraInterruptFlags)AuraInterruptMask.Standing), "cj",
+            new ThrowingActions());
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.Exception && v.Detail.StartsWith("NotSupportedException", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Harness_ACastThatIgnoresMovement_IsCaught()
+    {
+        SpellInfo spell = SelfSpell(CastBreaks, castMs: 2_000) with { InterruptFlags = SpellInterruptFlags.Movement };
+        SweepResult honest = RunFaults(spell, "d");
+        Assert.Equal("ran", honest.Outcomes[0].Checks["d"]);
+        Assert.DoesNotContain(honest.Violations, v => v.Category.StartsWith("d.", StringComparison.Ordinal));
+
+        SweepResult result = RunFaults(spell, "d", probe: new AlwaysCastingProbe());
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.CastNotInterrupted && v.SpellId == CastBreaks);
+    }
+
+    [Fact]
+    public void Harness_AMissingCooldown_IsCaught()
+    {
+        SpellInfo spell = SelfSpell(Cooled) with { RecoveryTime = 5_000, Category = 990, CategoryRecoveryTime = 5_000 };
+        SweepResult honest = RunFaults(spell, "ej");
+        Assert.Equal("ran", honest.Outcomes[0].Checks["e"]);
+        Assert.DoesNotContain(honest.Violations, v => v.Category.StartsWith("e.", StringComparison.Ordinal));
+
+        SweepResult result = RunFaults(spell, "ej", probe: new NoCooldownProbe());
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.CooldownMissing && v.SpellId == Cooled);
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.CategoryCooldownMissing && v.SpellId == Cooled);
+    }
+
+    [Fact]
+    public void Harness_ACostNotTaken_IsCaught()
+    {
+        SpellInfo spell = SelfSpell(Costly) with { ManaCost = 50, PowerType = (int)PowerType.Mana };
+        SweepResult honest = RunFaults(spell, "fj");
+        Assert.Equal("ran", honest.Outcomes[0].Checks["f"]);
+        Assert.DoesNotContain(honest.Violations, v => v.Category.StartsWith("f.", StringComparison.Ordinal));
+
+        SweepResult result = RunFaults(spell, "fj", probe: new FlatPowerProbe());
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.CostNotDeducted && v.SpellId == Costly);
+    }
+
+    [Fact]
+    public void Harness_AnOutOfRangeCastAccepted_IsCaught()
+    {
+        SpellInfo spell = new()
+        {
+            Id = Ranged,
+            Name = "Sweep fault ranged",
+            RangeIndex = 4,
+            Range = new SpellRange(0, 30),
+            SpellVisual = 1,
+            Effects = [new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage, BaseDice = 1, DieSides = 1, TargetA = SpellImplicitTarget.UnitEnemy }, new(), new()],
+        };
+        SweepResult honest = RunFaults(spell, "g");
+        Assert.Equal("ran", honest.Outcomes[0].Checks["g"]);
+        Assert.DoesNotContain(honest.Violations, v => v.Category.StartsWith("g.", StringComparison.Ordinal));
+
+        SweepResult result = RunFaults(spell, "g", probe: new RangeBlindProbe());
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.OutOfRangeAccepted && v.SpellId == Ranged);
+    }
+
+    [Fact]
+    public void Harness_StacksSpreadOverHolders_AreCaught()
+    {
+        SpellInfo spell = Aura(Stacker, AuraType.Dummy, 30_000) with { StackAmount = 3 };
+        SweepResult honest = RunFaults(spell, "hj");
+        Assert.Equal("ran", honest.Outcomes[0].Checks["h"]);
+        Assert.DoesNotContain(honest.Violations, v => v.Category.StartsWith("h.", StringComparison.Ordinal));
+
+        SweepResult result = RunFaults(spell, "hj", probe: new SplitStackProbe());
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.StackOverCap && v.Detail.Contains("holders=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Harness_AnAuraThatSurvivesItsDispel_IsCaught()
+    {
+        SpellInfo spell = Aura(MagicBuff, AuraType.Dummy, 30_000) with { Dispel = 1 };
+        SweepResult honest = RunFaults(spell, "ij", extra: [DispelSpell()]);
+        Assert.Equal("ran:" + Dispeller, honest.Outcomes[0].Checks["i"]);
+        Assert.DoesNotContain(honest.Violations, v => v.Category.StartsWith("i.", StringComparison.Ordinal));
+
+        SweepResult result = RunFaults(spell, "ij", probe: new StickyAuraProbe(), extra: [DispelSpell()]);
+        Assert.Contains(result.Violations, v => v.Category == SweepCategory.NotDispelled && v.SpellId == MagicBuff);
     }
 
     [Fact]
@@ -213,15 +355,23 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
         public bool Move(SweepScene scene, Player player) => ProductionSweepActions.Move(scene, player);
     }
 
-    /// <summary>A never-expiring aura: once seen, a holder keeps being reported as applied.</summary>
-    private sealed class StickyAuraProbe : ISweepProbe
+    /// <summary>An action driver that throws.</summary>
+    private sealed class ThrowingActions : ISweepActions
     {
-        private readonly ProductionSweepProbe _real = new();
+        public IReadOnlyList<SweepAction> Actions { get; } =
+            [new("throws", AuraInterruptMask.Standing, PlayerOnly: false, (_, _) => throw new NotSupportedException("injected driver fault"))];
+
+        public bool Move(SweepScene scene, Player player) => ProductionSweepActions.Move(scene, player);
+    }
+
+    /// <summary>A never-expiring aura: once seen, a holder keeps being reported as applied.</summary>
+    private sealed class StickyAuraProbe : ProductionSweepProbe
+    {
         private readonly Dictionary<(ObjectGuid, uint), IReadOnlyList<SpellAuraHolder>> _seen = [];
 
-        public IReadOnlyList<SpellAuraHolder> Holders(SpellSystem system, Unit unit, uint spellId)
+        public override IReadOnlyList<SpellAuraHolder> Holders(SpellSystem system, Unit unit, uint spellId)
         {
-            IReadOnlyList<SpellAuraHolder> live = _real.Holders(system, unit, spellId);
+            IReadOnlyList<SpellAuraHolder> live = base.Holders(system, unit, spellId);
             if (live.Count > 0)
             {
                 _seen[(unit.Guid, spellId)] = live;
@@ -230,7 +380,55 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
 
             return _seen.GetValueOrDefault((unit.Guid, spellId)) ?? [];
         }
-
-        public UnitFlags Flags(Unit unit) => _real.Flags(unit);
     }
+
+    /// <summary>A cast that a move does not interrupt: the caster keeps casting.</summary>
+    private sealed class AlwaysCastingProbe : ProductionSweepProbe
+    {
+        public override bool IsCasting(SpellSystem system, Unit unit) => true;
+    }
+
+    /// <summary>A spell that never goes on cooldown, its own or its category's.</summary>
+    private sealed class NoCooldownProbe : ProductionSweepProbe
+    {
+        public override bool IsReady(SpellSystem system, Unit unit, SpellInfo spell) => true;
+
+        public override uint? CategoryCooldownUntil(SpellSystem system, Unit unit, uint category) => null;
+    }
+
+    /// <summary>A cost that is never taken: the power never moves.</summary>
+    private sealed class FlatPowerProbe : ProductionSweepProbe
+    {
+        public override uint Power(Unit unit, PowerType power) => 1_000;
+    }
+
+    /// <summary>A range check that lets everything through.</summary>
+    private sealed class RangeBlindProbe : ProductionSweepProbe
+    {
+        public override SpellCastResult Cast(SpellSystem system, Unit caster, uint spellId, SpellCastTargets targets, bool triggered)
+        {
+            SpellCastResult result = base.Cast(system, caster, spellId, targets, triggered);
+            return result == SpellCastResult.OutOfRange ? SpellCastResult.CastOk : result;
+        }
+    }
+
+    /// <summary>Every application lands in a holder of its own (reported as two holders of the same caster).</summary>
+    private sealed class SplitStackProbe : ProductionSweepProbe
+    {
+        public override IReadOnlyList<SpellAuraHolder> Holders(SpellSystem system, Unit unit, uint spellId)
+        {
+            IReadOnlyList<SpellAuraHolder> live = base.Holders(system, unit, spellId);
+            return live.Count > 0 ? [.. live, .. live] : live;
+        }
+    }
+}
+
+/// <summary>
+/// The sweep reads the process-wide fault ledger (<see cref="ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared"/>) and attributes every new fault
+/// to the spell being swept, so no other test may record into it meanwhile: these tests run alone.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class SpellContractSweepCollection
+{
+    public const string Name = "Spell contract sweep (fault ledger)";
 }

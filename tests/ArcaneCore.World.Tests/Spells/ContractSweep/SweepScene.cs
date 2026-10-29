@@ -3,7 +3,8 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Net;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Tests.Spells.ContractSweep;
 
@@ -77,9 +78,9 @@ internal sealed class SweepScene : IDisposable
     /// <summary>Every unit of the scene the spell could have put an aura on.</summary>
     public IEnumerable<Unit> Units => _players.Cast<Unit>().Concat(_creatures);
 
-    /// <summary>A session for the production movement path (the handlers read its world, services and logger).</summary>
+    /// <summary>A session for the production movement path (the handlers read its world, services and logger: the rig's capture, so a fault logged there counts).</summary>
     public WorldSession Session => _session ??= new WorldSession(new MemoryStream(), "spell-sweep", Rig.Services, Rig.Opcodes, Rig.World,
-        Rig.Registry, new WorldSessionOptions(), NullLogger.Instance);
+        Rig.Registry, new WorldSessionOptions(), Rig.Services.GetRequiredService<ILoggerFactory>().CreateLogger("spell-sweep.session"));
 
     /// <summary>A hostile creature next to the scene that attacks or is attacked by the drivers.</summary>
     public Creature Striker() => _striker ??= AddCreature(hostile: true, 60, -2f, 0);

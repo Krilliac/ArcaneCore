@@ -174,3 +174,53 @@ internal sealed class SpellSweepBaseline
         return parts.Length > 1 && uint.TryParse(parts[1], out uint id) ? id : 0;
     }
 }
+
+/// <summary>
+/// The checked-in coverage list (<c>spell-contract-coverage.txt</c>): for every Spell.dbc row, the generic cast result and which checks
+/// ran. A swept spell whose line changed fails the sweep: a check that stopped running (a cast now refused, an aura no longer applied)
+/// would otherwise look like a pass, and one that started running needs its line refreshed. Refreshed with the baseline (same variable).
+/// </summary>
+internal sealed class SpellSweepCoverage
+{
+    public const string FileName = "spell-contract-coverage.txt";
+
+    private SpellSweepCoverage(string path, IReadOnlyList<string> header, Dictionary<uint, string> lines)
+    {
+        Path = path;
+        Header = header;
+        Lines = lines;
+    }
+
+    public string Path { get; }
+
+    public IReadOnlyList<string> Header { get; }
+
+    public Dictionary<uint, string> Lines { get; }
+
+    public static string SourcePath => RepositorySource.FindFile("tests", "ArcaneCore.World.Tests", "Spells", "ContractSweep", FileName)
+        ?? throw new FileNotFoundException("the spell contract coverage list is missing", FileName);
+
+    public static SpellSweepCoverage Load(string path)
+    {
+        string[] lines = File.ReadAllLines(path);
+        List<string> header = [.. lines.TakeWhile(l => l.StartsWith('#'))];
+        Dictionary<uint, string> byId = [];
+        foreach (string line in lines.Where(l => l.Length > 0 && !l.StartsWith('#')))
+        {
+            byId[uint.Parse(line.AsSpan(0, line.IndexOf('\t')), System.Globalization.CultureInfo.InvariantCulture)] = line;
+        }
+
+        return new SpellSweepCoverage(path, header, byId);
+    }
+
+    /// <summary>Every swept spell whose coverage line differs from the file, as "expected -> found".</summary>
+    public string[] Compare(IEnumerable<SweepSpellOutcome> outcomes)
+        => [.. outcomes.Select(o => (Expected: Lines.GetValueOrDefault(o.SpellId), Found: o.Coverage()))
+            .Where(p => p.Expected != p.Found)
+            .Select(p => $"{p.Expected ?? "(none)"} -> {p.Found}")
+            .Order(StringComparer.Ordinal)];
+
+    /// <summary>Rewrite the list (header kept) from a full run, by spell id, LF line ends.</summary>
+    public void Write(IEnumerable<SweepSpellOutcome> outcomes)
+        => File.WriteAllText(Path, string.Join('\n', [.. Header, .. outcomes.OrderBy(o => o.SpellId).Select(o => o.Coverage())]) + "\n");
+}

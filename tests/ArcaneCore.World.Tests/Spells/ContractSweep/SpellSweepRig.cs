@@ -148,7 +148,10 @@ internal sealed class SpellSweepRig : IDisposable
 
     public GameObjectMapSystem? Objects { get; }
 
-    /// <summary>Exceptions logged by any rig service (a catch-and-log site, LogFault) since the last <see cref="TakeFaults"/>.</summary>
+    /// <summary>
+    /// Exceptions caught since the last <see cref="TakeFaults"/>: every fault the engine counted in <see cref="FaultLedger.Shared"/> (logged
+    /// or not, throttled or not) and every exception a rig service logged that the ledger did not count, plus error lines.
+    /// </summary>
     public IReadOnlyList<SweepFault> TakeFaults() => _faults.Take();
 
     private T AddUpdater<T>(T updater) where T : class, IMapUpdater
@@ -255,8 +258,13 @@ internal sealed class SpellSweepRig : IDisposable
 internal sealed record SweepFault(string Category, string Type, string Message, string TopFrame);
 
 /// <summary>
-/// The rig's logger factory: records every log entry that carries an exception, or is Error or worse, so an exception the engine
-/// catches and logs (<see cref="FaultLedgerLogging.LogFault(ILogger, string, Exception, string, object?[])"/>) is not a silent pass.
+/// The rig's fault capture, so an exception the engine catches is never a silent pass. Two sources:
+/// <list type="bullet">
+/// <item><see cref="FaultLedger.Shared"/>, which every catch site records into (FaultLedger.Record, and LogFault through it) whether or not
+/// it logs; its throttle only limits the log lines, the counts always move. <see cref="Take"/> reports each signature whose count went up.
+/// The ledger is process-wide, so the sweep tests run in a non-parallel collection (<see cref="SpellContractSweepCollection"/>).</item>
+/// <item>The rig's logger factory: an exception logged at any level that the ledger did not count, and an Error line without one.</item>
+/// </list>
 /// </summary>
 internal sealed class SweepFaultCapture : ILoggerFactory
 {
@@ -265,6 +273,33 @@ internal sealed class SweepFaultCapture : ILoggerFactory
 
     private readonly List<SweepFault> _faults = [];
     private readonly object _gate = new();
+    private Dictionary<string, long> _ledgerCounts = [];
+    private long _ledgerTotal = -1;
+
+    /// <summary>Report the ledger signatures whose counts rose since the last call (the first call only takes the starting counts).</summary>
+    private void DrainLedger()
+    {
+        FaultLedger ledger = FaultLedger.Shared;
+        long total = ledger.Total;
+        if (total == _ledgerTotal)
+        {
+            return;
+        }
+
+        bool first = _ledgerTotal < 0;
+        _ledgerTotal = total;
+        Dictionary<string, long> counts = [];
+        foreach (FaultSnapshot entry in ledger.Snapshot())
+        {
+            counts[entry.Id] = entry.Count;
+            if (!first && entry.Count > _ledgerCounts.GetValueOrDefault(entry.Id))
+            {
+                _faults.Add(new SweepFault(entry.Site, entry.ExceptionType, entry.SampleMessage, entry.Frames.Count > 0 ? entry.Frames[0] : ""));
+            }
+        }
+
+        _ledgerCounts = counts;
+    }
 
     public void Record(string category, Exception exception)
     {
@@ -278,6 +313,7 @@ internal sealed class SweepFaultCapture : ILoggerFactory
     {
         lock (_gate)
         {
+            DrainLedger();
             SweepFault[] taken = [.. _faults];
             _faults.Clear();
             return taken;
@@ -310,13 +346,19 @@ internal sealed class SweepFaultCapture : ILoggerFactory
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Error;
+        // Enabled at every level: a caller that checks IsEnabled first ([LoggerMessage], LoggerMessage.Define) would otherwise drop a
+        // fault logged as a warning. The filtering is in Log.
+        public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
             if (exception is not null)
             {
-                owner.Record(category, exception);
+                // A LogFault site counted it in the ledger first: the ledger reports it (once, unthrottled).
+                if (!FaultLedger.WasRecorded(exception))
+                {
+                    owner.Record(category, exception);
+                }
             }
             else if (logLevel >= LogLevel.Error)
             {

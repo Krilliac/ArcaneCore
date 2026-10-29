@@ -81,8 +81,36 @@ internal sealed class SweepSpellOutcome
 
     public bool AppliedAura { get; set; }
 
-    /// <summary>Checks that ran (by contract letter) and checks that could not run with the reason, so a skipped check is never a pass.</summary>
+    /// <summary>
+    /// Checks that ran (by contract letter) and checks that could not run with the reason. A skipped check is never a pass: the coverage
+    /// line (<see cref="Coverage"/>) is ratcheted, so a check that stops running fails the sweep like a new violation.
+    /// </summary>
     public SortedDictionary<string, string> Checks { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The coverage line: spell id, generic cast result, and the checks that ran (b..i; c with the number of interrupt actions that ran).
+    /// </summary>
+    public string Coverage()
+    {
+        var ran = new List<string>();
+        foreach ((string letter, string state) in Checks)
+        {
+            if (letter == "c")
+            {
+                int actions = state.Split(',').Count(part => part.EndsWith("=ran", StringComparison.Ordinal));
+                if (actions > 0)
+                {
+                    ran.Add("c" + actions);
+                }
+            }
+            else if (state.StartsWith("ran", StringComparison.Ordinal) || state is "permanent-1s" or "long-config-only")
+            {
+                ran.Add(letter);
+            }
+        }
+
+        return $"{SpellId}\t{CastResult}\t{string.Join(' ', ran)}";
+    }
 }
 
 /// <summary>Where a spell's aura landed and on what the sweep cast it.</summary>

@@ -16,15 +16,42 @@ internal interface ISweepProbe
 
     /// <summary>The unit's UNIT_FIELD_FLAGS.</summary>
     UnitFlags Flags(Unit unit);
+
+    /// <summary>Every cast the sweep makes (SpellSystem.CastSpell).</summary>
+    SpellCastResult Cast(SpellSystem system, Unit caster, uint spellId, SpellCastTargets targets, bool triggered);
+
+    /// <summary>Whether the unit has a cast or channel in progress.</summary>
+    bool IsCasting(SpellSystem system, Unit unit);
+
+    /// <summary>Whether the spell is off its own cooldown for the unit (the global cooldown ignored).</summary>
+    bool IsReady(SpellSystem system, Unit unit, SpellInfo spell);
+
+    /// <summary>When the category's cooldown ends for the unit, or null when it has none.</summary>
+    uint? CategoryCooldownUntil(SpellSystem system, Unit unit, uint category);
+
+    /// <summary>The unit's current power of <paramref name="power"/>.</summary>
+    uint Power(Unit unit, PowerType power);
 }
 
-/// <summary>Reads the engine directly.</summary>
-internal sealed class ProductionSweepProbe : ISweepProbe
+/// <summary>Reads the engine directly. The can-fail doubles derive from it and override one observation.</summary>
+internal class ProductionSweepProbe : ISweepProbe
 {
-    public IReadOnlyList<SpellAuraHolder> Holders(SpellSystem system, Unit unit, uint spellId)
+    public virtual IReadOnlyList<SpellAuraHolder> Holders(SpellSystem system, Unit unit, uint spellId)
         => system.GetState(unit.Guid) is { } state ? [.. state.AuraHolders.Where(h => !h.IsRemoved && h.Spell.Id == spellId)] : [];
 
-    public UnitFlags Flags(Unit unit) => unit.UnitFlags;
+    public virtual UnitFlags Flags(Unit unit) => unit.UnitFlags;
+
+    public virtual SpellCastResult Cast(SpellSystem system, Unit caster, uint spellId, SpellCastTargets targets, bool triggered)
+        => system.CastSpell(caster, spellId, targets, triggered);
+
+    public virtual bool IsCasting(SpellSystem system, Unit unit) => system.GetState(unit.Guid)?.CurrentCast is not null;
+
+    public virtual bool IsReady(SpellSystem system, Unit unit, SpellInfo spell) => system.IsSpellReadyIgnoringGlobalCooldown(unit, spell);
+
+    public virtual uint? CategoryCooldownUntil(SpellSystem system, Unit unit, uint category)
+        => system.GetState(unit.Guid) is { } state && state.CategoryCooldowns.TryGetValue(category, out uint until) ? until : null;
+
+    public virtual uint Power(Unit unit, PowerType power) => unit.GetUInt32(UpdateFields.UnitFieldPower1 + (int)power);
 }
 
 /// <summary>The sweep's result: one outcome per swept spell and every violation found.</summary>
@@ -269,12 +296,13 @@ internal sealed class SpellSweepRunner
 
         foreach (SweepFault fault in _rig.TakeFaults())
         {
-            Violate(fault.Type == SweepFaultCapture.ErrorLogType ? SweepCategory.ErrorLog : SweepCategory.LoggedFault, spell.Id, $"{fault.Category}:{fault.Type}");
+            Violate(fault.Type == SweepFaultCapture.ErrorLogType ? SweepCategory.ErrorLog : SweepCategory.LoggedFault, spell.Id,
+                fault.Type == SweepFaultCapture.ErrorLogType ? $"{fault.Category}:{fault.Type}" : $"{fault.Category}:{fault.Type} at {fault.TopFrame}");
         }
     }
 
     private SpellCastResult Cast(SweepScene scene, bool triggered)
-        => _rig.System.CastSpell(scene.Caster, scene.Spell.Id, scene.Targets, triggered);
+        => _probe.Cast(_rig.System, scene.Caster, scene.Spell.Id, scene.Targets, triggered);
 
     private Unit? FindAuraUnit(SweepScene scene)
     {
@@ -314,7 +342,7 @@ internal sealed class SpellSweepRunner
         }
     }
 
-    private bool IsCasting(Unit unit) => _rig.System.GetState(unit.Guid)?.CurrentCast is not null;
+    private bool IsCasting(Unit unit) => _probe.IsCasting(_rig.System, unit);
 
     // ---- (b) aura lifetime --------------------------------------------------------------------------------------------
 
@@ -505,7 +533,15 @@ internal sealed class SpellSweepRunner
                 return;
             }
 
-            _actions.Move(scene, scene.Caster);
+            // The move handlers may reject a step (speed, collision): a rejected move moved nothing and proves nothing.
+            (float x, float y) = (scene.Caster.X, scene.Caster.Y);
+            if (!_actions.Move(scene, scene.Caster) || (scene.Caster.X == x && scene.Caster.Y == y))
+            {
+                state = "not-run:move-rejected";
+                _rig.System.InterruptNonMeleeSpells(scene.Caster);
+                return;
+            }
+
             _rig.World.RunTick(50);
             bool cancelled = !IsCasting(scene.Caster);
             state = "ran";
@@ -558,14 +594,13 @@ internal sealed class SpellSweepRunner
             }
 
             state = "ran";
-            UnitSpellState? spells = _rig.System.GetState(scene.Caster.Guid);
             uint now = _rig.World.NowMs;
-            if (own && _rig.System.IsSpellReadyIgnoringGlobalCooldown(scene.Caster, spell))
+            if (own && _probe.IsReady(_rig.System, scene.Caster, spell))
             {
                 Violate(SweepCategory.CooldownMissing, spell.Id, $"recovery={spell.RecoveryTime}");
             }
 
-            if (category && !(spells is not null && spells.CategoryCooldowns.TryGetValue(spell.Category, out uint until) && until > now))
+            if (category && !(_probe.CategoryCooldownUntil(_rig.System, scene.Caster, spell.Category) is { } until && until > now))
             {
                 Violate(SweepCategory.CategoryCooldownMissing, spell.Id, $"category={spell.Category} recovery={spell.CategoryRecoveryTime}");
             }
@@ -574,7 +609,7 @@ internal sealed class SpellSweepRunner
             if (wait <= MaxSimulatedMs)
             {
                 Advance(wait + 200, 1000);
-                if (!_rig.System.IsSpellReadyIgnoringGlobalCooldown(scene.Caster, spell))
+                if (!_probe.IsReady(_rig.System, scene.Caster, spell))
                 {
                     Violate(SweepCategory.CooldownNotExpired, spell.Id, $"not ready {wait + 200} ms after the cast");
                 }
@@ -613,7 +648,7 @@ internal sealed class SpellSweepRunner
             int field = UpdateFields.UnitFieldPower1 + (int)power;
             uint max = scene.Caster.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)power);
             scene.Caster.SetUInt32(field, max);
-            uint before = scene.Caster.GetUInt32(field);
+            uint before = _probe.Power(scene.Caster, power);
             uint baseMana = scene.Caster.GetUInt32(UpdateFields.UnitFieldBaseMana);
             SpellCastResult result = Cast(scene, triggered: false);
             if (result != SpellCastResult.CastOk)
@@ -622,15 +657,22 @@ internal sealed class SpellSweepRunner
                 return;
             }
 
-            uint after = scene.Caster.GetUInt32(field);
-            if (IsCasting(scene.Caster))
+            // A channel pays its cost when it starts (vmangos Spell::cast takes the power before the channel runs), so it is read
+            // now; a cast with a cast time cannot be running here (NoCastTime), so anything still casting must be a channel.
+            uint after = _probe.Power(scene.Caster, power);
+            bool channelling = IsCasting(scene.Caster);
+            if (channelling)
+            {
+                _rig.System.InterruptNonMeleeSpells(scene.Caster);
+            }
+
+            if (channelling && !spell.IsChanneled)
             {
                 state = "not-run:not-instant";
-                _rig.System.InterruptNonMeleeSpells(scene.Caster);
                 return;
             }
 
-            state = "ran";
+            state = channelling ? "ran:channel" : "ran";
             long deducted = (long)before - after;
             long minimum = spell.ManaCost + (power == PowerType.Mana ? (long)baseMana * spell.ManaCostPercentage / 100 : 0);
             long maximum = minimum + (long)spell.ManaCostPerLevel * scene.Caster.Level;
@@ -661,12 +703,22 @@ internal sealed class SpellSweepRunner
         string state = "not-run";
         Scene(spell, PlayerCheats.NoCooldown | PlayerCheats.NoPowerCost | PlayerCheats.NoCastTime, spell.Range.Max + 15f, scene =>
         {
+            // Only the range refusal proves the range check: a refusal for anything else (reagents, target, line of sight) says
+            // nothing about it, so it is recorded as not run (and the coverage file ratchets that).
             SpellCastResult result = Cast(scene, triggered: false);
-            state = "ran:" + result;
-            if (result == SpellCastResult.CastOk)
+            if (result == SpellCastResult.OutOfRange)
             {
+                state = "ran";
+            }
+            else if (result == SpellCastResult.CastOk)
+            {
+                state = "ran";
                 Violate(SweepCategory.OutOfRangeAccepted, spell.Id, $"max={spell.Range.Max}");
                 _rig.System.InterruptNonMeleeSpells(scene.Caster);
+            }
+            else
+            {
+                state = "not-run:refused-" + result;
             }
         });
         Checked('g', state);
@@ -699,8 +751,14 @@ internal sealed class SpellSweepRunner
             }
 
             state = "ran";
-            int stacks = _probe.Holders(_rig.System, unit, spell.Id).Max(h => (int)h.StackAmount);
-            if (stacks > spell.StackAmount)
+            // One caster's applications of a stacking aura share one holder (vmangos Unit::AddSpellAuraHolder): over the cap is a
+            // holder whose count passed StackAmount, or the applications spread over several holders of the same caster.
+            SpellAuraHolder[] mine = [.. _probe.Holders(_rig.System, unit, spell.Id).Where(h => h.CasterGuid == scene.Caster.Guid)];
+            if (mine.Length > 1)
+            {
+                Violate(SweepCategory.StackOverCap, spell.Id, $"cap={spell.StackAmount} holders={mine.Length}");
+            }
+            else if (mine.Sum(h => (int)h.StackAmount) > spell.StackAmount)
             {
                 Violate(SweepCategory.StackOverCap, spell.Id, $"cap={spell.StackAmount}");
             }
@@ -774,7 +832,7 @@ internal sealed class SpellSweepRunner
                 : hostileDispel ? scene.AddPlayer(Class.Priest, 60, 3f, 3f) : scene.AddCreature(hostile: true, 60, 3f, 3f);
             for (int i = 0; i < 5 && _probe.Holders(_rig.System, unit, spell.Id).Count > 0; i++)
             {
-                _rig.System.CastSpell(dispeller, dispelSpell, SpellCastTargets.ForUnit(unit.Guid), triggered: true);
+                _probe.Cast(_rig.System, dispeller, dispelSpell, SpellCastTargets.ForUnit(unit.Guid), triggered: true);
                 _rig.World.RunTick(0);
             }
 
@@ -836,7 +894,7 @@ internal sealed class SpellSweepRunner
             string who = unit is Player ? "player" : "creature";
             if (unit.Health > unit.MaxHealth)
             {
-                Violate(SweepCategory.HealthOutOfRange, spellId, $"{who} health>{"max"}");
+                Violate(SweepCategory.HealthOutOfRange, spellId, $"{who} health>max");
             }
 
             bool dead = unit.Combat.DeathState != DeathState.Alive;
@@ -846,16 +904,16 @@ internal sealed class SpellSweepRunner
             }
 
             if (unit is Player player && (player.Flags & PlayerFlags.Ghost) != 0 && unit.Combat.DeathState == DeathState.Alive && unit.Health > 0
-                && !_rig.System.GetState(unit.Guid)?.AuraHolders.Any(h => !h.IsRemoved && h.Spell.HasAura(AuraType.Ghost)) == true)
+                && (_rig.System.GetState(unit.Guid) is not { } ghostState || !ghostState.AuraHolders.Any(h => !h.IsRemoved && h.Spell.HasAura(AuraType.Ghost))))
             {
                 Violate(SweepCategory.DeathStateInconsistent, spellId, "player ghost flag while alive");
             }
 
             IReadOnlyList<SpellAuraHolder> holders = _rig.System.GetState(unit.Guid)?.AuraHolders.Where(h => !h.IsRemoved).ToArray() ?? [];
             UnitFlags flags = _probe.Flags(unit);
-            foreach ((AuraType type, UnitFlags flag) in FlagAuras)
+            foreach ((_, UnitFlags flag) in FlagAuras)
             {
-                if ((flags & flag) != 0 && !holders.Any(h => h.Spell.HasAura(type))
+                if ((flags & flag) != 0
                     && !(flag == UnitFlags.Stunned && dead)
                     && !FlagAuras.Where(f => f.Flag == flag).Any(f => holders.Any(h => h.Spell.HasAura(f.Type))))
                 {
