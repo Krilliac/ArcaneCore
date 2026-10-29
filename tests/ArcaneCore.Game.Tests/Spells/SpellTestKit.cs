@@ -29,7 +29,12 @@ internal sealed class SpellTestKit : IDisposable
             [(1, 1, Passive), (1, 1, InstantHeal)],
             [(DatabaseTeleport, new SpellTargetPosition(0, 40, 50, 83.5f, 1.5f))]);
         Spellbook = new MemorySpellbook();
-        System = new SpellSystem(Store, () => Now, spellbook: Spellbook, random: new Random(1)) { MapUpdateIntervalMs = 0 };
+        System = new SpellSystem(Store, () => Now, spellbook: Spellbook, random: new Random(1))
+        {
+            MapUpdateIntervalMs = 0,
+            ActiveSetAuditThrows = true, // every scenario doubles as a stale-active-set detector
+            ActiveSetAuditBudget = int.MaxValue,
+        };
     }
 
     public uint Now { get; set; } = 10_000;
