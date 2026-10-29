@@ -27,7 +27,7 @@ public sealed class QuestNpcQueryHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != sizeof(uint))
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "CMSG_QUEST_QUERY requires a four-byte quest id");
+            MalformedPacket.Throw("CMSG_QUEST_QUERY requires a four-byte quest id");
         }
 
         var reader = new PacketReader(payload);
@@ -47,7 +47,7 @@ public sealed class QuestNpcQueryHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != sizeof(uint) + sizeof(ulong))
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "CMSG_NPC_TEXT_QUERY requires a text id and an eight-byte guid");
+            MalformedPacket.Throw("CMSG_NPC_TEXT_QUERY requires a text id and an eight-byte guid");
         }
 
         var reader = new PacketReader(payload);

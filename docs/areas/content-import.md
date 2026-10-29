@@ -18,6 +18,8 @@ A running game event's `equipment_id` is a `creature_equip_template` entry too a
 
 World schema v53 adds `npc_vendor_template` and `creature_template.VendorTemplateId` (vmangos `vendor_id`). Import reads the shared stock and link. The standard deploy migrates with `arcane-db upgrade` first and then runs `refresh` without `--migrate` (which refuses an older schema); `refresh --migrate` upgrades and refreshes in one step. Refresh replaces the shared stock and updates the links without replacing direct `npc_vendor` rows, and reports the number of links it changed. An `npc_vendor_template` table missing a required column (for example `slot` or `condition_id`) is skipped with a warning, not an abort. Vendor list order and buying follow vmangos `ObjectMgr::LoadVendorTemplates`, `Creature::GetVendorTemplateItems` and `WorldSession::SendListInventory`.
 
+`points_of_interest` (the gossip map markers a guard option shows through `action_poi_id`) is read by the NPC importer from the same dump as the gossip tables; coordinates may be negative, and a row with entry 0 is skipped with a warning. The table already existed in the world schema, so there is no schema step. `import` writes it (`replace` clears it first); `refresh` does not touch it.
+
 ## Delivered
 
 ### Content gaps: game-event orphans and four relay commands (2026-10-10; wave 17, branch `grok/content-gaps`; no schema change)
