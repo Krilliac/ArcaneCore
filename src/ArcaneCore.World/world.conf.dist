@@ -18707,6 +18707,21 @@ World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates = false
 World.Playerbots.Qa.GitHub.CommentIntervalHours = 24
 
 #
+#    World.Playerbots.Qa.GitHub.CreateWithinHours
+#        Description: A new issue is opened only for a finding met on the running build, or last
+#                     seen within this many hours (0..8760; 0 = the running build only). A finding
+#                     known only from history (loaded at start-up, last met on an older build
+#                     earlier than that) never opens one, and is not looked up; an issue it already
+#                     holds (by number) is still updated.
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.CreateWithinHours = 24
+
+#
 #    World.Playerbots.Qa.GitHub.Enabled
 #        Description: Report findings to GitHub (off by default). Enabled without Publish is a dry
 #                     run: no network call is made.

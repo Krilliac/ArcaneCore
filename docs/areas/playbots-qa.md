@@ -312,6 +312,14 @@ was not). Only a rate-limit refusal (429, or 403 with `Retry-After` / an exhaust
 minutes) and resent, since a refused request was not applied. Reads and PATCH back off 1 s, 2 s and give up after 3 attempts. A
 transient failure stops the pass (the rest would fail the same way); a refusal (bad permissions) fails that finding and goes on.
 
+### New issues only for recent findings
+
+`CreateWithinHours` (default 24; 0..8760; 0 = the running build only) limits when a **new** issue is opened. A finding gets one only if the running build has met it, or it
+was last seen within that many hours. Findings are loaded from the store at start-up and their severity follows their lifetime count, so after a restart an old, high-count
+finding that nothing on the running build has met would otherwise head the queue and be filed as if it were new. Such a finding opens no issue (nothing is listed, searched or
+created for it, and a dry run writes no pending file); it is logged once per process. A finding that already holds an issue number is updated,
+commented on, reopened or closed as before, and it opens an issue as soon as the running build meets it again.
+
 ### Rate caps
 
 `MaxIssuesPerHour` (default 5) and `MaxCommentsPerHour` (default 10) are rolling-hour limits (0 turns the action off). The times
