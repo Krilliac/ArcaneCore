@@ -34,7 +34,7 @@ public sealed class QuestShareHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != 9)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "MSG_QUEST_PUSH_RESULT requires exactly 9 bytes");
+            MalformedPacket.Throw("MSG_QUEST_PUSH_RESULT requires exactly 9 bytes");
         }
 
         // vmangos ignores the guid of the packet and answers for the player itself (QuestHandler.cpp:461-474).
@@ -45,7 +45,7 @@ public sealed class QuestShareHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != 4)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), "quest sharing requires exactly 4 bytes");
+            MalformedPacket.Throw("quest sharing requires exactly 4 bytes");
         }
 
         return new PacketReader(payload).ReadUInt32();
