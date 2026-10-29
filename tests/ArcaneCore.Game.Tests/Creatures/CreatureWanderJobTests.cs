@@ -8,6 +8,7 @@ using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.TestSupport;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
@@ -128,7 +129,7 @@ public sealed class CreatureWanderJobTests
     {
         private readonly NavMeshFixture _fixture = new();
 
-        public Scene(int wanderers, int seed = 1, Action<CreatureOptions>? configure = null)
+        public Scene(int wanderers, int seed = 1, Action<CreatureOptions>? configure = null, bool ungatedParallel = false)
         {
             _fixture.WriteParams(MapId);
             _fixture.WriteTile(MapId, 31, 31, new CellTile(0, 0, 0, 0, 20, 20, Size: 2));
@@ -142,10 +143,34 @@ public sealed class CreatureWanderJobTests
                 spawns.Add(Spawn((uint)(i + 1), WolfEntry, 10 + ((i % 3) * 10), 12 + ((i / 3) * 10), z: 0, movementType: 1, wander: 6));
             }
 
-            World = TestWorld.CreateRuntime();
+            if (ungatedParallel)
+            {
+                // Two map threads, the creature system outside the serial gate and the spline pass on: the wander leg runs in the ungated
+                // pass (_ungatedMotion). The owner guard throws on any owner-only access made outside the gate.
+                World = new WorldRuntime(
+                    new WorldRuntimeOptions
+                    {
+                        UpdateCompressionThreshold = 0,
+                        AutosaveIntervalMs = 0,
+                        CommandTimeBudgetMs = 0,
+                        Parallel = new ParallelMapOptions
+                        {
+                            MapUpdateThreads = 2, Ungated = "CreatureMapSystem", CreatureSplinePass = true, OwnerGuard = OwnerGuardMode.Throw,
+                        },
+                    },
+                    new RecordingSaveQueue(),
+                    NullLogger<WorldRuntime>.Instance);
+                World.GetMap(1, 0); // a second map: the maps phase runs on the map threads (and the serial gate is real) only with two or more
+            }
+            else
+            {
+                World = TestWorld.CreateRuntime();
+            }
+
             Map = World.GetMap(MapId);
             var options = new CreatureOptions();
             options.Movement.PathJobs = true;
+            options.Movement.PathJobsWander = true;
             configure?.Invoke(options);
             System = new CreatureMapSystem(Map, Content([Template()], spawns), options, random: new Random(seed), aiServices: new CreatureAiServices());
             Map.AddUpdater(System);
@@ -345,6 +370,130 @@ public sealed class CreatureWanderJobTests
                 Assert.Equal(0, s.System.WanderJobsInFlight);
             }
         }
+    }
+
+    /// <summary>
+    /// The ungated route (random motion outside the world's serial gate, Parallel:Ungated = CreatureMapSystem with the spline pass and two
+    /// maps) submits and applies a wander job against the shared mesh. The "wanderers outside the gate" part of the map's update breakdown
+    /// is printed only when that update's ungated pass ran creatures, and the only creature is the wanderer, so on the tick that raised
+    /// the submitted (and the applied) counter, the submit (and the apply) happened with _ungatedMotion true. OwnerGuard = Throw would
+    /// fault any owner-only call made in that pass; none may be recorded.
+    /// </summary>
+    [Fact]
+    public void OutsideTheSerialGate_TheWanderJobIsSubmittedAndApplied_WithoutAnOwnerViolation()
+    {
+        using var s = new Scene(wanderers: 1, ungatedParallel: true);
+        Creature wolf = s.Wolves[0];
+        s.Mesh.Gate.Reset();
+
+        bool submittedUngated = false;
+        for (int i = 0; i < 300 && s.System.WanderJobsSubmitted == 0; i++)
+        {
+            s.World.RunTick(100);
+            if (s.System.WanderJobsSubmitted > 0)
+            {
+                submittedUngated = Breakdown(s).Contains(" wanderers outside the gate", StringComparison.Ordinal);
+            }
+        }
+
+        Assert.Equal(1, s.System.WanderJobsSubmitted);
+        Assert.True(submittedUngated, "the job was not submitted by a wanderer outside the gate");
+        Assert.True(Until(() => s.Mesh.PickEntered >= 1), "no worker took the job");
+        s.Tick(3);
+        Assert.False(wolf.IsMoving);
+        Assert.Equal(0, s.System.WanderJobsApplied);
+
+        s.Mesh.Gate.Set();
+        Assert.True(Until(() => s.Mesh.PathReturned >= 1), "the job did not finish");
+        bool appliedUngated = false;
+        for (int i = 0; i < 100 && s.System.WanderJobsApplied == 0; i++)
+        {
+            s.World.RunTick(100);
+            Thread.Sleep(1);
+            if (s.System.WanderJobsApplied > 0)
+            {
+                appliedUngated = Breakdown(s).Contains(" wanderers outside the gate", StringComparison.Ordinal);
+            }
+        }
+
+        Assert.True(s.System.WanderJobsApplied >= 1, "the finished job was never applied");
+        Assert.True(appliedUngated, "the result was not applied by a wanderer outside the gate");
+        Assert.Equal(0, s.World.ParallelCounters.OwnerViolations);
+        Assert.Equal(0, s.Mesh.SyncPointCalls);
+        Assert.Equal(0, s.Mesh.SyncPathCalls);
+        Assert.Equal(0, s.System.PathJobsSubmitted);
+    }
+
+    private static string Breakdown(Scene s) => ((IMapUpdateBreakdown)s.System).DescribeLastUpdate();
+
+    /// <summary>
+    /// Only the generator's Epoch catches this: the creature does not move, does not enter combat, and the same generator is on top of the
+    /// stack and within the start tolerance when the job is asked about again, so the Top, combat, evade and start-position checks all pass.
+    /// A MoveDistract pushed and cleared at once (Clear resumes the default) restarts the generator in place: Interrupt, Finish and
+    /// Initialize each bump Epoch. The old job must be dropped as stale and its pick never walked. With the Epoch compare removed from the
+    /// staleness check nothing would drop it: it would finish, be applied on the next ask and the creature would walk Picks[0] (argued, not
+    /// run: src was being edited concurrently).
+    /// </summary>
+    [Fact]
+    public void AJobWhoseGeneratorRestartedInPlace_IsDropped_AndItsLegIsNeverWalked()
+    {
+        using var s = new Scene(wanderers: 1);
+        Creature wolf = s.Wolves[0];
+        s.Mesh.Gate.Reset();
+        Assert.True(s.TickUntil(() => s.System.WanderJobsSubmitted >= 1, 300), "no wander job was submitted");
+        Assert.True(Until(() => s.Mesh.PickEntered >= 1), "no worker took the job");
+        Assert.False(wolf.IsMoving);
+        var before = new Vector3(wolf.X, wolf.Y, wolf.Z);
+        long staleBefore = s.System.WanderJobsStale;
+        long appliedBefore = s.System.WanderJobsApplied;
+
+        wolf.Motion.MoveDistract(200);
+        wolf.Motion.Clear();
+
+        // The restart changed nothing else the stale check looks at.
+        Assert.Equal(MovementGeneratorType.Random, wolf.Motion.CurrentType);
+        Assert.Empty(wolf.Motion.ActiveTypes);
+        Assert.Equal(before, new Vector3(wolf.X, wolf.Y, wolf.Z));
+        Assert.False(wolf.Combat.IsInCombat);
+        Assert.False(wolf.IsEvading);
+
+        var splines = new List<CreatureSpline>();
+        void Watch()
+        {
+            if (wolf.Spline is { } spline && !splines.Contains(spline))
+            {
+                splines.Add(spline);
+            }
+        }
+
+        // Still held: the next update or the sweep drops the job.
+        for (int i = 0; i < 6; i++)
+        {
+            s.World.RunTick(100);
+            Watch();
+        }
+
+        Assert.True(s.System.WanderJobsStale > staleBefore, "the restarted generator's old job was not dropped as stale");
+
+        s.Mesh.Gate.Set();
+        Assert.True(Until(() => s.Mesh.Picks.ContainsKey(0)), "the old job did not pick its point");
+        Vector3 oldEnd = s.Mesh.Picks[0];
+        Assert.True(Until(() => s.Mesh.SharedPathEnds.Any(e => DistanceXY(e, oldEnd) < 0.001f)), "the old job did not finish its path search");
+        s.Mesh.Gate.Reset(); // a job the restarted generator asks for stays pending
+
+        for (int i = 0; i < 20; i++)
+        {
+            s.World.RunTick(100);
+            Watch();
+            Thread.Sleep(2);
+        }
+
+        foreach (CreatureSpline spline in splines)
+        {
+            Assert.True(DistanceXY(new Vector3(spline.EndX, spline.EndY, 0), oldEnd) > 0.05f, $"the creature walked the old run's leg to ({oldEnd.X:F2}, {oldEnd.Y:F2})");
+        }
+
+        Assert.Equal(appliedBefore, s.System.WanderJobsApplied);
     }
 
     [Fact]

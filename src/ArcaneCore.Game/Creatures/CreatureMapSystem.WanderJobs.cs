@@ -17,8 +17,9 @@ namespace ArcaneCore.Game.Creatures;
 /// Determinism: with the feature off (PathJobs off, PathJobsWander off, or no shared mesh) the map RNG's draws and the outcomes are exactly
 /// those of the synchronous route. With it on, a leg costs the map RNG ONE draw, the seed, at submit; the point is a pure function of
 /// (seed, centre, radius, loaded navmesh), the answer <c>TryGetRandomPointAroundShared</c> gives with <c>new Random(seed)</c>. The same map
-/// seed and the same tile state therefore give the same legs (two identical worlds wander identically). The step, pause and run draws
-/// happen at apply, in the same order as before.
+/// seed and the same tile state therefore give the same legs when each job is applied on the same update (as a test that waits for the
+/// pool each tick does). In a live server worker timing can move a leg's apply update, and with it the later draws from the map RNG: the
+/// step, pause and run draws and the next legs' seed draws happen at apply, on the shared map RNG, among other creatures' draws.
 /// </para>
 /// <para>
 /// Timing, the one-tick shift: the leg the synchronous route starts on tick T (the timer ran out) is submitted on T and applied on the
@@ -41,7 +42,7 @@ public sealed partial class CreatureMapSystem
     private long _lastWanderSweepMs;
     private long _lastLoggedWanderSubmitted;
 
-    private sealed record WanderJobKey(RandomMovementGenerator Generator, int Epoch, Vector3 Start, PathOptions Options);
+    private sealed record WanderJobKey(RandomMovementGenerator Generator, int Epoch, Vector3 Start, PathOptions Options, Vector3 Center, float Radius);
 
     /// <summary>Wander jobs submitted to the pool.</summary>
     public long WanderJobsSubmitted { get; private set; }
@@ -85,12 +86,17 @@ public sealed partial class CreatureMapSystem
         }
     }
 
-    /// <summary>The most outstanding wander jobs this map may have; a test lowers it.</summary>
+    /// <summary>
+    /// The most outstanding wander jobs this map may have; a test lowers it. Unlike <c>PathJobsMaxInFlightPerMap</c>, which counts pending
+    /// jobs, this cap counts finished-but-unclaimed jobs too; a stunned or casting creature holds its slot until it asks again or the
+    /// 10 s unclaimed sweep drops the job.
+    /// </summary>
     internal int WanderJobsMaxInFlight { get; set; } = WanderJobsMaxInFlightPerMapDefault;
 
     WanderJobAnswer ICreaturePathQuery.TryWanderByJob(Creature creature, RandomMovementGenerator generator, Vector3 center, float radius, out PlannedPath plan)
     {
         plan = default;
+        _lastPlanQueued = false;
         if (!_options.Movement.PathJobsWander
             || !(_options.Movement.PathJobs || _pathJobsResolved)
             || PathJobs is not { } jobs
@@ -144,7 +150,9 @@ public sealed partial class CreatureMapSystem
             var key = (WanderJobKey)job.Tag!;
             if (WanderJobStale(creature, job, key)
                 || Vector3.DistanceSquared(key.Start, start) > PathJobStartTolerance * PathJobStartTolerance
-                || !ReferenceEquals(key.Options, options))
+                || !ReferenceEquals(key.Options, options)
+                || key.Center != center
+                || key.Radius != radius)
             {
                 job.Abandon();
                 _wanderJobs.Remove(creature);
@@ -167,7 +175,7 @@ public sealed partial class CreatureMapSystem
                 _wanderJobs.Remove(creature);
                 WanderJobsApplied++;
                 CountJobSearch(creature, job);
-                plan = FinishPlannedPath(creature, key.Start, job.Destination, toSpawn: false, key.Options, result);
+                plan = FinishPlannedPath(creature, start, job.Destination, toSpawn: false, key.Options, result);
                 return WanderJobAnswer.Applied;
             }
             else if (job.Status == NavJobStatus.Completed && job.PickOutcome == NavJobPickOutcome.NoPoint)
@@ -199,7 +207,7 @@ public sealed partial class CreatureMapSystem
         var pick = new NavJobPointPick(points, center, radius, seed, MeshPointOptions);
         var next = new NavJob(search, Map.MapId, start, pick, options)
         {
-            Tag = new WanderJobKey(generator, generator.Epoch, start, options),
+            Tag = new WanderJobKey(generator, generator.Epoch, start, options, center, radius),
             SubmittedAtMs = _clockMs,
         };
         if (!jobs.TrySubmit(next))

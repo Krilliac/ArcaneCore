@@ -88,10 +88,13 @@ public sealed class CreatureMovementOptions
     /// <summary>
     /// <c>Creatures:Movement:PathJobsWander</c>: with <see cref="PathJobs"/> on, a wander leg's random-point pick and its path search run
     /// as one job on the path-job pool, and the creature idles until the answer is applied on the map's thread. The map's RNG gives one
-    /// draw per leg (the seed); the point is a pure function of that seed, the wander centre and radius, and the loaded navmesh. The
-    /// leg starts one update later than the synchronous route. Off keeps the synchronous point pick and today's RNG draws exactly.
+    /// draw per leg (the seed); the point of a leg is a pure function of (seed, centre, radius, loaded navmesh). The same map seed and
+    /// tile state give the same legs when each job is applied on the same update (as a test that waits for the pool each tick does); in
+    /// a live server worker timing can move a leg's apply update and with it the later draws from the map RNG. The leg starts one update
+    /// later than the synchronous route. Needs <see cref="PathJobs"/>; off by default (opt-in, like <see cref="PathJobsFollow"/>). Off
+    /// keeps the synchronous point pick and today's RNG draws exactly.
     /// </summary>
-    public bool PathJobsWander { get; set; } = true;
+    public bool PathJobsWander { get; set; }
 }
 
 /// <summary>The default movement of a waypoint creature without a path (<see cref="CreatureMovementOptions.MissingWaypointPathFallback"/>).</summary>

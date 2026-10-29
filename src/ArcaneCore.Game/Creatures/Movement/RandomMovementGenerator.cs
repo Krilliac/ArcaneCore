@@ -170,13 +170,6 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             return true;
         }
 
-        if (mover is ICreaturePathQuery { HasPathBudget: false, CanQueuePathJob: false } budgeted)
-        {
-            budgeted.NoteDeferred(creature);
-            _nextMoveMs = budgeted.IsCrowdedRandomPass ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
-            return true;
-        }
-
         float wander = WanderOf(creature);
         CreatureHome home = _center ?? creature.Home;
         float destX = home.X;
@@ -191,10 +184,12 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         bool jobApplied = false;
         bool skipMeshPick = false;
         PlannedPath plan = default;
+        bool wanderNotQueued = true;
         if (wander >= 0.1f && mover is ICreaturePathQuery wanderQuery)
         {
             // PathJobsWander: the point pick and the path run as one job on the pool (CreatureMapSystem.WanderJobs.cs); the creature idles
             // until the map applies the answer. NotQueued leaves the synchronous route below unchanged.
+            // It runs before the synchronous search-budget gate: wander jobs have their own cap, and the drape budget is checked at apply.
             switch (wanderQuery.TryWanderByJob(creature, this, new Vector3(home.X, home.Y, home.Z), wander, out plan))
             {
                 case WanderJobAnswer.Waiting:
@@ -204,13 +199,22 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
                     _nextMoveMs = PathJobRetryMs;
                     return true;
                 case WanderJobAnswer.Applied:
+                    wanderNotQueued = false;
                     jobApplied = true;
                     onMesh = true;
                     break;
                 case WanderJobAnswer.NoMeshPoint:
+                    wanderNotQueued = false;
                     skipMeshPick = true;
                     break;
             }
+        }
+
+        if (wanderNotQueued && mover is ICreaturePathQuery { HasPathBudget: false, CanQueuePathJob: false } budgeted)
+        {
+            budgeted.NoteDeferred(creature);
+            _nextMoveMs = budgeted.IsCrowdedRandomPass ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+            return true;
         }
 
         bool run;
