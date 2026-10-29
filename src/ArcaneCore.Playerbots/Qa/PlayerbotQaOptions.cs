@@ -135,6 +135,12 @@ public sealed class PlayerbotQaGitHubOptions
     /// <summary>The most issues created per rolling hour (0..1000; 0 creates none); the rest stay pending.</summary>
     public int MaxIssuesPerHour { get; set; } = 5;
 
+    /// <summary>
+    /// A new issue is opened only for a finding met since this start-up, or last seen within this many hours (0..8760; 0 = only findings met since this start-up). A finding known
+    /// only from history (loaded at start-up, last seen earlier than that) never opens one, and is not looked up; an issue it already holds (by number) is still updated.
+    /// </summary>
+    public int CreateWithinHours { get; set; } = 24;
+
     /// <summary>The most comments added per rolling hour (0..1000; 0 adds none).</summary>
     public int MaxCommentsPerHour { get; set; } = 10;
 
@@ -212,6 +218,7 @@ public sealed class PlayerbotQaGitHubOptions
         if (MinOccurrences is < 1 or > 1_000_000) problems.Add("GitHub:MinOccurrences must be 1..1000000");
         if (MinDistinctBots is < 1 or > 10_000) problems.Add("GitHub:MinDistinctBots must be 1..10000");
         if (MaxIssuesPerHour is < 0 or > 1000) problems.Add("GitHub:MaxIssuesPerHour must be 0..1000");
+        if (CreateWithinHours is < 0 or > 8760) problems.Add("GitHub:CreateWithinHours must be 0..8760");
         if (MaxCommentsPerHour is < 0 or > 1000) problems.Add("GitHub:MaxCommentsPerHour must be 0..1000");
         if (CommentIntervalHours is < 1 or > 720) problems.Add("GitHub:CommentIntervalHours must be 1..720");
         if (MaxSpellIssuesPerPass is < 0 or > 100) problems.Add("GitHub:MaxSpellIssuesPerPass must be 0..100");
