@@ -182,4 +182,28 @@ public sealed class GenericDummyAuraCasesTests
 
         Assert.Equal(plain + (uint)expectedBonus, shaman.Health - 1000);
     }
+
+    [Fact]
+    public void EnemyAreaAura_HitsEnemiesInRadius_NotTheCaster_AndLetsGoOfThoseWhoLeave()
+    {
+        const uint sam = 26659;
+        SpellEffectInfo area = Effect(SpellEffectName.ApplyAreaAuraEnemy, 10, SpellImplicitTarget.UnitCaster, AuraType.PeriodicDamage, amplitude: 1000) with { Radius = 20f };
+        using SpellTestKit kit = Kit(Instant(Spell(sam, area) with { Duration = new SpellDuration(-1, 0, -1) }));
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player near, _) = kit.AddHostilePlayer(2, 5, 0);
+        (Player far, _) = kit.AddHostilePlayer(3, 60, 0);
+
+        kit.System.CastSpell(caster, sam, SpellCastTargets.ForSelf(), triggered: true);
+        kit.Advance(1500);
+
+        Assert.True(kit.System.HasAura(near, sam));
+        Assert.False(kit.System.HasAura(far, sam));
+        Assert.Contains(kit.System.GetAuras(near), h => h.Spell.Id == sam && h.Auras[0]?.Type == AuraType.PeriodicDamage);
+        Assert.All(kit.System.GetAuras(caster).Where(h => h.Spell.Id == sam), h => Assert.Equal(AuraType.None, h.Auras[0]?.Type));
+        Assert.Equal(caster.MaxHealth, caster.Health);
+
+        near.SetPosition(60, 0, near.Z, near.Orientation);
+        kit.Advance(1500);
+        Assert.False(kit.System.HasAura(near, sam));
+    }
 }

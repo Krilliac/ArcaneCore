@@ -20489,7 +20489,7 @@
 26655	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
 26656	CastOk	d
 26658	CastOk	g
-26659	CastOk
+26659	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 26662	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 26663	CastOk	g
 26664	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up

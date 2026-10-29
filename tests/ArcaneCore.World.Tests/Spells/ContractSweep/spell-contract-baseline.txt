@@ -599,7 +599,6 @@ a.unhandled-effect	25351	EnchantItemTemporary
 a.unhandled-effect	26019	EnchantItem
 a.unhandled-effect	26020	EnchantItem
 a.unhandled-effect	2605	EnchantItem
-a.unhandled-effect	26659	ApplyAreaAuraEnemy
 a.unhandled-effect	26743	EnchantItem
 a.unhandled-effect	26792	EnchantItem
 a.unhandled-effect	26793	EnchantItem
