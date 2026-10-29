@@ -1258,7 +1258,7 @@ public sealed class LogonSession(
         if (clockSkewSuspect && SkewWarning.TryEnter(out int suppressed))
         {
             logger.LogWarning(
-                "A realm heartbeat is more than {Seconds} s ahead of this host's clock, so that realm is shown offline: synchronise the clocks of the world and logon hosts (NTP) ({Suppressed} more since the last line)",
+                "A realm heartbeat is more than {Seconds} s ahead of this host's clock, the beat is treated as fresh; synchronise the clocks of the world and logon hosts (NTP) ({Suppressed} more since the last line)",
                 (int)RealmListProjection.MaxClockSkew.TotalSeconds, suppressed);
         }
 

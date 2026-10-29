@@ -31,6 +31,7 @@ public sealed class RealmStatusWorldTests
         {
             // The hosted service runs before the world host: the row says Starting before the world has done anything.
             await liveness.StartAsync(CancellationToken.None);
+            await liveness.StartWrite;
             Assert.Equal(RealmRuntimeState.Starting, store.Row.State);
             Assert.True(store.Row.Flags.HasFlag(RealmFlags.Offline));
 
@@ -66,6 +67,7 @@ public sealed class RealmStatusWorldTests
         try
         {
             await services.GetRequiredService<RealmLivenessService>().StartAsync(CancellationToken.None);
+            await services.GetRequiredService<RealmLivenessService>().StartWrite;
             await host.StartAsync(CancellationToken.None);
             Assert.False(services.GetRequiredService<RealmStatusFeature>().Enabled);
             Assert.Equal(RealmFlags.Offline, store.Row.Flags);
@@ -87,6 +89,7 @@ public sealed class RealmStatusWorldTests
         try
         {
             await services.GetRequiredService<RealmLivenessService>().StartAsync(CancellationToken.None);
+            await services.GetRequiredService<RealmLivenessService>().StartWrite;
             await host.StartAsync(CancellationToken.None);
             RealmStatusFeature feature = services.GetRequiredService<RealmStatusFeature>();
             feature.RequestPopulation(25);

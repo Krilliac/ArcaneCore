@@ -6,7 +6,7 @@ namespace ArcaneCore.Realm.Protocol;
 
 /// <summary>What the realm list shows for one realm to one account, and why.</summary>
 /// <param name="Flags">The flags to put on the wire.</param>
-/// <param name="HeartbeatAge">Realm clock minus the world's last heartbeat; null when the row has none. Negative when the world's clock is ahead.</param>
+/// <param name="HeartbeatAge">Realm clock minus the world's last heartbeat; null when the row has none. Zero when the world's clock is ahead.</param>
 /// <param name="ClockSkewSuspect">The heartbeat is further in the future than <see cref="RealmListProjection.MaxClockSkew"/>: the two hosts' clocks disagree.</param>
 public readonly record struct RealmView(RealmFlags Flags, TimeSpan? HeartbeatAge, bool ClockSkewSuspect);
 
@@ -34,16 +34,16 @@ public static class RealmListProjection
         ArgumentNullException.ThrowIfNull(realm);
         ArgumentNullException.ThrowIfNull(options);
 
-        TimeSpan? age = realm.HeartbeatUtc is { } beat ? now - AsUtc(beat) : null;
-        bool skew = age is { } a && a < -MaxClockSkew;
+        TimeSpan? raw = realm.HeartbeatUtc is { } beat ? now - AsUtc(beat) : null;
+        bool skew = raw is { } r && r < -MaxClockSkew;
+        // A heartbeat ahead of this clock is drift between hosts, not a dead world: it counts as fresh (age 0) and the caller warns.
+        TimeSpan? age = raw is { } a ? (a < TimeSpan.Zero ? TimeSpan.Zero : a) : null;
         RealmFlags flags = realm.Flags;
 
         if (realm.State != RealmRuntimeState.Unknown)
         {
-            // A heartbeat from further in the future than the allowed drift cannot be trusted to age: it would keep a dead world
-            // online until the realm's clock caught up, so it counts as no heartbeat and the warning names the cause.
             bool stale = options.HeartbeatStaleSeconds > 0
-                && (age is not { } seen || skew || seen > TimeSpan.FromSeconds(options.HeartbeatStaleSeconds));
+                && (age is not { } seen || seen > TimeSpan.FromSeconds(options.HeartbeatStaleSeconds));
             switch (realm.State)
             {
                 case RealmRuntimeState.Stopped:

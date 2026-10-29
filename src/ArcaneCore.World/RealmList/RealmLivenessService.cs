@@ -49,6 +49,7 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
     private readonly LogGate _withheldWarning;
     private readonly CancellationTokenSource _stop = new();
     private Phase _phase;                    // guarded by _gate
+    private bool _startingPending;           // guarded by _gate once the loop runs: the Starting write has not succeeded yet
     private RealmRuntimeState _written;      // guarded by _gate: the state last written
     private DateTime _lastBeatUtc;           // guarded by _gate: the last time a beat vouched for the world
     private DateTime _lastAttemptUtc;        // guarded by _gate: the last beat decision, written or withheld
@@ -92,6 +93,9 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
     /// <summary>Test seam: false leaves the timer loop off, so a test drives <see cref="WakeAsync"/> itself.</summary>
     internal bool StartLoop { get; init; } = true;
 
+    /// <summary>The queued first pass (the Starting write). <see cref="StartAsync"/> does not wait for it; tests do.</summary>
+    internal Task StartWrite { get; private set; } = Task.CompletedTask;
+
     /// <summary>The realm-list id this service writes.</summary>
     public int RealmId => _options.Id;
 
@@ -109,24 +113,8 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
         }
 
         Enabled = true;
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            DateTime now = Now();
-            if (await WriteAsync("starting", store => store.SetStartingAsync(_options.Id, now, CancellationToken.None)).ConfigureAwait(false) is true)
-            {
-                _lastBeatUtc = now;
-            }
-
-            _lastAttemptUtc = now;
-            _written = RealmRuntimeState.Starting;
-            _phase = Phase.Starting;
-        }
-        finally
-        {
-            _gate.Release();
-        }
-
+        _phase = Phase.Starting;
+        _startingPending = true;
         _lifecycle = _services.GetService<ServerLifecycleFeature>();
         if (_lifecycle is not null)
         {
@@ -139,6 +127,9 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
             _startedRegistration = lifetime.ApplicationStarted.Register(MarkListenerBound);
         }
 
+        // The Starting write goes to the writer, not onto the start path: an unreachable auth database must not hold the world back
+        // by the connection timeout. The realm daemon reads a missing or old Starting row as offline anyway.
+        StartWrite = Task.Run(() => WakeAsync(_stop.Token), CancellationToken.None);
         if (StartLoop)
         {
             _loop = Task.Run(() => RunLoopAsync(_stop.Token), CancellationToken.None);
@@ -200,6 +191,19 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
             DateTime now = Now();
             if (_phase == Phase.Starting)
             {
+                if (_startingPending)
+                {
+                    _lastAttemptUtc = now;
+                    if (await WriteAsync("starting", store => store.SetStartingAsync(_options.Id, now, CancellationToken.None)).ConfigureAwait(false) is true)
+                    {
+                        _startingPending = false;
+                        _lastBeatUtc = now;
+                        _written = RealmRuntimeState.Starting;
+                    }
+
+                    return;
+                }
+
                 if (_listenerBound && ticks > 0)
                 {
                     if (await WriteAsync("online", store => store.SetOnlineAsync(_options.Id, now, CancellationToken.None)).ConfigureAwait(false) is true)

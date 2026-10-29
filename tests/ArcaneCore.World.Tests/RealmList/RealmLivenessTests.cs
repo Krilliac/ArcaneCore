@@ -29,6 +29,7 @@ public sealed class RealmLivenessTests
         await using Rig rig = new(row => row.Flags = RealmFlags.NewPlayers | RealmFlags.Offline);
 
         await rig.Service.StartAsync(CancellationToken.None);
+        await rig.Service.StartWrite;
         Assert.Equal(RealmRuntimeState.Starting, rig.Row.State);
         Assert.True(rig.Row.Flags.HasFlag(RealmFlags.Offline));
         Assert.Equal(rig.Clock.UtcNow, rig.Row.HeartbeatUtc);
@@ -60,6 +61,7 @@ public sealed class RealmLivenessTests
     {
         await using Rig rig = new(row => row.Flags = RealmFlags.Offline);
         await rig.Service.StartAsync(CancellationToken.None);
+        await rig.Service.StartWrite;
 
         rig.Ticks = 40; // the loop has been running a while, the listener is not bound yet
         rig.Clock.Advance(TimeSpan.FromSeconds(1));
@@ -163,6 +165,7 @@ public sealed class RealmLivenessTests
             world.Start();
             await WaitAsync(() => world.TicksStarted > 0, "the world loop starts ticking");
             await service.StartAsync(CancellationToken.None);
+            await service.StartWrite;
             service.MarkListenerBound();
 
             // The service's own timer drives the writer: advance the hand clock and let the pool thread do the work.
@@ -280,11 +283,38 @@ public sealed class RealmLivenessTests
         var service = new RealmLivenessService(services, NullLogger<RealmLivenessService>.Instance, new RealmStatusOptions { Id = 0 }, new HandClock(), () => 1);
 
         await service.StartAsync(CancellationToken.None);
+        await service.StartWrite;
         await service.StopAsync(CancellationToken.None);
 
         Assert.False(service.Enabled);
         Assert.Equal(0, store.Writes);
         Assert.Equal(RealmFlags.Offline, store.Row.Flags);
+    }
+
+    [Fact]
+    public async Task StartAsync_DoesNotWaitForTheAuthDatabase()
+    {
+        // An unreachable auth database must not hold the world back by the connection timeout: the Starting write is queued to the writer.
+        var store = new RealmRowStore(new RealmEntry { Id = 1, Name = "R", Address = "a", Flags = RealmFlags.NewPlayers });
+        using var release = new ManualResetEventSlim(false);
+        store.OnCall = _ => release.Wait(TimeSpan.FromSeconds(30));
+        using ServiceProvider services = new ServiceCollection().AddSingleton<IRealmStatusStore>(store).BuildServiceProvider();
+        var service = new RealmLivenessService(services, NullLogger<RealmLivenessService>.Instance, new RealmStatusOptions { Id = 1 }, new HandClock(), () => 1)
+        {
+            StartLoop = false,
+        };
+
+        // The write is blocked inside the store; StartAsync must still return (the bound only matters on failure).
+        await service.StartAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.True(service.Enabled);
+        Assert.False(service.StartWrite.IsCompleted);
+        Assert.Equal(RealmRuntimeState.Unknown, store.Row.State);
+
+        release.Set();
+        await service.StartWrite;
+        Assert.Equal(RealmRuntimeState.Starting, store.Row.State);
+        await service.StopAsync(CancellationToken.None);
+        service.Dispose();
     }
 
     [Fact]
@@ -297,6 +327,7 @@ public sealed class RealmLivenessTests
         var service = new RealmLivenessService(services, log, new RealmStatusOptions { Id = 1 }, clock, () => 1);
 
         await service.StartAsync(CancellationToken.None);
+        await service.StartWrite;
         service.MarkListenerBound();
         await service.WakeAsync(CancellationToken.None);
         await service.WakeAsync(CancellationToken.None);
@@ -379,6 +410,7 @@ public sealed class RealmLivenessTests
         {
             var rig = new Rig(row => row.Flags = RealmFlags.NewPlayers | RealmFlags.Offline);
             await rig.Service.StartAsync(CancellationToken.None);
+            await rig.Service.StartWrite;
             rig.Ticks = 1;
             rig.Lifetime.Started.Cancel();
             rig.Clock.Advance(TimeSpan.FromSeconds(1));

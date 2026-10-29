@@ -42,7 +42,7 @@ write. The gap after a restart countdown ends and before the new process is read
 
 A realm locked above the account's security level (`realmlist.AllowedSecurityLevel` greater than the account's GM level)
 is also sent Offline, in every state (vmangos AuthSocket.cpp:1088-1090). The 1.x client has no locked display, so
-the lock is shown as offline. There is no command to set the lock yet: set the column with SQL.
+the lock is shown as offline. The lock compares `AllowedSecurityLevel` with the account-wide GM level, not a per-realm level as vmangos's `GetSecurityOn` does (AuthSocket.cpp:1088). There is no command to set the lock yet: set the column with SQL.
 
 ## 3. Configuration
 
@@ -87,9 +87,9 @@ into the wire flags for each realm-list request. The stored row is never changed
 command prints the state, the heartbeat age, the flags a player would be sent (`wire`) and the lock level.
 
 **Clocks.** The heartbeat is the world's UTC clock; its age is judged by the realm daemon's clock. Daemons on one host
-agree. On split hosts, run NTP on both. A heartbeat more than 5 s in the future is not trusted to age (it would keep a dead
-world online until the other clock caught up): that realm is shown Offline and the logon daemon logs one warning per five
-minutes naming the cause.
+agree. On split hosts, run NTP on both. A heartbeat in the future counts as fresh (its age is
+read as zero), so drift never takes a live realm offline; when it is more than 5 s ahead the logon daemon logs one warning per five
+minutes naming the cause. Consequence: a world whose clock runs ahead keeps showing online for that long after it hangs.
 
 **Upgrade order.** The world applies auth schema 7 (`arcane-db upgrade`, or the world's own start-up). A logon daemon
 built before it keeps working against the upgraded database and sends the stored flags; start the new logon daemon

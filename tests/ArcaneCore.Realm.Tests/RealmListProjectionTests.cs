@@ -110,11 +110,17 @@ public sealed class RealmListProjectionTests
         RealmView within = RealmListProjection.Evaluate(Row(RealmRuntimeState.Online, -4), AccountSecurity.Player, Now, Defaults);
         Assert.Equal(RealmFlags.NewPlayers, within.Flags);
         Assert.False(within.ClockSkewSuspect);
+        Assert.Equal(TimeSpan.Zero, within.HeartbeatAge);
+    }
 
-        // Further ahead than the drift allowance: not trusted to age, so offline, and flagged for the warning.
+    [Fact]
+    public void FutureHeartbeat_BeyondSkew_IsFreshAndWarns()
+    {
+        // Clock drift between hosts is not a dead world: the beat counts as fresh (age clamped to 0) and the caller is told to warn.
         RealmView beyond = RealmListProjection.Evaluate(Row(RealmRuntimeState.Online, -30), AccountSecurity.Player, Now, Defaults);
-        Assert.Equal(RealmFlags.NewPlayers | RealmFlags.Offline, beyond.Flags);
+        Assert.Equal(RealmFlags.NewPlayers, beyond.Flags);
         Assert.True(beyond.ClockSkewSuspect);
+        Assert.Equal(TimeSpan.Zero, beyond.HeartbeatAge);
     }
 
     [Fact]
