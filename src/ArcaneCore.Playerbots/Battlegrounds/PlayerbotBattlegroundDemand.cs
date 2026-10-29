@@ -81,7 +81,7 @@ internal sealed class PlayerbotBattlegroundDemand
     /// <paramref name="maxBots"/> committed bots, the team fewer than <see cref="TeamAllowance"/>, and no running match of the bracket is
     /// already full of bots.
     /// </summary>
-    internal bool CanQueue(BattlegroundType type, int bracket, Team team, BattlegroundTemplate template, int maxBots, bool raiseToMinimum = true)
+    internal bool CanQueue(BattlegroundType type, int bracket, Team team, BattlegroundTemplate template, int maxBots, bool raiseToMinimum)
     {
         ArgumentNullException.ThrowIfNull(template);
         int cap = EffectiveCap(template, maxBots, raiseToMinimum);

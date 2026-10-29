@@ -12153,10 +12153,11 @@ World.Playerbots.Battlegrounds.Enabled = true
 
 #
 #    World.Playerbots.Battlegrounds.MaxBotsPerBattleground
-#        Description: The most bots in one battleground (0..80; 0 queues none). Bots waiting for one
-#                     battleground type and level bracket never exceed it, a team never gets more
-#                     than half of it (rounded up) and a bot declines an invitation into a match
-#                     that already holds this many.
+#        Description: The most bots in one battleground (0..80; 0 queues none), unless
+#                     RaiseCapToMatchMinimum raises it for a type whose template minimum needs more.
+#                     Bots waiting for one battleground type and level bracket do not exceed the
+#                     (effective) cap, a team never gets more than half of it (rounded up) and a bot
+#                     declines an invitation into a match that already holds this many.
 #        Type: int
 #        Default: 20
 #        Allowed: a whole number, -2147483648 to 2147483647

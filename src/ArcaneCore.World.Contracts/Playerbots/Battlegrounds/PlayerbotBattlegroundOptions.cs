@@ -1,8 +1,8 @@
 namespace ArcaneCore.World.Playerbots.Battlegrounds;
 
 /// <summary>
-/// <c>World:Playerbots:Battlegrounds</c>: autonomous managed bots queue for Warsong Gulch and Arathi Basin through the real battlemaster
-/// opcodes, accept the invitation, play the objective and leave at the end (Alterac Valley is refused: no bot queues for it)
+/// <c>World:Playerbots:Battlegrounds</c>: autonomous managed bots queue for Warsong Gulch, Arathi Basin and Alterac Valley through the real battlemaster
+/// opcodes, accept the invitation, play the objective and leave at the end
 /// (<c>PlayerbotBattlegroundCoordinator</c>, docs/areas/playbots-battlegrounds.md). Every key is live: <c>.reload config</c>
 /// changes this object in place and the coordinator reads it at every decision.
 /// </summary>
@@ -18,8 +18,9 @@ public sealed class PlayerbotBattlegroundOptions
     public float QueueChancePerMinute { get; set; } = 0.05f;
 
     /// <summary>
-    /// The most bots in one battleground (0..80; 0 queues none). Bots waiting for one battleground type and level bracket never exceed
-    /// it, a team never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many.
+    /// The most bots in one battleground (0..80; 0 queues none), unless <see cref="RaiseCapToMatchMinimum"/> raises it for a type whose
+    /// template minimum needs more. Bots waiting for one battleground type and level bracket do not exceed the (effective) cap, a team
+    /// never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many.
     /// </summary>
     public int MaxBotsPerBattleground { get; set; } = 20;
 

@@ -36,7 +36,7 @@ public sealed class PlayerbotBattlegroundDemandTests
     [InlineData(5, 5)]
     [InlineData(20, 20)]
     [InlineData(80, 20)] // limited by 2 teams x MaxPlayersPerTeam (10), not by the cap
-    public void BotsWaiting_NeverExceedMaxBotsPerBattleground(int cap, int expectedAdmitted)
+    public void BotsWaiting_WithTheRaiseOff_NeverExceedMaxBotsPerBattleground(int cap, int expectedAdmitted)
     {
         // The configured cap as it is: a cap under the template minimum (Wsg 5 per team) is raised by default (RaiseCapToMatchMinimum, tested below).
         var demand = new PlayerbotBattlegroundDemand();
@@ -65,8 +65,8 @@ public sealed class PlayerbotBattlegroundDemandTests
         int admitted = Fill(demand, Options(80), alternate: false);
         Assert.Equal((int)Wsg.MaxPlayersPerTeam, admitted);
         Assert.Equal((int)Wsg.MaxPlayersPerTeam, demand.BotsCommitted(BattlegroundType.WarsongGulch, 2, Team.Alliance));
-        Assert.False(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Alliance, Wsg, 80));
-        Assert.True(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Horde, Wsg, 80));
+        Assert.False(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Alliance, Wsg, 80, true));
+        Assert.True(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Horde, Wsg, 80, true));
 
         // Half the cap, rounded up, also bounds a team: cap 5 allows 3.
         Assert.Equal(3, PlayerbotBattlegroundDemand.TeamAllowance(10, 5));
@@ -81,9 +81,9 @@ public sealed class PlayerbotBattlegroundDemandTests
     {
         var demand = new PlayerbotBattlegroundDemand();
         demand.BlockBracket(BattlegroundType.WarsongGulch, 2);
-        Assert.False(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Alliance, Wsg, 20));
+        Assert.False(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Alliance, Wsg, 20, true));
         Assert.Null(demand.Pick(OneChoice, Team.Alliance, Templates, Options(20), chanceHit: true, pick: 0));
-        Assert.True(demand.CanQueue(BattlegroundType.WarsongGulch, 3, Team.Alliance, Wsg, 20));
+        Assert.True(demand.CanQueue(BattlegroundType.WarsongGulch, 3, Team.Alliance, Wsg, 20, true));
     }
 
     [Fact]
@@ -142,7 +142,7 @@ public sealed class PlayerbotBattlegroundDemandTests
     {
         var demand = new PlayerbotBattlegroundDemand();
         demand.AddRealWaiting(BattlegroundType.WarsongGulch, 2, Team.Alliance);
-        Assert.False(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Alliance, Wsg, 0));
+        Assert.False(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Alliance, Wsg, 0, true));
         Assert.Null(demand.Pick(OneChoice, Team.Horde, Templates, Options(0), chanceHit: true, pick: 0));
         Assert.True(PlayerbotBattlegroundDemand.MustDecline(0, 0));
     }
@@ -183,7 +183,7 @@ public sealed class PlayerbotBattlegroundDemandTests
         demand.Clear();
         Assert.False(demand.AnyRealWaiting);
         Assert.Equal(0, demand.BotsCommitted(BattlegroundType.WarsongGulch, 2));
-        Assert.True(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Horde, Wsg, 20));
+        Assert.True(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Horde, Wsg, 20, true));
     }
 
     [Fact]

@@ -1,6 +1,6 @@
 # Playerbots in battlegrounds: queueing, playing, leaving
 
-How autonomous managed playerbots queue for battlegrounds, play Warsong Gulch and Arathi Basin, and leave when the match is over, so
+How autonomous managed playerbots queue for battlegrounds, play Warsong Gulch, Arathi Basin and Alterac Valley, and leave when the match is over, so
 the world has battleground traffic and the bots exercise the server's battleground code. The bot itself (goals, movement, the brain)
 is in `docs/areas/playbots.md`; bot-led groups in `docs/areas/playbots-groups.md`; the server's battlegrounds (queues, matches, flags,
 nodes, graveyards) in `docs/areas/battlegrounds.md`. A bot in a real player's party (the party AI) or under a scripted controller is
@@ -47,7 +47,8 @@ The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal l
 
 | Check | Refusal |
 |---|---|
-| Warsong Gulch or Arathi Basin (Alterac Valley is out of scope, below) | `Unsupported` |
+| Warsong Gulch, Arathi Basin or Alterac Valley | `Unsupported` |
+| with `RaiseCapToMatchMinimum` off: `MaxBotsPerBattleground` at least twice the template's `MinPlayersPerTeam` (bots alone could never start the match) | `CapBelowMinimum` |
 | a `battleground_template` row for the type | `NoTemplate` |
 | the bot's level within the template's minimum and maximum; the bracket is the manager's (`BracketOfLevel`, vmangos `Player::GetBattleGroundBracketIdFromLevel`) | `LevelOutOfRange` (not logged) |
 | the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), and the banner spell 21651 in the spell store, known by the bot (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
@@ -179,7 +180,7 @@ s (and leaves that buff alone for 30 s) and forgets a buff that despawned or som
 |---|---|---|
 | `World:Playerbots:Battlegrounds:Enabled` | `true` | Off: no bot starts a queue; bots already walking, queued or in a match finish their business. |
 | `World:Playerbots:Battlegrounds:QueueChancePerMinute` | `0.05` | 0..1. The chance per minute that a free, eligible bot starts to queue; each 2-second scan rolls `1 - (1 - p)^(seconds / 60)`. A real player's queue that needs bots is filled without a roll. |
-| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `20` | 0..80. Bots committed to one (type, bracket) never exceed it, a team never more than `min(MaxPlayersPerTeam, ceil(cap / 2))`, a running match holding it blocks its bracket, and an invitation into a match holding it is declined. 0 queues no bot. |
+| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `20` | 0..80. Unless `RaiseCapToMatchMinimum` raises it for a type whose template minimum needs more, bots committed to one (type, bracket) never exceed it, a team never more than `min(MaxPlayersPerTeam, ceil(cap / 2))`, a running match holding it blocks its bracket, and an invitation into a match holding it is declined. 0 queues no bot. |
 | `World:Playerbots:Battlegrounds:PreferFillingRealPlayerQueues` | `true` | A (type, bracket) a real player waits in gets bots at once, up to the template's minimum per team, before any random choice. |
 | `World:Playerbots:Battlegrounds:RaiseCapToMatchMinimum` | `true` | A type whose template minimum needs more bots than `MaxBotsPerBattleground` (2 x `MinPlayersPerTeam`, e.g. Alterac Valley's 20 per team) gets that minimum as its cap, never above 2 x `MaxPlayersPerTeam`, so bots alone can start it. Off: the type is refused for bots (`CapBelowMinimum`). Template values are never changed. |
 | `World:Playerbots:Battlegrounds:MaxTravelYards` | `1500` | 100..20000. The farthest (straight line, same map) a battlemaster may stand for a bot to choose it. |
@@ -228,10 +229,10 @@ without it the 21651 cast went through and nothing was claimed, which is how the
 
 ## Limits
 
-* **Alterac Valley is out of scope.** Its objectives (graveyards and towers assaulted for five minutes, captains, the general, the
-  reinforcements), its NPC fights and its 40-player scale have no bot AI here; it is refused in the eligibility check (`Unsupported`,
-  logged once), so no bot ever queues for it, whatever the template, the battlemasters and the content say. No configuration key turns
-  it on.
+* **Alterac Valley needs 20 bots a side.** The template minimum is 20 players per team (retail, not changed). Bots alone start a
+  match only when 20 eligible bots of each faction (level 51-60, within `MaxTravelYards` of a friendly Alterac Valley battlemaster) queue
+  within `MaxQueueWaitMinutes`; the cap is raised to that minimum for the type (`RaiseCapToMatchMinimum`), the match is 20 against 20
+  bots unless real players join, and up to 40 a side is never reached by bots alone.
 * **Arathi Basin banners: only what the server routes.** classic-db and vmangos make the five neutral banners (180087-180091) goobers
   whose use casts a trigger spell (23932, 23935-23938) that vmangos scripts into the click (`BattlegroundBannerTriggerScript`); the server
   routes them (`MatchRuntime.RoutesBannerUse`: a button with `noDamageImmune`, or a goober whose data10 is a banner trigger spell), so with

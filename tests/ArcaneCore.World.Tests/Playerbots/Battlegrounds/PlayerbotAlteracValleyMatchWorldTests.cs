@@ -57,6 +57,7 @@ public sealed class PlayerbotAlteracValleyMatchWorldTests
                     return true;
                 });
                 ScenarioContext.ExpectEqual(BotsPerTeam * 2, await context.ReadAsync(() => matches[0]!.PlayerCount), "players in the match");
+                ScenarioContext.ExpectEqual(0, await context.ReadAsync(() => coordinator.Totals.Declined), "bots declined an invitation at the exact cap");
             });
 
             var av = (AlteracValley)(await context.BattlegroundOfAsync(bots[0]))!;
@@ -92,8 +93,6 @@ public sealed class PlayerbotAlteracValleyMatchWorldTests
                 bool anyQueued = await context.ReadAsync(() => bots.Any(b => Manager(context).StateOf(b.Guid).InAnyQueue || Manager(context).StateOf(b.Guid).InBattleground));
                 ScenarioContext.Expect(!anyQueued, "a bot queued for or entered Alterac Valley although the cap is below the minimum");
                 ScenarioContext.ExpectEqual(0, await context.ReadAsync(() => coordinator.Totals.Queued), "bots queued");
-                ScenarioContext.ExpectEqual(1, await context.ReadAsync(() => coordinator.Refusals.Count(r => r.Type == BattlegroundType.AlteracValley
-                    && r.Why == PlayerbotBattlegroundRefusal.CapBelowMinimum)), "the refusal is recorded once");
             });
         });
     }

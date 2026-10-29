@@ -36,7 +36,7 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// <para>
 /// <b>Who queues.</b> Every <see cref="ScanMs"/> each free bot (autonomous, not in a real player's party, not in or waiting for a bot-led
 /// group, in no group, alive, out of combat, in no queue, no deserter, on a map of <see cref="PlayerbotOptions.AllowedMaps"/>) is looked
-/// over: the battleground types it may join (<see cref="PlayerbotBattlegroundBrackets.Eligible"/>: Warsong Gulch and Arathi Basin only,
+/// over: the battleground types it may join (<see cref="PlayerbotBattlegroundBrackets.Eligible"/>: Warsong Gulch, Arathi Basin and Alterac Valley,
 /// the level within the template, the objective content loaded, a battlemaster of its faction within
 /// <see cref="PlayerbotBattlegroundOptions.MaxTravelYards"/>), and whether it goes (<see cref="PlayerbotBattlegroundDemand.Pick"/>: a real
 /// player's queue first, else the per-minute chance, under the caps). The snapshot the caps read is rebuilt at every scan from the
@@ -48,7 +48,7 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// state says (the bot's queue slots, its invitation, the match it is bound to): walk to the battlemaster
 /// (<see cref="PlayerbotBattlegroundAI.Travel"/>), CMSG_BATTLEMASTER_HELLO and CMSG_BATTLEMASTER_JOIN (vmangos BattleGroundHandler.cpp:40-264),
 /// wait in the queue doing what the brain does, answer the invitation with CMSG_BATTLEFIELD_PORT (enter, or leave when the invited match
-/// already holds <see cref="PlayerbotBattlegroundOptions.MaxBotsPerBattleground"/> bots; BattleGroundHandler.cpp:361-507), leave the queue
+/// already holds the effective cap (<see cref="PlayerbotBattlegroundOptions.MaxBotsPerBattleground"/>, raised for a type whose template minimum needs more) of bots; BattleGroundHandler.cpp:361-507), leave the queue
 /// after <see cref="PlayerbotBattlegroundOptions.MaxQueueWaitMinutes"/>, play the match (<see cref="PlayerbotBattlegroundAI.Play"/>), and
 /// leave it with CMSG_LEAVE_BATTLEFIELD once it is over (BattleGroundHandler.cpp:510-525; vmangos BattleBotAI.cpp:461-485 leaves on the
 /// ended scoreboard). The server answers these as it answers any client; the coordinator reads the outcome from the manager, as a client
@@ -473,7 +473,13 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             foreach (ObjectGuid guid in match.Players)
                 if (guid != exceptGuid && world.FindOnlinePlayer(guid) is { Session: WorldSession { IsManaged: true } }) count++;
         foreach (Tracked other in _tracked.Values)
-            if (other.BotId != except && other.Phase == PlayerbotBattlegroundPhase.Entering && other.InstanceId == instanceId) count++;
+        {
+            if (other.BotId == except || other.Phase != PlayerbotBattlegroundPhase.Entering || other.InstanceId != instanceId) continue;
+            // A bot that has arrived is already counted as a participant above while its tracker is still Entering.
+            if (match is not null && _bots.TryGetValue(other.BotId, out PlayerbotBattlegroundBot arrived) && arrived.Session.Player is { } arrivedPlayer
+                && match.PlayerTeam(arrivedPlayer.Guid) is not null) continue;
+            count++;
+        }
         return count;
     }
 
@@ -734,6 +740,8 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         float chance = PlayerbotBattlegroundDemand.ChancePerThink(options.QueueChancePerMinute, sinceMs);
         bool anyRealWaiting = _demand.AnyRealWaiting || (options.PreferFillingRealPlayerQueues && options.QueueChancePerMinute > 0f && _demand.AnyBotWaiting);
         bool checkedRefusalsThisScan = false;
+        Func<BattlegroundType, bool> capCoversMinimum = type => options.RaiseCapToMatchMinimum || options.MaxBotsPerBattleground <= 0
+            || manager.TemplateOf(type) is not { } template || options.MaxBotsPerBattleground >= 2 * (int)template.MinPlayersPerTeam;
         foreach (PlayerbotBattlegroundBot bot in _orderedBots)
         {
             if (_tracked.ContainsKey(bot.BotId) || !bot.Free || !bot.Session.IsManaged || bot.Session.Player is not { IsInWorld: true } player) continue;
@@ -745,9 +753,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             checkedRefusalsThisScan = true;
             List<PlayerbotBattlegroundChoice> eligible = PlayerbotBattlegroundBrackets.Eligible(player.Level, manager.TemplateOf,
                 type => HasObjectiveContent(feature, type) && (type is not (BattlegroundType.ArathiBasin or BattlegroundType.AlteracValley) || KnowsBannerSpell(player)),
-                type => !IsSetAside(bot.BotId, type) && FindMaster(player, type) is not null, Refused,
-                type => options.RaiseCapToMatchMinimum || options.MaxBotsPerBattleground <= 0 || manager.TemplateOf(type) is not { } template
-                    || PlayerbotBattlegroundDemand.EffectiveCap(template, options.MaxBotsPerBattleground, false) >= 2 * (int)template.MinPlayersPerTeam);
+                type => !IsSetAside(bot.BotId, type) && FindMaster(player, type) is not null, Refused, capCoversMinimum);
             if (eligible.Count == 0 || (!roll && !anyRealWaiting)) continue;
             if (_demand.Pick(eligible, player.Team, manager.TemplateOf, options, roll, _random.NextDouble()) is not { } choice
                 || FindMaster(player, choice.Type) is not { } master) continue;
@@ -851,9 +857,15 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         }
 
         foreach (Tracked t in _tracked.Values)
-            if (t.Phase is PlayerbotBattlegroundPhase.Travel or PlayerbotBattlegroundPhase.Join or PlayerbotBattlegroundPhase.Queued
-                or PlayerbotBattlegroundPhase.Invited or PlayerbotBattlegroundPhase.Entering)
-                _demand.AddBotCommitted(t.Type, t.Bracket, t.Team);
+        {
+            if (t.Phase is not (PlayerbotBattlegroundPhase.Travel or PlayerbotBattlegroundPhase.Join or PlayerbotBattlegroundPhase.Queued
+                or PlayerbotBattlegroundPhase.Invited or PlayerbotBattlegroundPhase.Entering)) continue;
+            // An Entering bot that already participates is counted with its running match below.
+            if (t.Phase == PlayerbotBattlegroundPhase.Entering && t.InstanceId != 0 && manager.GetBattleground(t.InstanceId, t.Type) is { } entered
+                && _bots.TryGetValue(t.BotId, out PlayerbotBattlegroundBot enteredBot) && enteredBot.Session.Player is { } enteredPlayer
+                && entered.PlayerTeam(enteredPlayer.Guid) is not null) continue;
+            _demand.AddBotCommitted(t.Type, t.Bracket, t.Team);
+        }
 
         foreach (Battleground match in manager.RunningBattlegrounds)
         {
