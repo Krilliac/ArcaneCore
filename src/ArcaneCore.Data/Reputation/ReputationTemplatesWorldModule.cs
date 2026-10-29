@@ -102,7 +102,12 @@ public sealed class EfReputationContentSource(WorldDbContext db) : IReputationCo
             .OrderBy(r => r.Faction).ToListAsync(cancellationToken).ConfigureAwait(false);
         List<ReputationRewardRateRow> rates = await db.Set<ReputationRewardRateRow>().AsNoTracking()
             .OrderBy(r => r.Faction).ToListAsync(cancellationToken).ConfigureAwait(false);
-        return new ReputationContentRows(
+        return ToRows(spillovers, rates);
+    }
+
+    /// <summary>The kernel rows for the entities of the two tables (shared with the dump importer's preview).</summary>
+    public static ReputationContentRows ToRows(IEnumerable<ReputationSpilloverTemplateRow> spillovers, IEnumerable<ReputationRewardRateRow> rates)
+        => new(
             [.. spillovers.Select(r => new ReputationSpilloverTemplate(r.Faction,
             [
                 new ReputationSpillover(r.Faction1, r.Rate1, r.Rank1),
@@ -111,5 +116,4 @@ public sealed class EfReputationContentSource(WorldDbContext db) : IReputationCo
                 new ReputationSpillover(r.Faction4, r.Rate4, r.Rank4),
             ]))],
             [.. rates.Select(r => new ReputationRewardRate(r.Faction, r.QuestRate, r.CreatureRate, r.SpellRate))]);
-    }
 }
