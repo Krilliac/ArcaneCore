@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Stand-in child for the real-launcher tests (SystemProcessSupervisedLauncherTests). Not an ArcaneCore daemon and references none:
+       it never reads stdin, so "drain" and EOF do nothing, and it exits only when killed or when its bounded lifetime (60 s) runs out. Not in ArcaneCore.slnx; built and copied next
+       to ArcaneCore.World.Tests.dll through that project's reference (an Exe reference copies the dll and its runtimeconfig). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <AssemblyName>SupervisedChildFixture</AssemblyName>
+    <RootNamespace>SupervisedChildFixture</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+</Project>
