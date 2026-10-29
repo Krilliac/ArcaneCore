@@ -82,6 +82,11 @@ public static partial class ContentImporterCli
                                 rows for build 5875: classic-db (entry, Threat, multiplier, ap_bonus) or vmangos
                                 (threat, multiplier, inverse_effect_mask, build_min, build_max); a non-zero ap_bonus is
                                 refused (--dry-run writes nothing)
+          convert-rules         convert the imported EventAI tables (creature_ai_scripts, creature_ai_texts, broadcast_text,
+                                creature_ai_summons) into creature-host rows of rule, rule_action and rule_text, ids at 2^30 and
+                                above (docs/reference/rules-conversion.md); replaces exactly that id band, so it can be run again;
+                                prints each row it could not convert by id and reason (--report <file> writes them all;
+                                --dry-run converts and reports but writes nothing). Takes no dump. The rows are never committed.
           refresh <dump>...     replace, in one transaction, only the world tables a world built by an older importer
                                 lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
                                 exploration_basexp and game_weather, areatrigger_tavern, instance_encounter (the dungeon
@@ -173,6 +178,7 @@ public static partial class ContentImporterCli
                 "class-masks" => ClassMasks(arguments, output),
                 "proc-events" => await ProcEventsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "spell-threat" => await SpellThreatAsync(arguments, output, cancellationToken).ConfigureAwait(false),
+                "convert-rules" => await ConvertRulesAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh" => await RefreshAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh-portals" => await RefreshPortalsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),

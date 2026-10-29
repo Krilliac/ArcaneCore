@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Rules;
 using System.Globalization;
 using System.Text;
 
@@ -89,7 +90,8 @@ public static class RuleReference
             .Append("Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the ")
             .Append($"sequence then waits in one of the subject's {RuleSubjectState.PendingCapacity} pending slots. Lists nest at most ")
             .Append($"{RuleEvaluator.MaxListDepth} deep (checked when they run: a deeper start fails and is counted), and a list that starts itself again with no delay in between is rejected at load.\n\n")
-            .Append($"Ids below {RuleCatalog.CustomIdStart} are shipped or converted content; server-authored rows use {RuleCatalog.CustomIdStart} and up. ")
+            .Append($"Rule and rule_text ids below {RuleCatalog.CustomIdStart} are shipped content; server-authored rows use {RuleCatalog.CustomIdStart} up to {RuleCatalog.ConvertedIdStart - 1}. ")
+            .Append($"From {RuleCatalog.ConvertedIdStart} (2^30) up the ids belong to the converters, one sub-band of {RuleIdBands.SubBandSize} (2^26) ids each: EventAI at {RuleIdBands.EventAi}, DB scripts at {RuleIdBands.DbScripts} (reserved), SmartAI at {RuleIdBands.SmartAi} (reserved). A converter rewrites only its own sub-band, and a row at or above {RuleIdBands.End} is rejected at load. ")
             .Append($"`playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, or {RuleCatalog.CustomGoalIdStart} and up for a custom goal.\n\n");
 
         b.Append("## Parameter kinds\n\n| Kind | Checked at load |\n| --- | --- |\n");
