@@ -632,13 +632,16 @@ public sealed class PlayerbotPathShapingTests
         for (int ti = 0; ti <= 12; ti++)
         {
             float theta = 0.4f + (ti * 0.2f);
-            for (int k = 0; k <= 24; k++)
+            for (int k = 0; k <= 26; k++)
             {
-                float tauOld = -1.2f + (k * 0.1f);
+                // k 0..24 is the grid -1.2..1.2 in steps of 0.1; k 25 and 26 are +-0.5995, the only inputs that give a zero cap (the allowed
+                // turn is MaxHeadingStepRadians minus 1e-3, so a neighbour already inside that last 1e-3 may not be pushed at all). They sit
+                // 5e-4 from the edge, far outside float rounding of cos/sin/atan2, so the branch they take is the same on every libm.
+                float tauOld = k <= 24 ? -1.2f + (k * 0.1f) : (k == 25 ? 0.5995f : -0.5995f);
 
                 // The allowance jumps by 0.3 rad at |tau| = MaxHeadingStepRadians by design; a grid point on that edge lands on either side
                 // depending on the libm rounding of cos/sin/atan2, so it is not a stable check.
-                if (MathF.Abs(MathF.Abs(tauOld) - PlayerbotPathShaping.MaxHeadingStepRadians) < 1e-3f)
+                if (k <= 24 && MathF.Abs(MathF.Abs(tauOld) - PlayerbotPathShaping.MaxHeadingStepRadians) < 1e-3f)
                     continue;
 
                 foreach (float side in new[] { 1f, -1f })
