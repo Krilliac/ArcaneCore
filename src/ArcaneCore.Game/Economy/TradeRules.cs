@@ -143,6 +143,9 @@ public sealed class TradeSession(Player initiator, Player target)
     /// <summary>Set while the two-character settlement runs; the trade accepts no changes.</summary>
     public bool Settling { get; set; }
 
+    /// <summary>Set when the settlement committed (the trade ended with TradeComplete): a closed session that never reached it was cancelled or failed. Read by drivers that must tell the two apart.</summary>
+    public bool Completed { get; set; }
+
     public TradeSide SideOf(Player player) => ReferenceEquals(player, Initiator.Player) ? Initiator : Target;
 
     public TradeSide OtherSide(Player player) => ReferenceEquals(player, Initiator.Player) ? Target : Initiator;

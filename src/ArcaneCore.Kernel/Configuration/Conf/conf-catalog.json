@@ -22833,6 +22833,38 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Social:Trading:Deals:BuyMaxPremiumPercent",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "50",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "The most a buying bot pays over the item's reference price in percent; never more than the reference divided by 0.67 (0..100, default 50).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Social:Trading:Deals:CounterTolerancePercent",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "10",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "A counter-offer the bot accepts: at most this share under its ask when selling (never under the vendor value); one counter per deal, then it holds its price (0..50, default 10).",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Social:Trading:Deals:DealMinutes",
       "section": "World:Playerbots",
       "type": "int",
@@ -22939,7 +22971,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The hours an auction house observation is kept in the price book (1..720, default 24).",
+      "meaning": "The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -22955,7 +22987,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3).",
+      "meaning": "The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -22971,7 +23003,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "Master switch (on by default). Once the trade desk lands (a later P4 step), off will cancel every window it drives at its next pass; no effect until then.",
+      "meaning": "Master switch (on by default). Off stops the trade desk quoting and agreeing deals and cancels every window it drives at its next pass.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

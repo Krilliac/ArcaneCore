@@ -20,6 +20,11 @@ public sealed class EfNpcContentStore(WorldDbContext db) : INpcContentStore
             .ToListAsync(cancellationToken).ConfigureAwait(false);
         List<NpcTextRow> textRows = await db.Set<NpcTextRow>().AsNoTracking().OrderBy(r => r.Id)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
+        List<NpcTextBroadcastRow> broadcastRows = await db.Set<NpcTextBroadcastRow>().AsNoTracking().OrderBy(r => r.Id)
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        Dictionary<uint, BroadcastTextRow> broadcastTexts = broadcastRows.Count == 0
+            ? []
+            : await db.Set<BroadcastTextRow>().AsNoTracking().ToDictionaryAsync(r => r.Id, cancellationToken).ConfigureAwait(false);
         List<VendorItem> vendor = await db.Set<VendorItem>().AsNoTracking()
             .OrderBy(r => r.Entry).ThenBy(r => r.Slot).ThenBy(r => r.Item)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
@@ -42,11 +47,65 @@ public sealed class EfNpcContentStore(WorldDbContext db) : INpcContentStore
         List<PointOfInterest> pois = await db.Set<PointOfInterest>().AsNoTracking().OrderBy(r => r.Entry)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
 
-        return new NpcContent(gossips, menus, options, textRows.Select(ToNpcText).ToArray(), vendor, trainer, nodes, paths, starts, pois)
+        return new NpcContent(gossips, menus, options, ResolveTexts(textRows, broadcastRows, broadcastTexts), vendor, trainer, nodes, paths, starts, pois)
         {
             VendorTemplateItems = vendorTemplates.Select(r => r.ToVendorItem()).ToArray(),
             VendorTemplateIds = vendorTemplateIds,
         };
+    }
+
+    /// <summary>
+    /// Every inline <c>npc_text</c> row, plus a text for each <c>npc_text_broadcast_text</c> id that has no inline row (an inline row
+    /// wins, so existing content is unchanged; mangos-classic <c>ObjectMgr.cpp:5653-5655</c> lets the broadcast row win, a deliberate divergence). Ordered by id, like the inline rows were.
+    /// </summary>
+    public static NpcText[] ResolveTexts(
+        IReadOnlyList<NpcTextRow> inline,
+        IReadOnlyList<NpcTextBroadcastRow> links,
+        IReadOnlyDictionary<uint, BroadcastTextRow> broadcastTexts)
+    {
+        var texts = new List<NpcText>(inline.Count + links.Count);
+        var inlineIds = new HashSet<uint>();
+        foreach (NpcTextRow row in inline)
+        {
+            inlineIds.Add(row.Id);
+            texts.Add(ToNpcText(row));
+        }
+
+        foreach (NpcTextBroadcastRow link in links)
+        {
+            if (!inlineIds.Contains(link.Id))
+            {
+                texts.Add(ToNpcText(link, broadcastTexts));
+            }
+        }
+
+        texts.Sort((a, b) => a.Id.CompareTo(b.Id));
+        return [.. texts];
+    }
+
+    /// <summary>
+    /// The eight variants of a broadcast-text row. A variant whose <c>BroadcastTextId</c> is 0 or names no <c>broadcast_text</c> row has
+    /// probability 0 and empty text, so it is never picked. The broadcast row's EmoteID1..3 / EmoteDelay1..3 become the three
+    /// emote/delay pairs of the variant and its LanguageID the variant language. Divergence from mangos-classic
+    /// (<c>ObjectMgr.cpp:5659, 5674-5682</c>), which keeps the row's probability and sends empty text; zeroing it never picks a blank variant.
+    /// </summary>
+    public static NpcText ToNpcText(NpcTextBroadcastRow r, IReadOnlyDictionary<uint, BroadcastTextRow> broadcastTexts)
+    {
+        (float Prob, uint Broadcast)[] slots =
+        [
+            (r.Prob0, r.BroadcastTextId0), (r.Prob1, r.BroadcastTextId1), (r.Prob2, r.BroadcastTextId2), (r.Prob3, r.BroadcastTextId3),
+            (r.Prob4, r.BroadcastTextId4), (r.Prob5, r.BroadcastTextId5), (r.Prob6, r.BroadcastTextId6), (r.Prob7, r.BroadcastTextId7),
+        ];
+        var options = new NpcTextOption[8];
+        for (int i = 0; i < slots.Length; i++)
+        {
+            (float prob, uint id) = slots[i];
+            options[i] = id != 0 && broadcastTexts.TryGetValue(id, out BroadcastTextRow? b)
+                ? new NpcTextOption(prob, b.Text, b.FemaleText, b.Language, b.EmoteDelay1, b.EmoteId1, b.EmoteDelay2, b.EmoteId2, b.EmoteDelay3, b.EmoteId3)
+                : new NpcTextOption(0f, string.Empty, string.Empty, 0, 0, 0, 0, 0, 0, 0);
+        }
+
+        return new NpcText { Id = r.Id, Options = options };
     }
 
     /// <summary>The inline cmangos-classic row as eight variants.</summary>

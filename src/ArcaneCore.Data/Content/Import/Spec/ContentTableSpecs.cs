@@ -245,6 +245,9 @@ public static class ContentTableSpecs
         new("creature_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
         new("playercreateinfo_item", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("itemid")], ["amount"], []),
         new("creature_onkill_reputation", [new KeyColumn("creature_id")], [], s_onKillSignatures, OnKillReputationDumpImporter.ReadsColumn),
+        // Same layout in cmangos and vmangos, no patch column (vmangos ObjectMgr.cpp:8832, :8976).
+        new("reputation_spillover_template", [new KeyColumn("faction")], [], [], ReputationTemplatesDumpImporter.ReadsSpilloverColumn),
+        new("reputation_reward_rate", [new KeyColumn("faction")], [], [], ReputationTemplatesDumpImporter.ReadsRateColumn),
         new("playercreateinfo", [new KeyColumn("race"), new KeyColumn("class")], [], [], PlayerCreateDumpImporter.ReadsStartColumn),
         new("playercreateinfo_spell", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("spell")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsSpellColumn),
         new("playercreateinfo_action", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("button")], [], [], PlayerCreateActionDumpImporter.ReadsColumn),
@@ -262,6 +265,7 @@ public static class ContentTableSpecs
         new("gossip_menu", [new KeyColumn("entry"), new KeyColumn("text_id"), new KeyColumn("condition_id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu", c)),
         new("gossip_menu_option", [new KeyColumn("menu_id"), new KeyColumn("id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu_option", c)),
         new("npc_text", [new KeyColumn("ID")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text", c)),
+        new("npc_text_broadcast_text", [new KeyColumn("Id")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text_broadcast_text", c)),
         new("npc_vendor", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor", c)),
         new("npc_vendor_template", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor_template", c)),
         new("npc_trainer", [new KeyColumn("entry"), new KeyColumn("spell")], [], [], c => NpcDumpImporter.ReadsColumn("npc_trainer", c)),
