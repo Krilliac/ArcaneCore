@@ -7,19 +7,22 @@ namespace ArcaneCore.Game.Tests.Rules;
 public sealed class RuleVocabularyTests
 {
     [Fact]
-    public void Default_HoldsTheSharedPrimitives_AndTheBotHost()
+    public void Default_HoldsTheSharedPrimitives_AndTheShippedHosts()
     {
         RuleVocabulary vocabulary = RuleVocabulary.Default;
 
-        Assert.Equal(["bot"], vocabulary.Hosts.Select(h => h.Name));
+        Assert.Contains("bot", vocabulary.Hosts.Select(h => h.Name));
+        Assert.Contains("world_event", vocabulary.Hosts.Select(h => h.Name));
         Assert.Equal(
-            [
-                "event 1 bot.goal_evaluate", "event 2 bot.gold_below", "event 3 bot.free_bag_slots_below",
-                "action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "action 100 bot.propose_goal", "action 101 bot.suppress_goal",
-                "target 1 self", "target 2 invoker",
-            ],
-            vocabulary.Primitives.Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
-        Assert.All(vocabulary.Primitives, p => Assert.True(p.Host is RuleHostKind.Any or RuleHostKind.Bot));
+            ["event 1 world_event.started", "event 2 world_event.stopped", "event 3 world_event.update", "action 100 world_event.start_event", "action 101 world_event.stop_event"],
+            vocabulary.Primitives.Where(p => p.Host == RuleHostKind.WorldEvent).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
+        Assert.Equal(
+            ["event 1 bot.goal_evaluate", "event 2 bot.gold_below", "event 3 bot.free_bag_slots_below", "action 100 bot.propose_goal", "action 101 bot.suppress_goal"],
+            vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Bot).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
+        IReadOnlyList<RulePrimitiveInfo> shared = [.. vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Any)];
+        Assert.Equal(
+            ["action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "target 1 self", "target 2 invoker"],
+            shared.Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
         Assert.All(vocabulary.Primitives, p => Assert.True(p.IsBuiltIn));
         Assert.All(vocabulary.Primitives, p => Assert.False(string.IsNullOrWhiteSpace(p.Description)));
     }
@@ -34,7 +37,7 @@ public sealed class RuleVocabularyTests
         Assert.NotNull(vocabulary.FindEvent(RuleTestKit.Kind, RuleTestKit.Ping));
         Assert.NotNull(vocabulary.FindAction(RuleTestKit.Kind, RuleTestKit.Record));
         Assert.Null(vocabulary.FindAction(RuleHostKind.Any, RuleTestKit.Record));
-        Assert.Null(vocabulary.FindEvent(RuleHostKind.Creature, RuleTestKit.Ping));
+        Assert.Null(vocabulary.FindEvent(RuleHostKind.GameObject, RuleTestKit.Ping));
         Assert.Equal("test", vocabulary.FindHost("TEST")!.Name);
         Assert.Contains(vocabulary.For(RuleTestKit.Kind), p => p.Name == "test.record");
         Assert.Contains(vocabulary.For(RuleTestKit.Kind), p => p.Name == "say");

@@ -9,7 +9,10 @@ namespace ArcaneCore.Kernel.Logging;
 /// <c>cut</c>/<c>awk</c> see stable columns. In colour mode the same text is wrapped in ANSI SGR codes (level coloured,
 /// timestamp/category/scopes dimmed); the layout is identical, so a <c>sed 's/\x1b\[[0-9;]*m//g'</c> of a colour log equals the plain log.
 /// Allocation: none for a message without exception or scopes (every field is formatted into the caller's <see cref="LogBuffer"/>).
-/// The message text is appended unchanged: callers sanitise client-controlled text with <see cref="LogSafe"/> before logging.
+/// Variable text (message, category, event name, scopes, exception lines) goes through <see cref="AppendEscaped"/>: CR, LF, every other C0
+/// control (including ESC), DEL, the C1 controls (including NEL) and U+2028/U+2029 are written as visible escapes, so no caller can make
+/// a sink emit a forged line (CWE-117). Text without such characters is copied unchanged and allocates nothing. Callers still use
+/// <see cref="LogSafe"/> where truncation is wanted.
 /// </summary>
 public static class LogLineFormatter
 {
@@ -48,12 +51,12 @@ public static class LogLineFormatter
             buffer.Append(' ');
         }
 
-        buffer.Append(evt.Category);
+        AppendEscaped(ref buffer, evt.Category);
         WriteEventId(ref buffer, evt.EventId);
         if (scopes is not null)
         {
             ScopeText text = ScopeText.Collect(scopes);
-            buffer.Append(text.Written);
+            AppendEscaped(ref buffer, text.Written);
         }
 
         buffer.Append(':');
@@ -63,7 +66,7 @@ public static class LogLineFormatter
         }
 
         buffer.Append(' ');
-        buffer.Append(evt.Message);
+        AppendEscaped(ref buffer, evt.Message);
         buffer.Append('\n');
         if (evt.Exception is not null)
         {
@@ -86,10 +89,56 @@ public static class LogLineFormatter
             }
 
             buffer.Append("      ");
-            buffer.Append(line);
+            AppendEscaped(ref buffer, line);
             buffer.Append('\n');
         }
     }
+
+    /// <summary>True for a character a line-oriented sink must not emit raw: C0 controls, DEL, C1 controls, U+2028 and U+2029.</summary>
+    public static bool NeedsEscape(char c) => c < 0x20 || (c >= 0x7F && c <= 0x9F) || c == (char)0x2028 || c == (char)0x2029;
+
+    /// <summary>
+    /// Appends <paramref name="text"/> with every <see cref="NeedsEscape"/> character written as a visible escape: <c>\r</c>, <c>\n</c>,
+    /// <c>\t</c> or <c>\uXXXX</c> (upper-case hex). Clean runs are copied in one piece.
+    /// </summary>
+    public static void AppendEscaped(ref LogBuffer buffer, scoped ReadOnlySpan<char> text)
+    {
+        int flushed = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (!NeedsEscape(c))
+            {
+                continue;
+            }
+
+            buffer.Append(text[flushed..i]);
+            flushed = i + 1;
+            switch (c)
+            {
+                case '\r':
+                    buffer.Append("\\r");
+                    break;
+                case '\n':
+                    buffer.Append("\\n");
+                    break;
+                case '\t':
+                    buffer.Append("\\t");
+                    break;
+                default:
+                    buffer.Append("\\u");
+                    buffer.Append(HexUpper((c >> 12) & 0xF));
+                    buffer.Append(HexUpper((c >> 8) & 0xF));
+                    buffer.Append(HexUpper((c >> 4) & 0xF));
+                    buffer.Append(HexUpper(c & 0xF));
+                    break;
+            }
+        }
+
+        buffer.Append(text[flushed..]);
+    }
+
+    private static char HexUpper(int value) => (char)(value < 10 ? '0' + value : 'A' + value - 10);
 
     /// <summary><c>yyyy-MM-dd HH:mm:ss.fff</c>, hand formatted so the fast path does not depend on the runtime's format parser.</summary>
     public static void WriteTimestamp(ref LogBuffer buffer, DateTime time)
@@ -120,7 +169,7 @@ public static class LogLineFormatter
         buffer.Append('[');
         if (eventId.Name is not null)
         {
-            buffer.Append(eventId.Name);
+            AppendEscaped(ref buffer, eventId.Name);
             if (eventId.Id != 0)
             {
                 buffer.Append(':');

@@ -96,6 +96,9 @@ public sealed class ReloadAllMembershipTests
 
         // rules (the shared rule engine's tables) is an ArcaneCore addition; all reaches it, like the other content tables.
         ["rules"] = true,
+
+        // tuning (the plain tuning tables, rule engine phase P5) is an ArcaneCore addition; all reaches it.
+        ["tuning"] = true,
     };
 
     /// <summary>
@@ -113,7 +116,7 @@ public sealed class ReloadAllMembershipTests
     };
 
     /// <summary>Names with no vmangos counterpart (each needs a reason in docs/areas/hot-reload.md).</summary>
-    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges", "chat_word_filter", "instance_encounter", "rules" };
+    private static readonly HashSet<string> ArcaneCoreNames = new(StringComparer.Ordinal) { "spell_enchant_charges", "chat_word_filter", "instance_encounter", "rules", "tuning" };
 
     private static ReloadCoordinator Coordinator(WorldTestHost host) => host.WorldServices.GetRequiredService<ReloadFeature>().Coordinator;
 

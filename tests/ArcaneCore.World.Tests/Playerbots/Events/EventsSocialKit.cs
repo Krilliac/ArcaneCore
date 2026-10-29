@@ -48,6 +48,7 @@ internal static class EventsSocialKit
             services.AddSingleton<ICreatureDataStore>(content);
             services.AddSingleton<IQuestContentStore>(content);
             services.AddSingleton<IGameEventDataStore>(content);
+            services.AddSingleton<ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore>(new ShippedHolidayFlavourStore());
         });
     }
 

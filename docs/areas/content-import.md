@@ -394,6 +394,10 @@ feature reads:
   rows for build 5875 in one transaction, by column name for both the classic-db (`entry, Threat, multiplier, ap_bonus`) and the vmangos
   layout; vmangos rows whose build range misses 5875 are dropped and counted, a non-zero `ap_bonus` or two rows for one spell is an error.
   `--dry-run` parses and counts without a database. A running world applies the rows with `.reload spell_threats`. See [threat](threat.md).
+- **Convert EventAI to rules.** `convert-rules --database <file>` (or `--provider`/`--connection-string`; `--dry-run`, `--report <file>`) turns the
+  imported EventAI tables into creature-host `rule`, `rule_action` and `rule_text` rows with deterministic ids at `2^30` and above, replaces
+  exactly that band so it can be run again, and lists each row it could not convert by id and reason. It reads the database and takes no dump;
+  the converted rows stay in that database and are never committed. See [EventAI to rule conversion](../reference/rules-conversion.md).
 - **Refresh an existing world.** `refresh <dump>... --database <file> [--dbc-dir <dir>]` brings a world that an older importer built up
   to the tables the current world reads, and touches nothing else (creatures, objects, items, quests, loot and NPC services stay as they
   are). Inside one transaction it empties and refills, only when the inputs carry them: `world_safe_locs` and `game_graveyard_zone`

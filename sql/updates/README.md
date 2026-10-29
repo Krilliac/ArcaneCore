@@ -78,7 +78,7 @@ needs recovering: fix the cause and run the file again.
 Apart from the row inserts described below, the files carry the schema and the version row only. Initial rows (configured realms, the Warden scan table, M3 world data) are
 written by the daemons' initializers at start, into empty tables, and are not part of the schema.
 
-A step can also insert rows of its own (`EnsureRowChange`: insert the row when its key is absent, never overwrite an edited one). Characters 0060/0061 and world 0062 (the shipped bot goal ladder) do this; the generated file carries the INSERTs and is version-guarded like any other.
+A step can also insert rows of its own (`EnsureRowChange`: insert the row when its key is absent, never overwrite an edited one). Characters 0060/0061 and world 0064 (the shipped bot goal ladder) do this; the generated file carries the INSERTs and is version-guarded like any other.
 
 Content ArcaneCore ships as rows (the Undercity siege bot scenario) is separate idempotent SQL under [`sql/content`](../content/README.md).
 

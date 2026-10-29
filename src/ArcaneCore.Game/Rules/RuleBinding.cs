@@ -82,6 +82,14 @@ public sealed class RuleSubjectState
     /// <summary>The current phase, 0..31 (<c>set_phase</c> changes it).</summary>
     public int Phase { get; set; }
 
+    /// <summary>
+    /// The phase the evaluator's phase gate tests instead of <see cref="Phase"/> while it is 0..31; -1 (the default) tests <see cref="Phase"/>.
+    /// A host that readies rules before it processes them (the creature host, as cmangos EventAI does) sets it around <c>Fire</c> and clears it
+    /// after. Actions always read and write <see cref="Phase"/>; only the check honours this, so <c>Update</c> and list starts (which do not
+    /// gate on phase) are unaffected.
+    /// </summary>
+    public int GatePhase { get; set; } = -1;
+
     /// <summary>How many delayed runs are pending.</summary>
     public int PendingCount
     {

@@ -33,6 +33,7 @@ public sealed partial class WorldRuntime : IDisposable
     private readonly ManualResetEventSlim _wakeSignal = new(false);
     private Thread? _thread;
     private int _worldThreadId = -1;
+    private long _ticksStarted; // written only by the thread that runs RunTick; read by liveness publishers on any thread
 
     /// <summary>A token that is this runtime and nothing else: stamped on reports (<c>AnomalyLedger.Report</c>'s <c>origin</c>) so a test capture can tell two worlds apart without anything holding the runtime itself alive.</summary>
     public object Identity { get; } = new();
@@ -78,6 +79,13 @@ public sealed partial class WorldRuntime : IDisposable
 
     /// <summary>Test seam (the cadence harness): the spun part of a precise wait, in microseconds. Set before <see cref="Start"/>.</summary>
     internal long TickSpinMarginMicros { get; set; } = WorldTickWaiter.DefaultSpinMarginMicros;
+
+    /// <summary>
+    /// How many ticks have started since this runtime was created: the world loop's proof of life. Written by the thread that runs
+    /// <see cref="RunTick(uint)"/> (one plain add and a volatile store, no lock, no allocation), read on any thread. A value that stops
+    /// advancing while the process is up means the loop is stuck or stalled; the realm-list heartbeat (<c>World:Realm</c>) is withheld then.
+    /// </summary>
+    public long TicksStarted => Volatile.Read(ref _ticksStarted);
 
     public int OnlinePlayerCount => _online.Count;
 
@@ -464,6 +472,7 @@ public sealed partial class WorldRuntime : IDisposable
 
         // Before anything of this tick runs: the previous tick's phases, duration and slowest features are complete and still readable.
         RaiseTickStarting(diffMs);
+        Volatile.Write(ref _ticksStarted, _ticksStarted + 1);
         long phaseStart = Stopwatch.GetTimestamp();
         long bytesStart = GC.GetAllocatedBytesForCurrentThread();
         _topCount = 0;

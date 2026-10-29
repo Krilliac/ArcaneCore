@@ -6,16 +6,16 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.World.Rules;
 
 /// <summary>
-/// World schema 62 (lane P1 was assigned 64, but the update-file exporter refuses to write files while placeholders for the open 62-63 exist, so this branch uses the first free number): the shipped bot content (docs/superpowers/specs/2026-10-28-rule-engine-design.md, phase P1). No new table: the step
+/// World schema 64: the shipped bot content (docs/superpowers/specs/2026-10-28-rule-engine-design.md, phase P1). No new table: the step
 /// seeds <c>playerbot_goal</c> with the goal catalogue (the 18 goal kinds and the 16 ladder rungs) and the bot goal ladder as rules
 /// (<c>rule</c> ids 10001-10016, one <c>bot.propose_goal</c> action each in <c>rule_action</c>), all from <see cref="PlayerbotLadderContent"/>.
 /// A row is inserted only when its key is absent, so a server's edit of a shipped row (a weight, <c>enabled</c>) survives a later upgrade,
-/// and the step is idempotent. The version is the next free world step (the integrator renumbers this one constant).
+/// and the step is idempotent.
 /// </summary>
 public sealed class PlayerbotLadderDataModule : IDataModule
 {
     /// <summary>The world schema version of this step.</summary>
-    public const int Version = 62;
+    public const int Version = 64;
 
     public DatabaseComponent Component => DatabaseComponent.World;
 

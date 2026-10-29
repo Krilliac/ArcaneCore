@@ -34,7 +34,8 @@ public sealed class RealmConsole : IHostedService
         LogonServer logon,
         TimeProvider time,
         IHostApplicationLifetime lifetime,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        IOptions<RealmLivenessOptions>? liveness = null)
         : this(
             options,
             source,
@@ -42,7 +43,8 @@ public sealed class RealmConsole : IHostedService
                 scopes,
                 (logon ?? throw new ArgumentNullException(nameof(logon))) is var validLogon ? () => validLogon.ActiveSessions : null!,
                 time,
-                lifetime),
+                lifetime,
+                liveness?.Value),
             loggerFactory)
     {
     }

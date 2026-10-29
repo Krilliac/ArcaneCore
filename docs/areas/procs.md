@@ -193,11 +193,12 @@ placeholder and renumbered the wave-2 world steps down to 38-41, so this step is
   them into one damage).
 - Effect 70 EXTRA_ATTACKS stays unsupported (vmangos HandleUnused: one visual-only spell); proc-driven extra attacks are PROC_TRIGGER_SPELL auras
   triggering SPELL_EFFECT_ADD_EXTRA_ATTACKS spells (Hand of Justice, Sword Specialization, Windfury), which work.
+- PERIODIC_HEALTH_FUNNEL (62) and POWER_BURN_MANA (162) are registered auras and their ticks fire the periodic damage procs before the damage
+  (`FirePeriodicDamageProcs` from `SpellSystem.PowerBurn.cs` and `DrainAuras.cs`; vmangos SpellAuras.cpp:5902-5928, 6300-6354).
 
 ## Limits (not delivered)
 
-- PERIODIC_HEALTH_FUNNEL (pets lane) and POWER_BURN_MANA are unsupported auras, so their ticks fire no procs yet (vmangos SpellAuras.cpp:5928,
-  6300-6354); absorbs of a leech tick are not modelled (DrainAuras).
+- Absorbs of a leech tick are not modelled (DrainAuras).
 
 - The class-specific cases inside vmangos' ProcTriggerSpell, Dummy and OverrideClassScripts handlers: Seal of Righteousness, Judgement of
   Light/Wisdom and Shaman Lightning Shield ([class-scripts](class-scripts.md)) and the talents of "Talent procs" are delivered, and so are the item and set dummy cases

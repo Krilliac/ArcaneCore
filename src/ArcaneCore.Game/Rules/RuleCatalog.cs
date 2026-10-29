@@ -47,8 +47,11 @@ public sealed class RuleCatalog
     /// <summary>See <see cref="RungGoalIdStart"/>.</summary>
     public const short RungGoalIdEnd = 116;
 
-    /// <summary>Rule ids from here up are server-authored (custom); shipped and converted content stays below.</summary>
-    public const int CustomIdStart = 1_000_000;
+    /// <summary>Rule ids from here up are server-authored (custom), up to <see cref="ConvertedIdStart"/> (exclusive); shipped content stays below.</summary>
+    public const int CustomIdStart = RuleIdBands.CustomStart;
+
+    /// <summary>Rule and text ids from here up belong to the converters, one sub-band each (<see cref="RuleIdBands"/>); an id past the named sub-bands is rejected at load.</summary>
+    public const int ConvertedIdStart = RuleIdBands.ConvertedStart;
 
     /// <summary>The default cap on <c>cooldown_max_ms</c>: 24 hours. A longer cooldown is a data error (a rule meant to fire once a day or less
     /// is a once-only rule), and the cap keeps the drawn cooldown and the subject's clock arithmetic far from overflow.</summary>
@@ -276,11 +279,15 @@ public sealed class RuleCatalog
 
         private bool IsRejected(RuleHostKind host, int list) => !_compiledLists.TryGetValue((host, list), out ListResult? result) || result.List is null;
 
+        private static string IdPastBands(int id)
+            => $"id {id} is in the converter range (2^30 and up) but past the named converter sub-bands (ends at {RuleIdBands.End}); authored ids are {RuleIdBands.CustomStart} up to {RuleIdBands.ConvertedStart - 1}";
+
         private void LoadTexts()
         {
             foreach (RuleTextRecord row in content.Texts.OrderBy(t => t.Id))
             {
                 string? problem = row.Id <= 0 ? "id must be 1 or more"
+                    : !RuleIdBands.IsAcceptable(row.Id) ? IdPastBands(row.Id)
                     : _texts.ContainsKey(row.Id) ? "duplicate id (the first row is kept)"
                     : string.IsNullOrWhiteSpace(row.ContentDefault) ? "content_default is empty"
                     : null;
@@ -403,6 +410,12 @@ public sealed class RuleCatalog
             {
                 var host = (RuleHostKind)row.Host;
                 var owner = new RuleOwner((RuleOwnerKind)row.OwnerKind, row.OwnerId);
+                if (row.Id > 0 && !RuleIdBands.IsAcceptable(row.Id))
+                {
+                    _rejected.Add(Reject(RuleDataTables.Rule, row.Id, host, owner, IdPastBands(row.Id)));
+                    continue;
+                }
+
                 if (row.Id <= 0 || !seen.Add(row.Id))
                 {
                     _rejected.Add(Reject(RuleDataTables.Rule, row.Id, host, owner, row.Id <= 0 ? "id must be 1 or more" : "duplicate id (the first row is kept)"));

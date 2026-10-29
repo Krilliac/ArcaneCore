@@ -81,6 +81,14 @@ Cluster.Worker.LinkSecret = "<long random string>"
 The World's own client listener (`World:Port`) stays open in worker mode; point the realm list at the gateway's port to
 send clients through the gateway.
 
+Realm liveness in this topology belongs to the operator, not to a world. A combined-mode world keeps its realm-list row current: offline
+while starting, online while its loop ticks, offline at stop, with a heartbeat the logon daemon judges (`World:Realm:Id`,
+[installation](../guide/installation.md) section 4, [realm list liveness](../ops/realm-liveness.md), vmangos Master.cpp:215/:330). A worker
+does not (neither state nor heartbeat; having the gateway own liveness would need the worker's tick counter on the link and is not built): an active and a standby worker serve the same realm, so the old active world going offline after a handoff would hide a realm
+the promoted standby is serving, and the client-facing endpoint is the gateway, which has no realm-list writer. Set the row's flags with
+SQL (`realmlist.Flags`, Offline = 0x02) when the gateway itself is taken down, and keep `realmlist.State` at 0 (Unknown) so the logon daemon
+enforces no heartbeat for a row no world writes: a row left at another state by an earlier combined-mode world would go offline for good.
+
 Worker mode makes character fencing **mandatory** (Tier 3b groundwork): with `Cluster:Worker:Enabled = true` the
 characters write fence is registered whatever `Cluster:Fencing:Enabled` says, and the World refuses to start unless
 `Cluster:Fencing:Enabled = true` too. Combined mode (worker off) is unchanged.
@@ -138,6 +146,10 @@ These keys are **not** in the generated configuration catalog: the catalog cover
 (`ConfigDaemon` has no Gateway value), and there is no `gateway.conf.dist` or `--check-config` for the gateway yet. The
 source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `ConfigExceptionTable.UncataloguedSourceRoots`.
 
+## Running under the host supervisor
+
+The gateway, the worker and a standby worker can be launched and watched by the host supervisor instead of by hand: start `ArcaneCore.World` with `Cluster:Supervisor:Enabled` true and list each child under `Cluster:Supervisor:Processes` (keys without `:`, for example `worker-EK`), each with its own configuration and its own `Cluster:Worker:Enabled`. The supervisor process builds no world and opens no database or listener; it refuses to start with fewer than `Cluster:Supervisor:MinClusterProcesses` admissible processes, does not restart a child that exits 78, and a child cannot itself run as a supervisor. See the M15.4 section of [CLUSTERING_DESIGN.md](../CLUSTERING_DESIGN.md).
+
 ## Where things run
 
 | Concern | Runs on | Note |
@@ -193,8 +205,10 @@ recovery).
     that exists today.
   - `IRealmAuthorityLeaseStore` has only an in-memory implementation and no DI registration. The `.cluster leases` summary
     therefore always shows the fallback owner (combined, or the character ownership epoch), never a realm lease token.
-- **The M15.4 host supervisor is a library, not a host.** `ClusterHostSupervisor` (process admission, merged console, restart
-  backoff) is exercised only by its tests. No daemon or tool constructs it or binds its options (the Cluster:Supervisor section,
-  including the per-process console switch described in the [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)),
-  so those keys are read by nothing, and they are not in the conf catalog. `MinClusterProcesses` is declared but not
-  enforced by admission.
+- **The M15.4 host supervisor is hosted as an opt-in mode, with gaps.** `Cluster:Supervisor:Enabled` runs `ArcaneCore.World` as the
+  supervisor only (see "Running under the host supervisor" above and the
+  [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)); the `Cluster:Supervisor` keys are in the conf
+  catalog and `MinClusterProcesses` is enforced when the supervisor starts. Not built: the coordinator role, restart
+  reconciliation (the owned-pid set is in memory and does not survive a supervisor restart, so children of a dead supervisor
+  are not found again), and placement of new or empty maps onto workers. A second drain of an entry that ended Faulted (a kill the
+  OS refused) marks it Drained again; that is not yet reconciled.

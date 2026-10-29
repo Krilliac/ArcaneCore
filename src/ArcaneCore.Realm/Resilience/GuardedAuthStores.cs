@@ -68,6 +68,19 @@ internal sealed class GuardedRealmStore(GuardedCalls<IRealmStore> calls) : IReal
 }
 
 /// <summary>See <see cref="GuardedAccountStore"/>.</summary>
+internal sealed class GuardedRealmCharacterCountStore(GuardedCalls<IRealmCharacterCountStore> calls) : IRealmCharacterCountStore
+{
+    public Task<IReadOnlyDictionary<int, int>> GetCountsAsync(int accountId, CancellationToken cancellationToken = default)
+        => calls.RunAsync(static (store, s, ct) => store.GetCountsAsync(s, ct), accountId, cancellationToken);
+
+    public Task SetCountAsync(int realmId, int accountId, int count, CancellationToken cancellationToken = default)
+        => calls.RunAsync(
+            static (store, s, ct) => store.SetCountAsync(s.RealmId, s.AccountId, s.Count, ct),
+            (RealmId: realmId, AccountId: accountId, Count: count),
+            cancellationToken);
+}
+
+/// <summary>See <see cref="GuardedAccountStore"/>.</summary>
 internal sealed class GuardedBanStore(GuardedCalls<IBanStore> calls) : IBanStore
 {
     public Task<AccountBanRecord?> GetActiveAccountBanAsync(int accountId, CancellationToken cancellationToken = default)

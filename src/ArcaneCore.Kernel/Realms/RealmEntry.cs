@@ -28,6 +28,32 @@ public enum RealmFlags : byte
     Recommended = 0x40,
 }
 
+/// <summary>
+/// What the world daemon says about itself in its realm-list row (auth schema v7). <see cref="Unknown"/> is a row nobody manages
+/// (a hand-edited row, a world that never writes it): the realm list sends the stored flags and enforces no heartbeat.
+/// The realm daemon turns a state and the heartbeat age into the flags it sends (docs/ops/realm-liveness.md).
+/// </summary>
+public enum RealmRuntimeState : byte
+{
+    /// <summary>Not managed by a world: stored flags, no heartbeat enforcement.</summary>
+    Unknown = 0,
+
+    /// <summary>The process is up but not yet accepting connections.</summary>
+    Starting = 1,
+
+    /// <summary>Accepting connections and ticking.</summary>
+    Online = 2,
+
+    /// <summary>A restart countdown is running and the world still serves.</summary>
+    Restarting = 3,
+
+    /// <summary>A shutdown countdown is running and the world still serves.</summary>
+    ShuttingDown = 4,
+
+    /// <summary>The world stopped cleanly.</summary>
+    Stopped = 5,
+}
+
 /// <summary>A realm advertised to the client in the realm-list reply.</summary>
 public sealed class RealmEntry
 {
@@ -48,4 +74,19 @@ public sealed class RealmEntry
 
     /// <summary>Realm category id (timezone grouping) for the build-5875 list layout.</summary>
     public byte Category { get; set; }
+
+    /// <summary>The world's own state for this realm (auth schema v7); <see cref="RealmRuntimeState.Unknown"/> for an unmanaged row.</summary>
+    public RealmRuntimeState State { get; set; }
+
+    /// <summary>
+    /// When the world last proved it was ticking, UTC (auth schema v7); null before any beat. Written by the world's clock and
+    /// compared with the realm daemon's, so split hosts need synchronised clocks (docs/ops/realm-liveness.md).
+    /// </summary>
+    public DateTime? HeartbeatUtc { get; set; }
+
+    /// <summary>
+    /// Lowest account security level that sees this realm online (auth schema v7; vmangos <c>allowedSecurityLevel</c>); 0 = everyone.
+    /// A lower account sees it offline (vmangos AuthSocket.cpp:1088-1090).
+    /// </summary>
+    public byte AllowedSecurityLevel { get; set; }
 }

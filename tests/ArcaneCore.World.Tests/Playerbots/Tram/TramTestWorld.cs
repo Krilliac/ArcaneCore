@@ -25,7 +25,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Tram;
 /// </summary>
 internal static class TramTestData
 {
-    public const uint Tram = TramNetwork.TramMapId;
+    public static uint Tram => TramNetwork.TramMapId;
 
     /// <summary>Zone IDs for this fixture's flat continent: its western starts are Stormwind/Westfall, its east Ironforge.</summary>
     public static uint ZoneAt(Vector3 at) => at.X > -7000f ? 1537u : at.X < -10000f ? 40u : at.X < -9000f ? 12u : 1519u;

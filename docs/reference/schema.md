@@ -9,9 +9,9 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 
 | Component | Current version | Version-1 base tables |
 |---|---|---|
-| `auth` | 6 | `account`, `realmlist` |
+| `auth` | 7 | `account`, `realmlist` |
 | `characters` | 66 | `characters` |
-| `world` | 62 | `player_create_info`, `race_info`, `class_info` |
+| `world` | 64 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -22,6 +22,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 4 | `Auth.Playerbots.ManagedPlayerbotProvisionDataModule` | creates `managed_playerbot_provision` |
 | 5 | `Auth.AccountLoginSecurityDataModule` | adds columns `account.LockFlags`, `account.SecurityInfo`, `account.LastIp` |
 | 6 | `Auth.AccountLoginInfoDataModule` | adds columns `account.LastLoginUtc`, `account.LastOs`, `account.LastPlatform`, `account.LastLocale`, `account.LastBuild` |
+| 7 | `Auth.RealmLivenessDataModule` | creates `realmcharacters`; adds columns `realmlist.State`, `realmlist.HeartbeatUtc`, `realmlist.AllowedSecurityLevel` |
 
 ## `characters`
 
@@ -157,6 +158,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 59 | `World.Rules.PlayerbotGoalDataModule` | creates `playerbot_goal` |
 | 60 | `Npc.NpcTextBroadcastDataModule` | creates `npc_text_broadcast_text` |
 | 61 | `World.Creatures.CreatureImmunityDataModule` | creates `creature_immunities`; adds columns `creature_template.MechanicImmuneMask`, `creature_template.SchoolImmuneMask` |
-| 62 | `World.Rules.PlayerbotLadderDataModule` | no changes |
+| 62 | `World.WorldState.HolidayFlavourDataModule` | creates `holiday_flavour` |
+| 63 | `World.Tuning.TuningDataModule` | creates `auction_bot_value`, `auction_bot_loot`, `playerbot_ship_route`, `playerbot_elevator_region`, `playerbot_tram_network` |
+| 64 | `World.Rules.PlayerbotLadderDataModule` | no changes |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

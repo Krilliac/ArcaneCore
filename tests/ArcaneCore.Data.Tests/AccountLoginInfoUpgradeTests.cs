@@ -13,10 +13,10 @@ public sealed class AccountLoginInfoUpgradeTests : IAsyncLifetime
     public static IEnumerable<object[]> Providers() => TestDatabases.AvailableProviders();
 
     [Fact]
-    public void AuthSchema_IsVersion6_WithTheLoginInfoModule()
+    public void AuthSchema_IncludesVersion6_WithTheLoginInfoModule()
     {
         Assert.Equal(6, AccountLoginInfoDataModule.Version);
-        Assert.Equal(6, AuthDbContext.Schema.CurrentVersion);
+        Assert.True(AuthDbContext.Schema.CurrentVersion >= AccountLoginInfoDataModule.Version);
         Assert.Contains(DataModules.For(DatabaseComponent.Auth), m => m is AccountLoginInfoDataModule);
     }
 
@@ -40,7 +40,7 @@ public sealed class AccountLoginInfoUpgradeTests : IAsyncLifetime
         {
             await using AuthDbContext db = TestContexts.Create<AuthDbContext>(connection);
             await SchemaBootstrapper.EnsureAsync(db, AuthDbContext.Schema);
-            Assert.Equal(6, (await db.Set<SchemaVersionRow>().SingleAsync()).Version);
+            Assert.Equal(AuthDbContext.Schema.CurrentVersion, (await db.Set<SchemaVersionRow>().SingleAsync()).Version); // v6 and anything after it
             Account row = await db.Accounts.SingleAsync();
             Assert.Equal("KEEPER", row.Username);
             Assert.Equal(string.Empty, row.LastIp);

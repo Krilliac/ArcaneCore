@@ -14,6 +14,8 @@ sequence, unrelated to the schema version; a file is never renumbered or reused.
 | File | Needs world schema | Installs |
 |---|---|---|
 | `world/<provider>/0001_undercity_siege.sql` | 54 | game event 900 "Bot scenario: Undercity siege" and its `game_event_playerbot_*` rows ([bot event scenarios](../../docs/areas/playbots-scenarios-events.md)) |
+| `world/<provider>/0002_holiday_flavour.sql` | 62 | the `holiday_flavour` rows: how bots tell each festival, keyed by holiday id (also seeded into an empty table at world start; this file resets or edits them) ([world events](../../docs/areas/playbots-social.md)) |
+| `world/<provider>/0003_tuning_tables.sql` | 63 | the shipped rows of the tuning tables: auction bot value and loot matrices, bot ship routes, lift regions and the Deeprun Tram ([tuning tables](../../docs/areas/tuning-tables.md)); the world also seeds an empty table with the same rows at start |
 
 ## Rules every content file follows
 

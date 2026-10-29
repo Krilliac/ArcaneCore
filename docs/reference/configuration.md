@@ -26,6 +26,7 @@ How to read the tables:
 - [`ClientData`](#clientdata)
 - [`Cluster:Fencing`](#clusterfencing)
 - [`Cluster:NodeBridge`](#clusternodebridge)
+- [`Cluster:Supervisor`](#clustersupervisor)
 - [`Cluster:Worker`](#clusterworker)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
@@ -59,6 +60,7 @@ How to read the tables:
 - [`Quests`](#quests)
 - [`Ranged`](#ranged)
 - [`Realm:Console`](#realmconsole)
+- [`Realm:Liveness`](#realmliveness)
 - [`Realms`](#realms)
 - [`Reputation`](#reputation)
 - [`Resilience`](#resilience)
@@ -98,6 +100,7 @@ How to read the tables:
 - [`World:PacketHeuristics`](#worldpacketheuristics)
 - [`World:Playerbots`](#worldplayerbots)
 - [`World:Playerbots:Qa`](#worldplayerbotsqa)
+- [`World:Realm`](#worldrealm)
 - [`World:RemoteAdmin`](#worldremoteadmin)
 - [`World:Social`](#worldsocial)
 - [`World:Social:WriteQueue`](#worldsocialwritequeue)
@@ -173,15 +176,15 @@ How to read the tables:
 | `AuctionHouseBot:DailyItemBudget` | `uint` | `5000` | - | Custody limit: most items the bot may create into the houses per UTC day, all houses together (MaNGOS Zero custody; 0 = none). |
 | `AuctionHouseBot:Enabled` | `bool` | `false` | - | Run the bot (default false). With false nothing is listed, bought or minted. |
 | `AuctionHouseBot:Houses` | `string` | `"2,6,7"` | - | The auction houses the bot serves, comma-separated AuctionHouse.dbc ids (2 Alliance, 6 Horde, 7 neutral; cMaNGOS serves all three). |
-| `AuctionHouseBot:LootCreatureElite` | `string` | `"30,34,1,2"` | - | Loot of rank 1 (elite) creatures; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootCreatureNormal` | `string` | `"30,35,8,12"` | - | Loot sources (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls". Each sell pass draws between min and max loot tables of the source (a negative min makes an empty draw more likely) and rolls each one minRolls..maxRolls times; every item that drops is added to the listing pool. "0,0,0,0" turns a source off. |
-| `AuctionHouseBot:LootCreatureRare` | `string` | `"0,10,1,1"` | - | Loot of rank 4 (rare) creatures; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootCreatureRareElite` | `string` | `"-10,2,1,1"` | - | Loot of rank 2 (rare elite) creatures; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootCreatureWorldBoss` | `string` | `"-20,1,1,1"` | - | Loot of rank 3 (world boss) creatures; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootDisenchant` | `string` | `"10,12,1,1"` | - | disenchant_loot_template; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootFishing` | `string` | `"3,5,30,40"` | - | fishing_loot_template; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootGameobject` | `string` | `"13,16,7,11"` | - | gameobject_loot_template (every table; cMaNGOS only takes chests that respawn); see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootSkinning` | `string` | `"3,5,50,50"` | - | skinning_loot_template; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureElite` | `string` | `""` | - | Deprecated override of the "creature elite" row (rank 1, elite creatures); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureNormal` | `string` | `""` | - | Deprecated override of the `auction_bot_loot` row "creature normal" (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls". Each sell pass draws between min and max loot tables of the source (a negative min makes an empty draw more likely) and rolls each one minRolls..maxRolls times; every item that drops is added to the listing pool. "0,0,0,0" turns a source off. Empty (the default) takes the rows; a value overrides them and logs a warning at start. The key goes in a later release. |
+| `AuctionHouseBot:LootCreatureRare` | `string` | `""` | - | Deprecated override of the "creature rare" row (rank 4, rare creatures); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureRareElite` | `string` | `""` | - | Deprecated override of the "creature rare elite" row (rank 2); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureWorldBoss` | `string` | `""` | - | Deprecated override of the "creature world boss" row (rank 3); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootDisenchant` | `string` | `""` | - | Deprecated override of the "disenchant" row (disenchant_loot_template); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootFishing` | `string` | `""` | - | Deprecated override of the "fishing" row (fishing_loot_template); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootGameobject` | `string` | `""` | - | Deprecated override of the "gameobject" row (gameobject_loot_template, every table; cMaNGOS only takes chests that respawn); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootSkinning` | `string` | `""` | - | Deprecated override of the "skinning" row (skinning_loot_template); see `LootCreatureNormal`. |
 | `AuctionHouseBot:MaxAuctionsPerHouse` | `uint` | `2000` | - | Most bot auctions open in one house at once; a sell action never lists past it (ArcaneCore guard, 0 = no listing). |
 | `AuctionHouseBot:MaxRequiredLevel` | `uint` | `60` | - | Highest required level of a listed item (cMaNGOS AuctionHouseBot.Level.MaxRequired, 1-255, default 60). Below 60 the item level is capped at this + 5. |
 | `AuctionHouseBot:RandomProperties` | `bool` | `true` | - | Roll random properties ("of the Bear") for minted items whose template has them (cMaNGOS Item::CreateItem). Default true. |
@@ -193,13 +196,13 @@ How to read the tables:
 | `AuctionHouseBot:TimeMaxHours` | `uint` | `24` | - | Longest listing in hours (cMaNGOS AuctionHouseBot.Time.Max, 1-72, default 24). |
 | `AuctionHouseBot:TimeMinHours` | `uint` | `2` | - | Shortest listing in hours (cMaNGOS AuctionHouseBot.Time.Min, 1-72, default 2). |
 | `AuctionHouseBot:UpdateIntervalSeconds` | `uint` | `20` | - | Seconds between bot actions. Each action handles one house, alternating the sell then the buy pass over the houses (cMaNGOS AuctionHouseBot::Update m_houseAction). |
-| `AuctionHouseBot:ValueArtifact` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of artifact items per item class (cMaNGOS AuctionHouseBot.Value.Artifact; all 0 by default). |
-| `AuctionHouseBot:ValueEpic` | `string` | `"800,800,800,800,800,800,800,800,0,800,0,800,800,800,0,800,800"` | - | Price of epic items per item class (cMaNGOS AuctionHouseBot.Value.Epic). |
-| `AuctionHouseBot:ValueLegendary` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of legendary items per item class (cMaNGOS AuctionHouseBot.Value.Legendary; all 0 by default). |
-| `AuctionHouseBot:ValueNormal` | `string` | `"100,100,0,100,0,100,100,100,0,100,0,100,100,100,0,100,100"` | - | Price of common (white) items per item class (cMaNGOS AuctionHouseBot.Value.Normal). |
-| `AuctionHouseBot:ValuePoor` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of poor items per item class as a percent of the vendor price, 17 comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). |
-| `AuctionHouseBot:ValueRare` | `string` | `"400,400,400,400,400,400,400,400,0,400,0,400,400,400,0,400,400"` | - | Price of rare (blue) items per item class (cMaNGOS AuctionHouseBot.Value.Rare). |
-| `AuctionHouseBot:ValueUncommon` | `string` | `"200,200,200,200,200,200,200,200,0,200,0,200,200,200,0,200,200"` | - | Price of uncommon (green) items per item class (cMaNGOS AuctionHouseBot.Value.Uncommon). |
+| `AuctionHouseBot:ValueArtifact` | `string` | `""` | - | Deprecated override of the quality 6 (artifact) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Artifact). |
+| `AuctionHouseBot:ValueEpic` | `string` | `""` | - | Deprecated override of the quality 4 (epic) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Epic). |
+| `AuctionHouseBot:ValueLegendary` | `string` | `""` | - | Deprecated override of the quality 5 (legendary) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Legendary). |
+| `AuctionHouseBot:ValueNormal` | `string` | `""` | - | Deprecated override of the quality 1 (common, white) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Normal). |
+| `AuctionHouseBot:ValuePoor` | `string` | `""` | - | Deprecated override of the `auction_bot_value` rows (quality 0, poor): price of poor items per item class as a percent of the vendor price, 17 comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). Empty (the default) takes the rows; a value overrides them and logs a warning at start. The key goes in a later release. |
+| `AuctionHouseBot:ValueRare` | `string` | `""` | - | Deprecated override of the quality 3 (rare, blue) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Rare). |
+| `AuctionHouseBot:ValueUncommon` | `string` | `""` | - | Deprecated override of the quality 2 (uncommon, green) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Uncommon). |
 | `AuctionHouseBot:ValueVariance` | `uint` | `10` | - | Random price spread in percent (cMaNGOS AuctionHouseBot.Value.Variance, 0-100, default 10). |
 | `AuctionHouseBot:VendorValue` | `bool` | `true` | - | Price an item that a vendor sells at 100 % of the vendor price, so it cannot be bought and resold for profit (cMaNGOS AuctionHouseBot.Value.Vendor, default true). |
 
@@ -312,6 +315,17 @@ How to read the tables:
 |---|---|---|---|---|
 | `Cluster:NodeBridge:Enabled` | `bool` | `false` | - | `true` starts the node bridge: the World connects to each endpoint in `Endpoints`, logs node connection events and heartbeats, and syncs live worker placement. `false`, the default, does nothing at all: no sockets, no log lines, no background task. Read once when the daemon starts. |
 | `Cluster:NodeBridge:Endpoints` | `string` | `"worker:EK\|Worker\|127.0.0.1:19081\|0;worker:Kalimdor\|Worker\|127.0.0.1:19082\|1;worker:instances\|Worker\|127.0.0.1:19083\|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway\|Gateway\|127.0.0.1:19084\|-;social\|Social\|127.0.0.1:19085\|-;coordinator\|Coordinator\|127.0.0.1:19086\|-;supervisor\|Supervisor\|127.0.0.1:19087\|-"` | - | The nodes the bridge monitors, as `;`-separated entries of `nodeId\|role\|host:port\|maps`, where `maps` is a comma list of map ids or `-` for a realm-wide node. The default is the seven local nodes: worker:EK 19081, worker:Kalimdor 19082, worker:instances 19083, gateway 19084, social 19085, coordinator 19086, supervisor 19087. A blank value means the seven default nodes. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set, replaces it but does not turn the bridge on (a warning is logged when `Enabled` is false). Only read when `Enabled` is true. |
+
+## `Cluster:Supervisor`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Supervisor:Enabled` | `bool` | `false` | - | Runs this World process as the host supervisor only (default: false): it launches and watches the configured `Processes` and starts no world, database, listener or feature. Off, a World start is unchanged. |
+| `Cluster:Supervisor:MaxConcurrentProcesses` | `int` | `9` | - | Maximum number of concurrent supervised child processes allowed on this host (default: 9). |
+| `Cluster:Supervisor:MaxTotalAllocatedMemoryMb` | `long?` | `null` | - | Optional cap on the sum of `SupervisedProcessConfig.RequiredMemoryMb` across all active supervised processes. |
+| `Cluster:Supervisor:MinClusterProcesses` | `int` | `3` | - | Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3). A start that can admit fewer launches nothing and refuses with a message naming this key. |
+| `Cluster:Supervisor:MinFreeMemoryReserveMb` | `long` | `1024` | - | Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB). |
+| `Cluster:Supervisor:Processes` | `Dictionary<string, SupervisedProcessConfig>` | `{}` | - | Supervised process definitions, started in ascending `SupervisedProcessConfig.StartOrder` (ties by key), keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`). |
 
 ## `Cluster:Worker`
 
@@ -538,8 +552,9 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `HotReload:ApplyConfigFileChanges` | `bool` | `false` | - | Apply an edit of world.conf or appsettings*.json while the world runs: once the edits settle, the configuration is re-read through the same pipeline as `.reload config` (live keys change on the world thread, restart keys keep their value and are logged), whether or not `Commands` is on. Default false, the retail behaviour: vmangos has no file watcher, a mangosd.conf edit applies only through `.reload config` (ServerCommands.cpp:1016). True is an opt-in ArcaneCore convenience. Needs the host's file watching (`hostBuilder:reloadConfigOnChange`, default true). Read once when the world starts. |
 | `HotReload:BuildTimeoutMs` | `int` | `60000` | - | How long a candidate may take to build (database read plus indexing) before the reload is abandoned. 0 = no limit. |
-| `HotReload:Commands` | `bool` | `false` | - | The one switch for live reload. Default false: a production server does not carry the reload machinery (vmangos registers the `reload` root, Chat.cpp:1212, but ArcaneCore's operator-initiated hot reload is a development tool, so it is opt-in). When false the reload coordinator is not built, no reloadable is registered and the `.reload` root does not exist (the chat reply is "There is no such command"). A development server turns it on with `HotReload:Commands=true`. Read once when the world starts. |
+| `HotReload:Commands` | `bool` | `false` | - | The one switch for live reload. Default false: a production server does not carry the reload machinery (vmangos registers the `reload` root, Chat.cpp:1212, but ArcaneCore's operator-initiated hot reload is a development tool, so it is opt-in). When false the reload coordinator is not built, no reloadable is registered and the `.reload` root does not exist (the chat reply is "There is no such command"); `ApplyConfigFileChanges` then runs the config reload on a coordinator of its own that holds only `config`. A development server turns it on with `HotReload:Commands=true`. Read once when the world starts. |
 | `HotReload:CommitTimeoutMs` | `int` | `30000` | - | How long to wait for the world thread to run the swap before abandoning the reload. A swap that has not started by then is cancelled and never runs later. 0 = no limit. |
 | `HotReload:EmptyTables` | `EmptyTablePolicy` | `Retail` | - | What a reload does when item_template, game_tele or areatrigger_teleport comes back empty. Default Retail: vmangos clears the loaded rows first (ObjectMgr.cpp:3817, 10468, 7708), so the table ends up empty. Values: `Retail`, `KeepLoaded`. |
 | `HotReload:NegativeNumbers` | `InvalidNumberPolicy` | `Retail` | - | What `.reload config` does with a negative interval or range. Default Retail: vmangos logs an error and uses the default (World.cpp:2949-2977 setConfigPos/setConfigMin). Values: `Retail`, `Reject`. |
@@ -845,6 +860,13 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Realm:Console:Enabled` | `bool` | `true` | - | Accept typed console commands (help, info, realmlist, online, account ..., quit) when standard input is an interactive console. Never starts a reader when input is redirected (services, tests, deploy scripts). Default on. |
+
+## `Realm:Liveness`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Realm:Liveness:HeartbeatStaleSeconds` | `int` | `60` | - | Seconds without a heartbeat after which a world that claims to be running is shown offline. Default 60. Must be at least three times `World:Realm:HeartbeatIntervalSeconds` (a missed beat or two never flips the realm) and above five times `Ops:Watchdog:TickMonitor:HangMs` in seconds (a slow tick is a hang for the watchdog long before it is an outage here). 0 turns the heartbeat check off (the state and the lock level still apply). |
+| `Realm:Liveness:RestartingAs` | `RestartingRealmDisplay` | `Invalid` | - | What a realm shows while its world counts down to a restart and still serves: `Invalid` (red name, still selectable, the retail-emulator convention, unverified in the 1.12.1 client binary) or `Offline` (grey, not selectable). Default Invalid. Values: `Invalid`, `Offline`. |
 
 ## `Realms`
 
@@ -1428,11 +1450,12 @@ How to read the tables:
 | `World:Playerbots:AllowedMaps` | `uint[]` | `[0, 1]` | - | The maps bots may act and travel on (non-empty, no duplicates; a configured list replaces the default continents 0 and 1). |
 | `World:Playerbots:AsyncNavigationEnabled` | `bool` | `false` | restart | Run far playerbot navigation queries on the bounded private worker (off by default during rollout). Restart required: the worker is created when the feature attaches. |
 | `World:Playerbots:Battlegrounds:Enabled` | `bool` | `true` | live | Let free bots queue for battlegrounds (on by default). Off: no bot starts a queue; bots already walking to a battlemaster, queued or in a match finish. |
-| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `int` | `20` | live | The most bots in one battleground (0..80; 0 queues none). Bots waiting for one battleground type and level bracket never exceed it, a team never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many. |
+| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `int` | `20` | live | The most bots in one battleground (0..80; 0 queues none), unless `RaiseCapToFillTemplate` raises it for a type whose template minimum needs more. Bots waiting for one battleground type and level bracket do not exceed the (effective) cap, a team never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many. |
 | `World:Playerbots:Battlegrounds:MaxQueueWaitMinutes` | `int` | `30` | live | Minutes a bot waits in a queue before it leaves it (1..240); it then does not queue for that type again for 10 minutes. |
 | `World:Playerbots:Battlegrounds:MaxTravelYards` | `int` | `1500` | live | The farthest, in yards, a battlemaster may stand from a bot for the bot to walk to it (100..20000): a straight line on the bot's own map, to a battlemaster whose faction is not hostile to the bot. |
 | `World:Playerbots:Battlegrounds:PreferFillingRealPlayerQueues` | `bool` | `true` | live | Let bots fill the queues real players wait in, so their games start (on by default): a bracket with a real player waiting gets bots at once (no chance roll) up to the minimum both teams need, and they pick the type and bracket the player waits for. |
 | `World:Playerbots:Battlegrounds:QueueChancePerMinute` | `float` | `0.05` | live | The chance, per minute, that a free bot of a fitting level starts to queue (0..1; 0 never, 1 at the next scan). The chance of one scan is `1 - (1 - p)^(scanSeconds / 60)`, so the rate does not depend on how often the coordinator looks. |
+| `World:Playerbots:Battlegrounds:RaiseCapToFillTemplate` | `bool` | `true` | live | Raise the cap of any battleground type whose 2 x `MinPlayersPerTeam` exceeds `MaxBotsPerBattleground` to 2 x `MaxPlayersPerTeam` (on by default), so bots alone can start it, fill it to the template's maximum and backfill a leaver's slot. At the default cap of 20 that is Alterac Valley (20 per team minimum, 40 maximum: 80 bots); Warsong Gulch and Arathi Basin only when the cap is set below twice their minimum (10 and 16 in the z2815 rows). One warning names each raised type and its new cap, once the coordinator scans (once bots are online), and again after a reload that changes the cap, this option or the templates. Off: the configured cap is kept for every type, with no raise and no refusal, as before this option (a type whose minimum the cap does not cover then does not start from bots alone, but its bots still help a real player's queue). The retail template values are never changed. |
 | `World:Playerbots:Budget:ClassLevelsAhead` | `int` | `2` | live | How many levels ahead of its own the bot saves for class spells (0..10): the spells its class trainer teaches at levels up to this many above the bot's, plus the ones it can learn now, are reserved at the trainer's prices, so lower-priority spending (riding, the auction house) cannot eat the money they cost. 0 reserves only what can be learned now. |
 | `World:Playerbots:Budget:DiscretionaryFloorFraction` | `float` | `0.1` | live | The share of its current money (0..1) a bot may always spend on discretionary purchases (auction upgrades), even when the reserves leave nothing over: a reserve the bot may never reach (a tier far above its means) does not stop its optional buying for good. 0 lets the reserves take everything. Auction listing deposits are never limited by the reserves. |
 | `World:Playerbots:Budget:Enabled` | `bool` | `true` | live | Let bots save for what they will need (on by default). Off: nothing is reserved and every spend site may spend all the bot's money. |
@@ -1864,7 +1887,6 @@ How to read the tables:
 | `World:Playerbots:Social:Memory:AffinityPerTrade` | `int` | `3` | live | Affinity gained when a trade with the bot completes (0..30). |
 | `World:Playerbots:Social:Memory:AffinityPerTradeScam` | `int` | `-15` | live | Affinity change toward a partner who changed a deal's value after matching it (-100..0). |
 | `World:Playerbots:Social:Memory:AffinityPerWatchedDie` | `int` | `-12` | live | Affinity change toward a same-faction bystander who watched the bot die without helping (-100..0). |
-| `World:Playerbots:Social:Memory:AnswerHelpEnabled` | `bool` | `true` | live | Let a managed bot that is asked for help join the fight, by its helpfulness and its liking for the asker. |
 | `World:Playerbots:Social:Memory:BystanderMinHealthPercent` | `int` | `50` | live | The least health percent a bystander needs to count as able to help (1..100). |
 | `World:Playerbots:Social:Memory:BystanderMinSeconds` | `int` | `5` | live | The shortest low-health window, in seconds, in which a bystander's inaction counts (1..60). |
 | `World:Playerbots:Social:Memory:BystanderRadiusYards` | `int` | `30` | live | How close, in yards, a unit must stay to the bot through its low-health window to count as a bystander (5..60). |
@@ -1900,8 +1922,8 @@ How to read the tables:
 | `World:Playerbots:Social:Rivalry:Emotes:RudeRequiresOptIn` | `bool` | `false` | live | Send rude emotes only to real players who whispered "rivals on" (off by default: they go to every real rival who has not opted out). |
 | `World:Playerbots:Social:Rivalry:Enabled` | `bool` | `true` | live | The master switch (on by default). Off: the lane sends nothing and an emote is answered as before the stance existed. Recorded opt-outs are kept. |
 | `World:Playerbots:Social:Rivalry:Safeguards:SafeAreas` | `string` | `"35,392,976,2255,2361,2268"` | live | Area ids (comma separated; the sub-zone a character stands in, not its zone) where no rude emote is sent, on top of every capital city, which is always quiet. The default is the six neutral towns with a guard post for both factions: 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook, 2361 Nighthaven and 2268 Light's Hope Chapel. Empty keeps only the capitals. |
-| `World:Playerbots:Social:Trading:AcceptGifts` | `bool` | `true` | live | Accept gift windows (an empty bot side) from partners the rules allow (on by default). |
-| `World:Playerbots:Social:Trading:AnswerTrades` | `bool` | `true` | live | Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default). |
+| `World:Playerbots:Social:Trading:AcceptGifts` | `bool` | `true` | live | Not yet implemented: no code reads this key, so changing it has no effect. Accept gift windows (an empty bot side) from partners the rules allow (on by default). |
+| `World:Playerbots:Social:Trading:AnswerTrades` | `bool` | `true` | live | Not yet implemented: no code reads this key, so changing it has no effect. Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default). |
 | `World:Playerbots:Social:Trading:Deals:BuyMaxPremiumPercent` | `int` | `50` | live | The most a buying bot pays over the item's reference price in percent; never more than the reference divided by 0.67 (0..100, default 50). |
 | `World:Playerbots:Social:Trading:Deals:CounterTolerancePercent` | `int` | `10` | live | A counter-offer the bot accepts: at most this share under its ask when selling (never under the vendor value); one counter per deal, then it holds its price (0..50, default 10). |
 | `World:Playerbots:Social:Trading:Deals:DealMinutes` | `int` | `5` | live | The minutes an agreed deal stays open (1..60, default 5). |
@@ -1910,13 +1932,13 @@ How to read the tables:
 | `World:Playerbots:Social:Trading:Deals:FriendDiscountPercent` | `int` | `20` | live | The ask discount in percent for a friend at full affinity, scaled by the bot's giving affinity (0..100, default 20). |
 | `World:Playerbots:Social:Trading:Deals:MaxDealCopper` | `int` | `500000` | live | The most a single deal may be worth in copper (0..100000000, default 500000 = 50 g; 0 disables deals). |
 | `World:Playerbots:Social:Trading:Deals:PairCooldownMinutes` | `int` | `10` | live | The minutes a pair waits after a deal expired, was declined or was cancelled before a new one (0..1440, default 10). |
-| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk. |
-| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk. |
+| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | Not yet implemented: the price book is not built, so nothing reads this key. The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk. |
+| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | Not yet implemented: the price book is not built, so nothing reads this key. The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk. |
 | `World:Playerbots:Social:Trading:Enabled` | `bool` | `true` | live | Master switch (on by default). Off stops the trade desk quoting and agreeing deals and cancels every window it drives at its next pass. |
-| `World:Playerbots:Social:Trading:GiftMinValueCopper` | `int` | `100` | live | The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100). |
-| `World:Playerbots:Social:Trading:Gifts:Enabled` | `bool` | `true` | live | Group gifts after a run (on by default). |
-| `World:Playerbots:Social:Trading:Gifts:GiftClaimSeconds` | `int` | `15` | live | The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15). |
-| `World:Playerbots:Social:Trading:Gifts:MaxGiftValueCopper` | `int` | `5000` | live | The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts). |
+| `World:Playerbots:Social:Trading:GiftMinValueCopper` | `int` | `100` | live | Not yet implemented: no code reads this key, so changing it has no effect. The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100). |
+| `World:Playerbots:Social:Trading:Gifts:Enabled` | `bool` | `true` | live | Not yet implemented: no code reads this key, so changing it has no effect. Group gifts after a run (on by default). |
+| `World:Playerbots:Social:Trading:Gifts:GiftClaimSeconds` | `int` | `15` | live | Not yet implemented: no code reads this key, so changing it has no effect. The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15). |
+| `World:Playerbots:Social:Trading:Gifts:MaxGiftValueCopper` | `int` | `5000` | live | Not yet implemented: no code reads this key, so changing it has no effect. The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts). |
 | `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperPerAccount` | `int` | `20000` | live | The copper one real account, all its characters together, may receive from all bots per UTC day (0..100000000, default 20000 = 2 g). |
 | `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperPerBot` | `int` | `20000` | live | The copper one bot may give real players per UTC day, gifts and discounts counted (0..100000000, default 20000 = 2 g). |
 | `World:Playerbots:Social:Trading:Limits:DailyOutflowCopperServer` | `int` | `2000000` | live | The copper all bots together may give real players per UTC day (0..1000000000, default 2000000 = 200 g). |
@@ -1924,7 +1946,7 @@ How to read the tables:
 | `World:Playerbots:Social:Trading:Limits:MaxTradesPerAccountPerHour` | `int` | `10` | live | The trades all bots together may complete toward one real account in an hour (0..120, default 10). |
 | `World:Playerbots:Social:Trading:Limits:MaxTradesPerBotPerHour` | `int` | `6` | live | The trades one bot may complete with real players in an hour (0..120, default 6). |
 | `World:Playerbots:Social:Trading:LowTrustPermille` | `int` | `350` | live | The trust (permille) below which a partner's deals are capped at a quarter of the deal maximum (0..1000, default 350). |
-| `World:Playerbots:Social:Trading:MaxGiftsReceivedPerHour` | `int` | `10` | live | The gifts one bot accepts from one partner in an hour (0..120, default 10). |
+| `World:Playerbots:Social:Trading:MaxGiftsReceivedPerHour` | `int` | `10` | live | Not yet implemented: no code reads this key, so changing it has no effect. The gifts one bot accepts from one partner in an hour (0..120, default 10). |
 | `World:Playerbots:Social:Trading:NinjaMemoryDays` | `int` | `14` | live | The days a bot gives a partner who looted ninja-style no group gifts and asks more (0..365, default 14). |
 | `World:Playerbots:Social:Trading:ScamMemoryDays` | `int` | `30` | live | The days a bot refuses every trade and gift from a partner who scammed it (0..365, default 30; 0 forgets at once, the scam still costs affinity and trust). |
 | `World:Playerbots:Social:Trading:TradeTimeoutSeconds` | `int` | `45` | live | The seconds one trade may take from the initiate to the close, a running settlement not counted (10..300, default 45). |
@@ -1994,6 +2016,14 @@ How to read the tables:
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
 | `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
 | `World:Playerbots:Qa:TickHangWarmupMinutes` | `int` | `5` | - | Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5). |
+
+## `World:Realm`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Realm:HeartbeatIntervalSeconds` | `int` | `10` | - | Seconds between the heartbeats this world writes into its realm-list row while its loop is ticking (ArcaneCore-specific; vmangos has no liveness check). The logon daemon shows the realm offline once the last beat is older than `Realm:Liveness:HeartbeatStaleSeconds` (default 60, which must be at least three times this interval). A beat is written only if the world loop started a tick since the last one, so a hung or stalled loop stops beating while the process is still up. Needs `World:Realm:Id` above 0. |
+| `World:Realm:Id` | `int` | `1` | - | The realm-list id this world serves (vmangos RealmID; mangosd.conf.dist.in ships 1). The world clears its Offline flag at start and sets it at a clean stop, so the realm list shows the realm offline while the world is down. 0 = this world does not write the realm list (ArcaneCore-specific: vmangos refuses to start without a RealmID, Master.cpp:475-480). |
+| `World:Realm:PlayerLimit` | `int` | `100` | - | The population formula's player limit (vmangos PlayerLimit, default 100, SystemConfig.h:91): the realm list's population hint is 2 x sessions / PlayerLimit, written when a session is added (World.cpp:340-353). 0 = the population is never written (vmangos skips it when the limit is 0). ArcaneCore has no login queue, so only the hint reads this value. |
 
 ## `World:RemoteAdmin`
 

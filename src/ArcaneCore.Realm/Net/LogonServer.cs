@@ -25,7 +25,9 @@ public sealed class LogonServer(
     ILoggerFactory loggerFactory,
     ILogger<LogonServer> logger,
     IOptions<NetProtectionOptions>? protection = null,
-    IOptionsMonitor<AutoPatchOptions>? autoPatch = null) : BackgroundService
+    IOptionsMonitor<AutoPatchOptions>? autoPatch = null,
+    IOptionsMonitor<RealmLivenessOptions>? liveness = null,
+    TimeProvider? timeProvider = null) : BackgroundService
 {
     // Auth:AutoPatch is read through the monitor on every challenge, so an appsettings edit applies to the next connection.
     private readonly PatchCatalog patches = new(() => autoPatch?.CurrentValue ?? new AutoPatchOptions());
@@ -189,11 +191,13 @@ public sealed class LogonServer(
                 IRealmStore realmStore = scope.ServiceProvider.GetRequiredService<IRealmStore>();
                 IBanStore? banStore = scope.ServiceProvider.GetService<IBanStore>();
                 IAccountLoginInfoStore? loginInfoStore = scope.ServiceProvider.GetService<IAccountLoginInfoStore>();
+                IRealmCharacterCountStore? characterCounts = scope.ServiceProvider.GetService<IRealmCharacterCountStore>();
 
                 var session = new LogonSession(
                     stream, accountStore, realmStore, config,
                     loggerFactory.CreateLogger<LogonSession>(), endpoint, banStore, guard, IpBans, patches: patches,
-                    loginInfoStore: loginInfoStore);
+                    timeProvider: timeProvider, loginInfoStore: loginInfoStore,
+                    liveness: liveness?.CurrentValue, characterCounts: characterCounts);
 
                 await session.RunAsync(stoppingToken).ConfigureAwait(false);
             }

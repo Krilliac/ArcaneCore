@@ -5,6 +5,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Transports;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Tuning;
 
 namespace ArcaneCore.World.Playerbots;
 
@@ -15,7 +16,7 @@ internal readonly record struct ShipClass(TravelMeans Means, TravelAccess Access
 /// The boat and zeppelin routes bots may ride (docs/areas/playbots.md, "Travel"), built from the world's own ship data
 /// (<see cref="TransportSystem.Templates"/>: <c>gameobject_template</c> type 15 and the client's TaxiPathNode.dbc). Nothing here is a
 /// hand-typed coordinate: the two ports of a route are the positions of its two stop frames (TaxiPathNode action flag 2, where the ship
-/// waits), and the round trip is the template's period. Only the entries of <see cref="Classic"/> are routes; the table says which kind each
+/// waits), and the round trip is the template's period. Only the entries of <see cref="Classic"/> (the <c>playerbot_ship_route</c> rows) are routes; the table says which kind each
 /// is and who rides it (a classic-db entry the world does not sail is simply absent).
 /// <para>
 /// A route whose data does not have exactly two distinct ports (stop frames at different places) is skipped; a classic entry with such
@@ -36,26 +37,44 @@ internal static class PlayerbotShipNetwork
 
     /// <summary>
     /// The classic routes by <c>gameobject_template</c> entry (classic-db z2815, vmangos the same; the entries
-    /// <see cref="Scenarios.ShipCrossingScenario"/> and RealTransportContentTests name). Boats: both factions ride the goblin boat of
-    /// Booty Bay - Ratchet, the Alliance the others. Zeppelins: the Horde.
+    /// <see cref="Scenarios.ShipCrossingScenario"/> and RealTransportContentTests name), read from the <c>playerbot_ship_route</c> rows of the
+    /// active tuning catalog (<see cref="TuningCatalog.Active"/>; shipped: both factions ride the goblin boat of Booty Bay - Ratchet, the
+    /// Alliance the other boats, the Horde the zeppelins). Cached per catalog; the dictionary is immutable.
     /// </summary>
-    internal static readonly IReadOnlyDictionary<uint, ShipClass> Classic = new Dictionary<uint, ShipClass>
+    internal static IReadOnlyDictionary<uint, ShipClass> Classic
     {
-        [20808] = new(TravelMeans.Boat, TravelAccess.Both, "Booty Bay - Ratchet"),
-        [176231] = new(TravelMeans.Boat, TravelAccess.Alliance, "Menethil Harbor - Theramore Isle"),
-        [176310] = new(TravelMeans.Boat, TravelAccess.Alliance, "Menethil Harbor - Auberdine"),
-        [176244] = new(TravelMeans.Boat, TravelAccess.Alliance, "Auberdine - Rut'theran Village"),
-        [177233] = new(TravelMeans.Boat, TravelAccess.Alliance, "Forgotten Coast - Feathermoon Stronghold"),
-        [164871] = new(TravelMeans.Zeppelin, TravelAccess.Horde, "Orgrimmar - Undercity"),
-        [175080] = new(TravelMeans.Zeppelin, TravelAccess.Horde, "Grom'gol - Orgrimmar"),
-        [176495] = new(TravelMeans.Zeppelin, TravelAccess.Horde, "Grom'gol - Undercity"),
-    };
+        get
+        {
+            TuningCatalog active = TuningCatalog.Active;
+            ClassicBox? box = Volatile.Read(ref s_classicBox);
+            if (box is null || box.Generation != active.Generation)
+            {
+                box = new ClassicBox(active.Generation, ClassificationOf(active));
+                Volatile.Write(ref s_classicBox, box);
+            }
+
+            return box.Map;
+        }
+    }
+
+    /// <summary>The ship classification of <paramref name="catalog"/>'s <c>playerbot_ship_route</c> rows.</summary>
+    internal static IReadOnlyDictionary<uint, ShipClass> ClassificationOf(TuningCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        return catalog.Ships.ToDictionary(r => r.Entry, r => new ShipClass((TravelMeans)r.Means, (TravelAccess)r.Access, r.Name));
+    }
+
+    private static ClassicBox? s_classicBox;
+
+    private sealed record ClassicBox(long Generation, IReadOnlyDictionary<uint, ShipClass> Map);
 
     private static readonly ConditionalWeakTable<TransportSystem, Box> Cache = [];
 
-    private sealed class Box(IReadOnlyList<ShipRoute> routes)
+    private sealed class Box(IReadOnlyList<ShipRoute> routes, long generation)
     {
         public IReadOnlyList<ShipRoute> Routes { get; } = routes;
+
+        public long Generation { get; } = generation;
     }
 
     /// <summary>The classic routes of <paramref name="world"/>'s ships, or none while transports are off.</summary>
@@ -69,7 +88,11 @@ internal static class PlayerbotShipNetwork
     internal static IReadOnlyList<ShipRoute> Routes(TransportSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
-        return Cache.GetValue(system, s => new Box(Build(s.Templates, Classic, report: true))).Routes;
+        TuningCatalog active = TuningCatalog.Active;
+        if (Cache.TryGetValue(system, out Box? cached) && cached.Generation == active.Generation) return cached.Routes;
+        var built = new Box(Build(system.Templates, ClassificationOf(active), report: true), active.Generation);
+        Cache.AddOrUpdate(system, built);
+        return built.Routes;
     }
 
     /// <summary>

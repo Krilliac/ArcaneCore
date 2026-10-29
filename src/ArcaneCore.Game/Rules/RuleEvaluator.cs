@@ -286,7 +286,8 @@ public sealed class RuleEvaluator(Random random)
             return RuleOutcome.EventMismatch;
         }
 
-        if (rule.PhaseMask != 0 && (state.Phase is < 0 or > 31 || (rule.PhaseMask & (1u << state.Phase)) == 0))
+        int phase = state.GatePhase >= 0 ? state.GatePhase : state.Phase;
+        if (rule.PhaseMask != 0 && (phase is < 0 or > 31 || (rule.PhaseMask & (1u << phase)) == 0))
         {
             return RuleOutcome.Phase;
         }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using ArcaneCore.Kernel.Tuning;
 
 namespace ArcaneCore.Game.Economy.AuctionBot;
 
@@ -63,26 +64,30 @@ public sealed class AuctionBotOptions
     /// <summary>Highest required level of a listed item (cMaNGOS AuctionHouseBot.Level.MaxRequired, 1-255, default 60). Below 60 the item level is capped at this + 5.</summary>
     public uint MaxRequiredLevel { get; set; } = 60;
 
-    /// <summary>Price of poor items per item class as a percent of the vendor price, 17 comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought).</summary>
-    public string ValuePoor { get; set; } = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0";
+    /// <summary>
+    /// Deprecated override of the <c>auction_bot_value</c> rows (quality 0, poor): price of poor items per item class as a percent of the vendor price, 17
+    /// comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). Empty (the default) takes the rows; a value overrides them
+    /// and logs a warning at start. The key goes in a later release.
+    /// </summary>
+    public string ValuePoor { get; set; } = string.Empty;
 
-    /// <summary>Price of common (white) items per item class (cMaNGOS AuctionHouseBot.Value.Normal).</summary>
-    public string ValueNormal { get; set; } = "100,100,0,100,0,100,100,100,0,100,0,100,100,100,0,100,100";
+    /// <summary>Deprecated override of the quality 1 (common, white) <c>auction_bot_value</c> rows; see <see cref="ValuePoor"/> (cMaNGOS AuctionHouseBot.Value.Normal).</summary>
+    public string ValueNormal { get; set; } = string.Empty;
 
-    /// <summary>Price of uncommon (green) items per item class (cMaNGOS AuctionHouseBot.Value.Uncommon).</summary>
-    public string ValueUncommon { get; set; } = "200,200,200,200,200,200,200,200,0,200,0,200,200,200,0,200,200";
+    /// <summary>Deprecated override of the quality 2 (uncommon, green) <c>auction_bot_value</c> rows; see <see cref="ValuePoor"/> (cMaNGOS AuctionHouseBot.Value.Uncommon).</summary>
+    public string ValueUncommon { get; set; } = string.Empty;
 
-    /// <summary>Price of rare (blue) items per item class (cMaNGOS AuctionHouseBot.Value.Rare).</summary>
-    public string ValueRare { get; set; } = "400,400,400,400,400,400,400,400,0,400,0,400,400,400,0,400,400";
+    /// <summary>Deprecated override of the quality 3 (rare, blue) <c>auction_bot_value</c> rows; see <see cref="ValuePoor"/> (cMaNGOS AuctionHouseBot.Value.Rare).</summary>
+    public string ValueRare { get; set; } = string.Empty;
 
-    /// <summary>Price of epic items per item class (cMaNGOS AuctionHouseBot.Value.Epic).</summary>
-    public string ValueEpic { get; set; } = "800,800,800,800,800,800,800,800,0,800,0,800,800,800,0,800,800";
+    /// <summary>Deprecated override of the quality 4 (epic) <c>auction_bot_value</c> rows; see <see cref="ValuePoor"/> (cMaNGOS AuctionHouseBot.Value.Epic).</summary>
+    public string ValueEpic { get; set; } = string.Empty;
 
-    /// <summary>Price of legendary items per item class (cMaNGOS AuctionHouseBot.Value.Legendary; all 0 by default).</summary>
-    public string ValueLegendary { get; set; } = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0";
+    /// <summary>Deprecated override of the quality 5 (legendary) <c>auction_bot_value</c> rows; see <see cref="ValuePoor"/> (cMaNGOS AuctionHouseBot.Value.Legendary).</summary>
+    public string ValueLegendary { get; set; } = string.Empty;
 
-    /// <summary>Price of artifact items per item class (cMaNGOS AuctionHouseBot.Value.Artifact; all 0 by default).</summary>
-    public string ValueArtifact { get; set; } = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0";
+    /// <summary>Deprecated override of the quality 6 (artifact) <c>auction_bot_value</c> rows; see <see cref="ValuePoor"/> (cMaNGOS AuctionHouseBot.Value.Artifact).</summary>
+    public string ValueArtifact { get; set; } = string.Empty;
 
     /// <summary>Price an item that a vendor sells at 100 % of the vendor price, so it cannot be bought and resold for profit (cMaNGOS AuctionHouseBot.Value.Vendor, default true).</summary>
     public bool VendorValue { get; set; } = true;
@@ -122,35 +127,36 @@ public sealed class AuctionBotOptions
     public bool RandomProperties { get; set; } = true;
 
     /// <summary>
-    /// Loot sources (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls". Each sell pass draws between
-    /// min and max loot tables of the source (a negative min makes an empty draw more likely) and rolls each one minRolls..maxRolls times;
-    /// every item that drops is added to the listing pool. "0,0,0,0" turns a source off.
+    /// Deprecated override of the <c>auction_bot_loot</c> row "creature normal" (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates,
+    /// minRolls, maxRolls". Each sell pass draws between min and max loot tables of the source (a negative min makes an empty draw more likely)
+    /// and rolls each one minRolls..maxRolls times; every item that drops is added to the listing pool. "0,0,0,0" turns a source off. Empty (the
+    /// default) takes the rows; a value overrides them and logs a warning at start. The key goes in a later release.
     /// </summary>
-    public string LootCreatureNormal { get; set; } = "30,35,8,12";
+    public string LootCreatureNormal { get; set; } = string.Empty;
 
-    /// <summary>Loot of rank 4 (rare) creatures; see <see cref="LootCreatureNormal"/>.</summary>
-    public string LootCreatureRare { get; set; } = "0,10,1,1";
+    /// <summary>Deprecated override of the "creature rare" row (rank 4, rare creatures); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootCreatureRare { get; set; } = string.Empty;
 
-    /// <summary>Loot of rank 1 (elite) creatures; see <see cref="LootCreatureNormal"/>.</summary>
-    public string LootCreatureElite { get; set; } = "30,34,1,2";
+    /// <summary>Deprecated override of the "creature elite" row (rank 1, elite creatures); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootCreatureElite { get; set; } = string.Empty;
 
-    /// <summary>Loot of rank 2 (rare elite) creatures; see <see cref="LootCreatureNormal"/>.</summary>
-    public string LootCreatureRareElite { get; set; } = "-10,2,1,1";
+    /// <summary>Deprecated override of the "creature rare elite" row (rank 2); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootCreatureRareElite { get; set; } = string.Empty;
 
-    /// <summary>Loot of rank 3 (world boss) creatures; see <see cref="LootCreatureNormal"/>.</summary>
-    public string LootCreatureWorldBoss { get; set; } = "-20,1,1,1";
+    /// <summary>Deprecated override of the "creature world boss" row (rank 3); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootCreatureWorldBoss { get; set; } = string.Empty;
 
-    /// <summary>disenchant_loot_template; see <see cref="LootCreatureNormal"/>.</summary>
-    public string LootDisenchant { get; set; } = "10,12,1,1";
+    /// <summary>Deprecated override of the "disenchant" row (disenchant_loot_template); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootDisenchant { get; set; } = string.Empty;
 
-    /// <summary>fishing_loot_template; see <see cref="LootCreatureNormal"/>.</summary>
-    public string LootFishing { get; set; } = "3,5,30,40";
+    /// <summary>Deprecated override of the "fishing" row (fishing_loot_template); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootFishing { get; set; } = string.Empty;
 
-    /// <summary>gameobject_loot_template (every table; cMaNGOS only takes chests that respawn); see <see cref="LootCreatureNormal"/>.</summary>
-    public string LootGameobject { get; set; } = "13,16,7,11";
+    /// <summary>Deprecated override of the "gameobject" row (gameobject_loot_template, every table; cMaNGOS only takes chests that respawn); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootGameobject { get; set; } = string.Empty;
 
-    /// <summary>skinning_loot_template; see <see cref="LootCreatureNormal"/>.</summary>
-    public string LootSkinning { get; set; } = "3,5,50,50";
+    /// <summary>Deprecated override of the "skinning" row (skinning_loot_template); see <see cref="LootCreatureNormal"/>.</summary>
+    public string LootSkinning { get; set; } = string.Empty;
 
     /// <summary>
     /// One loot source setting, parsed as cMaNGOS ParseLootConfig: four integers (missing ones 0, extra ignored), values 2-4 not
@@ -175,12 +181,89 @@ public sealed class AuctionBotOptions
         return values;
     }
 
-    /// <summary>The value lists by quality, parsed (missing values are 0, extra values ignored, as cMaNGOS ParseItemValueConfig).</summary>
-    public uint[][] ParseValues() =>
-    [
-        ParseValueList(ValuePoor), ParseValueList(ValueNormal), ParseValueList(ValueUncommon), ParseValueList(ValueRare),
-        ParseValueList(ValueEpic), ParseValueList(ValueLegendary), ParseValueList(ValueArtifact),
-    ];
+    /// <summary>
+    /// The value lists by quality: the <c>auction_bot_value</c> rows of <paramref name="tuning"/> (<see cref="TuningCatalog.Active"/> when
+    /// null), except that a quality whose <c>Value*</c> key is set is read from that key (missing values 0, extra values ignored, as cMaNGOS
+    /// ParseItemValueConfig).
+    /// </summary>
+    public uint[][] ParseValues(TuningCatalog? tuning = null)
+    {
+        uint[][] rows = (tuning ?? TuningCatalog.Active).ValueMatrix();
+        string?[] keys = [ValuePoor, ValueNormal, ValueUncommon, ValueRare, ValueEpic, ValueLegendary, ValueArtifact];
+        for (int quality = 0; quality < keys.Length; quality++)
+        {
+            if (!string.IsNullOrWhiteSpace(keys[quality]))
+            {
+                rows[quality] = ParseValueList(keys[quality]);
+            }
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// The "minTemplates, maxTemplates, minRolls, maxRolls" setting of a loot <paramref name="source"/> (a name of
+    /// <see cref="TuningCatalog.LootSources"/>): its <c>Loot*</c> key when set (<see cref="ParseLootConfig"/>), else its <c>auction_bot_loot</c> row.
+    /// </summary>
+    public int[] ParseLoot(string source, TuningCatalog? tuning = null)
+    {
+        string? key = source switch
+        {
+            "creature normal" => LootCreatureNormal,
+            "creature elite" => LootCreatureElite,
+            "creature rare elite" => LootCreatureRareElite,
+            "creature world boss" => LootCreatureWorldBoss,
+            "creature rare" => LootCreatureRare,
+            "disenchant" => LootDisenchant,
+            "fishing" => LootFishing,
+            "gameobject" => LootGameobject,
+            "skinning" => LootSkinning,
+            _ => null,
+        };
+        return string.IsNullOrWhiteSpace(key) ? (tuning ?? TuningCatalog.Active).LootConfig(source) : ParseLootConfig(key);
+    }
+
+    /// <summary>
+    /// The deprecated keys that are set and so override their tuning rows (spec 11, "Config keys during data moves"): one startup warning
+    /// each, naming the key and the table it shadows.
+    /// </summary>
+    public IReadOnlyList<string> DeprecatedOverrides()
+    {
+        var found = new List<string>();
+        TuningCatalog shipped = TuningCatalog.Shipped;
+        void Check(string name, string? text, string table, bool identical)
+        {
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                found.Add(identical
+                    ? $"{SectionName}:{name} is set to a value identical to the shipped {table} row; if the table row was not edited, remove the key (it is deprecated)."
+                    : $"{SectionName}:{name} is set and overrides the {table} rows; the key is deprecated, edit the rows (.reload tuning) and remove it.");
+            }
+        }
+
+        void Value(string name, string? text, int quality)
+            => Check(name, text, "auction_bot_value", !string.IsNullOrWhiteSpace(text) && ParseValueList(text).SequenceEqual(shipped.ValueMatrix()[quality]));
+        void Loot(string name, string? text, string source)
+            => Check(name, text, "auction_bot_loot", !string.IsNullOrWhiteSpace(text) && ParseLootConfig(text).SequenceEqual(shipped.LootConfig(source)));
+
+        Value(nameof(ValuePoor), ValuePoor, 0);
+        Value(nameof(ValueNormal), ValueNormal, 1);
+        Value(nameof(ValueUncommon), ValueUncommon, 2);
+        Value(nameof(ValueRare), ValueRare, 3);
+        Value(nameof(ValueEpic), ValueEpic, 4);
+        Value(nameof(ValueLegendary), ValueLegendary, 5);
+        Value(nameof(ValueArtifact), ValueArtifact, 6);
+        Loot(nameof(LootCreatureNormal), LootCreatureNormal, "creature normal");
+        Loot(nameof(LootCreatureRare), LootCreatureRare, "creature rare");
+        Loot(nameof(LootCreatureElite), LootCreatureElite, "creature elite");
+        Loot(nameof(LootCreatureRareElite), LootCreatureRareElite, "creature rare elite");
+        Loot(nameof(LootCreatureWorldBoss), LootCreatureWorldBoss, "creature world boss");
+        Loot(nameof(LootDisenchant), LootDisenchant, "disenchant");
+        Loot(nameof(LootFishing), LootFishing, "fishing");
+        Loot(nameof(LootGameobject), LootGameobject, "gameobject");
+        Loot(nameof(LootSkinning), LootSkinning, "skinning");
+        return found;
+    }
 
     /// <summary>One comma-separated list of percents; an unreadable entry is 0 (cMaNGOS atoi).</summary>
     public static uint[] ParseValueList(string? text)

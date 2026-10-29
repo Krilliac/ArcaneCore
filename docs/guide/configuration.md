@@ -28,7 +28,7 @@ Where the file is looked for, first match wins:
 ## Precedence
 
 Lowest to highest: appsettings.json < appsettings.{Environment}.json < world.conf (realm.conf for the realm) < user secrets (Development only) < environment variables < command line.
-A key set in a higher source wins. The `.conf` file reloads while the daemon runs; which keys then take effect without a restart is the Reload line of each key.
+A key set in a higher source wins. Editing the `.conf` file while the daemon runs changes nothing by itself, as in vmangos: `.reload config` (or a restart) applies it, and which keys then take effect without a restart is the Reload line of each key (see "Reloading" below).
 
 ## Syntax
 
@@ -73,6 +73,14 @@ dotnet run --project src/ArcaneCore.Realm -- write-config --defaults realm.conf
 
 `.reload config` in the world console re-reads the configuration. The Reload line of a key says what happens: **Live** keys are applied to the running server,
 **Restart** keys keep their old value and the server reports that a restart is needed, **Start-up** keys are only read when the daemon starts.
+
+With `HotReload:ApplyConfigFileChanges = true` (default `false`) the world daemon does the same by itself when `world.conf` or an `appsettings*.json`
+file is saved; it needs the host's file watching, `hostBuilder:reloadConfigOnChange`, which is on by default. Once the file has been quiet for half a second,
+the configuration goes through the `.reload config` pipeline, whether or not `HotReload:Commands` is on: live keys change on the world thread,
+restart keys keep their value, and one log line lists the changed keys that took effect and those that need a restart. Like `.reload config`, an
+applied change ends the `.rates set` and `.server config set` overrides; a save that changes no value applies nothing. A file with a mistake is not
+applied: the error is logged, the running values stay, and the next save is tried again. vmangos has no such watcher (an edit applies only through
+`.reload config`), which is why the switch is off by default. The realm daemon reads its keys at start only.
 
 ## Adding a key
 

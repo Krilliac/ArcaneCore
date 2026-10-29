@@ -2,7 +2,8 @@
 
 Branch `claude/vw-hot-reload` (wave 1), extended by `claude/vw5-hot-reload-everywhere` (wave 4: quests, NPC tables, loot, game
 objects, the `reload all` contract and the table audit). Operator-initiated reload of configuration and content without a
-restart, modelled on the vmangos `.reload` command tree. Nothing reloads by itself.
+restart, modelled on the vmangos `.reload` command tree. Content never reloads by itself; the one automatic path is a saved configuration file,
+which runs the `config` reload when `HotReload:ApplyConfigFileChanges` is on (default off, see below).
 
 References (read-only, never copied): **vmangos** `src/game/Chat/Chat.cpp` (reload table 794-935,
 root 1212), `src/game/Commands/ServerCommands.cpp` (config 1016, spell_template 1409-1417,
@@ -252,6 +253,8 @@ overrides and the temporary-enchantment charge counts (vmangos loads `spell_ench
 has no reload command for it, so its reload name is an ArcaneCore addition) are read off the world thread and swapped on the world thread; a failed read keeps the previous table. Each joins
 `.reload all` only when its SQL store is registered.
 
+**`tuning`** (`TuningContentReloadable`, an ArcaneCore addition; [tuning tables](tuning-tables.md)): the auction bot value and loot rows and the bot ship, lift and tram rows are read and validated off the world thread and swapped as one catalog on the world thread. Any rejected row rejects the reload and the active rows stay; with `HotReload:EmptyTables = KeepLoaded` empty tables keep them. Joins `.reload all`.
+
 **`reserved_name`** (`ReservedNameContentReloadable`, `NameCatalogFeature.ReplaceReservedExact`): the SQL exact-name set is loaded through the registered `IReservedNameStore` off the world thread and published as a complete immutable catalog on the world thread. The startup-loaded NamesProfanity/NamesReserved DBC regex arrays and provenance are retained across the swap. A failed read or publish leaves the previous catalog in place; an empty successful SQL snapshot removes only SQL exact names. Character creation captures one catalog reference for its request, while the existing pet veto resolves the feature catalog dynamically for each rename.
 
 ## Deviations from retail
@@ -272,6 +275,7 @@ retail variant of (no switch is possible); they are limits, not options.
 | A negative interval/range in `.reload config` is replaced by its default and noted (vmangos `setConfigPos`/`setConfigMin`). | `HotReload:NegativeNumbers` (`Retail` default; `Reject` rejects the reload) |
 | `quest_template` also re-reads the four quest relation tables, and there are no separate `creature_questrelation` / `creature_involvedrelation` / `gameobject_*relation` reloadables (vmangos has one command per table, Chat.cpp:824, 827, 840, 842): the quest store derives chains, breadcrumbs and relations from one immutable set. `reload all` reloads all of them either way (`all_quest`, ServerCommands.cpp:938-942). | none, structural |
 | `.reload spell_template` does not reload `spell_mod` (no such table here; vmangos ServerCommands.cpp:1414). | none |
+| `.reload spell_template` swaps `SpellSystem.Store` only. What `SpellFeature` derived from the store at startup is not rebuilt: the taxi paths a `SPELL_EFFECT_SEND_TAXI` spell names (`QuestNpcFeature.RefreshTaxiNetwork`, called once from `SpellFeature.Attach`) and the spell-mod coverage log (`SpellModFeature`). A reloaded spell that newly names a taxi path cannot fly it until restart. vmangos builds its taxi node mask once as well, when it loads the DBCs (DBCStores.cpp:366-405) and never on `reload spell_template`, so this is parity, not a gap to close. | none |
 | Live reload is off by default and is a development facility: vmangos always registers its `reload` root (Chat.cpp:1212), here the root and the coordinator do not exist unless enabled. Per the standing rule that hot-reload commands are off by default. | `HotReload:Commands` (default false; `true` for a development server) |
 
 ## Limits (not delivered, by design of this slice)
@@ -291,14 +295,19 @@ retail variant of (no switch is possible); they are limits, not options.
 - The reloads that read through `INpcContentStore`, `IQuestContentStore`, `ILootDataStore` and `IGameObjectDataStore` use the existing
   `Load` methods unchanged; they add no new database query, so there is no provider-specific schema or SQL to cover (the existing store
   tests keep their provider theories). The reload tests use in-memory stores, on every machine.
-- No file watcher, no database revision polling, no automatic apply, no assembly (code) reload and no
-  cluster rollout. The `HotReload` section itself is read when the world starts.
+- No database revision polling, no automatic content reload, no assembly (code) reload and no cluster rollout. The `HotReload` section
+  itself is read when the world starts.
+- Configuration files are the opt-in exception (`ConfigFileReloadFeature`, `HotReload:ApplyConfigFileChanges`, default `false`: vmangos has
+  no file watcher, see [the configuration guide](../guide/configuration.md)). When it is on and a
+  provider of the live configuration reloads, the notifications are debounced (500 ms) and the `config` reload runs on `ReloadFeature`'s
+  coordinator, or, with `HotReload:Commands` off, on a coordinator of its own that holds only `config`. A notification whose values are
+  unchanged runs nothing. The applied change logs the changed keys that are live and those that need a restart.
 - Reloaded spells are visible to new casts, lookups and logins. Spells already in flight keep their
   record (see above). Clients cache spell data locally (WDB), so a client sees changed tooltips only
   after clearing its cache; the automated tests cover the server swap only, not a real client.
 - The live host configuration (`reloadOnChange`) is untouched. A truncated `appsettings.json` written
-  while the host watches it is handled by the host's own file provider (not by this feature); `.reload
-  config` re-reads from the source list on demand and ignores a broken file.
+  while the host watches it is handled by the host's own file provider (not by this feature); the `config` reload re-reads from
+  the source list and rejects a broken file, so a file-triggered reload of a broken file changes nothing.
 
 ## Tests
 

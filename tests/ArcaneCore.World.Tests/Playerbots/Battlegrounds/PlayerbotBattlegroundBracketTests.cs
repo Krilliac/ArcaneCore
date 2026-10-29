@@ -63,7 +63,7 @@ public sealed class PlayerbotBattlegroundBracketTests
         => Assert.Equal(PlayerbotBattlegroundRefusal.LevelOutOfRange, PlayerbotBattlegroundBrackets.Check(BattlegroundType.WarsongGulch, 61, Wsg, out _));
 
     [Fact]
-    public void Av_IsRefusedAsUnsupported_AtEveryLevel_WithATemplateAndContent()
+    public void Av_IsAccepted_FromLevel51To60_WithATemplateAndContent()
     {
         for (uint level = 1; level <= 50; level++)
         {

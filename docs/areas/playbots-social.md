@@ -158,9 +158,8 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   asked unit. Going alone says nothing. `CallForHelpEnabled` off means the bot never asks (and so blames nobody).
 - *Watched me die.* If the bot dies in the window (not a duel, window at least `BystanderMinSeconds`), each asked candidate that still
   qualifies at death and never helped gets WatchedMeDie (`AffinityPerWatchedDie`). A bot that went alone blames nobody.
-- *Answering* (`AnswerHelpEnabled`): the answer probability is `helpfulness * (1 + affinity / 100)` clamped to 0..1 as a hash of the
-  answering bot, the asker and the call (`PlayerbotCallForHelp.Answers`). The function is in place and tested, but the answer is not wired to
-  the brain's assist lane yet (that moves to P2); nothing acts on a help emote today.
+- *Answering* (`AnswerHelp`, in the Helping lane below): the answer probability is `helpfulness * (1 + affinity / 100)` clamped to 0..1 as a hash of the
+  answering bot, the asker and the call (`PlayerbotCallForHelp.Answers`). The old Memory AnswerHelpEnabled key never had a reader and was removed; `AnswerHelp` is the only switch.
 
 **Forgiveness, caps, bad group behaviour, reliability and War Mode** (all in `PlayerbotSocialMemory`, all live):
 
@@ -380,7 +379,11 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
   are) is a *root*. An event linked to a running root (`game_event.linked_to`, at most four links; Wickerman Ember to Hallow's End) counts
   while its root runs; event 21 (Winter Veil: Gifts) is not linked in the data, counts as nothing in slice 1 and is held for the later event-quest stage. A festival has a flavour (Midsummer, Winter Veil, Lunar
   Festival, Love is in the Air, Noblegarden, Children's Week, Hallow's End, Harvest Festival, Darkmoon Faire, fishing contest, or a plain
-  "festival") that sets its name, its emotes and its `event.<flavour>.arrive` lines. The fishing contest names itself but does not gather
+  "festival") that sets its name, its emotes and its `event.<flavour>.arrive` lines. The flavours are rows of the `holiday_flavour` table
+  (world schema 62, shipped by `sql/content/world/<provider>/0002_holiday_flavour.sql`; holiday id 0 is the plain "festival", and the
+  pack reads the table when it attaches). The world database initializer seeds the shipped rows into an empty table at start (nothing to
+  apply by hand; the content file is for resetting or editing them), and the pack logs a warning when the table has no holiday-0 row,
+  in which case festivals run as plain gathering "festival"s with no crowd emotes. The fishing contest names itself but does not gather
   (its NPCs run a contest, not a party). `World:Playerbots:Social:Events:Holidays:ExcludedEvents` is a comma list of event ids (at most 64) that are never festivals.
 - **The board.** `PlayerbotWorldEventBoard` listens to the game events and rebuilds its picture only when a festival event starts or stops:
   the placed NPCs of the running festival (the positive `game_event_creature` rows of the root and its running members) that talk, give

@@ -44,7 +44,9 @@ public sealed class LogonSession(
     TimeProvider? timeProvider = null,
     PatchCatalog? patches = null,
     OpcodeTable? traffic = null,
-    IAccountLoginInfoStore? loginInfoStore = null)
+    IAccountLoginInfoStore? loginInfoStore = null,
+    RealmLivenessOptions? liveness = null,
+    IRealmCharacterCountStore? characterCounts = null)
 {
     private static readonly NetProtectionOptions DefaultProtection = new();
 
@@ -70,6 +72,11 @@ public sealed class LogonSession(
     private string _clientLocale = string.Empty;
     private ushort _clientBuild;
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly RealmLivenessOptions _liveness = liveness ?? new RealmLivenessOptions();
+    private int _accountId; // the proven account: its id picks the per-realm character counts
+    private AccountSecurity _accountSecurity; // its security level decides which locked realms it sees online
+    private int _reconnectAccountId;
+    private AccountSecurity _reconnectSecurity;
     private bool _isAutocreate;
     private byte[]? _autocreateVerifier;
     private bool _authenticated;
@@ -725,6 +732,8 @@ public sealed class LogonSession(
             return;
         }
 
+        int provenId = 0;
+        AccountSecurity provenSecurity = AccountSecurity.Player;
         if (isAutocreate)
         {
             if (autocreateVerifier is not { } verifier)
@@ -734,7 +743,7 @@ public sealed class LogonSession(
                 return;
             }
 
-            await accountStore.CreateAsync(
+            Account created = await accountStore.CreateAsync(
                 new Account
                 {
                     Username = username,
@@ -744,6 +753,8 @@ public sealed class LogonSession(
                     Status = AccountStatus.Active,
                 },
                 cancellationToken).ConfigureAwait(false);
+            provenId = created.Id;
+            provenSecurity = created.Security;
             logger.LogInformation("[{Endpoint}] auto-created account '{Account}'", remoteEndpoint, LogSafe.Escape(username));
         }
         else
@@ -751,8 +762,12 @@ public sealed class LogonSession(
             await accountStore.UpdateLoginAsync(username, srp.SessionKey,
                     AccountBanEvaluator.AddressOfEndpoint(remoteEndpoint), cancellationToken)
                 .ConfigureAwait(false);
+            provenId = account?.Id ?? 0;
+            provenSecurity = account?.Security ?? AccountSecurity.Player;
         }
 
+        _accountId = provenId;
+        _accountSecurity = provenSecurity;
         _authenticated = true;
         _unauthenticatedLifetime?.CancelAfter(Timeout.InfiniteTimeSpan); // proven: the pre-proof lifetime no longer applies
         logger.LogInformation("[{Endpoint}] '{Account}' authenticated", remoteEndpoint, LogSafe.Escape(username));
@@ -863,6 +878,8 @@ public sealed class LogonSession(
 
         _username = username;
         _reconnectSessionKey = sessionKey.ToArray();
+        _reconnectAccountId = account.Id;
+        _reconnectSecurity = account.Security;
         _reconnectChallenge = RandomNumberGenerator.GetBytes(16);
         var writer = new PacketWriter(34);
         writer.WriteByte((byte)AuthCommand.ReconnectChallenge);
@@ -918,6 +935,8 @@ public sealed class LogonSession(
             return;
         }
 
+        _accountId = _reconnectAccountId;
+        _accountSecurity = _reconnectSecurity;
         _authenticated = true;
         var writer = new PacketWriter(2);
         writer.WriteByte((byte)AuthCommand.ReconnectProof);
@@ -1234,13 +1253,48 @@ public sealed class LogonSession(
         Invariant.Assert(_srp is null, "an authenticated logon session holds no SRP state");
 
         IReadOnlyList<RealmEntry> realms = await realmStore.GetRealmsAsync(cancellationToken).ConfigureAwait(false);
-        // Known gap: charactersPerRealm is always 0 because the realm server has no characters-DB source to count
-        // the account's characters per realm; the client's realm list therefore never shows character counts.
+        // What the world says about itself (state, heartbeat age) and the account's level decide the flags; the stored rows are not changed.
+        realms = RealmListProjection.Apply(realms, _accountSecurity, _time.GetUtcNow(), _liveness, out bool clockSkewSuspect);
+        if (clockSkewSuspect && SkewWarning.TryEnter(out int suppressed))
+        {
+            logger.LogWarning(
+                "A realm heartbeat is more than {Seconds} s ahead of this host's clock, the beat is treated as fresh; synchronise the clocks of the world and logon hosts (NTP) ({Suppressed} more since the last line)",
+                RealmListProjection.MaxClockSkew.Seconds, suppressed);
+        }
+
+        IReadOnlyDictionary<int, int> counts = await ReadCharacterCountsAsync(cancellationToken).ConfigureAwait(false);
         // A realm list over the wire limits makes Build throw; RunAsync records it in the fault ledger and closes the session.
-        ReadOnlyMemory<byte> packet = RealmListWriter.Build(realms, charactersPerRealm: 0);
+        ReadOnlyMemory<byte> packet = RealmListWriter.Build(realms, counts);
         await SendAsync(packet, cancellationToken).ConfigureAwait(false);
         logger.LogInformation("[{Endpoint}] sent realm list ({Count} realm(s))", remoteEndpoint, realms.Count);
     }
+
+    /// <summary>One warning per five minutes however many clients ask: a skewed clock is seen by every realm-list request.</summary>
+    private static readonly LogGate SkewWarning = new(TimeSpan.FromMinutes(5));
+
+    /// <summary>
+    /// The account's character count per realm (vmangos AuthSocket.cpp:1062 reads <c>realmcharacters</c> for every realm). The count is
+    /// informational: a store that fails is logged and the list goes out with zeros, never refused.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<int, int>> ReadCharacterCountsAsync(CancellationToken cancellationToken)
+    {
+        if (characterCounts is null || _accountId <= 0)
+        {
+            return EmptyCounts;
+        }
+
+        try
+        {
+            return await characterCounts.GetCountsAsync(_accountId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException))
+        {
+            logger.LogFault("realm.character-counts", ex, "[{Endpoint}] could not read the account's character counts; the realm list shows none", remoteEndpoint);
+            return EmptyCounts;
+        }
+    }
+
+    private static readonly IReadOnlyDictionary<int, int> EmptyCounts = new Dictionary<int, int>();
 
     // --- reply builders ----------------------------------------------------------
 
