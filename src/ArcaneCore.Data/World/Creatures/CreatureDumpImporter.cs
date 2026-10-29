@@ -48,6 +48,9 @@ public sealed record CreatureImportReport(
     /// <summary><c>creature_equip_template</c> rows (item entries per equipment id; world schema 56).</summary>
     public int Equipment { get; init; }
 
+    /// <summary><c>creature_immunities</c> rows (static creature immunity sets; world schema 61).</summary>
+    public int Immunities { get; init; }
+
     /// <summary><c>creature_spawn_entry</c> rows (the entries a spawn can become; vmangos <c>id2</c> ... <c>id5</c> included).</summary>
     public int SpawnEntries { get; init; }
 
@@ -108,6 +111,9 @@ public sealed class CreatureDumpImporter
     private bool _sawEquipTemplateTable;
     private bool _sawResistanceColumns;
     private readonly Dictionary<uint, (uint Probability, CreatureEquipmentRow Row)> _equipment = [];
+    private bool _sawImmunityTable;
+    private bool _sawImmunityMaskColumns;
+    private readonly Dictionary<(uint Entry, uint SetId, byte Type, uint Value), CreatureImmunityRow> _immunities = [];
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
     private readonly Dictionary<(uint Spell, uint Type, uint Target, uint Mask), SpellScriptTargetRow> _spellScriptTargets = [];
@@ -228,6 +234,52 @@ public sealed class CreatureDumpImporter
         return (rows, links);
     }
 
+    /// <summary>The dump carried a <c>creature_immunities</c> table (cmangos only).</summary>
+    public bool HasImmunityTable => _sawImmunityTable;
+
+    /// <summary>The dump's creature_template carries a mechanic or school immunity mask column (cmangos <c>MechanicImmuneMask</c>, vmangos <c>mechanic_immune_mask</c>).</summary>
+    public bool HasImmunityMaskColumns => _sawImmunityMaskColumns;
+
+    /// <summary>The <c>creature_immunities</c> rows that would be written (for inspection and tests).</summary>
+    public IReadOnlyCollection<CreatureImmunityRow> ImmunitySnapshot() => [.. _immunities.Values];
+
+    /// <summary>
+    /// Content refresh of creature immunities (world schema 61): replace <c>creature_immunities</c> with the rows read (a dump that carries the table with no valid rows empties it), and set
+    /// <c>creature_template.MechanicImmuneMask</c> / <c>SchoolImmuneMask</c> of the templates already in the world from the dump. Each half runs only when
+    /// the dump carried it (the table; the template columns), so a dump without either leaves the world as it is. Runs inside the caller's
+    /// <see cref="Content.Import.ImportTransaction"/>. Returns the immunity rows written and the templates changed.
+    /// </summary>
+    public async Task<(int Rows, int Templates)> RefreshImmunitiesAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        int rows = 0;
+        if (_sawImmunityTable)
+        {
+            await db.Set<CreatureImmunityRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+            await InsertBatchedAsync(db, _immunities.Values, cancellationToken).ConfigureAwait(false);
+            rows = _immunities.Count;
+        }
+
+        int changed = 0;
+        if (_sawImmunityMaskColumns && _templates.Count > 0)
+        {
+            foreach (CreatureTemplateRow template in await db.Set<CreatureTemplateRow>().ToListAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (_templates.TryGetValue(template.Entry, out var source)
+                    && (template.MechanicImmuneMask != source.Row.MechanicImmuneMask || template.SchoolImmuneMask != source.Row.SchoolImmuneMask))
+                {
+                    template.MechanicImmuneMask = source.Row.MechanicImmuneMask;
+                    template.SchoolImmuneMask = source.Row.SchoolImmuneMask;
+                    changed++;
+                }
+            }
+
+            await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return (rows, changed);
+    }
+
     /// <summary>Refresh only ScriptName on templates already in the world; other creature fields keep their current values.</summary>
     public async Task<int> RefreshScriptNamesAsync(WorldDbContext db, CancellationToken cancellationToken = default)
     {
@@ -341,6 +393,9 @@ public sealed class CreatureDumpImporter
                     break;
                 case "creature_equip_template":
                     ReadEquipment(row);
+                    break;
+                case "creature_immunities":
+                    ReadImmunity(row);
                     break;
                 case "creature_classlevelstats":
                     ReadClassLevelStats(row);
@@ -466,6 +521,7 @@ public sealed class CreatureDumpImporter
                     await DbScriptDumpImporter.DeleteAllAsync(db, ct).ConfigureAwait(false);
                     await db.Set<CreatureAddonRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<CreatureEquipmentRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
+                    await db.Set<CreatureImmunityRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<CreatureMovementRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<SpellScriptTargetRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
                     await db.Set<CreatureLinkRow>().ExecuteDeleteAsync(ct).ConfigureAwait(false);
@@ -488,6 +544,7 @@ public sealed class CreatureDumpImporter
                 await InsertBatchedAsync(db, _spawnEntries.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _addons.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _equipment.Values.Select(e => e.Row), ct).ConfigureAwait(false);
+                await InsertBatchedAsync(db, _immunities.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _aiScripts.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _aiTexts.Values, ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _broadcastTexts.Values, ct).ConfigureAwait(false);
@@ -530,6 +587,7 @@ public sealed class CreatureDumpImporter
         Dialect, _templates.Count, _spawns.Count, _movement.Count, _models.Count, _addons.Count, _skippedSpawns, [.. ReportWarnings()])
     {
         Equipment = _equipment.Count,
+        Immunities = _immunities.Count,
         AiEvents = _aiScripts.Count,
         AiTexts = _aiTexts.Count,
         ScriptTexts = _scriptTextEntries.Count,
@@ -749,6 +807,7 @@ public sealed class CreatureDumpImporter
     {
         _sawVendorTemplateIdColumn |= row.Has("VendorTemplateId") || row.Has("vendor_id");
         _sawEquipmentTemplateIdColumn |= row.Has("EquipmentTemplateId") || row.Has("equipment_id");
+        _sawImmunityMaskColumns |= row.Has("MechanicImmuneMask") || row.Has("mechanic_immune_mask") || row.Has("SchoolImmuneMask") || row.Has("school_immune_mask");
         _sawResistanceColumns |= row.Has("ResistanceFire") || row.Has("fire_res") || row.Has("ResistanceHoly") || row.Has("holy_res");
         bool vmangos = row.Has("level_min");
         SetDialect(vmangos ? CreatureDumpDialect.VMangos : CreatureDumpDialect.CMangos);
@@ -793,6 +852,8 @@ public sealed class CreatureDumpImporter
             TrainerSpell = U32(row, "TrainerSpell", "trainer_spell"),
             VendorTemplateId = U32(row, "VendorTemplateId", "vendor_id"),
             EquipmentTemplateId = U32(row, "EquipmentTemplateId", "equipment_id"),
+            MechanicImmuneMask = U32(row, "MechanicImmuneMask", "mechanic_immune_mask"),
+            SchoolImmuneMask = U32(row, "SchoolImmuneMask", "school_immune_mask"),
             UnitFlags = U32(row, "UnitFlags"),
             DynamicFlags = U32(row, "DynamicFlags"),
             TypeFlags = U32(row, "CreatureTypeFlags"),
@@ -1150,6 +1211,27 @@ public sealed class CreatureDumpImporter
             EquipEntry2 = U32(row, "equipentry2", "item2"),
             EquipEntry3 = U32(row, "equipentry3", "item3"),
         });
+    }
+
+    /// <summary>
+    /// <c>creature_immunities</c> (cmangos only): Entry, SetId, Type, Value. mangos-classic refuses a type of <c>MAX_SPELL_IMMUNITY</c> (6) or more
+    /// (ObjectMgr::LoadCreatureImmunities, ObjectMgr.cpp:964-969); this importer does too and says so. Rows of an entry that has no template
+    /// are kept (mangos-classic drops them): the store never looks them up, and a later template import may supply the entry.
+    /// </summary>
+    private void ReadImmunity(DumpRow row)
+    {
+        _sawImmunityTable = true;
+        uint entry = U32(row, "Entry");
+        uint setId = U32(row, "SetId");
+        uint type = U32(row, "Type");
+        if (type > (uint)CreatureImmunityType.Mechanic)
+        {
+            _warnings.Add($"creature_immunities row for entry {entry} set {setId} has invalid type {type}; skipped");
+            return;
+        }
+
+        uint value = U32(row, "Value");
+        _immunities[(entry, setId, (byte)type, value)] = new CreatureImmunityRow { Entry = entry, SetId = setId, Type = (byte)type, Value = value };
     }
 
     // --- helpers ---------------------------------------------------------------------------
