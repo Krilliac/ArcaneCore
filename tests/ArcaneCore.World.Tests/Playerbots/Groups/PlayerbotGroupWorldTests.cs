@@ -250,6 +250,52 @@ public sealed class PlayerbotGroupWorldTests
     }
 
     /// <summary>
+    /// The quest drop is looted even when the members' loop watch has just given up the place the boss died on. A healer walking
+    /// between the leader and the fight, then to the corpse, makes the A, B, A pattern PlayerbotMotion gives up, and the places it
+    /// refuses for a minute include the corpse: the walk to it was refused on three thinks in a row, the member's three loot tries
+    /// were spent, it never looted, and the group gave up as objective-missing (the flaky CI failure of the test above, in about one
+    /// CI lane in forty). Here the give-up is made at the kill for both followers, so it does not depend on how the fight moved them.
+    /// </summary>
+    [Fact]
+    public async Task ADungeonQuestDrop_IsLooted_WhenALoopGaveUpTheCorpseSpot()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonItemQuest], dungeon: true);
+        var tank = await world.AddBotAsync("Spottank", Human, Warrior, 12, [Taunt], EntranceArea);
+        var healer = await world.AddBotAsync("Spotprie", Human, Priest, 12, [LesserHeal, Smite], EntranceArea);
+        var mage = await world.AddBotAsync("Spotmage", Human, Mage, 12, [Fireball], EntranceArea);
+        (Guid Id, string Name)[] bots = [tank, healer, mage];
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.Groups.Any(g => g.State != PlayerbotGroupState.Forming)), await world.TraceAsync());
+
+        bool gaveUp = false;
+        Assert.True(await world.RunUntilAsync(480_000, () =>
+        {
+            if (!gaveUp && world.Player(tank.Id).Map is { } map)
+            {
+                foreach (ObjectGuid guid in world.Player(tank.Id).VisibleObjects)
+                {
+                    if (map.FindObject(guid) is not Creature { Entry: BossEntry, IsAlive: false } corpse) continue;
+                    var at = new System.Numerics.Vector3(corpse.X, corpse.Y, corpse.Z);
+                    foreach ((Guid id, _) in new[] { healer, mage })
+                    {
+                        PlayerbotMotion.Blacklist(world.Player(id), [at], world.World.Host.World.NowMs);
+                    }
+
+                    gaveUp = true;
+                }
+            }
+
+            return world.Coordinator.Groups.Count == 0;
+        }), await world.TraceAsync());
+        Assert.True(gaveUp, "the boss was never seen dead");
+        Assert.True(world.Coordinator.Totals.Completed == 1, await world.TraceAsync());
+        await world.OnWorldAsync(() =>
+        {
+            Assert.All(bots, b => Assert.Equal(1u, world.Player(b.Id).Inventory.GetItemCount(BossTrophy)));
+            return true;
+        });
+    }
+
+    /// <summary>
     /// Grouped for a goal, the members share its quest the way players do: one member dropped the elite quest after the group formed; a
     /// member who has it pushes it to the party once everyone is within the share distance (CMSG_PUSHQUESTTOPARTY, vmangos
     /// HandlePushQuestToParty), the member without it accepts it from the sharer (CMSG_QUESTGIVER_ACCEPT_QUEST with the sharer's guid),
