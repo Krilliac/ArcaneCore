@@ -151,6 +151,10 @@ internal static class DeadminesTestContent
     public static void InstallCollision(ArcaneCore.Game.Maps.WorldRuntime world)
         => WorldCollision.Of(world).Install(lineOfSight: new Floor(), pathfinder: new OpenPathfinder());
 
+    /// <summary>The dungeon content whose entrance teleport demands <paramref name="requiredQuestDone"/> and/or <paramref name="requiredItem"/> (areatrigger_teleport columns).</summary>
+    public static void RegisterWithEntranceRequirements(IServiceCollection services, uint requiredQuestDone = 0, uint requiredItem = 0)
+        => services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 10, requiredQuestDone: requiredQuestDone, requiredItem: requiredItem));
+
     /// <summary>The same content with a dungeon that admits one player: the second bot is refused at the entrance.</summary>
     public static void RegisterOnePlayerOnly(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new Maps(playerLimit: 1));
 
@@ -179,7 +183,7 @@ internal static class DeadminesTestContent
 
     private static readonly AreaTriggerTeleport[] BotTeleports = [new AreaTriggerTeleport(TramTrigger, "Deeprun Tram", "", 0, TramMap, 4.6f, 28.2f, -4.3f, 0f)];
 
-    private sealed class Maps(uint playerLimit, bool forBots = false) : IMapDataStore
+    private sealed class Maps(uint playerLimit, bool forBots = false, uint requiredQuestDone = 0, uint requiredItem = 0) : IMapDataStore
     {
         public Task<MapContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new MapContent(
             [
@@ -195,7 +199,8 @@ internal static class DeadminesTestContent
             ],
             [
                 new AreaTriggerTeleport(DungeonEntryScenario.EntranceTrigger, "Deadmines - Entering", "You must be at least level 10 to enter.", 10,
-                    DungeonEntryScenario.Deadmines, -16.4f, -383.07f, 61.78f, 1.9f),
+                    DungeonEntryScenario.Deadmines, -16.4f, -383.07f, 61.78f, 1.9f,
+                    RequiredItem: requiredItem, RequiredQuestDone: requiredQuestDone),
                 new AreaTriggerTeleport(DungeonEntryScenario.ExitTrigger, "Deadmines - Exiting", "", 0, 0, -11208.7f, 1675.9f, 24.5733f, 4.71239f),
                 .. (forBots ? BotTeleports : []),
             ],

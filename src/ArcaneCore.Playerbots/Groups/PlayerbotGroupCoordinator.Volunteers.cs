@@ -87,10 +87,7 @@ public sealed partial class PlayerbotGroupCoordinator
     private PlayerbotGroupPlan? MatchWithVolunteer(List<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupGoal goal, GroupManager groupManager)
     {
         if (_volunteers.Count == 0 || _world is not { } world) return null;
-        PlayerbotGroupCandidate oldest = candidates[0];
-        for (int i = 1; i < candidates.Count; i++)
-            if (candidates[i].NeedSinceMs < oldest.NeedSinceMs) oldest = candidates[i];
-        if (_bots[oldest.BotId].Session.Player is not { } anchor) return null;
+        if (PlayerbotGroupContent.QualifyingAnchor(candidates) is not { } oldest || _bots[oldest.BotId].Session.Player is not { } anchor) return null;
         uint now = Now;
         foreach ((ObjectGuid guid, (Guid _, (PlayerbotGroupGoalKind, uint) key, uint until)) in _volunteers)
         {
@@ -107,8 +104,8 @@ public sealed partial class PlayerbotGroupCoordinator
             var withPlayer = new List<PlayerbotGroupCandidate>(candidates.Count + 1);
             withPlayer.AddRange(candidates);
             withPlayer.Add(new(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
-                new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, static _ => false), Gear(real), uint.MaxValue));
-            if (PlayerbotGroupContent.Match(withPlayer, size, _options.Groups) is { } plan && plan.Leader.BotId != Guid.Empty
+                new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, static _ => false), Gear(real), uint.MaxValue, Qualifying: PlayerbotGroupContent.QualifiesAtLevel(goal, real.Level)));
+            if (PlayerbotGroupContent.Match(withPlayer, size, _options.Groups, goal.InInstance) is { } plan && plan.Leader.BotId != Guid.Empty
                 && plan.Members.Any(m => m.Bot.BotId == Guid.Empty))
             {
                 _volunteers.Remove(guid);

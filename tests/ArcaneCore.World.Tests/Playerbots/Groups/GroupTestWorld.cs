@@ -117,10 +117,14 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     /// <param name="rfc">RFC map, trigger, encounter, creature and graveyard content for an end-to-end run.</param>
     /// <param name="openWorldTrophyDrop">The open-world ogre drops <see cref="BossTrophy"/> too: the item then has a dropper outside the instance.</param>
     /// <param name="extraCreatures">More creature templates and their spawns (the bosses of the dungeon and raid run tests).</param>
+    /// <param name="dungeonQuestLevel">The quest level of <see cref="DungeonQuest"/> (default 10).</param>
     /// <param name="extraTemplates">More creature templates with no database spawn (an event boss a test places with <c>SpawnTemporary</c>).</param>
+    /// <param name="extraItems">More item templates (gear a dungeon boss drops).</param>
+    /// <param name="extraLoot">More loot rows (creature or reference tables) next to the boss's own.</param>
     public static async Task<GroupTestWorld> StartAsync(uint[] quests, Action<PlayerbotOptions>? configure = null, bool dungeon = false,
         Action<IServiceCollection>? services = null, (CreatureTemplate Template, CreatureSpawn Spawn)[]? extraCreatures = null, bool rfc = false,
-        bool openWorldTrophyDrop = false, CreatureTemplate[]? extraTemplates = null)
+        bool openWorldTrophyDrop = false, CreatureTemplate[]? extraTemplates = null, byte dungeonQuestLevel = 10,
+        ItemTemplate[]? extraItems = null, (LootTableKind Kind, LootStoreRow Row)[]? extraLoot = null)
     {
         var options = new PlayerbotOptions
         {
@@ -128,7 +132,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             Groups = { FormationTimeoutSeconds = 600 },
         };
         configure?.Invoke(options);
-        var content = new GroupContent(quests, dungeon, openWorldTrophyDrop, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])], extraTemplates ?? []);
+        var content = new GroupContent(quests, dungeon, openWorldTrophyDrop, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])], extraTemplates ?? [], dungeonQuestLevel, extraLoot ?? []);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(collection =>
         {
             if (dungeon) DeadminesTestContent.Register(collection);
@@ -138,7 +142,11 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             collection.AddSingleton<IQuestContentStore>(content);
             collection.AddScoped<ILootDataStore>(_ => content);
             if (collection.LastOrDefault(d => d.ServiceType == typeof(IItemTemplateSource))?.ImplementationInstance is ArcaneCore.World.Tests.Items.InMemoryItemTemplateSource items)
+            {
                 items.Templates.Add(new ItemTemplate { Entry = BossTrophy, Name = "Deadmines Boss's Trophy", Class = 12, Quality = 1, Stackable = 1, MaxCount = 1 });
+                foreach (ItemTemplate extra in extraItems ?? []) items.Templates.Add(extra);
+            }
+
             services?.Invoke(collection);
         });
         await world.Host.OnWorldAsync(() =>
@@ -284,13 +292,14 @@ internal sealed class GroupTestWorld : IAsyncDisposable
     }
 
     /// <summary>The giver, the creatures and the quests (a later registration replaces the scenario content's stores).</summary>
-    private sealed class GroupContent(uint[] quests, bool dungeon, bool openWorldTrophyDrop, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra, CreatureTemplate[] templatesOnly) : ICreatureDataStore, IQuestContentStore, ILootDataStore
+    private sealed class GroupContent(uint[] quests, bool dungeon, bool openWorldTrophyDrop, (CreatureTemplate Template, CreatureSpawn Spawn)[] extra, CreatureTemplate[] templatesOnly, byte dungeonQuestLevel, (LootTableKind Kind, LootStoreRow Row)[] extraLoot) : ICreatureDataStore, IQuestContentStore, ILootDataStore
     {
         Task<LootContent> ILootDataStore.LoadAsync(CancellationToken cancellationToken) => Task.FromResult(new LootContent(
             [
                 (LootTableKind.Creature, new LootStoreRow(BossEntry, 0, 100f, 0, -(int)BossLootReference, 1)),
                 (LootTableKind.Reference, new LootStoreRow(BossLootReference, BossTrophy, -100f, 0, 1, 1)),
                 .. openWorldTrophyDrop ? [(LootTableKind.Creature, new LootStoreRow(OgreEntry, BossTrophy, -100f, 0, 1, 1))] : Array.Empty<(LootTableKind, LootStoreRow)>(),
+                .. extraLoot,
             ],
             [new CreatureLootInfo(BossEntry, BossEntry, 0, 0, 0), .. openWorldTrophyDrop ? [new CreatureLootInfo(OgreEntry, OgreEntry, 0, 0, 0)] : Array.Empty<CreatureLootInfo>()]));
 
@@ -328,7 +337,7 @@ internal sealed class GroupTestWorld : IAsyncDisposable
             [
                 Quest(EliteQuest, "Group: the ogre", type: 1, suggested: 3, OgreEntry),
                 Quest(BruteQuest, "The brute", type: 0, suggested: 0, BruteEntry),
-                Quest(DungeonQuest, "Dungeon: the boss", type: 81, suggested: 3, BossEntry, minLevel: 10),
+                Quest(DungeonQuest, "Dungeon: the boss", type: 81, suggested: 3, BossEntry, minLevel: 10, questLevel: dungeonQuestLevel),
                 Quest(RaidQuest, "Raid: the warlord", type: 62, suggested: 6, WarlordEntry),
                 Quest(DuoQuest, "Group: the ogre for two", type: 1, suggested: 2, OgreEntry),
                 Quest(DungeonItemQuest, "Dungeon: the boss's trophy", type: 81, suggested: 3, 0, minLevel: 10, item: BossTrophy),
@@ -341,9 +350,9 @@ internal sealed class GroupTestWorld : IAsyncDisposable
                 [.. offered.Select(q => new CreatureQuestRelation { Id = GiverEntry, Quest = q.Entry })]));
         }
 
-        private static QuestTemplate Quest(uint id, string title, uint type, byte suggested, uint objective, byte minLevel = 1, uint item = 0) => new()
+        private static QuestTemplate Quest(uint id, string title, uint type, byte suggested, uint objective, byte minLevel = 1, uint item = 0, byte questLevel = 10) => new()
         {
-            Entry = id, Method = 2, MinLevel = minLevel, QuestLevel = 10, RequiredRaces = 0xFF, Title = title, Type = type,
+            Entry = id, Method = 2, MinLevel = minLevel, QuestLevel = questLevel, RequiredRaces = 0xFF, Title = title, Type = type,
             SuggestedPlayers = suggested, ReqCreatureOrGOId1 = (int)objective, ReqCreatureOrGOCount1 = objective == 0 ? 0u : 1u, RewXP = 100,
             QuestFlags = 8, // QUEST_FLAGS_SHARABLE, as most real group quests (e.g. classic-db 176 "Wanted: Hogger")
             ReqItemId1 = item, ReqItemCount1 = item == 0 ? 0u : 1u,

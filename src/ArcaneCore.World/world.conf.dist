@@ -13770,6 +13770,35 @@ World.Playerbots.Chat.Voice.GeneralSharePercent = 25
 World.Playerbots.Chat.Voice.GroupCalls = true
 
 #
+#    World.Playerbots.Chat.Voice.LfgMaxTravelSeconds
+#        Description: The longest planned trip, in seconds, from which a bot still advertises a
+#                     place under LfgNearDungeonOnly (0..7200; 0 = only the same or a bordering
+#                     zone, or a summon).
+#        Type: int
+#        Default: 600
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.LfgMaxTravelSeconds = 600
+
+#
+#    World.Playerbots.Chat.Voice.LfgNearDungeonOnly
+#        Description: A bot advertises a dungeon, raid or group quest in chat only when it is near
+#                     the place (on by default): in the same or a bordering zone, within
+#                     LfgMaxTravelSeconds of travel by the planner (flight paths, hearthstone, mage
+#                     portals, ships), or when a warlock waiting for the same goal can summon it.
+#                     Otherwise the bot keeps quiet and another waiting bot may post. Off: the bot
+#                     that waited longest always posts.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.LfgNearDungeonOnly = true
+
+#
 #    World.Playerbots.Chat.Voice.LinesPerPass
 #        Description: The most lines the voice hands to the chat service in one social pass, every
 #                     topic together (1..100).
@@ -14774,6 +14803,22 @@ World.Playerbots.Groups.Cooperation.RefuseAffinity = -40
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Groups.Cooperation.SameGoalMeetingRadiusYards = 150
+
+#
+#    World.Playerbots.Groups.DungeonOutOfBandNeedsReason
+#        Description: A bot whose level is outside a dungeon's level band (the catalogue band, else
+#                     the 1.12 recommended levels with two levels of slack) waits for a group there
+#                     only with a reason: a quest that is not grey for it, an attunement or key
+#                     step, a gear upgrade the dungeon drops, a guildmate or friend already waiting,
+#                     or a forming group of its level (on by default). Off: every dungeon holding
+#                     the objective is allowed, still ranked in-band first, then nearest band.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonOutOfBandNeedsReason = true
 
 #
 #    World.Playerbots.Groups.DungeonRuns.BandAboveBoss
