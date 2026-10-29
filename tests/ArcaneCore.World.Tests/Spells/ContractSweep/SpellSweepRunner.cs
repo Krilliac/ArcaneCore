@@ -137,6 +137,20 @@ internal sealed class SpellSweepRunner
 
     private bool Runs(char contract) => Contracts.Contains(contract, StringComparison.Ordinal);
 
+    /// <summary>The state of (b) and (c) for a spell whose aura only exists on a released ghost (<see cref="NeedsAGhost"/>).</summary>
+    public const string NeedsAGhostState = "not-run:needs-a-ghost";
+
+    /// <summary>
+    /// Whether the spell is a death ghost form (8326, or the Night Elf wisp 20584) whose aura is SPELL_AURA_GHOST: it belongs to a released,
+    /// dead player (vmangos casts it only in Player::BuildPlayerRepop and removes it in ResurrectPlayer; GhostForm does the same here), and
+    /// an Alive player wearing it is the half-resurrected state that MapCombat.VerifyPlayerLifeInvariants heals by removing exactly these
+    /// spells' auras. The sweep's casters are alive, so its lifetime (b) and interrupt (c) checks would only measure that heal: they do not
+    /// run. The cast, its handlers (a) and the invariants (j) still do. Other SPELL_AURA_GHOST spells (Into the Rift, 10454) are legitimate
+    /// on a living player and are swept as usual.
+    /// </summary>
+    private static bool NeedsAGhost(SpellInfo spell)
+        => (spell.Id is CombatConstants.GhostSpellId or CombatConstants.WispGhostSpellId) && spell.Effects.Any(e => e.AuraType == AuraType.Ghost);
+
     private Class ClassFor(SpellInfo spell)
     {
         Class? byPower = spell.PowerType switch
@@ -202,7 +216,7 @@ internal sealed class SpellSweepRunner
             auraUnit = FindAuraUnit(scene);
             applied = auraUnit is not null;
             _current.AppliedAura = applied;
-            if (applied && Runs('b'))
+            if (applied && Runs('b') && !NeedsAGhost(spell))
             {
                 CheckLifetime(scene, spell, auraUnit!);
             }
@@ -214,14 +228,18 @@ internal sealed class SpellSweepRunner
         {
             Checked('b', applied ? "not-run:passive" : "not-run:no-aura");
         }
+        else if (NeedsAGhost(spell))
+        {
+            Checked('b', NeedsAGhostState);
+        }
 
-        if (applied && !spell.IsPassive && Runs('c'))
+        if (applied && !spell.IsPassive && !NeedsAGhost(spell) && Runs('c'))
         {
             CheckAuraInterrupts(spell);
         }
         else
         {
-            Checked('c', applied ? "not-run:passive" : "not-run:no-aura");
+            Checked('c', !applied ? "not-run:no-aura" : spell.IsPassive ? "not-run:passive" : NeedsAGhostState);
         }
 
         if (Runs('d'))

@@ -6704,7 +6704,7 @@
 8322	ItemNotReady
 8324	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 8325	CastOk	d
-8326	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
+8326	CastOk
 8327	CastOk
 8328	CastOk
 8329	CastOk
