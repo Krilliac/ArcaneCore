@@ -17,7 +17,11 @@ public static class WorldFrameCodec
 
     /// <summary>
     /// Read the size (big-endian u16, counts the 4 opcode bytes) and raw opcode (little-endian u32) of an already
-    /// decrypted CMSG header, and report whether they are in bounds. Run before any payload is allocated.
+    /// decrypted CMSG header, and report whether they are in bounds. Run before any payload is allocated. The opcode must fit 16 bits.
+    /// The full 32-bit check matches mangos-classic (src/game/Server/WorldSocket.cpp:184, <c>header->cmd >= NUM_MSG_TYPES</c>). vmangos instead
+    /// truncates to uint16 through <c>IsDefinitelyBogusOpcode</c> (WorldSocket.cpp:117, Opcodes.h:162) and would accept 0x3CE400DC as 0x00DC.
+    /// ArcaneCore rejects deliberately: a genuine 1.12.1 client always sends zero high bits, the only live hits came from a tampered client,
+    /// and refusing a malformed header is the safer posture.
     /// </summary>
     public static bool TryParseClientHeader(ReadOnlySpan<byte> header, out ushort size, out uint rawOpcode)
     {

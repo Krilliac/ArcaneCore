@@ -133,8 +133,8 @@ public static class AddonInfo
         // not zlib never reaches ZLibStream, which would raise a first-chance exception for every such connection.
         if (addonBlock.Length < 6 || (addonBlock[4] & 0x0F) != 8 || (addonBlock[4] * 256 + addonBlock[5]) % 31 != 0)
         {
-            logger?.LogDebug("[{Endpoint}] addon block is not zlib (CMF 0x{Cmf:X2}, len {Length}); sending empty addon info",
-                endpoint, addonBlock.Length > 4 ? addonBlock[4] : 0, addonBlock.Length);
+            logger?.LogDebug("[{Endpoint}] addon block is not zlib (CMF {Cmf}, len {Length}); sending empty addon info",
+                endpoint, addonBlock.Length > 4 ? $"0x{addonBlock[4]:X2}" : "n/a", addonBlock.Length);
             return false;
         }
 
