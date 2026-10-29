@@ -11,12 +11,9 @@ public sealed class PackProbeSpellModule : ISpellHandlerModule
 {
     public const SpellEffectName ProbeEffect = SpellEffectName.Unk127;
 
-    /// <summary>Calls of the installed handler, for a test that casts through it.</summary>
-    public static int Calls { get; private set; }
-
     public void Register(SpellSystem system)
     {
         ArgumentNullException.ThrowIfNull(system);
-        system.RegisterEffect(ProbeEffect, static _ => Calls++);
+        system.RegisterEffect(ProbeEffect, static _ => { });
     }
 }

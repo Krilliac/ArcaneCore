@@ -82,7 +82,8 @@ When a server and the docs disagree, the server wins and the conflict is listed 
    - `tests/ArcaneCore.Data.Tests/Spells`: schema upgrade, stores, DBC importer on SQLite, MariaDB and PostgreSQL.
    - `tests/ArcaneCore.World.Tests/Spells`: loopback end to end.
 3. With a client:
-   - Run `arcane-spell-import <WoW 1.12.1>/Data/DBFilesClient` after extracting the DBCs the client actually uses: each file from `patch-2.MPQ` if it has it, else `patch.MPQ`, else `dbc.MPQ` (the base archive holds older copies of some files, e.g. `SpellShapeshiftForm.dbc`). `D:efsient-dbc-5875-effective` holds verified extractions.
+   - Run `arcane-spell-import <WoW 1.12.1>/Data/DBFilesClient` after extracting the DBCs the client actually uses: each file from `patch-2.MPQ` if it has it, else `patch.MPQ`, else `dbc.MPQ` (the base archive holds older copies of some files, e.g. `SpellShapeshiftForm.dbc`). `D:
+efsient-dbc-5875-effective` holds verified extractions.
    - Fill `playercreateinfo_spell` from classic-db (M8 importer) or by hand.
    - Log in: the spellbook shows the starting spells.
    - Cast a spell with a cast time and watch the cast bar, the GCD and the cooldown.
@@ -136,21 +137,32 @@ instead of by editing `SpellSystem.Effects.cs` / `SpellSystem.Auras.cs`:
 - Packs and hot modules: `SpellFeature.Attach` applies `SpellHandlerModules.Discover(CodeAssemblies)` over the world's startup code set
   (`WorldCodeAssemblies.Startup`: World plus the built-in packs such as Playerbots; assembly name, then full type name) through
   `SpellSystem.RegisterModules(CodeAssemblies)`, after every handler the feature installs itself, so a pack's handler modules are applied
-  like Game's and a pack module that claims an installed handler fails startup. A `.hotmodule` assembly's `ISpellHandlerModule` types are a
+  like Game's. A pack module that claims a handler installed before `SpellFeature.Attach` (the built-ins, an earlier module, the seams the feature
+  installs first) fails startup; a feature that attaches later (e.g. `TotemFeature`) calls `RegisterEffect` over a module's handler and replaces it silently
+  (only a script-wrapped handler is guarded, below). A `.hotmodule` assembly's `ISpellHandlerModule` types are a
   module slot (`spell-handlers`, `ModuleGameSeams`): load applies them, reload takes the old version's handlers out first (only while they are still
   the installed ones) and applies the new, unload removes them, and a module that claims an installed handler rolls the whole swap back.
+  Unloading or reloading a module first removes the live auras of its aura types (their holders go whole, while the module's handler is still installed, so
+  the stat changes revert); a swap that fails afterwards is rolled back without bringing those auras back.
   Limit: only the effect and aura tables are undone; what a module installs through other seams (observers, cast checks) stays until restart.
+  Limit: a hot module whose effect handler a spell script has wrapped (`ExecuteEffects`) cannot be reloaded, because the guard makes the module's
+  `RegisterEffect` throw over the wrapper, so the swap rolls back every time; unloading it leaves the wrapper (which keeps the module's `AssemblyLoadContext`
+  alive) installed. Limit: the `spell-handlers` slot runs after the `spell-scripts` slot, so a module's own script `ExecuteEffects` is not wrapped until the
+  next `ScriptsChanged`.
 - A spell script chain is guarded: `RegisterEffect` over the handler the spell script dispatcher wrapped (Dummy, ScriptEffect, Dispel, and any
   effect a script declares in `ExecuteEffects`) throws unless the caller read it first with `GetEffectHandler` and calls it from the new handler,
   so a later feature cannot silently drop the script hooks.
-- Effects with a handler since the wiring review (vmangos SpellEffects.cpp table): HEAL_MECHANICAL 75 (`EffectHealMechanical` :1835, no crit, no heal
-  procs; the one Spell.dbc user is Mechanical Patch Kit 15057), EVADE 21 and NOSTALRIUS 131 (empty bodies; Evade (DND) 108 is the one user of 21),
-  APPLY_AREA_AURA_FRIEND 128 and APPLY_AREA_AURA_ENEMY 129 (`EffectApplyAreaAura` :2323; the one user is the test spell Sam's Test Aura 26659). The friend
+- Effects with a handler since the wiring review (vmangos SpellEffects.cpp table): HEAL_MECHANICAL 75 (`EffectHealMechanical` :1835, `DealHeal` only: no crit, no heal
+  procs, no assist threat and no combat for the healer (`HealingOrigin.NoThreat`); the one Spell.dbc user is Mechanical Patch Kit 15057), EVADE 21 and NOSTALRIUS 131 (empty bodies; Evade (DND) 108 is the one user of 21),
+  APPLY_AREA_AURA_FRIEND 128 and APPLY_AREA_AURA_ENEMY 129 (`EffectApplyAreaAura` :2323; the one user is the test spell Sam's Test Aura 26659). The effect
+  applies to any live unit target; the caster's own aura spreads (the enemy kind gives the caster a holder of aura type NONE) and a unit that holds the
+  spell's aura at that effect index, whoever cast it, gets no second one. The friend
   and enemy area auras pick their units once when the effect runs; vmangos re-evaluates them every update (`AreaAuraFriendEnemyEffects.cs`).
   Effects 126, 127 (`EffectUnused`) and 132, 133 (past the end of vmangos's table) stay unregistered.
 - Fail closed: a module that replaces a handler installed before it ran (built-in, an earlier module, or a seam
   registration), is applied twice, is abstract or lacks the constructor makes startup throw naming the module and the
-  effect or aura. Nothing is skipped silently. `RegisterEffect` / `RegisterAura` called directly still replace, as before.
+  effect or aura. Nothing is skipped silently. `RegisterEffect` / `RegisterAura` called directly replace the handler (the module path is the one that fails closed); `RegisterEffect` over a script-wrapped
+  handler throws, as above.
 
 Delivered handlers (reference: vmangos `src/game/Spells`; only the 1.12.1 branch of its `#if` blocks counts, build 5875):
 

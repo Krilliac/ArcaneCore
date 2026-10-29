@@ -10,7 +10,8 @@ namespace ArcaneCore.Game.Spells;
 /// <para>
 /// Unlike HEAL (<c>EffectHeal</c> adds to <c>m_healing</c>, which the spell hit then rolls a crit for, fires the heal procs and logs) this effect calls
 /// <c>SpellCaster::DealHeal</c> at once: the caster's healing bonus and the target's healing-taken bonus apply (the <see cref="SpellAmountStage.DirectHeal"/>
-/// stage), there is no crit and no heal proc, and SMSG_SPELLHEALLOG is sent (with the whole amount, as <c>SendHealSpellLog(.., addhealth, critical)</c>)
+/// stage), there is no crit, no heal proc, no assist threat and no combat entry for the healer (<c>DealHeal</c> only restores health,
+/// SpellCaster.cpp:1026-1044: <see cref="IDamageSink.HealingOrigin.NoThreat"/>), and SMSG_SPELLHEALLOG is sent (with the whole amount, as <c>SendHealSpellLog(.., addhealth, critical)</c>)
 /// only when the caster or the target is a player (SpellCaster.cpp:1041-1042).
 /// </para>
 /// </summary>
@@ -34,7 +35,7 @@ public sealed partial class SpellSystem
         }
 
         uint amount = ModifyDirect(SpellAmountStage.DirectHeal, context, (uint)context.Value);
-        uint healed = Damage.Heal(context.Caster, target, context.Spell, amount, periodic: false);
+        uint healed = Damage.Heal(context.Caster, target, context.Spell, amount, IDamageSink.HealingOrigin.NoThreat);
         RecordHealing(context.Caster, target, context.Spell, healed, critical: false);
         if (context.Caster is Player || target is Player)
         {

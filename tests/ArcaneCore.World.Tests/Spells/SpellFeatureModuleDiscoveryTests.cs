@@ -53,9 +53,9 @@ public sealed class SpellFeatureModuleDiscoveryTests
         SpellSystem system = await AttachAsync(null);
 
         Assert.False(system.HasEffectHandler(PackProbeSpellModule.ProbeEffect)); // TestSupport is not in the startup set
-        foreach (Type module in SpellHandlerModules.Discover(WorldCodeAssemblies.Startup))
-        {
-            Assert.Contains(module, system.Modules);
-        }
+        // The startup set holds no module outside Game today, so what ran is exactly the built-ins plus whatever the set discovers (none now, a pack's later).
+        IReadOnlyList<Type> expected = [.. SpellHandlerModules.BuiltIn, .. SpellHandlerModules.Discover(WorldCodeAssemblies.Startup).Where(t => !SpellHandlerModules.BuiltIn.Contains(t))];
+        Assert.NotEmpty(system.Modules);
+        Assert.Equal(expected.OrderBy(t => t.FullName, StringComparer.Ordinal), system.Modules.OrderBy(t => t.FullName, StringComparer.Ordinal));
     }
 }

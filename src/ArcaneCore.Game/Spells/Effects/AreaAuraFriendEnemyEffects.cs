@@ -11,7 +11,9 @@ namespace ArcaneCore.Game.Spells;
 /// <item>FRIEND (<c>AnyFriendlyUnitInObjectRangeCheck</c>, GridNotifiers.h:808-820): every alive unit within the effect radius that the caster is friendly to,
 /// the caster included.</item>
 /// <item>ENEMY (<c>AnyAoETargetUnitInObjectRangeCheck</c>, GridNotifiers.h:944-967): every unit within the radius the caster may attack, and never the
-/// caster (the constructor turns the caster's own aura into aura NONE, SpellAuras.cpp:441-445, so it has no effect on it).</item>
+/// caster (the constructor turns the caster's own aura into aura NONE, SpellAuras.cpp:441-445, so it has no effect on it; the caster still holds that
+/// holder, which does the spreading). A unit that already holds an aura of the spell at the effect index, whoever cast it, gets no second one
+/// (SpellAuras.cpp:757-784).</item>
 /// </list>
 /// <para>
 /// LIMITS: the units around the caster are decided once, when the effect runs; vmangos re-evaluates them on every update (a unit that walks into the
@@ -34,10 +36,19 @@ public sealed partial class SpellSystem
 {
     internal void EffectApplyAreaAuraRange(SpellEffectContext context, bool enemy)
     {
-        // vmangos puts the aura on the unit target and the others get theirs from it: the effect is for the caster as target only (as the party handler).
+        // vmangos EffectApplyAreaAura (SpellEffects.cpp:2323-2332): the aura goes on any live unit target. Only the caster's own aura then looks around
+        // for the others (AreaAura::Update, SpellAuras.cpp:592-600); an aura on another target is a plain aura of the spell (its upkeep, dropping off
+        // when the caster dies or leaves the radius, is not modelled).
         Unit caster = context.Caster;
-        if (!ReferenceEquals(context.Target, caster))
+        Unit? target = context.Target;
+        if (target is null || !target.IsAlive)
         {
+            return;
+        }
+
+        if (!ReferenceEquals(target, caster))
+        {
+            EffectApplyAura(context);
             return;
         }
 
@@ -64,6 +75,13 @@ public sealed partial class SpellSystem
             return;
         }
 
+        int duration = context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration;
+        if (enemy)
+        {
+            // The caster's own ENEMY aura exists to spread and does nothing to the caster: aura type NONE (AreaAura::AreaAura, SpellAuras.cpp:441-445).
+            AddAreaHolder(context, kind, caster, caster, duration, selfNone: true);
+        }
+
         float radius = ModFloat(caster, context.Spell, SpellModOp.Radius, context.Effect.Radius); // vmangos AreaAura::AreaAura: SPELLMOD_RADIUS
         if (radius <= 0)
         {
@@ -73,7 +91,6 @@ public sealed partial class SpellSystem
         var objects = new List<WorldObject>();
         map.Grids.CollectObjects(caster.X, caster.Y, radius, objects);
         var seen = new HashSet<Unit>(ReferenceEqualityComparer.Instance) { caster };
-        int duration = context.Cast.State == SpellCastState.Casting ? context.Cast.Timer : context.Cast.Duration;
         foreach (WorldObject obj in objects)
         {
             if (obj is not Unit unit || !unit.IsInWorld || !ReferenceEquals(unit.Map, map) || !seen.Add(unit) || !unit.IsAlive)
@@ -96,36 +113,50 @@ public sealed partial class SpellSystem
                 continue; // vmangos AreaAura::Update (SpellAuras.cpp:785-786)
             }
 
-            if (GetAuras(unit).Any(h => !h.IsRemoved && h.Spell.Id == context.Spell.Id && h.CasterGuid == caster.Guid))
+            // Area auras do not stack in the generic case (SpellAuras.cpp:757-784): any holder of the spell id with an aura at this effect index, whoever
+            // cast it, keeps the unit from getting another.
+            if (GetAuras(unit).Any(h => !h.IsRemoved && h.Spell.Id == context.Spell.Id && h.Auras.OfType<SpellAura>().Any(a => a.EffectIndex == first)))
             {
-                continue; // in the generic case area auras do not stack (SpellAuras.cpp:757-784)
+                continue;
             }
 
-            var holder = new SpellAuraHolder(context.Spell, unit, caster.Guid, caster.Level,
-                _auraCasterOwners.GetValue(caster, static c => new AuraCasterOwner(c)), duration);
-            for (int i = 0; i < effects.Count; i++)
+            AddAreaHolder(context, kind, unit, caster, duration, selfNone: false);
+        }
+    }
+
+    private void AddAreaHolder(SpellEffectContext context, SpellEffectName kind, Unit unit, Unit caster, int duration, bool selfNone)
+    {
+        IReadOnlyList<SpellEffectInfo> effects = context.Spell.Effects;
+        var holder = new SpellAuraHolder(context.Spell, unit, caster.Guid, caster.Level,
+            _auraCasterOwners.GetValue(caster, static c => new AuraCasterOwner(c)), duration);
+        for (int i = 0; i < effects.Count; i++)
+        {
+            SpellEffectInfo effect = effects[i];
+            if (effect.Effect != kind || effect.AuraType == AuraType.None)
             {
-                SpellEffectInfo effect = effects[i];
-                if (effect.Effect != kind || effect.AuraType == AuraType.None)
-                {
-                    continue;
-                }
-
-                if (!AuraHandlers.ContainsKey(effect.AuraType))
-                {
-                    ReportUnsupported(context.Cast, i, "aura", (uint)effect.AuraType);
-                }
-
-                var aura = new SpellAura(i, effect.AuraType, SnapshotAuraAmount(new SpellEffectContext(this, context.Cast, unit, i, context.Value)),
-                    ModifiedAmplitude(caster, context.Spell, effect), effect.MiscValue, unit.PowerType);
-                aura.PeriodicTimer = PeriodicTiming.InitialTimer(context.Spell, aura);
-                holder.SetAura(aura);
+                continue;
             }
 
-            if (!holder.IsEmpty)
+            if (selfNone)
             {
-                AddAuraHolder(holder);
+                holder.SetAura(new SpellAura(i, AuraType.None, 0, 0, effect.MiscValue, unit.PowerType));
+                continue;
             }
+
+            if (!AuraHandlers.ContainsKey(effect.AuraType))
+            {
+                ReportUnsupported(context.Cast, i, "aura", (uint)effect.AuraType);
+            }
+
+            var aura = new SpellAura(i, effect.AuraType, SnapshotAuraAmount(new SpellEffectContext(this, context.Cast, unit, i, context.Value)),
+                ModifiedAmplitude(caster, context.Spell, effect), effect.MiscValue, unit.PowerType);
+            aura.PeriodicTimer = PeriodicTiming.InitialTimer(context.Spell, aura);
+            holder.SetAura(aura);
+        }
+
+        if (!holder.IsEmpty)
+        {
+            AddAuraHolder(holder);
         }
     }
 }
