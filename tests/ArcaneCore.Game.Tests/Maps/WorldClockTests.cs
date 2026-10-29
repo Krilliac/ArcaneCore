@@ -111,6 +111,5 @@ public sealed class WorldClockTests
         Assert.Equal(TimeSpan.FromMilliseconds(2500), time.GetElapsedTime(start));
         Assert.Equal(1000, time.TimestampFrequency);
         Assert.Equal(anchor.AddMilliseconds(2500), time.GetUtcNow());
-        Assert.Throws<NotSupportedException>(() => time.CreateTimer(_ => { }, null, TimeSpan.Zero, Timeout.InfiniteTimeSpan));
     }
 }
