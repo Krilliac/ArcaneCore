@@ -1365,14 +1365,18 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             Hold();
             if (unchecked(Now(world) - began) / 5_000 >= trail.Count)
                 trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} sent={sent} push={raid.Push} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} x={leader.X - Origin.X:F1} lagSince={raid.LagSinceMs} off={worstOff:F1}");
-            // The members stay behind, fighting at the start (the lag hold of a pushing leader at its waypoint runs, about 110 yards); once the leader has waited 5 s a guard that is more than 20 yards from it (the one farthest along x: the raid's members are
-            // far behind) turns on the leader, as the guard of a member that died does. It runs at the leader from afar, and the leader must fight it at the waypoint.
+            // The members stay behind, fighting at the start (the lag hold of a pushing leader at its waypoint runs, about 110 yards); once the leader has waited 5 s a guard (the one farthest along x) turns on the leader, as the guard of a member that
+            // died does. It runs at the leader from afar, and the leader must fight it at the waypoint.
+            // Where the guards are by then is not this test's to wait for: a guard that chased the leader to the waypoint is still on it unless its soft leash fired during the chase, and since #1630 that is a coin toss (a melee chaser
+            // standing at the leader refreshes its leash clock every 5 s, so the clock is under 5 s old when the leader walks off; the chase to the waypoint takes about 15 s against the 12 s of the leash; and an in-area member listed above
+            // the leader within 110% of its threat keeps the leader the victim, vmangos ThreatContainer::selectNextVictim). So every guard is sent back to its spawn point first, and the probe runs at the leader from there, 100 yards out.
             if (!sent && raid.AtWaypoint && raid.PushInForce != PlayerbotSiegePush.None && raid.LagSinceMs != 0 && unchecked(Now(world) - raid.LagSinceMs) > 5_000
                 && leader.Map?.FindUpdater<CreatureMapSystem>() is { } system
-                && system.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive).OrderByDescending(g => MathF.Abs(g.X - leader.X)).FirstOrDefault() is { } guard
-                && MathF.Abs(guard.X - leader.X) > 20f)
+                && system.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive).OrderByDescending(g => MathF.Abs(g.X - leader.X)).FirstOrDefault() is { } guard)
             {
                 ResetOtherGuardsToStraggler(system, raid, leader, guard, Now(world));
+                ResetGuardToHome(system, guard, Now(world));
+                system.AttackStart(guard, leader);
                 guard.Combat.Threat.AddThreat(leader, 100_000f);
                 sent = true;
             }
@@ -1421,11 +1425,7 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Player? straggler = raid.Group?.Members.FirstOrDefault(m => !m.Real && m.BotId != raid.Group.LeaderBotId) is { } held ? leader.Map?.FindPlayer(held.Guid) : null;
         foreach (Creature other in system.Creatures.Where(g => g.Entry is GuardA or GuardB && g.IsAlive && !ReferenceEquals(g, probe)))
         {
-            system.ResetAurasOnEvade(other);
-            system.StopCombatInPlace(other);
-            other.Motion.Clear();
-            system.StopMoving(other);
-            other.Relocate(other.Home.X, other.Home.Y, other.Home.Z, other.Home.Orientation, now);
+            ResetGuardToHome(system, other, now);
             if (straggler is not null)
             {
                 other.CalledAssistance = true;
@@ -1433,6 +1433,16 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 other.Combat.Threat.AddThreat(straggler, 100_000f);
             }
         }
+    }
+
+    /// <summary>Put a guard back at its spawn point out of combat, at once (no evade run home): its auras of the fight, its combat, threat and motion are dropped.</summary>
+    private static void ResetGuardToHome(CreatureMapSystem system, Creature guard, uint now)
+    {
+        system.ResetAurasOnEvade(guard);
+        system.StopCombatInPlace(guard);
+        guard.Motion.Clear();
+        system.StopMoving(guard);
+        guard.Relocate(guard.Home.X, guard.Home.Y, guard.Home.Z, guard.Home.Orientation, now);
     }
 
     /// <summary>
