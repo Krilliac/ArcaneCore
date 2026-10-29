@@ -570,8 +570,6 @@ a.unhandled-effect	24164	EnchantItem
 a.unhandled-effect	24165	EnchantItem
 a.unhandled-effect	24167	EnchantItem
 a.unhandled-effect	24168	EnchantItem
-a.unhandled-effect	24237	TeleportGraveyard
-a.unhandled-effect	24253	TeleportGraveyard
 a.unhandled-effect	2426	Stealth
 a.unhandled-effect	24302	EnchantItem
 a.unhandled-effect	24420	EnchantItem
@@ -919,7 +917,6 @@ a.unhandled-other	16468	no-consumer:Dummy
 a.unhandled-other	1648	dummy:Dummy
 a.unhandled-other	16499	no-consumer:Dummy
 a.unhandled-other	16507	dummy:Dummy
-a.unhandled-other	16510	dummy:Dummy
 a.unhandled-other	16532	no-consumer:Dummy
 a.unhandled-other	16562	dummy:Dummy
 a.unhandled-other	16572	dummy:Dummy
@@ -1536,7 +1533,6 @@ a.unhandled-other	28338	script:ScriptEffect
 a.unhandled-other	28339	script:ScriptEffect
 a.unhandled-other	28349	dummy:Dummy
 a.unhandled-other	28351	dummy:Dummy
-a.unhandled-other	28359	dummy:Dummy
 a.unhandled-other	28365	dummy:Dummy
 a.unhandled-other	28366	dummy:Dummy
 a.unhandled-other	28367	dummy:Dummy
@@ -1607,7 +1603,6 @@ a.unhandled-other	29286	dummy:Dummy
 a.unhandled-other	29287	script:ScriptEffect
 a.unhandled-other	29288	dummy:Dummy
 a.unhandled-other	29313	script:ScriptEffect
-a.unhandled-other	29336	script:ScriptEffect
 a.unhandled-other	29357	dummy:Dummy
 a.unhandled-other	29379	script:ScriptEffect
 a.unhandled-other	29387	dummy:Dummy
@@ -1617,7 +1612,6 @@ a.unhandled-other	29422	dummy:Dummy
 a.unhandled-other	29429	dummy:Dummy
 a.unhandled-other	29430	dummy:Dummy
 a.unhandled-other	29498	dummy:Dummy
-a.unhandled-other	29499	script:ScriptEffect
 a.unhandled-other	2950	dummy:Dummy
 a.unhandled-other	29500	script:ScriptEffect
 a.unhandled-other	29509	script:ScriptEffect

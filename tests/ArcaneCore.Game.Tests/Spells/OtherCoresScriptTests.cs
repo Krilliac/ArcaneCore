@@ -238,13 +238,49 @@ public sealed class OtherCoresScriptTests
     }
 
     [Fact]
+    public void HeiganTeleportTrigger_TheTargetCastsTeleportPlayersOnItself()
+    {
+        using SpellTestKit kit = Kit(ScriptEffect(29499), Marker(29273));
+        (Player player, _) = kit.AddPlayer(1);
+
+        CastSelf(kit, player, 29499);
+
+        Assert.True(kit.System.HasAura(player, 29273));
+    }
+
+    [Fact]
+    public void TriggerTeslas_StripsAurasThenCastsShockOverload()
+    {
+        using SpellTestKit kit = Kit(Dummy(28359), Marker(28159), Marker(90020));
+        (Player player, _) = kit.AddPlayer(1);
+        Assert.True(kit.System.AddAura(player, 90020));
+
+        CastSelf(kit, player, 28359);
+
+        Assert.False(kit.System.HasAura(player, 90020));
+        Assert.True(kit.System.HasAura(player, 28159));
+    }
+
+    [Fact]
+    public void GraveyardTeleport_HasAnEffectHandlerAndIgnoresNonBattlegrounds()
+    {
+        using SpellTestKit kit = Kit(Instant(Spell(24237, Effect(SpellEffectName.TeleportGraveyard, 0, SpellImplicitTarget.UnitCaster))));
+        (Player player, _) = kit.AddPlayer(1);
+
+        Assert.True(kit.System.HasEffectHandler(SpellEffectName.TeleportGraveyard));
+        CastSelf(kit, player, 24237);
+
+        Assert.True(player.IsAlive);
+    }
+
+    [Fact]
     public void Discovery_RegistersEveryOtherCoresScript()
     {
         var ids = SpellScriptRegistry.Discover(typeof(SpellScriptRegistry).Assembly).SpellIds.ToHashSet();
         foreach (uint id in new uint[]
         {
             5249, 17678, 18269, 19484, 19707, 19869, 22276, 22282, 22659, 22664, 23450, 23484, 24019, 24342, 24796, 24886, 25145, 25149, 25150,
-            25158, 25792, 26080, 26264, 26569, 26585, 27749, 28000, 28238, 28415, 28416, 28417, 28455, 28628, 28629,
+            25158, 25792, 26080, 26264, 26569, 26585, 27749, 28000, 28238, 28359, 28415, 28416, 28417, 28455, 28628, 28629, 29336, 29499, 16510,
         })
         {
             Assert.Contains(id, ids);

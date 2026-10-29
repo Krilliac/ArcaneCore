@@ -114,9 +114,9 @@ public sealed class SilithusAncientsScript : ISpellScript
 /// Despawn 26264 (:3980-3988) and Despawn Toxic Slimes 26585 (boss_viscidus.cpp ViscidusDespawnAdds) any creature at once, Despawn Shades of Taerar 24886
 /// (:1166-1177, entry 15302), Despawn Brood 25792 (:1126-1132, Yauj brood 15621), Dispel Drakonids 23484 (:1062-1078, Nefarian's drakonids 14261-14265 and
 /// 14302), Despawn Chained Spirits 24342 (boss_mandokir.cpp DespawnChainedSpirits, Chained Spirit 15117), and the Kodo Kombobulator 18269 (mangoszero
-/// SpellEffectDummy.cpp:531-546) on any non-player target.
+/// SpellEffectDummy.cpp:531-546) on any non-player target, and Despawn Buffet 29336 (boss_sapphiron.cpp DespawnBuffet) on any creature.
 /// </summary>
-[SpellScript(17678, 26264, 26585, 24886, 25792, 23484, 24342, 18269)]
+[SpellScript(17678, 26264, 26585, 24886, 25792, 23484, 24342, 18269, 29336)]
 public sealed class DespawnCreatureScript : ISpellScript
 {
     private static readonly uint[] s_drakonids = [14261, 14262, 14263, 14264, 14265, 14302];
@@ -346,6 +346,58 @@ public sealed class HateReductionScript : ISpellScript
         if (context.EffectIndex == 0 && !ReferenceEquals(context.Target, context.Caster))
         {
             context.Caster.Combat.Threat.ModifyThreatPercent(context.Target, context.Spell.Id == 19707 ? -50 : -100);
+        }
+    }
+}
+
+/// <summary>
+/// Trigger Teslas 28359 (cmangos boss_thaddius.cpp TriggerTeslas): the target loses all its auras and casts Shock Overload 28159 (not triggered). The
+/// overload emote (broadcast text 12178) is not sent: no broadcast-text seam exists for a spell script.
+/// </summary>
+[SpellScript(28359)]
+public sealed class TriggerTeslasScript : ISpellScript
+{
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        Unit target = context.Target;
+        foreach (SpellAuraHolder holder in context.System.GetAuras(target).ToArray())
+        {
+            context.System.RemoveAuras(target, holder.Spell.Id);
+        }
+
+        context.System.CastSpell(target, 28159, SpellCastTargets.ForSelf(), triggered: false);
+    }
+}
+
+/// <summary>
+/// Teleport Trigger 29499 (cmangos boss_heigan.cpp TeleportTrigger): each target casts Teleport Players 29273 on itself. The reference also caps the
+/// spell at 3 affected targets (SetMaxAffectedTargets); that cap is a target-selection property this script cannot set.
+/// </summary>
+[SpellScript(29499)]
+public sealed class HeiganTeleportTriggerScript : ISpellScript
+{
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        OtherCoresCasts.Cast(context, context.Target, context.Target, 29273);
+    }
+}
+
+/// <summary>
+/// Corrupted Saber Visual 16510 (cmangos felwood.cpp CorruptedSaberVisual, quest "Winna's Kitten"): the caster takes the Corrupt Saber template 10042.
+/// The reference swaps only entry, display, name and scale; UpdateEntry swaps the whole template (the reference's own comment calls that not exact).
+/// The owner emote is not sent.
+/// </summary>
+[SpellScript(16510)]
+public sealed class CorruptedSaberVisualScript : ISpellScript
+{
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Caster is Creature saber && saber.System is { } creatures)
+        {
+            creatures.UpdateEntry(saber, 10042);
         }
     }
 }
