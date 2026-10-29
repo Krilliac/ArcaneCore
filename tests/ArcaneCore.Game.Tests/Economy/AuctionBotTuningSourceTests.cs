@@ -47,8 +47,8 @@ public sealed class AuctionBotTuningSourceTests
 
         Assert.Equal(
             [
-                "AuctionHouseBot:ValueNormal is set to a value identical to the shipped auction_bot_value row; the key is deprecated, remove it.",
-                "AuctionHouseBot:LootSkinning is set to a value identical to the shipped auction_bot_loot row; the key is deprecated, remove it.",
+                "AuctionHouseBot:ValueNormal is set to a value identical to the shipped auction_bot_value row; if the table row was not edited, remove the key (it is deprecated).",
+                "AuctionHouseBot:LootSkinning is set to a value identical to the shipped auction_bot_loot row; if the table row was not edited, remove the key (it is deprecated).",
             ],
             options.DeprecatedOverrides());
     }

@@ -236,7 +236,7 @@ public sealed class AuctionBotOptions
             if (!string.IsNullOrWhiteSpace(text))
             {
                 found.Add(identical
-                    ? $"{SectionName}:{name} is set to a value identical to the shipped {table} row; the key is deprecated, remove it."
+                    ? $"{SectionName}:{name} is set to a value identical to the shipped {table} row; if the table row was not edited, remove the key (it is deprecated)."
                     : $"{SectionName}:{name} is set and overrides the {table} rows; the key is deprecated, edit the rows (.reload tuning) and remove it.");
             }
         }

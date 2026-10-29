@@ -74,10 +74,33 @@ public sealed class TuningWorldTests
             (TuningFeature feature, _, MutableStore store) = Start(host, TuningContent.Empty);
 
             Assert.Equal(1, store.SeedCalls);
+            Assert.NotSame(before, TuningCatalog.Active);
+            Assert.NotEqual(before.Generation, TuningCatalog.Active.Generation);
             Assert.Equal(TuningDefaults.Content.RowCount, store.Content.RowCount);
             Assert.Equal(TuningDefaults.Content.RowCount, feature.Catalog.RowCount);
             Assert.Empty(feature.Catalog.Rejected);
             Assert.Equal(TuningCatalog.Shipped.ValueMatrix(), feature.Catalog.ValueMatrix());
+        }
+        finally
+        {
+            TuningCatalog.Replace(before);
+        }
+    }
+
+    [Fact]
+    public async Task Attach_InstallsRowsThatDifferFromTheShippedOnes()
+    {
+        TuningCatalog before = TuningCatalog.Active;
+        try
+        {
+            await using var host = WorldTestHost.Start();
+            Assert.Equal(0u, before.Value(0, 0));
+
+            (TuningFeature feature, _, _) = Start(host, WithPoorPercent(77));
+
+            Assert.NotSame(before, TuningCatalog.Active);
+            Assert.Equal(77u, TuningCatalog.Active.Value(0, 0));
+            Assert.Equal(77u, feature.Catalog.Value(0, 0));
         }
         finally
         {

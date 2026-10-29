@@ -35,7 +35,7 @@ public sealed class AuctionBotConfigChecks : IConfigCheck
         foreach (string deprecated in options.DeprecatedOverrides())
         {
             issues.Add(new ConfigIssue(ConfigSeverity.Warning, deprecated[..deprecated.IndexOf(' ', StringComparison.Ordinal)], deprecated,
-                "remove the key and edit the tuning rows instead (docs/areas/tuning-tables.md)"));
+                "edit the tuning rows instead of the key, or remove the key if its value equals the unedited row (docs/areas/tuning-tables.md)"));
         }
 
         foreach ((string name, string? text) in new[]

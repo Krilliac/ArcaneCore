@@ -32,7 +32,7 @@ network is built.
 
 `.reload tuning` (also part of `.reload all`) reads and validates the tables off the world thread and swaps the catalog in between ticks.
 The auction bot rebuilds its pool and loot sources on its next action; ship routes, lift regions and the tram network are read from the new
-catalog on the next bot plan. `HotReload:EmptyTables = KeepLoaded` keeps the loaded rows when the tables read back empty. Otherwise a reload that reads a table back empty applies and switches that behaviour off (the success message names the empty tables); this lasts only until the next restart, which seeds an empty table again.
+catalog on the next bot plan. `HotReload:EmptyTables = KeepLoaded` keeps the loaded rows only when every tuning table reads back empty; a single emptied table still applies. Otherwise a reload that reads a table back empty applies and switches that behaviour off (the success message names the empty tables); this lasts only until the next restart, which seeds an empty table again.
 
 ## Config keys during the move
 
