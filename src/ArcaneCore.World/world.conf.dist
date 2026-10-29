@@ -12154,7 +12154,7 @@ World.Playerbots.Battlegrounds.Enabled = true
 #
 #    World.Playerbots.Battlegrounds.MaxBotsPerBattleground
 #        Description: The most bots in one battleground (0..80; 0 queues none), unless
-#                     RaiseCapToMatchMinimum raises it for a type whose template minimum needs more.
+#                     RaiseCapToFillTemplate raises it for a type whose template minimum needs more.
 #                     Bots waiting for one battleground type and level bracket do not exceed the
 #                     (effective) cap, a team never gets more than half of it (rounded up) and a bot
 #                     declines an invitation into a match that already holds this many.
@@ -12220,20 +12220,21 @@ World.Playerbots.Battlegrounds.PreferFillingRealPlayerQueues = true
 World.Playerbots.Battlegrounds.QueueChancePerMinute = 0.05
 
 #
-#    World.Playerbots.Battlegrounds.RaiseCapToMatchMinimum
+#    World.Playerbots.Battlegrounds.RaiseCapToFillTemplate
 #        Description: Raise the cap of a battleground type whose template minimum needs more bots
-#                     than MaxBotsPerBattleground allows (on by default): 2 x MinPlayersPerTeam, for
-#                     example Alterac Valley's 20 per team against the default cap of 20, becomes
-#                     that type's cap (never above 2 x MaxPlayersPerTeam), so bots alone can start
-#                     it. Off: such a type is refused for bots (CapBelowMinimum) instead of queues
-#                     that can never pop. The retail template values are never changed.
+#                     than MaxBotsPerBattleground allows (on by default) to 2 x MaxPlayersPerTeam,
+#                     for example Alterac Valley (20 per team minimum, 40 maximum) against the
+#                     default cap of 20 gets 80, so bots alone can start it and fill it to 40 per
+#                     team. A type whose minimum the cap covers keeps the cap. Off: such a type is
+#                     refused for bots (CapBelowMinimum) instead of queues that can never pop. The
+#                     retail template values are never changed.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Battlegrounds.RaiseCapToMatchMinimum = true
+World.Playerbots.Battlegrounds.RaiseCapToFillTemplate = true
 
 #
 #    World.Playerbots.Budget.ClassLevelsAhead

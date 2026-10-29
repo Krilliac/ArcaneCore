@@ -358,7 +358,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         var lines = new List<string>
         {
             string.Create(CultureInfo.InvariantCulture,
-                $"Bot battlegrounds: {(o.Enabled ? "enabled" : "disabled")}, chance {o.QueueChancePerMinute}/min, at most {o.MaxBotsPerBattleground} bots per battleground{(o.RaiseCapToMatchMinimum ? " (raised to a type's template minimum)" : string.Empty)}; {_tracked.Count} bots busy; queued {Totals.Queued}, entered {Totals.Entered}, left {Totals.Left}, declined {Totals.Declined}, queues given up {Totals.QueueTimeouts}."),
+                $"Bot battlegrounds: {(o.Enabled ? "enabled" : "disabled")}, chance {o.QueueChancePerMinute}/min, at most {o.MaxBotsPerBattleground} bots per battleground{RaisedCaps(o)}; {_tracked.Count} bots busy; queued {Totals.Queued}, entered {Totals.Entered}, left {Totals.Left}, declined {Totals.Declined}, queues given up {Totals.QueueTimeouts}."),
         };
         foreach (Tracked t in _tracked.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
             lines.Add(string.Create(CultureInfo.InvariantCulture,
@@ -367,6 +367,21 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"refused {type}: {why}"));
         foreach (string line in Events.TakeLast(5)) lines.Add("last: " + line);
         return lines;
+    }
+
+    /// <summary>
+    /// The status line's note of the types whose cap <c>RaiseCapToFillTemplate</c> raises now (<see cref="PlayerbotBattlegroundDemand.IsRaised"/>),
+    /// e.g. <c> (AlteracValley raised to 80 to fill the template)</c>; empty when no loaded template is raised.
+    /// </summary>
+    private string RaisedCaps(PlayerbotBattlegroundOptions o)
+    {
+        if (Feature()?.Manager is not { } manager) return string.Empty;
+        var raised = new List<string>();
+        foreach (BattlegroundType type in PlayerbotBattlegroundBrackets.Types)
+            if (manager.TemplateOf(type) is { } template && PlayerbotBattlegroundDemand.IsRaised(template, o.MaxBotsPerBattleground, o.RaiseCapToFillTemplate))
+                raised.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{type} raised to {PlayerbotBattlegroundDemand.EffectiveCap(template, o.MaxBotsPerBattleground, o.RaiseCapToFillTemplate)}"));
+        return raised.Count == 0 ? string.Empty : $" ({string.Join(", ", raised)} to fill the template)";
     }
 
     // --- the queue machine, every tick ----------------------------------------------------------------------------------
@@ -738,9 +753,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
         PlayerbotBattlegroundOptions options = _options.Battlegrounds;
         float chance = PlayerbotBattlegroundDemand.ChancePerThink(options.QueueChancePerMinute, sinceMs);
-        bool anyRealWaiting = _demand.AnyRealWaiting || (options.PreferFillingRealPlayerQueues && options.QueueChancePerMinute > 0f && _demand.AnyBotWaiting);
+        // Also every free bot is looked over while a preparing or running match has a slot open (Pick decides whether it fills it).
+        bool anyRealWaiting = _demand.AnyRealWaiting || (options.PreferFillingRealPlayerQueues && options.QueueChancePerMinute > 0f && _demand.AnyBotWaiting)
+            || _demand.AnyOpenSlots;
         bool checkedRefusalsThisScan = false;
-        Func<BattlegroundType, bool> capCoversMinimum = type => options.RaiseCapToMatchMinimum || options.MaxBotsPerBattleground <= 0
+        Func<BattlegroundType, bool> capCoversMinimum = type => options.RaiseCapToFillTemplate || options.MaxBotsPerBattleground <= 0
             || manager.TemplateOf(type) is not { } template || options.MaxBotsPerBattleground >= 2 * (int)template.MinPlayersPerTeam;
         foreach (PlayerbotBattlegroundBot bot in _orderedBots)
         {
@@ -765,6 +782,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             };
             _tracked[bot.BotId] = tracked;
             _demand.AddBotCommitted(choice.Type, choice.Bracket, player.Team);
+            _demand.AddBotPending(choice.Type, choice.Bracket, player.Team);
             Note($"{player.Name} goes to the {choice.Type} battlemaster {master.Name}");
         }
     }
@@ -819,10 +837,10 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         return !feature.IsDeserter(player);
     }
 
-    /// <summary>The bot cap of one type's matches: the configured cap, raised to the template minimum when the option asks for it.</summary>
+    /// <summary>The bot cap of one type's matches: the configured cap, raised to 2 x the template maximum when it cannot start the type (<see cref="PlayerbotBattlegroundDemand.EffectiveCap"/>).</summary>
     private int CapOf(BattlegroundManager manager, BattlegroundType type)
         => manager.TemplateOf(type) is { } template
-            ? PlayerbotBattlegroundDemand.EffectiveCap(template, _options.Battlegrounds.MaxBotsPerBattleground, _options.Battlegrounds.RaiseCapToMatchMinimum)
+            ? PlayerbotBattlegroundDemand.EffectiveCap(template, _options.Battlegrounds.MaxBotsPerBattleground, _options.Battlegrounds.RaiseCapToFillTemplate)
             : _options.Battlegrounds.MaxBotsPerBattleground;
 
     private void Refused(BattlegroundType type, PlayerbotBattlegroundRefusal why)
@@ -865,6 +883,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 && _bots.TryGetValue(t.BotId, out PlayerbotBattlegroundBot enteredBot) && enteredBot.Session.Player is { } enteredPlayer
                 && entered.PlayerTeam(enteredPlayer.Guid) is not null) continue;
             _demand.AddBotCommitted(t.Type, t.Bracket, t.Team);
+            // Not invited yet: the match's invited count does not hold it, so it is subtracted from the open slots it will take.
+            if (t.Phase is PlayerbotBattlegroundPhase.Travel or PlayerbotBattlegroundPhase.Join or PlayerbotBattlegroundPhase.Queued)
+                _demand.AddBotPending(t.Type, t.Bracket, t.Team);
         }
 
         foreach (Battleground match in manager.RunningBattlegrounds)
@@ -873,14 +894,24 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             _demand.AddMatchInBracket(match.Type, match.Bracket);
             if (!match.HasFreeSlots) continue;
             int bots = 0;
+            bool real = false;
             foreach ((ObjectGuid guid, Team team) in match.Participants())
             {
-                if (_world.FindOnlinePlayer(guid) is not { Session: WorldSession { IsManaged: true } }) continue;
+                if (_world.FindOnlinePlayer(guid) is not { Session: WorldSession { IsManaged: true } })
+                {
+                    real = true;
+                    continue;
+                }
+
                 bots++;
                 _demand.AddBotCommitted(match.Type, match.Bracket, team);
             }
 
             if (bots >= CapOf(manager, match.Type)) _demand.BlockBracket(match.Type, match.Bracket);
+            // The slots the server's queue fills while the match prepares or runs (BattlegroundQueue.CheckFreeSlots, vmangos FillPlayersToBG):
+            // FreeSlotsForTeam is the template maximum less the invited, and 0 outside WaitJoin and InProgress.
+            _demand.AddOpenSlots(match.Type, match.Bracket, Team.Alliance, (int)Math.Min(match.FreeSlotsForTeam(Team.Alliance), int.MaxValue), real);
+            _demand.AddOpenSlots(match.Type, match.Bracket, Team.Horde, (int)Math.Min(match.FreeSlotsForTeam(Team.Horde), int.MaxValue), real);
         }
     }
 

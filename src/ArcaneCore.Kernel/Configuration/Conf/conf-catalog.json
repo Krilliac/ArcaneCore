@@ -14873,7 +14873,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The most bots in one battleground (0..80; 0 queues none), unless `RaiseCapToMatchMinimum` raises it for a type whose template minimum needs more. Bots waiting for one battleground type and level bracket do not exceed the (effective) cap, a team never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many.",
+      "meaning": "The most bots in one battleground (0..80; 0 queues none), unless `RaiseCapToFillTemplate` raises it for a type whose template minimum needs more. Bots waiting for one battleground type and level bracket do not exceed the (effective) cap, a team never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -14943,7 +14943,7 @@
       "isCollection": false
     },
     {
-      "path": "World:Playerbots:Battlegrounds:RaiseCapToMatchMinimum",
+      "path": "World:Playerbots:Battlegrounds:RaiseCapToFillTemplate",
       "section": "World:Playerbots",
       "type": "bool",
       "kind": "scalar",
@@ -14953,7 +14953,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "Raise the cap of a battleground type whose template minimum needs more bots than `MaxBotsPerBattleground` allows (on by default): 2 x `MinPlayersPerTeam`, for example Alterac Valley's 20 per team against the default cap of 20, becomes that type's cap (never above 2 x `MaxPlayersPerTeam`), so bots alone can start it. Off: such a type is refused for bots (`CapBelowMinimum`) instead of queues that can never pop. The retail template values are never changed.",
+      "meaning": "Raise the cap of a battleground type whose template minimum needs more bots than `MaxBotsPerBattleground` allows (on by default) to 2 x `MaxPlayersPerTeam`, for example Alterac Valley (20 per team minimum, 40 maximum) against the default cap of 20 gets 80, so bots alone can start it and fill it to 40 per team. A type whose minimum the cap covers keeps the cap. Off: such a type is refused for bots (`CapBelowMinimum`) instead of queues that can never pop. The retail template values are never changed.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

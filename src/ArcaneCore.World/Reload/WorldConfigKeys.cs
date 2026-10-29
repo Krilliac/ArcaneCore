@@ -797,7 +797,7 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Battlegrounds:MaxBotsPerBattleground", o => o.Battlegrounds.MaxBotsPerBattleground, (o, v) => o.Battlegrounds.MaxBotsPerBattleground = v,
             v => v is >= 0 and <= 80 ? null : "must be 0..80"),
         LivePlayerbots("Battlegrounds:PreferFillingRealPlayerQueues", o => o.Battlegrounds.PreferFillingRealPlayerQueues, (o, v) => o.Battlegrounds.PreferFillingRealPlayerQueues = v),
-        LivePlayerbots("Battlegrounds:RaiseCapToMatchMinimum", o => o.Battlegrounds.RaiseCapToMatchMinimum, (o, v) => o.Battlegrounds.RaiseCapToMatchMinimum = v),
+        LivePlayerbots("Battlegrounds:RaiseCapToFillTemplate", o => o.Battlegrounds.RaiseCapToFillTemplate, (o, v) => o.Battlegrounds.RaiseCapToFillTemplate = v),
         LivePlayerbotsValue("Battlegrounds:MaxTravelYards", o => o.Battlegrounds.MaxTravelYards, (o, v) => o.Battlegrounds.MaxTravelYards = v,
             v => v is >= 100 and <= 20_000 ? null : "must be 100..20000"),
         LivePlayerbotsValue("Battlegrounds:MaxQueueWaitMinutes", o => o.Battlegrounds.MaxQueueWaitMinutes, (o, v) => o.Battlegrounds.MaxQueueWaitMinutes = v,

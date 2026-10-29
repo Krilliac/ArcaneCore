@@ -41,7 +41,7 @@ public sealed class PlayerbotBattlegroundOptionsTests : IDisposable
         Assert.Equal(0.05f, options.QueueChancePerMinute);
         Assert.Equal(20, options.MaxBotsPerBattleground);
         Assert.True(options.PreferFillingRealPlayerQueues);
-        Assert.True(options.RaiseCapToMatchMinimum);
+        Assert.True(options.RaiseCapToFillTemplate);
         Assert.Equal(1500, options.MaxTravelYards);
         Assert.Equal(30, options.MaxQueueWaitMinutes);
         options.Validate();
@@ -95,7 +95,7 @@ public sealed class PlayerbotBattlegroundOptionsTests : IDisposable
             [Prefix + "QueueChancePerMinute"] = "0.25",
             [Prefix + "MaxBotsPerBattleground"] = "12",
             [Prefix + "PreferFillingRealPlayerQueues"] = "false",
-            [Prefix + "RaiseCapToMatchMinimum"] = "false",
+            [Prefix + "RaiseCapToFillTemplate"] = "false",
             [Prefix + "MaxTravelYards"] = "800",
             [Prefix + "MaxQueueWaitMinutes"] = "7",
         }).Build();
@@ -107,7 +107,7 @@ public sealed class PlayerbotBattlegroundOptionsTests : IDisposable
         Assert.Equal(0.25f, bg.QueueChancePerMinute);
         Assert.Equal(12, bg.MaxBotsPerBattleground);
         Assert.False(bg.PreferFillingRealPlayerQueues);
-        Assert.False(bg.RaiseCapToMatchMinimum);
+        Assert.False(bg.RaiseCapToFillTemplate);
         Assert.Equal((800, 7), (bg.MaxTravelYards, bg.MaxQueueWaitMinutes));
         Assert.Equal(bg.MaxBotsPerBattleground, PlayerbotOptions.Bind(configuration).Battlegrounds.MaxBotsPerBattleground);
     }
@@ -127,7 +127,7 @@ public sealed class PlayerbotBattlegroundOptionsTests : IDisposable
         string path = Path.Combine(_directory, "appsettings.json");
         File.WriteAllText(path, """
             { "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5, "Playerbots": { "Enabled": true, "Battlegrounds": {
-                "Enabled": false, "QueueChancePerMinute": 0.5, "MaxBotsPerBattleground": 8, "PreferFillingRealPlayerQueues": false, "RaiseCapToMatchMinimum": false,
+                "Enabled": false, "QueueChancePerMinute": 0.5, "MaxBotsPerBattleground": 8, "PreferFillingRealPlayerQueues": false, "RaiseCapToFillTemplate": false,
                 "MaxTravelYards": 900, "MaxQueueWaitMinutes": 12 } } } }
             """);
         var playerbots = new PlayerbotOptions { Enabled = true };
@@ -140,7 +140,7 @@ public sealed class PlayerbotBattlegroundOptionsTests : IDisposable
         Assert.Equal(0.5f, bg.QueueChancePerMinute);
         Assert.Equal((8, 900, 12), (bg.MaxBotsPerBattleground, bg.MaxTravelYards, bg.MaxQueueWaitMinutes));
         Assert.False(bg.PreferFillingRealPlayerQueues);
-        Assert.False(bg.RaiseCapToMatchMinimum);
+        Assert.False(bg.RaiseCapToFillTemplate);
         Assert.Contains("no changes", (await coordinator.ReloadAsync("config")).Message);
 
         // Out of range: refused, nothing changes.
@@ -154,7 +154,7 @@ public sealed class PlayerbotBattlegroundOptionsTests : IDisposable
         // Removed: the defaults come back.
         File.WriteAllText(path, """{ "World": { "AutosaveIntervalMs": 0, "TickIntervalMs": 5 } }""");
         Assert.Equal(ReloadStatus.Applied, (await coordinator.ReloadAsync("config")).Status);
-        Assert.True(bg.Enabled && bg.PreferFillingRealPlayerQueues && bg.RaiseCapToMatchMinimum);
+        Assert.True(bg.Enabled && bg.PreferFillingRealPlayerQueues && bg.RaiseCapToFillTemplate);
         Assert.Equal((0.05f, 20, 1500, 30), (bg.QueueChancePerMinute, bg.MaxBotsPerBattleground, bg.MaxTravelYards, bg.MaxQueueWaitMinutes));
     }
 

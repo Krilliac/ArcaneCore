@@ -18,7 +18,7 @@ public sealed class PlayerbotBattlegroundOptions
     public float QueueChancePerMinute { get; set; } = 0.05f;
 
     /// <summary>
-    /// The most bots in one battleground (0..80; 0 queues none), unless <see cref="RaiseCapToMatchMinimum"/> raises it for a type whose
+    /// The most bots in one battleground (0..80; 0 queues none), unless <see cref="RaiseCapToFillTemplate"/> raises it for a type whose
     /// template minimum needs more. Bots waiting for one battleground type and level bracket do not exceed the (effective) cap, a team
     /// never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many.
     /// </summary>
@@ -32,11 +32,11 @@ public sealed class PlayerbotBattlegroundOptions
 
     /// <summary>
     /// Raise the cap of a battleground type whose template minimum needs more bots than <see cref="MaxBotsPerBattleground"/> allows (on by
-    /// default): 2 x <c>MinPlayersPerTeam</c>, for example Alterac Valley's 20 per team against the default cap of 20, becomes that type's
-    /// cap (never above 2 x <c>MaxPlayersPerTeam</c>), so bots alone can start it. Off: such a type is refused for bots
-    /// (<c>CapBelowMinimum</c>) instead of queues that can never pop. The retail template values are never changed.
+    /// default) to 2 x <c>MaxPlayersPerTeam</c>, for example Alterac Valley (20 per team minimum, 40 maximum) against the default cap of 20
+    /// gets 80, so bots alone can start it and fill it to 40 per team. A type whose minimum the cap covers keeps the cap. Off: such a type
+    /// is refused for bots (<c>CapBelowMinimum</c>) instead of queues that can never pop. The retail template values are never changed.
     /// </summary>
-    public bool RaiseCapToMatchMinimum { get; set; } = true;
+    public bool RaiseCapToFillTemplate { get; set; } = true;
 
     /// <summary>
     /// The farthest, in yards, a battlemaster may stand from a bot for the bot to walk to it (100..20000): a straight line on the bot's own map,

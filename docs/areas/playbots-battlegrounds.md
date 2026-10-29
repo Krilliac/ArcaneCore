@@ -50,17 +50,22 @@ The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal l
 | Warsong Gulch, Arathi Basin or Alterac Valley | `Unsupported` |
 | a `battleground_template` row for the type | `NoTemplate` |
 | the bot's level within the template's minimum and maximum; the bracket is the manager's (`BracketOfLevel`, vmangos `Player::GetBattleGroundBracketIdFromLevel`) | `LevelOutOfRange` (not logged) |
-| with `RaiseCapToMatchMinimum` off: `MaxBotsPerBattleground` at least twice the template's `MinPlayersPerTeam` (bots alone could never start the match) | `CapBelowMinimum` |
+| with `RaiseCapToFillTemplate` off: `MaxBotsPerBattleground` at least twice the template's `MinPlayersPerTeam` (bots alone could never start the match) | `CapBelowMinimum` |
 | the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), Alterac Valley (map 30) a template for map 30 and, when its node banners exist, at least one the match routes to the node click; and the banner spell 21651 in the spell store, known by the bot for Arathi Basin and Alterac Valley (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
 | a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), in a walking region the bot's own joins (by the navigation mesh's region graph, no path search; an indoor end is let through; a master that stands still is preferred to one that walks waypoints), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
 
 Then the pick (`PlayerbotBattlegroundDemand.Pick`): a (type, bracket) a real player waits in, whose team still needs bots to reach the
-template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`); otherwise the bot rolls its per-minute chance
+template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`); so is one whose preparing or running match has a slot of
+the bot's team open that no real player waiting in the queue and no bot already on its way will take (`FillNeed`: the server's queue
+invites queued players into such a match, `BattlegroundQueue.CheckFreeSlots` as vmangos `FillPlayersToBG`, and a leaver frees a slot again;
+only while `QueueChancePerMinute` is above 0, or, with `PreferFillingRealPlayerQueues`, while a real player plays in the match); otherwise the bot rolls its per-minute chance
 (`QueueChancePerMinute`, as `1 - (1 - p)^(scan seconds / 60)`) and takes a random one of the open choices. A choice is open while the
 bracket holds fewer than `MaxBotsPerBattleground` committed bots, the bot's team fewer than `min(MaxPlayersPerTeam, ceil(cap / 2))`, and
-no running match of the bracket with room already holds the cap in bots. With `RaiseCapToMatchMinimum` (on) a type whose template
-needs more than the cap (2 x `MinPlayersPerTeam`, Alterac Valley's 20 per team against the default cap of 20) uses that minimum as its cap
-(never above 2 x `MaxPlayersPerTeam`), so bots alone can start it; with it off such a type is refused (`CapBelowMinimum`, logged once).
+no running match of the bracket with room already holds the cap in bots. With `RaiseCapToFillTemplate` (on) a type whose template
+minimum needs more than the cap (2 x `MinPlayersPerTeam`, Alterac Valley's 20 per team against the default cap of 20) uses 2 x
+`MaxPlayersPerTeam` as its cap (80 for Alterac Valley, 40 per team), so bots alone can start it and fill it to the template's maximum; a
+type whose minimum the cap covers (Warsong Gulch and Arathi Basin at the default 20) keeps the configured cap. With it off such a type is
+refused (`CapBelowMinimum`, logged once). The `.playerbot battlegrounds` status line names each loaded type whose cap is raised.
 
 The snapshot behind these numbers is rebuilt at every scan from the battleground manager itself: the real players (sessions that are
 not managed) waiting in each queue and not yet invited, the bots this coordinator committed (walking, joining, queued, invited,
@@ -91,8 +96,9 @@ start or in progress the server casts the ordinary Deserter debuff (26013, 15 mi
 vmangos Player::LeaveBattleground), and the bot queues for nothing until it wears off. The party AI's own flag follows only at the bot's next
 think, too late for a port sent the same tick, so it is not what decides.
 
-An invitation into a match that already holds the type's effective cap (`MaxBotsPerBattleground`, raised by `RaiseCapToMatchMinimum`)
-in bots (participants plus bots porting in) is declined
+An invitation into a match that already holds the type's effective cap (`MaxBotsPerBattleground`, raised to 2 x `MaxPlayersPerTeam` by
+`RaiseCapToFillTemplate`) in bots (participants plus bots porting in) is declined; below it the bot takes the invitation, and the server
+invites no one into a team that is full (`Battleground.FreeSlotsForTeam`)
 (CMSG_BATTLEFIELD_PORT action 0). A bot that a controller, a real player's party or a bot group takes while it walks, joins or waits
 leaves the queue. Back in the world (the server teleports it to where it queued, the battleground entry point) the brain resumes with its
 quests, suspensions and memories; only its route, target and rest belong to another place (`PlayerbotBrain.ResumeAfterGroup`).
@@ -181,9 +187,9 @@ s (and leaves that buff alone for 30 s) and forgets a buff that despawned or som
 |---|---|---|
 | `World:Playerbots:Battlegrounds:Enabled` | `true` | Off: no bot starts a queue; bots already walking, queued or in a match finish their business. |
 | `World:Playerbots:Battlegrounds:QueueChancePerMinute` | `0.05` | 0..1. The chance per minute that a free, eligible bot starts to queue; each 2-second scan rolls `1 - (1 - p)^(seconds / 60)`. A real player's queue that needs bots is filled without a roll. |
-| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `20` | 0..80. Unless `RaiseCapToMatchMinimum` raises it for a type whose template minimum needs more, bots committed to one (type, bracket) never exceed it, a team never more than `min(MaxPlayersPerTeam, ceil(cap / 2))`, a running match holding it blocks its bracket, and an invitation into a match holding it is declined. 0 queues no bot. |
+| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `20` | 0..80. Unless `RaiseCapToFillTemplate` raises it for a type whose template minimum needs more, bots committed to one (type, bracket) never exceed it, a team never more than `min(MaxPlayersPerTeam, ceil(cap / 2))`, a running match holding it blocks its bracket, and an invitation into a match holding it is declined. 0 queues no bot. |
 | `World:Playerbots:Battlegrounds:PreferFillingRealPlayerQueues` | `true` | A (type, bracket) a real player waits in gets bots at once, up to the template's minimum per team, before any random choice. |
-| `World:Playerbots:Battlegrounds:RaiseCapToMatchMinimum` | `true` | A type whose template minimum needs more bots than `MaxBotsPerBattleground` (2 x `MinPlayersPerTeam`, e.g. Alterac Valley's 20 per team) gets that minimum as its cap, never above 2 x `MaxPlayersPerTeam`, so bots alone can start it. Off: the type is refused for bots (`CapBelowMinimum`). Template values are never changed. |
+| `World:Playerbots:Battlegrounds:RaiseCapToFillTemplate` | `true` | A type whose template minimum needs more bots than `MaxBotsPerBattleground` (2 x `MinPlayersPerTeam`, e.g. Alterac Valley's 20 per team) gets 2 x `MaxPlayersPerTeam` as its cap (Alterac Valley: 80, 40 per team), so bots alone can start it and fill it, and backfill a leaver's slot. A type whose minimum the cap covers keeps the cap. Off: the type is refused for bots (`CapBelowMinimum`). Template values are never changed. |
 | `World:Playerbots:Battlegrounds:MaxTravelYards` | `1500` | 100..20000. The farthest (straight line, same map) a battlemaster may stand for a bot to choose it. |
 | `World:Playerbots:Battlegrounds:MaxQueueWaitMinutes` | `30` | 1..240. A bot leaves a queue after this long and does not queue for that type again for 10 minutes. |
 
@@ -232,10 +238,11 @@ without it the 21651 cast went through and nothing was claimed, which is how the
 
 ## Limits
 
-* **Alterac Valley needs 20 bots a side.** The template minimum is 20 players per team (retail, not changed). Bots alone start a
-  match only when 20 eligible bots of each faction (level 51-60, within `MaxTravelYards` of a friendly Alterac Valley battlemaster) queue
-  within `MaxQueueWaitMinutes`; the cap is raised to that minimum for the type (`RaiseCapToMatchMinimum`), the match is 20 against 20
-  bots unless real players join, and up to 40 a side is never reached by bots alone.
+* **Alterac Valley needs 20 bots a side to start, and fills to 40 only with enough free bots.** The template minimum is 20 players per
+  team and the maximum 40 (retail, not changed). Bots alone start a match only when 20 eligible bots of each faction (level 51-60, within
+  `MaxTravelYards` of a friendly Alterac Valley battlemaster) queue within `MaxQueueWaitMinutes`; the cap for the type is 80
+  (`RaiseCapToFillTemplate`), and the bots keep queuing into the preparing or running match until each team holds 40, as far as free
+  eligible bots exist. The pace is the server queue's: it invites into a match with free slots at each queue update.
 * **Arathi Basin banners: only what the server routes.** classic-db and vmangos make the five neutral banners (180087-180091) goobers
   whose use casts a trigger spell (23932, 23935-23938) that vmangos scripts into the click (`BattlegroundBannerTriggerScript`); the server
   routes them (`MatchRuntime.RoutesBannerUse`: a button with `noDamageImmune`, or a goober whose data10 is a banner trigger spell), so with

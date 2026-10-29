@@ -17,7 +17,7 @@ internal enum PlayerbotBattlegroundRefusal : byte
     /// <summary>A type the bots do not play (<see cref="PlayerbotBattlegroundBrackets.Supported"/>; every vanilla type is played now).</summary>
     Unsupported,
 
-    /// <summary>The configured cap is below 2 x the template's <c>MinPlayersPerTeam</c> and <c>RaiseCapToMatchMinimum</c> is off: bots alone could never start a match.</summary>
+    /// <summary>The configured cap is below 2 x the template's <c>MinPlayersPerTeam</c> and <c>RaiseCapToFillTemplate</c> is off: bots alone could never start a match.</summary>
     CapBelowMinimum,
 }
 
