@@ -611,7 +611,7 @@ internal sealed class SpellSweepRunner
                 {
                     Violate(SweepCategory.InterruptNotRemoved, spell.Id, $"{action.Name} flags=0x{flags:X}");
                 }
-                else if (!expected && !present && unit.IsAlive && !spell.IsChanneled && spell.ProcCharges == 0 && spell.ProcFlags == ProcFlags.None)
+                else if (!expected && !present && !ranOut && unit.IsAlive && !spell.IsChanneled && spell.ProcCharges == 0 && spell.ProcFlags == ProcFlags.None)
                 {
                     Violate(SweepCategory.InterruptRemovedWithoutFlag, spell.Id, $"{action.Name} flags=0x{flags:X}");
                 }

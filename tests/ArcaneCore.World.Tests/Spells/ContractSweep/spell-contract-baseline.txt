@@ -23,7 +23,6 @@ a.unhandled-effect	10521	EnchantHeldItem
 a.unhandled-effect	1054	EnchantHeldItem
 a.unhandled-effect	10607	EnchantHeldItem
 a.unhandled-effect	10611	EnchantHeldItem
-a.unhandled-effect	108	Evade
 a.unhandled-effect	11202	EnchantItemTemporary
 a.unhandled-effect	11338	EnchantItemTemporary
 a.unhandled-effect	11339	EnchantItemTemporary
@@ -107,7 +106,6 @@ a.unhandled-effect	14792	EnchantHeldItem
 a.unhandled-effect	14847	EnchantItem
 a.unhandled-effect	1492	GuaranteeHit
 a.unhandled-effect	15036	EnchantHeldItem
-a.unhandled-effect	15057	HealMechanical
 a.unhandled-effect	15340	EnchantItem
 a.unhandled-effect	15389	EnchantItem
 a.unhandled-effect	15391	EnchantItem
@@ -1569,17 +1567,10 @@ b.removed-early	14621	gone before its duration
 b.removed-early	18657	gone before its duration
 b.removed-early	3410	gone before its duration
 b.removed-early	6410	gone before its duration
-b.removed-early	8326	permanent aura gone after 1 s
 b.removed-early	9484	gone before its duration
 b.state-not-restored	4948	max-power1
 b.state-not-restored	5759	max-power3
 b.state-not-restored	7164	max-power1
-c.removed-without-flag	8326	cast flags=0x0
-c.removed-without-flag	8326	melee-hit-taken flags=0x0
-c.removed-without-flag	8326	mount flags=0x0
-c.removed-without-flag	8326	move flags=0x0
-c.removed-without-flag	8326	stand-up flags=0x0
-c.removed-without-flag	8326	turn flags=0x0
 i.not-dispelled	10831	type=1 helpful
 i.not-dispelled	12843	type=1 helpful
 i.not-dispelled	13235	type=1 harmful

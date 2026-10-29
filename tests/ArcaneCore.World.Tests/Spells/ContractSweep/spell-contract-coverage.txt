@@ -52,7 +52,7 @@
 89	CastOk	b c:melee-hit-taken,melee-swing,mount e f g
 91	triggered:DontReport
 94	CastOk	b c:move,turn,melee-hit-taken,melee-swing,cast,mount,stand-up
-96	CastOk	g
+96	CastOk
 99	OnlyShapeshift
 100	OnlyShapeshift
 101	CastOk	b c:melee-hit-taken,melee-swing,mount e f g
@@ -1227,7 +1227,7 @@
 1767	CastOk	e f g
 1768	CastOk	e f g
 1769	CastOk	e f g
-1770	CastOk	e f g
+1770	CastOk	e f
 1771	CastOk
 1772	CastOk
 1773	CastOk
@@ -1245,11 +1245,11 @@
 1790	CastOk
 1791	CastOk
 1792	CastOk
-1794	CastOk	e g
-1795	CastOk	e g
-1796	CastOk	e g
-1797	CastOk	e g
-1798	CastOk	e g
+1794	CastOk	e
+1795	CastOk	e
+1796	CastOk	e
+1797	CastOk	e
+1798	CastOk	e
 1799	CastOk
 1800	CastOk
 1801	CastOk
@@ -1479,7 +1479,7 @@
 2097	CastOk
 2098	EquippedItemClassMainhand
 2108	CastOk
-2110	CastOk	g
+2110	CastOk
 2111	CastOk	d f g
 2112	CastOk	d f g
 2113	CastOk	d f g
@@ -1802,11 +1802,11 @@
 2484	ItemGone
 2495	triggered:DontReport
 2496	CastOk
-2497	CastOk	e f g
-2498	CastOk	e f g
-2499	CastOk	e f g
-2500	CastOk	e f g
-2501	CastOk	e f g
+2497	CastOk	e f
+2498	CastOk	e f
+2499	CastOk	e f
+2500	CastOk	e f
+2501	CastOk	e f
 2502	triggered:DontReport
 2503	triggered:DontReport
 2504	triggered:DontReport
@@ -1946,12 +1946,12 @@
 2674	ItemNotReady
 2675	ItemNotReady
 2676	CastOk
-2677	CastOk	e g
+2677	CastOk	e
 2678	CastOk
-2679	CastOk	e g
-2680	CastOk	e g
-2681	CastOk	e g
-2682	CastOk	e g
+2679	CastOk	e
+2680	CastOk	e
+2681	CastOk	e
+2682	CastOk	e
 2683	CastOk
 2684	CastOk
 2685	CastOk
@@ -1966,12 +1966,12 @@
 2694	CastOk
 2695	CastOk
 2696	CastOk
-2697	CastOk	e g
+2697	CastOk	e
 2698	CastOk
-2699	CastOk	e g
-2700	CastOk	e g
-2701	CastOk	e g
-2702	CastOk	e g
+2699	CastOk	e
+2700	CastOk	e
+2701	CastOk	e
+2702	CastOk	e
 2703	CastOk
 2704	CastOk
 2705	CastOk
@@ -2293,7 +2293,7 @@
 3127	CastOk
 3128	CastOk
 3129	CastOk	d
-3130	CastOk	e g
+3130	CastOk	e
 3131	CastOk	d e g
 3132	CastOk	b c:melee-hit-taken,melee-swing,mount d g i
 3133	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d e f
@@ -2307,12 +2307,12 @@
 3141	CastOk	d
 3142	CastOk
 3143	CastOk	d
-3145	CastOk	e g
+3145	CastOk	e
 3146	CastOk	b c:melee-hit-taken,melee-swing,mount d e
-3147	CastOk	g
-3148	CastOk	g
+3147	CastOk
+3148	CastOk
 3149	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
-3150	CastOk	e g
+3150	CastOk	e
 3151	CastOk	e
 3157	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 3158	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
@@ -2376,17 +2376,17 @@
 3237	CastOk
 3238	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
 3240	CastOk
-3242	CastOk	g
+3242	CastOk
 3243	CastOk	d g
 3245	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 3246	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up g i
-3247	CastOk	e g
+3247	CastOk	e
 3248	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
-3252	CastOk	e g
+3252	CastOk	e
 3256	CastOk	b c:melee-hit-taken,melee-swing,mount d i
 3258	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up i
 3260	CastOk	b c:move,turn,melee-hit-taken,mount,stand-up
-3261	CastOk	g
+3261	CastOk
 3263	CastOk	b c:melee-hit-taken,melee-swing,mount d g i
 3264	CastOk	d
 3267	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d g
@@ -2523,7 +2523,7 @@
 3422	CastOk
 3423	CastOk
 3424	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
-3427	CastOk	g
+3427	CastOk
 3428	CastOk
 3429	CastOk	b c:melee-hit-taken,melee-swing,mount d g
 3433	CastOk
@@ -2534,7 +2534,7 @@
 3440	CastOk
 3442	CastOk	b c:melee-hit-taken,melee-swing,mount g i
 3443	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d f i
-3446	CastOk	e g
+3446	CastOk	e
 3447	ItemNotReady
 3448	ItemNotReady
 3449	ItemNotReady
@@ -2553,7 +2553,7 @@
 3463	CastOk
 3464	CastOk
 3465	CastOk
-3466	CastOk	e f g
+3466	CastOk	e f
 3467	CastOk
 3472	CastOk	d f g
 3473	CastOk
@@ -2614,10 +2614,10 @@
 3537	CastOk	d
 3538	CastOk
 3539	CastOk
-3542	CastOk	e g
+3542	CastOk	e
 3547	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 3549	CastOk	d
-3551	CastOk	g
+3551	CastOk
 3552	DontReport
 3553	CastOk
 3558	CastOk	b c:move,turn,melee-hit-taken,melee-swing,cast,mount,stand-up e f g i
@@ -2654,17 +2654,17 @@
 3594	triggered:DontReport
 3595	triggered:DontReport
 3596	CastOk
-3597	CastOk	e g
+3597	CastOk	e
 3598	CastOk
 3599	ItemGone
 3600	CastOk	b c:melee-hit-taken,melee-swing,mount i
 3602	CastOk	b c:melee-hit-taken,melee-swing,mount g
-3603	CastOk	e g
-3604	CastOk	e g
+3603	CastOk	e
+3604	CastOk	e
 3605	CastOk	d
 3606	CastOk	d g
 3607	CastOk	d g
-3609	CastOk	g
+3609	CastOk
 3611	CastOk	d
 3612	CastOk
 3615	CastOk
@@ -2761,7 +2761,7 @@
 3740	CastOk	d
 3741	CastOk
 3742	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e f i
-3743	CastOk	e g
+3743	CastOk	e
 3744	CastOk
 3745	CastOk	d
 3746	CastOk	d
@@ -3082,8 +3082,8 @@
 4098	CastOk
 4099	CastOk
 4100	CastOk
-4101	CastOk	g
-4102	CastOk	e g
+4101	CastOk
+4102	CastOk	e
 4104	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
 4105	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
 4107	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
@@ -3127,16 +3127,16 @@
 4147	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
 4148	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
 4149	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
-4150	CastOk	g
+4150	CastOk
 4152	CastOk
 4153	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d
 4154	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
-4159	CastOk	e g
+4159	CastOk	e
 4160	CastOk	g
 4161	CastOk
 4164	CastOk	d g
 4165	CastOk	d g
-4166	CastOk	g
+4166	CastOk
 4167	CastOk	b c:melee-hit-taken,melee-swing,mount e g
 4168	CastOk	b c:melee-hit-taken,melee-swing e g
 4169	CastOk	b c:melee-hit-taken,melee-swing,mount e g
@@ -3209,7 +3209,7 @@
 4237	CastOk
 4238	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
 4239	BadTargets
-4240	CastOk	g
+4240	CastOk
 4241	CastOk
 4242	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 4243	CastOk	b c:melee-hit-taken,melee-swing g
@@ -3250,8 +3250,8 @@
 4278	CastOk
 4279	CastOk
 4280	CastOk	g
-4281	CastOk	e g
-4282	CastOk	g
+4281	CastOk	e
+4282	CastOk
 4283	CastOk
 4284	CastOk
 4285	CastOk	b c:melee-hit-taken,melee-swing,mount g
@@ -4075,7 +4075,7 @@
 5161	CastOk	d
 5162	CastOk
 5164	CastOk	b c:melee-hit-taken,melee-swing,mount e g
-5165	CastOk	e g
+5165	CastOk	e
 5166	BadTargets
 5167	CastOk
 5169	ItemNotReady
@@ -4177,7 +4177,7 @@
 5268	ItemNotReady
 5269	CastOk	d
 5270	CastOk	d
-5271	CastOk	g
+5271	CastOk
 5272	CastOk	d
 5273	CastOk	d
 5274	CastOk	d
@@ -4224,7 +4224,7 @@
 5333	ItemNotReady
 5334	CastOk
 5335	CastOk
-5337	CastOk	g
+5337	CastOk
 5338	CastOk
 5339	triggered:DontReport
 5340	CastOk
@@ -4300,7 +4300,7 @@
 5419	CastOk
 5420	OnlyShapeshift
 5421	OnlyShapeshift
-5422	CastOk	g
+5422	CastOk
 5424	CastOk	b c:melee-hit-taken,melee-swing,mount d g
 5426	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 5427	CastOk
@@ -4391,7 +4391,7 @@
 5529	CastOk
 5530	CastOk	b c:melee-hit-taken,melee-swing
 5531	CastOk	b c:melee-hit-taken,melee-swing
-5532	CastOk	e g
+5532	CastOk	e
 5533	CastOk
 5534	CastOk
 5535	CastOk
@@ -4843,7 +4843,7 @@
 6013	CastOk
 6014	CastOk
 6015	CastOk
-6016	CastOk	e g
+6016	CastOk	e
 6017	CastOk
 6019	CastOk
 6020	CastOk
@@ -5295,7 +5295,7 @@
 6528	CastOk	b i
 6529	BadTargets
 6530	CastOk	d e g
-6531	CastOk	g
+6531	CastOk
 6533	CastOk	b c:melee-hit-taken,melee-swing g
 6534	CastOk	d
 6535	CastOk	d e f
@@ -5354,7 +5354,7 @@
 6592	CastOk
 6593	CastOk
 6594	CastOk
-6595	CastOk	e g
+6595	CastOk	e
 6598	CastOk
 6600	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 6601	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
@@ -5447,7 +5447,7 @@
 6709	CastOk	d
 6711	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
 6712	CastOk
-6713	CastOk	g
+6713	CastOk
 6714	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 6716	CastOk	b c:melee-hit-taken,melee-swing,mount g
 6717	RequiresSpellFocus
@@ -5472,7 +5472,7 @@
 6744	CastOk
 6745	CastOk
 6746	CastOk
-6747	CastOk	g
+6747	CastOk
 6748	NoComboPoints
 6749	CastOk
 6750	CastOk
@@ -5577,7 +5577,7 @@
 6927	OnlyStealthed
 6940	BadTargets	g
 6941	CastOk
-6942	CastOk	g
+6942	CastOk
 6945	CastOk	b c:move,turn,melee-hit-taken,mount,stand-up
 6946	CastOk	b c:melee-hit-taken,melee-swing,mount g i
 6947	CastOk
@@ -5701,11 +5701,11 @@
 7136	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d
 7137	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 7139	CastOk	b c:melee-hit-taken,melee-swing,mount
-7140	CastOk	g
+7140	CastOk
 7141	CastOk
 7143	CastOk
 7144	CastOk	b c:move,turn,mount,stand-up
-7145	CastOk	e g
+7145	CastOk	e
 7146	CastOk
 7147	ItemNotReady
 7148	CastOk
@@ -5718,7 +5718,7 @@
 7155	CastOk	d
 7156	ItemNotReady
 7157	CastOk
-7159	CastOk	g
+7159	CastOk
 7160	BadTargets
 7162	CastOk	d g
 7164	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e
@@ -6652,7 +6652,7 @@
 8251	CastOk
 8252	CastOk
 8253	CastOk	g
-8255	CastOk	g
+8255	CastOk
 8256	CastOk	b c:melee-hit-taken,melee-swing,mount d e g i
 8257	CastOk	b c:melee-hit-taken,melee-swing,mount g h i
 8258	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
@@ -6728,7 +6728,7 @@
 8352	CastOk	d g
 8353	CastOk	g
 8354	CastOk
-8355	CastOk	g
+8355	CastOk
 8356	CastOk	d
 8357	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 8358	CastOk
@@ -6752,7 +6752,7 @@
 8376	CastOk	d f
 8377	CastOk	b c:melee-hit-taken,melee-swing,mount
 8378	CastOk
-8379	CastOk	g
+8379	CastOk
 8380	EquippedItemClassMainhand
 8381	CastOk
 8382	CastOk	b c:melee-hit-taken,melee-swing,mount g i
@@ -6764,7 +6764,7 @@
 8388	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 8389	CastOk
 8390	CastOk
-8391	CastOk	g
+8391	CastOk
 8392	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 8393	CastOk
 8394	CastOk	b c:move,turn,melee-hit-taken,cast,stand-up d
@@ -6943,7 +6943,7 @@
 8643	EquippedItemClassMainhand
 8644	CastOk
 8645	CastOk	g
-8646	CastOk	g
+8646	CastOk
 8647	EquippedItemClassMainhand
 8648	CastOk
 8649	EquippedItemClassMainhand
@@ -7615,7 +7615,7 @@
 9788	CastOk
 9789	CastOk
 9790	CastOk
-9791	CastOk	g
+9791	CastOk
 9793	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 9794	CastOk	b c:melee-hit-taken,melee-swing,mount g
 9795	CastOk	d
@@ -8447,7 +8447,7 @@
 10848	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 10849	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d
 10850	BadTargets
-10851	CastOk	g
+10851	CastOk
 10852	CastOk	b c:melee-swing,mount
 10853	CastOk
 10854	CastOk	d
@@ -8782,7 +8782,7 @@
 11424	CastOk
 11425	CastOk
 11426	CastOk	b c:move,turn,cast,mount,stand-up e f i
-11427	CastOk	e g
+11427	CastOk	e
 11428	CastOk	b c:melee-hit-taken,melee-swing,mount e g
 11430	CastOk	b c:melee-hit-taken,melee-swing,mount g
 11431	CastOk	d f g
@@ -9269,7 +9269,7 @@
 12094	CastOk
 12095	CastOk
 12096	CastOk	b c:melee-hit-taken,melee-swing,mount d f g i
-12097	CastOk	g
+12097	CastOk
 12098	CastOk	b c:melee-hit-taken,melee-swing,mount d f g i
 12099	CastOk
 12100	CastOk
@@ -9328,7 +9328,7 @@
 12162	CastOk
 12163	CastOk
 12165	CastOk
-12166	CastOk	g
+12166	CastOk
 12167	CastOk	d f g
 12168	CastOk
 12169	triggered:DontReport
@@ -9457,7 +9457,7 @@
 12458	CastOk	d
 12459	triggered:DontReport
 12460	triggered:DontReport
-12461	CastOk	g
+12461	CastOk
 12463	CastOk
 12464	CastOk
 12466	CastOk	d f g
@@ -9520,7 +9520,7 @@
 12535	CastOk
 12536	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up i
 12537	CastOk	d
-12538	CastOk	g
+12538	CastOk
 12539	CastOk
 12540	NotInfront
 12541	CastOk	b c:melee-hit-taken,melee-swing,mount i
@@ -10094,7 +10094,7 @@
 13443	CastOk	b c:melee-hit-taken,melee-swing,mount g
 13444	CastOk	b c:melee-hit-taken,melee-swing,mount g h
 13445	CastOk	b c:melee-hit-taken,melee-swing,mount g
-13446	CastOk	g
+13446	CastOk
 13459	CastOk	b c:melee-hit-taken,melee-swing,mount g
 13461	CastOk
 13462	CastOk
@@ -10182,7 +10182,7 @@
 13579	NotInfront
 13582	CastOk	d
 13583	CastOk	b c:melee-hit-taken,melee-swing,mount d g i
-13584	CastOk	g
+13584	CastOk
 13585	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up f g i
 13586	CastOk
 13587	CastOk
@@ -10570,7 +10570,7 @@
 14098	CastOk
 14099	CastOk	g
 14100	CastOk	b c:melee-hit-taken,melee-swing,mount
-14102	CastOk	g
+14102	CastOk
 14103	CastOk	d f g
 14104	CastOk
 14105	CastOk	f g
@@ -10579,7 +10579,7 @@
 14109	CastOk	d f g
 14110	CastOk	b c:melee-hit-taken,melee-swing,mount g i
 14111	CastOk
-14112	CastOk	e g
+14112	CastOk	e
 14113	CastOk
 14114	CastOk
 14115	CastOk
@@ -11467,7 +11467,7 @@
 15244	CastOk	b c:melee-hit-taken,melee-swing,mount f i
 15245	CastOk	d f
 15247	DontReport	g
-15248	CastOk	g
+15248	CastOk
 15249	TooClose	g
 15250	CastOk	g
 15252	CastOk	b c:move,turn,melee-hit-taken,mount,stand-up
@@ -11693,12 +11693,12 @@
 15576	CastOk
 15577	CastOk
 15578	CastOk
-15579	CastOk	g
+15579	CastOk
 15580	triggered:DontReport
 15581	triggered:DontReport
-15582	CastOk	g
+15582	CastOk
 15583	triggered:DontReport
-15584	CastOk	g
+15584	CastOk
 15585	CastOk	d f
 15586	CastOk	d f g
 15587	CastOk	d f g
@@ -11721,20 +11721,20 @@
 15604	CastOk	b c:move,turn,melee-hit-taken,melee-swing,cast,mount,stand-up i
 15605	CastOk	e f g
 15607	triggered:DontReport
-15608	CastOk	g
+15608	CastOk
 15609	CastOk	b c:melee-hit-taken,melee-swing,mount d
 15610	CastOk	g
 15611	CastOk	d g
 15612	CastOk	d g
-15613	CastOk	e g
+15613	CastOk	e
 15614	CastOk	g
 15615	CastOk	g
 15616	CastOk	b c:melee-hit-taken,melee-swing,mount f g i
-15617	CastOk	g
-15618	CastOk	g
+15617	CastOk
+15618	CastOk
 15619	triggered:DontReport
 15620	triggered:DontReport
-15621	CastOk	g
+15621	CastOk
 15622	triggered:DontReport
 15623	triggered:DontReport
 15627	RequiresSpellFocus
@@ -11761,12 +11761,12 @@
 15649	RequiresSpellFocus
 15650	CastOk
 15651	CastOk	g
-15652	CastOk	g
+15652	CastOk
 15653	CastOk	d f g
 15654	CastOk	b c:melee-hit-taken,melee-swing,mount f g i
 15655	triggered:DontReport
 15656	CastOk	b c:melee-hit-taken,melee-swing,mount g i
-15657	CastOk	g
+15657	CastOk
 15658	CastOk
 15659	CastOk	d e f g
 15660	CastOk	b c:move,turn,melee-hit-taken,mount,stand-up
@@ -11867,7 +11867,7 @@
 15790	CastOk	b c:melee-hit-taken,melee-swing,mount d f g
 15791	CastOk	g
 15792	CastOk	d
-15793	CastOk	g
+15793	CastOk
 15794	CastOk	d
 15795	triggered:DontReport
 15797	CastOk	d g
@@ -12181,7 +12181,7 @@
 16169	CastOk
 16170	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up f g i
 16171	CastOk
-16172	CastOk	g
+16172	CastOk
 16173	CastOk
 16176	CastOk
 16177	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up i
@@ -12497,7 +12497,7 @@
 16550	CastOk
 16551	CastOk	b c:move,turn,melee-hit-taken,melee-swing,cast,mount,stand-up
 16552	CastOk	b c:melee-hit-taken,melee-swing,mount d g h i
-16553	CastOk	g
+16553	CastOk
 16554	CastOk	d g
 16555	CastOk	b c:melee-hit-taken,melee-swing,mount g i
 16556	CastOk
@@ -13060,7 +13060,7 @@
 17153	CastOk	b c:melee-hit-taken,melee-swing,mount g
 17154	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up i
 17155	BadTargets
-17156	CastOk	g
+17156	CastOk
 17157	CastOk	d g
 17158	CastOk	b c:melee-hit-taken,melee-swing,mount d g h i
 17159	CastOk	g
@@ -13133,7 +13133,7 @@
 17227	CastOk	b c:melee-hit-taken,melee-swing,mount g i
 17228	CastOk
 17229	CastOk	b c:move,turn,melee-hit-taken,cast,stand-up d
-17230	CastOk	g
+17230	CastOk
 17231	CastOk	d
 17232	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 17233	CastOk	g
@@ -13290,7 +13290,7 @@
 17441	CastOk
 17442	CastOk
 17443	CastOk
-17445	CastOk	g
+17445	CastOk
 17446	CastOk
 17447	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d
 17448	CastOk
@@ -13315,7 +13315,7 @@
 17467	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 17468	ItemNotReady
 17469	ItemNotReady
-17470	CastOk	g
+17470	CastOk
 17471	CastOk
 17472	CastOk
 17473	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d
@@ -13497,7 +13497,7 @@
 17682	CastOk	b c:melee-hit-taken,melee-swing,mount d f g i
 17683	CastOk
 17684	CastOk
-17685	CastOk	g
+17685	CastOk
 17686	CastOk	b c:melee-hit-taken,melee-swing,mount
 17687	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 17688	CastOk
@@ -14053,7 +14053,7 @@
 18363	CastOk	b c:move,turn,melee-hit-taken,cast,stand-up d
 18364	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 18367	DontReport
-18368	CastOk	g
+18368	CastOk
 18369	CastOk
 18371	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up i
 18372	CastOk
@@ -14803,7 +14803,7 @@
 19316	CastOk
 19317	CastOk
 19318	CastOk
-19319	CastOk	g
+19319	CastOk
 19320	CastOk
 19321	CastOk
 19322	CastOk
@@ -15074,7 +15074,7 @@
 19629	CastOk
 19630	CastOk
 19631	CastOk	b c:melee-hit-taken,melee-swing,mount h
-19632	CastOk	e g
+19632	CastOk	e
 19633	CastOk	g
 19634	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up i
 19635	CastOk
@@ -15084,9 +15084,9 @@
 19639	CastOk	g
 19640	CastOk
 19641	CastOk	b c:melee-hit-taken,melee-swing,mount
-19642	CastOk	g
+19642	CastOk
 19643	CastOk	b c:melee-hit-taken,melee-swing,mount g
-19644	CastOk	g
+19644	CastOk
 19645	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d
 19646	BadTargets
 19647	CastOk	e f g
@@ -15375,7 +15375,7 @@
 19980	CastOk	d
 19981	CastOk	d
 19982	CastOk	d
-19983	CastOk	e g
+19983	CastOk	e
 19984	CastOk
 19985	CastOk
 19986	CastOk
@@ -16020,7 +16020,7 @@
 20671	CastOk
 20672	CastOk	b c:move,turn,melee-hit-taken,mount,stand-up
 20676	CastOk
-20677	CastOk	g
+20677	CastOk
 20678	CastOk	d f g
 20679	CastOk	f g
 20680	CastOk	d f
@@ -16033,7 +16033,7 @@
 20687	CastOk	d f
 20688	triggered:EquippedItem
 20690	CastOk	f g
-20691	CastOk	g
+20691	CastOk
 20692	CastOk	d g
 20693	DontReport
 20694	CastOk
@@ -17056,7 +17056,7 @@
 22413	CastOk
 22414	CastOk	d f g
 22415	CastOk	b c:melee-hit-taken,melee-swing,mount d g i
-22416	CastOk	g
+22416	CastOk
 22417	CastOk	b c:move,turn,cast,mount,stand-up f i
 22418	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up i
 22419	CastOk	b c:melee-hit-taken,melee-swing,mount
@@ -17067,7 +17067,7 @@
 22424	CastOk	b c:melee-hit-taken,melee-swing,mount
 22425	CastOk	d
 22426	CastOk	b c:melee-hit-taken,melee-swing,mount g h
-22427	CastOk	g
+22427	CastOk
 22428	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up g
 22429	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 22430	ItemNotReady
@@ -18348,7 +18348,7 @@
 24013	DontReport
 24014	DontReport
 24015	DontReport
-24016	CastOk	g
+24016	CastOk
 24017	DontReport
 24018	triggered:DontReport
 24019	CastOk
@@ -18640,7 +18640,7 @@
 24330	CastOk
 24331	OnlyShapeshift
 24332	CastOk	b c:melee-hit-taken,melee-swing,mount g
-24333	CastOk	e g
+24333	CastOk	e
 24334	CastOk	d
 24335	triggered:DontReport
 24336	CastOk	b c:melee-hit-taken,melee-swing,mount i
@@ -18965,7 +18965,7 @@
 24668	CastOk	d f g
 24669	CastOk	d
 24670	ItemNotReady
-24671	CastOk	g
+24671	CastOk
 24672	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up g i
 24673	CastOk	b c:melee-hit-taken,melee-swing,mount i
 24674	CastOk	b c:melee-hit-taken,melee-swing,mount g i
@@ -19430,7 +19430,7 @@
 25170	CastOk
 25171	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d
 25172	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
-25174	CastOk	g
+25174	CastOk
 25175	CastOk
 25176	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 25177	CastOk	b c:melee-hit-taken,melee-swing,mount d
@@ -20956,7 +20956,7 @@
 27791	CastOk
 27792	CastOk
 27793	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
-27794	CastOk	e g
+27794	CastOk	e
 27795	CastOk
 27796	CastOk
 27797	CastOk
@@ -21681,7 +21681,7 @@
 28908	DontReport
 28909	DontReport
 28911	OnlyStealthed
-28913	CastOk	g
+28913	CastOk
 28919	DontReport
 28920	DontReport
 28921	DontReport
@@ -22119,7 +22119,7 @@
 29898	CastOk
 29899	CastOk
 29910	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
-29915	CastOk	g
+29915	CastOk
 29931	CastOk	g
 29934	CastOk	g
 29936	CastOk
