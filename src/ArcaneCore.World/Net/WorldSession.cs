@@ -717,6 +717,13 @@ public sealed partial class WorldSession : IPlayerSession
             HeuristicsClientPacket(opcode, payload);
             if (opcode == WorldOpcode.CmsgPing)
             {
+                // Answered in any state (vmangos parity); before authentication it is under the netguard packet budget, so an
+                // unauthenticated socket cannot draw a pong per ping until the pre-auth timeout.
+                if (_state == SessionState.Connected && ApplyPacketBudget(opcode) is { } pingVerdict)
+                {
+                    return pingVerdict;
+                }
+
                 if (!TryHandlePing(payload)) // vmangos answers pings in WorldSocket, in any state
                 {
                     _logger.LogWarning("[{Endpoint}] malformed {Opcode}; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
@@ -745,35 +752,9 @@ public sealed partial class WorldSession : IPlayerSession
                 return false;
             }
 
-            // Net:Protection:World* packet budgets (docs/ops/netguard.md): over a budget the packet is dropped, a flood closes the connection.
-            if (_packetLimiter is not null)
+            if (ApplyPacketBudget(opcode) is { } verdict)
             {
-                switch (_packetLimiter.OnPacket((ushort)opcode, Clock.Milliseconds()))
-                {
-                    case OpcodeRateVerdict.Flood:
-                        if (_guard is not null)
-                        {
-                            _guard.ReportPacketFlood(RemoteEndpoint);
-                        }
-                        else
-                        {
-                            _logger.LogWarning("[{Endpoint}] packet flood over {Limit} packets per second; disconnecting", RemoteEndpoint, _protection.WorldFloodPacketsPerSecond);
-                        }
-
-                        return false;
-                    case OpcodeRateVerdict.Dropped:
-                        _budgetDropped = true;
-                        if (_guard is not null)
-                        {
-                            _guard.ReportPacketDropped(RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
-                        }
-                        else if (_packetGate.TryEnter(out int suppressed))
-                        {
-                            _logger.LogWarning("[{Endpoint}] {Opcode} over the connection's packet budget; dropped ({Suppressed} more dropped since the last line)", RemoteEndpoint, WorldOpcodeNames.GetName(opcode), suppressed);
-                        }
-
-                        return true;
-                }
+                return verdict;
             }
 
             if (!_opcodes.TryGet(opcode, out OpcodeHandler handler))
@@ -866,6 +847,47 @@ public sealed partial class WorldSession : IPlayerSession
         while (_worldQueue.TryDequeue(out QueuedPacket packet))
         {
             Release(packet);
+        }
+    }
+
+    /// <summary>
+    /// Net:Protection:World* packet budgets (docs/ops/netguard.md): null lets the packet through; true means it was dropped over a
+    /// budget (the connection stays); false means a flood (close the connection).
+    /// </summary>
+    private bool? ApplyPacketBudget(WorldOpcode opcode)
+    {
+        if (_packetLimiter is null)
+        {
+            return null;
+        }
+
+        switch (_packetLimiter.OnPacket((ushort)opcode, Clock.Milliseconds()))
+        {
+            case OpcodeRateVerdict.Flood:
+                if (_guard is not null)
+                {
+                    _guard.ReportPacketFlood(RemoteEndpoint);
+                }
+                else
+                {
+                    _logger.LogWarning("[{Endpoint}] packet flood over {Limit} packets per second; disconnecting", RemoteEndpoint, _protection.WorldFloodPacketsPerSecond);
+                }
+
+                return false;
+            case OpcodeRateVerdict.Dropped:
+                _budgetDropped = true;
+                if (_guard is not null)
+                {
+                    _guard.ReportPacketDropped(RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
+                }
+                else if (_packetGate.TryEnter(out int suppressed))
+                {
+                    _logger.LogWarning("[{Endpoint}] {Opcode} over the connection's packet budget; dropped ({Suppressed} more dropped since the last line)", RemoteEndpoint, WorldOpcodeNames.GetName(opcode), suppressed);
+                }
+
+                return true;
+            default:
+                return null;
         }
     }
 
@@ -990,8 +1012,13 @@ public sealed partial class WorldSession : IPlayerSession
             return false;
         }
 
+        // An earlier session of the account may hold values not yet written (throttled or queued): take them before the read and lay
+        // them over the loaded settings, so this session serves the newest blob. Nothing here waits for the account data queue.
+        AccountDataFeature? accountData = Services.GetService<AccountDataFeature>() is { IsAttached: true } attached ? attached : null;
+        AccountDataFeature.PendingAccountData? pendingData = accountData?.Snapshot(stored.Id);
         AccountSettings settings = await Services.GetRequiredService<IAccountDataStore>()
             .GetAsync(stored.Id).ConfigureAwait(false);
+        AttachAccountData(accountData, stored.Id, settings, pendingData);
 
         lock (_sendLock)
         {
@@ -1109,6 +1136,32 @@ public sealed partial class WorldSession : IPlayerSession
         }
     }
 
+    /// <summary>The account data feature this session is counted in (set once, by <see cref="AttachAccountData"/>; released by <see cref="Close"/>).</summary>
+    private AccountDataFeature? _accountDataFeature;
+
+    private int _accountDataAccountId;
+
+    /// <summary>Count this session in the account's throttle state and overlay the values an earlier session left unwritten. Synchronous, so a session that attached always reaches <see cref="Close"/>.</summary>
+    private void AttachAccountData(AccountDataFeature? feature, int accountId, AccountSettings settings, AccountDataFeature.PendingAccountData? pending)
+    {
+        if (feature is null)
+        {
+            return;
+        }
+
+        lock (_sendLock)
+        {
+            if (_state == SessionState.Closed)
+            {
+                return; // Close already ran and would never release it
+            }
+
+            feature.AttachSession(accountId, settings, pending);
+            _accountDataAccountId = accountId;
+            Volatile.Write(ref _accountDataFeature, feature);
+        }
+    }
+
     private void Close()
     {
         lock (_sendLock)
@@ -1124,6 +1177,10 @@ public sealed partial class WorldSession : IPlayerSession
             _packetCapture = null;
             _outbound.Writer.TryComplete();
         }
+
+        // The 1.12 client uploads its changed settings in a burst as it logs out: the last session of the account queues what the throttle
+        // still holds (the feature writes from a scope of its own, so this session's scope ending does not matter).
+        Interlocked.Exchange(ref _accountDataFeature, null)?.EndSession(_accountDataAccountId);
 
         _registry.Unregister(this);
         DiscardQueuedPackets(); // a closed session retains nothing

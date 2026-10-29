@@ -269,7 +269,7 @@ a persistent pet instance store, effect 109, or guardian/mini-pet revival.
   (`Pet.cpp:1274-1480`) needs the stats lane's per-class level stats and the `pet_levelstats` data
   (a World table, planned P4). The pet name and `UNIT_FIELD_PETNUMBER` are not generated.
 * **Map change (wave 2).** A far teleport puts the controlled pet away before the owner leaves its map and brings it back in the
-  new map; a same-map teleport does so when the pet is beyond the grid activation distance of the destination
+  new map; a same-map teleport does so when the pet is beyond the grid activation distance of the destination (unless the teleport carries NotUnsummonPet, as the under-map recall does)
   (`PetTeleportFollow`, `SummonService.UnsummonPetTemporarily` / `ResummonTemporarilyUnsummonedPet`; vmangos
   `UnsummonPetTemporaryIfAny`, `ResummonPetTemporaryUnSummonedIfAny`, Player.cpp:1911-1921, 2045-2048, 20911-20940,
   MovementHandler.cpp:197-198, 274-284). A hunter pet comes back from its current-pet snapshot; a demon or other summoned pet keeps

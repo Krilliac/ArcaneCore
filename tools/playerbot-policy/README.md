@@ -45,7 +45,7 @@ rewards or examples produced by Claude or any other LLM (Anthropic's terms prohi
    - A decision whose window is not entirely inside health coverage (the start of a run, a restart, or a file from a build that writes
      no health records, such as the Node1 fleet build `ea054aaa`) cannot be checked: it is kept and counted as *unverified*, with a
      warning. With no health records at all the tools say loudly that the filter could not apply.
-   - `--tick-log WORLD.jsonl` (repeatable) adds windows from the world's JSON-lines log (`Logging:Json`), so old telemetry can still
+   - `--tick-log WORLD_LOG` (repeatable) adds windows from the world's log in either format (`Logging:ArcaneCore:Format` = `Json` or `Text`; `logs/*.jsonl` or `logs/*.log`; the format is detected per line, and each rolled or fallback segment is its own file to pass), so old telemetry can still
      be filtered: each `TickOverrun` warning gives `[ts - S s, ts]` ("in the last S s"; the first warning after a start has no such
      part and 30 s, the default `WarnIntervalSeconds`, is assumed). These windows are coarser than health records, because the
      warning is rate limited, and the log's own time span counts as covered. The log and the telemetry must come from the same run

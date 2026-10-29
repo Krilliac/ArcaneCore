@@ -177,7 +177,7 @@ File name: `%03u%02u%02u.map` of map id, tile X, tile Y, where tile X =
 
 ### Teleports (`src/ArcaneCore.Game/Teleport/`, `src/ArcaneCore.World/Teleport/`)
 
-Hooks for other areas: `NearTeleportStarting(player, destination)` before the near teleport ack is sent,
+Hooks for other areas: `NearTeleportStarting(player, destination, options)` before the near teleport ack is sent,
 `FarTeleportExecuting(player)` while the player is still in its old map, `TeleportCompleted(player)` after a near ack or the arrival in
 the new map. The pets use them to take the player's pet along (`PetTeleportFollow`, docs/integration/pets.md).
 

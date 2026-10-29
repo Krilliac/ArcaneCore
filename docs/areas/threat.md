@@ -150,8 +150,13 @@ own migrations add 313 further entries (267 with a multiplier other than 1, most
 world database. No dump is bundled and none was available while this was written, so the vmangos dialect is built from the loader's
 SELECT, not from a real vmangos dump.
 
-Import is a library call, like the world-state importer (`SpellThreatDumpImporter.Parse` + `ImportAsync`); it is not wired into the
-unified `arcane-content-importer` CLI (the table has no entry in `ContentTableSpecs` and no drift test).
+Import. `arcane-content-importer spell-threat <dump>... --database <file>` (or `--provider` with `--connection-string`) replaces `spell_threat`
+with the dump's rows for build 5875 in one transaction, for the classic-db and the vmangos layout (rows whose build range misses 5875 are dropped
+and counted); `--dry-run` parses and counts without a database. `plan` lists the table with the columns it reads (`ContentTableSpecs`). A running
+world picks the rows up with `.reload spell_threats`. The parser reads one `INSERT` per line, as `mysqldump` writes it; the multi-line `INSERT`
+layout of `sql/base/mangos.sql` is not read (the command then reports no rows). Only the classic-db table is imported by the command; vmangos'
+own migrations are not replayed as a second source (follow-up: an optional migrations directory like `--player-stats-migrations-dir`, classic-db
+rows winning on conflict).
 
 Provider coverage. The schema and store tests are theories over `TestDatabases.AvailableProviders`; on this machine only SQLite ran. MariaDB DDL
 is not transactional and commits implicitly, so the step is only re-runnable (the upgrade test drops the table and runs the step twice);

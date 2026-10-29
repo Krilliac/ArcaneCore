@@ -31,7 +31,7 @@ public sealed class TouchOfWeaknessScript : ISpellScript
             return;
         }
 
-        context.System.CastSpell(context.Caster, hexSpell, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true);
+        context.System.CastSpell(context.Caster, hexSpell, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true);
     }
 }
 

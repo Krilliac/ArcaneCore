@@ -16,7 +16,8 @@ public sealed class SpellLineOfSightTests
     {
         using var kit = new SpellTestKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.World.RunTick(0);
         kit.Spellbook.Teach(caster, CastBolt);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);

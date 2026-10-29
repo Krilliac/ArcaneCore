@@ -145,6 +145,19 @@ class FilterTests(unittest.TestCase):
         h.add_tick_log(path)
         return h
 
+    def test_a_text_format_tick_log_gives_the_same_windows_as_the_json_one(self):
+        warn = "2026-10-15 04:26:13.650 WARN ArcaneCore.Kernel.Ops.Watchdog.TickMonitor world tick overran its 100 ms budget 10 time(s) in the last 30 s: frame p50 61 ms"
+        info = "2026-10-15 04:30:00.000 INFO hello"
+        end = health_filter._unix_ms("2026-10-15T04:26:13.650Z")
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "world.log")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(warn + "\n" + info + "\n")
+            h = health_filter.Health()
+            self.assertEqual(1, h.add_tick_log(path))
+        self.assertIn((end - 31_000, end, 10), h.intervals)
+        self.assertEqual(1, len(h.log_spans))
+
     def test_the_tail_of_a_tick_log_is_not_covered_and_warning_windows_are_widened(self):
         warn = ('{"ts":"2026-10-15T04:26:13.650Z","level":"Warning","eventId":7101,"eventName":"TickOverrun",'
                 '"message":"world tick overran its 100 ms budget 10 time(s) in the last 30 s: frame p50 61 ms"}')

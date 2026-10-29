@@ -64,6 +64,7 @@ public static class WorldPersistenceProbes
         Queue(registry, "gm audit", () => sp.GetService<GmAuditFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
         Queue(registry, "groups", () => sp.GetService<SocialGroupPersistenceFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
         Queue(registry, "account addresses", () => sp.GetService<AccountAddressFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
+        Queue(registry, "account data", () => sp.GetService<Handlers.AccountDataFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
     }
 
     private static void Queue<T>(

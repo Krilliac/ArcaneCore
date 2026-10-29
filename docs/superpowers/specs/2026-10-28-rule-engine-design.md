@@ -62,12 +62,12 @@ rule
   owner_id          int
   event_type        smallint
   event_param1..4   int
-  phase_mask        int      -- 0 = all phases (EventAI/SmartAI phases)
+  phase_mask        int      -- positive: bit n = fires in phase n (0..31); 0 = all phases (see "Phase masks" in 6)
   filter_id         int      -- rule_subject_filter.id, 0 = none
   chance_pct        tinyint  -- 0..100, applied per firing unless STABLE_SHARE flag
   condition_id      int      -- conditions.condition_entry, 0 = none
   cooldown_min_ms   int
-  cooldown_max_ms   int
+  cooldown_max_ms   int      -- at most 86 400 000 (24 h, P0 cap; larger is rejected); delay_ms has the same cap
   priority          smallint -- order among rules firing on the same event
   flags             int      -- repeatable, combat-only, out-of-combat-only, debug-trace, stable-share, ...
   enabled           tinyint
@@ -168,6 +168,11 @@ playerbot_goal      -- the goal catalogue, keyed by the existing enum value
      - The old source tables stay only as import input, while dumps still arrive in that format.
 5. **Ref-core fixes after parity.** Divergences from retail found during conversion are recorded and fixed in their own PRs afterwards (pre-authorised; retail wins), so a parity diff never hides a behaviour change.
 
+**Phase masks (verified against the references).** The rule `phase_mask` is positive: bit n set means the rule fires in phase n, and 0 means every phase. The two script systems the converters read differ from it:
+
+- EventAI (mangos-classic 8ec338a1704e7dcb1c0213eb7ed58f9231ade40f, `src/game/AI/EventAI/CreatureEventAI.cpp:263-264`) stores an *inverse* mask: an event is skipped when bit `m_Phase` is set, and phase 0 is an ordinary phase. The converter writes `phase_mask = ~event_inverse_phase_mask` (32 bits), and 0 when the inverse mask is 0. An inverse mask of all 32 bits (the event never fires) would invert to 0 (every phase): the converter writes such a row disabled instead.
+- SmartAI (TrinityCore 44b718c1d79260d417fbb8dd852586aec2d05f1e, `src/server/game/AI/SmartScripts/SmartScript.cpp:4364-4369`, used at :3181 and :3782) stores a positive mask in which bit n means phase n + 1; a zero mask always passes, and phase 0 matches no non-zero mask. The converter writes `phase_mask = event_phase_mask << 1` (and 0 for 0).
+
 ## 7. Phased roadmap
 
 | Phase | Scope | Done when |
@@ -223,9 +228,9 @@ playerbot_goal      -- the goal catalogue, keyed by the existing enum value
 | 27 | Guard posts | `GuardPostTable.cs:33-45` | Data | P6 |
 | 28 | Profession specialization gossip | `ProfessionSpecializationGossip.cs` | Rules | P6 |
 | 29 | Bot BG buffs | `PlayerbotBattlegroundBuffs.cs:51-131` | Rules | P6 |
-| 30 | Loot `condition_id` (stored, evaluation unverified) | `GameObjectLootRows.cs:228` | Verify; wire to conditions | P0 |
+| 30 | Loot `condition_id` (verified in P0: evaluated per recipient by `LootService.Generate` through `ConditionFeature`, references included; `LootConditionsWorldTests`) | `GameObjectLootRows.cs:228` | Verified; nothing to wire | P0 (done) |
 
-The inventory is a living list. New candidates go in this table, and a test (`RuleInventoryTests`, added in P0) can later grep for known hard-coded patterns, such as magic SCRIPT_COMMAND switches, to catch regressions back into code.
+The inventory is a living list. New candidates go in this table, and a test (`RuleInventoryTests`, deferred from P0 to P2, when the first converters land and there are known patterns to pin) can later grep for known hard-coded patterns, such as magic SCRIPT_COMMAND switches, to catch regressions back into code.
 
 ## 10. Left to the builder
 
@@ -263,3 +268,14 @@ The inventory is a living list. New candidates go in this table, and a test (`Ru
   - Rows become the source of the values.
   - An existing `*Options` key still overrides its row value for one deprecation cycle and logs a warning at startup.
   - The keys are removed later in their own PR, with docs and `DocKeyAuditTests` updated together.
+
+### Notes from P0 for the host phases
+
+- A delayed run (`PendingRun`) keeps a strong reference to its invoker subject until it runs or the state is reset. P1 should keep the invoker's guid in the pending run and re-resolve it when the run resumes, so a despawned or logged-out invoker is neither kept alive nor acted on.
+- Module vocabularies (`RuleVocabulary.WithModule`) are API only in P0: no module host feeds them yet, and `RuleFeature` builds from `RuleVocabulary.Default`.
+- No spell or creature existence check is wired at runtime (`RuleBuildOptions.SpellExists` and `CreatureEntryExists` are unit-tested), because the spell and creature features attach after `RuleFeature`. The first host phase that uses `cast` or creature entries wires them and re-validates on reload.
+- `ConditionTableGate` evaluates without a player or a source; a host that needs player conditions supplies its own `IRuleConditionGate`.
+- The evaluator calls host code (`RuleEvent.Matches`, `RuleTarget.Resolve`, `RuleAction.Execute`, the condition gate) without a try/catch. The first host wraps its `Fire`/`Update` calls in the fault-ledger idiom, and guards against an action that synchronously fires the same event again (`MaxListDepth` limits list nesting only).
+- A chain of more than 8 lists with no delay between them passes the catalog and is cut at run time (`DepthLimited`); the first host phase either rejects such chains at load or keeps this documented.
+- The 24-hour caps on `cooldown_max_ms` and `delay_ms` may reject converted EventAI/SmartAI/DB-script rows with longer timers; the P2 converters check their corpus against them.
+- The evaluator counters (`RuleEvaluatorCounters`) belong to each host's evaluator; P0 has none in the world, so no command prints them yet.

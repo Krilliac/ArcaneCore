@@ -305,8 +305,12 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             : null;
         if (character is null || character.AccountId != session.AccountId)
         {
-            session.Logger.LogWarning("[{Endpoint}] login for character {Guid} not owned by '{Account}'",
-                session.RemoteEndpoint, rawGuid, session.AccountName);
+            if (ClientWarningGates.TryEnter(session, "foreign-login", out int suppressed))
+            {
+                session.Logger.LogWarning("[{Endpoint}] login for character {Guid} not owned by '{Account}' ({Suppressed} more since the last line)",
+                    session.RemoteEndpoint, rawGuid, session.AccountName, suppressed);
+            }
+
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginNoCharacter));
             return;
         }

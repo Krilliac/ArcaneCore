@@ -82,13 +82,18 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
             return;
         }
 
+        ResolveSpells()?.System.CastSpell(player, SpellHonorlessTarget, SpellCastTargets.ForSelf(), triggered: true);
+    }
+
+    private SpellFeature? ResolveSpells()
+    {
         if (!_spellsResolved)
         {
             _spells = services.GetService<SpellFeature>();
             _spellsResolved = true;
         }
 
-        _spells?.System.CastSpell(player, SpellHonorlessTarget, SpellCastTargets.ForSelf(), triggered: true);
+        return _spells;
     }
 
     private static void SendBeforeAddToMap(Player player)
@@ -99,8 +104,14 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
         }
     }
 
-    private static void SendAfterAddToMap(Player player)
+    private void SendAfterAddToMap(Player player)
     {
+        // vmangos HandleMoveWorldportAckOpcode (MovementHandler.cpp:189-191): the mount allow check on far arrival only, after the map add.
+        if (ResolveSpells() is { } spells)
+        {
+            MapEntryMountRule.Enforce(spells.System, player);
+        }
+
         if (player.Session is WorldSession session)
         {
             LoginSequence.SendInitialPacketsAfterAddToMap(session, player);
