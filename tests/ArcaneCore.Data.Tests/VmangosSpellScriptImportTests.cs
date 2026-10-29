@@ -102,6 +102,25 @@ public sealed class VmangosSpellScriptImportTests
     }
 
     [Fact]
+    public void TheCmangosScriptNameBinding_NamedSpellScriptsToo_IsNotReadAsSteps()
+    {
+        // classic-db z2815 has its own spell_scripts: the ScriptName binding (Id, ScriptName), no DB script steps; its INSERT names no
+        // columns, so they come from the CREATE TABLE (its first rows).
+        DbScriptDumpImporter importer = Read("""
+            CREATE TABLE `spell_scripts` (
+              `Id` int(11) NOT NULL,
+              `ScriptName` char(64) NOT NULL,
+              PRIMARY KEY (`Id`)
+            );
+            INSERT INTO `spell_scripts` VALUES (10,'spell_blizzard'),(433,'spell_food_animation');
+            """);
+
+        Assert.Empty(importer.VmangosSpellScriptIds);
+        Assert.Empty(importer.VmangosSpellScriptRejections);
+        Assert.False(importer.HasRows);
+    }
+
+    [Fact]
     public void ClassicDbRows_WinOverVmangosRowsOfTheSameSpell()
     {
         DbScriptDumpImporter importer = Read($"""

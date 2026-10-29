@@ -126,7 +126,12 @@ public sealed class DbScriptDumpImporter
                 ReadWaypoint(row);
                 break;
             case VmangosSpellScriptTranslator.Table:
-                ReadVmangosSpellScript(row);
+                // cmangos and classic-db have a spell_scripts table too: the script-name binding (Id, ScriptName), not DB script steps.
+                if (row.Has("command"))
+                {
+                    ReadVmangosSpellScript(row);
+                }
+
                 break;
             case "conditions":
                 ReadCondition(row);

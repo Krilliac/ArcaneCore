@@ -203,14 +203,6 @@ public static class ContentTableSpecs
                 "EffectPointsPerComboPoint", "EffectChainTarget", "EffectMultipleValue", "EffectMechanic", "EffectImplicitTargetA",
                 "EffectImplicitTargetB", "EffectRadiusIndex", "EffectApplyAuraName", "EffectItemType", "EffectMiscValue", "EffectTriggerSpell",
             ], []),
-        // World schema 62: vmangos spell_scripts, translated into dbscripts_on_spell (VmangosSpellScriptTranslator; no key in vmangos either).
-        new("spell_scripts",
-            [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),
-             new KeyColumn("datalong2"), new KeyColumn("data_flags"), new KeyColumn("condition_id")],
-            [
-                "datalong3", "datalong4", "target_param1", "target_param2", "target_type", "dataint", "dataint2", "dataint3", "dataint4",
-                "x", "y", "z", "o",
-            ], []),
         new("script_waypoint", [new KeyColumn("Entry"), new KeyColumn("PathId"), new KeyColumn("Point")],
             ["PositionX", "PositionY", "PositionZ", "Orientation", "WaitTime", "ScriptId"], []),
         new("creature_template_spells", [new KeyColumn("entry"), new KeyColumn("setId")], Enumerable.Range(1, 10).Select(i => "spell" + i), []),
