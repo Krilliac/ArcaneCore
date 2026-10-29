@@ -51,6 +51,40 @@ public static class NpcServiceDbcReaders
         return rows;
     }
 
+    /// <summary>ChrRaces.dbc field 14 is the starting taxi mask (vmangos ChrRacesEntryfmt, DBCStructure.h:159; PlayerTaxi.cpp:33 reads it).</summary>
+    private const int ChrRacesStartingTaxiField = 14;
+
+    /// <summary>Build-5875 ChrRaces.dbc width (ClientDbcLayouts "niixiixxiiiiixixissssssssxxxx", 29 fields).</summary>
+    private const int ChrRacesFieldCount = 29;
+
+    public static IReadOnlyList<RaceTaxiStart> LoadRaceTaxiStarts(string path) => ReadRaceTaxiStarts(DbcFile.Load(path));
+
+    /// <summary>
+    /// One <see cref="RaceTaxiStart"/> per ChrRaces.dbc row that has a non-zero starting taxi mask (a zero mask is the same as no row).
+    /// A race id above 255 cannot be keyed by the byte <c>race</c> column and is refused.
+    /// </summary>
+    public static IReadOnlyList<RaceTaxiStart> ReadRaceTaxiStarts(DbcFile file)
+    {
+        Require(file, ChrRacesFieldCount, "ChrRaces.dbc");
+        var rows = new List<RaceTaxiStart>(file.RecordCount);
+        for (int row = 0; row < file.RecordCount; row++)
+        {
+            uint race = file.GetUInt32(row, 0);
+            uint mask = file.GetUInt32(row, ChrRacesStartingTaxiField);
+            if (race > byte.MaxValue)
+            {
+                throw new InvalidDataException($"ChrRaces.dbc race id {race} does not fit race_taxi_start.race");
+            }
+
+            if (mask != 0)
+            {
+                rows.Add(new RaceTaxiStart { Race = (byte)race, Mask = mask });
+            }
+        }
+
+        return rows;
+    }
+
     /// <summary>Canonical SkillLineAbility.dbc width (vmangos DBCfmt.h:68 "niiiixxiiiiixxi").</summary>
     public const int SkillLineAbilityFields = 15;
 
