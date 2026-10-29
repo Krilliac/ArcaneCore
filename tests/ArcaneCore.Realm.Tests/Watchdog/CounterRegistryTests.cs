@@ -65,6 +65,7 @@ public sealed class CounterRegistryTests
         Assert.Equal(["a", "b"], _registry.Counters.ToArray().Select(c => c.Name));
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task ConcurrentIncrements_AreExact_AndSnapshotsAreMonotonicPerCounter_WhileRegistrationsHappen()
     {

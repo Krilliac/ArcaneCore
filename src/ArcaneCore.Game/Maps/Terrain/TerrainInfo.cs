@@ -13,7 +13,8 @@ namespace ArcaneCore.Game.Maps.Terrain;
 /// empty <c>GridMap</c>: no height (<see cref="TerrainTile.InvalidHeightValue"/>), area flag 0
 /// and no liquid — lookups degrade, nothing fails.
 /// </para>
-/// <para>Thread affinity: world thread.</para>
+/// <para>Thread affinity: world thread, except <see cref="TryGetLoadedHeight"/> and <see cref="TryGetLoadedLiquidStatus"/>, which a map thread
+/// outside the serial gate may call for tiles already in memory (tiles are freed only by the world tick's clean-up, never during the maps phase).</para>
 /// </summary>
 public sealed class TerrainInfo
 {
@@ -71,6 +72,32 @@ public sealed class TerrainInfo
         }
 
         height = tile.GetHeight(x, y);
+        return true;
+    }
+
+    /// <summary>
+    /// <see cref="GetLiquidStatus"/> from a tile already in memory, never loading one (a ground drape on a map thread outside the serial
+    /// gate; the slot is read once, like <see cref="TryGetLoadedHeight"/>). False, with nothing else meaningful, when the tile is not in memory.
+    /// </summary>
+    public bool TryGetLoadedLiquidStatus(float x, float y, float z, LiquidTypeFlags requiredType, out LiquidStatus status, out LiquidData data)
+    {
+        status = LiquidStatus.NoWater;
+        data = default;
+        TerrainTile tile;
+        if (TerrainTile.TileOf(x, y) is not { } index)
+        {
+            tile = TerrainTile.Empty;
+        }
+        else if (Volatile.Read(ref _tiles[(index.X * Size) + index.Y]) is { } loaded)
+        {
+            tile = loaded;
+        }
+        else
+        {
+            return false;
+        }
+
+        status = LiquidStatusOn(tile, x, y, z, requiredType, out data);
         return true;
     }
 

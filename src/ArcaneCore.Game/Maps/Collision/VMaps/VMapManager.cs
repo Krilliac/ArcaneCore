@@ -17,13 +17,19 @@ namespace ArcaneCore.Game.Maps.Collision.VMaps;
 /// the world thread. A corrupt tile is dropped whole; a spawn whose model is missing or corrupt,
 /// whose slot is out of range or whose name is not a plain file name is skipped.
 /// </para>
-/// <para>Thread affinity: world thread.</para>
+/// <para>Thread affinity: world thread (or inside the serial gate). The exception is a ground drape in shared mode
+/// (<see cref="VMapSharedReader"/>): <see cref="GetModelHeight"/> then reads loaded tiles from any map thread under the read side of
+/// one lock, and every change of the loaded tiles takes its write side.</para>
 /// </summary>
 public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLifecycle, ICollisionTilePrefetch, ICollisionTileDemand
 {
     private readonly string _directory;
     private readonly ILogger _logger;
     private readonly Dictionary<uint, VMapTree?> _trees = [];
+
+    // Read side: shared ground drapes on map threads outside the serial gate (GetModelHeightShared). Write side: every change of _trees,
+    // _emptyTiles and the loaded tiles of a VMapTree (the install or release only, never a file read or parse). See VMapSharedReader.
+    private readonly ReaderWriterLockSlim _sharedLock = new(LockRecursionPolicy.NoRecursion);
 
     // Tiles whose load was attempted and whose vmtile file does not exist (vmangos StaticMapTree::LoadMapTile: loaded, empty). Kept apart from
     // VMapTree.IsTileLoaded, which keeps meaning "a model tile was read" (anti-cheat HasModels uses it). Cleared on unload.
@@ -72,7 +78,16 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         }
 
         VMapTree? tree = LoadTree(mapId);
-        _trees[mapId] = tree;
+        _sharedLock.EnterWriteLock();
+        try
+        {
+            _trees[mapId] = tree;
+        }
+        finally
+        {
+            _sharedLock.ExitWriteLock();
+        }
+
         return tree;
     }
 
@@ -104,7 +119,15 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
                 {
                     // vmangos StaticMapTree::LoadMapTile: a missing tile file is a tile without models. Remembered apart from the tree's
                     // loaded tiles so IsTileLoaded (and anti-cheat HasModels) stay false; CoverageAt answers Loaded for it.
-                    _emptyTiles.Add((mapId, tileX, tileY));
+                    _sharedLock.EnterWriteLock();
+                    try
+                    {
+                        _emptyTiles.Add((mapId, tileX, tileY));
+                    }
+                    finally
+                    {
+                        _sharedLock.ExitWriteLock();
+                    }
                 }
 
                 return false;
@@ -123,18 +146,36 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
             }
         }
 
-        tree.AddTile((tileX, tileY), Instantiate(tree, spawns, path));
+        List<(ModelInstance Instance, uint Slot)> instances = Instantiate(tree, spawns, path); // file and model reads outside the lock
+        _sharedLock.EnterWriteLock();
+        try
+        {
+            tree.AddTile((tileX, tileY), instances);
+        }
+        finally
+        {
+            _sharedLock.ExitWriteLock();
+        }
+
         return true;
     }
 
     /// <summary>Release a tile's models (vmangos <c>VMapManager2::unloadMap</c>).</summary>
     public void UnloadTile(uint mapId, int tileX, int tileY)
     {
-        _emptyTiles.Remove((mapId, tileX, tileY)); // a reload tries the file again
-        _onDemand.Remove((mapId, tileX, tileY));
-        if (_trees.GetValueOrDefault(mapId) is { } tree)
+        _onDemand.Remove((mapId, tileX, tileY)); // owner-only bookkeeping: no shared reader looks at it
+        _sharedLock.EnterWriteLock();
+        try
         {
-            tree.RemoveTile((tileX, tileY));
+            _emptyTiles.Remove((mapId, tileX, tileY)); // a reload tries the file again
+            if (_trees.GetValueOrDefault(mapId) is { } tree)
+            {
+                tree.RemoveTile((tileX, tileY));
+            }
+        }
+        finally
+        {
+            _sharedLock.ExitWriteLock();
         }
     }
 
@@ -174,6 +215,8 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
         }
 
         string[] unused = [.. _models.Where(m => m.Value is not null && !used.Contains(m.Key)).Select(m => m.Key)];
+        // No lock: _models is read and written by the owner thread only (AcquireModel), a shared reader never looks at it, and the models
+        // its tiles hold stay reachable through their ModelInstance objects, so dropping a cache entry frees nothing a reader uses.
         foreach (string name in unused)
         {
             _models.Remove(name);
@@ -381,6 +424,11 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
     public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
     {
         var point = new Vector3(x, y, z);
+        if (VMapSharedReader.Active)
+        {
+            return HeightEnabled && IsFinite(point) ? GetModelHeightShared(mapId, point, maxSearchDistance) : null;
+        }
+
         if (!HeightEnabled || !IsFinite(point) || _trees.GetValueOrDefault(mapId) is not { } tree)
         {
             return null;
@@ -388,6 +436,56 @@ public sealed class VMapManager : ILineOfSight, IModelCoverage, ICollisionTileLi
 
         return tree.GetHeight(VMapFormat.ToInternal(point), maxSearchDistance);
     }
+
+    /// <summary>
+    /// <see cref="GetModelHeight"/> for a ground drape outside the serial gate (<see cref="VMapSharedReader"/>), from any thread: the same
+    /// <see cref="VMapTree.GetHeight"/> over the same loaded tiles, under the read side of the lock. When the map's tree has not been read
+    /// yet or the model tile under the point is not loaded (and not known to be empty) it answers null and records the abort, so the drape is
+    /// repeated inside the gate, where a tile may be loaded; it never loads anything itself.
+    /// </summary>
+    private float? GetModelHeightShared(uint mapId, Vector3 point, float maxSearchDistance)
+    {
+        // A shared drape takes the read lock once for all its samples (VMapSharedReader.Scope); a bare shared-mode caller takes it per call.
+        bool take = !VMapSharedReader.HoldsLock(_sharedLock);
+        if (take)
+        {
+            _sharedLock.EnterReadLock();
+        }
+
+        try
+        {
+            if (!_trees.TryGetValue(mapId, out VMapTree? tree))
+            {
+                VMapSharedReader.Abort(SharedDrapeAbort.ModelTileNotLoaded);
+                return null;
+            }
+
+            if (tree is null)
+            {
+                return null; // the map has no vmap data: open, as for the owner
+            }
+
+            if (tree.IsTiled
+                && (Terrain.TerrainTile.TileOf(point.X, point.Y) is not { } tile
+                    || !(tree.IsTileLoaded(tile.X, tile.Y) || _emptyTiles.Contains((mapId, tile.X, tile.Y)))))
+            {
+                VMapSharedReader.Abort(SharedDrapeAbort.ModelTileNotLoaded);
+                return null;
+            }
+
+            return tree.GetHeight(VMapFormat.ToInternal(point), maxSearchDistance);
+        }
+        finally
+        {
+            if (take)
+            {
+                _sharedLock.ExitReadLock();
+            }
+        }
+    }
+
+    /// <summary>The lock shared reads hold for reading and every change of the loaded tiles for writing (tests: the write-lock seam).</summary>
+    internal ReaderWriterLockSlim SharedLock => _sharedLock;
 
     public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
     {

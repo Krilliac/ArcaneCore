@@ -37,6 +37,7 @@ internal static class ItemTestData
     public const uint QuestLetter = 90011;
     public const uint QuestLetterQuest = 7020;
     public const uint QuestLetterCopy = 90012;
+    public const uint ResistRing = 90013;
 
     public static IReadOnlyList<ItemTemplate> Templates { get; } =
     [
@@ -63,6 +64,7 @@ internal static class ItemTestData
         new() { Entry = QuestNote, Class = 12, SubClass = 0, Name = "Test Note", DisplayId = 109, StartQuest = QuestNoteQuest },
         new() { Entry = QuestLetterCopy, Class = 12, SubClass = 0, Name = "Test Letter Copy", DisplayId = 111, StartQuest = QuestLetterQuest },
         new() { Entry = QuestLetter, Class = 12, SubClass = 0, Name = "Test Letter", DisplayId = 110, StartQuest = QuestLetterQuest },
+        new() { Entry = ResistRing, Class = 4, SubClass = 0, Name = "Test Resist Ring", DisplayId = 112, InventoryType = 11, HolyRes = 10, FireRes = 7 },
     ];
 
     /// <summary>vmangos playercreateinfo_item for race 1 (human), class 1 (warrior).</summary>

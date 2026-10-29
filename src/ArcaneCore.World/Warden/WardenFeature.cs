@@ -109,7 +109,6 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
 
         int[] accounts = [.. _pendingBans.Where(b => !b.Key.IsCompleted).Select(b => b.Value).Distinct()];
         var ex = new TimeoutException($"{accounts.Length} Warden ban write(s) still pending after {PendingBanStopWait.TotalSeconds:0.###} s at stop (account(s) {string.Join(", ", accounts)}); the ban(s) may be lost");
-        FaultLedger.Shared.Record("warden.ban-stop", ex);
         logger.LogFault("warden.ban-stop", ex, "Warden: {Count} ban write(s) still pending at stop (account(s) {Accounts}); the ban(s) may be lost", accounts.Length, string.Join(", ", accounts));
     }
 
@@ -143,7 +142,6 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("warden.load-checks", ex);
             AnomalyLedger.Shared.Report("warden", "check-fault", "load-checks", $"error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("warden.load-checks", ex, "Warden: loading warden_checks failed; running the configured scans only");
         }
@@ -207,7 +205,6 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("warden.tick", ex);
                 AnomalyLedger.Shared.Report("warden", "check-fault", $"account {session.AccountId}", $"tick error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("warden.tick", ex, "Warden: world tick update faulted for account {AccountId}", session.AccountId);
             }
@@ -269,7 +266,6 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("warden.verdict", ex);
                     AnomalyLedger.Shared.Report("warden", "check-fault", $"account {session.AccountId}", $"verdict subscriber error={ex.GetType().Name}: {ex.Message}");
                     logger.LogFault("warden.verdict", ex, "Warden: Verdict subscriber threw for account {AccountId}", session.AccountId);
                 }
@@ -415,7 +411,6 @@ public sealed partial class WardenFeature(IServiceProvider services, ILogger<War
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("warden.ban", ex);
             AnomalyLedger.Shared.Report("warden", "check-fault", $"account {accountId}", $"ban error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("warden.ban", ex, "Warden: ban of account {Account} failed", accountId);
         }

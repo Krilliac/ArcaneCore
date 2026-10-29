@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Maps.Collision.VMaps;
 using ArcaneCore.Game.Maps.Terrain;
 
 namespace ArcaneCore.Game.Maps.Collision;
@@ -67,7 +68,8 @@ public readonly record struct GroundQuery(
 /// height to detail vertices), so a mesh height kept as a unit's z floats it; <see cref="DrapePath"/> puts every point of a creature leg
 /// on the ground and splits a chord that would pass over or under it (docs/areas/collision-pathing.md, "Ground snap").
 /// <para>
-/// Thread affinity: world thread (or inside the serial gate). The model tree (<c>VMapManager</c>) is world-thread state whose tiles
+/// Thread affinity: world thread (or inside the serial gate), except <see cref="TryDrapePathShared"/>, which a map thread may run outside
+/// it over what is already loaded (shared mode, <see cref="VMapSharedReader"/>). The model tree (<c>VMapManager</c>) is world-thread state whose tiles
 /// are loaded and freed in place, and the terrain tiles are shared by the instances of a map id: never call this from a path-job pool thread.
 /// Allocation: <see cref="TrySnap"/> and <see cref="SnapOrKeep"/> allocate nothing; <see cref="DrapePath"/> allocates its result list.
 /// </para>
@@ -126,6 +128,13 @@ public static class GroundHeight
             return false;
         }
 
+        bool shared = VMapSharedReader.Active;
+        if (shared && (VMapSharedReader.Aborted || query.LoadTiles))
+        {
+            VMapSharedReader.Abort(SharedDrapeAbort.Unsupported); // a drape that already gave up is discarded; loading tiles is the owner's
+            return false;
+        }
+
         if (query.LoadTiles)
         {
             collision.LoadTilesOnDemand(x, y);
@@ -135,6 +144,14 @@ public static class GroundHeight
         float floor;
         if (!query.LoadTiles && !collision.Map.Terrain.TryGetLoadedHeight(x, y, out terrain))
         {
+            if (shared)
+            {
+                // The gated drape keeps the height here (or takes the mesh fallback) and the normal loaders bring the tile in; which of
+                // those is right is the owner's to say.
+                VMapSharedReader.Abort(SharedDrapeAbort.TerrainTileNotLoaded);
+                return false;
+            }
+
             // The terrain tile is not in memory and reading it is a disk read: a drape runs on the world thread, so it keeps the height it
             // had (below, the mesh fallback, which also never loads) and the normal loaders bring the tile in.
             terrain = TerrainTile.InvalidHeightValue;
@@ -142,8 +159,14 @@ public static class GroundHeight
         }
         else
         {
+            // In shared mode the tile was just seen loaded (TryGetLoadedHeight), and a terrain tile is freed only by the clean-up of the world
+            // tick, never during the maps phase, so GetTile finds it without loading.
             terrain = collision.Map.Terrain.GetHeight(x, y, z);
             floor = collision.GetHeight(x, y, z, query.Up, useModels: true, maxSearchDistance: query.Up + query.Down); // the probe starts at z + Up
+            if (shared && VMapSharedReader.Aborted)
+            {
+                return false;
+            }
         }
 
         if (query.PreferTerrainOverProps && Known(terrain) && Known(floor)
@@ -156,9 +179,23 @@ public static class GroundHeight
         {
             source = Known(terrain) && MathF.Abs(terrain - floor) <= 0.02f ? GroundSource.Terrain : GroundSource.Model;
             snappedZ = floor + StandOffset;
+            LiquidData liquid = default;
+            LiquidStatus liquidStatus = LiquidStatus.NoWater;
+            if (query.Liquid == LiquidMode.Surface)
+            {
+                if (!shared)
+                {
+                    liquidStatus = collision.Map.GetLiquidStatus(x, y, floor, LiquidTypeFlags.AllLiquids, out liquid);
+                }
+                else if (!collision.Map.Terrain.TryGetLoadedLiquidStatus(x, y, floor, LiquidTypeFlags.AllLiquids, out liquidStatus, out liquid))
+                {
+                    VMapSharedReader.Abort(SharedDrapeAbort.LiquidTileNotLoaded);
+                    return false;
+                }
+            }
+
             if (query.Liquid == LiquidMode.Surface
-                && (collision.Map.GetLiquidStatus(x, y, floor, LiquidTypeFlags.AllLiquids, out LiquidData liquid)
-                    & (LiquidStatus.WaterWalk | LiquidStatus.InWater | LiquidStatus.UnderWater)) != 0
+                && (liquidStatus & (LiquidStatus.WaterWalk | LiquidStatus.InWater | LiquidStatus.UnderWater)) != 0
                 && float.IsFinite(liquid.Level) && liquid.Level > floor
                 && liquid.Level <= z + query.Up + WindowEpsilon && liquid.Level >= z - query.Down - WindowEpsilon)
             {
@@ -173,7 +210,10 @@ public static class GroundHeight
         // looked for higher than a model floor is (MeshFallbackUp): a chord across an arched cave floor, such as Grizzled Den's, runs up to
         // 3.2 yd under the floor, which a model probe from z + 2 starts below.
         if (query.AllowMeshFallback
-            && collision.TryGetMeshFloor(x, y, z, query.Down, MathF.Max(query.Up, MeshFallbackUpYards), out float mesh) && float.IsFinite(mesh))
+            && (shared
+                ? collision.TryGetMeshFloorShared(x, y, z, query.Down, MathF.Max(query.Up, MeshFallbackUpYards), out float mesh)
+                : collision.TryGetMeshFloor(x, y, z, query.Down, MathF.Max(query.Up, MeshFallbackUpYards), out mesh))
+            && float.IsFinite(mesh))
         {
             snappedZ = mesh - MeshBias + StandOffset;
             source = GroundSource.Mesh;
@@ -239,6 +279,43 @@ public static class GroundHeight
     }
 
     /// <summary>
+    /// <see cref="DrapePath"/> from a map thread outside the world's serial gate, or null when it cannot be answered from what is loaded
+    /// (<paramref name="abort"/> says why). It is the same code with the same arithmetic: model heights come from the vmap tiles under the
+    /// read side of their lock, terrain and liquid from tiles already in memory, and the navmesh branches from the pathfinder's shared
+    /// queries. A drape that would need a tile loaded, a navmesh the owner has not looked up, or services that are not known to be safe
+    /// to read concurrently is discarded whole, and the caller repeats it inside the gate with <see cref="DrapePath"/>. Every sample of a
+    /// non-null result equals the gated answer for the model and terrain state (one snapshot for the whole drape) and the navmesh state at
+    /// that moment (see <see cref="VMapSharedReader"/> for the memory-model argument and why the navmesh lock is not held across the drape). The query must not
+    /// load tiles. Allocation: the result list, as <see cref="DrapePath"/>.
+    /// </summary>
+    internal static List<Vector3>? TryDrapePathShared(
+        MapCollision collision,
+        Vector3 start,
+        IReadOnlyList<Vector3> points,
+        out SharedDrapeAbort abort,
+        float step = 4f,
+        float tolerance = 0.15f,
+        int maxPoints = 32,
+        GroundQuery? query = null,
+        float? modelTolerance = null,
+        bool cornersOnMesh = false)
+    {
+        ArgumentNullException.ThrowIfNull(collision);
+        if (!collision.SupportsSharedDrape || (query ?? Walker).LoadTiles)
+        {
+            abort = SharedDrapeAbort.Unsupported;
+            return null;
+        }
+
+        // The vmap read lock is taken once here for the whole drape (one snapshot of the model tiles, one acquire/release pair). Lock order is
+        // vmap read, then navmesh read (per query); nothing takes them the other way round.
+        using VMapSharedReader.Scope scope = VMapSharedReader.Enter((collision.LineOfSight as VMapManager)?.SharedLock);
+        List<Vector3> draped = DrapePath(collision, start, points, step, tolerance, maxPoints, query, modelTolerance, cornersOnMesh);
+        abort = VMapSharedReader.Reason;
+        return abort == SharedDrapeAbort.None ? draped : null;
+    }
+
+    /// <summary>
     /// The snapped <paramref name="corners"/> with ground points inserted every <paramref name="step"/> yd where the chord misses. When that
     /// is more than <paramref name="maxPoints"/> points, the corners and the inserted points that deviate most from the chord between their
     /// neighbours are kept (Douglas-Peucker order) until the cap is reached, so a place where the ground bends, such as the top of a ramp, stays
@@ -275,7 +352,10 @@ public static class GroundHeight
                     float expected = last.Z + ((corner.Z - last.Z) * ((at - lastAt) / (length - lastAt)));
                     float guardZ = (at - lastAt) <= (length - at) ? last.Z : corner.Z; // the nearer end: the last sample, or the corner when it is the nearer one
                     bool snapped = TrySnap(collision, x, y, expected, guardZ, q, out float ground, out GroundSource source);
-                    if (!snapped && collision.TryWalkMeshSurface(last, new Vector3(x, y, expected), out float walked))
+                    if (!snapped && !VMapSharedReader.Aborted
+                        && (VMapSharedReader.Active
+                            ? collision.TryWalkMeshSurfaceShared(last, new Vector3(x, y, expected), out float walked)
+                            : collision.TryWalkMeshSurface(last, new Vector3(x, y, expected), out walked)))
                     {
                         snapped = TrySnap(collision, x, y, walked, guardZ, q, out ground, out source);
                     }

@@ -456,6 +456,60 @@ public sealed partial class MapCollision : IMapUpdater, IUnderMapClassifier
     }
 
     /// <summary>
+    /// Whether this map's services are ones a ground drape may read outside the serial gate (<see cref="GroundHeight.TryDrapePathShared"/>):
+    /// the vmap manager (shared mode, <see cref="VMapManager"/>) or the open default for models. The pathfinder is not asked: a navmesh
+    /// branch of the drape goes through <see cref="TryGetMeshFloorShared"/> and <see cref="TryWalkMeshSurfaceShared"/>, which give up when
+    /// it is not a <see cref="MMaps.NavMeshPathfinder"/> whose mesh the owner has looked up.
+    /// </summary>
+    internal bool SupportsSharedDrape => _services.LineOfSight is VMapManager or OpenLineOfSight;
+
+    /// <summary>
+    /// <see cref="TryGetMeshFloor"/> for a shared drape: the navmesh's loaded tiles under its read lock. When the owner has not looked the
+    /// map's mesh up (or the pathfinder is not the navmesh one) it records the abort and answers false, and the drape is discarded.
+    /// </summary>
+    internal bool TryGetMeshFloorShared(float x, float y, float z, float below, float above, out float height)
+    {
+        height = 0f;
+        bool? answer = _services.Pathfinder is ISharedMeshFloorQuery mesh ? mesh.TryGetMeshFloorShared(Map.MapId, x, y, z, below, above, out height) : null;
+        if (answer is null)
+        {
+            VMapSharedReader.Abort(SharedDrapeAbort.MeshNotShared);
+            return false;
+        }
+
+        return answer.Value;
+    }
+
+    /// <summary>
+    /// <see cref="TryWalkMeshSurface"/> for a shared drape, over <see cref="ISharedMeshPointQuery.RaycastShared"/> with the same checks and the
+    /// same result; gives up (abort recorded, false) when the owner has not looked the map's mesh up.
+    /// </summary>
+    internal bool TryWalkMeshSurfaceShared(Vector3 from, Vector3 to, out float height)
+    {
+        height = 0f;
+        if (!float.IsFinite(from.X) || !float.IsFinite(from.Y) || !float.IsFinite(from.Z)
+            || !float.IsFinite(to.X) || !float.IsFinite(to.Y) || !float.IsFinite(to.Z))
+        {
+            return false;
+        }
+
+        MeshRaycastResult? walk = _services.Pathfinder is ISharedMeshPointQuery mesh ? mesh.RaycastShared(Map.MapId, from, to, null) : null;
+        if (walk is not { } result)
+        {
+            VMapSharedReader.Abort(SharedDrapeAbort.MeshNotShared);
+            return false;
+        }
+
+        if (!result.Available || result.Hit || !float.IsFinite(result.Point.Z))
+        {
+            return false;
+        }
+
+        height = result.Point.Z;
+        return true;
+    }
+
+    /// <summary>
     /// vmangos <c>TerrainInfo::IsOutdoors</c> (GridMap.cpp:880-890) from the group the model query finds at the point itself: outside every
     /// WMO group, or inside a group whose MOGP flags say exterior. WMOAreaTable.dbc plays no part in this test (vmangos reads only the MOGP
     /// flag; <see cref="TerrainInfo.GetAreaFlag"/> is where the area table is read). The ground-over-a-building check of

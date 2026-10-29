@@ -115,6 +115,7 @@ public sealed class PopulationZoneWiringTests
         Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task AStalledBotInAZoneItEscaped_IsRelocated_ThoughItFitsTheZone()
     {
@@ -147,6 +148,7 @@ public sealed class PopulationZoneWiringTests
         Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task AStalledBotInAZoneOverItsCapacity_IsRelocated()
     {

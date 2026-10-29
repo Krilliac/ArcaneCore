@@ -22,10 +22,23 @@ public sealed class LeashTests
         public void Dispose() => World.Dispose();
     }
 
-    private static Fight Start(CreatureTemplate? template = null, CreatureOptions? options = null)
+    /// <summary>A scripted caster: chases to <see cref="CreatureAI.CasterChaseDistance"/> (a ranged chase with an offset).</summary>
+    private sealed class CasterLeashAI : AggressorAI
     {
-        CreatureContent content = Content([template ?? Template()], [Spawn(1, WolfEntry, 5, 0)]);
-        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() }, options);
+        public CasterLeashAI(Creature creature)
+            : base(creature)
+        {
+            CasterChaseDistance = 20f;
+        }
+    }
+
+    private static Fight Start(CreatureTemplate? template = null, CreatureOptions? options = null, bool caster = false)
+    {
+        CreatureContent content = Content([caster ? (template ?? Template()) with { AIName = "CasterLeashAI" } : template ?? Template()], [Spawn(1, WolfEntry, 5, 0)]);
+        var factory = new CreatureAiFactory();
+        factory.Register("CasterLeashAI", c => new CasterLeashAI(c));
+        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content,
+            caster ? new CreatureAiServices { Hostility = new AlwaysHostile(), Factory = factory } : new CreatureAiServices { Hostility = new AlwaysHostile() }, options);
         (Player player, _) = AddPlayer(runtime, 1, 0, 0);
         Creature wolf = Assert.Single(system.Creatures);
         wolf.AI!.CombatMovement = false; // stay where the test puts it
@@ -129,6 +142,186 @@ public sealed class LeashTests
         Assert.False(f.Wolf.IsInEvadeMode);
         Run(f.World, 7000);
         Assert.True(f.Wolf.IsInEvadeMode);
+    }
+
+    private static int LeashAge(Fight f) => (int)f.System.GetLeashFacts(f.Wolf, f.Player)!.Value.ClockAgeSeconds;
+
+    [Fact]
+    public void AChaserStandingInMeleeFarFromHome_RefreshesItsLeashEveryFiveSeconds_AndDoesNotEvade()
+    {
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        f.Wolf.AI!.CombatMovement = true; // the chase generator runs: the wolf stands at its victim (vmangos m_leashExtensionTimer)
+        f.System.ApplyCombatMovement(f.Wolf);
+        Assert.True(MapCombat.CanReachWithMeleeAutoAttack(f.Wolf, f.Player));
+
+        // Past the 12 s extension (three 5 s refreshes), both beyond the 50 yd area; kept short, a fight with no damage exchanged is dropped
+        // by other rules after about 30-40 s.
+        Run(f.World, 20000);
+
+        Assert.False(f.Wolf.IsInEvadeMode);
+        Assert.Same(f.Player, f.Wolf.Combat.Victim);
+    }
+
+    [Fact]
+    public void AChaserThatIsKitedOutOfMelee_StillEvadesOnSchedule()
+    {
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        f.Wolf.AI!.CombatMovement = true;
+        f.System.ApplyCombatMovement(f.Wolf);
+
+        Run(f.World, 3000); // standing in melee: the 5 s timer has not fired
+        // The victim keeps stepping out of reach, so the chaser is always running after it and never stands long enough to refresh.
+        for (int i = 0; i < 60 && !f.Wolf.IsInEvadeMode; i++)
+        {
+            f.Player.Relocate(f.Wolf.X + 8, 0, 83.5f, 0, 0);
+            Run(f.World, 500);
+        }
+
+        Assert.True(f.Wolf.IsInEvadeMode);
+    }
+
+    [Fact]
+    public void TheChaseLeashTimer_IsFiveSeconds_AndStartingANewPathRearmsIt()
+    {
+        // vmangos TargetedMovementGenerator.cpp:389-401, .h:107: the timer runs while the chase spline is finalized and is re-armed to 5000
+        // when a new path starts. Driven in 100 ms world ticks so the 5 s boundary is exact; asserted on the leash clock's age.
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        f.Wolf.AI!.CombatMovement = true;
+        f.System.ApplyCombatMovement(f.Wolf);
+        Assert.Equal(MovementGeneratorType.Chase, f.Wolf.Motion.CurrentType);
+        Assert.False(f.Wolf.IsMoving);
+
+        Run(f.World, 4900); // 4.9 s standing: nothing yet (a refresh would drop the age to 0)
+        Assert.True(LeashAge(f) >= 4);
+
+        f.Player.Relocate(f.Wolf.X + 8, 0, 83.5f, 0, 0); // a new path starts: the timer is re-armed to 5000 (a short run: the 12 s leash must not expire first)
+        Run(f.World, 100);
+        Assert.True(f.Wolf.IsMoving);
+        for (int i = 0; i < 100 && f.Wolf.IsMoving; i++)
+        {
+            Run(f.World, 100);
+        }
+
+        Assert.False(f.Wolf.IsMoving);
+        Assert.True(MapCombat.CanReachWithMeleeAutoAttack(f.Wolf, f.Player));
+        Run(f.World, 4800); // just under 5 s standing again since the move: still no refresh
+        Assert.True(LeashAge(f) >= 9 && !f.Wolf.IsInEvadeMode, $"DBG age={LeashAge(f)} evade={f.Wolf.IsInEvadeMode}");
+
+        Run(f.World, 300); // 5 s standing: the refresh
+        Assert.Equal(0, LeashAge(f));
+    }
+
+    [Fact]
+    public void ARangedCasterStandingAtItsRangeBeyondTheThreatArea_DoesNotEvade()
+    {
+        // vmangos refreshes for every chase movement generator whose spline is finalized, a ranged chase with an offset included.
+        using Fight f = Start(caster: true);
+        MoveBoth(f, wolfX: 100, playerX: 120);
+        f.Wolf.AI!.CombatMovement = true;
+        f.System.ApplyCombatMovement(f.Wolf);
+        Assert.IsType<RangedMovementGenerator>(f.Wolf.Motion.Top);
+
+        Run(f.World, 40000);
+
+        Assert.IsType<RangedMovementGenerator>(f.Wolf.Motion.Top);
+        Assert.False(f.Wolf.IsInEvadeMode);
+        Assert.Same(f.Player, f.Wolf.Combat.Victim);
+    }
+
+    [Theory]
+    [InlineData(HitKind.Damage)]
+    [InlineData(HitKind.Absorbed)]
+    [InlineData(HitKind.HostileSpell)]
+    public void ACreatureThatIsHit_RefreshesItsLeash(HitKind kind)
+    {
+        // vmangos Unit::SetInCombatWithAggressor (Unit.cpp:5985-5987), reached by DealDamage (Unit.cpp:781-785, the absorb path :747-750)
+        // and by a hostile spell hit (Spell.cpp:1252, 1675).
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        Run(f.World, 6000);
+        Assert.True(LeashAge(f) >= 5);
+
+        switch (kind)
+        {
+            case HitKind.Damage:
+                f.Map.Combat.DealDamage(f.Player, f.Wolf, 1);
+                break;
+            case HitKind.Absorbed:
+                f.Map.Combat.DealDamage(f.Player, f.Wolf, 0); // a fully absorbed swing reaches DealDamage with no damage
+                break;
+            default:
+                new ArcaneCore.Game.Spells.MapCombatDamageSink().DealSpellDamage(
+                    f.Player, f.Wolf, global::ArcaneCore.Game.Tests.Spells.SpellTestKit.Spell(990_001), 0, periodic: false);
+                break;
+        }
+
+        Assert.Equal(0, LeashAge(f));
+    }
+
+    [Fact]
+    public void AHitThatDoesNotLinkCombat_ATouchOnlyHit_DoesNotRefreshTheLeash()
+    {
+        // vmangos refreshes inside SetInCombatWithAggressor's !touchOnly branch (Unit.cpp:5984-5987); a hit that only touches the PvP flag
+        // (a hunter trap's hit, Spell.cpp:1650/1688) does not link combat.
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        Run(f.World, 6000);
+
+        f.Map.Combat.DealDamage(f.Player, f.Wolf, 1, startsCombat: false);
+
+        Assert.True(LeashAge(f) >= 5);
+    }
+
+    [Fact]
+    public void TheProductionMover_ImplementsExtendLeash_NotTheInterfaceDefaultNoOp()
+    {
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        Run(f.World, 6000);
+        Assert.True(LeashAge(f) >= 5);
+
+        ((ICreatureMover)f.System).ExtendLeash(f.Wolf);
+
+        Assert.Equal(0, LeashAge(f));
+    }
+
+    [Fact]
+    public void ARootedCreature_KeepsRefreshingItsExtension_AtTheThreeSecondCheck()
+    {
+        // vmangos Creature::Update (Creature.cpp:986-989): UNIT_STATE_NO_FREE_MOVE includes the root.
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        f.Wolf.AddMovementFlags(MovementFlags.Root);
+
+        Run(f.World, 30000);
+
+        Assert.False(f.Wolf.IsInEvadeMode);
+    }
+
+    [Fact]
+    public void ACreatureWithCombatMovementOff_AttackingInMelee_StillEvadesByTheNormalLeashRule()
+    {
+        // No chase generator runs, so nothing refreshes the clock: the 12 s extension runs out and the creature evades.
+        using Fight f = Start();
+        MoveBoth(f, wolfX: 100, playerX: 101);
+        Assert.False(f.Wolf.AI!.CombatMovement);
+        Assert.True(MapCombat.CanReachWithMeleeAutoAttack(f.Wolf, f.Player));
+
+        Run(f.World, 11000);
+        Assert.False(f.Wolf.IsInEvadeMode);
+        Run(f.World, 3000);
+
+        Assert.True(f.Wolf.IsInEvadeMode);
+    }
+
+    public enum HitKind
+    {
+        Damage,
+        Absorbed,
+        HostileSpell,
     }
 
     [Fact]

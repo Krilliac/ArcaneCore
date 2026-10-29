@@ -138,14 +138,16 @@ The gate needs `ARCANECORE_LANES_ROOT` (or `-LanesRoot`). The commands mirror `.
 ```
 dotnet restore ArcaneCore.slnx --locked-mode
 dotnet build ArcaneCore.slnx -c Release --no-restore
-dotnet test tests/ci/Game.slnf  -c Release --no-build -m:1 --logger trx --results-directory TestResults
-dotnet test tests/ci/World.slnf -c Release --no-build -m:1 --logger trx --results-directory TestResults
-dotnet test tests/ci/Data.slnf  -c Release --no-build -m:1 --logger trx --results-directory TestResults
-dotnet test tests/ci/Rest.slnf  -c Release --no-build -m:1 --logger trx --results-directory TestResults
+dotnet test tests/ci/Game.slnf  -c Release --no-build -m:1 --filter "Category!=Timing" --logger trx --results-directory TestResults
+dotnet test tests/ci/World.slnf -c Release --no-build -m:1 --filter "Category!=Timing" --logger trx --results-directory TestResults
+dotnet test tests/ci/Data.slnf  -c Release --no-build -m:1 --filter "Category!=Timing" --logger trx --results-directory TestResults
+dotnet test tests/ci/Rest.slnf  -c Release --no-build -m:1 --filter "Category!=Timing" --logger trx --results-directory TestResults
+bash tools/ops/ci/test-stages.sh --stage timing --logs timing-logs tests/ci/Game.slnf tests/ci/World.slnf tests/ci/Data.slnf tests/ci/Rest.slnf
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
 ```
 
 - `Rest.slnf` = Realm, MockClient, Kernel, Cryptography, Gateway and Atlas tests. The four filters cover every test project once.
+- Timing-sensitive tests carry `[Trait("Category", "Timing")]` and run in the serial timing stage, with one isolated rerun; a `FLAKY (passed on rerun)` line is a bug to fix ([contributing](docs/guide/contributing.md)).
 - `tools/ops/ci/full-suite-gate.ps1` is the one-shot alternative. It exits 2 when restore or build fails, so nothing ran.
 - **Check counts, not exit codes.** Read the passed/failed/skipped totals per suite and compare them with the base branch. A
   killed run, a filter that matched 0 tests, or a build that never ran can all exit 0.

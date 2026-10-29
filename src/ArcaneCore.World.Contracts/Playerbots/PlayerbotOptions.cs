@@ -207,7 +207,7 @@ public sealed class PlayerbotOptions
 
     /// <summary>
     /// Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience,
-    /// money, bags, quest log and spells did not change) before it reports a stall in <c>.playerbot list</c> and gives up its
+    /// money, bags, quest log and spells did not change, and it took no target's health to a new low) before it reports a stall in <c>.playerbot list</c> and gives up its
     /// goal (<c>PlayerbotStallWatch</c>; 10..86400).
     /// </summary>
     public int StallSeconds { get; set; } = 120;

@@ -362,6 +362,7 @@ public sealed class PlayerbotChatServiceTests
         Assert.Contains(status, line => line.StartsWith("Bot chat: enabled=yes", StringComparison.Ordinal));
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task AFullQueue_TakesNoMore()
     {

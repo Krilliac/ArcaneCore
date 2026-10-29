@@ -27,6 +27,9 @@ internal enum TravelMeans : byte
 
     /// <summary>A portal a mage bot opened on request, clicked by the requester (<see cref="PlayerbotMageService"/>).</summary>
     MagePortal,
+
+    /// <summary>A same-map teleport trigger (an <c>areatrigger_teleport</c> row whose target is the trigger's own map) walked into: Teldrassil's Darnassus and Rut'theran portals.</summary>
+    AreaTrigger,
 }
 
 /// <summary>Which faction may use a transport route.</summary>
@@ -43,11 +46,13 @@ internal readonly record struct TravelPlace(uint MapId, Vector3 Position)
 /// <summary>
 /// One leg of a planned trip: how, from where, to where, the estimated time and the copper it costs. <see cref="TransportEntry"/> names
 /// the ship of a boat or zeppelin leg; <see cref="SpellId"/> the Teleport or Portal spell of a mage leg (the portal's own spell for a
-/// requester); <see cref="MageGuid"/> the mage a portal leg asked.
+/// requester); <see cref="MageGuid"/> the mage a portal leg asked;
+/// <see cref="TriggerId"/> the area trigger of an <see cref="TravelMeans.AreaTrigger"/> leg.
 /// </summary>
 internal sealed record TravelLeg(TravelMeans Means, TravelPlace From, TravelPlace To, float Seconds, uint Copper)
 {
     public uint TransportEntry { get; init; }
+    public uint TriggerId { get; init; }
     public uint SpellId { get; init; }
     public ulong MageGuid { get; init; }
 }
@@ -67,6 +72,12 @@ internal sealed record ShipRoute(uint Entry, TravelMeans Means, TravelAccess Acc
 
 /// <summary>A portal some mage of the bot's faction near it can open (<see cref="PlayerbotPortalBoard"/>): where it leads, where the mage stands, and its fee.</summary>
 internal readonly record struct PortalOffer(ulong MageGuid, uint PortalSpellId, TravelPlace MagePlace, TravelPlace Destination, uint FeeCopper);
+
+/// <summary>
+/// A same-map teleport trigger a bot may walk into (<see cref="PlayerbotAreaTriggers.SameMapPortals"/>): the trigger's id, where its volume
+/// is (<paramref name="Entrance"/>) and where its teleport puts the bot (<paramref name="Exit"/>). One way, entrance to exit.
+/// </summary>
+internal sealed record TriggerPortal(uint TriggerId, TravelPlace Entrance, TravelPlace Exit);
 
 /// <summary>A Teleport spell the bot (a mage) knows and can cast now, with the place it leads to (<c>spell_target_position</c>).</summary>
 internal readonly record struct OwnTeleport(uint SpellId, TravelPlace Destination);
@@ -97,6 +108,9 @@ internal sealed record TravelFacts
 
     /// <summary>The boat and zeppelin routes the bot may ride now (faction and the Boats/Zeppelins switches applied).</summary>
     public IReadOnlyList<ShipRoute> Ships { get; init; } = [];
+
+    /// <summary>The same-map teleport triggers the bot may walk into on its map (policy applied, the journey's failed ones left out).</summary>
+    public IReadOnlyList<TriggerPortal> TriggerPortals { get; init; } = [];
 
     /// <summary>
     /// Whether a bot can walk (or ride, or fly a known path) from one place to another on the same map: the planner never walks between maps.
