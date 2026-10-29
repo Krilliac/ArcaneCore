@@ -18,10 +18,10 @@ must obey is the server's, enforced by the ordinary handlers.
 | File (`src/ArcaneCore.Playerbots/Economy/`) | What it does |
 |---|---|
 | `PlayerbotBudget.cs`, `PlayerbotServiceIndex.cs`, `PlayerbotRidingTrips.cs`, `PlayerbotMount.cs` (folder `Playerbots/Budget/`) | The budget, the shared trainer/vendor index, the riding and mount-vendor trips, and mounting (`World:Playerbots:Budget`, `World:Playerbots:Mounts`). |
-| `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`, `BankDeposit`, `BuyBankSlots`. |
+| `PlayerbotEconomyOptions.cs` | `World:Playerbots:Economy`: `Enabled`, `ListChancePerVisit`, `MaxListingsPerBot`, `BuyUpgradeBudgetFraction`, `VisitIntervalMinutes`, `BankDeposit`, `BuyBankSlots`, `BuyReagents`, `ListMarkupPercentCommon`, `ListMarkupPercentUncommon`, `ListMarkupPercentRare`, `ListMarkupPercentEpic`, `BuyBelowAskPercent`. |
 | `PlayerbotBank.cs` (folder `Playerbots/`) | The bank errand while the bot stays at its capital home: deposit goods it does not need, buy a bank bag slot when the bank is nearly full. |
 | `PlayerbotEconomy.cs` | The world side, one per bot (owned by `PlayerbotBrain`): the visit as a state machine, one step per think. |
-| `PlayerbotEconomyPlanner.cs` | The pure decisions: which items are listable, the listing slots, the visit budget, the price plan, the upgrade to buy, the parsing of an auction letter's subject, `PlayerbotRelistMemory`. |
+| `PlayerbotEconomyPlanner.cs` | The pure decisions: which items are listable, the listing slots, the visit budget, the price plan, the upgrade to buy, the reagent to buy, the parsing of an auction letter's subject, `PlayerbotRelistMemory`, `PlayerbotBoughtMemory`. |
 | `PlayerbotAuctionPricing.cs` | The pure prices: reference price, vendor floor, undercut, start bid, deposit, whether a listing pays. |
 | `PlayerbotEconomyWire.cs` | The client payloads (list, owner list, sell, bid, mail commands) and the decoders of the replies (`EconomyPackets` layouts); a short reply throws `FormatException` only. |
 | `PlayerbotEconomyDestinations.cs` | Finding the faction auctioneer and the mailbox: live sightings first, then static spawn hints; the walker that goes there. |
@@ -36,7 +36,8 @@ shorter of the interval and five minutes.
 
 A visit begins only when the bot is in the world, alive, not a ghost, not in combat, not casting, the economy feature is on and the
 settlement layer can act (`Settlements.CanAct`: no settlement of this bot pending, its character save neither held nor quarantined), and there is something to do: a listable item and
-a successful listing roll, or a budget of at least 100 copper with a free bag slot (an upgrade to look for), or an unread auction letter
+a successful listing roll, or a budget of at least 100 copper with a free bag slot (an upgrade to look for), or a reagent a wanted recipe uses that the bot carries fewer of
+than one craft needs (with `BuyReagents` on, a budget of at least 100 copper and a free bag slot; an entry bought and not yet collected from its letter, or one a vendor stocks, is not a shortfall), or an unread auction letter
 (`MSG_QUERY_NEXT_MAIL_TIME`). Otherwise the next visit is a full interval away. A visit lasts at most 300 s of world time.
 
 1. **Travel.** The nearest faction auctioneer the bot can see (alive, friendly, not in combat, `NpcFlags.Auctioneer`). Out of reach it walks
@@ -47,11 +48,25 @@ a successful listing roll, or a budget of at least 100 copper with a free bag sl
 3. **Listing.** Items in the order of reference price times count, most valuable first. For each one the bot asks the house for every
    listing of that name (`CMSG_AUCTION_LIST_ITEMS`), plans a price, and sells (`CMSG_AUCTION_SELL_ITEM`, 8 hours) only if the plan pays
    and its deposit fits the budget left. It waits for the result (at most 30 s; the deadline drops the visit) before the next request.
-4. **Buying** (only when the budget allows). One page of usable green-or-better weapons, one of armor; among the rows the bot can pay
-   (a buyout, not its own, within the budget left and the money in hand, not refused lately) the one whose item gains the most for its
+4. **Reagents** (only with `BuyReagents` on, a budget of at least 100 copper and a free bag slot). The reagents of the recipes the bot wants to craft (the same
+   spellbook read as the vendor supply needs, `PlayerbotVendorSupplyNeeds.Reagents`: the largest count one craft uses) that it carries
+   fewer of than one craft uses are its shortfalls, except an entry it bought and has not yet collected and an entry a vendor stocks (see below). For each, in item id
+   order starting at a position that rotates with the visit number (so later entries get their turn) and at most four searches a visit, one a think, it asks the
+   house for the listings of the item's name and class (`CMSG_AUCTION_LIST_ITEMS`). Of the rows it can pay (a buyout, not its own, within
+   the budget left, the money in hand and what the budget leaves spendable, not refused lately, not a vendor-stocked item) whose count is at
+   most `ReagentOverbuyFactor` (2) times the shortfall and whose buyout per unit, rounded up, is at most the buy cap
+   (`PlayerbotAuctionPricing.BuyCapPerUnit`, see The price; an item with no vendor sell price is never bought), it takes the one that covers the shortfall first; among covering rows the lower total
+   buyout, then the lower price per unit (compared exactly), then the lower auction id; among rows that do not cover the shortfall the
+   lowest price per unit, then the lower buyout, then the lower auction id. It buys it out with a bid equal to the buyout. At most two
+   purchases a visit and two failed tries; a bid waits for its result like an upgrade's, then the visit returns to this phase. The
+   purchase is noted in `PlayerbotBoughtMemory`. `BuyReagents` is read again at this step, so a live reload that turns it off ends the
+   phase at once, mid-visit.
+5. **Buying** (only when the budget allows). One page of usable green-or-better weapons, one of armor; among the rows the bot can pay
+   (a buyout, not its own, within the budget left and the money in hand, not refused lately, and whose buyout per unit, rounded up, is at most the
+   buy cap of the item) the one whose item gains the most for its
    slot, then the lower buyout, then the lower auction id; nothing gaining more than `PlayerbotItemScore.MinimumGain` is bought. It
    places a bid equal to the buyout (`CMSG_AUCTION_PLACE_BID`), which buys the auction out. At most one purchase per visit and two tries.
-5. **Mailbox.** The letters (`CMSG_GET_MAIL_LIST`): see below. At most 20 letters per visit.
+6. **Mailbox.** The letters (`CMSG_GET_MAIL_LIST`): see below. At most 20 letters per visit.
 
 Listing deposits and the buyout both count against the visit budget: `BuyUpgradeBudgetFraction` of the money held when the visit began.
 
@@ -66,6 +81,32 @@ forgets the entry).
 
 Bought: only an item that is an upgrade for one of the bot's own slots, by the same score the equipment goal wears by, so it is worn
 once collected. The bot never buys to resell.
+
+Reagents are bought only to be used. The listing reservation also covers every reagent of a recipe the bot wants (whatever it carries,
+with `BuyReagents` on or off) and every reagent entry the bot bought at the house in the last 24 hours (gear upgrades are not recorded; `PlayerbotBoughtMemory`: 64 entries, in
+memory, the oldest purchase goes first, lost on restart), so there is no buy-then-relist loop. The won item comes to the bot by mail,
+which the same visit collects. Each purchase also adds one to the entry's awaiting count, and each "won" auction letter the mail step takes the item
+of lowers it by one (`NoteCollected`, never below 0); while the count is above 0, the entry is not a reagent shortfall, so a letter the visit did not collect (no mailbox in sight,
+walk failures, visit cap) does not make the next visit buy the same reagent again. The count ends with the 24 hour hold, so a lost letter
+cannot block buying forever.
+
+Anti-exploit rules for reagents. Vendor-stocked items are never bought at the house: the index of the world data
+(`PlayerbotServiceIndex.IsVendorStocked`) holds every item any vendor with a spawn sells, and a vendor's goods (thread, flux, salt,
+vials) cost no more than the vendor's price, so a player listing them above it would otherwise farm gold from the
+bots. A vendor-stocked entry is not a shortfall for the house, so no visit starts for it. Without the index (no creature content or
+spell table loaded), or with an index that lists no vendor-stocked item, every reagent counts as vendor stocked: the bot buys no
+reagents at the house (fail closed). A row is eligible only
+when its count is at most twice the shortfall, so a shortfall of 1 never buys a stack of 20 whose surplus is then held back from
+listing. The per-unit cap is the one derived buy cap of The price (the same for reagents and gear): half the bot floor of the item at the default
+`BuyBelowAskPercent`, so a gathered material is bought for at most the buy cap per unit (see The price) and never at a price any bot asks; an item with no vendor sell price
+is never bought. The figures for eight reference items are in the table under The price. The visit budget still applies.
+
+A bid whose settlement ends without a result packet, or that settles at once without leaving a pending settlement, is judged by the
+money: if the bot paid, the buyout counts as bought (a reagent is noted in the bought memory, a gear bid counts as a purchase); if it paid
+nothing, the auction is refused for a while. A reagent bid
+still unsettled at the operation deadline is noted as bought before the visit is dropped, so an unknown outcome cannot make the next
+visit buy the same reagent again. The same holds when the visit aborts with a reagent bid pending (a reset, the economy turned off, combat,
+death, a map change, the visit cap): the pending bid is booked as bought, so the next visit does not buy it again.
 
 ## The bank
 
@@ -88,9 +129,9 @@ them or send what the house answers with silence.
 * **Cut and proceeds**: a sale pays `bid + deposit - cut` (`SendAuctionSuccessfulMail`), the cut being the house's cut percent of the
   bid (`GetAuctionCut`). An expiry loses the deposit and returns the item by mail. A listing is made only if the deposit lost on one
   expiry stays below what a sale leaves over vendoring the stack (`buyout - cut - vendor price`), and the price never falls below the
-  vendor floor after the cut.
+  bot floor, which includes the vendor floor after the cut.
 * **Start bid not above the buyout** (`HandleAuctionSellItem` :242-246 refuses a bid above the buyout): the start bid is 80% of the
-  buyout, at least 1 copper, never above it. No price above 2,000,000,000 copper (:236).
+  buyout, raised to the bot floor of the stack, at least 1 copper, never above the buyout. No price above 2,000,000,000 copper (:236).
 * **Silent refusals**: a bid the player cannot pay is answered with nothing (`HandleAuctionPlaceBid` :498-503), so the bot checks its
   money before it sends, and a request that creates no pending settlement and no result is treated as refused: that auction is left
   alone for 10 minutes.
@@ -105,10 +146,41 @@ required level) and to 100 copper, times the square root of the quality for any 
 quest-item branch of mangoszero is not needed: quest items are never listed. An item with no vendor sell price has reference 0 and is
 never listed.
 
+The bot floor F of one unit (`PlayerbotAuctionPricing.FloorPerUnit`) is 0 for an item with no vendor sell price, else the largest of
+three figures, saturated at the client price limit: the vendor floor after the cut `ceil(sell x 100 / (100 - cut%)) + 1` (cut% is the
+house's cut percent times `AuctionRateCut`), the vendor sell price times the markup percent of the item's quality
+(`ListMarkupPercentCommon`, `ListMarkupPercentUncommon`, `ListMarkupPercentRare`, `ListMarkupPercentEpic` for epic and above; poor items use
+the common one), and the reference price above (at least 100 copper).
+
 The asking price per unit is 1% (at least one copper) under the lowest other seller's buyout per unit for the same item (the bot's own
-listings, bid-only auctions and other items matching the name do not count), else the reference price; never below the vendor floor
-`ceil(sell x 100 / (100 - cut%)) + 1`, never above twice the reference, and the total never above the client price limit. A floor above
-twice the reference means the item is not listed.
+listings, bid-only auctions and other items matching the name do not count), else F; always within F and 2 F. The start bid is 80% of the
+buyout, raised to F times the count, never above the buyout. A listing whose floor or ask for the stack would exceed the client price limit
+is not made (the total is never squeezed under the floor).
+
+The buy cap per unit (`PlayerbotAuctionPricing.BuyCapPerUnit`), for reagents and gear alike, is F times `BuyBelowAskPercent` (1..99) percent,
+rounded down; 0 (never bought) when the item has no vendor sell price. A row is bought only if its buyout per unit, rounded up, is at most
+the cap. Both the listing and the cap read the live options at each step, with the same cut as the house charges.
+
+The invariant: for every item and every in-range option value, every bot buy per unit is at most F - 1, and every bot ask per unit (buyout
+and start bid) is at least F. A player who buys from a bot and sells back to a bot therefore nets `buyout - cut - ask`, which is below zero
+for any cut of 0 or more (the deposit is returned on a sale), so there is no gold to be made by looping goods through the bots.
+
+Figures from the classic-db reference data at a 5% cut with no competitor, at the default options (F is also the ask):
+
+| Item (entry) | Vendor sell | F = ask | Buy cap (50%) |
+|---|---|---|---|
+| Linen Cloth (2589) | 13 | 100 | 50 |
+| Silk Cloth (4306) | 150 | 1800 | 900 |
+| Mageweave Cloth (4338) | 250 | 3200 | 1600 |
+| Runecloth (14047) | 400 | 5000 | 2500 |
+| Woolen Boots (2583, uncommon) | 359 | 1077 | 538 |
+| Shimmering Armor (6567, uncommon) | 1036 | 3108 | 1554 |
+| Sword of Zeal (6622, rare, bind on equip) | 55400 | 443200 (44 g 32 s) | 221600 |
+| Bow of Searing Arrows (2825, epic, bind on equip) | 14721 | 1472100 (147 g 21 s) | 736050 |
+
+Residual limits: listings made before a change of a markup or of `BuyBelowAskPercent` keep their prices for up to 8 hours. Bot-to-bot
+trades through the house stop, because every ask lies above every bid. Items with a vendor sell price of 0 are never listed or bought. One
+search page of rows over the cap can hide cheaper ones; that only stops buying, it never overpays.
 
 ### The faction house only
 
@@ -206,6 +278,12 @@ NPC, loot or attack take the mount off first (`PlayerbotMount.DismountForAction`
 | `VisitIntervalMinutes` | `30` | Minutes between two visits of one bot (1..1440). |
 | `BankDeposit` | `true` | Deposit goods the bot does not need at a banker while it stays at its capital home. |
 | `BuyBankSlots` | `true` | Buy the next bank bag slot when the bank has fewer than 5 free slots and the price is at most 40% of the bot's gold. |
+| `BuyReagents` | `true` | Buy the reagents of wanted recipes the bot carries fewer of than one craft uses: at most 2 auctions a visit, never a vendor-stocked item, at most twice the shortfall in count, at most the buy cap per unit (`BuyBelowAskPercent`), within the visit budget. Off: none is searched or bought, also when turned off mid-visit. |
+| `ListMarkupPercentCommon` | `500` | The bot floor of a common (white) item as a percent (100..100000) of its vendor sell price (never below the reference price or the vendor floor after the cut). |
+| `ListMarkupPercentUncommon` | `300` | Same, uncommon (green). |
+| `ListMarkupPercentRare` | `800` | Same, rare (blue). |
+| `ListMarkupPercentEpic` | `10000` | Same, epic and above. |
+| `BuyBelowAskPercent` | `50` | The most a bot pays per unit at the house (reagents and gear) as a percent (1..99) of the bot floor of that item, so no bot ever pays what a bot asks. |
 
 `World:Playerbots:Budget` (live):
 
@@ -233,8 +311,8 @@ every key is `docs/reference/configuration.md`.
 
 `tests/ArcaneCore.World.Tests/Playerbots/Economy/`: `PlayerbotAuctionPricingTests` (reference price, undercut, floor, deposit, whether a
 listing pays), `PlayerbotEconomyPlannerTests` (what is listable, the listing slots and roll, the visit budget, the price plan, the
-upgrade choice and its tie-breaks, the subject parser, the relist memory, the options' bounds), `PlayerbotEconomyWireTests` (every
+upgrade choice and its tie-breaks and buy cap, the reagent shortfalls and choice with its per-unit cap (`BuyCapPerUnit` and its options), the bought memory including `BoughtMemory_NoteBought_SweepsEntriesWhoseHoldHasExpired_WithoutAnyQuery` and `BoughtMemory_AnUnqueriedEntry_DoesNotWrapBackIntoItsHold_AfterALaterNoteBoughtSweptIt`, the subject parser, the relist memory, the bounds and defaults of the five pricing options), `PlayerbotEconomyWireTests` (every
 decoder against the bytes `EconomyPackets` writes, and `FormatException` on malformed replies), and `PlayerbotEconomyWorldTests` (bots in a
 real scenario world: a visit that lists up to the free slots, a sale and an expiry collected from the mailbox, COD and player letters left
 alone, a full bag leaving an item letter in the box, and two bots racing for one auction, once a seller-0 listing, with the item existing
-once and the AH bot's ledger audit clean).
+once and the AH bot's ledger audit clean; a visit that buys the in-cap reagent pair, passes over the over-cap pair and the single, and collects it in the same visit; a visit that buys nothing when the only covering row is over the cap; `Visit_DoesNotBuyAReagentAgain_WhenTheVisitWasResetWhileItsBidWasPending`, `Visit_RefusesAReagentBid_ThatSettledAtOnceWithoutTakingMoney`, `Visit_BooksAReagentBuyout_WhoseSettlementEndsWithoutAResultPacket`, `Visit_DoesNotBuyAReagentAgain_WhenItsPendingBidHitTheOperationDeadline`, and the three service-index cases `Visit_BuysNoReagent_WhenTheServiceIndexListsNoVendorStock_AndTheSeamIsNull`, `Visit_BuysTheReagent_WhenARealVendorStocksADifferentItem_AndTheSeamIsNull` and `Visit_BuysNoReagent_WhenARealVendorStocksIt_AndTheSeamIsNull`; a visit that buys nothing for a vendor-stocked entry with an in-cap covering row listed; a visit that buys nothing when `BuyReagents` is turned off after the visit started; none bought with `BuyReagents` off; a needed reagent never listed; `Visit_BuysNoReagentPricedAtTwiceTheReference_ButBuysOneAtTheDerivedCap`; `Visit_BuysNoUpgradeAboveTheBuyCap_EvenWithinTheBudgetAndThePurse_ButBuysOneAtTheCap`), and `PlayerbotEconomyInvariantTests` (the property tests `NoPlayerLoopThroughBots_EverProfits` and `NoPlayerLoopThroughBots_EverProfits_SecondSeed`, seeds 20261028 and 7, over random items, houses, options and competitors; `BuyCap_IsBelowTheFloor_ForEveryBuyBelowAskPercent_AndTheMarkupAndSellEdges`; and the table theory `ReferenceItems_HaveTheDocumentedBotFloorAndBuyCap` over the eight reference items above).

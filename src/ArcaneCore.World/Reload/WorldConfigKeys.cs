@@ -773,6 +773,17 @@ public static class WorldConfigKeys
             v => v is >= 1 and <= PlayerbotEconomyOptions.MaxVisitIntervalMinutes ? null : $"must be 1..{PlayerbotEconomyOptions.MaxVisitIntervalMinutes}"),
         LivePlayerbots("Economy:BankDeposit", o => o.Economy.BankDeposit, (o, v) => o.Economy.BankDeposit = v),
         LivePlayerbots("Economy:BuyBankSlots", o => o.Economy.BuyBankSlots, (o, v) => o.Economy.BuyBankSlots = v),
+        LivePlayerbots("Economy:BuyReagents", o => o.Economy.BuyReagents, (o, v) => o.Economy.BuyReagents = v),
+        LivePlayerbotsValue("Economy:ListMarkupPercentCommon", o => o.Economy.ListMarkupPercentCommon, (o, v) => o.Economy.ListMarkupPercentCommon = v,
+            v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
+        LivePlayerbotsValue("Economy:ListMarkupPercentUncommon", o => o.Economy.ListMarkupPercentUncommon, (o, v) => o.Economy.ListMarkupPercentUncommon = v,
+            v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
+        LivePlayerbotsValue("Economy:ListMarkupPercentRare", o => o.Economy.ListMarkupPercentRare, (o, v) => o.Economy.ListMarkupPercentRare = v,
+            v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
+        LivePlayerbotsValue("Economy:ListMarkupPercentEpic", o => o.Economy.ListMarkupPercentEpic, (o, v) => o.Economy.ListMarkupPercentEpic = v,
+            v => v is >= 100 and <= 100000 ? null : "must be 100..100000"),
+        LivePlayerbotsValue("Economy:BuyBelowAskPercent", o => o.Economy.BuyBelowAskPercent, (o, v) => o.Economy.BuyBelowAskPercent = v,
+            v => v is >= 1 and <= 99 ? null : "must be 1..99"),
         // Not vmangos keys: how bots plan their money and ride (docs/areas/playbots-economy.md). PlayerbotBudget and PlayerbotMount read the
         // shared PlayerbotOptions.Budget / Mounts at every decision.
         LivePlayerbots("Budget:Enabled", o => o.Budget.Enabled, (o, v) => o.Budget.Enabled = v),
