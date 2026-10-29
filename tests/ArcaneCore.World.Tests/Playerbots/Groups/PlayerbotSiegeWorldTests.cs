@@ -1336,8 +1336,10 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
 
     /// <summary>
     /// A guard that runs at the waiting leader from its spawn point is fought by the leader at its waypoint (the leader's AI takes it as its target and its melee hits it) and never evades on its way in. Once it has been hit it is
-    /// put <see cref="ProbeKiteYards"/> beyond the waypoint and held there (a kiting attacker past the answer leash): the leader does not follow it past the leash and is back at its waypoint within
-    /// <see cref="PlayerbotSiegeCommander.WaypointYards"/>; released, the guard comes back, and the step moves on without a denial or a refused waypoint.
+    /// put <see cref="ProbeKiteYards"/> from the waypoint, on the side the leader fought it on, and held there rooted for <see cref="ProbeHoldMs"/> with the leader on its threat list: a kiting attacker past the answer leash that
+    /// stays within <see cref="PlayerbotGroupAI.AssistYards"/> of the leader for the whole hold (the test checks that, and that the step's answer is not spent), so the leash of the waiting leader's target selection is the one
+    /// thing between the leader and it. For the whole hold the leader must not take it as its target again (from <see cref="ProbeDropByMs"/> on: a think or two), must not go past the leash, and must be back within
+    /// <see cref="PlayerbotSiegeCommander.WaypointYards"/> of its waypoint by <see cref="ProbeHomeByMs"/> and stay there to the end of the hold; released, the guard comes back, and the step moves on without a denial or a refused waypoint.
     /// </summary>
     [Theory]
     [MemberData(nameof(StalemateRuns))]
@@ -1356,7 +1358,10 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         }
 
         int stepAtPush = -1;
-        bool sent = false, refused = false, targeted = false, hit = false, evaded = false, onLeader = false, kited = false, back = false;
+        bool sent = false, refused = false, targeted = false, hit = false, evaded = false, onLeader = false, kited = false, released = false, back = false;
+        // The hold's books: whether the probe stayed answerable but for the leash (an attacker of the leader within AssistYards, the step's answer unspent), and what the leader did about it.
+        bool attackerLost = false, tooFar = false, spent = false, targetedPastLeash = false, strayedHome = false;
+        float kiteDistance = -1f, farthestInHold = -1f;
         uint kitedAt = 0;
         Creature? probe = null;
         float worstOff = 0f;
@@ -1365,12 +1370,13 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         bool done = await world.RunUntilAsync(PlayerbotSiegeCommander.StalemateMs + 250_000, () =>
         {
             Player leader = Leader(world, raid);
+            var leaderAi = raid.Group!.Members.First(m => m.BotId == leaderBot).AI;
             // Read before the top-up: the probe was at full health after the last one, so less now is damage dealt during this tick, by its victim's side.
             if (probe is not null && siege.Step == stepAtPush)
             {
                 evaded |= probe.IsEvading;
                 onLeader |= ReferenceEquals(probe.Combat.Victim, leader);
-                targeted |= ReferenceEquals(raid.Group!.Members.First(m => m.BotId == leaderBot).AI?.TargetUnit, probe);
+                targeted |= ReferenceEquals(leaderAi?.TargetUnit, probe);
                 hit |= ReferenceEquals(leader.Combat.Victim, probe) && probe.Health < probe.MaxHealth;
             }
 
@@ -1380,7 +1386,8 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
             if (stepAtPush < 0) return false;
             Hold();
             if (unchecked(Now(world) - began) / 5_000 >= trail.Count)
-                trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} sent={sent} push={raid.Push} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} x={leader.X - Origin.X:F1} lagSince={raid.LagSinceMs} off={worstOff:F1}");
+                trail.Add($"+{unchecked(Now(world) - began)}ms step={siege.Step} sent={sent} push={raid.Push} denied={raid.PushDeniedStep} atWp={raid.AtWaypoint} x={leader.X - Origin.X:F1} lagSince={raid.LagSinceMs} off={worstOff:F1} "
+                    + $"tgt={(leaderAi?.TargetUnit is null ? "-" : "set")} probe={(probe is null ? "-" : $"{Yards3d(leader, probe):F1}yd")} spent={raid.AnswerSpent}");
             // The members stay behind, fighting at the start (the lag hold of a pushing leader at its waypoint runs, about 110 yards); once the leader has waited 5 s a guard (the one farthest along x) turns on the leader, as the guard of a member that
             // died does. It runs at the leader from afar, and the leader must fight it at the waypoint.
             // Where the guards are by then is not this test's to wait for: a guard that chased the leader to the waypoint is still on it unless its soft leash fired during the chase, and since #1630 that is a coin toss (a chaser whose
@@ -1405,23 +1412,42 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
                 float off = YardsFrom(leader, waypoint);
                 worstOff = Math.Max(worstOff, off);
                 refused |= PlayerbotMotion.IsBlacklisted(leader, waypoint);
-                // The leash: once the leader has fought the probe, the probe kites past the answer leash and is held there (rooted, so it neither walks back nor is pushed about) with the leader on its threat list. The leader
-                // must not follow it (the bound below) and must be back at its waypoint 2 s on; then the probe is released and comes back to be fought at the waypoint again.
+                // The leash: once the leader has fought the probe, the probe kites past the answer leash and is held there (rooted, so it neither walks back nor is pushed about) with the leader on its threat list. It goes to the side
+                // of the waypoint the leader fought it on (the way it came): past the leash from the waypoint, yet within AssistYards of the leader wherever on its way home the leader is, since the leader fights within the leash
+                // (so the probe is at most ProbeKiteYards plus its melee reach from the leader, and ProbeKiteYards from the waypoint itself). A rooted creature refreshes its leash clock at every leash check and runs no chase step,
+                // so it neither soft-leashes nor evades for an unreachable victim while held.
                 if (!kited && hit && probe is not null && leader.Map?.FindUpdater<CreatureMapSystem>() is { } creatures)
                 {
                     kited = true;
                     kitedAt = Now(world);
                     creatures.SetAiImmobilized(probe, true, combatOnly: false);
-                    probe.Relocate(waypoint.X + ProbeKiteYards, waypoint.Y, probe.Z, 0, Now(world));
+                    float dx = probe.X - waypoint.X, dy = probe.Y - waypoint.Y, length = MathF.Sqrt((dx * dx) + (dy * dy));
+                    (dx, dy) = length >= 1f ? (dx / length, dy / length) : (-1f, 0f);
+                    probe.Relocate(waypoint.X + (ProbeKiteYards * dx), waypoint.Y + (ProbeKiteYards * dy), probe.Z, 0, Now(world));
+                    kiteDistance = Yards3d(leader, probe);
                 }
 
-                if (kited && !back && probe is not null)
+                if (kited && !released && probe is not null)
                 {
+                    uint sinceKite = unchecked(Now(world) - kitedAt);
                     if (!ReferenceEquals(probe.Combat.Victim, leader)) probe.Combat.Threat.AddThreat(leader, 100_000f);
-                    if (unchecked(Now(world) - kitedAt) > 2_000 && off <= PlayerbotSiegeCommander.WaypointYards && leader.Map?.FindUpdater<CreatureMapSystem>() is { } held2)
+                    // Answerable but for the leash: an attacker of the leader within AssistYards (3D, as SelectTarget measures), with the step's answer unspent (so the leash in force is SiegeAnswerLeashYards, not the disk).
+                    attackerLost |= !leader.Combat.Attackers.Contains(probe);
+                    tooFar |= Yards3d(leader, probe) > PlayerbotGroupAI.AssistYards;
+                    spent |= raid.AnswerSpent;
+                    // The leash itself: the leader drops the probe within a think or two and never takes it again while it is held; it is home by ProbeHomeByMs and stays home to the end of the hold.
+                    if (sinceKite >= ProbeDropByMs) targetedPastLeash |= ReferenceEquals(leaderAi?.TargetUnit, probe);
+                    back |= off <= PlayerbotSiegeCommander.WaypointYards;
+                    if (sinceKite >= ProbeHomeByMs)
                     {
-                        back = true;
-                        held2.SetAiImmobilized(probe, false, combatOnly: false);
+                        strayedHome |= off > PlayerbotSiegeCommander.WaypointYards;
+                        farthestInHold = Math.Max(farthestInHold, off);
+                    }
+
+                    if (sinceKite >= ProbeHoldMs && leader.Map?.FindUpdater<CreatureMapSystem>() is { } holding)
+                    {
+                        released = true;
+                        holding.SetAiImmobilized(probe, false, combatOnly: false);
                     }
                 }
             }
@@ -1430,7 +1456,8 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         });
 
         string story = $"run {run}: done={done} sent={sent} step={siege.Step}/{stepAtPush} denied={raid.PushDeniedStep} refused={refused} worstOff={worstOff:F1} retreats={raid.Retreats} "
-            + $"probe: onLeader={onLeader} evaded={evaded}; leader: targeted={targeted} hit={hit} kited={kited} back={back} {raid.LastFacts}"
+            + $"probe: onLeader={onLeader} evaded={evaded} kiteDistance={kiteDistance:F1} attackerLost={attackerLost} tooFar={tooFar} spent={spent}; "
+            + $"leader: targeted={targeted} hit={hit} kited={kited} released={released} targetedPastLeash={targetedPastLeash} back={back} strayedHome={strayedHome} farthestInHold={farthestInHold:F1} {raid.LastFacts}"
             + Environment.NewLine + string.Join(Environment.NewLine, trail);
         Assert.True(sent, "the probe never fired: " + story);
         Assert.True(done && siege.Step > stepAtPush, "the step did not move: " + story);
@@ -1440,17 +1467,37 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         // The leader answered it at the waypoint before the step moved: its AI took the probe as its target and its melee hit it.
         Assert.True(targeted, "the waiting leader never took the probe as its target: " + story);
         Assert.True(hit, "the waiting leader never hit the probe: " + story);
-        // Past the leash it was not followed: the leader stayed within the leash of its waypoint and went back to it.
         Assert.True(kited, "the probe was never sent past the leash: " + story);
+        Assert.True(released, "the hold did not run its course before the step moved: " + story);
+        // The hold was a test of the leash and nothing else: the probe stayed an attacker of the leader within AssistYards, and the answer of the step was not spent.
+        Assert.True(kiteDistance <= PlayerbotGroupAI.AssistYards - 2f, "the probe was not held within AssistYards of the leader: " + story);
+        Assert.False(attackerLost, "the probe stopped being an attacker of the leader during the hold: " + story);
+        Assert.False(tooFar, "the leader was more than AssistYards from the held probe: " + story);
+        Assert.False(spent, "the answer of the step was spent during the hold, so the disk, not the leash, kept the leader: " + story);
+        // The leash: the waiting leader does not answer an attacker beyond SiegeAnswerLeashYards of its waypoint, does not follow it past the leash, and is home for the rest of the hold.
+        Assert.False(targetedPastLeash, "the leader took the probe as its target while it was held past the leash: " + story);
         Assert.True(worstOff <= PlayerbotSiegeCommander.SiegeAnswerLeashYards + 3f, "the leader followed the probe past the leash: " + story);
         Assert.True(back, "the leader did not return to its waypoint once the probe was past the leash: " + story);
+        Assert.False(strayedHome, $"the leader was not at its waypoint from {ProbeHomeByMs} ms to {ProbeHoldMs} ms into the hold: " + story);
         Assert.NotEqual(stepAtPush, raid.PushDeniedStep);
         Assert.False(refused, "the loop watch refused the waypoint: " + story);
     }
 
-    /// <summary>How far beyond the waypoint the probe of the waiting-leader test is held once it has been fought: past <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/> (and the test's 3-yard
-    /// slack on it), yet well within <see cref="PlayerbotGroupAI.AssistYards"/> of the leader, so the probe is still one of the leader's answerable attackers and only the answer leash keeps the leader at its waypoint.</summary>
-    private const float ProbeKiteYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards + 8f;
+    /// <summary>How far from the waypoint the probe of the waiting-leader test is held once it has been fought: past <see cref="PlayerbotSiegeCommander.SiegeAnswerLeashYards"/> by more than the 3-yard slack of the bound plus a melee reach
+    /// (a leader that chased it to melee stands clear of the bound), yet, on the side the leader fought on, within <see cref="PlayerbotGroupAI.AssistYards"/> of a leader standing at the waypoint (42 against 50), so the probe stays
+    /// one of the answerable attackers of the leader for the whole hold and only the answer leash keeps the leader at its waypoint.</summary>
+    private const float ProbeKiteYards = PlayerbotSiegeCommander.SiegeAnswerLeashYards + 12f;
+
+    /// <summary>How long the probe is held past the leash: long enough for the walk home and a stretch standing there, well under the lag hold (<see cref="PlayerbotGroupCoordinator.LagHoldMs"/>) that moves the step on.</summary>
+    private const uint ProbeHoldMs = 12_000;
+
+    /// <summary>How long after the probe is put past the leash the leader may still have it as its target: a combat think or two (<see cref="PlayerbotOptions.CombatThinkIntervalMs"/>).</summary>
+    private const uint ProbeDropByMs = 1_000;
+
+    /// <summary>By when the leader must be back within <see cref="PlayerbotSiegeCommander.WaypointYards"/> of its waypoint: it fights within the leash, 30 yards at the most, which it walks back in under 5 s.</summary>
+    private const uint ProbeHomeByMs = 7_000;
+
+    private static float Yards3d(Unit a, Unit b) => MathF.Sqrt(((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y)) + ((a.Z - b.Z) * (a.Z - b.Z)));
 
     /// <summary>One line of what the waiting leader and its attacker are doing (the failure story of the answer tests).</summary>
     private static string AnswerLine(GroupTestWorld world, PlayerbotSiegeRaid raid, Guid leaderBot, Player leader, Vector3 waypoint, Creature? attacker, uint began)
