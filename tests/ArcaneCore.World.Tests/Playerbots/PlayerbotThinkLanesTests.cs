@@ -964,16 +964,17 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // a real 4 s think and wall thresholds
     public async Task ALongThink_IsNotCountedAsSilenceOfTheBotsThoughtAfterItInTheSameTick()
     {
-        // One bot thinks for 2.5 s (a stall: past the 1 s threshold, credited once, at the long think, to the feature's stalled total). A bot thought after
+        // One bot thinks for 4 s (a stall: past the 1 s threshold, credited once, at the long think, to the feature's stalled total). A bot thought after
         // it in that tick waited through it, and its gap starts at its own think (the live clock), so the stall is in that gap, where the credit takes it
         // out. Counted from the tick start (a clock that does not move inside the tick) the bot's gap would start before the long think and the stall would
         // reach it a tick later, after the credit was already used up: in the gap, the main pass that feeds the motion lease, the report pass and the
         // silence the first lane yields to.
         var shared = new Stall();
         var (host, feature, capture, thinks) = await StartAsync(budgetMs: double.PositiveInfinity, boundMs: 1500, burnMs: 0, "Aftbot",
-            controllerFor: name => new StallOnce(shared, name, 2500));
+            controllerFor: name => new StallOnce(shared, name, 4000));
         try
         {
             // A measured pass and every bot primed.
@@ -982,6 +983,7 @@ public sealed class PlayerbotThinkLanesTests
                 await Task.Delay(50);
             Assert.True(await host.World.InvokeAsync(() => thinks.Count == 3 && thinks.Values.All(n => n >= 5)), "the bots did not warm up");
 
+            uint reportBefore = await host.World.InvokeAsync(() => feature.ReportPassMs);
             // Armed on the world thread, in the commands phase: the first bot of the next think pass is the long one, the other two follow in that tick.
             await host.World.InvokeAsync(() => { Volatile.Write(ref shared.Armed, 1); return true; });
             deadline = DateTime.UtcNow.AddSeconds(60);
@@ -1000,9 +1002,13 @@ public sealed class PlayerbotThinkLanesTests
             Assert.True(stall > 0 && end > stall && log.Length >= end + 10, "the stall did not happen or the bots did not think after it");
             string[] sameTick = [log[stall - 1].Name, log[end + 1].Name, log[end + 2].Name];
             Assert.Equal(3, sameTick.Distinct().Count()); // the two other bots thought after the long one
+            // The stall is credited once, at the long think (1 s threshold: the followers' report samples are about 1 s). Counted twice
+            // (a gap from the tick start) their next samples are the whole 4 s and the report pass that sets the starvation bound climbs far higher.
+            uint reportAfter = await host.World.InvokeAsync(() => feature.ReportPassMs);
+            Assert.True((long)reportAfter - reportBefore < 400, $"the report pass went from {reportBefore} to {reportAfter} ms after one long think");
             foreach (string follower in sameTick.Skip(1))
             {
-                // The bot waited through the long think, so its gap in that tick is long (a quarter of 2.5 s in the smoothing); the next tick adds a gap
+                // The bot waited through the long think, so its gap in that tick is long (a quarter of 4 s in the smoothing); the next tick adds a gap
                 // of about a tick, so the smoothed gap falls. Counted from the tick start, the long think reaches it a tick late instead.
                 uint first = log[Array.FindIndex(log, end + 1, e => e.Name == follower)].Gap;
                 uint next = log.Skip(end + 3).First(e => e.Name == follower).Gap;
