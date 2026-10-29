@@ -182,6 +182,31 @@ public sealed class RuleEvaluatorTests
     }
 
     [Fact]
+    public void GatePhase_GatesInsteadOfPhase_WhileActionsStillWritePhase()
+    {
+        RuleCatalog catalog = Build(new RuleContent
+        {
+            Rules = [Rule(1) with { PhaseMask = 0b10 }, Rule(2) with { PhaseMask = 0b01, Priority = 5 }],
+            Actions = [RecordOf(1, 1), Action(1, SetPhase, 3, seq: 1), RecordOf(2, 2)],
+        });
+        (RuleSubjectState state, TestSubject subject) = Bound(catalog);
+        RuleEvaluator evaluator = Evaluator();
+
+        state.Phase = 0;
+        state.GatePhase = 1;
+        evaluator.Fire(state, subject, Ping, default, 0);
+
+        Assert.Equal([1], subject.Tags);
+        Assert.Equal(3, state.Phase);
+        Assert.Equal(1, state.GatePhase);
+
+        state.GatePhase = -1;
+        evaluator.Fire(state, subject, Ping, default, 1);
+
+        Assert.Equal([1], subject.Tags);
+    }
+
+    [Fact]
     public void CombatFlags_Filters_AndEventParameters_GateRules()
     {
         RuleCatalog catalog = Build(new RuleContent
