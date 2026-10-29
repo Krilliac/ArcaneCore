@@ -794,6 +794,7 @@ internal static class PlayerbotMageService
             {
                 leg.LastTradeMs = now;
                 if (!session.TryManagedAction(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(mage.Guid.Value))) owners?.Release(player, BotSocial.PlayerbotTradeOwner.Fee);
+                else owners?.Of(player, session.Services.GetService<EconomyFeature>()?.TradeOf(player));
             }
 
             return TravelLegStep.Traveling;

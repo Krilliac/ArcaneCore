@@ -175,6 +175,29 @@ public sealed class PlayerbotTradeOwnersTests
     }
 
     /// <summary>
+    /// An unbound claim whose window closed before it was ever read must not adopt a later window with the same partner: read with a live trade after the grace it is
+    /// dropped, and read within the grace it binds (the initiate's own window). Broken: a stale claim from a bounced request bound to the next window and credited it.
+    /// </summary>
+    [Fact]
+    public async Task Of_AnUnboundClaim_NeverAdoptsALaterWindowWithTheSamePartner_AfterTheGrace()
+    {
+        await using Rig rig = await Rig.StartAsync();
+        await rig.OnWorld((bot, partner, _) =>
+        {
+            Assert.True(rig.Owners.TryClaim(bot, PlayerbotTradeOwner.Gift, partner.Guid, null));
+            rig.Clock.Ms += PlayerbotTradeOwners.PendingGraceMs + 1;
+            var later = new TradeSession(bot, partner); // a live trade with the claimed partner, but the claim is past its grace: the window is not the claim's
+            Assert.Equal(PlayerbotTradeOwner.None, rig.Owners.Of(bot, later).Owner);
+            Assert.Equal(0, rig.Owners.Count);
+
+            Assert.True(rig.Owners.TryClaim(bot, PlayerbotTradeOwner.Gift, partner.Guid, null));
+            rig.Clock.Ms += PlayerbotTradeOwners.PendingGraceMs;
+            Assert.Same(later, rig.Owners.Of(bot, later).Session); // exactly at the grace: still the initiate's own window
+            return true;
+        });
+    }
+
+    /// <summary>
     /// Healing on read, bound claims: the session gone for 10000 ms still holds, at 10001 ms it clears; coming back resets the count; a different session clears the claim.
     /// Broken: a claim whose terminal status never came would hold the slot for ever, or a returning session would be read as gone.
     /// </summary>

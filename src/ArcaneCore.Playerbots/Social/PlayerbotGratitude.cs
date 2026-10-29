@@ -381,6 +381,7 @@ internal sealed class PlayerbotGratitudeLane
                 tip.LastInitiateMs = pass.NowMs;
                 if (!PlayerbotSocialPackets.Send(bot.Session, WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(helper.Guid.Value)))
                     owners?.Release(self, PlayerbotTradeOwner.Tip);
+                else owners?.Of(self, economy.TradeOf(self));
             }
 
             return true;

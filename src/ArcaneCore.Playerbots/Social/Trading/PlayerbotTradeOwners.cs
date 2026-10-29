@@ -148,12 +148,13 @@ internal sealed class PlayerbotTradeOwners
                     return default;
                 }
             }
-            else if (live.OtherSide(bot).Player.Guid == record.Partner) record.Session = live;
-            else
+            else if (now - record.ClaimedMs > PendingGraceMs || live.OtherSide(bot).Player.Guid != record.Partner)
             {
+                // Too old to be the window its initiate opened (that binds at once), or another partner's: a claim never adopts a later window.
                 _records.Remove(key);
                 return default;
             }
+            else record.Session = live;
         }
         else if (live is null)
         {
