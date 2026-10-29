@@ -823,6 +823,7 @@ internal sealed class SpellSweepRunner
         // within reach (Unit::AttackerStateUpdate), so the cast has no range refusal to check.
         if (spell.IsNextMeleeSwing)
         {
+            _sceneOrdinal++; // the scene the check used to build: later scenes keep their seeds (and so their rolls)
             Checked('g', "not-run:next-swing");
             return;
         }
