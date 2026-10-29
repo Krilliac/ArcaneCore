@@ -33,6 +33,25 @@ public sealed class RuleDataTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LadderStep_SeedsTheShippedGoalsAndLadderRules_ExactlyAsTheContentDefinesThem()
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        await using (WorldDbContext db = TestContexts.Create<WorldDbContext>(cs))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+        }
+
+        await using WorldDbContext read = TestContexts.Create<WorldDbContext>(cs);
+        RuleContent loaded = await new EfRuleContentStore(read).LoadAsync();
+
+        Assert.Equal(34, PlayerbotLadderContent.Goals.Count);
+        Assert.Equal(PlayerbotLadderContent.Goals, loaded.Goals);
+        Assert.Equal(PlayerbotLadderContent.Rules, loaded.Rules);
+        Assert.Equal(PlayerbotLadderContent.Actions, loaded.Actions);
+        Assert.Contains(DataModules.For(DatabaseComponent.World), m => m is PlayerbotLadderDataModule);
+    }
+
+    [Fact]
     public async Task Store_ReadsEveryTable_InKeyOrder()
     {
         DatabaseConnectionOptions cs = await _databases.CreateAsync(DatabaseProvider.Sqlite);
@@ -50,13 +69,22 @@ public sealed class RuleDataTests : IAsyncLifetime
                 new RuleListActionRow { ListId = 7, Seq = 0, ActionType = 1, Param1 = 1, TargetType = 1 },
                 new RuleSubjectFilterRow { Id = 1, ClassMask = 3, RaceMask = 5, LevelMin = 10, LevelMax = 20, Team = 1, MapId = 1, ZoneId = 14, AreaId = 15, SubjectFlags = 2, SharePct = 30, ShareSeed = 9, Comment = "f" },
                 new RuleTextRow { Id = 1, ContentDefault = "Grr", Sound = 5, Type = 1, Language = 7, Emote = 3, BroadcastTextId = 11, Comment = "t" },
-                new PlayerbotGoalRow { GoalId = 2, Name = "grind", BasePriority = 10, Driver = 1, DriverParam1 = 1, DriverParam4 = 4, Comment = "g" },
-                new PlayerbotGoalRow { GoalId = 1, Name = "quest", Enabled = 0 });
+                new PlayerbotGoalRow { GoalId = 2002, Name = "grind", BasePriority = 10, Driver = 1, DriverParam1 = 1, DriverParam4 = 4, Comment = "g" },
+                new PlayerbotGoalRow { GoalId = 2001, Name = "quest", Enabled = 0 });
             await db.SaveChangesAsync();
         }
 
         await using WorldDbContext read = TestContexts.Create<WorldDbContext>(cs);
-        RuleContent content = await new EfRuleContentStore(read).LoadAsync();
+        RuleContent loaded = await new EfRuleContentStore(read).LoadAsync();
+
+        // The ladder step seeds the shipped rows (below the test rows' ids and in other goal ranges): this test reads back its own.
+        Assert.Equal(PlayerbotLadderContent.Rules.Count + 2, loaded.Rules.Count);
+        RuleContent content = loaded with
+        {
+            Rules = [.. loaded.Rules.Where(r => r.Id < PlayerbotLadderContent.FirstRuleId)],
+            Actions = [.. loaded.Actions.Where(a => a.OwnerId < PlayerbotLadderContent.FirstRuleId)],
+            Goals = [.. loaded.Goals.Where(g => g.GoalId >= 2000)],
+        };
 
         Assert.Equal([1, 2], content.Rules.Select(r => r.Id));
         RuleRecord hogger = content.Rules[1];
@@ -73,7 +101,7 @@ public sealed class RuleDataTests : IAsyncLifetime
         Assert.Equal((3, 5, (byte)10, (byte)20, (byte)1, 1, 14, 15, 2, (byte)30, 9, "f"), (filter.ClassMask, filter.RaceMask, filter.LevelMin, filter.LevelMax, filter.Team, filter.MapId, filter.ZoneId, filter.AreaId, filter.SubjectFlags, filter.SharePct, filter.ShareSeed, filter.Comment));
         RuleTextRecord text = Assert.Single(content.Texts);
         Assert.Equal(("Grr", 5, (byte)1, (byte)7, 3, 11, "t"), (text.ContentDefault, text.Sound, text.Type, text.Language, text.Emote, text.BroadcastTextId, text.Comment));
-        Assert.Equal([(short)1, (short)2], content.Goals.Select(g => g.GoalId));
+        Assert.Equal([(short)2001, (short)2002], content.Goals.Select(g => g.GoalId));
         Assert.False(content.Goals[0].Enabled);
         Assert.Equal(("grind", (short)10, true, (short)1, 1, 4, "g"), (content.Goals[1].Name, content.Goals[1].BasePriority, content.Goals[1].Enabled, content.Goals[1].Driver, content.Goals[1].DriverParam1, content.Goals[1].DriverParam4, content.Goals[1].Comment));
     }

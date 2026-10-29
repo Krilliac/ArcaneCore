@@ -6,7 +6,7 @@ Generated from the rule primitives and hosts of the Game assembly (`RuleVocabula
 
 | `host` | Name | Registered | Owner kinds | Capabilities |
 | ---: | --- | --- | --- | --- |
-| 1 | bot | no | - | - |
+| 1 | bot | yes | 0 Global | None |
 | 2 | creature | yes | 0 Global, 1 Entry, 2 Guid | Speak, Cast |
 | 3 | gameobject | no | - | - |
 | 4 | areatrigger | no | - | - |
@@ -54,9 +54,9 @@ For each rule of the fired event, lowest `priority` first (ties by `id`), the ev
 
 `chance_pct` is a fresh roll per firing. With the StableShare flag it is instead a stable share of subjects, as `share_pct` is: a subject is selected when `bucket(seed, rule_id, guid) < pct`, where bucket is two SplitMix64 finalisations of the three inputs, mod 100 (`RuleShare.Bucket`). A filter uses its `share_seed`; the StableShare chance uses the filter's seed (0 without a filter) xor 0x5EED5EED, so the two shares are independent. The same subjects stay selected across ticks and restarts; a new seed reshuffles them.
 
-Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the sequence then waits in one of the subject's 4 pending slots. Lists nest at most 8 deep (checked when they run: a deeper start fails and is counted), and a list that starts itself again with no delay in between is rejected at load.
+Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the sequence then waits in one of the subject's 4 pending slots. Lists started one inside another with no delay in between nest at most 8 deep: a longer chain, or a list that starts itself again with no delay in between, is rejected at load (with the rule that starts it); a delay ends the synchronous part, the load check counts only zero-delay starts and a resumed list tail runs at depth 1, so a start that still gets too deep at run time fails and is counted. The bot host runs its rules in one synchronous pass and never resumes a run: a bot rule action with `delay_ms` above 0, or a list with one, is rejected at load.
 
-Rule and rule_text ids below 1000000 are shipped content; server-authored rows use 1000000 up to 1073741823. From 1073741824 (2^30) up the ids belong to the converters, one sub-band of 67108864 (2^26) ids each: EventAI at 1073741824, DB scripts at 1140850688 (reserved), SmartAI at 1207959552 (reserved). A converter rewrites only its own sub-band, and a row at or above 1275068416 is rejected at load. `playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, or 1000 and up for a custom goal.
+Rule and rule_text ids below 1000000 are shipped content; server-authored rows use 1000000 up to 1073741823. From 1073741824 (2^30) up the ids belong to the converters, one sub-band of 67108864 (2^26) ids each: EventAI at 1073741824, DB scripts at 1140850688 (reserved), SmartAI at 1207959552 (reserved). A converter rewrites only its own sub-band, and a row at or above 1275068416 is rejected at load. `playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, a ladder rung (101 to 116: 100 plus the rung number), or 1000 and up for a custom goal. A goal a rule proposes needs a non-zero `driver`.
 
 ## Parameter kinds
 
@@ -79,6 +79,9 @@ Rule and rule_text ids below 1000000 are shipped content; server-authored rows u
 
 | Id | Name | Host | Parameters | Description |
 | ---: | --- | --- | --- | --- |
+| 1 | `bot.goal_evaluate` | bot | - | The bot is choosing its next goal (once per out-of-combat ladder pass); its rules propose goals. |
+| 2 | `bot.gold_below` | bot | 1 `copper` (NonNegative): The money threshold, in copper. | Fires with each ladder pass while the bot holds less than the given copper. |
+| 3 | `bot.free_bag_slots_below` | bot | 1 `slots` (NonNegative): The free-slot threshold. | Fires with each ladder pass while the bot has fewer free bag slots than given. |
 | 1 | `creature.timer_in_combat` | creature | 1 `initial_min_ms` (Int): Initial delay minimum in ms.<br>2 `initial_max_ms` (Int): Initial delay maximum in ms (below the minimum: never fires). | While in combat, after an initial delay and then every repeat interval (the rule's cooldown range); the initial delay starts when combat starts. |
 | 2 | `creature.timer_out_of_combat` | creature | 1 `initial_min_ms` (Int): Initial delay minimum in ms.<br>2 `initial_max_ms` (Int): Initial delay maximum in ms. | While out of combat and not evading, after an initial delay (armed at spawn and on reset) and then every repeat interval. |
 | 3 | `creature.timer` | creature | 1 `initial_min_ms` (Int): Initial delay minimum in ms.<br>2 `initial_max_ms` (Int): Initial delay maximum in ms. | In and out of combat, after an initial delay (armed at spawn only) and then every repeat interval. |
@@ -125,6 +128,8 @@ Rule and rule_text ids below 1000000 are shipped content; server-authored rows u
 | 2 | `start_rule_list` | shared | 1 `list_id` (RuleListId): rule_list.id. | Start a rule list for the subject: its actions up to the first delay run now, the rest later; a list already running restarts. |
 | 3 | `say` | shared | 1 `text_id` (TextId): rule_text.id. | The subject says a rule_text (its type picks say, yell, emote or whisper) to the target. |
 | 4 | `cast` | shared | 1 `spell_id` (SpellId): The spell.<br>2 `cast_flags` (NonNegative): Host-defined cast flags (0 = a normal cast). | The subject casts a spell on the target. |
+| 100 | `bot.propose_goal` | bot | 1 `goal_id` (GoalId): playerbot_goal.goal_id of a goal that has a driver.<br>2 `weight` (Int): Shipped rungs are 100 apart from 1600 down to 200; the policy sits at 1150. | Propose a goal to the bot's ladder pass: the highest weight is tried first (ties by playerbot_goal.base_priority), and a goal whose driver does not act lets the next candidate run. |
+| 101 | `bot.suppress_goal` | bot | 1 `goal_id` (GoalId): playerbot_goal.goal_id of a goal that has a driver. | Remove every proposal of a goal from this ladder pass, whoever proposed it; with a subject filter it switches a rung off for a share of bots. |
 | 100 | `creature.row` | creature | 1 `flags` (NonNegative): CreatureRuleIds.RowFlags: 1 repeatable, 2 random action, 4 combat action, 8 ranged only, 16 melee only, 32 one shot.<br>2 `action_count` (NonNegative): How many actions follow (the choices of a random-action row). | Row options of a converted EventAI row (first action): repeatable, random action, combat action, ranged/melee only, one shot. |
 | 101 | `creature.say` | creature | 1 `text_id` (TextId): rule_text.id.<br>2 `text_id_2` (NonNegative): Second choice (0 none).<br>3 `text_id_3` (NonNegative): Third choice (0 none). | Say a rule_text; with a second (and third) text one is chosen at random. Pair with creature.text_audience for the EventAI text target. |
 | 102 | `creature.set_faction` | creature | 1 `faction_template` (NonNegative):  | A faction template becomes the creature's faction until it respawns; 0 gives the template's faction back. |

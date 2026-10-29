@@ -11,10 +11,14 @@ public sealed class RuleVocabularyTests
     {
         RuleVocabulary vocabulary = RuleVocabulary.Default;
 
+        Assert.Contains("bot", vocabulary.Hosts.Select(h => h.Name));
         Assert.Contains("world_event", vocabulary.Hosts.Select(h => h.Name));
         Assert.Equal(
             ["event 1 world_event.started", "event 2 world_event.stopped", "event 3 world_event.update", "action 100 world_event.start_event", "action 101 world_event.stop_event"],
             vocabulary.Primitives.Where(p => p.Host == RuleHostKind.WorldEvent).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
+        Assert.Equal(
+            ["event 1 bot.goal_evaluate", "event 2 bot.gold_below", "event 3 bot.free_bag_slots_below", "action 100 bot.propose_goal", "action 101 bot.suppress_goal"],
+            vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Bot).Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
         IReadOnlyList<RulePrimitiveInfo> shared = [.. vocabulary.Primitives.Where(p => p.Host == RuleHostKind.Any)];
         Assert.Equal(
             ["action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "target 1 self", "target 2 invoker"],
@@ -33,7 +37,7 @@ public sealed class RuleVocabularyTests
         Assert.NotNull(vocabulary.FindEvent(RuleTestKit.Kind, RuleTestKit.Ping));
         Assert.NotNull(vocabulary.FindAction(RuleTestKit.Kind, RuleTestKit.Record));
         Assert.Null(vocabulary.FindAction(RuleHostKind.Any, RuleTestKit.Record));
-        Assert.Null(vocabulary.FindEvent(RuleHostKind.Bot, RuleTestKit.Ping));
+        Assert.Null(vocabulary.FindEvent(RuleHostKind.GameObject, RuleTestKit.Ping));
         Assert.Equal("test", vocabulary.FindHost("TEST")!.Name);
         Assert.Contains(vocabulary.For(RuleTestKit.Kind), p => p.Name == "test.record");
         Assert.Contains(vocabulary.For(RuleTestKit.Kind), p => p.Name == "say");

@@ -80,9 +80,21 @@ public sealed class RuleTracer
     }
 }
 
-/// <summary>What the evaluator counted since it was created (diagnostics for its host; P0 wires no host, so no command prints them yet).</summary>
+/// <summary>
+/// What the evaluator counted since it was created (diagnostics for its host). Written on the host thread only; a host registers them with
+/// <see cref="RuleCountersRegistry"/> and <c>.rules stats</c> prints them (a plain 64-bit read from another thread is a snapshot, not a lock).
+/// </summary>
 public sealed class RuleEvaluatorCounters
 {
+    /// <summary>Faults <see cref="RuleEvaluator.TryFire"/> and <see cref="RuleEvaluator.TryUpdate"/> caught (the ledger holds the details).</summary>
+    public long Faults;
+
+    /// <summary>Firings refused because the same event was already running for the same subject (an action fired it again), or because the nesting cap was hit.</summary>
+    public long Reentrant;
+
+    /// <summary>Delayed runs resumed after their invoker was gone (despawned, logged out): they continued without an invoker.</summary>
+    public long InvokerLost;
+
     /// <summary>Rule firings whose actions ran.</summary>
     public long Fired;
 
@@ -97,4 +109,33 @@ public sealed class RuleEvaluatorCounters
 
     /// <summary>List starts refused at the nesting limit.</summary>
     public long DepthLimited;
+
+    /// <summary>One line with every counter (<c>.rules stats</c>).</summary>
+    public string Describe() => string.Create(System.Globalization.CultureInfo.InvariantCulture,
+        $"fired={Fired} actions={ActionsRun} failed={ActionsFailed} dropped_runs={DroppedRuns} depth_limited={DepthLimited} reentrant={Reentrant} invoker_lost={InvokerLost} faults={Faults}");
+}
+
+/// <summary>
+/// The evaluator counters of every running host, by label, for <c>.rules stats</c>. A host with one evaluator per map thread registers each
+/// under its own label and unregisters it when the thread goes away. Thread-safe.
+/// </summary>
+public sealed class RuleCountersRegistry
+{
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (RuleHostKind Host, RuleEvaluatorCounters Counters)> _entries = new(StringComparer.Ordinal);
+
+    /// <summary>Register (or replace) the counters of <paramref name="label"/>.</summary>
+    public void Register(RuleHostKind host, string label, RuleEvaluatorCounters counters)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        ArgumentNullException.ThrowIfNull(counters);
+        _entries[label] = (host, counters);
+    }
+
+    /// <summary>Remove <paramref name="label"/>; true when it was registered.</summary>
+    public bool Unregister(string label) => _entries.TryRemove(label, out _);
+
+    /// <summary>One line per registered evaluator (narrowed to <paramref name="host"/>), ordered by label.</summary>
+    public IReadOnlyList<string> Lines(RuleHostKind? host = null)
+        => [.. _entries.Where(e => host is null || e.Value.Host == host).OrderBy(e => e.Key, StringComparer.Ordinal)
+            .Select(e => $"{RuleHostNames.Of(e.Value.Host)} {e.Key}: {e.Value.Counters.Describe()}")];
 }
