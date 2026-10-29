@@ -4751,7 +4751,7 @@ Logging.ArcaneCore.Console.QueueCapacity = 4096
 
 #
 #    Logging.ArcaneCore.File.Enabled
-#        Description: true writes the plain text log to Path. Default off.
+#        Description: true writes the one log file, in the chosen Format, to Path. Default off.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -4763,14 +4763,15 @@ Logging.ArcaneCore.File.Enabled = false
 #
 #    Logging.ArcaneCore.File.Path
 #        Description: The active log file; relative paths resolve against the working directory.
-#                     Rolled segments sit next to it as name-yyyyMMdd-NNN.ext.
+#                     Rolled segments sit next to it as name-yyyyMMdd-NNN.ext. Not set means
+#                     logs/arcanecore.jsonl for a Json file and logs/arcanecore.log for a Text file.
 #        Type: string
-#        Default: "logs/arcanecore.log"
+#        Default: (not set)
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#loggingarcanecore
 #
-Logging.ArcaneCore.File.Path = "logs/arcanecore.log"
+# Logging.ArcaneCore.File.Path =
 
 #
 #    Logging.ArcaneCore.File.QueueCapacity
@@ -4819,6 +4820,22 @@ Logging.ArcaneCore.File.RollDaily = true
 Logging.ArcaneCore.File.RollSizeMb = 64
 
 #
+#    Logging.ArcaneCore.Format
+#        Description: The content format of the one log file: Json (one JSON object per line,
+#                     structured properties kept) or Text (the plain console line format). Not set
+#                     means the legacy File/Json switches decide; with nothing configured the
+#                     default is Json: JSON keeps the structured state properties for ingestion, and
+#                     the console already gives a text view. The file is configured under File.
+#                     Restart-only. Values: Text, Json.
+#        Type: LogFileFormat?
+#        Default: (not set)
+#        Allowed: Text | Json
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#loggingarcanecore
+#
+# Logging.ArcaneCore.Format =
+
+#
 #    Logging.ArcaneCore.IncludeScopes
 #        Description: true appends the active logger scopes to each line (=&gt; scope). Live at
 #                     reload.
@@ -4832,7 +4849,8 @@ Logging.ArcaneCore.IncludeScopes = true
 
 #
 #    Logging.ArcaneCore.Json.Enabled
-#        Description: true writes one JSON object per log event to Path. Default off.
+#        Description: Deprecated: use File:Enabled with Format=Json. true writes one JSON object per
+#                     log event to Path. Default off.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -4843,20 +4861,20 @@ Logging.ArcaneCore.Json.Enabled = false
 
 #
 #    Logging.ArcaneCore.Json.Path
-#        Description: The active JSON-lines file; relative paths resolve against the working
-#                     directory. Rolls like the text file.
+#        Description: Deprecated: use File:Path. The active JSON-lines file; relative paths resolve
+#                     against the working directory. Not set means logs/arcanecore.jsonl.
 #        Type: string
-#        Default: "logs/arcanecore.jsonl"
+#        Default: (not set)
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#loggingarcanecore
 #
-Logging.ArcaneCore.Json.Path = "logs/arcanecore.jsonl"
+# Logging.ArcaneCore.Json.Path =
 
 #
 #    Logging.ArcaneCore.Json.QueueCapacity
-#        Description: Lines the JSON writer thread may hold before new lines are dropped (counted
-#                     and reported as a JSON line).
+#        Description: Deprecated: use File:QueueCapacity. Lines the JSON writer thread may hold
+#                     before new lines are dropped (counted and reported as a JSON line).
 #        Type: int
 #        Default: 8192
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -4867,8 +4885,8 @@ Logging.ArcaneCore.Json.QueueCapacity = 8192
 
 #
 #    Logging.ArcaneCore.Json.Retain
-#        Description: Rolled segments kept; the oldest beyond this count are deleted after each
-#                     roll. 0 keeps all.
+#        Description: Deprecated: use File:Retain. Rolled segments kept; the oldest beyond this
+#                     count are deleted after each roll. 0 keeps all.
 #        Type: int
 #        Default: 14
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -4879,7 +4897,8 @@ Logging.ArcaneCore.Json.Retain = 14
 
 #
 #    Logging.ArcaneCore.Json.RollDaily
-#        Description: true rolls at the first line of a new day (in the Timestamps clock).
+#        Description: Deprecated: use File:RollDaily. true rolls at the first line of a new day (in
+#                     the Timestamps clock).
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -4890,7 +4909,8 @@ Logging.ArcaneCore.Json.RollDaily = true
 
 #
 #    Logging.ArcaneCore.Json.RollSizeMb
-#        Description: Roll when the active file would exceed this many MiB; 0 never rolls by size.
+#        Description: Deprecated: use File:RollSizeMb. Roll when the active file would exceed this
+#                     many MiB; 0 never rolls by size.
 #        Type: int
 #        Default: 64
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -5577,8 +5597,8 @@ Net.Protection.WorldPacketsPerSecond = 4000
 #
 #    Ops.Diagnostics.Dumps.Directory
 #        Description: The directory the dump files are written to. Empty (default) means dumps
-#                     beside the text log file (Logging:ArcaneCore:File:Path, so logs/dumps by
-#                     default). It is created on the first dump.
+#                     beside the log file (the resolved Logging:ArcaneCore:File:Path, so logs/dumps
+#                     by default). It is created on the first dump.
 #        Type: string
 #        Default: ""
 #        Allowed: text
@@ -14049,6 +14069,18 @@ World.Playerbots.Economy.BuyReagents = true
 World.Playerbots.Economy.BuyUpgradeBudgetFraction = 0.25
 
 #
+#    World.Playerbots.Economy.ConsumableKeepCount
+#        Description: Per consumable entry, the count (1..200) a bot always keeps before a stack of
+#                     it is surplus.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ConsumableKeepCount = 20
+
+#
 #    World.Playerbots.Economy.Enabled
 #        Description: Let bots list, buy and collect at the auction house (on by default). Off: no
 #                     visit starts; a running one is dropped.
@@ -14059,6 +14091,34 @@ World.Playerbots.Economy.BuyUpgradeBudgetFraction = 0.25
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.Enabled = true
+
+#
+#    World.Playerbots.Economy.HouseBuyoutsPerHour
+#        Description: The most auctions all bots together buy out at one auction house in any 60
+#                     minutes of world time (0..100000); 0 lets no bot buy there. A soft limit: a
+#                     buyout counts when the house confirms it, so bots with buyouts in flight
+#                     together can overshoot it by their number.
+#        Type: int
+#        Default: 200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.HouseBuyoutsPerHour = 200
+
+#
+#    World.Playerbots.Economy.HouseListingsPerHour
+#        Description: The most auctions all bots together list at one auction house in any 60
+#                     minutes of world time (0..100000); 0 lets no bot list there. A soft limit: a
+#                     listing counts when the house confirms it, so bots with listings in flight
+#                     together can overshoot it by their number.
+#        Type: int
+#        Default: 400
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.HouseListingsPerHour = 400
 
 #
 #    World.Playerbots.Economy.ListChancePerVisit
@@ -14122,6 +14182,30 @@ World.Playerbots.Economy.ListMarkupPercentRare = 800
 World.Playerbots.Economy.ListMarkupPercentUncommon = 300
 
 #
+#    World.Playerbots.Economy.ListSurplusConsumables
+#        Description: List stacks of consumables (food, drink, potions, bandages, elixirs, scrolls)
+#                     beyond the keep count (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ListSurplusConsumables = true
+
+#
+#    World.Playerbots.Economy.MaxBuyoutsPerHour
+#        Description: The most auctions one bot buys out, reagents and upgrades together, in any 60
+#                     minutes of world time (0..100); 0 buys nothing.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MaxBuyoutsPerHour = 6
+
+#
 #    World.Playerbots.Economy.MaxListingsPerBot
 #        Description: The most auctions one bot has listed at once (0..50), counted from the auction
 #                     house's own owner list; 0 lists nothing.
@@ -14132,6 +14216,44 @@ World.Playerbots.Economy.ListMarkupPercentUncommon = 300
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.MaxListingsPerBot = 5
+
+#
+#    World.Playerbots.Economy.MaxListingsPerHour
+#        Description: The most auctions one bot lists in any 60 minutes of world time (0..100); 0
+#                     lists nothing.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MaxListingsPerHour = 10
+
+#
+#    World.Playerbots.Economy.MoneyGoal
+#        Description: A bot short of money lists every visit and gets 3 more listing slots (on by
+#                     default). Short means its budget reserves more than it has, or its money is
+#                     below MoneyGoalCopperPerLevel times its level. It only raises listing, and
+#                     never when ListChancePerVisit or MaxListingsPerBot is 0.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MoneyGoal = true
+
+#
+#    World.Playerbots.Economy.MoneyGoalCopperPerLevel
+#        Description: The money floor per character level of the money goal, in copper (0..100000);
+#                     0: only what the budget reserves counts.
+#        Type: int
+#        Default: 500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MoneyGoalCopperPerLevel = 500
 
 #
 #    World.Playerbots.Economy.VisitIntervalMinutes

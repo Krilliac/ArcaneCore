@@ -6,7 +6,7 @@ using Microsoft.Extensions.Options;
 namespace ArcaneCore.Kernel.Logging;
 
 /// <summary>
-/// The ArcaneCore <see cref="ILoggerProvider"/>: a console sink, an optional rolling text file and an optional JSON-lines file,
+/// The ArcaneCore <see cref="ILoggerProvider"/>: a console sink and at most one rolling log file (text or JSON lines, <see cref="ArcaneLoggingOptions.Format"/>),
 /// all behind bounded queues (docs/ops/logging.md). Built once from <see cref="ArcaneLoggingOptions"/>; a configuration reload
 /// (the host re-reads <c>appsettings.json</c> on change) applies <c>Console:Mode</c>, <c>Timestamps</c> and <c>IncludeScopes</c>
 /// live and logs, for every file key that changed, that it keeps its start value (vmangos "option can't be changed at reload",
@@ -37,6 +37,7 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
     public ArcaneLoggerProvider(IOptionsMonitor<ArcaneLoggingOptions> options)
         : this(options, ConsoleColorSupport.TerminalAllowsColor, BuildSinks(options.CurrentValue))
     {
+        EmitStartupWarnings(options.CurrentValue);
     }
 
     /// <summary>
@@ -134,25 +135,26 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
         }
     }
 
-    /// <summary>The sinks the host configuration asks for: console (always, possibly disabled), then file and JSON when enabled.</summary>
+    /// <summary>
+    /// The sinks the host configuration asks for: the console (always, possibly disabled), then at most one file sink as resolved by
+    /// <see cref="LogFileSinkPlan"/>, named <c>file</c> for Text and <c>json</c> for Json.
+    /// </summary>
     public static LogSink[] BuildSinks(ArcaneLoggingOptions options)
     {
         LoggingConfigChecks.ThrowIfInvalid(options);
         Func<DateTime> clock = options.Timestamps == TimestampKind.Local ? LocalClock : UtcClock;
-        var sinks = new List<LogSink>(3)
+        var sinks = new List<LogSink>(2)
         {
             Queued("console", new TextWriterLineWriter(Console.Out), options.Console.QueueCapacity, static (name, writer) => new TextLogSink(name, writer, color: false)),
         };
-        if (options.File.Enabled)
+        LogFileSinkPlan plan = LogFileSinkPlan.Resolve(options);
+        if (plan.Enabled)
         {
-            var policy = RollingFilePolicy.FromOptions(options.File.RollSizeMb, options.File.RollDaily, options.File.Retain);
-            sinks.Add(Queued("file", new RollingFileWriter(options.File.Path, policy, clock), options.File.QueueCapacity, static (name, writer) => new TextLogSink(name, writer, color: false)));
-        }
-
-        if (options.Json.Enabled)
-        {
-            var policy = RollingFilePolicy.FromOptions(options.Json.RollSizeMb, options.Json.RollDaily, options.Json.Retain);
-            sinks.Add(Queued("json", new RollingFileWriter(options.Json.Path, policy, clock), options.Json.QueueCapacity, static (name, writer) => new JsonLogSink(name, writer)));
+            var policy = RollingFilePolicy.FromOptions(plan.RollSizeMb, plan.RollDaily, plan.Retain);
+            var file = new RollingFileWriter(plan.Path, policy, clock);
+            sinks.Add(plan.Format == LogFileFormat.Text
+                ? Queued("file", file, plan.QueueCapacity, static (name, writer) => new TextLogSink(name, writer, color: false))
+                : Queued("json", file, plan.QueueCapacity, static (name, writer) => new JsonLogSink(name, writer)));
         }
 
         return [.. sinks];
@@ -210,26 +212,45 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
         }
 
         ReportFixed("Console:QueueCapacity", previous.Console.QueueCapacity, next.Console.QueueCapacity);
+        ReportFixed("Format", FormatText(previous.Format), FormatText(next.Format));
         ReportFixed("File:Enabled", previous.File.Enabled, next.File.Enabled);
-        ReportFixed("File:Path", previous.File.Path, next.File.Path);
+        ReportFixed("File:Path", PathText(previous.File.Path), PathText(next.File.Path));
         ReportFixed("File:RollSizeMb", previous.File.RollSizeMb, next.File.RollSizeMb);
         ReportFixed("File:RollDaily", previous.File.RollDaily, next.File.RollDaily);
         ReportFixed("File:Retain", previous.File.Retain, next.File.Retain);
         ReportFixed("File:QueueCapacity", previous.File.QueueCapacity, next.File.QueueCapacity);
         ReportFixed("Json:Enabled", previous.Json.Enabled, next.Json.Enabled);
-        ReportFixed("Json:Path", previous.Json.Path, next.Json.Path);
+        ReportFixed("Json:Path", PathText(previous.Json.Path), PathText(next.Json.Path));
         ReportFixed("Json:RollSizeMb", previous.Json.RollSizeMb, next.Json.RollSizeMb);
         ReportFixed("Json:RollDaily", previous.Json.RollDaily, next.Json.RollDaily);
         ReportFixed("Json:Retain", previous.Json.Retain, next.Json.Retain);
         ReportFixed("Json:QueueCapacity", previous.Json.QueueCapacity, next.Json.QueueCapacity);
     }
 
+    private static string FormatText(LogFileFormat? format) => format?.ToString() ?? "(unset)";
+
+    private static string PathText(string? path) => string.IsNullOrEmpty(path) ? "(unset)" : path;
+
     private void ReportFixed<T>(string key, T running, T wanted)
         where T : IEquatable<T>
     {
-        if (!running.Equals(wanted))
+        if (running.Equals(wanted))
         {
-            Self(LogLevel.Warning, $"Logging:ArcaneCore:{key} option can't be changed at reload; still {Convert.ToString(running, CultureInfo.InvariantCulture)}, restart to apply {Convert.ToString(wanted, CultureInfo.InvariantCulture)}.");
+            return;
+        }
+
+        Self(LogLevel.Warning, $"Logging:ArcaneCore:{key} option can't be changed at reload; still {Convert.ToString(running, CultureInfo.InvariantCulture)}, restart to apply {Convert.ToString(wanted, CultureInfo.InvariantCulture)}.");
+    }
+
+    /// <summary>
+    /// Writes the plan's warnings (deprecated or ambiguous file configuration) through the sinks, so they land in the log file too and
+    /// not only in the startup config report on stderr. <see cref="Self"/> already isolates each sink's failure.
+    /// </summary>
+    private void EmitStartupWarnings(ArcaneLoggingOptions options)
+    {
+        foreach (LogFileSinkWarning warning in LogFileSinkPlan.Resolve(options).Warnings)
+        {
+            Self(LogLevel.Warning, warning.Message + " Fix: " + warning.Fix + ".");
         }
     }
 
@@ -268,6 +289,7 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
         var copy = new ArcaneLoggingOptions { Timestamps = source.Timestamps, IncludeScopes = source.IncludeScopes };
         copy.Console.Mode = source.Console.Mode;
         copy.Console.QueueCapacity = source.Console.QueueCapacity;
+        copy.Format = source.Format;
         copy.File.Enabled = source.File.Enabled;
         copy.File.Path = source.File.Path;
         copy.File.RollSizeMb = source.File.RollSizeMb;
