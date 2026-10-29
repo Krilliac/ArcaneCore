@@ -174,11 +174,11 @@ public sealed class SessionTraceTimelineTests
         var clock = new FakeTimeProvider();
         await using WorldTestHost host = SessionTraceTestKit.Start(clock, logs);
         await using WorldTestClient gm = await host.EnterWorldAsync("STDIS0", "Disconnectgm", AccountSecurity.GameMaster);
-        WorldTestClient target = await host.EnterWorldAsync("STDIS1", "Disconnectone");
+        WorldTestClient target = await host.EnterWorldAsync("STDIS1", "Dropone");
         SessionTraceFeature feature = SessionTraceTestKit.FeatureOf(host);
-        uint low = await SessionTraceTestKit.LowGuidAsync(host, "Disconnectone");
+        uint low = await SessionTraceTestKit.LowGuidAsync(host, "Dropone");
         await gm.CollectAsync();
-        Assert.StartsWith("Session trace on for Disconnectone (guid", await SessionTraceTestKit.CommandAsync(gm, ".debug trace session Disconnectone on"), StringComparison.Ordinal);
+        Assert.StartsWith("Session trace on for Dropone (guid", await SessionTraceTestKit.CommandAsync(gm, ".debug trace session Dropone on"), StringComparison.Ordinal);
         Trace trace = await host.OnWorldAsync(() => Assert.Single(feature.Active));
         Assert.StartsWith("127.0.0.1:", trace.Endpoint, StringComparison.Ordinal);
 
@@ -187,12 +187,12 @@ public sealed class SessionTraceTimelineTests
         TraceLine dropped = await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Guid == low && l.Event == "disconnect", "the disconnect line");
         Assert.Equal("reason=connection closed", dropped.Detail);
         await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Guid == low && l.Event == "logout", "the logout line");
-        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Disconnectone") is null, "the character left the world");
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Dropone") is null, "the character left the world");
 
         // The registry keeps the entry, now offline.
         Assert.True(await host.OnWorldAsync(() => feature.IsTraced(new ObjectGuid(low))));
         Assert.Equal("offline", trace.Endpoint);
-        Assert.Contains("offline", Assert.Single(await SessionTraceTestKit.CommandLinesAsync(gm, ".debug trace session list"), r => r.Contains("Disconnectone", StringComparison.Ordinal)), StringComparison.Ordinal);
+        Assert.Contains("offline", Assert.Single(await SessionTraceTestKit.CommandLinesAsync(gm, ".debug trace session list"), r => r.Contains("Dropone", StringComparison.Ordinal)), StringComparison.Ordinal);
 
         // Relog of the same character: the trace is still on and attaches the new session.
         Account account = (await host.Accounts.FindByUsernameAsync("STDIS1"))!;
@@ -202,7 +202,7 @@ public sealed class SessionTraceTimelineTests
         await again.LoginAsync((ulong)characterId);
         await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Guid == low && l.Event == "attached", "the attach line");
         Assert.StartsWith("127.0.0.1:", trace.Endpoint, StringComparison.Ordinal);
-        Assert.Same(trace, SessionTraceTestKit.SessionOf(host, "Disconnectone").SessionTrace);
+        Assert.Same(trace, SessionTraceTestKit.SessionOf(host, "Dropone").SessionTrace);
         await again.CollectAsync();
         await again.SendAsync(WorldOpcode.CmsgPing, Ping);
         await again.ReadUntilAsync(WorldOpcode.SmsgPong);
@@ -210,7 +210,7 @@ public sealed class SessionTraceTimelineTests
         Assert.Contains(afterRelog, l => l.Event == "in" && l.Detail.StartsWith("CMSG_PING", StringComparison.Ordinal));
 
         // A kick records its reason on the line.
-        SessionTraceTestKit.SessionOf(host, "Disconnectone").Kick("session-trace-test-kick");
+        SessionTraceTestKit.SessionOf(host, "Dropone").Kick("session-trace-test-kick");
         TraceLine kicked = await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Guid == low && l.Event == "disconnect" && l.Detail.Contains("session-trace-test-kick", StringComparison.Ordinal), "the kick line");
         Assert.Equal("reason=session-trace-test-kick", kicked.Detail);
     }

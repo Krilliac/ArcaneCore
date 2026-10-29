@@ -73,6 +73,12 @@ public sealed partial class WorldSession
 
     private void CapturePacket(bool fromClient, WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
+        // GM session trace (WorldSession.SessionTrace.cs): every reader path calls this for an inbound packet; untraced is one volatile read.
+        if (fromClient && Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Inbound(opcode, payload);
+        }
+
         // Packet-tools taps (WorldSession.PacketTools.cs): none by default, one array read on the per-packet path.
         ISessionPacketTap[] taps = Volatile.Read(ref _taps);
         if (taps.Length != 0)
