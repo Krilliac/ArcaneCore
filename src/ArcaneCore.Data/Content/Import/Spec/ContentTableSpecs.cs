@@ -271,6 +271,8 @@ public static class ContentTableSpecs
         new("game_tele", [new KeyColumn("id")], [], [], LocationDumpImporter.ReadsTeleColumn),
         new("world_safe_locs", [new KeyColumn("id")], ["map", "x", "y", "z", "o", "name"], []),
         new("game_graveyard_zone", [new KeyColumn("id"), new KeyColumn("ghost_zone", "ghost_loc")], ["faction", "link_kind", "patch_min", "patch_max"], s_graveyardSignatures),
+        // spell_threat: SpellThreatDumpImporter reads by name; classic-db has Threat/ap_bonus (ap_bonus must be zero), vmangos threat/inverse_effect_mask and the build range.
+        new("spell_threat", [new KeyColumn("entry")], ["Threat", "threat", "multiplier", "ap_bonus", "inverse_effect_mask", "build_min", "build_max"], s_buildRangeSignatures),
         new("world_safe_locs_facing", [new KeyColumn("id")], ["orientation"], []),
     ];
 

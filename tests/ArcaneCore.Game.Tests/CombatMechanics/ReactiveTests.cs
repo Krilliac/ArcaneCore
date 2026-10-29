@@ -88,11 +88,11 @@ public sealed class ReactiveTests
             Kit = new SpellTestKit([.. Spells()]);
             (Warrior, _) = Kit.AddPlayer(1);
             Warrior.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warrior);
-            (Rogue, _) = Kit.AddPlayer(2, 0, 3);
+            (Rogue, _) = Kit.AddHostilePlayer(2, 0, 3);
             Rogue.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Rogue);
             (Hunter, _) = Kit.AddPlayer(3, 0, -3);
             Hunter.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
-            (Enemy, _) = Kit.AddPlayer(4, 3, 0);
+            (Enemy, _) = Kit.AddHostilePlayer(4, 3, 0);
             Enemy.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warrior);
             Combos = new ComboPointService(Kit.System, (_, guid) => Kit.World.FindOnlinePlayer(guid));
             Combos.Install();

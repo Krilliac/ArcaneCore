@@ -46,7 +46,7 @@ public sealed class JudgementScript : ISpellScript
             break;
         }
 
-        system.CastSpell(caster, judgement, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true);
+        system.CastSpell(caster, judgement, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true);
     }
 }
 
@@ -68,7 +68,7 @@ public sealed class JudgementOfCommandDummyScript : ISpellScript
         uint damageSpell = (uint)Math.Max(0, (int)context.Spell.SimpleValue(0));
         if (context.System.Store.Get(damageSpell) is not null)
         {
-            context.System.CastSpell(context.Caster, damageSpell, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true);
+            context.System.CastSpell(context.Caster, damageSpell, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true);
         }
     }
 }
@@ -140,7 +140,7 @@ public sealed class HolyShockScript : ISpellScript
         }
 
         uint spell = context.System.Relations.IsFriendly(context.Caster, context.Target) ? ids.Heal : ids.Hurt;
-        context.System.CastSpell(context.Caster, spell, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true);
+        context.System.CastSpell(context.Caster, spell, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true);
     }
 
     /// <summary>vmangos WorldObject::IsFacingTarget (Object.cpp:1986-1989): within 1.4 yards in 2D, or in the front half circle.</summary>
@@ -240,7 +240,7 @@ public sealed class HolyLightScript : ISpellScript
             return;
         }
 
-        system.CastCustomSpell(context.Caster, healSpell, SpellCastTargets.ForUnit(context.Target.Guid), heal, (int)context.Spell.Id);
+        system.CastCustomSpell(context.Caster, healSpell, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), heal, (int)context.Spell.Id);
     }
 }
 

@@ -47,7 +47,8 @@ public sealed class SpellWorldTests
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient caster = await host.EnterWorldAsync("CASTER", "Caster");
-        await using WorldTestClient target = await host.EnterWorldAsync("TARGET", "Target");
+        await using WorldTestClient target = await host.EnterWorldAsync("TARGET", "Target", race: 2);
+        await FlagForPvpAsync(host, "Target");
         await caster.CollectAsync();
         await target.CollectAsync();
         ulong targetGuid = await host.PlayerStateAsync("Target", p => p.Guid.Value);
@@ -67,7 +68,8 @@ public sealed class SpellWorldTests
     {
         await using var host = WorldTestHost.Start(configure: o => { o.TickIntervalMs = 20; o.MaxCommandsPerTick = 1; });
         await using WorldTestClient caster = await host.EnterWorldAsync("SATCASTER", "Satcaster");
-        await using WorldTestClient target = await host.EnterWorldAsync("SATTARGET", "Sattarget");
+        await using WorldTestClient target = await host.EnterWorldAsync("SATTARGET", "Sattarget", race: 2);
+        await FlagForPvpAsync(host, "Sattarget");
         await caster.CollectAsync();
         await target.CollectAsync();
         ulong targetGuid = await host.PlayerStateAsync("Sattarget", p => p.Guid.Value);
@@ -96,7 +98,8 @@ public sealed class SpellWorldTests
     {
         await using var host = WorldTestHost.Start(configure: o => o.TickIntervalMs = 50);
         await using WorldTestClient caster = await host.EnterWorldAsync("QUITTER", "Quitter");
-        await using WorldTestClient target = await host.EnterWorldAsync("SPARED", "Spared");
+        await using WorldTestClient target = await host.EnterWorldAsync("SPARED", "Spared", race: 2);
+        await FlagForPvpAsync(host, "Spared");
         await caster.CollectAsync();
         await target.CollectAsync();
         ulong targetGuid = await host.PlayerStateAsync("Spared", p => p.Guid.Value);
