@@ -30,7 +30,7 @@ public sealed class RuleWorldTests
 
     private static RuleContent Broken() => Valid(1) with
     {
-        Rules = [new RuleRecord { Id = 5, Host = (byte)RuleHostKind.Creature, EventType = 1 }],
+        Rules = [new RuleRecord { Id = 5, Host = (byte)RuleHostKind.GameObject, EventType = 1 }],
     };
 
     private sealed class MutableRuleStore(RuleContent content) : IRuleContentStore
@@ -79,7 +79,7 @@ public sealed class RuleWorldTests
 
         Assert.Single(f.Rules.Catalog.Texts);
         RuleRejection rejection = Assert.Single(f.Rules.Catalog.Rejected);
-        Assert.Equal("rule 5: host 2 is not registered (registered: none)", rejection.ToString());
+        Assert.Equal("rule 5: host 3 is not registered (registered: 2 creature)", rejection.ToString());
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public sealed class RuleWorldTests
 
         Assert.Equal(ReloadStatus.Rejected, result.Status);
         Assert.Same(before, f.Rules.Catalog);
-        Assert.Contains("rule 5: host 2 is not registered (registered: none)", result.Notes);
+        Assert.Contains("rule 5: host 3 is not registered (registered: 2 creature)", result.Notes);
     }
 
     [Fact]

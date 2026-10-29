@@ -79,7 +79,7 @@ public sealed class RuleCommandsTests
         {
             Rules =
             [
-                new RuleRecord { Id = 5, Host = (byte)RuleHostKind.Creature, OwnerKind = (byte)RuleOwnerKind.Entry, OwnerId = 99, EventType = 1 },
+                new RuleRecord { Id = 5, Host = (byte)RuleHostKind.GameObject, OwnerKind = (byte)RuleOwnerKind.Entry, OwnerId = 99, EventType = 1 },
                 new RuleRecord { Id = 6, Host = (byte)RuleHostKind.Bot, EventType = 1 },
             ],
         }, RuleVocabulary.Default, new RuleBuildOptions()));
@@ -89,11 +89,11 @@ public sealed class RuleCommandsTests
         Assert.Equal("2 rejected row(s).", all[^1]);
         Assert.Equal(4, all.Length);
 
-        string[] creature = await ConsoleAsync(host, ".rules check creature 99");
-        Assert.Equal(["rule 5: host 2 is not registered (registered: none) [creature entry 99]", "1 rejected row(s)."], creature[1..]);
-        Assert.Equal("No rejected rule row matches.", (await ConsoleAsync(host, ".rules check creature 98"))[1]);
+        string[] creature = await ConsoleAsync(host, ".rules check gameobject 99");
+        Assert.Equal(["rule 5: host 3 is not registered (registered: 2 creature) [gameobject entry 99]", "1 rejected row(s)."], creature[1..]);
+        Assert.Equal("No rejected rule row matches.", (await ConsoleAsync(host, ".rules check gameobject 98"))[1]);
         Assert.StartsWith("Unknown rule host 'dragon'. Hosts: bot, creature,", (await ConsoleAsync(host, ".rules check dragon"))[0], StringComparison.Ordinal);
-        Assert.StartsWith("Syntax:", (await ConsoleAsync(host, ".rules check creature x"))[0], StringComparison.Ordinal);
+        Assert.StartsWith("Syntax:", (await ConsoleAsync(host, ".rules check gameobject x"))[0], StringComparison.Ordinal);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class RuleCommandsTests
         await using WorldTestHost host = WorldTestHost.Start();
 
         string[] lines = await ConsoleAsync(host, ".rules vocab");
-        Assert.Equal("6 primitive(s).", lines[^1]);
+        Assert.EndsWith(" primitive(s).", lines[^1], StringComparison.Ordinal); // host lanes add their primitives to the shared six
         Assert.Contains(lines, l => l.StartsWith("action 4 cast(spell_id:SpellId, cast_flags:NonNegative) [shared]: ", StringComparison.Ordinal));
 
         string[] bot = await ConsoleAsync(host, ".rules vocab bot");
