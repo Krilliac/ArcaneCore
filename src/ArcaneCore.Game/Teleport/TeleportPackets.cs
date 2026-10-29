@@ -39,6 +39,13 @@ public enum TeleportOptions
     NotLeaveCombat = 0x04,
 
     /// <summary>
+    /// <c>TELE_TO_NOT_UNSUMMON_PET</c> (0x08, UnitDefines.h:774): a same-map teleport keeps the pet summoned even when it is farther from
+    /// the destination than the grid activation distance (Player::TeleportTo skips the temporary unsummon, Player.cpp:1913-1921). Used by the
+    /// under-map recall (Player.h:1798).
+    /// </summary>
+    NotUnsummonPet = 0x08,
+
+    /// <summary>
     /// Take the far path (SMSG_TRANSFER_PENDING, SMSG_NEW_WORLD, MSG_MOVE_WORLDPORT_ACK) even when the destination is the player's current
     /// map id. The vmangos counterpart is <c>TELE_TO_FORCE_MAP_CHANGE</c> (0x20, UnitDefines.h:776), which HandleGonameCommand sets when the
     /// battleground id changes (TeleportCommands.cpp:1252-1256) or the dungeon instance changes (:1299) and TeleportToHomebind always sets

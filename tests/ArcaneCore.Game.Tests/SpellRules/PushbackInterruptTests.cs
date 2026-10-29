@@ -73,7 +73,8 @@ public sealed class PushbackInterruptTests
     private static (Player Attacker, Player Caster, FakeSession Session, SpellCast Cast) Casting(SpellTestKit kit, uint spell)
     {
         (Player attacker, _) = kit.AddPlayer(1);
-        (Player caster, FakeSession session) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(attacker);
+        (Player caster, FakeSession session) = kit.AddHostilePlayer(2, 2);
         kit.Spellbook.Teach(caster, spell);
         kit.System.HandleCastRequest(caster, spell, spell is Channel or ChannelActionCancel ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(attacker.Guid));
         SpellCast cast = kit.System.GetState(caster.Guid)!.CurrentCast!;
@@ -128,6 +129,7 @@ public sealed class PushbackInterruptTests
     {
         using SpellTestKit kit = Kit();
         (Player attacker, _) = kit.AddPlayer(1);
+        SpellTestKit.FlagForPvp(attacker);
         Creature creature = FoundationTests.MakeCreature(0, 30);
         SpellInfo bolt = kit.Store.Get(Bolt)! with { InterruptFlags = SpellInterruptFlags.DamagePushback | SpellInterruptFlags.DamageCancels };
         var cast = new SpellCast(bolt, creature, SpellCastTargets.ForUnit(attacker.Guid), triggered: false, 3000, 0, 0);
@@ -323,6 +325,7 @@ public sealed class PushbackInterruptTests
     {
         using SpellTestKit kit = Kit();
         (Player kicker, _) = kit.AddPlayer(1);
+        SpellTestKit.FlagForPvp(kicker);
         Creature creature = FoundationTests.MakeCreature(0, 30);
         kit.System.CreatureImmunities = new SilenceImmune();
         SpellInfo bolt = kit.Store.Get(Bolt)!;

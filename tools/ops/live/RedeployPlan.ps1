@@ -13,11 +13,11 @@ Set-StrictMode -Version Latest
 # The names .reload accepts besides `config` (ReloadAllMembershipTests.Expected pins them to the reloadables the World registers; the
 # planner test pins this list to that one).
 $script:ReloadableContent = @(
-    'all_loot', 'areatrigger_tavern', 'areatrigger_teleport', 'chat_word_filter', 'creature_loot_template', 'creature_onkill_reputation',
+    'all_loot', 'areatrigger_tavern', 'areatrigger_teleport', 'chat_word_filter', 'conditions', 'creature_loot_template', 'creature_onkill_reputation',
     'creature_template', 'disenchant_loot_template', 'fishing_loot_template', 'game_tele', 'game_weather', 'gameobject_loot_template',
     'gameobject_template', 'gossip_menu', 'gossip_menu_option', 'instance_encounter', 'item_loot_template', 'item_template', 'npc_gossip',
     'npc_text', 'npc_trainer', 'npc_vendor', 'pickpocketing_loot_template', 'points_of_interest', 'quest_template', 'reference_loot_template',
-    'reputation_reward_rate', 'reputation_spillover_template', 'reserved_name', 'skill_fishing_base_level', 'skinning_loot_template',
+    'reputation_reward_rate', 'reputation_spillover_template', 'reserved_name', 'rules', 'skill_fishing_base_level', 'skinning_loot_template',
     'spell_enchant_charges', 'spell_proc_event', 'spell_proc_item_enchant', 'spell_template', 'spell_threats'
 )
 

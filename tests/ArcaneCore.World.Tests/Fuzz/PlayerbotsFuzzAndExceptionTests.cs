@@ -199,6 +199,16 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         AssertInvalid(o => o.ChaseReplanYards = 0.4f);
         AssertInvalid(o => o.ChaseReplanYards = 101f);
         AssertInvalid(o => o.ChaseReplanYards = float.NaN);
+        AssertInvalid(o => o.CornerClearanceYards = 0.4f);
+        AssertInvalid(o => o.CornerClearanceYards = 5.1f);
+        AssertInvalid(o => o.CornerClearanceYards = float.NaN);
+        AssertInvalid(o => o.CornerClearanceYards = float.PositiveInfinity);
+        AssertInvalid(o => o.CornerCentringMaxYards = -0.1f);
+        AssertInvalid(o => o.CornerCentringMaxYards = 10.1f);
+        AssertInvalid(o => o.CornerCentringMaxYards = float.NaN);
+        AssertInvalid(o => o.CornerTurnLeadYards = -0.1f);
+        AssertInvalid(o => o.CornerTurnLeadYards = 6.1f);
+        AssertInvalid(o => o.CornerTurnLeadYards = float.NaN);
         AssertInvalid(o => o.SlowThinkLogMs = -1);
         AssertInvalid(o => o.SlowThinkLogMs = 60001);
         AssertInvalid(o => o.MaxThinkSearchNodes = 500);
@@ -1052,7 +1062,7 @@ public sealed class PlayerbotsFuzzAndExceptionTests
         {
             _ = PlayerbotAuctionPricing.ReferencePerUnit(itemTpl);
             _ = PlayerbotAuctionPricing.VendorFloorPerUnit(itemTpl.SellPrice, 0.05f);
-            _ = PlayerbotAuctionPricing.StartBid((uint)rng.Next(10, 50000));
+            _ = PlayerbotAuctionPricing.StartBid((uint)rng.Next(10, 50000), (uint)rng.Next(0, 5000), 1u);
             _ = PlayerbotEconomyPlanner.VisitBudget((uint)rng.Next(0, 100000), econOpts.BuyUpgradeBudgetFraction);
             _ = PlayerbotEconomyPlanner.Remaining(1000u, (uint)rng.Next(0, 2000));
             _ = PlayerbotEconomyPlanner.TryParseAuctionSubject("Outbid: Linen Cloth", out _, out _);

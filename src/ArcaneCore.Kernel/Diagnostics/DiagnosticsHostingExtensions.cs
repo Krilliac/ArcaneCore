@@ -116,8 +116,8 @@ internal sealed class DiagnosticsHostedService(
 
     private void ConfigureDialogs(DiagnosticsOptions value, ILogger crashLogger)
     {
-        FileSinkOptions? file = loggingOptions?.Value.File;
-        CrashDialog.LogFilePath = file is { Enabled: true, Path.Length: > 0 } ? Path.GetFullPath(file.Path) : null;
+        LogFileSinkPlan? logFile = loggingOptions is null ? null : LogFileSinkPlan.Resolve(loggingOptions.Value);
+        CrashDialog.LogFilePath = logFile is { Enabled: true, Path.Length: > 0 } ? Path.GetFullPath(logFile.Path) : null;
         if (!value.CrashDialog && !value.FaultDialog)
         {
             return;
