@@ -444,6 +444,22 @@ public sealed class NpcVendorServiceTests
         Assert.Equal(2u, kit.Player.Inventory.GetItemCount(Lantern));
     }
 
+    [Fact] // NPCHandler.cpp:1012-1013: after GetNPCIfCanInteractWith
+    public void RepairItem_EndsInteractingAuras_OnlyForAReachableRepairer()
+    {
+        using var kit = new NpcServiceTestKit(NpcFlags.Vendor | NpcFlags.Repair, repair: Repair());
+        int cancels = 0;
+        kit.Services.InteractingCancels = _ => cancels++;
+
+        kit.Npc = kit.Npc with { X = kit.Player.X + 60 };
+        kit.Services.RepairItem(kit.Player, kit.Npc.Guid, default);
+        Assert.Equal(0, cancels);
+
+        kit.Npc = kit.Npc with { X = kit.Player.X + 1 };
+        kit.Services.RepairItem(kit.Player, kit.Npc.Guid, default);
+        Assert.Equal(1, cancels);
+    }
+
     [Fact]
     public void RepairItem_DiscountRoundsHalfCopperUp()
     {

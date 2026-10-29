@@ -158,6 +158,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player); // vmangos HandleTrainerBuySpellOpcode, NPCHandler.cpp:319-320 (after the money check)
         if (spells.CastTeachingSpell(player, npc.Guid, trainerSpell.Spell))
         {
             ModifyMoney(s, -(long)cost);
@@ -186,6 +187,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player); // vmangos SendTrainerList, NPCHandler.cpp:167-168
         float discount = PriceDiscount(player, npc);
         bool canLearnPrimary = spells.GetFreePrimaryProfessionPoints(player) > 0;
         var entries = new List<TrainerListEntry>();
