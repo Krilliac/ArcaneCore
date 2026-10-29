@@ -595,19 +595,20 @@ How to read the tables:
 |---|---|---|---|---|
 | `Logging:ArcaneCore:Console:Mode` | `ConsoleMode` | `Color` | - | `Color` (default), `Plain` or `Off`. Live at reload; colour is still disabled when stdout is not a terminal or `NO_COLOR` is set. Values: `Color`, `Plain`, `Off`. |
 | `Logging:ArcaneCore:Console:QueueCapacity` | `int` | `4096` | - | Lines the console writer thread may hold before new lines are dropped (and the drop counted and reported). Restart-only. |
-| `Logging:ArcaneCore:File:Enabled` | `bool` | `false` | - | `true` writes the plain text log to `Path`. Default off. |
-| `Logging:ArcaneCore:File:Path` | `string` | `"logs/arcanecore.log"` | - | The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`. |
+| `Logging:ArcaneCore:File:Enabled` | `bool` | `false` | - | `true` writes the one log file, in the chosen `Format`, to `Path`. Default off. |
+| `Logging:ArcaneCore:File:Path` | `string` | `null` | - | The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`. Not set means `logs/arcanecore.jsonl` for a Json file and `logs/arcanecore.log` for a Text file. |
 | `Logging:ArcaneCore:File:QueueCapacity` | `int` | `8192` | - | Lines the file writer thread may hold before new lines are dropped (counted and reported in the file itself). The world thread never waits on the disk. |
 | `Logging:ArcaneCore:File:Retain` | `int` | `14` | - | Rolled segments kept next to the active file; the oldest beyond this count are deleted after each roll. 0 keeps all. |
 | `Logging:ArcaneCore:File:RollDaily` | `bool` | `true` | - | `true` rolls at the first line of a new day (in the `Timestamps` clock). |
 | `Logging:ArcaneCore:File:RollSizeMb` | `int` | `64` | - | Roll when the active file would exceed this many MiB; 0 never rolls by size. |
+| `Logging:ArcaneCore:Format` | `LogFileFormat?` | `null` | - | The content format of the one log file: `Json` (one JSON object per line, structured properties kept) or `Text` (the plain console line format). Not set means the legacy `File`/`Json` switches decide; with nothing configured the default is `Json`: JSON keeps the structured state properties for ingestion, and the console already gives a text view. The file is configured under `File`. Restart-only. Values: `Text`, `Json`. |
 | `Logging:ArcaneCore:IncludeScopes` | `bool` | `true` | - | `true` appends the active logger scopes to each line (`=&gt; scope`). Live at reload. |
-| `Logging:ArcaneCore:Json:Enabled` | `bool` | `false` | - | `true` writes one JSON object per log event to `Path`. Default off. |
-| `Logging:ArcaneCore:Json:Path` | `string` | `"logs/arcanecore.jsonl"` | - | The active JSON-lines file; relative paths resolve against the working directory. Rolls like the text file. |
-| `Logging:ArcaneCore:Json:QueueCapacity` | `int` | `8192` | - | Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line). |
-| `Logging:ArcaneCore:Json:Retain` | `int` | `14` | - | Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all. |
-| `Logging:ArcaneCore:Json:RollDaily` | `bool` | `true` | - | `true` rolls at the first line of a new day (in the `Timestamps` clock). |
-| `Logging:ArcaneCore:Json:RollSizeMb` | `int` | `64` | - | Roll when the active file would exceed this many MiB; 0 never rolls by size. |
+| `Logging:ArcaneCore:Json:Enabled` | `bool` | `false` | - | Deprecated: use `File:Enabled` with `Format=Json`. `true` writes one JSON object per log event to `Path`. Default off. |
+| `Logging:ArcaneCore:Json:Path` | `string` | `null` | - | Deprecated: use `File:Path`. The active JSON-lines file; relative paths resolve against the working directory. Not set means `logs/arcanecore.jsonl`. |
+| `Logging:ArcaneCore:Json:QueueCapacity` | `int` | `8192` | - | Deprecated: use `File:QueueCapacity`. Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line). |
+| `Logging:ArcaneCore:Json:Retain` | `int` | `14` | - | Deprecated: use `File:Retain`. Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all. |
+| `Logging:ArcaneCore:Json:RollDaily` | `bool` | `true` | - | Deprecated: use `File:RollDaily`. `true` rolls at the first line of a new day (in the `Timestamps` clock). |
+| `Logging:ArcaneCore:Json:RollSizeMb` | `int` | `64` | - | Deprecated: use `File:RollSizeMb`. Roll when the active file would exceed this many MiB; 0 never rolls by size. |
 | `Logging:ArcaneCore:Timestamps` | `TimestampKind` | `Utc` | - | The clock timestamps are taken from: `Utc` (default) or `Local`. Live at reload. Values: `Utc`, `Local`. |
 
 ## `Loot`
@@ -686,7 +687,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `Ops:Diagnostics:Dumps:Directory` | `string` | `""` | - | The directory the dump files are written to. Empty (default) means `dumps` beside the text log file (`Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump. |
+| `Ops:Diagnostics:Dumps:Directory` | `string` | `""` | - | The directory the dump files are written to. Empty (default) means `dumps` beside the log file (the resolved `Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump. |
 | `Ops:Diagnostics:Dumps:Enabled` | `bool` | `false` | - | `true` lets an administrator write a dump of the running world with `.debug dump`. Default false, because a dump holds everything in memory: session keys, password material in flight, character data. Keep the dump directory private and delete the files when the analysis is done. |
 | `Ops:Diagnostics:Dumps:MinIntervalSeconds` | `int` | `600` | - | The least seconds between two dumps, so a repeated command cannot suspend the process again and again or fill the disk. 0 disables the limit. Default 600. |
 
