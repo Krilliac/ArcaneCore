@@ -201,6 +201,41 @@ public sealed class PopulationZoneValueTests
         Assert.Null(atlas.PickValued(level59, Rule, value, w, assigned, new Random(7), (_, _) => true));
     }
 
+    [Fact]
+    public void MinTotalKeepsLessValuableZonesOutOfTheRankingAndTheDraw()
+    {
+        // Valued() zones are equal; a zone with fewer quests is worth less.
+        PopulationZoneAtlas atlas = Atlas((100, 55, 60), (101, 55, 60), (102, 55, 60));
+        PopulationZoneValue value = Value(Valued(100), Valued(101) with { Quests = [.. Valued(101).Quests.Take(2)], Gear = [] }, Valued(102) with { Quests = [.. Valued(102).Quests.Take(4)], Gear = [] });
+        PopulationValueWeights w = PopulationValueWeights.Default;
+        var assigned = new Dictionary<uint, int>();
+        IReadOnlyList<ZoneScore> all = atlas.Rank(Fresh60(), Rule, value, w, assigned);
+        Assert.Equal([100u, 102u, 101u], all.Select(s => s.ZoneId));
+
+        // The floor is inclusive and only drops what is below it.
+        Assert.Equal([100u, 102u], atlas.Rank(Fresh60(), Rule, value, w, assigned, minTotal: all[1].Total).Select(s => s.ZoneId));
+        Assert.Equal([100u], atlas.Rank(Fresh60(), Rule, value, w, assigned, minTotal: all[1].Total + 0.001).Select(s => s.ZoneId));
+        Assert.Empty(atlas.Rank(Fresh60(), Rule, value, w, assigned, minTotal: all[0].Total + 0.001));
+        Assert.Equal(all.Select(s => s.ZoneId), atlas.Rank(Fresh60(), Rule, value, w, assigned, minTotal: double.NegativeInfinity).Select(s => s.ZoneId));
+
+        // The draw never leaves the floor, across many seeds, and reports the filtered ranking.
+        for (int seed = 0; seed < 200; seed++)
+        {
+            var ranked = new List<ZoneScore>();
+            PopulationSafeSelection? pick = atlas.PickValued(Fresh60(), Rule, value, w, assigned, new Random(seed), (_, _) => true, ranked: ranked, minTotal: all[1].Total);
+            Assert.NotNull(pick);
+            Assert.NotEqual(101u, pick.Placement.Zone.ZoneId);
+            Assert.Equal([100u, 102u], ranked.Select(s => s.ZoneId));
+        }
+
+        // Nothing at or above the floor and safe: null, the zones below it are not a fallback.
+        Assert.Null(atlas.PickValued(Fresh60(), Rule, value, w, assigned, new Random(1), (location, _) => location.Id == 101, minTotal: all[1].Total));
+
+        // A precomputed ranking is used as given (no second Rank).
+        PopulationSafeSelection? viaCache = atlas.PickValued(Fresh60(), Rule, value, w, assigned, new Random(1), (_, _) => true, precomputed: [all[2]]);
+        Assert.Equal(101u, viaCache!.Placement.Zone.ZoneId);
+    }
+
     // ----- builder -----
 
     private const uint Human = 1, Orc = 2, Friendly = 35, Hostile = 14;

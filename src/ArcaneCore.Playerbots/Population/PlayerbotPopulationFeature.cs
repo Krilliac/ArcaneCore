@@ -2276,10 +2276,12 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // Those first, then the worst misfit. The vetoes are world-thread state, so the candidates are read there.
         PopulationZoneValue? value = ctx.Input.ZoneValue;
         PopulationValueWeights weights = PopulationValueWeights.From(pop);
-        // With the zone value in force, a level-capped bot in a zone it reaches within CapReach counts as fitting (the rule Rank uses).
+        // With value routing on, a level-capped bot in a zone it reaches within CapReach counts as fitting (the rule Rank uses), also while
+        // the zone value is not built yet (after an area-table change it is dropped until rebuilt): bots a valued move placed there are
+        // not out-levelled and mass-relocated meanwhile.
         bool valued = pop.ValueRouting && value is not null;
         bool Reaches(PopulationZone zone, PopulationBotFacts bot)
-            => valued && PopulationZoneAtlas.CapReaches(zone, bot.Level, bot.Team, rule, weights.CapReach);
+            => pop.ValueRouting && PopulationZoneAtlas.CapReaches(zone, bot.Level, bot.Team, rule, weights.CapReach);
         (PopulationBotFacts Bot, PopulationZone? Zone, bool Stuck)[] candidates = await world.InvokeAsync(() => ctx.Input.Running
             .Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Dead && !f.Vetoed)
             .Select(f => (Bot: f, Zone: atlas.Find(f.ZoneId)))
@@ -2291,7 +2293,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // best zone for it moves there. A few such bots per pass in turn (round robin by BotId, a cursor across passes), so the check
         // costs the same every pass. The bots that would otherwise take the "fine where it stands" branch are the ones checked.
         Func<uint, int> troubleOf = zone => _trouble.Count(zone, NowUnix());
-        var lowValue = new HashSet<Guid>();
+        var lowValue = new Dictionary<Guid, double>(); // bot -> the least total a zone must have to be worth the move
         if (valued && pop.ValueChecksPerPass > 0 && pop.ValueRelocateBelowPct > 0)
         {
             long stayedSince = NowUnix() - pop.ValueRelocateMinStayMinutes * 60L;
@@ -2307,9 +2309,13 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 .Select(i => eligible[((start < 0 ? 0 : start) + i) % eligible.Length])];
             if (checks.Length > 0)
             {
-                _valueCursor = checks[^1].BotId;
-                Guid[] low = await world.InvokeAsync(() => checks.Where(f => IsLowValue(f)).Select(f => f.BotId).ToArray(), ct).ConfigureAwait(false);
-                lowValue.UnionWith(low);
+                (Guid BotId, bool Evaluated, double MinTotal)[] results = await world.InvokeAsync(
+                    () => checks.Select(f => (f.BotId, Evaluated: IsLowValue(f, out double minTotal), MinTotal: minTotal)).ToArray(), ct).ConfigureAwait(false);
+                // The cursor moves past the bots that were evaluated only (one in transit or gone is checked again next pass).
+                for (int i = results.Length - 1; i >= 0; i--)
+                    if (results[i].Evaluated) { _valueCursor = results[i].BotId; break; }
+                foreach (var (botId, evaluated, minTotal) in results)
+                    if (evaluated && !double.IsNaN(minTotal)) lowValue[botId] = minTotal;
             }
         }
 
@@ -2317,7 +2323,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         {
             if (moved >= pop.MaxRelocationsPerInterval) break;
             PlayerbotPopulationMember member = ctx.Members[bot.BotId];
-            bool lowValueMove = lowValue.Contains(bot.BotId);
+            bool lowValueMove = lowValue.TryGetValue(bot.BotId, out double lowValueMin);
             if (!stuck && !lowValueMove && current is not null && (bot.Level <= current.MaxLevel + pop.OutlevelMargin || Reaches(current, bot))
                 && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, rule))
             {
@@ -2341,7 +2347,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 PopulationSafeSelection? picked = null;
                 if (valued)
                     picked = atlas.PickValued(ProfileOf(player), rule, value!, weights, ctx.Assigned, _random, safe,
-                        zone => zone == bot.ZoneId || vetoed(zone), troubleOf);
+                        zone => zone == bot.ZoneId || vetoed(zone), troubleOf,
+                        minTotal: lowValueMove ? lowValueMin : double.NegativeInfinity);
                 // A bot that only wants a better zone stays put rather than going to a random fitting one.
                 if (picked is null && !lowValueMove) picked = atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random, safe, vetoed);
                 return (picked, false);
@@ -2368,18 +2375,23 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
 
         return moved;
 
-        // World thread: the bot's zone is worth less than ValueRelocateBelowPct percent of the best zone for it, and the best is another zone.
-        bool IsLowValue(PopulationBotFacts bot)
+        // World thread: evaluated is false when the bot cannot be judged now (gone, in transit, zone unknown). Otherwise minTotal is the total
+        // a zone needs to be worth the move, or NaN when the bot's zone is not worth less than ValueRelocateBelowPct percent of the best
+        // zone for it. A move for value only lands in a zone worth at least 100 / ValueRelocateBelowPct times the zone it leaves.
+        bool IsLowValue(PopulationBotFacts bot, out double minTotal)
         {
+            minTotal = double.NaN;
             if (pop.ValueRelocateBelowPct <= 0) return false;
             if (ctx.Input.Managed.FindSession(bot.BotId)?.Player is not { } player || PopulationProvisioner.IsInTransit(player)) return false;
             if (atlas.Find(bot.ZoneId) is not { } zone) return false;
             PopulationBotProfile profile = ProfileOf(player);
             IReadOnlyList<ZoneScore> ranking = atlas.Rank(profile, rule, value!, weights, ctx.Assigned,
                 zoneId => zoneId == bot.ZoneId || _vetoes.IsVetoed(bot.BotId, zoneId, NowUnix()), troubleOf);
-            if (ranking.Count == 0) return false;
+            if (ranking.Count == 0) return true;
             ZoneScore here = PopulationZoneScoring.Score(zone, value!.Find(zone.ZoneId), profile, weights, troubleOf(zone.ZoneId), ctx.Assigned.GetValueOrDefault(zone.ZoneId));
-            return here.Total < ranking[0].Total * pop.ValueRelocateBelowPct / 100.0;
+            if (here.Total < ranking[0].Total * pop.ValueRelocateBelowPct / 100.0)
+                minTotal = here.Total * 100.0 / pop.ValueRelocateBelowPct;
+            return true;
         }
 
         // A zone the operator excluded, on a map bots may be placed on (another map is left alone, like a capital).

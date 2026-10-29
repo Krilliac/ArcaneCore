@@ -20447,7 +20447,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "The percentage (0..100) of the best zone's value under which a level-capped bot's own zone is left for the best one. 0 turns the check off.",
+      "meaning": "The percentage (0..100) of the best zone's value under which a level-capped bot's own zone is left, for a zone worth at least 100 / this percentage times its own (50 = twice as much). 0 turns the check off.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

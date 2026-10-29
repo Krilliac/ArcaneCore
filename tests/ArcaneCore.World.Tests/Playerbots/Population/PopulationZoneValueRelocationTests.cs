@@ -199,6 +199,34 @@ public sealed class PopulationZoneValueRelocationTests
         Assert.DoesNotContain(log.Lines, l => l.Contains("no safe zone", StringComparison.Ordinal));
     }
 
+    private const uint Middling = 204; // levels 55-60, three quests: worth under half of Rich (about 5.9 for the real bot)
+    private const uint DudOne = 205;     // levels 55-60, one quest: worth less than Middling
+    private const uint DudTwo = 206;     // levels 55-60, two quests: worth less than Middling
+
+    // G (RED): the low-value move draws among the top zones, some of which are worth less than the zone the bot leaves; it must only land
+    // in a zone worth at least 100 / ValueRelocateBelowPct times its own. Rich is far above, the duds below Middling are in the top 5 too:
+    // each move was a ~34 percent chance of landing in a dud before the floor, so 30 moves make a wrong pick near-certain (about 0.66^30).
+    [Fact]
+    public async Task ALowValueMove_NeverLandsInAZoneWorthLessThanTheOneItLeaves_OverManyMoves()
+    {
+        (uint, int, int)[] zones = [(Middling, 55, Capped), (Rich, 55, Capped), (DudOne, 55, Capped), (DudTwo, 55, Capped)];
+        PopulationZoneValue value = Value(Facts(Middling, 3, false), Facts(Rich, 6, true), Facts(DudOne, 1, false), Facts(DudTwo, 2, false));
+        (PopulationTestHost world, Guid bot, _) = await StartAsync(value, zones);
+        await using PopulationTestHost guard = world;
+        var landed = new List<uint>();
+
+        for (int move = 0; move < 30; move++)
+        {
+            await PlaceBotAsync(world, bot, Capped, Middling);
+            SeedStay(world, Middling, ageSeconds: (world.Population.ValueRelocateMinStayMinutes + 5) * 60L);
+            PopulationStatus status = await PassAsync(world);
+            Assert.True(status.Reason.Contains("moved 1", StringComparison.Ordinal), $"move {move}: {status.Reason}");
+            landed.Add(Assert.Single(world.Members.Snapshot).ZoneId);
+        }
+
+        Assert.All(landed, zone => Assert.Equal(Rich, zone));
+    }
+
     public enum MustMove { OutLevelled, Excluded }
 
     private static async Task<(PopulationTestHost World, Guid Bot, CapturedLog Log)> StartMustMoveAsync(MustMove kind, bool valueRouting)

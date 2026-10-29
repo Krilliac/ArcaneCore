@@ -16470,7 +16470,8 @@ World.Playerbots.Population.ValueQuestWeight = 10
 #
 #    World.Playerbots.Population.ValueRelocateBelowPct
 #        Description: The percentage (0..100) of the best zone's value under which a level-capped
-#                     bot's own zone is left for the best one. 0 turns the check off.
+#                     bot's own zone is left, for a zone worth at least 100 / this percentage times
+#                     its own (50 = twice as much). 0 turns the check off.
 #        Type: int
 #        Default: 50
 #        Allowed: a whole number, -2147483648 to 2147483647
