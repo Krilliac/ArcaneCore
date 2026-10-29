@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
@@ -338,12 +339,34 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
                         continue;
                     if (Home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId && !home.HasSpawnInside(content, dropper))
                         continue;
+                    // A dropper whose every spawn lies where no walk reaches from the bot (another landmass, an island) is a hunt that cannot start
+                    // (GitHub #1441); the next dropper of the reagent is tried instead.
+                    if (AllSpawnsUnreachable(content.GetSpawns(player.MapId, dropper), at => PlayerbotNavigation.IsUnreachableOnFoot(player, at, out _, out _)))
+                        continue;
                     return dropper;
                 }
             }
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Whether there is at least one spawn and <paramref name="unreachable"/> holds for every one of them (stops at the first reachable one).
+    /// False for no spawn: the caller has its own test for a creature that is not spawned. Pure; world thread when the predicate reads a map.
+    /// </summary>
+    internal static bool AllSpawnsUnreachable(IReadOnlyList<CreatureSpawn> spawns, Func<Vector3, bool> unreachable)
+    {
+        if (spawns.Count == 0)
+            return false;
+        for (int i = 0; i < spawns.Count; i++)
+        {
+            CreatureSpawn spawn = spawns[i];
+            if (!unreachable(new Vector3(spawn.X, spawn.Y, spawn.Z)))
+                return false;
+        }
+
+        return true;
     }
 
     private bool TryCraft(Player player, SpellStore store, SpellbookCache spellbook, uint elapsedMs, uint now)
@@ -616,19 +639,47 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         return 0f;
     }
 
+    /// <summary>Spellbook walks for <see cref="IsReagentForKnownRecipe"/> on this thread: the test seam of its index.</summary>
+    [ThreadStatic] private static int t_reagentIndexBuilds;
+
+    internal static int ReagentIndexBuilds => t_reagentIndexBuilds;
+
+    /// <summary>
+    /// Per known-spell snapshot (<see cref="SpellbookCache.GetSpells"/> hands out one instance per bot until its book changes, so a learned or
+    /// forgotten spell is a new key): the items any of those spells uses as a reagent, with the spell store it was read from.
+    /// </summary>
+    private static readonly ConditionalWeakTable<IReadOnlyList<uint>, KnownRecipeReagents> ReagentIndex = new();
+
+    private sealed record KnownRecipeReagents(SpellStore Store, HashSet<uint> Items);
+
+    /// <summary>
+    /// Whether a known spell uses <paramref name="reagentItemId"/> as a reagent (count above 0). The spellbook is walked once per book
+    /// snapshot and spell store into a set: <see cref="CraftPriority"/> asked this of every craftable recipe on every think, a spellbook walk
+    /// per recipe (live 2026-10-27, H1: CraftPriority/IsReagentForKnownRecipe 6.5% of think time).
+    /// </summary>
     private static bool IsReagentForKnownRecipe(Player player, uint reagentItemId, SpellStore store, SpellbookCache spellbook)
     {
-        foreach (uint spellId in spellbook.GetSpells(player))
+        IReadOnlyList<uint> spells = spellbook.GetSpells(player);
+        if (!ReagentIndex.TryGetValue(spells, out KnownRecipeReagents? index) || !ReferenceEquals(index.Store, store))
         {
-            if (store.Get(spellId) is not { } spell)
-                continue;
-            for (int r = 0; r < spell.Reagents.Count; r++)
+            t_reagentIndexBuilds++;
+            var items = new HashSet<uint>();
+            foreach (uint spellId in spells)
             {
-                if (spell.Reagents[r].ItemId == reagentItemId && spell.Reagents[r].Count > 0)
-                    return true;
+                if (store.Get(spellId) is not { } spell)
+                    continue;
+                for (int r = 0; r < spell.Reagents.Count; r++)
+                {
+                    if (spell.Reagents[r].Count > 0)
+                        items.Add(spell.Reagents[r].ItemId);
+                }
             }
+
+            index = new KnownRecipeReagents(store, items);
+            ReagentIndex.AddOrUpdate(spells, index);
         }
-        return false;
+
+        return index.Items.Contains(reagentItemId);
     }
 
     /// <summary>
@@ -1342,7 +1393,8 @@ internal sealed class PlayerbotCrafting(WorldSession session, PlayerbotOptions o
         if (bestNode is null || bestGatherSpell is null)
             return false;
 
-        Goal = PlayerbotGoalKind.Vendor;
+        // Its own kind: TargetEntry is a gameobject entry, which a Vendor goal (a creature entry) made bot QA read as "creature N has no spawn" (GitHub #1487).
+        Goal = PlayerbotGoalKind.Gather;
         TargetEntry = bestNode.Entry;
 
         if (bestDistSq > GatherInteractYards * GatherInteractYards)

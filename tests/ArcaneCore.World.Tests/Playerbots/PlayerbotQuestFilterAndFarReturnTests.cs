@@ -19,6 +19,7 @@ using ArcaneCore.World.Items;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Npc;
 using ArcaneCore.World.Tests.Spells;
@@ -95,6 +96,17 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                 var options = new PlayerbotOptions { Enabled = true };
                 var destinations = new PlayerbotWorldDestinations(session, options);
                 var goals = new PlayerbotQuestGoals(session, options);
+                // The candidate scan stops judging starters once the quest phase's 25 ms wall budget is spent. On a loaded runner it was,
+                // and the supported giver read as no candidate. A probe on a manual clock holds the phase's time still, so the filter
+                // (not the machine's speed) decides each answer, the "no candidate" ones included.
+                var clock = new PlayerbotThinkProbeTests.ManualClock();
+                bool HasCandidate()
+                {
+                    var probe = new PlayerbotThinkProbe(clock);
+                    probe.Begin();
+                    try { return goals.HasCandidate(player); }
+                    finally { probe.End(); }
+                }
 
                 // When only the unsupported quests are rewardable, neither travel nor the visible giver selects them.
                 services.Options.RewardMode = QuestRewardMode.AllowlistOnly;
@@ -110,7 +122,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                 ];
                 Assert.False(destinations.HasQuestCandidate(player));
                 player.VisibleObjects.Add(UnsupportedMechanicsFixture.GiverGuid);
-                Assert.False(goals.HasCandidate(player));
+                Assert.False(HasCandidate());
 
                 // Adding the supported kill quest makes the giver eligible for that quest only.
                 services.Options.OrdinaryRewardQuestIds =
@@ -118,7 +130,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                     .. services.Options.OrdinaryRewardQuestIds,
                     UnsupportedMechanicsFixture.SupportedKillQuest,
                 ];
-                Assert.True(goals.HasCandidate(player));
+                Assert.True(HasCandidate());
                 return true;
             });
         }
@@ -330,6 +342,10 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                     () => session.Player!.Map?.FindObject(UnsupportedMechanicsFixture.PeonGuid) is Creature
                         && host.WorldServices.GetRequiredService<ArcaneCore.World.GameObjects.GameObjectLootFeature>().LootContent.RowCount > 0,
                     "lazy peon spawned and loot loaded");
+                QuestStatusData? row = null;
+                PlayerbotQuestGoals? goals = null;
+                Creature? peon = null;
+                LazyPeonAI? ai = null;
                 await host.World.InvokeAsync(() =>
                 {
                     WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
@@ -346,7 +362,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                     QuestStatusData killRow = state.Quests.GetOrAdd(UnsupportedMechanicsFixture.SupportedKillQuest);
                     killRow.Status = QuestStatus.Complete;
                     killRow.Rewarded = true;
-                    QuestStatusData row = state.Quests.GetOrAdd(UnsupportedMechanicsFixture.ItemUseLazyPeonsQuest);
+                    row = state.Quests.GetOrAdd(UnsupportedMechanicsFixture.ItemUseLazyPeonsQuest);
                     state.Quests.SetSlot(state.Quests.FindSlot(0), UnsupportedMechanicsFixture.ItemUseLazyPeonsQuest);
                     row.Status = QuestStatus.Incomplete;
                     Assert.False(PlayerbotQuestGoals.CanExecuteObjectives(session, player, services, content, quest));
@@ -357,10 +373,10 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                     Assert.True(PlayerbotQuestGoals.CanExecuteObjectives(session, player, services, content, quest));
 
                     var options = new PlayerbotOptions { Enabled = true };
-                    var goals = new PlayerbotQuestGoals(session, options);
+                    goals = new PlayerbotQuestGoals(session, options);
 
-                    Creature peon = (Creature)player.Map!.FindObject(UnsupportedMechanicsFixture.PeonGuid)!;
-                    LazyPeonAI ai = Assert.IsType<LazyPeonAI>(peon.AI);
+                    peon = (Creature)player.Map!.FindObject(UnsupportedMechanicsFixture.PeonGuid)!;
+                    ai = Assert.IsType<LazyPeonAI>(peon.AI);
                     Assert.True(ai.IsAsleep);
                     Assert.False(goals.IsUnavailableItemTarget(peon));
 
@@ -371,10 +387,17 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                     Assert.True(goals.Update(player, 500));
                     Assert.Equal(UnsupportedMechanicsFixture.FriendlyPeonEntry, goals.PreferredCreatureEntry);
                     Assert.Equal(UnsupportedMechanicsFixture.ForemansBlackjackItem, goals.PreferredItemUseId);
+                    return true;
+                });
 
-                    Assert.False(ai.IsAsleep);
-                    Assert.Equal(1u, row.CreatureOrGOCount[0]);
-                    Assert.True(goals.IsUnavailableItemTarget(peon));
+                // With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the blackjack's spell goes off at the batch boundary.
+                await host.WaitForWorldAsync(() => !host.WorldServices.GetRequiredService<SpellFeature>().System.HasPendingGo(session.Player!),
+                    "the batched item use went off");
+                await host.World.InvokeAsync(() =>
+                {
+                    Assert.False(ai!.IsAsleep);
+                    Assert.Equal(1u, row!.CreatureOrGOCount[0]);
+                    Assert.True(goals!.IsUnavailableItemTarget(peon!));
                     return true;
                 });
             }

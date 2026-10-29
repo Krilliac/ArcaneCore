@@ -63,6 +63,7 @@ public sealed class AuraRankSelectionTests
         kit.Spellbook.Teach(priest, BuffR1, BuffR2);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(priest, BuffR2, SpellCastTargets.ForUnit(lowbie.Guid)));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         Assert.True(kit.System.HasAura(lowbie, BuffR1));
         Assert.False(kit.System.HasAura(lowbie, BuffR2));

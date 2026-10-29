@@ -173,7 +173,7 @@ public sealed class SnowballKnockdownScript : ISpellScript
         ArgumentNullException.ThrowIfNull(context);
         if (context.Caster is not Player caster || context.Target is not Player target) return;
         if (context.System.HasAura(target, SnowballResistant)) return;
-        if (!context.System.Groups.GetGroupMembers(target, raid: true).Contains(caster.Guid)) return;
+        if (!context.System.Groups.IsMember(target, caster.Guid, raid: true)) return;
         HolidayCasts.Self(context, target, Knockdown);
     }
 }

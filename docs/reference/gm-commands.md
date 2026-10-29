@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 396 |
-| `Administrator` | 6 | 596 |
+| `GameMaster` | 3 | 402 |
+| `Administrator` | 6 | 602 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -64,8 +64,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.debug vis range` | 3 | GameMaster | declared retail level | Syntax: .debug vis range [#yards] Mark a circle of #yards around you on the floor (default the visibility distance, 100 yards). |
 | `.debug vis spawns` | 3 | GameMaster | declared retail level | Syntax: .debug vis spawns [#yards] Mark the spawn points of the creatures spawned within #yards (default 40), nearest first. |
 | `.debug vis kit` | 3 | GameMaster | declared retail level | Syntax: .debug vis kit #kitid Play a SpellVisualKit.dbc visual on yourself, seen only by you (the id is not checked). |
+| `.debug vis follow` ... | 3 | GameMaster | declared retail level | Syntax: .debug vis follow [off] Start or stop following the selected creature or playerbot: its current path is drawn (blue corners, red when incomplete or a straight line, a glyphed crystal with a tall yellow glow at its goal) and redrawn whenever it changes, until the unit leaves your map, a creature dies, or you log out or change map. With off: stop following every unit and remove their path markers. |
+| `.debug vis follow nearby` | 3 | GameMaster | declared retail level | Syntax: .debug vis follow nearby [#yards] Follow every creature and playerbot moving within #yards of you now (default 40), nearest first, up to your follow limit. |
+| `.debug vis follow list` | 3 | GameMaster | declared retail level | Syntax: .debug vis follow list List the units you follow with their path points and markers. |
 | `.debug vis list` | 3 | GameMaster | declared retail level | Syntax: .debug vis list List your drawings with their marker counts and the seconds they have left. |
-| `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now. |
+| `.debug vis clear` | 3 | GameMaster | declared retail level | Syntax: .debug vis clear Remove all your markers now and stop following. |
 | `.debug script` | 3 | GameMaster | declared retail level | Syntax: .debug script $entry [$map] Say which AI the creature entry gets on the map (default: your map): the layer (map entry AI, dungeon boss AI, ScriptName, entry script, EventAI, SmartAI, built-in or default), the implementing type, and whether its ScriptName is implemented. From the console the map is required. |
 | `.debug scriptcoverage` | 3 | GameMaster | declared retail level | Syntax: .debug scriptcoverage [$map] Count the creatures spawned on the map (default: every dungeon) whose template names a ScriptName or an AIName, and how many ScriptNames have no implementation; the unresolved ones are listed. |
 | `.debug capture` | 6 | Administrator | declared retail level | Syntax: .debug capture on\|off &lt;player&gt; Start or stop an opt-in PKT 3.1 trace for an online player's client session. The trace stops by itself at the size limit or when the disk writer falls 8192 records behind; the file is finished asynchronously after a stop. |
@@ -661,6 +664,10 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.rates reset` | 6 | Administrator | stored level through the map | Syntax: .rates reset [$name\|all] Put one rate (or all of them, the default) back to its configured value. |
 | `.rates history` | 3 | GameMaster | stored level through the map | Syntax: .rates history [#n] The last n rate changes (set, reset, reload), newest first, with who and why (25 by default, at most 25; the server keeps the last 100). |
 | `.rates overrides` | 3 | GameMaster | stored level through the map | Syntax: .rates overrides The .rates set lines that recreate every overridden rate, with the configured value each one would return to. |
+| `.rules` ... | 3 | GameMaster | stored level through the map | Syntax: .rules check [host] [owner_id] \| vocab [host] \| trace [guid] — rule engine tools for rule authors. |
+| `.rules check` | 3 | GameMaster | stored level through the map | Syntax: .rules check [host] [owner_id] — what is loaded and every rule row that was rejected, with its reason (narrowed to a host and owner). |
+| `.rules vocab` | 3 | GameMaster | stored level through the map | Syntax: .rules vocab [host] — every event, action and target id with its parameters (a host's own plus the shared ones). |
+| `.rules trace` | 3 | GameMaster | stored level through the map | Syntax: .rules trace [guid] — start or stop tracing every rule evaluation of a subject (decimal or 0x guid); without a guid, show who is traced and the latest traced evaluations. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |

@@ -80,7 +80,7 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
     private static void Complete(WorldSession session, Player player, byte[] payload)
     {
         (ObjectGuid guid, uint quest) = ReadQuest(payload);
-        Services(session).CompleteQuest(player, guid, quest);
+        Services(session).CompleteQuest(player, guid, quest, session.Services.GetRequiredService<QuestNpcFeature>().OfferedInTrade(player));
     }
 
     private static void RequestReward(WorldSession session, Player player, byte[] payload)
@@ -117,7 +117,7 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != expected)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), $"quest interaction requires exactly {expected} bytes");
+            MalformedPacket.Throw($"quest interaction requires exactly {expected} bytes");
         }
     }
 }

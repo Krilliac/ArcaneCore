@@ -20,4 +20,26 @@ public sealed class OwnerAwareGroupResolver(ISpellGroupResolver inner) : ISpellG
             ? inner.GetGroupMembers(totem.Owner, raid)
             : inner.GetGroupMembers(unit, raid);
     }
+
+    public void AppendGroupMembers(Unit unit, bool raid, List<ObjectGuid> into)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(into);
+        if (TotemQuery.TryGet(unit, out TotemInfo totem))
+        {
+            inner.AppendGroupMembers(totem.Owner, raid, into);
+        }
+        else
+        {
+            inner.AppendGroupMembers(unit, raid, into);
+        }
+    }
+
+    public bool IsMember(Unit unit, ObjectGuid other, bool raid)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        return TotemQuery.TryGet(unit, out TotemInfo totem)
+            ? inner.IsMember(totem.Owner, other, raid)
+            : inner.IsMember(unit, other, raid);
+    }
 }

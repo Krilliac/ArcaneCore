@@ -34,6 +34,19 @@ namespace ArcaneCore.Game.Tests.ClassSpells;
 /// </summary>
 public sealed class Wave45ClassSpellPackTests
 {
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static SpellInfo Instant(SpellInfo spell) => spell with { StartRecoveryCategory = 0, StartRecoveryTime = 0, SpellVisual = 1 };
 
     private static SpellInfo AtEnemy(SpellInfo spell) => Instant(spell with { RangeIndex = 4, Range = new SpellRange(0, 30) });
@@ -163,6 +176,7 @@ public sealed class Wave45ClassSpellPackTests
         (Player ally, _) = kit.AddPlayer(2, 2, 0);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(priest, pwsRank1, SpellCastTargets.ForUnit(ally.Guid), triggered: false));
+        FlushSpellBatch(kit);
         Assert.True(kit.System.HasAura(ally, pwsRank1));
         Assert.True(kit.System.HasAura(ally, PriestCastObserver.WeakenedSoul));
 
@@ -191,6 +205,7 @@ public sealed class Wave45ClassSpellPackTests
         priest.Health = 200;
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(priest, damageRankId, SpellCastTargets.ForSelf(), triggered: false));
+        FlushSpellBatch(kit);
         Assert.Equal(255u, priest.Health);
     }
 
@@ -220,6 +235,7 @@ public sealed class Wave45ClassSpellPackTests
         kit.System.Relations = new FakeRelations { Hostile = { victim.Guid } };
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(hunter, sleepSpellId, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+        FlushSpellBatch(kit);
         Assert.True(kit.System.HasAura(victim, sleepSpellId));
         Assert.False(kit.System.HasAura(victim, dotSpellId));
 
@@ -264,6 +280,7 @@ public sealed class Wave45ClassSpellPackTests
         Assert.Equal(SpellCastResult.BadTargets, kit.System.CastSpell(hunter, mongooseBite, SpellCastTargets.ForUnit(other.Guid), triggered: false));
         uint before = attacker.Health;
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(hunter, mongooseBite, SpellCastTargets.ForUnit(attacker.Guid), triggered: false));
+        FlushSpellBatch(kit);
         Assert.Equal(before - 35u, attacker.Health);
 
         reactives.Update(ReactiveService.ReactiveTimerStartMs);
@@ -299,6 +316,7 @@ public sealed class Wave45ClassSpellPackTests
         foreach (uint shot in new[] { arcaneShot, multiShot, volley, aimedShot, rapidFire })
         {
             Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(hunter, shot, SpellCastTargets.ForSelf(), triggered: false));
+            FlushSpellBatch(kit);
             Assert.Contains(kit.System.GetActiveCooldowns(hunter), c => c.SpellId == shot);
         }
 
@@ -374,6 +392,7 @@ public sealed class Wave45ClassSpellPackTests
         uint before = enemy.Health;
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(rogue, eviscerateRank1, SpellCastTargets.ForUnit(enemy.Guid), triggered: false));
+        FlushSpellBatch(kit);
 
         uint expectedDamage = (uint)(10 + (15 * comboPoints) + expectedApBonus);
         Assert.Equal(before - expectedDamage, enemy.Health);
@@ -408,6 +427,7 @@ public sealed class Wave45ClassSpellPackTests
 
         uint before = enemy.Health;
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(warrior, shieldSlamRank1, SpellCastTargets.ForUnit(enemy.Guid), triggered: false));
+        FlushSpellBatch(kit);
         Assert.Equal(before - (225u + expectedBlock), enemy.Health);
     }
 
@@ -430,6 +450,7 @@ public sealed class Wave45ClassSpellPackTests
         kit.System.CombatRules = new NoCritNoResistRules();
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(warrior, WarriorScriptsModule.IntimidatingShout, SpellCastTargets.ForUnit(primary.Guid), triggered: false));
+        FlushSpellBatch(kit);
 
         SpellAuraHolder primaryHolder = Assert.Single(kit.System.GetAuras(primary), h => h.Spell.Id == WarriorScriptsModule.IntimidatingShout);
         Assert.NotNull(primaryHolder.Auras[0]); // Effect 0 (cower on primary target) landed
@@ -527,6 +548,7 @@ public sealed class Wave45ClassSpellPackTests
         Assert.True(kit.System.HasAura(enemy, magicBuff));
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(felhunter, devourSpellId, SpellCastTargets.ForUnit(enemy.Guid), triggered: false));
+        FlushSpellBatch(kit);
         Assert.False(kit.System.HasAura(enemy, magicBuff));
         Assert.Equal(295u, felhunter.Health);
     }

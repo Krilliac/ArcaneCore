@@ -221,6 +221,19 @@ public sealed class TalentEffectCoverageTests
         Assert.Empty(after.Gaps);
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     [Fact]
     public void DreamwalkerClassScripts_AreConsumedAndTriggerPowerAndRegrowthBonuses()
     {
@@ -269,10 +282,12 @@ public sealed class TalentEffectCoverageTests
         kit.System.CastSpell(druid, regrowthBonusAura, SpellCastTargets.ForSelf(), triggered: true);
 
         kit.System.CastSpell(druid, rejuvSpell, SpellCastTargets.ForUnit(ally.Guid), triggered: false);
+        FlushSpellBatch(kit);
         Assert.Equal(200u, SpellSystem.GetPower(ally, PowerType.Rage));
 
         kit.Now += 2_000;
         kit.System.CastSpell(druid, regrowthSpell, SpellCastTargets.ForUnit(ally.Guid), triggered: false);
+        FlushSpellBatch(kit);
         Assert.True(kit.System.HasAura(ally, 28750));
     }
 

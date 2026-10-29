@@ -47,8 +47,9 @@ public sealed class SpellRuleOptions
 
     /// <summary>
     /// Whether holy resistance is ignored when resisting damage. Retail (vmangos Unit::CalculateDamageAbsorbAndResist,
-    /// Unit.cpp:1936-1946): false, holy is resisted like any magic school. true reproduces cmangos-classic
-    /// (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely ignore holy resistance value").
+    /// Unit.cpp:1936-1946): false; vmangos holds the holy resistance field at 0 (Player::UpdateResistances), so holy is only
+    /// resisted through the level-based innate resist of higher-level creatures. true reproduces cmangos-classic
+    /// (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely ignore holy resistance value") and also drops that innate part.
     /// </summary>
     public bool IgnoreHolyResistance { get; init; }
 
@@ -84,6 +85,13 @@ public sealed class SpellRuleOptions
     /// https://vanilla-wow-archive.fandom.com/wiki/Patch_1.4.0). true reproduces vmangos (SpellEntry.cpp:333-343, DIMINISHING_CONTROL_ROOT).
     /// </summary>
     public bool FrostShockDiminishesAsRoot { get; init; }
+
+    /// <summary>
+    /// Whether a creature nobody tapped (no damage ever called LootService.OnCreatureDamaged: a scripted or GM kill) counts as tapped by the
+    /// warlock for Soul Shards. Retail (vmangos Aura::HandleChannelDeathItem, SpellAuras.cpp:2860-2861, Creature::IsTappedBy, Creature.cpp:1615-1632):
+    /// false, an untapped creature gives no shard. true keeps the shard for such kills.
+    /// </summary>
+    public bool SoulShardUntappedCountsAsTapped { get; init; }
 
     /// <summary>
     /// Whether immunities (aura-granted and creature static masks) are enforced. Retail: true; false disables every

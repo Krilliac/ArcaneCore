@@ -126,6 +126,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
         world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
         {
             OnMapCreated(map);
@@ -150,7 +151,6 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    FaultLedger.Shared.Record("economy.delivery-timer", ex);
                     _logger.LogFault("economy.delivery-timer", ex, "economy mail delivery notification failed");
                 }
             }), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
@@ -196,6 +196,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             world.PlayerLoggedIn -= OnPlayerLoggedIn;
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
             world.MapCreated -= OnMapCreated;
+            world.MapUnloading -= OnMapUnloading;
         }
 
         await StopAsync().ConfigureAwait(false);
@@ -344,7 +345,6 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("economy.read", ex);
                 _logger.LogFault("economy.read", ex, "economy read failed");
                 if (failed is not null)
                 {
@@ -430,7 +430,12 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
 
     private readonly HashSet<Map> _maps = [];
 
-    private void OnMapCreated(Map map)
+    /// <summary>How many maps this feature currently owns an updater on (an unloaded map is released).</summary>
+    internal int TrackedMapCount => _maps.Count;
+
+    internal void OnMapUnloading(Map map) => _maps.Remove(map);
+
+    internal void OnMapCreated(Map map)
     {
         if (_maps.Add(map))
         {
@@ -452,7 +457,6 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
                     }
                     catch (Exception ex) when (ex is not OutOfMemoryException)
                     {
-                        FaultLedger.Shared.Record("economy.gossip-auction", ex);
                         _logger.LogFault("economy.gossip-auction", ex, "auction hello from gossip failed for player {Player}", player.Guid);
                     }
                 }
@@ -474,7 +478,6 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("economy.sweep-recover", ex);
             _logger.LogFault("economy.sweep-recover", ex, "auction recovery sweep failed");
         }
 
@@ -484,7 +487,6 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("economy.sweep-auctions", ex);
             _logger.LogFault("economy.sweep-auctions", ex, "auction expiry sweep failed");
         }
 
@@ -494,7 +496,6 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("economy.sweep-mails", ex);
             _logger.LogFault("economy.sweep-mails", ex, "mail expiry sweep failed");
         }
     }

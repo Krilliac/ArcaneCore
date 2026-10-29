@@ -34,6 +34,7 @@ public sealed class ItemSpecialProcTests
         session.Clear();
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, special, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
 
         Assert.Contains(session.Sent, packet => packet.Opcode == WorldOpcode.SmsgSpellGo
             && new PacketReader(packet.Payload).ReadPackedGuid() == item.Guid.Value);
@@ -81,6 +82,7 @@ public sealed class ItemSpecialProcTests
         session.Clear();
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, spell, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.Contains(session.Sent, packet => packet.Opcode == WorldOpcode.SmsgSpellGo
             && new PacketReader(packet.Payload).ReadPackedGuid() == item.Guid.Value);
     }
@@ -104,6 +106,7 @@ public sealed class ItemSpecialProcTests
         kit.System.CombatRules = new AlwaysMissRules();
         session.Clear();
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, spell, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.Contains(session.Sent, packet => packet.Opcode == WorldOpcode.SmsgSpellGo
             && new PacketReader(packet.Payload).ReadPackedGuid() == item.Guid.Value);
 
@@ -112,6 +115,7 @@ public sealed class ItemSpecialProcTests
         kit.System.CombatRules = new AlwaysReflectRules();
         session.Clear();
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, spell, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.DoesNotContain(session.Sent, packet => packet.Opcode == WorldOpcode.SmsgSpellGo
             && new PacketReader(packet.Payload).ReadPackedGuid() == item.Guid.Value);
 
@@ -120,6 +124,7 @@ public sealed class ItemSpecialProcTests
         kit.System.CombatRules = SpellCombatRules.Neutral;
         session.Clear();
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, lethalId, SpellCastTargets.ForUnit(victim.Guid), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.DoesNotContain(session.Sent, packet => packet.Opcode == WorldOpcode.SmsgSpellGo
             && new PacketReader(packet.Payload).ReadPackedGuid() == item.Guid.Value);
     }

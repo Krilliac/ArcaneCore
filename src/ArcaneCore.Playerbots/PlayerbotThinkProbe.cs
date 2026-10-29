@@ -445,6 +445,12 @@ internal sealed class PlayerbotThinkProbe
         }
     }
 
+    /// <summary>The fallback queries of the running think that were refused or cut to a narrower node limit so far (0 with no think running).</summary>
+    internal static int BudgetCuts => t_active is { } probe ? probe.Refused + probe.Clamped : 0;
+
+    /// <summary>Whether the last <see cref="Find"/> of this thread was answered capped or without a search (a plan miss), without consuming it.</summary>
+    internal static bool LastQueryCapped => t_lastCachedCapped;
+
     internal static bool ConsumeLastQueryCapped()
     {
         bool capped = t_lastCachedCapped;

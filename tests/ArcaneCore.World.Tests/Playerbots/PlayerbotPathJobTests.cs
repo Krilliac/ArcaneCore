@@ -791,23 +791,120 @@ public sealed class PlayerbotPathJobTests
             Assert.True(h.Think(() => PlayerbotNavigation.TryPlanFar(h.Player, far, h.Options, 12_000, out _)));
             Assert.Equal(3, h.Nav.OwnerCalls);
 
-            // A chase and a trial answer this think, even through the waiting wrapper.
+            // A chase answers this think, even through the waiting wrapper (a trial through it is a job: ATrialSearch_...).
             Assert.Equal(PlanOutcome.Route, h.Plan(far, ref wait, 1_000, out _, chase: true));
             Assert.Equal(4, h.Nav.OwnerCalls);
-            Assert.Equal(PlanOutcome.Route, h.Plan(far, ref wait, 1_000, out _, trial: true));
-            Assert.Equal(5, h.Nav.OwnerCalls);
 
             // A query within the vmangos search budget (a goal under 100 yards), and one that cannot take a pending answer.
             Assert.Equal(PlanOutcome.Route, h.Plan(h.Far(50), ref wait, 1_000, out _));
-            Assert.Equal(6, h.Nav.OwnerCalls);
+            Assert.Equal(5, h.Nav.OwnerCalls);
             PathOptions blocking = Harness.Query(12_000) with { NonBlockingTiles = false };
             h.Think(() =>
             {
                 using PlayerbotPathJobs.DeferrableScope scope = PlayerbotPathJobs.Deferrable();
                 return PlayerbotThinkProbe.Find(h.Collision, h.Origin, far, blocking);
             });
-            Assert.Equal(7, h.Nav.OwnerCalls);
+            Assert.Equal(6, h.Nav.OwnerCalls);
             Assert.Empty(h.Runner.Submitted);
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// A trial search (a candidate weighed through <see cref="PlayerbotNavigation.PlanExact"/>) is a path job: the think answers pending
+    /// without a search on the world thread, and a later think uses the finished answer. A trial through a bool planner keeps searching at once.
+    /// </summary>
+    [Fact]
+    public async Task ATrialSearch_IsSubmittedAsAJob_AndItsResultIsUsedOnALaterThink()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Vector3 far = h.Far();
+            var wait = new TileWait();
+
+            Assert.Equal(PlanOutcome.Pending, h.Plan(far, ref wait, 1_000, out PlayerbotRoute? first, trial: true));
+            Assert.Null(first);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Single(h.Runner.Submitted);
+
+            h.Runner.CompleteAll();
+            Assert.Equal(PlanOutcome.Route, h.Plan(far, ref wait, 1_500, out PlayerbotRoute? later, trial: true));
+            Assert.NotNull(later);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+
+            // A bool planner cannot tell pending from refused: its trial still searches on the think.
+            Assert.True(h.Think(() => PlayerbotNavigation.TryPlan(h.Player, far, h.Options, out _, trial: true)));
+            Assert.Equal(1, h.Nav.OwnerCalls);
+            return true;
+        });
+    }
+
+    /// <summary>
+    /// The steep-ascent diagnosis (a quest's confirmation of an unreachable ender) is a path job: pending at first with no search on the world
+    /// thread, decided once the job is done, and the verdict is kept per quest and spot, so asking again runs no query at all.
+    /// </summary>
+    [Fact]
+    public async Task ASteepAscentDiagnosis_IsAJob_AndItsVerdictIsCachedPerQuestAndSpot()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Vector3 far = h.Far();
+            const uint quest = 4242;
+
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Pending,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 1_000, out _)));
+            Assert.Equal(0, h.Nav.OwnerCalls);
+            Assert.Single(h.Runner.Submitted);
+
+            h.Runner.CompleteAll();
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Clear,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 1_500, out _)));
+            Assert.Equal(1, h.Jobs.Totals.Applied);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+
+            // Asked again at the same spot: the kept verdict answers, no query of any kind is made.
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Clear,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 2_000, out _)));
+            Assert.Equal(0, h.Probe.Queries);
+            Assert.Equal(0, h.Probe.JobsSubmitted + h.Probe.JobsWaiting + h.Probe.JobsApplied);
+            Assert.Single(h.Runner.Submitted);
+            Assert.Equal(0, h.Nav.OwnerCalls);
+
+            return true;
+        });
+    }
+
+    /// <summary>A verdict made on one floor is not the verdict of the floor 2.5 yards above it (within the flat spot radius), while a step of a yard is the same spot.</summary>
+    [Fact]
+    public async Task ADiagnosisVerdict_DoesNotAnswerForAnotherFloorAboveTheSpot()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            using var h = new Harness(world, Options());
+            Vector3 far = h.Far();
+            const uint quest = 4243;
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Pending,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 1_000, out _)));
+            h.Runner.CompleteAll();
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Clear,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 1_500, out _)));
+            Assert.Single(h.Runner.Submitted);
+
+            Vector3 here = new(h.Player.X, h.Player.Y, h.Player.Z);
+            h.Player.Relocate(here.X, here.Y, here.Z + 1f);
+            Assert.Equal(PlayerbotNavigation.DiagnosisState.Clear,
+                h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 2_000, out _)));
+            Assert.Equal(0, h.Probe.Queries); // the kept verdict answered
+
+            h.Player.Relocate(here.X, here.Y, here.Z + 2.5f);
+            h.Think(() => PlayerbotNavigation.DiagnoseSteepAscent(h.Player, far, h.Options, quest, 2_500, out _));
+            Assert.True(h.Probe.Queries > 0, "the verdict of the floor below answered for the floor above");
             return true;
         });
     }

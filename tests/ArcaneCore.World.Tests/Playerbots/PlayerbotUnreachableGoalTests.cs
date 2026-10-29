@@ -506,6 +506,26 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         });
         Assert.True(refused, "navigation into a remembered dead-end pin cell must be refused");
 
+        // A far goal in the pinned cell (beyond one chunk of MaxPathPoints - 2 yards) is refused on the first think, before any region
+        // search or path job is started for it.
+        var farOptions = new PlayerbotOptions { Enabled = true, MaxPathPoints = 20 };
+        Assert.True(Vector3.Distance(bindPos, pinPos) > farOptions.MaxPathPoints - 2);
+        PlanOutcome farOutcome = await world.Host.OnWorldAsync(() =>
+        {
+            TileWait wait = default;
+            return PlayerbotNavigation.PlanToward(world.Player, pinPos, farOptions, ref wait, world.Host.World.NowMs, out _);
+        });
+        Assert.Equal(PlanOutcome.Refused, farOutcome);
+        Task<ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph?>? building = world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes);
+        Assert.NotNull(building);
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? farGraph = await building;
+        Assert.NotNull(farGraph);
+        Assert.Equal(0, PlayerbotRegionRoutes.Of(farGraph!).Searches);
+        Assert.Equal(0, PlayerbotRegionRoutes.Of(farGraph!).Count);
+        Assert.Equal(0, PlayerbotRegionRoutes.Of(farGraph!).AskedCount); // nothing queued for the pool either
+        // (No path-job service is bound on this test's thread, so a path job cannot be counted here; the early refusal precedes the
+        // path query, which the zero region searches and the Refused outcome on the first think show.)
+
         // The pin is remembered for ten minutes, not for good: real thinks over the world clock, and the cell is open again.
         for (int minute = 1; minute <= 9; minute++)
         {
@@ -533,13 +553,99 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
         await world.PlaceAsync(nearCliffEdge);
         await WaitUntilUnreachableAsync(world);
         var options = new PlayerbotOptions { Enabled = true, MaxPathPoints = 20 };
-        PlanOutcome outcome = await world.Host.OnWorldAsync(() =>
+        // The region search is a cache miss: it runs off the think (Pending) and the refusal is the answer of a later think.
+        TileWait wait = default;
+        PlanOutcome outcome = PlanOutcome.Pending;
+        for (int think = 0; think < 400 && outcome == PlanOutcome.Pending; think++)
         {
-            TileWait wait = default;
-            return PlayerbotNavigation.PlanToward(world.Player, UnreachableSpawn, options, ref wait, world.Host.World.NowMs,
-                out _, completedQuestReturn: true);
-        });
+            outcome = await world.Host.OnWorldAsync(() => PlayerbotNavigation.PlanToward(world.Player, UnreachableSpawn, options, ref wait,
+                world.Host.World.NowMs, out _, completedQuestReturn: true));
+            if (outcome == PlanOutcome.Pending) await Task.Delay(25);
+        }
+
         Assert.Equal(PlanOutcome.Refused, outcome);
+    }
+
+    /// <summary>
+    /// "Unreachable" with no portal at all is the answer for a start already nearer the goal than any exit of its region. It is derived per
+    /// asking position from one start-independent entry: whoever asks first, one search serves both, the near start gets no portal and the far
+    /// start the way to the portal nearest the goal.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AnUnreachableAnswerWithNoPortal_IsDerivedPerStart_WhicheverStartAsksFirst(bool nearFirst)
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        var nearCliffEdge = new Vector3(37, 5, 0);
+        int from = world.Nav.RegionAt(graph, nearCliffEdge, locate), to = world.Nav.RegionAt(graph, UnreachableSpawn, locate);
+        var farStart = new Vector3(2, 5, 0);
+        Assert.Equal(from, world.Nav.RegionAt(graph, farStart, locate));
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+
+        List<Vector3> edgePortals, far;
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionRouteStatus edge, farStatus;
+        if (nearFirst)
+        {
+            Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge, to, UnreachableSpawn, mayDefer: false, out edge, out edgePortals));
+            Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, farStart, to, UnreachableSpawn, mayDefer: true, out farStatus, out far));
+        }
+        else
+        {
+            Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, farStart, to, UnreachableSpawn, mayDefer: false, out farStatus, out far));
+            Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge, to, UnreachableSpawn, mayDefer: true, out edge, out edgePortals));
+        }
+
+        Assert.Equal(ArcaneCore.Game.Maps.Collision.MMaps.NavRegionRouteStatus.Unreachable, edge);
+        Assert.Equal(ArcaneCore.Game.Maps.Collision.MMaps.NavRegionRouteStatus.Unreachable, farStatus);
+        Assert.Empty(edgePortals);
+        Assert.NotEmpty(far);
+        Assert.Equal(1, cache.Searches);
+        // Whichever start asked first, the far chain ends at the one portal of the component nearest the goal (NavRegionGraphTests: (20, 40 + inset, 0)).
+        Assert.True(Vector2.Distance(new(far[^1].X, far[^1].Y), new(20f, 40f + ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph.PortalInsetYards)) < 0.5f,
+            $"the far chain ends at {far[^1]}");
+
+        // A start a few yards off the edge is answered from the same entry.
+        Assert.True(PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge + new Vector3(-3, 0, 0), to, UnreachableSpawn, mayDefer: true, out _, out List<Vector3> again));
+        Assert.Empty(again);
+        Assert.Equal(1, cache.Searches);
+    }
+
+    /// <summary>
+    /// Two bots in one region, one standing at the cliff edge and one far from it, asking the same pair alternately under a waiting wrapper,
+    /// both get an answer within a few rounds from a single search: neither's answer replaces or restarts the other's.
+    /// </summary>
+    [Fact]
+    public async Task TwoStartsAskingAlternately_BothResolve_FromOneSearch()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph graph = (await world.Nav.RegionGraphTask(0, PathMover.Player.IncludeFlags, NavTerrain.SteepSlopes)!)!;
+        var locate = new PathOptions { Mover = PathMover.Player, ExcludeFlags = NavTerrain.SteepSlopes, LoadTiles = true, NonBlockingTiles = true };
+        var nearCliffEdge = new Vector3(37, 5, 0);
+        var farStart = new Vector3(2, 5, 0);
+        int from = world.Nav.RegionAt(graph, nearCliffEdge, locate), to = world.Nav.RegionAt(graph, UnreachableSpawn, locate);
+        PlayerbotRegionRoutes.RouteCache cache = PlayerbotRegionRoutes.Of(graph);
+        var budget = new PlayerbotRegionRoutes.SyncSearchBudget();
+
+        bool nearDone = false, farDone = false;
+        List<Vector3> nearPortals = [], farPortals = [];
+        for (int round = 0; round < 3 && !(nearDone && farDone); round++)
+        {
+            nearDone = PlayerbotRegionRoutes.TryRoute(graph, from, nearCliffEdge, to, UnreachableSpawn, mayDefer: true, out _, out nearPortals, wallMs: round, budget: budget);
+            farDone = PlayerbotRegionRoutes.TryRoute(graph, from, farStart, to, UnreachableSpawn, mayDefer: true, out _, out farPortals, wallMs: round, budget: budget);
+            for (int tries = 0; tries < 400 && cache.AskedCount > 0; tries++) await Task.Delay(25);
+        }
+
+        Assert.True(nearDone && farDone, $"near answered {nearDone}, far answered {farDone}");
+        Assert.Empty(nearPortals);
+        Assert.NotEmpty(farPortals);
+        Assert.Equal(1, cache.Searches);
     }
 
     [Fact]
@@ -566,6 +672,93 @@ public sealed class PlayerbotUnreachableGoalTests : IDisposable
             Assert.True(suspensions.IsEntrySuspended(6, afterFirst + PlayerbotSuspensions.SuspendMs + 1_000));
             return true;
         });
+    }
+
+    /// <summary>
+    /// Issue #1501: a bot on a ledge the mesh does not cover, 60 yards above the floor, is located on the floor polygon only by the far box
+    /// (FarExtents, 200 yards tall). The mesh's answer from there is no route: its first leg is a 60-yard drop that the motion refuses as
+    /// <c>bot-motion/start-blocked</c> on every think. With no terrain under the bot the plan is refused, and the refusal is no verdict on
+    /// the goal (the route-plan watch is not charged). The control: from the floor itself the same plan is the mesh's route.
+    /// </summary>
+    [Fact]
+    public async Task ABotFarAboveTheMesh_GetsNoMeshRouteThatDropsFromItsLedge_AndTheRefusalIsNoVerdict()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        var options = new PlayerbotOptions { Enabled = true };
+        Vector3 destination = new(25, 5, 0);
+
+        (bool controlPlanned, PlayerbotRoute? control) = await world.Host.OnWorldAsync(() =>
+        {
+            bool planned = PlayerbotNavigation.TryPlan(world.Player, destination, options, out PlayerbotRoute? route);
+            return (planned, route);
+        });
+        Assert.True(controlPlanned && control is not null, "the control: from the floor the mesh routes");
+        Assert.True(control!.Navigated, "the control's route is the mesh's");
+
+        Vector3 ledge = new(5, 5, 60);
+        await world.PlaceAsync(ledge);
+        Assert.True(MathF.Abs(world.Player.Z - ledge.Z) < 1f, $"the bot stands on its ledge (z {world.Player.Z})");
+
+        using var cap = PlayerbotAnomalies.CaptureFor(world.Player);
+        (bool planned, PlayerbotRoute? route, bool towardPlanned, PlayerbotRoute? toward, bool refusedNext) = await world.Host.OnWorldAsync(() =>
+        {
+            bool exact = PlayerbotNavigation.TryPlan(world.Player, destination, options, out PlayerbotRoute? exactRoute);
+            uint now = world.Host.World.NowMs;
+            bool towardOk = PlayerbotNavigation.TryPlanToward(world.Player, destination, options, out PlayerbotRoute? towardRoute, nowMs: now);
+            if (towardRoute is not null)
+            {
+                // The think follows what it planned: a first leg off the ledge is refused there (start-blocked).
+                world.Session.ManagedBudget = new ManagedActionBudget(1);
+                PlayerbotMotion.Follow(world.Session, world.Player, towardRoute, options, now);
+            }
+            for (int i = 0; i < PlayerbotNavigationAnomalies.RepeatedRefusals; i++)
+                PlayerbotNavigation.TryPlanToward(world.Player, destination, options, out _, nowMs: now + (uint)(i * 10));
+            bool refused = PlayerbotRoutePlanWatch.ShouldRefuse(world.Player, PlayerbotMotion.CurrentPosition(world.Player), destination,
+                now + (uint)(PlayerbotNavigationAnomalies.RepeatedRefusals * 10));
+            return (exact, exactRoute, towardOk, towardRoute, refused);
+        });
+
+        AssertNoDropFromLedge(planned, route, ledge);
+        AssertNoDropFromLedge(towardPlanned, toward, ledge);
+        Assert.False(refusedNext, "a refusal from off the mesh is no verdict: the route-plan watch is not charged");
+        Assert.Equal(0, cap.Count(PlayerbotMotionAnomalies.Key(PlayerbotMotionAnomalies.Code.StartBlocked)));
+
+        static void AssertNoDropFromLedge(bool planned, PlayerbotRoute? route, Vector3 ledge)
+        {
+            if (!planned || route is null) return;
+            Assert.True(route.Points.Count >= 2);
+            Assert.True(MathF.Abs(route.Points[1].Z - route.Points[0].Z) <= PlayerbotNavigation.ProjectedEndYards,
+                $"the route's first leg drops from {route.Points[0]} to {route.Points[1]} (bot at {ledge}); navigated {route.Navigated}");
+        }
+    }
+
+    /// <summary>
+    /// Issue #1501 review: the off-mesh refusal is for a first leg no walk covers, a climb or drop of a harmful fall's height or more
+    /// (14.57 yards). A bot 10 yards above the floor polygon (a rock, a roof), past the near box but short of that, keeps the mesh's
+    /// route down, as it had before the fix.
+    /// </summary>
+    [Fact]
+    public async Task ABotAModerateHeightAboveTheMesh_KeepsTheMeshRoute()
+    {
+        await using SyntheticNavWorld world = await StartAsync(ContentOf(UnreachableSpawn));
+        await world.PlaceAsync(Start);
+        await WaitUntilUnreachableAsync(world);
+        var options = new PlayerbotOptions { Enabled = true };
+        Vector3 destination = new(25, 5, 0);
+
+        Vector3 rock = new(5, 5, 10);
+        await world.PlaceAsync(rock);
+        Assert.True(MathF.Abs(world.Player.Z - rock.Z) < 1f, $"the bot stands on its rock (z {world.Player.Z})");
+
+        (bool planned, PlayerbotRoute? route) = await world.Host.OnWorldAsync(() =>
+        {
+            bool ok = PlayerbotNavigation.TryPlan(world.Player, destination, options, out PlayerbotRoute? planRoute);
+            return (ok, planRoute);
+        });
+        Assert.True(planned && route is not null, "a drop short of a harmful fall keeps its mesh route");
+        Assert.True(route!.Navigated, "the route is the mesh's");
     }
 
     private sealed class Content(CreatureContent content) : ICreatureDataStore

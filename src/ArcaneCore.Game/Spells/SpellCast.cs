@@ -106,6 +106,12 @@ public sealed class SpellCast
     /// </summary>
     internal bool IsItemTriggeredCast { get; set; }
 
+    /// <summary>
+    /// Prepared inside SpellSystem.HandleItemUse, whose item use consumes the item once, after all its spells (ItemUseDispatch). A held
+    /// batched go keeps that when it goes off (SpellSystem.Batching.cs).
+    /// </summary>
+    internal bool InItemUseDispatch { get; set; }
+
     /// <summary>Template spell slot selected by CMSG_USE_ITEM.</summary>
     public byte ItemSpellIndex { get; }
 
@@ -270,6 +276,12 @@ public sealed class UnitSpellState
     internal List<SpellAuraHolder> Auras { get; } = [];
 
     public IReadOnlyList<SpellAuraHolder> AuraHolders => Auras;
+
+    /// <summary>Whether any holder needed a tick at the last <see cref="SpellSystem"/> aura update (see <c>SpellSystem.AnyTickingHolder</c>); false means the update skipped the snapshot. Diagnostic only: nothing in the game reads it for behaviour.</summary>
+    internal bool HasTickingHolders { get; set; }
+
+    /// <summary>Whether the <c>aura/holders-excess</c> anomaly was already reported for this unit's current excess (re-armed when the count falls back under the bound).</summary>
+    internal bool AuraExcessReported { get; set; }
 
     /// <summary>
     /// Milliseconds until the channel fields of a channel that ended normally are cleared (vmangos ChannelResetEvent and

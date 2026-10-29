@@ -191,6 +191,7 @@ public sealed class SpellTargetingTests
         Assert.Equal(SpellCastResult.BadTargets, kit.System.HandleCastRequest(caster, PartyBuff, SpellCastTargets.ForUnit(stranger.Guid)));
         Assert.Equal(10u, stranger.Health);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, PartyBuff, SpellCastTargets.ForUnit(member.Guid)));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         Assert.Equal(30u, member.Health);
         Assert.Contains(WorldOpcode.SmsgCastResult, Opcodes(session));
     }

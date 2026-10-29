@@ -41,6 +41,9 @@ public sealed class CastPipelineModTests
     private const uint HealOfFamily = 942022;
     private const uint AllEffectsMod = 942023;
 
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
+
     private static SpellTestKit Kit() => new(
         // cost: base 100 rage, fire school
         InFamily(Spell(Costly, Effect(SpellEffectName.Dummy, 0)) with { PowerType = (int)PowerType.Rage, ManaCost = 100, School = SpellSchool.Fire }),
@@ -114,6 +117,7 @@ public sealed class CastPipelineModTests
             caster.SetFloat(UpdateFields.UnitFieldPowerCostMultiplier + (int)SpellSchool.Fire, 0.1f);
 
             Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Costly, SpellCastTargets.ForSelf()));
+            FlushSpellBatch(kit);
 
             // vmangos: ((100 - 20) * 50% off) = 40, then x1.1 = 44. The old order gave 100 * 1.1 = 110 and refused the cast.
             Assert.Equal(100u - 44u, Rage(caster));
@@ -129,6 +133,7 @@ public sealed class CastPipelineModTests
             caster.SetFloat(UpdateFields.UnitFieldPowerCostMultiplier + (int)SpellSchool.Fire, -0.1f);
 
             Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Costly, SpellCastTargets.ForSelf()));
+            FlushSpellBatch(kit);
 
             Assert.Equal(100u - 90u, Rage(caster));
         }
@@ -170,6 +175,7 @@ public sealed class CastPipelineModTests
         using (kit)
         {
             kit.System.HandleCastRequest(caster, CdSpell, SpellCastTargets.ForSelf());
+            FlushSpellBatch(kit);
 
             Assert.Equal(9000u, kit.System.GetState(caster.Guid)!.SpellCooldowns[CdSpell] - kit.Now);
         }
@@ -182,6 +188,7 @@ public sealed class CastPipelineModTests
         using (kit)
         {
             kit.System.HandleCastRequest(caster, CategorySpell, SpellCastTargets.ForSelf());
+            FlushSpellBatch(kit);
 
             UnitSpellState state = kit.System.GetState(caster.Guid)!;
             Assert.Equal(6000u, state.CategoryCooldowns[8] - kit.Now);
@@ -196,6 +203,7 @@ public sealed class CastPipelineModTests
         using (kit)
         {
             kit.System.HandleCastRequest(caster, IgnoredSpell, SpellCastTargets.ForSelf());
+            FlushSpellBatch(kit);
 
             Assert.Equal(10_000u, kit.System.GetState(caster.Guid)!.SpellCooldowns[IgnoredSpell] - kit.Now);
         }
@@ -230,6 +238,7 @@ public sealed class CastPipelineModTests
         {
             (Player target, _) = kit.AddHostilePlayer(2, 3, 0);
             kit.System.HandleCastRequest(caster, DotOfFamily, SpellCastTargets.ForUnit(target.Guid));
+            FlushSpellBatch(kit);
 
             Assert.Equal(15000, kit.System.GetState(target.Guid)!.AuraHolders.Single(h => h.Spell.Id == DotOfFamily).MaxDuration);
         }

@@ -617,6 +617,18 @@ internal static partial class PlayerbotElevator
     /// <summary>A direct route ending this close (flat) to the goal reaches it (<see cref="TryBegin"/>).</summary>
     internal const float ReachedYards = 3f;
 
+    /// <summary>
+    /// An approach route (<see cref="TryBegin"/>: the walk to a lift's landing from beyond <see cref="ElevatorNetwork.NearLiftYards"/>) that
+    /// ends farther than <see cref="ElevatorNetwork.NearLiftYards"/> from the lift must end at least this much (flat) nearer to it than the
+    /// bot stands, else it is refused. A leg that gains nothing would be handed back at every plan, and a caller counts a leg of 20 yards or
+    /// more as progress, so the bot would walk it for ever. A leg of the region graph or a chunk of the straight line passes: it is hundreds
+    /// of yards towards the lift.
+    /// </summary>
+    internal const float ApproachProgressYards = 30f;
+
+    /// <summary>After <see cref="TryBegin"/> found no approach route to a lift (every landing refused or without progress), it plans none for the same bot and lift for this long (ms).</summary>
+    internal const uint ApproachRetryMs = 5_000;
+
     /// <summary>A bot this close to its landing (flat) has arrived at it.</summary>
     internal const float AtLandingYards = 3f;
 
@@ -676,6 +688,21 @@ internal static partial class PlayerbotElevator
 
     /// <summary>Each bot's wait for the navigation tiles of the direct walk <see cref="TryBegin"/> weighs against the lift.</summary>
     private static readonly ConditionalWeakTable<Player, StrongBox<TileWait>> TileWaits = [];
+
+    /// <summary>Each bot's wait for the navigation tiles of the approach route <see cref="TryBegin"/> plans to a far lift (its own wait: another goal than the direct walk's).</summary>
+    private static readonly ConditionalWeakTable<Player, StrongBox<TileWait>> ApproachTileWaits = [];
+
+    /// <summary>Each bot's last refused approach (<see cref="ApproachMemo"/>). World thread of the bot's map.</summary>
+    private static readonly ConditionalWeakTable<Player, ApproachMemo> ApproachMemos = [];
+
+    /// <summary>Per map, the landing beside each car's stop at a level (<see cref="ApproachLanding"/>); only found landings are kept. Written from any map thread, hence concurrent.</summary>
+    private static readonly ConditionalWeakTable<Map, System.Collections.Concurrent.ConcurrentDictionary<(uint SpawnGuid, ElevatorLevel Level), Vector3>> ApproachLandings = [];
+
+    private sealed class ApproachMemo
+    {
+        internal uint LiftKey;
+        internal uint UntilMs;
+    }
     private static readonly ConditionalWeakTable<WorldRuntime, Func<Map, ElevatorSurvey>> Surveys = [];
     private static readonly ConditionalWeakTable<Map, ElevatorSurvey> MapSurveys = [];
 
@@ -725,13 +752,17 @@ internal static partial class PlayerbotElevator
 
     /// <summary>
     /// Begin a trip towards <paramref name="goal"/> when a lift is the way there (<see cref="ElevatorNetwork.Choose"/>), the navigation mesh
-    /// has no way to a goal within one route's reach without it, and no trip failed lately. True when a trip is under way afterwards.
+    /// has no way to a goal within one route's reach without it, the bot stands within <see cref="ElevatorNetwork.NearLiftYards"/> of the
+    /// lift and no trip failed lately. True when a trip is under way afterwards.
     /// </summary>
     internal static bool TryBegin(WorldSession session, Player player, Vector3 goal, PlayerbotOptions options)
         => TryBegin(session, player, goal, options, out _);
 
-    /// <param name="walk">When false: the route the mesh check planned to the goal, when it reaches it (null when no check ran). The caller
-    /// walks it instead of planning again, so a think still costs one path query.</param>
+    /// <param name="walk">When false, the route the caller walks instead of planning again (so a think costs one path query when the mesh joins the goal, and up to one per car more for the far approach), or null
+    /// when the caller plans its own. Either the direct route the mesh check planned to the goal itself, when it reaches it; or, for a bot
+    /// farther than <see cref="ElevatorNetwork.NearLiftYards"/> from the lift whose goal the mesh does not join, the route towards the
+    /// landing beside the lift (<see cref="PlayerbotRoute.ToLiftLanding"/>: it ends at the lift, not at the goal, so a caller must not
+    /// judge the goal by where it ends). A pending tile read, a refused approach and a held-off lift leave it null.</param>
     internal static bool TryBegin(WorldSession session, Player player, Vector3 goal, PlayerbotOptions options, out PlayerbotRoute? walk)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -746,16 +777,11 @@ internal static partial class PlayerbotElevator
         // A region the choice needs is still being read in the background (ElevatorSurvey.TryRegionAt): no verdict on the lift yet, which
         // IsHeldOff reports to the callers that defer on it. No tile is read on the world thread for it.
         if (network.Choose(map.MapId, bot, goal, SurveyOf(session.World, map), out _) is not { } choice) return false;
-        // A bot farther from the lift than one route reaches is not sent at it: the approach (ToStop, Walk) plans each leg with
-        // PlayerbotNavigation.PlanToward, which at that range often gets no route to the lift, and the walk ends after MaxRefusedPlans
-        // refusals in a row or the 60 s no-progress bound. This is a coarse guard, not the fix: of the "no way to the Great Lift"
-        // failures of bot QA #1482 (2026-10-25), those that began more than 2000 yards out are covered, most of that day's; those that
-        // began inside it are not, nor are the Undercity (~450 yards) and Thunder Bluff ones, nor the "in the shaft pit" trip failures at the lift itself. The journey or
-        // the walk leg brings the bot within reach first, and the trip begins on a later think. Every lift shares this (a mesa top is
-        // always within reach of its lifts).
-        if (Vector2.Distance(Flat(bot), choice.Lift.Centre) > options.MaxRouteYards) return false;
-        // The lift only when the mesh has no way: a goal within one route's reach that the mesh joins to the bot is walked to. A route
-        // that stops short of it (the mesh's nearest point, at the cliff's foot under a mesa's top) is no way there.
+        // A bot farther from the lift than one route reaches is not sent at it: O(1) rejection before any path query.
+        float liftYards = Vector2.Distance(Flat(bot), choice.Lift.Centre);
+        if (liftYards > options.MaxRouteYards) return false;
+        // The lift only when the mesh has no way: a goal within one route's reach that the mesh joins to the bot is walked to, however
+        // far the lift is. A route that stops short of it (the mesh's nearest point, at the cliff's foot under a mesa's top) is no way there.
         PlanOutcome directPlan = PlanOutcome.Refused;
         PlayerbotRoute? direct = null;
         if (Vector3.Distance(bot, goal) <= options.MaxRouteYards)
@@ -774,13 +800,69 @@ internal static partial class PlayerbotElevator
             return false;
         }
 
-        // A lift that failed lately (its own backoff) is not ridden again yet; another lift and the mesh walk above are never held back.
+        // A lift that failed lately (its own backoff) is not ridden again yet, nor walked to; another lift and the mesh walk above are never held back.
         if (IsHeldOff(session, player, choice.Lift)) return false;
+        // Beyond NearLiftYards a trip is not begun: it is the local ride (ToStop, Waiting, Aboard, Drop), not the journey to the lift. Begun
+        // from hundreds of yards out, ToStop plans each leg with PlayerbotNavigation.PlanToward, which at that range often gets no route to
+        // the lift (the canyon floor of Thousand Needles under the Great Lift), and the walk ends after MaxRefusedPlans refusals in a row or
+        // the 60 s no-progress bound: the "no way to the Great Lift" failures of bot QA #1482. The bot walks towards the lift's landing as
+        // an ordinary route (returned in walk) and the trip begins on a later think, once it is near.
+        if (liftYards > ElevatorNetwork.NearLiftYards)
+        {
+            walk = ApproachRoute(player, map, choice.Lift, choice.From, bot, options, now);
+            return false;
+        }
+
         if (map.Collision.MeshPoints is not null && !HasReachableLanding(player, map, choice.Lift, choice.From, bot, options))
             return false;
         ElevatorTrip begun = Begin(session, player, choice.Lift, choice.From, goal);
         begun.Options = options;
         return true;
+    }
+
+    /// <summary>
+    /// The route from <paramref name="bot"/>, farther than <see cref="ElevatorNetwork.NearLiftYards"/> from <paramref name="lift"/>, towards the
+    /// landing beside the car nearest it that <see cref="PlayerbotNavigation.PlanToward"/> finds a route to (the nearest reachable landing over
+    /// all cars, as <see cref="ToStop"/> picks), marked <see cref="PlayerbotRoute.ToLiftLanding"/>; null when none does. A route that ends
+    /// farther than <see cref="ElevatorNetwork.NearLiftYards"/> from the lift and less than <see cref="ApproachProgressYards"/> nearer it than
+    /// the bot is refused (a leg handed back at every plan would be walked for ever). A pending tile read gives null and no verdict; a
+    /// refusal is remembered for <see cref="ApproachRetryMs"/>, so the path queries are not repeated at every plan of every caller (the
+    /// landing of each car is cached per map). World thread of the bot's map.
+    /// </summary>
+    private static PlayerbotRoute? ApproachRoute(Player player, Map map, ElevatorLift lift, ElevatorLevel from, Vector3 bot, PlayerbotOptions options, uint now)
+    {
+        ApproachMemo memo = ApproachMemos.GetValue(player, static _ => new ApproachMemo());
+        if (memo.LiftKey == lift.Key && unchecked((int)(memo.UntilMs - now)) > 0) return null;
+        StrongBox<TileWait> tiles = ApproachTileWaits.GetValue(player, static _ => new StrongBox<TileWait>());
+        float botYards = Vector2.Distance(Flat(bot), lift.Centre);
+        foreach (ElevatorCar car in lift.Cars.OrderBy(c => Vector2.DistanceSquared(Flat(c.At(from)), Flat(bot))))
+        {
+            if (ApproachLanding(map, car, from) is not { } landing) continue;
+            PlanOutcome outcome = PlayerbotNavigation.PlanToward(player, landing, options, ref tiles.Value, now, out PlayerbotRoute? route);
+            if (outcome == PlanOutcome.Pending) return null;
+            if (outcome != PlanOutcome.Route || route is not { Points.Count: > 0 }) continue;
+            float endYards = Vector2.Distance(Flat(route.Points[^1]), lift.Centre);
+            if (endYards > ElevatorNetwork.NearLiftYards && endYards > botYards - ApproachProgressYards) continue;
+            route.ToLiftLanding = true;
+            route.LiftLanding = landing;
+            memo.LiftKey = 0;
+            return route;
+        }
+
+        memo.LiftKey = lift.Key;
+        memo.UntilMs = unchecked(now + ApproachRetryMs);
+        return null;
+    }
+
+    /// <summary>The landing beside <paramref name="car"/> at <paramref name="level"/> (<see cref="LandingBeside"/>: the first of its ring of candidates, all the same distance from the stop, that has a floor), cached per map once found.</summary>
+    private static Vector3? ApproachLanding(Map map, ElevatorCar car, ElevatorLevel level)
+    {
+        var landings = ApproachLandings.GetValue(map, static _ => new System.Collections.Concurrent.ConcurrentDictionary<(uint SpawnGuid, ElevatorLevel Level), Vector3>());
+        if (landings.TryGetValue((car.SpawnGuid, level), out Vector3 known)) return known;
+        Vector3 stop = car.At(level);
+        if (LandingBeside(map, stop, stop) is not { } found) return null;
+        landings[(car.SpawnGuid, level)] = found;
+        return found;
     }
 
     private static bool HasReachableLanding(Player player, Map map, ElevatorLift lift, ElevatorLevel from, Vector3 bot, PlayerbotOptions options)

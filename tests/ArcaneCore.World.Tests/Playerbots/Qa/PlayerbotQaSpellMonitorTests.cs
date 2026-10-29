@@ -75,6 +75,7 @@ internal sealed class QaSpellKit : IDisposable
             Spell(ReferencedAura, Effect(SpellEffectName.ApplyAura, 1, aura: ReferencedAuraType)) with { Duration = new SpellDuration(30_000, 0, 30_000) },
             .. extra ?? [],
         ], [], []), () => 10_000) { MapUpdateIntervalMs = 0 };
+        System.SpellBatchWindowMs = 0; // the monitor is fed in the call that casts (observers, Hit); no update ever flushes a spell batch here
         new ScriptEffectModule().Register(System);
         if (brokenHeal) System.RegisterEffect(SpellEffectName.Heal, static _ => { }); // a handler that silently does nothing
         if (brokenDamage) System.RegisterEffect(SpellEffectName.SchoolDamage, static _ => { });

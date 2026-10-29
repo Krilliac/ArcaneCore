@@ -359,10 +359,13 @@ public sealed class PlayerbotQuestAnomalyTests
         });
     }
 
+    // GitHub #1541: every spawn of the objective visited is a camp waiting for its respawn, not a stall. The first sight of it only opens
+    // an episode; the stall is reported when the camp is still all visited a full visit window later (here no spawn of entry 90 is known,
+    // so the longest one, PlayerbotWorldDestinations.MaxVisitMs) and the objective has gained nothing since: once, at Warning for none.
     [Fact]
-    public async Task AnObjectiveWhoseSpawnsAreAllVisited_FiresNoProgress_Once_AndAnUnvisitedOneIsSilent()
+    public async Task AnObjectiveWhoseSpawnsAreAllVisited_FiresNoProgress_OnceAfterAFullVisitWindowWithoutCredit_AndAnUnvisitedOneIsSilent()
     {
-        await using QuestHost quest = await QuestHost.StartAsync();
+        await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
         WorldSession session = quest.Session;
         var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
         await quest.Host.OnWorldAsync(() =>
@@ -377,12 +380,71 @@ public sealed class PlayerbotQuestAnomalyTests
             for (int think = 0; think < 4; think++) Think(session, goals);
             Assert.False(capture.Any(NoProgress), capture.Describe());
 
-            // Every spawn of the creature has been walked: the objective cannot be progressed from here.
+            // Every spawn just walked: the camp waits for its respawn, which is no stall yet.
             goals.AllSpawnsVisited = (_, _, _) => true;
+            for (int think = 0; think < 4; think++) Think(session, goals);
+            Assert.Equal(0u, goals.PreferredCreatureEntry);
+            Assert.False(capture.Any(NoProgress), capture.Describe());
+            return true;
+        });
+
+        await quest.Host.World.AdvanceClockAsync(PlayerbotWorldDestinations.MaxVisitMs + 1_000);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
             for (int think = 0; think < 4; think++) Think(session, goals);
             Assert.Equal(1, capture.Count(NoProgress));
             AnomalyNotice notice = capture.Notices.Single(n => n.Key == NoProgress);
             Assert.Contains($"quest={QuestInteractionFixture.QuestId} entry=90 progress=0 reason=all-spawns-visited", notice.Detail, StringComparison.Ordinal);
+            Assert.Equal(AnomalySeverity.Warning, notice.Severity);
+            return true;
+        });
+    }
+
+    // GitHub #1541: a camp that is all visited again a full window later is no stall when the objective gained credit in between.
+    [Fact]
+    public async Task AnAllVisitedObjectiveThatGainsCreditWithinTheVisitWindow_FiresNothing()
+    {
+        await using QuestHost quest = await QuestHost.StartAsync(manualClock: true);
+        WorldSession session = quest.Session;
+        var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+        await quest.Host.OnWorldAsync(() =>
+        {
+            quest.Feature.Services.ReplaceQuests(new QuestStore(new QuestContent(
+                [new QuestTemplate
+                {
+                    Entry = QuestInteractionFixture.QuestId, Method = 2, MinLevel = 1, QuestLevel = 1,
+                    Title = "Three kills", Details = "Kill three.", RequestItemsText = "Kill three.",
+                    ReqCreatureOrGOId1 = 90, ReqCreatureOrGOCount1 = 3u,
+                }],
+                [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.QuestId }],
+                [new CreatureQuestRelation { Id = QuestInteractionFixture.Entry, Quest = QuestInteractionFixture.QuestId }])));
+            Player player = session.Player!;
+            for (int think = 0; think < 4; think++) Think(session, goals);
+            Assert.NotNull(quest.Feature.Services.StateOf(player)!.Quests.Get(QuestInteractionFixture.QuestId));
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            goals.AllSpawnsVisited = (_, _, _) => true;
+            Think(session, goals);
+            Assert.False(capture.Any(NoProgress), capture.Describe());
+            return true;
+        });
+
+        await quest.Host.World.AdvanceClockAsync(PlayerbotWorldDestinations.MaxVisitMs / 2);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            quest.Feature.Services.KilledMonsterCredit(player, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
+            return true;
+        });
+
+        await quest.Host.World.AdvanceClockAsync(PlayerbotWorldDestinations.MaxVisitMs / 2 + 1_000);
+        await quest.Host.OnWorldAsync(() =>
+        {
+            Player player = session.Player!;
+            using AnomalyCapture capture = PlayerbotAnomalies.CaptureFor(player);
+            for (int think = 0; think < 4; think++) Think(session, goals);
+            Assert.False(capture.Any(NoProgress), capture.Describe());
             return true;
         });
     }

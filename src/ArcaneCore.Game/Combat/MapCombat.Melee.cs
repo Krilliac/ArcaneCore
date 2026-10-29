@@ -903,7 +903,8 @@ public sealed partial class MapCombat
 
         if (direct && combatLink)
         {
-            if (attacker.Combat.Victim is null && attacker is Player)
+            // Not for a held swing of the batch (MapCombat.SwingBatch.cs): its player sent CMSG_ATTACKSTOP within the window, and stays stopped.
+            if (attacker.Combat.Victim is null && attacker is Player && !_resolvingHeldSwings)
             {
                 Attack(attacker, victim, melee: meleeDamage);
             }
@@ -1175,7 +1176,7 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// vmangos Unit::SetInCombatWithAggressor (Unit.cpp:5985): the victim's PvP pulse and combat state; a victim that uses the PvP combat
+    /// vmangos Unit::SetInCombatWithAggressor (Unit.cpp:5985): the victim's PvP pulse and combat state, and a creature victim's leash extension refresh; a victim that uses the PvP combat
     /// timer (<see cref="UsesPvpCombatTimer"/>: a player, a player's pet or charm, a NO_THREAT_LIST creature) lingers 5.5 s. It was players
     /// only, so a NO_THREAT_LIST creature (Mr. Smite) hit by a player had no linger and left combat - evaded - at the next 1.2 s check.
     /// </summary>
@@ -1190,6 +1191,13 @@ public sealed partial class MapCombat
         }
 
         SetInCombatState(victim, UsesPvpCombatTimer(victim) ? CombatConstants.PvpCombatTimerMs : 0, caller, nameof(SetInCombatWithAggressor));
+
+        // vmangos Unit::SetInCombatWithAggressor (Unit.cpp:5985-5987): a creature that is hit - damage, absorbed damage or a hostile spell
+        // hit - refreshes its leash extension clock.
+        if (victim is Creatures.Creature { System: { } system } hitCreature)
+        {
+            system.ExtendLeash(hitCreature);
+        }
     }
 
     /// <summary>vmangos Unit::SetInCombatWithVictim (Unit.cpp:6070): PvP flag on attack, then combat (5.5 s when the victim uses the PvP combat timer).</summary>

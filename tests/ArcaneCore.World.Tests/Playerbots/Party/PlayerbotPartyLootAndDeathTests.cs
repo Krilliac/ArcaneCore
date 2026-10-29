@@ -39,7 +39,9 @@ public sealed class PlayerbotPartyLootAndDeathTests
         await master.SendChatAsync(ChatType.Whisper, Language.Common, "passive", "Partyrobin");
         Assert.Equal("Passive: I will not attack.", (await PartyTestHost.ReadWhisperFromAsync(master, botGuid)).Text);
 
-        LootBag[] bags = await host.OnWorldAsync(() =>
+        // The owners are read in the same world-thread step as the kills: the bot thinks between any two steps, and its first think after
+        // the kills may already release its corpses (a separate read afterwards saw the second corpse at owner 0 on a loaded runner).
+        (LootBag[] bags, ulong[] owners) = await host.OnWorldAsync(() =>
         {
             Player owner = host.World.FindOnlinePlayer("Partyrobinm")!;
             Player follower = host.World.FindOnlinePlayer("Partyrobin")!;
@@ -53,10 +55,10 @@ public sealed class PlayerbotPartyLootAndDeathTests
                 result[i] = Loot(host, follower).FindLoot(corpse.Guid) ?? throw new InvalidOperationException("no loot for kill " + i);
             }
 
-            return result;
+            return (result, result.Select(b => b.Owner.Value).ToArray());
         });
         ObjectGuid masterGuid = await host.PlayerStateAsync("Partyrobinm", p => p.Guid);
-        Assert.Equal([masterGuid.Value, botGuid, masterGuid.Value, botGuid], await host.OnWorldAsync(() => bags.Select(b => b.Owner.Value).ToArray()));
+        Assert.Equal([masterGuid.Value, botGuid, masterGuid.Value, botGuid], owners);
 
         await host.WaitForWorldAsync(() => bags[1].Owner.IsEmpty && bags[3].Owner.IsEmpty, "the bot gives up both corpses it holds");
         Assert.Equal([masterGuid.Value, 0UL, masterGuid.Value, 0UL], await host.OnWorldAsync(() => bags.Select(b => b.Owner.Value).ToArray()));

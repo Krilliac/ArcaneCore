@@ -20,6 +20,9 @@ internal sealed class RecordingManagerHost : IBattlegroundManagerHost
     public readonly List<Battleground> Deleted = [];
     public uint NextInstance = 101;
 
+    /// <summary>Called after each recorded status (a test's re-entrant host reaction).</summary>
+    public Action<ObjectGuid, BattlegroundStatus>? OnStatus;
+
     public bool IsOnline(ObjectGuid player) => !Offline.Contains(player);
 
     public IBattlegroundHost CreateMatchHost(BattlegroundType type, uint instanceId)
@@ -32,7 +35,10 @@ internal sealed class RecordingManagerHost : IBattlegroundManagerHost
     public uint AllocateInstanceId() => NextInstance++;
 
     public void SendStatus(ObjectGuid player, uint queueSlot, BattlegroundStatusSubject subject, BattlegroundStatus status, uint time1, uint time2)
-        => Statuses.Add((player, queueSlot, subject, status, time1, time2));
+    {
+        Statuses.Add((player, queueSlot, subject, status, time1, time2));
+        OnStatus?.Invoke(player, status);
+    }
 
     public void SendGroupJoined(ObjectGuid player, uint result) => GroupJoined.Add((player, result));
 
@@ -63,6 +69,14 @@ public sealed class BattlegroundManagerTests
         var mgr = new BattlegroundManager(options ?? new BattlegroundOptions(), host, ports.ToPorts(new RecordingHost()));
         mgr.RegisterTemplate(WsgTemplate(minPerTeam, maxPerTeam));
         return (mgr, host, ports);
+    }
+
+    /// <summary>Bind a player to a real match (a binding to a match that no longer exists counts as none).</summary>
+    private static void PutInARunningMatch(BattlegroundManager mgr, ObjectGuid guid)
+    {
+        Battleground match = mgr.CreateNewBattleground(BattlegroundType.WarsongGulch, 0) ?? throw new InvalidOperationException("no match");
+        mgr.StartBattleground(match);
+        mgr.BindPlayer(guid, match, Team.Alliance);
     }
 
     private static BattlegroundMember M(ObjectGuid guid, Team team, uint level = 60, bool inWorld = true, bool deserter = false) => new(guid, team, level, inWorld, deserter);
@@ -194,9 +208,22 @@ public sealed class BattlegroundManagerTests
     public void APlayerAlreadyInABattlegroundCannotQueue()
     {
         var (mgr, _, _) = NewManager();
-        mgr.StateOf(Alliance[0]).InstanceId = 5;
+        PutInARunningMatch(mgr, Alliance[0]);
 
         Assert.Equal(BattlegroundJoinOutcome.Ignored, Solo(mgr, Alliance[0], Team.Alliance).Outcome);
+    }
+
+    [Fact]
+    public void ABindingToAMatchThatIsGoneIsNoBinding_ForTheQueue()
+    {
+        var (mgr, _, _) = NewManager();
+        Battleground gone = mgr.CreateNewBattleground(BattlegroundType.WarsongGulch, 0)!;   // never started: not a running match
+        mgr.BindPlayer(Alliance[0], gone, Team.Alliance);
+        Assert.True(mgr.StateOf(Alliance[0]).InBattleground);
+
+        Assert.Equal(BattlegroundJoinOutcome.Queued, Solo(mgr, Alliance[0], Team.Alliance).Outcome);
+        Assert.False(mgr.StateOf(Alliance[0]).InBattleground);
+        Assert.False(mgr.ClearStaleBinding(Alliance[0]));   // nothing left to clear
     }
 
     [Fact]
@@ -233,7 +260,7 @@ public sealed class BattlegroundManagerTests
     {
         var (mgr, host, _) = NewManager(new BattlegroundOptions { TagInBattlegrounds = name != "tagged" });
         Solo(mgr, Alliance[9], Team.Alliance);                      // a member already in the queue
-        mgr.StateOf(Alliance[8]).InstanceId = 7;                    // a member inside a battleground
+        PutInARunningMatch(mgr, Alliance[8]);                       // a member inside a battleground
         host.Statuses.Clear();
 
         BattlegroundJoinResult result = Party(mgr, Alliance[0], Team.Alliance, members);
@@ -659,6 +686,45 @@ public sealed class BattlegroundManagerTests
         Assert.True(mgr.EnterBattleground(Alliance[0]));
         Assert.Equal(Team.Alliance, bg.PlayerTeam(Alliance[0]));
         Assert.False(mgr.EnterBattleground(Alliance[1]));     // not bound to a match
+    }
+
+    [Fact]
+    public void APlayerBoundByACommandIsNotAddedToTheMatch_AndLeavingGivesBackNoInvitation()
+    {
+        var (mgr, _, bg) = WithInvitations();
+        ObjectGuid visitor = ObjectGuid.Player(9001);
+        uint invitedBefore = bg.InvitedCount(Team.Alliance);
+        uint freeBefore = bg.FreeSlotsForTeam(Team.Alliance);
+
+        mgr.BindPlayer(visitor, bg, Team.Alliance);
+
+        Assert.False(mgr.EnterBattleground(visitor));   // bound, but never invited: on the map, not a participant
+        Assert.Null(bg.PlayerTeam(visitor));
+        Assert.Equal(0, bg.PlayerCount);
+        mgr.ClearBinding(visitor);
+        bg.RemovePlayerAtLeave(visitor, teleportToEntryPoint: false, sendStatus: false);
+        Assert.False(mgr.StateOf(visitor).InBattleground);
+        Assert.Equal(invitedBefore, bg.InvitedCount(Team.Alliance));
+        Assert.Equal(freeBefore, bg.FreeSlotsForTeam(Team.Alliance));
+    }
+
+    [Fact]
+    public void ClearBinding_FreesTheQueueSlotOfAnInvitedEntrant_ButKeepsTheSlotOfAMatchItWasNeverInvitedTo()
+    {
+        var (mgr, _, bg) = WithInvitations();
+        mgr.HandlePort(new BattlegroundPortRequest(Alliance[0], 489, 1, 60, false));
+        mgr.EnterBattleground(Alliance[0]);
+        Assert.Equal(bg.InstanceId, mgr.StateOf(Alliance[0]).InvitedInstance(WsQueue));
+
+        mgr.ClearBinding(Alliance[0]);
+        Assert.Equal(-1, mgr.StateOf(Alliance[0]).SlotOf(WsQueue));   // the entrant's slot goes with its match
+
+        // Alliance[1] is still invited to the match, but a command binds it as if to another instance: the slot (and its invitation) stay.
+        mgr.StateOf(Alliance[1]).InstanceId = bg.InstanceId + 1;
+        mgr.StateOf(Alliance[1]).Type = BattlegroundType.WarsongGulch;
+        mgr.ClearBinding(Alliance[1]);
+        Assert.True(mgr.StateOf(Alliance[1]).SlotOf(WsQueue) >= 0);
+        Assert.Equal(bg.InstanceId, mgr.StateOf(Alliance[1]).InvitedInstance(WsQueue));
     }
 
     [Fact]

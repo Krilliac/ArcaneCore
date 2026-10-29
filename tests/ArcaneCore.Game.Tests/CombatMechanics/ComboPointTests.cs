@@ -51,6 +51,19 @@ public sealed class ComboPointTests
         });
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private sealed class Rig : IDisposable
     {
         public Rig()
@@ -82,7 +95,11 @@ public sealed class ComboPointTests
         public SpellSystem System => Kit.System;
 
         public SpellCastResult Cast(Player caster, uint spell, Unit? target = null, bool triggered = false)
-            => System.CastSpell(caster, spell, target is null ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(target.Guid), triggered);
+        {
+            SpellCastResult result = System.CastSpell(caster, spell, target is null ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(target.Guid), triggered);
+            FlushSpellBatch(Kit);
+            return result;
+        }
 
         public void Dispose() => Kit.Dispose();
     }

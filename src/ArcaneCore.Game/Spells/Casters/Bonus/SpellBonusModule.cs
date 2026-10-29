@@ -74,8 +74,9 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
             // A creature's Rate.Creature.*.SpellDamage also reaches these non-weapon melee class spells (MeleeDamageBonusDone, SpellCaster.cpp:1358-1359).
             return stage switch
             {
-                SpellAmountStage.DirectDamage => spells.ModFloat(caster, spell, SpellModOp.Damage, amount * CreatureSpellDamageRate(caster)),
-                SpellAmountStage.DamageOverTimeSnapshot => spells.ModFloat(caster, spell, SpellModOp.Dot, amount * CreatureSpellDamageRate(caster)),
+                // Hunter pet happiness (MeleeDamageBonusDone, SpellCaster.cpp:1378-1390) follows the creature rate (:1358-1359).
+                SpellAmountStage.DirectDamage => spells.ModFloat(caster, spell, SpellModOp.Damage, amount * CreatureSpellDamageRate(caster) * Pets.SummonService.HappinessDamageFactor(caster)),
+                SpellAmountStage.DamageOverTimeSnapshot => spells.ModFloat(caster, spell, SpellModOp.Dot, amount * CreatureSpellDamageRate(caster) * Pets.SummonService.HappinessDamageFactor(caster)),
                 SpellAmountStage.HealOverTimeSnapshot => spells.ModFloat(caster, spell, SpellModOp.Dot, amount),
                 _ => amount,
             };
@@ -202,6 +203,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
             percent *= SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.ModDamageDoneVersus, a => ((uint)a.MiscValue & typeMask) != 0));
             percent *= SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.PetDamageMulti, null));
             percent *= CreatureSpellDamageRate(caster);
+            percent *= Pets.SummonService.HappinessDamageFactor(caster); // vmangos SpellCaster.cpp:1663-1675: hunter pet happiness on DoneTotalMod
         }
 
         if (benefit != 0)

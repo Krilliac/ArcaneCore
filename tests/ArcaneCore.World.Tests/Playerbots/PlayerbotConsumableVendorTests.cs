@@ -50,6 +50,15 @@ public sealed class PlayerbotConsumableVendorTests
                     Player player = session.Player!;
                     var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
                     Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, 993000, SpellCastTargets.ForSelf(), triggered: false));
+                    return true;
+                });
+                // With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the cast, and its cooldown, go off at the batch boundary.
+                await host.WaitForWorldAsync(() => !host.WorldServices.GetRequiredService<SpellFeature>().System.HasPendingGo(session.Player!),
+                    "the batched cast went off");
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
                     Assert.Contains(spells.GetActiveCooldowns(player), row => row.SpellId == 993000);
                     session.ManagedBudget = new ManagedActionBudget(1);
                     var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });

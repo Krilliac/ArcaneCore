@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Maps.Templates;
@@ -50,6 +51,26 @@ public sealed partial class Map
         {
             UpdateObjectVisibility(obj);
         }
+    }
+
+    /// <summary>
+    /// Show a non-player object already placed in this map to everyone near it, and send each of them the create packet before this returns.
+    /// The ordering follows vmangos, where <c>Map::Add</c> calls <c>UpdateObjectVisibility</c> and <c>Player::UpdateVisibilityOf</c> sends the
+    /// create at once; the create block type is whatever the regular visibility pass picks (this does not mark the object new). A packet the
+    /// caller sends afterwards that names the object (SMSG_DUEL_REQUESTED) then reaches a client that already knows it.
+    /// Preconditions: world thread, outside the update phase. A player, or an object that is not in this map, is ignored.
+    /// </summary>
+    public void AnnounceObject(WorldObject obj)
+    {
+        ArgumentNullException.ThrowIfNull(obj);
+        EnsureWorldThread();
+        EnsureNotInUpdatePhase();
+        if (obj is Player || !ReferenceEquals(obj.Map, this))
+        {
+            return;
+        }
+
+        UpdateObjectVisibility(obj, flushViewers: true);
     }
 
     /// <summary>
@@ -207,7 +228,7 @@ public sealed partial class Map
     /// and whoever sees it. Anything else is out of range in both directions and invisible in
     /// both, so evaluating it would change nothing.
     /// </summary>
-    internal void VisibilityCandidates(WorldObject center, List<WorldObject> candidates)
+    internal void VisibilityCandidates(WorldObject center, List<WorldObject> candidates, List<WorldObject>? resolvedVisible = null)
     {
         float radius = VisibilityQueryRadius(center);
         List<WorldObject> extras = _candidateExtras;
@@ -215,7 +236,7 @@ public sealed partial class Map
         if (UseReferenceVisibilityOrder || !_grid.TryCollectObjectsInJoinOrder(center.X, center.Y, radius, candidates, extras, out CellArea area))
         {
             extras.Clear();
-            VisibilityCandidatesBySort(center, candidates);
+            VisibilityCandidatesBySort(center, candidates, resolvedVisible);
             return;
         }
 
@@ -224,11 +245,25 @@ public sealed partial class Map
         // merge them in. The result is exactly VisibilityCandidatesBySort's.
         if (center is Player player)
         {
-            foreach (ObjectGuid guid in player.VisibleObjects)
+            if (resolvedVisible is not null)
             {
-                if (_objects.TryGetValue(guid, out WorldObject? seen) && !_grid.IsCollectedIn(seen, area))
+                // The invariant pass just resolved every visible GUID: no second lookup per GUID.
+                foreach (WorldObject seen in resolvedVisible)
                 {
-                    extras.Add(seen);
+                    if (!_grid.IsCollectedIn(seen, area))
+                    {
+                        extras.Add(seen);
+                    }
+                }
+            }
+            else
+            {
+                foreach (ObjectGuid guid in player.VisibleObjects)
+                {
+                    if (_objects.TryGetValue(guid, out WorldObject? seen) && !_grid.IsCollectedIn(seen, area))
+                    {
+                        extras.Add(seen);
+                    }
                 }
             }
 
@@ -267,15 +302,22 @@ public sealed partial class Map
     /// The reference form of <see cref="VisibilityCandidates"/>: collect everything, then sort into join order and drop
     /// repeats. Used when the cells cannot be merged (a non-finite or oversized query), and by the equivalence tests.
     /// </summary>
-    internal void VisibilityCandidatesBySort(WorldObject center, List<WorldObject> candidates)
+    internal void VisibilityCandidatesBySort(WorldObject center, List<WorldObject> candidates, List<WorldObject>? resolvedVisible = null)
     {
         if (center is Player player)
         {
-            foreach (ObjectGuid guid in player.VisibleObjects)
+            if (resolvedVisible is not null)
             {
-                if (_objects.TryGetValue(guid, out WorldObject? seen))
+                candidates.AddRange(resolvedVisible);
+            }
+            else
+            {
+                foreach (ObjectGuid guid in player.VisibleObjects)
                 {
-                    candidates.Add(seen);
+                    if (_objects.TryGetValue(guid, out WorldObject? seen))
+                    {
+                        candidates.Add(seen);
+                    }
                 }
             }
 
@@ -302,7 +344,10 @@ public sealed partial class Map
     /// <summary>Re-evaluate visibility between a player and everything near it, in both directions.</summary>
     private void UpdateVisibility(Player player)
     {
-        VerifyVisibleSetInvariants(player);
+        // Full pass only after a removal (or on the 64th update); otherwise the resolved list stays null and
+        // VisibilityCandidates looks the visible GUIDs up itself.
+        bool ownsResolved = !_resolvedVisibleInUse;
+        List<WorldObject>? resolved = null;
 
         // vmangos Map::UpdateObjectVisibility / Player::UpdateVisibilityOf: same candidates and join order.
         // A visibility rule may recursively refresh a different player; that call must not reuse our active list.
@@ -311,7 +356,16 @@ public sealed partial class Map
         _visibilityScratchInUse |= ownsScratch;
         try
         {
-            VisibilityCandidates(player, candidates);
+            // Inside the try: a throwing scan must still release the resolved list in the finally.
+            if (ShouldScanVisibleSet(player))
+            {
+                resolved = ownsResolved ? _resolvedVisibleScratch : [];
+                resolved.Clear();
+                _resolvedVisibleInUse |= ownsResolved;
+                ScanVisibleSet(player, resolved);
+            }
+
+            VisibilityCandidates(player, candidates, resolved);
             PlayerVisibilityCandidates += candidates.Count;
             foreach (WorldObject other in candidates)
             {
@@ -334,11 +388,67 @@ public sealed partial class Map
                 candidates.Clear();
                 _visibilityScratchInUse = false;
             }
+
+            if (resolved is not null && ownsResolved)
+            {
+                resolved.Clear();
+                _resolvedVisibleInUse = false;
+            }
         }
     }
 
-    public bool VerifyVisibleSetInvariants(Player player)
+    private readonly ArcaneCore.Kernel.Logging.LogGate _orphanLogGate = new(TimeSpan.FromMinutes(1));
+
+    /// <summary>Orphan visible objects removed by <see cref="VerifyVisibleSetInvariants"/>; counts every heal, including those whose log line was throttled (map thread; read by tests and diagnostics code, not yet exported as a metric).</summary>
+    internal long OrphanVisibleHeals { get; private set; }
+
+    /// <summary>Every 64th visibility update of a player runs the invariant pass even when nothing was removed.</summary>
+    internal const int VisibleSetBackstopInterval = 64;
+
+    /// <summary>
+    /// Bumped whenever an object leaves the map (<see cref="NoteRemoval"/>). Not bumped when a player merely loses sight of
+    /// something: <see cref="RemoveVisible"/> keeps the observer index consistent and cannot leave an orphan, and on a busy map it
+    /// would bump nearly every tick and defeat the gate. Map owner thread.
+    /// </summary>
+    private long _removalEpoch;
+
+    private readonly List<WorldObject> _resolvedVisibleScratch = [];
+    private bool _resolvedVisibleInUse;
+    private readonly ConditionalWeakTable<Player, VisibleSetCheckState> _visibleSetChecks = new();
+
+    private sealed class VisibleSetCheckState
     {
+        public long Epoch = -1;
+        public int Updates;
+    }
+
+    /// <summary>
+    /// Cumulative number of full visible-set invariant passes (<see cref="VerifyVisibleSetInvariants"/>). A work counter for
+    /// tests and diagnostics; world thread.
+    /// </summary>
+    internal long VisibilityInvariantScans { get; private set; }
+
+    /// <summary>Records that an object was removed from the map or from a visible set, so every player's next update re-verifies.</summary>
+    internal void NoteRemoval() => _removalEpoch++;
+
+    private bool ShouldScanVisibleSet(Player player)
+    {
+        VisibleSetCheckState state = _visibleSetChecks.GetOrCreateValue(player);
+        state.Updates++;
+        if (state.Epoch == _removalEpoch && state.Updates % VisibleSetBackstopInterval != 0)
+        {
+            return false;
+        }
+
+        state.Epoch = _removalEpoch;
+        return true;
+    }
+
+    public bool VerifyVisibleSetInvariants(Player player) => ScanVisibleSet(player, null);
+
+    private bool ScanVisibleSet(Player player, List<WorldObject>? resolved)
+    {
+        VisibilityInvariantScans++;
         if (player.VisibleObjects.Count == 0)
         {
             return false;
@@ -351,6 +461,10 @@ public sealed partial class Map
             {
                 (orphans ??= []).Add(guid);
             }
+            else
+            {
+                resolved?.Add(seen);
+            }
         }
 
         if (orphans is null)
@@ -360,9 +474,24 @@ public sealed partial class Map
 
         foreach (ObjectGuid orphan in orphans)
         {
-            _logger.LogWarning(
-                "visibility invariant healed for player {Player} (guid={Guid}) on map {MapId}: removing orphan visible object {OrphanGuid} not present on this map",
-                player.Name, player.Guid.Low, MapId, orphan);
+            OrphanVisibleHeals++;
+            // The scan runs on a removal-epoch change or every 64th update, and a persistent orphan can repeat: one line per window; the held-back heals are counted on the next admitted line.
+            if (_orphanLogGate.TryEnter(out int suppressed))
+            {
+                if (suppressed == 0)
+                {
+                    _logger.LogWarning(
+                        "visibility invariant healed for player {Player} (guid={Guid}) on map {MapId}: removing orphan visible object {OrphanGuid} not present on this map",
+                        player.Name, player.Guid.Low, MapId, orphan);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "visibility invariant healed for player {Player} (guid={Guid}) on map {MapId}: removing orphan visible object {OrphanGuid} not present on this map ({Suppressed} more since)",
+                        player.Name, player.Guid.Low, MapId, orphan, suppressed);
+                }
+            }
+
             RemoveVisible(player, orphan);
             if (orphan != player.Guid && player.Session.WantsUpdateObjects)
             {
@@ -374,7 +503,7 @@ public sealed partial class Map
     }
 
     /// <summary>Re-evaluate which players see a non-player object (vmangos WorldObject::UpdateObjectVisibility).</summary>
-    private void UpdateObjectVisibility(WorldObject obj)
+    private void UpdateObjectVisibility(WorldObject obj, bool flushViewers = false)
     {
         List<Player> viewers = ObjectVisibilityViewers(obj);
         ObjectVisibilityCandidates += viewers.Count;
@@ -387,6 +516,10 @@ public sealed partial class Map
                 if (ReferenceEquals(viewer.Map, this))
                 {
                     UpdateVisibilityOf(viewer, obj);
+                    if (flushViewers)
+                    {
+                        FlushPlayer(viewer);
+                    }
                 }
             }
         }

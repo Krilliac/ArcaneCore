@@ -46,6 +46,9 @@ public sealed class ChargeEffectTests
 
     private static SpellTestKit Kit() => new(ChargeSpells());
 
+    /// <summary>With spell batching on, a held go resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
+
     private static SpellInfo[] ChargeSpells() =>
     [
         Ranged(Spell(Charge,
@@ -299,6 +302,7 @@ public sealed class ChargeEffectTests
         // No cooldown or global cooldown was spent: with a path the same cast goes through at once.
         WorldCollision.Of(kit.World).Install(pathfinder: StraightLinePathfinder.Instance);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
+        FlushSpellBatch(kit);
         Assert.Equal(20f - Gap(caster, target), caster.X, 3);
     }
 
@@ -336,6 +340,7 @@ public sealed class ChargeEffectTests
         WorldCollision.Of(kit.World).Install(new Obstacles { Floor = x => x < 15 ? Z : Z - aboveMesh }, nav);
 
         Assert.Equal(expected, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
+        FlushSpellBatch(kit);
         Assert.Equal(expected == SpellCastResult.CastOk ? 20f - Gap(caster, target) : casterX, caster.X, 2);
     }
 
@@ -369,6 +374,7 @@ public sealed class ChargeEffectTests
         float before = swimmer.X;
 
         Assert.Equal(SpellCastResult.CastOk, wet.Kit.System.HandleCastRequest(swimmer, Charge, SpellCastTargets.ForUnit(prey.Guid)));
+        FlushSpellBatch(wet.Kit);
 
         Assert.True(swimmer.X > before + 1f, $"the swimmer did not move ({before} -> {swimmer.X})");
         Assert.NotEmpty(Of(swimmerSession, WorldOpcode.SmsgMonsterMove));
@@ -478,6 +484,7 @@ public sealed class ChargeEffectTests
         kit.Spellbook.Teach(caster, Charge);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Charge, SpellCastTargets.ForUnit(target.Guid)));
+        FlushSpellBatch(kit);
         Assert.Equal(20f - Gap(caster, target), caster.X, 3);
     }
 

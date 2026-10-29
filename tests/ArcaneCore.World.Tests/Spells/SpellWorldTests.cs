@@ -62,6 +62,7 @@ public sealed class SpellWorldTests
         Assert.Equal(health - 7, await host.PlayerStateAsync("Target", p => p.Health));
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task CastSpell_WithACastTime_AdvancesOnWorldUpdated_WhenCommandQueueIsSaturated()
     {

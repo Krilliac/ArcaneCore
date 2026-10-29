@@ -101,7 +101,15 @@ public sealed class FeignDeathTests : IDisposable
     public void Dispose() => _world.Dispose();
 
     private SpellCastResult CastFeign(bool triggered = false)
-        => _spells.CastSpell(_hunter, FeignSpell, SpellCastTargets.ForSelf(), triggered);
+    {
+        SpellCastResult result = _spells.CastSpell(_hunter, FeignSpell, SpellCastTargets.ForSelf(), triggered);
+        if (_spells.SpellBatchWindowMs != 0)
+        {
+            Advance(_spells.SpellBatchWindowMs); // a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) holds the go until its boundary
+        }
+
+        return result;
+    }
 
     private void Advance(uint ms)
     {

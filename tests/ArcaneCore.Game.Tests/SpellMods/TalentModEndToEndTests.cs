@@ -101,6 +101,7 @@ public sealed class TalentModEndToEndTests
             SpellSystem.SetPower(Player, PowerType.Rage, 100);
             Kit.Advance(100);
             Assert.Equal(SpellCastResult.CastOk, Kit.System.HandleCastRequest(Player, Strike, SpellCastTargets.ForUnit(Target.Guid)));
+            Kit.Advance(Kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
             return 100u - SpellSystem.GetPower(Player, PowerType.Rage);
         }
 

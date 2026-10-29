@@ -275,7 +275,12 @@ public sealed class ArcaneCommandTests
         await using WorldTestHost host = Start(configuration: new() { ["World:GmCommands:LogCommands"] = "false" });
         await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator);
         await admin.SendChatAsync(ChatType.Say, Language.Common, ".gmannounce hello");
-        await admin.CollectAsync();
+
+        // Read up to the announcement's echo: the command has then run, and the echo cannot still be in flight and be read as the first
+        // line of the gmlog reply (a quiet window of a few milliseconds is not enough on a loaded machine).
+        while (!(await admin.ReadChatAsync()).Text.EndsWith("hello", StringComparison.Ordinal))
+        {
+        }
 
         Assert.Equal("No audited commands.", (await LinesAsync(admin, ".arcane gmlog"))[0]);
     }

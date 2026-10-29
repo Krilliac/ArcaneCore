@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Casters.Bonus;
 using ArcaneCore.Game.Spells.Rules;
@@ -20,7 +21,7 @@ namespace ArcaneCore.Game.Combat;
 /// <item>Taken: the victim's MOD_MELEE_DAMAGE_TAKEN (125) / MOD_RANGED_DAMAGE_TAKEN (113) and MOD_DAMAGE_TAKEN (14) for the damage school as a flat
 /// amount, then MOD_DAMAGE_PERCENT_TAKEN (87) for the school and MOD_MELEE_DAMAGE_TAKEN_PCT (126) / MOD_RANGED_DAMAGE_TAKEN_PCT (114).</item>
 /// </list>
-/// Not modelled: the hunter pet happiness factor (pets keep their own damage code). World thread only; reads the live aura lists.
+/// A hunter pet's happiness scales the done percent (<see cref="SummonService.HappinessDamageFactor"/>). World thread only; reads the live aura lists.
 /// </summary>
 public static class MeleeDamageBonus
 {
@@ -50,7 +51,8 @@ public static class MeleeDamageBonus
                 + spells.GetTotalAuraModifier(attacker, AuraType.ModRangedAttackPowerVersus, a => ((uint)a.MiscValue & typeMask) != 0)
             : spells.GetTotalAuraModifier(victim, AuraType.MeleeAttackPowerAttackerBonus)
                 + spells.GetTotalAuraModifier(attacker, AuraType.ModMeleeAttackPowerVersus, a => ((uint)a.MiscValue & typeMask) != 0);
-        float donePercent = Multiplier(spells, attacker, AuraType.ModDamageDoneVersus, typeMask);
+        // vmangos SpellCaster.cpp:1378-1390: hunter pet happiness multiplies DonePercent before the creature-type versus auras (:1392-1394).
+        float donePercent = SummonService.HappinessDamageFactor(attacker) * Multiplier(spells, attacker, AuraType.ModDamageDoneVersus, typeMask);
 
         float doneTotal = 0f;
         if (attackPowerBonus != 0 || doneFlat != 0)

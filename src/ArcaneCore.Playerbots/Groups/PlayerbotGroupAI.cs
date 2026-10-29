@@ -1550,7 +1550,7 @@ internal sealed class PlayerbotGroupAI
         SpellFeature? spells = _session.Services.GetService<SpellFeature>();
         if (spells is null || player.Combat.IsInCombat
             || spells.System.GetState(player.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting }
-            || PlayerbotConsumables.HasActiveFoodDrink(player, spells.System)
+            || PlayerbotConsumables.IsEatingOrAboutTo(player, spells.System)
             || !PlayerbotConsumables.TryFindRecovery(player, spells.System, RestBelowPct, RestBelowPct, out PlayerbotConsumable consumable)) return false;
         Goal = PlayerbotGoalKind.Rest;
         if ((player.Movement.Flags & MovementFlags.MaskMoving) != 0)
@@ -1577,7 +1577,7 @@ internal sealed class PlayerbotGroupAI
     {
         if (!PlayerbotMovementControl.Stop(_session, player)) return true;
         SpellFeature? spells = _session.Services.GetService<SpellFeature>();
-        bool eating = spells is not null && PlayerbotConsumables.HasActiveFoodDrink(player, spells.System);
+        bool eating = spells is not null && PlayerbotConsumables.IsEatingOrAboutTo(player, spells.System);
         if (!endNow && !player.Combat.IsInCombat && eating && PlayerbotConsumables.NeedsRecovery(player, _restKind)
             && unchecked((int)(_restUntilMs - _session.World.NowMs)) > 0)
         {

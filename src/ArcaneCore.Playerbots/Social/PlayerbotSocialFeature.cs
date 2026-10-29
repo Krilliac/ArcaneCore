@@ -455,9 +455,16 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         _world = null;
     }
 
+    /// <summary>The maps whose kills are heard (tests).</summary>
+    internal int TrackedMapCount => _maps.Count;
+
     private void UnsubscribeMaps()
     {
-        foreach (Map map in _maps) map.Combat.UnitKilled -= OnUnitKilled;
+        foreach (Map map in _maps)
+        {
+            if (map.FindUpdater<MapCombat>() is { } combat) combat.UnitKilled -= OnUnitKilled;
+        }
+
         _maps.Clear();
     }
 
@@ -959,7 +966,6 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         }
         catch (Exception error) when (error is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot.social", error);
             AnomalyLedger.Shared.Report("bot-social", "feature-fault", "social", $"{error.GetType().Name}: {error.Message}", origin: _world?.Identity);
             logger.LogFault("playerbot.social", error, "Playerbot social: the bot registry could not be read ({Type}); the last one stays", error.GetType().Name);
         }
@@ -997,12 +1003,12 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     private void OnMapCreated(Map map)
     {
-        if (_maps.Add(map)) map.Combat.UnitKilled += OnUnitKilled;
+        if (map.FindUpdater<MapCombat>() is { } combat && _maps.Add(map)) combat.UnitKilled += OnUnitKilled;
     }
 
     private void OnMapUnloading(Map map)
     {
-        if (_maps.Remove(map)) map.Combat.UnitKilled -= OnUnitKilled;
+        if (_maps.Remove(map) && map.FindUpdater<MapCombat>() is { } combat) combat.UnitKilled -= OnUnitKilled;
     }
 
     private void OnUnitKilled(Game.Entities.Unit? killer, Game.Entities.Unit victim)

@@ -27,7 +27,7 @@ public readonly record struct NavMeshDatasetDescriptor(string Directory, Guid Id
 /// <para>Thread affinity: world thread, except <see cref="FindPathShared"/> (any thread, under the shared read lock).</para>
 /// </summary>
 public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQuery, IMeshFloorQuery, ICollisionTileLifecycle, ICollisionTilePrefetch, ISharedPathSearch, ISharedTiledPathSearch,
-    ISharedMeshPointQuery, ICollisionTileDemand
+    ISharedMeshPointQuery, ISharedMeshFloorQuery, ICollisionTileDemand
 {
     /// <summary>
     /// First search box half-extents (Recast x, y, z) for the nearest polygon of an endpoint of a query without an end tolerance: the
@@ -898,12 +898,47 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
     public bool TryGetMeshFloor(uint mapId, float x, float y, float z, float below, float above, out float height)
     {
         height = 0f;
-        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z) || !float.IsFinite(below) || !float.IsFinite(above)
-            || below < 0f || above < 0f || GetNavMesh(mapId) is not { } mesh)
+        if (!MeshFloorArgumentsValid(x, y, z, below, above) || GetNavMesh(mapId) is not { } mesh)
         {
             return false;
         }
 
+        return MeshFloorCore(mesh, x, y, z, below, above, out height);
+    }
+
+    /// <inheritdoc />
+    public bool? TryGetMeshFloorShared(uint mapId, float x, float y, float z, float below, float above, out float height)
+    {
+        height = 0f;
+        if (!MeshFloorArgumentsValid(x, y, z, below, above))
+        {
+            return false;
+        }
+
+        _sharedLock.EnterReadLock();
+        try
+        {
+            // The owner reads a map's navmesh parameters on first use; a shared query never does. A map whose table entry is null has no
+            // mesh: the owner's answer comes from the fallback pathfinder, so that is the owner's to give too.
+            if (!_meshes.TryGetValue(mapId, out NavMesh? mesh) || mesh is null)
+            {
+                return null;
+            }
+
+            return MeshFloorCore(mesh, x, y, z, below, above, out height);
+        }
+        finally
+        {
+            _sharedLock.ExitReadLock();
+        }
+    }
+
+    private static bool MeshFloorArgumentsValid(float x, float y, float z, float below, float above)
+        => float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z) && float.IsFinite(below) && float.IsFinite(above) && below >= 0f && above >= 0f;
+
+    private static bool MeshFloorCore(NavMesh mesh, float x, float y, float z, float below, float above, out float height)
+    {
+        height = 0f;
         const float side = IMeshFloorQuery.MeshFloorHorizontalYards;
         float half = (below + above) * 0.5f;
         Vector3 center = NavMeshFormat.ToRecast(new Vector3(x, y, z + ((above - below) * 0.5f)));
@@ -1353,7 +1388,10 @@ public sealed partial class NavMeshPathfinder : IMapAwarePathfinder, IMeshPointQ
             type |= PathType.Short;
         }
 
-        return new PathResult(type, points);
+        // Without an end tolerance the start is not graded (vmangos/MaNGOS Zero getPolyByLocation's boxes): tell the caller when it lies
+        // past the near box's height off its polygon, found only by the far box (PathResult.StartFar, issue #1501).
+        bool startFarVertically = tolerance <= 0 && startFar && MathF.Abs(startOnMesh.Y - startRc.Y) > NearExtents.Y;
+        return new PathResult(type, points) { StartFar = startFarVertically };
     }
 
     // vmangos inRange(p1, p2, r, h): horizontal distance within r and vertical within h.

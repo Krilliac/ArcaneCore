@@ -195,7 +195,7 @@ leave-home quest of a later home.
 A far goal (a quest giver or ender, a corpse) is approached a leg at a time (`PlayerbotNavigation.TryPlanToward`). Beyond
 `MaxPathPoints - 2` yards the map's region graph leads (`NavRegionGraph`, [collision-pathing](collision-pathing.md); built off the world
 thread on the first far goal of a map, seconds for a continent): its search finds the way across the map coarsely, round mountains and out
-of dead ends, and the leg is one path query to the farthest point of that way within `RegionLegYards` (1000) and half of `MaxRouteYards`
+of dead ends, and the leg is one path query (a path job under a planning wrapper) to the farthest point of that way within `RegionLegYards` (1000) and half of `MaxRouteYards`
 (the goal itself when that near). A goal the walkable mesh does not join to the bot's place gets the way to the portal nearest it, as a
 partial path; when the region search reports `NavRegionRouteStatus.Unreachable` and either no portal lies closer (`portals.Count == 0`), the bot already stands within `NearestPortalRefusalYards` (4) of the final portal, or the Detour query to the chosen/first portal fails, `RegionLeg` refuses outright instead of falling through to straight-line Detour steps into dead-end edges. When a connected region route's query to the chosen portal is no route, the old steps below still get their turn. Before, a far goal was approached only by points on the straight line, and in the mountains the next one lay in rock: no
 route at all from any bot-QA stall point of issue #191 (quest 5881, Stonetalon to Grish Longrunner at the Great Lift, 5,200 to 7,900
@@ -203,6 +203,8 @@ yards) or #194 (quest 1418, the Swamp of Sorrows to Kargath, 3,400 yards), and e
 itself was tried too: it reaches Grish, but from the swamp it ends at the point nearest Kargath (-9356.8, -3872.5) and goes no further,
 while the way leads west and north by Deadwind Pass, Redridge, the Burning Steppes and Blackrock Mountain. Now every stall point's legs
 reach the ender: 9 to 13 legs of 6,500 to 9,400 yards, each plan 5 to 80 ms (`FromAnIssueStallPoint_...`, real terrain).
+
+The region search of a leg is cached per graph and per (from-region, to-region) pair (`PlayerbotRegionRoutes`): the same pair is asked on every leg and by every bot bound the same way. A miss under a planning wrapper (`PlanToward`, `PlanExact`, a chest's verdict) is queued for the pool (a FIFO drained by at most `MaxInFlight` = 8 workers, at most `MaxQueued` = 4096 pairs across all maps) and the bot answers `PlanOutcome.Pending`, as for a path job; the leg is planned on a later think from the finished answer, and the next legs between the same regions are hits. A bool planner that cannot take Pending searches on its think, as before. A pair whose queued search is lost is searched on the asking thread after `PathJobWaitMaxMs`, at most one search on the asking thread per 50 ms (lost work or a full queue; `SyncSearchBudget`, one per path-job service). An answer is start-independent: `Found` and `Unreachable` depend on the two regions only, and the chain kept for an unreachable goal always leads to the portal of the bot's component nearest the goal; whether a bot standing elsewhere in the region gets that chain or 'no portal' (it already stands nearer the goal than any exit) is decided per asking position from the kept chain, so bots at any distance apart share one entry and no search is repeated for them. Limit: the nearest portal is the one for the first asker's goal in that region. A far goal inside a remembered dead-end pin cell is refused before any region search or path job is started (`PlanTowardSteps`); a chest the exact search refused asks the same cache and answers Pending until the pair is searched. The time one region search takes on a continent graph (and so the drain time of a full queue) is not measured. A search that faulted is kept as an answer with no portals (`Exhausted`, and so no refusal) and is not retried until it is evicted from its graph's cache.
 
 Fragments of mesh and goals no walk reaches (bot QA cluster C3: the same stall point across bots and goals). Real-terrain probes
 (`PlayerbotDeadEndPinProbeTests`) found two kinds behind some of the pins. A *fragment*: the ridge pocket above the Valley of Trials
@@ -526,12 +528,25 @@ as a player does (`PlayerbotElevator`), following the tram rider's design withou
   whose destination is not up there rides the mesa's lift down, wherever the destination lies (quest 5361 is taken on Freewind Post and
   ends at Ghost Walker Post in Desolace); otherwise a lift whose regions put the bot on one level and the destination on the other is
   taken, the one the shorter straight-line way passes. Not when the navigation mesh joins the bot to a destination within one route's
-  reach (a route that stops short, at the foot of the cliff, is no way), and not while the bot stands farther from the lift than `MaxRouteYards`
-  (2000): the approach plans each leg with `PlayerbotNavigation.PlanToward`, which that far out often gets no route to the lift, and the walk
-  ends after `MaxRefusedPlans` refusals in a row or the 60 s no-progress bound (live 2026-10-25, issue #1482). This is a coarse guard, not the fix: of the
-  "no way to the Great Lift" failures that day those that began more than 2000 yards out (most of them in the 2026-10-25 live log) are covered and those inside it (among them the issue's own
-  -3557,-2240) are not, nor are the Undercity (~450 yards) and Thunder Bluff ones, and the "in the shaft pit" failures at the lift itself are not. The journey or the walk leg
-  brings the bot within reach and the trip begins on a later think (all lifts share the rule). A failed ride is not tried again for 10 minutes.
+  reach, however far the lift is (a route that stops short, at the foot of the cliff, is no way), and not while the bot stands farther from
+  the lift than `MaxRouteYards` (2000), nor farther than `ElevatorNetwork.NearLiftYards` (150): a trip is the local ride, and begun from
+  far out its approach plans each leg with `PlayerbotNavigation.PlanToward`, which that far out often gets no route to the lift, so the
+  walk ended after `MaxRefusedPlans` refusals in a row or the 60 s no-progress bound (live 2026-10-25, issue #1482). Of the five
+  evidence lines in the issue, measured from the lift's coordinates it names: three began 2056 to 5453 yards out (past `MaxRouteYards`),
+  one 1181 yards out (the Great Lift, -3557.6,-2240.7) and one 450 yards out (the Undercity lift, 1877.4,-161.6). Between 150 and 2000
+  yards, when no direct walk reaches the goal and the lift is not backed off, `TryBegin` hands the caller a route towards the landing beside
+  the nearest car that `PlanToward` finds a route to (`PlayerbotRoute.ToLiftLanding`; the landing of each car is cached per map, a refused
+  approach is not planned again for 5 s) and the trip begins on a later think, once the bot is near (all lifts share the rule). The route
+  must end within 150 yards of the lift or at least 30 yards nearer it than the bot, so a leg that gains nothing is not handed back for
+  ever. Callers walk it as they walk a direct route, skip the flight-path and held-off checks as they do for one, and their progress
+  clocks (the destination's not-closing clock, the repair walk's stuck clock) measure it to the landing, not the goal, since the way to
+  the lift may lead away from the goal; the explore cell is not blocked because a leg ends away from it. The far case costs the direct
+  mesh check plus up to one `PlanToward` per car (the other plans cost one query). When the approach is refused or its tiles are still being read the caller plans the goal
+  itself as before. This moves the approach out of the trip; it does not make the canyon floor of Thousand Needles any easier to cross, so
+  a bot there whose approach is refused is reported by its caller as an unreachable goal instead of as `bot-elevator/trip-failed`.
+  Undercity starts more than 150 yards from the lift (the one in the evidence is about 450) now take this approach route instead of a
+  trip; that change is not verified against the live data. The "in the shaft pit" failures at the lift itself and the Thunder Bluff
+  lifts (not analysed) are not addressed. A failed ride is not tried again for 10 minutes.
 * **The ride** (`ElevatorStage`): walk towards the lift; within 60 yards, pick the car that stands at the bot's level soonest after the bot
   can be beside it, walk to the landing beside it (the floor within 2.5 yards of the level, 6 to 9 yards from the car's centre: the car's
   half width from Elevatorcar.m2's bounds plus a step, nearest the bot), wait, step aboard when the car stands at that level for at least a
@@ -1010,7 +1025,7 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   is a CMSG_CAST_SPELL at itself.
 - **Transit backoff.** A failed transit point (a flight path node, a tram entrance, a lift, a ship's departure dock) waits
   `TransitBackoffSeconds` (60), doubling per failure of that point up to `TransitBackoffMaxSeconds` (300); a success clears it.
-- **Config** (`World:Playerbots:Travel`): `Enabled` (true), `Boats` (true), `Zeppelins` (true), `Hearthstone` (true), `MageService`
+- **Config** (`World:Playerbots:Travel`): `Enabled` (true), `Boats` (true), `Zeppelins` (true), `AreaTriggers` (true), `Hearthstone` (true), `MageService`
   (true), `MageServiceRadiusYards` (150, 10..1000), `MageServiceFeeCopper` (0, 0..100000), `MaxTravelSpendCopper` (10000, 0..10000000),
   `TransitBackoffSeconds` (60, 10..3600), `TransitBackoffMaxSeconds` (300, 10..86400, not below `TransitBackoffSeconds`). Flight paths:
   `World:Playerbots:Taxi:Enabled` (true).

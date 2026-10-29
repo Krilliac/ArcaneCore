@@ -16,7 +16,20 @@ namespace ArcaneCore.Game.Tests.Duel;
 public sealed class DuelChallengeTests
 {
     private static SpellCastResult CastDuel(DuelRig rig, Player caster, Player target)
-        => rig.Kit.System.HandleCastRequest(caster, DuelSpell, SpellCastTargets.ForUnit(target.Guid));
+    {
+        SpellCastResult result = rig.Kit.System.HandleCastRequest(caster, DuelSpell, SpellCastTargets.ForUnit(target.Guid));
+        ResolveSpellBatch(rig.Kit);
+        return result;
+    }
+
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(Spells.SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
 
     private static List<GameObject> Flags(DuelRig rig) => [.. rig.Objects.GameObjects.Where(go => go.Entry == FlagEntry)];
 
@@ -51,6 +64,49 @@ public sealed class DuelChallengeTests
         byte[] requested = DuelPackets.Requested(flag.Guid.Value, rig.A.Guid.Value);
         Assert.Equal(requested, Assert.Single(Packets(rig.SessionA, WorldOpcode.SmsgDuelRequested)));
         Assert.Equal(requested, Assert.Single(Packets(rig.SessionB, WorldOpcode.SmsgDuelRequested)));
+    }
+
+    [Fact]
+    public void TheFlagCreate_ReachesEveryDuellist_BeforeTheDuelRequested()
+    {
+        using var rig = new DuelRig();
+        rig.World.Options.UpdateCompressionThreshold = 0; // plain SMSG_UPDATE_OBJECT, so the create block's guid can be read
+        rig.ClearPackets();
+
+        Assert.Equal(SpellCastResult.CastOk, CastDuel(rig, rig.A, rig.B));
+
+        GameObject flag = Assert.Single(Flags(rig));
+        byte[][] markers = [.. new[] { ObjectUpdateType.CreateObject, ObjectUpdateType.CreateObject2 }.Select(type =>
+        {
+            var create = new PacketWriter(16);
+            create.WriteByte((byte)type);
+            create.WritePackedGuid(flag.Guid.Value);
+            return create.ToArray();
+        })];
+        foreach (FakeSession session in new[] { rig.SessionA, rig.SessionB })
+        {
+            List<(WorldOpcode Opcode, byte[] Payload)> sent = [.. session.Sent.ToArray().Select(p => (p.Opcode, p.Payload))];
+            int created = sent.FindIndex(p => p.Opcode == WorldOpcode.SmsgUpdateObject && markers.Any(marker => p.Payload.AsSpan().IndexOf(marker) >= 0));
+            int requested = sent.FindIndex(p => p.Opcode == WorldOpcode.SmsgDuelRequested);
+            Assert.True(created >= 0, "the flag create was never sent");
+            Assert.True(requested >= 0, "SMSG_DUEL_REQUESTED was never sent");
+            Assert.True(created < requested, $"flag create at {created} must precede SMSG_DUEL_REQUESTED at {requested}");
+        }
+    }
+
+    [Fact]
+    public void AnnounceObject_IgnoresAPlayer_AndAnObjectThatIsNotInThisMap()
+    {
+        using var rig = new DuelRig();
+        var stray = new OwnedUnit(); // never spawned: its Map is null
+        rig.ClearPackets();
+
+        rig.Map.AnnounceObject(rig.B);
+        rig.Map.AnnounceObject(stray);
+
+        Assert.Empty(rig.SessionA.Sent);
+        Assert.Empty(rig.SessionB.Sent);
+        Assert.Throws<ArgumentNullException>(() => rig.Map.AnnounceObject(null!));
     }
 
     [Fact]
@@ -261,6 +317,7 @@ public sealed class DuelChallengeTests
         kit.Spellbook.Teach(a, DuelSpell);
 
         kit.System.HandleCastRequest(a, DuelSpell, SpellCastTargets.ForUnit(b.Guid));
+        ResolveSpellBatch(kit);
 
         Assert.Contains((byte)SpellCastResult.NoDueling, FailureReasons(sa));
         Assert.Null(a.Duel);

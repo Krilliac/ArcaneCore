@@ -88,6 +88,7 @@ public sealed class EnchantingFeature(IServiceProvider services, ILogger<Enchant
         new EnchantItemSpells(catalog, () => Options.GmAllowTrades, TradeItem).Install(_spells.System);
         IsActive = true;
         world.MapCreated += OnMapCreated;
+        world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)
         {
             OnMapCreated(map);
@@ -108,6 +109,11 @@ public sealed class EnchantingFeature(IServiceProvider services, ILogger<Enchant
         var offered = partner[(int)targets.Item.Value];
         return offered.IsEmpty ? null : partner.Player.Inventory.GetItemByGuid(offered);
     }
+
+    /// <summary>How many maps this feature currently owns an updater on (an unloaded map is released).</summary>
+    internal int TrackedMapCount => _maps.Count;
+
+    private void OnMapUnloading(Map map) => _maps.Remove(map);
 
     private void OnMapCreated(Map map)
     {

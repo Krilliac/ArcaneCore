@@ -89,6 +89,17 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private readonly Dictionary<(uint QuestId, uint Entry), (uint Progress, string Reason)> _reportedNoProgressEpisodes = [];
     private readonly HashSet<(uint QuestId, uint EnderEntry, string Code)> _reportedTurnInRefusals = [];
 
+    // All-spawns-visited episodes per (quest, entry) (GitHub #1541, ObserveAllSpawnsVisited).
+    private readonly Dictionary<(uint QuestId, uint Entry), AllVisitedEpisode> _allVisitedEpisodes = [];
+    private const int MaxAllVisitedEpisodes = 64;
+
+    private sealed class AllVisitedEpisode
+    {
+        public uint StartMs;
+        public uint StartProgress;
+        public bool Reported;
+    }
+
     /// <summary>The bot's home area, or null. New quests are taken only inside it; distant completed returns may be abandoned.</summary>
     internal PlayerbotHomeArea? Home { get; set; }
 
@@ -124,13 +135,14 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (row.Value is { Status: QuestStatus.Complete, Rewarded: false })
             {
-                if (services.Quests.Get(row.Key) is not { } quest || !services.MeetsTurnInRequirements(player, quest))
+                IReadOnlySet<ObjectGuid>? offered = Offered(player);
+                if (services.Quests.Get(row.Key) is not { } quest || !services.MeetsTurnInRequirements(player, quest, offered))
                 {
                     _awaitingBagSpace.Remove(row.Key);
                     continue;
                 }
 
-                if (!RewardItemsFit(player, quest, services))
+                if (!RewardItemsFit(player, quest, services, offered))
                 {
                     NeedsBagSpaceForTurnIn = true;
                     _awaitingBagSpace.Add(row.Key);
@@ -209,7 +221,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 || services.Quests.Get(id) is not { IsActive: true } quest || !services.IsRewardable(id)) continue;
             // A refused abandon packet must not be sent on every think, regardless of home.
             if (IsRefused(id)) continue;
-            bool invalidatedAutoComplete = quest.IsAutoComplete && !services.MeetsTurnInRequirements(player, quest);
+            bool invalidatedAutoComplete = quest.IsAutoComplete && !services.MeetsTurnInRequirements(player, quest, Offered(player));
             if (!invalidatedAutoComplete && !_trip.IsInfeasible(player.MapId, player.X, player.Y, services.Quests, content, id,
                 Home is null ? _options.MaxDeliveryYards : 0, player, completed: true))
             {
@@ -461,7 +473,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 {
                     if (!QuestPackets.IsRequestItemsCompletable(packet.Payload))
                     {
-                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? "quest requirements not met at ender";
+                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest, offered: Offered(player)) ?? "quest requirements not met at ender";
                         RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "IncompleteAtEnder"), now);
                         return false;
                     }
@@ -487,7 +499,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 {
                     if (_stage is Stage.CompleteResponse or Stage.RewardOffer)
                     {
-                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
+                        string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest, offered: Offered(player)) ?? $"turn-in timed out in stage {_stage}";
                         RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
                         return false;
                     }
@@ -512,7 +524,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         {
             if (_stage is Stage.CompleteResponse or Stage.RewardRequest or Stage.RewardOffer or Stage.RewardChoice or Stage.RewardConfirmation)
             {
-                string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest) ?? $"turn-in timed out in stage {_stage}";
+                string reason = services.DiagnoseTurnInRefusal(player, _stageNpc, _stageQuest, offered: Offered(player)) ?? $"turn-in timed out in stage {_stage}";
                 RefuseTurnIn(player, _stageQuest, TargetEntry, reason, TurnInRefusalCode(reason, "StageTimeout"), now);
                 return false;
             }
@@ -528,7 +540,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
         if (_stage == Stage.None && TryShedUnkillableQuest(player, services, state, now)) return true;
 
-        long phaseStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+        long phaseStartTicks = PlayerbotThinkProbe.Timestamp();
         QuestTarget? target = FindCandidate(player, services, state, refreshBagSpace: false, phaseStartTicks: phaseStartTicks);
         if (target is null && _roomWanted && _stage == Stage.None && TryMakeRoomInFullLog(player, services, state, now))
             return true;
@@ -602,7 +614,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 return false;
             }
 
-            if (!services.MeetsTurnInRequirements(player, target.Quest))
+            if (!services.MeetsTurnInRequirements(player, target.Quest, Offered(player)))
             {
                 if (target.Quest.IsAutoComplete || (target.Quest.ReqItemCount.All(c => c == 0) && target.Quest.ReqCreatureOrGOCount.All(c => c == 0)))
                     Suspensions?.MarkUnreachableQuest(target.Quest.Id, now);
@@ -664,7 +676,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     {
                         _ = _session.DrainManagedPackets(WorldOpcode.SmsgQuestgiverOfferReward,
                             WorldOpcode.SmsgQuestgiverQuestFailed, WorldOpcode.SmsgQuestgiverQuestInvalid);
-                        string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice) ?? "reward choice refused";
+                        string reason = services.DiagnoseTurnInRefusal(player, target.Npc.Guid, target.Quest.Id, choice, Offered(player)) ?? "reward choice refused";
                         RefuseTurnIn(player, target.Quest.Id, target.Npc.Entry, reason, TurnInRefusalCode(reason, "RewardRefused"), now, enderGuid: target.Npc.Guid);
                         return false;
                     }
@@ -678,9 +690,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
     }
 
+    // The phase is timed on the running think's clock (PlayerbotThinkProbe.Timestamp): the system clock in a real think, a test's manual
+    // clock under a test probe, so a test of the fallbacks does not depend on how fast a loaded machine runs the first 25 ms.
     private static bool IsQuestNavigationBudgetExhausted(long phaseStartTicks)
     {
-        if (phaseStartTicks != 0 && System.Diagnostics.Stopwatch.GetTimestamp() - phaseStartTicks >= MaxQuestPhaseBudgetTicks)
+        if (phaseStartTicks != 0 && PlayerbotThinkProbe.Timestamp() - phaseStartTicks >= MaxQuestPhaseBudgetTicks)
             return true;
         PlayerbotThinkProbe? probe = PlayerbotThinkProbe.Active;
         return probe is not null && (probe.QueryTicks >= MaxQuestProbeQueryTicks || probe.Clamped > 0);
@@ -802,7 +816,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     {
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
         return services?.StateOf(player) is { Loaded: true } state
-            ? FindCandidate(player, services, state, refreshBagSpace: true, phaseStartTicks: System.Diagnostics.Stopwatch.GetTimestamp()) : null;
+            ? FindCandidate(player, services, state, refreshBagSpace: true, phaseStartTicks: PlayerbotThinkProbe.Timestamp()) : null;
     }
 
     private QuestTarget? FindCandidate(Player player, QuestNpcServices services, PlayerNpcState state, bool refreshBagSpace = true, long phaseStartTicks = 0)
@@ -841,14 +855,15 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     continue;
                 if (status.Status == QuestStatus.Complete && !status.Rewarded)
                 {
-                    if (!services.MeetsTurnInRequirements(player, quest))
+                    IReadOnlySet<ObjectGuid>? offered = Offered(player);
+                    if (!services.MeetsTurnInRequirements(player, quest, offered))
                     {
                         if (_stage != Stage.None && _stageQuest == id)
                             ClearStage();
                         continue;
                     }
 
-                    bool fits = RewardItemsFit(player, quest, services);
+                    bool fits = RewardItemsFit(player, quest, services, offered);
                     if (_stage == Stage.None && !fits)
                     {
                         NeedsBagSpaceForTurnIn = true;
@@ -1024,7 +1039,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
         if (chosen.Entry != 0 && chosen.Visited)
         {
-            ReportObjectiveNoProgress(player, chosen.Quest, chosen.Entry, chosen.Progress, "all-spawns-visited");
+            ObserveAllSpawnsVisited(player, chosen.Quest, chosen.Entry, chosen.Progress, now);
             PreferredCreatureEntry = 0;
             PreferredQuestId = 0;
             PreferredItemUseId = 0;
@@ -1450,8 +1465,11 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     /// (bank included) towards <c>SrcItemCount</c> and needs room for the rest (vmangos <c>Player::CanGiveQuestSourceItemIfNeed</c>,
     /// Player.cpp:13643-13676), refusing the accept otherwise. A quest without a source item always fits.
     /// </summary>
-    internal static bool RewardItemsFit(Player player, Quest quest, QuestNpcServices? services = null) =>
-        QuestNpcServices.CanFitQuestRewards(player, quest, RewardChoice(player, quest), services);
+    internal static bool RewardItemsFit(Player player, Quest quest, QuestNpcServices? services = null, IReadOnlySet<ObjectGuid>? offered = null) =>
+        QuestNpcServices.CanFitQuestRewards(player, quest, RewardChoice(player, quest), services, offered);
+
+    /// <summary>The bot's items sitting in its open trade window, which a turn-in neither counts nor takes (null without a trade).</summary>
+    private IReadOnlySet<ObjectGuid>? Offered(Player player) => _session.Services.GetService<QuestNpcFeature>()?.OfferedInTrade(player);
 
     private void RefreshBagSpaceWait(Player player, QuestNpcServices services, PlayerNpcState state)
     {
@@ -1462,7 +1480,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             {
                 if (state.Quests.Get(id) is { Status: QuestStatus.Complete, Rewarded: false })
                 {
-                    if (services.Quests.Get(id) is not { } cq || RewardItemsFit(player, cq, services))
+                    if (services.Quests.Get(id) is not { } cq || RewardItemsFit(player, cq, services, Offered(player)))
                     {
                         _awaitingBagSpace.Remove(id);
                     }
@@ -1482,7 +1500,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
             {
                 if (row.Value is { Status: QuestStatus.Complete, Rewarded: false }
                     && services.Quests.Get(row.Key) is { } cq
-                    && !RewardItemsFit(player, cq, services))
+                    && !RewardItemsFit(player, cq, services, Offered(player)))
                 {
                     anyBlocked = true;
                     break;
@@ -1769,24 +1787,62 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                 $"quest={questId} giver={entry} guid=0x{giver.Value:X} reason={reason} retryInMs={delay}", AnomalySeverity.Info);
     }
 
-    private void ReportObjectiveNoProgress(Player player, uint questId, uint entry, uint progress, string reason)
+    /// <summary>
+    /// The chosen objective's every spawn is marked visited (GitHub #1541). That alone is a camp waiting for its respawn, the normal
+    /// state of a contested camp, so the first sight only opens an episode for (quest, entry) at the objective's progress. The stall is
+    /// reported, once per episode, when the camp is found all visited again at least a full visit window later
+    /// (<see cref="AllVisitedWindowMs"/>: every visit mark of the first sight has expired by then, so the camp was walked again) with no
+    /// progress since the episode opened: at Warning when the objective has no credit at all, at Info when it has some. Progress gained
+    /// opens a new episode.
+    /// </summary>
+    private void ObserveAllSpawnsVisited(Player player, uint questId, uint entry, uint progress, uint now)
+    {
+        if (questId == 0 || entry == 0) return;
+        var key = (questId, entry);
+        if (!_allVisitedEpisodes.TryGetValue(key, out AllVisitedEpisode? episode) || progress > episode.StartProgress)
+        {
+            if (episode is null && _allVisitedEpisodes.Count >= MaxAllVisitedEpisodes)
+                _allVisitedEpisodes.Clear();
+            _allVisitedEpisodes[key] = new AllVisitedEpisode { StartMs = now, StartProgress = progress };
+            return;
+        }
+
+        if (episode.Reported || unchecked(now - episode.StartMs) < AllVisitedWindowMs(player, entry)) return;
+        episode.Reported = true;
+        ReportObjectiveNoProgress(player, questId, entry, progress, "all-spawns-visited",
+            progress > 0 ? AnomalySeverity.Info : AnomalySeverity.Warning);
+    }
+
+    /// <summary>
+    /// The longest visit window (<see cref="PlayerbotWorldDestinations.VisitWindowMs"/>) of the spawns of <paramref name="entry"/> on the
+    /// bot's map; <see cref="PlayerbotWorldDestinations.MaxVisitMs"/> when none is known.
+    /// </summary>
+    private uint AllVisitedWindowMs(Player player, uint entry)
+    {
+        ArcaneCore.Kernel.WorldData.Creatures.CreatureContent? content =
+            _session.Services.GetService<ArcaneCore.World.Creatures.CreatureWorldFeature>()?.Content;
+        IReadOnlyList<CreatureSpawn> spawns = content?.GetSpawns(player.MapId, entry) ?? [];
+        if (spawns.Count == 0) return PlayerbotWorldDestinations.MaxVisitMs;
+        uint window = 0;
+        for (int i = 0; i < spawns.Count; i++)
+            window = Math.Max(window, PlayerbotWorldDestinations.VisitWindowMs(spawns[i]));
+        return window;
+    }
+
+    private void ReportObjectiveNoProgress(Player player, uint questId, uint entry, uint progress, string reason,
+        AnomalySeverity severity = AnomalySeverity.Warning)
     {
         if (_session.IsInChaosProbe || questId == 0 || entry == 0) return;
         var key = (questId, entry);
-        if (_reportedNoProgressEpisodes.TryGetValue(key, out (uint Progress, string Reason) last))
-        {
-            // Once all spawns of an objective entry have been visited for a quest, killing stray respawns (incrementing progress)
-            // or revisiting the camp must not re-fire all-spawns-visited; other reasons deduplicate by (progress, reason) per (quest, entry).
-            if (reason == "all-spawns-visited" && last.Reason == "all-spawns-visited")
-                return;
-            if (last.Progress == progress && last.Reason == reason)
-                return;
-        }
+        // Deduplicate by (progress, reason) per (quest, entry); all-spawns-visited is also held to once per episode by its caller.
+        if (_reportedNoProgressEpisodes.TryGetValue(key, out (uint Progress, string Reason) last)
+            && last.Progress == progress && last.Reason == reason)
+            return;
         if (_reportedNoProgressEpisodes.Count >= 64)
             _reportedNoProgressEpisodes.Clear();
         _reportedNoProgressEpisodes[key] = (progress, reason);
         PlayerbotAnomalies.Report(player, "quest", "objective-no-progress",
-            $"quest={questId} entry={entry} progress={progress} reason={reason}");
+            $"quest={questId} entry={entry} progress={progress} reason={reason}", severity);
     }
 
     private uint CurrentObjectiveProgress(Player player, uint questId, uint entry)

@@ -75,7 +75,7 @@ public sealed partial class LootService
     }
 
     /// <summary>vmangos Creature::IsTappedBy (Creature.cpp:1615-1632).</summary>
-    private bool IsTappedBy(Player player, Creature creature)
+    public bool IsTappedBy(Player player, Creature creature)
     {
         if (creature.LootTapPlayerGuid == player.Guid)
         {

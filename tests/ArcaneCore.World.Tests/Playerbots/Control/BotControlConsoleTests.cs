@@ -188,6 +188,7 @@ public sealed class BotControlConsoleTests
         await ExecAsync(world, ".botctl release Botlaa");
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task Interact_Gossip_Menu_Quest_Buy_Sell_Train_RoundTrip()
     {
@@ -201,6 +202,15 @@ public sealed class BotControlConsoleTests
         }, "NPCs visible to Botnpc");
 
         await ExecAsync(world, ".botctl take Botnpc");
+
+        // Until it was taken over the bot ran its own AI beside a quest giver: on a loaded machine it had thinks enough to take the quest
+        // itself (the accept below then got QUEST_INVALID "already on", and the menu no longer offered it). Start from an empty log.
+        (string[] questsAtTake, _) = await ExecAsync(world, ".botctl quests Botnpc --json");
+        if (JsonLine(questsAtTake)["bots"]!.AsArray()[0]!["data"]!["quests"]!.AsArray().Count > 0)
+        {
+            (_, string? dropErr) = await ExecAsync(world, $".botctl quest Botnpc abandon {ControlNpcFixture.QuestId}");
+            Assert.Null(dropErr);
+        }
 
         // 1. interact + menu + gossip on a Gossip+Vendor+QuestGiver NPC.
         (string[] interactGossip, string? interactGossipErr) = await ExecAsync(world, $".botctl interact Botnpc npc:{ControlNpcFixture.GossipNpcEntry}");
@@ -228,8 +238,8 @@ public sealed class BotControlConsoleTests
         (_, string? badAcceptErr) = await ExecAsync(world, $".botctl quest Botnpc accept npc:{ControlNpcFixture.DirectNpcEntry} 999999");
         Assert.Equal("not-accepted", badAcceptErr);
 
-        (_, string? acceptErr) = await ExecAsync(world, $".botctl quest Botnpc accept npc:{ControlNpcFixture.DirectNpcEntry} {ControlNpcFixture.QuestId}");
-        Assert.Null(acceptErr);
+        (string[] acceptLines, string? acceptErr) = await ExecAsync(world, $".botctl quest Botnpc accept npc:{ControlNpcFixture.DirectNpcEntry} {ControlNpcFixture.QuestId}");
+        Assert.True(acceptErr is null, string.Join(" | ", acceptLines));
         (string[] questsAfterAccept, _) = await ExecAsync(world, ".botctl quests Botnpc --json");
         Assert.Single(JsonLine(questsAfterAccept)["bots"]!.AsArray()[0]!["data"]!["quests"]!.AsArray());
 

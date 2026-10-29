@@ -83,6 +83,7 @@ public sealed class SpellSettlementFreezeTests
         if (expire)
         {
             kit.Advance(1000);
+            kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the aura that ran out ends at the next boundary (0: no-op)
         }
         else
         {

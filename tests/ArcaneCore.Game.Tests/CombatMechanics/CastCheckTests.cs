@@ -45,6 +45,19 @@ public sealed class CastCheckTests
         yield return Melee(CooldownStrike) with { RecoveryTime = 10_000 };
     }
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private sealed class Rig : IDisposable
     {
         public Rig()
@@ -127,6 +140,7 @@ public sealed class CastCheckTests
 
         rig.Caster.UnitFlags |= UnitFlags.InCombat;   // the landing re-check is not strict
         rig.Kit.Advance(1000);
+        FlushSpellBatch(rig.Kit);
 
         Assert.True(rig.Target.Health < 60u);
     }

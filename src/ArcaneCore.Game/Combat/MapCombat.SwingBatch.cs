@@ -16,6 +16,10 @@ public sealed partial class MapCombat
     private readonly List<(Unit Attacker, Unit Victim, WeaponAttackType Hand)> _heldSwings = [];
     private uint _heldSwingIndex;
 
+    // True while the held swings resolve (UpdateHeldSwings): a held swing of a player who stopped attacking within the window still lands
+    // (it was committed), but it does not start the player's auto-attack again (DealDamage's re-attack of a player without a victim).
+    private bool _resolvingHeldSwings;
+
     /// <summary>Swings waiting for the next batch boundary on this map.</summary>
     internal int PendingSwings => _heldSwings.Count;
 
@@ -56,22 +60,30 @@ public sealed partial class MapCombat
 
         (Unit Attacker, Unit Victim, WeaponAttackType Hand)[] swings = [.. _heldSwings];
         _heldSwings.Clear();
-        foreach ((Unit attacker, Unit victim, WeaponAttackType hand) in swings)
+        _resolvingHeldSwings = true;
+        try
         {
-            // A unit that left this map (logout, a far teleport) loses its swing; a dead or stunned attacker still lands it (it was committed).
-            if (!attacker.IsInWorld || !victim.IsInWorld || !ReferenceEquals(attacker.Map, _map) || !ReferenceEquals(victim.Map, _map))
+            foreach ((Unit attacker, Unit victim, WeaponAttackType hand) in swings)
             {
-                continue;
-            }
+                // A unit that left this map (logout, a far teleport) loses its swing; a dead or stunned attacker still lands it (it was committed).
+                if (!attacker.IsInWorld || !victim.IsInWorld || !ReferenceEquals(attacker.Map, _map) || !ReferenceEquals(victim.Map, _map))
+                {
+                    continue;
+                }
 
-            try
-            {
-                AttackerStateUpdate(attacker, victim, hand);
+                try
+                {
+                    AttackerStateUpdate(attacker, victim, hand);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("map.combat", ex); // as the per-unit update loop records it; the rest of the batch still resolves
+                }
             }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("map.combat", ex); // as the per-unit update loop records it; the rest of the batch still resolves
-            }
+        }
+        finally
+        {
+            _resolvingHeldSwings = false;
         }
     }
 }

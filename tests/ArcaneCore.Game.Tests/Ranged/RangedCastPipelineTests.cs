@@ -105,6 +105,15 @@ public sealed class RangedCastPipelineTests
     private static SpellCastResult Fire(SpellTestKit kit, Player player, Player target, uint spell, bool triggered = true)
         => kit.System.CastSpell(player, spell, SpellCastTargets.ForUnit(target.Guid), triggered);
 
+    /// <summary>With a spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS) a cast that goes off is held: advance past the boundary so it resolves.</summary>
+    private static void ResolveSpellBatch(SpellTestKit kit)
+    {
+        if (kit.System.SpellBatchWindowMs != 0)
+        {
+            kit.Advance(kit.System.SpellBatchWindowMs);
+        }
+    }
+
     // --- checks ----------------------------------------------------------------------------
 
     [Fact]
@@ -400,6 +409,7 @@ public sealed class RangedCastPipelineTests
         kit.Spellbook.Teach(player, Heal);
 
         kit.System.HandleCastRequest(player, Heal, SpellCastTargets.ForSelf());
+        ResolveSpellBatch(kit);
 
         Assert.Equal(
             SpellPackets.BuildSpellStart(player.Guid, player.Guid, Heal, SpellCastFlags.Unknown2, 0, SpellCastTargets.ForSelf()),
@@ -434,6 +444,7 @@ public sealed class RangedCastPipelineTests
     public void RangedAbilityCooldown_IncludesTheWeaponSpeed()
     {
         using var kit = Kit();
+        kit.System.SpellBatchWindowMs = 0; // measures the cooldown from the request: assumes the cast resolves in the same call
         (Player player, _, Player target) = Shooter(kit);
         Equip(player, Bow);
         Arm(player, Arrow);
@@ -450,6 +461,7 @@ public sealed class RangedCastPipelineTests
     public void DoNotResetCombatTimers_LeavesTheOwnCooldownAlone()
     {
         using var kit = Kit();
+        kit.System.SpellBatchWindowMs = 0; // measures the cooldown from the request: assumes the cast resolves in the same call
         (Player player, _, Player target) = Shooter(kit);
         Equip(player, Bow);
         Arm(player, Arrow);
@@ -486,6 +498,7 @@ public sealed class RangedCastPipelineTests
     public void MeleeAbilityCooldown_IsUnchanged()
     {
         using var kit = Kit();
+        kit.System.SpellBatchWindowMs = 0; // measures the cooldown from the request: assumes the cast resolves in the same call
         (Player player, _, Player target) = Shooter(kit);
         player.SetUInt32(UpdateFields.UnitFieldRangedattacktime, 2500);
         uint start = kit.Now;

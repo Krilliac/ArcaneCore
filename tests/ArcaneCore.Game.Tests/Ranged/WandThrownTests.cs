@@ -223,6 +223,7 @@ public sealed class WandThrownTests
     public void ThrowUnderRapidFire_UsesTheHastedRangedTime()
     {
         using var rig = new Rig(Class.Warrior);
+        rig.Kit.System.SpellBatchWindowMs = 0; // times the hasted cooldown from the request: assumes the throw resolves when its cast bar ends
         rig.Equip(ThrownStack, 20);
         rig.Player.Combat.ApplyAttackTimePercentMod(WeaponAttackType.RangedAttack, 100f, apply: true); // +100%: 2000 -> 1000 ms
 

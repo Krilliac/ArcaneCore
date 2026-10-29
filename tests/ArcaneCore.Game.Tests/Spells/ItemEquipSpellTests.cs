@@ -67,6 +67,7 @@ public sealed class ItemEquipSpellTests
         Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(entry, 1, out Item? second));
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, first!.BagSlot, first.Slot, 0, SpellCastTargets.ForSelf()));
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleItemUse(player, second!.BagSlot, second.Slot, 0, SpellCastTargets.ForSelf()));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held goes resolve at the next boundary, in order (0: no-op)
         Assert.Equal(second.Guid, Assert.Single(kit.System.GetAuras(player), h => h.Spell.Id == spellId).ItemGuid);
     }
 }

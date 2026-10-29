@@ -180,6 +180,16 @@ public sealed class ComboPointService
         };
     }
 
+    /// <summary>Stop tracking one map's combat when the map unloads, so the service does not keep the dead map alive.</summary>
+    public void Unobserve(MapCombat combat)
+    {
+        ArgumentNullException.ThrowIfNull(combat);
+        _observed.Remove(combat);
+    }
+
+    /// <summary>How many maps' combat this service currently follows.</summary>
+    internal int ObservedCount => _observed.Count;
+
     /// <summary>vmangos Player::SetComboPoints: the client fields are only written while the target can still be found.</summary>
     private void WriteFields(Player player, State state)
     {

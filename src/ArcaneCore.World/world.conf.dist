@@ -7624,10 +7624,12 @@ SpellRules.FrostShockDiminishesAsRoot = false
 #
 #    SpellRules.IgnoreHolyResistance
 #        Description: Whether holy resistance is ignored when resisting damage. Retail (vmangos
-#                     Unit::CalculateDamageAbsorbAndResist, Unit.cpp:1936-1946): false, holy is
-#                     resisted like any magic school. true reproduces cmangos-classic
+#                     Unit::CalculateDamageAbsorbAndResist, Unit.cpp:1936-1946): false; vmangos
+#                     holds the holy resistance field at 0 (Player::UpdateResistances), so holy is
+#                     only resisted through the level-based innate resist of higher-level creatures.
+#                     true reproduces cmangos-classic
 #                     (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: "completely
-#                     ignore holy resistance value").
+#                     ignore holy resistance value") and also drops that innate part.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -7676,6 +7678,22 @@ SpellRules.MagicHitFloorPercent = 22
 #        Docs: docs/reference/configuration.md#spellrules
 #
 # SpellRules.ResistTablePath =
+
+#
+#    SpellRules.SoulShardUntappedCountsAsTapped
+#        Description: Whether a creature nobody tapped (no damage ever called
+#                     LootService.OnCreatureDamaged: a scripted or GM kill) counts as tapped by the
+#                     warlock for Soul Shards. Retail (vmangos Aura::HandleChannelDeathItem,
+#                     SpellAuras.cpp:2860-2861, Creature::IsTappedBy, Creature.cpp:1615-1632):
+#                     false, an untapped creature gives no shard. true keeps the shard for such
+#                     kills.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#spellrules
+#
+SpellRules.SoulShardUntappedCountsAsTapped = false
 
 #
 #    SpellRules.SpellBatchAuraExpiry
@@ -11108,6 +11126,30 @@ World.GmCommands.Boost.MaxQuality = 3
 #----------------------------------------------------------------------------
 
 #
+#    World.GmCommands.DebugDraw.FollowIntervalMs
+#        Description: Milliseconds between two reads of a followed unit's path (.debug vis follow);
+#                     it is redrawn only when it changed. 100..10000.
+#        Type: int
+#        Default: 500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommandsdebugdraw
+#
+World.GmCommands.DebugDraw.FollowIntervalMs = 500
+
+#
+#    World.GmCommands.DebugDraw.FollowNearbyMaxRadius
+#        Description: Widest .debug vis follow nearby radius in yards (a larger request is cut to
+#                     it). 5..533.
+#        Type: float
+#        Default: 100
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommandsdebugdraw
+#
+World.GmCommands.DebugDraw.FollowNearbyMaxRadius = 100
+
+#
 #    World.GmCommands.DebugDraw.GameObjectDisplayInfoDbcPath
 #        Description: The developer's own build-5875 GameObjectDisplayInfo.dbc (optional; nothing is
 #                     shipped). When set, every marker model (built-in and overridden) is checked
@@ -11158,6 +11200,18 @@ World.GmCommands.DebugDraw.Glow = true
 #        Docs: docs/reference/configuration.md#worldgmcommandsdebugdraw
 #
 World.GmCommands.DebugDraw.LifetimeSeconds = 120
+
+#
+#    World.GmCommands.DebugDraw.MaxFollowedUnits
+#        Description: Most units one GM follows at once (.debug vis follow, follow nearby); they
+#                     share MaxMarkersPerGm. 1..50.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldgmcommandsdebugdraw
+#
+World.GmCommands.DebugDraw.MaxFollowedUnits = 10
 
 #
 #    World.GmCommands.DebugDraw.MaxMarkersPerGm
@@ -18241,8 +18295,9 @@ World.Playerbots.Social.WarMode.RemoveCaps = true
 #    World.Playerbots.StallSeconds
 #        Description: Seconds of world time a living bot may go without any progress (it moved less
 #                     than 10 yards and its level, experience, money, bags, quest log and spells did
-#                     not change) before it reports a stall in .playerbot list and gives up its goal
-#                     (PlayerbotStallWatch; 10..86400).
+#                     not change, and it took no target's health to a new low) before it reports a
+#                     stall in .playerbot list and gives up its goal (PlayerbotStallWatch;
+#                     10..86400).
 #        Type: int
 #        Default: 120
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18399,6 +18454,18 @@ World.Playerbots.ThinkIntervalMs = 500
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.ThinkStarvedGapMs = 10000
+
+#
+#    World.Playerbots.Travel.AreaTriggers
+#        Description: Let bots walk into same-map teleport triggers as a leg (Teldrassil's Darnassus
+#                     and Rut'theran portals; on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Travel.AreaTriggers = true
 
 #
 #    World.Playerbots.Travel.Boats

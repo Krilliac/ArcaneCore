@@ -44,6 +44,14 @@ public sealed record ClusterWardenVerdict(
     ushort CheckId);
 
 /// <summary>
+/// The generation counter a <see cref="ClusterWardenVerdict"/> came from: the gateway's <see cref="NodeId"/> and the
+/// <see cref="NodeIncarnation"/> of the gateway process. Session generations are only monotonic within one incarnation
+/// (each gateway process counts from 1 and never persists the counter), so replay state is scoped to the source. The
+/// caller takes it from the admitted link's peer manifest, not from the verdict body.
+/// </summary>
+public readonly record struct ClusterWardenVerdictSource(string NodeId, Guid NodeIncarnation);
+
+/// <summary>
 /// Deterministic idempotency identifier for a playerbot chat ask (<c>worldIncarnation + botId + sequence</c>).
 /// </summary>
 public readonly record struct ClusterBotChatAskId(Guid WorldIncarnation, int BotId, long Sequence)

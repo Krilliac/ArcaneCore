@@ -70,6 +70,16 @@ public sealed class PlayerbotSocialFightWorldTests
         }, "the bystanders to be in sight");
     }
 
+    /// <summary>
+    /// Wait until a PvP kill involving any of <paramref name="bots"/> or <paramref name="players"/> would be heard: each bot is one the recorder tracks, each player is online,
+    /// and the world's kill feed listens on its map. These are the two conditions <see cref="PlayerbotSocialRecorder.NotePvpKill"/> needs.
+    /// </summary>
+    private static Task KillsHeardAsync(SocialWorld world, string[] bots, params string[] players)
+        => world.Host.WaitForWorldAsync(() => PartyTestHost.Feature(world.Host).PvpKills is { } feed
+            && bots.All(name => world.Host.World.FindOnlinePlayer(name) is { Map: { } map } p && RecorderOf(world).IsManaged(p.Guid) && feed.Hears(map))
+            && players.All(name => world.Host.World.FindOnlinePlayer(name) is { Map: { } map } && feed.Hears(map)),
+            "the kill feed to hear every map and the recorder to track every bot");
+
     private static void Reposition(SocialWorld world, string anchor, string name, float dx)
     {
         Player a = Online(world, anchor);
@@ -148,7 +158,11 @@ public sealed class PlayerbotSocialFightWorldTests
         await world.Host.OnWorldAsync(() =>
         {
             Player bot = Online(world, "Helpvictim");
+            // The first mob goes too: left standing beside the bot, still hostile and hit by it, it was the bot's next target, and a think that
+            // attacked it before the fight read looked put the bot back in combat, so the tracker never saw this fight end (hosted CI, 15 s).
+            Assert.True(Systems.TryGetValue(bot.Map!, out CreatureMapSystem? system));
             bot.Map!.Combat.CombatStop(bot);
+            system.Despawn(mob);
             Assert.False(bot.Combat.IsInCombat);
         });
         PlayerbotFightSocial tracker = PartyTestHost.Feature(world.Host).FightOf(victim)!;
@@ -315,7 +329,9 @@ public sealed class PlayerbotSocialFightWorldTests
         try
         {
             foreach (string name in names) clients.Add(await world.AddPlayerAsync(name));
-            ObjectGuid G(string name) => world.Host.PlayerStateAsync(name, p => p.Guid).GetAwaiter().GetResult();
+            var guids = new Dictionary<string, ObjectGuid>();
+            foreach (string name in names) guids[name] = await world.Host.PlayerStateAsync(name, p => p.Guid);
+            ObjectGuid G(string name) => guids[name];
             await StandAsync(world, "Deathasker", [.. names.Select((n, i) => (n, 4f + i * 0.5f))]);
 
             // Before the fight: one bystander is already disliked (a strike), so it is a candidate that is never asked.
@@ -352,7 +368,15 @@ public sealed class PlayerbotSocialFightWorldTests
                 Reposition(world, "Deathasker", "Bystfar", 6f);
                 Online(world, "Bystweak").Health = Online(world, "Bystweak").MaxHealth;
             });
-            await Task.Delay(2500);
+            // The window's re-check (once a second while it is open) has ruled out the three that stopped qualifying, and the window is open long
+            // enough for a death in it to be blamed on anyone (the same test the death itself runs).
+            PlayerbotFightSocial tracker = PartyTestHost.Feature(world.Host).FightOf(bot)!;
+            PlayerbotSocialMemoryOptions memoryOptions = PartyTestHost.PlayerbotOptionsOf(world.Host).Social.Memory;
+            ulong away = G("Bystaway").Value, hurt = G("Bysthurt").Value, fighting = G("Bystfight").Value;
+            await world.Host.WaitForWorldAsync(() => tracker.WindowOpen
+                && tracker.Holds(away) == false && tracker.Holds(hurt) == false && tracker.Holds(fighting) == false
+                && PlayerbotCallForHelp.WindowLongEnough(memoryOptions, unchecked(world.Host.World.NowMs - tracker.WindowStartMs)),
+                "the window to re-check the bystanders and be long enough");
 
             // The bot dies. At the same instant three more fail the final check only.
             await world.Host.OnWorldAsync(() =>
@@ -501,7 +525,7 @@ public sealed class PlayerbotSocialFightWorldTests
         ObjectGuid sameBotGuid = await world.Host.PlayerStateAsync("Pvpsamebot", p => p.Guid);
         ObjectGuid orcPlayerGuid = await world.Host.PlayerStateAsync("Pvporcplayer", p => p.Guid);
         ObjectGuid humanPlayerGuid = await world.Host.PlayerStateAsync("Pvphumplayer", p => p.Guid);
-        await Task.Delay(1500); // every bot has thought: the map's kill observer watches for them
+        await KillsHeardAsync(world, ["Pvpslayer", "Pvporcbot", "Pvphumanbot", "Pvpsamebot"], "Pvporcplayer", "Pvphumplayer");
         var options = new PlayerbotSocialMemoryOptions();
 
         await world.Host.OnWorldAsync(() =>
@@ -568,7 +592,8 @@ public sealed class PlayerbotSocialFightWorldTests
         await b.AddBotAsync("Leakvictim", race: SocialTestKit.Orc);
         Assert.Equal(await a.Host.PlayerStateAsync("Leakbota", p => p.Guid.Low), await b.Host.PlayerStateAsync("Leakkiller", p => p.Guid.Low)); // the same character id in both
         ObjectGuid victimGuid = await b.Host.PlayerStateAsync("Leakvictim", p => p.Guid);
-        await Task.Delay(1500);
+        await KillsHeardAsync(a, ["Leakbota"]);
+        await KillsHeardAsync(b, ["Leakkiller", "Leakvictim"]);
 
         await b.Host.OnWorldAsync(() =>
         {
@@ -593,7 +618,7 @@ public sealed class PlayerbotSocialFightWorldTests
         ObjectGuid loserGuid = await world.Host.PlayerStateAsync("Duelloser", p => p.Guid);
         ObjectGuid winnerGuid = await world.Host.PlayerStateAsync("Duelwinner", p => p.Guid);
         ObjectGuid rivalGuid = await world.Host.PlayerStateAsync("Duelrival", p => p.Guid);
-        await Task.Delay(1500);
+        await KillsHeardAsync(world, ["Duelloser", "Duelwinner", "Plainvictim"], "Duelrival");
 
         await world.Host.OnWorldAsync(() =>
         {

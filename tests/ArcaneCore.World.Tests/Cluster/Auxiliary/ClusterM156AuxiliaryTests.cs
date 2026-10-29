@@ -69,18 +69,19 @@ public sealed class ClusterM156AuxiliaryTests
             Reason: "MEM_CHECK failed",
             Action: ClusterWardenAction.Kick,
             CheckId: 243);
+        var gatewaySource = new ClusterWardenVerdictSource("gateway-1", Guid.NewGuid());
 
-        Assert.False(verifier.TryAcceptVerdict(verdict with { OwnerEpoch = 8 }, activeSessionGeneration: 4, activeOwnerEpoch: 9, out string? epochReason));
+        Assert.False(verifier.TryAcceptVerdict(verdict with { OwnerEpoch = 8 }, gatewaySource, activeSessionGeneration: 4, activeOwnerEpoch: 9, out string? epochReason));
         Assert.Contains("stale owner epoch", epochReason, StringComparison.OrdinalIgnoreCase);
 
-        Assert.False(verifier.TryAcceptVerdict(verdict with { SessionGeneration = 3 }, activeSessionGeneration: 4, activeOwnerEpoch: 9, out string? genReason));
+        Assert.False(verifier.TryAcceptVerdict(verdict with { SessionGeneration = 3 }, gatewaySource, activeSessionGeneration: 4, activeOwnerEpoch: 9, out string? genReason));
         Assert.Contains("stale session generation", genReason, StringComparison.OrdinalIgnoreCase);
 
-        Assert.True(verifier.TryAcceptVerdict(verdict, activeSessionGeneration: 4, activeOwnerEpoch: 9, out string? acceptedReason));
+        Assert.True(verifier.TryAcceptVerdict(verdict, gatewaySource, activeSessionGeneration: 4, activeOwnerEpoch: 9, out string? acceptedReason));
         Assert.Null(acceptedReason);
 
         // Replaying the same verdict for the same session generation is suppressed as duplicate.
-        Assert.False(verifier.TryAcceptVerdict(verdict, activeSessionGeneration: 4, activeOwnerEpoch: 9, out string? dupReason));
+        Assert.False(verifier.TryAcceptVerdict(verdict, gatewaySource, activeSessionGeneration: 4, activeOwnerEpoch: 9, out string? dupReason));
         Assert.Contains("duplicate Warden verdict", dupReason, StringComparison.OrdinalIgnoreCase);
     }
 

@@ -106,6 +106,19 @@ public sealed class ClassDummyScriptTests : IDisposable
 
     public void Dispose() => _kit.Dispose();
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private SpellCastResult Cast(uint spell, Unit? target = null)
         => _kit.System.CastSpell(_player, spell, target is null ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
@@ -207,6 +220,7 @@ public sealed class ClassDummyScriptTests : IDisposable
         foreach (uint spell in new[] { Sprint, Kick, FrostNova, FireBlast, RapidFire })
         {
             _kit.System.CastSpell(_player, spell, SpellCastTargets.ForSelf(), triggered: false);
+            FlushSpellBatch(_kit);
             Assert.True(OnCooldown(spell), $"{spell} has no cooldown");
         }
 
@@ -220,6 +234,7 @@ public sealed class ClassDummyScriptTests : IDisposable
         Assert.True(OnCooldown(FireBlast)); // fire, not frost
 
         _kit.System.CastSpell(_player, Readiness, SpellCastTargets.ForSelf(), triggered: false);
+        FlushSpellBatch(_kit);
         Assert.False(OnCooldown(RapidFire));
         Assert.True(OnCooldown(Readiness)); // Readiness keeps its own
     }

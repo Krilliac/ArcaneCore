@@ -7,7 +7,8 @@ namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
 /// Notices a living bot that makes no progress at all: it has not moved <see cref="ProgressYards"/> from where it stood, and
-/// nothing about it changed (level, experience, money, bags, quest log, spells), for <see cref="PlayerbotOptions.StallSeconds"/>
+/// nothing about it changed (level, experience, money, bags, quest log, spells, hits that take a target's health to a new low), for
+/// <see cref="PlayerbotOptions.StallSeconds"/>
 /// of world time. Such a bot used to stand still for hours without a fault (live 2026-10-08: Ironwander re-selling an item the
 /// vendor refused, Graveweaver in the Deathknell crypt, Dawnrover beside William Pestle), and nothing told the operator.
 /// <para>
@@ -55,6 +56,8 @@ internal sealed partial class PlayerbotStallWatch
     private uint _aliveSinceMs;
 
     private bool _started;
+    // Set by ReportExternal: the next look re-anchors the watch where the bot stands but keeps the external report (see there).
+    private bool _externalHeld;
     private Vector3 _anchor;
     private uint _anchorMap;
     private Fingerprint _fingerprint;
@@ -92,6 +95,7 @@ internal sealed partial class PlayerbotStallWatch
     internal void Reset()
     {
         _started = false;
+        _externalHeld = false;
         _stallReport = null;
     }
 
@@ -164,12 +168,15 @@ internal sealed partial class PlayerbotStallWatch
         if (!_started || player.MapId != _anchorMap || !current.Equals(_fingerprint)
             || Vector3.Distance(position, _anchor) >= ProgressYards)
         {
+            // The first look after an external report only re-anchors: the report stands until the bot makes progress from here.
+            bool keepExternal = !_started && _externalHeld;
+            _externalHeld = false;
             _started = true;
             _anchor = position;
             _anchorMap = player.MapId;
             _fingerprint = current;
             _progressMs = nowMs;
-            _stallReport = null;
+            if (!keepExternal) _stallReport = null;
             return false;
         }
 
@@ -278,6 +285,7 @@ internal sealed partial class PlayerbotStallWatch
     /// <summary>
     /// A stall another part of the bot found and explains itself (a tram trip that failed, <see cref="PlayerbotTram"/>): reported and
     /// counted like one this watch found, so the feature logs it and the caller gives the goal up. Progress clears it as usual.
+    /// The watch restarts at the next look, where the bot then stands, and the report stays until progress from there.
     /// </summary>
     internal void ReportExternal(string reason)
     {
@@ -287,16 +295,20 @@ internal sealed partial class PlayerbotStallWatch
         Count++;
         GiveUps++;
         _started = false;
+        _externalHeld = true;
     }
 
     private readonly record struct Death(uint AtMs, uint Map, Vector3 Position, uint[] Attackers, uint Sequence);
 
     /// <summary>
     /// What counts as progress besides moving. <paramref name="RestMark"/>: the most health and mana seen while the bot rests (0
-    /// otherwise), so regeneration is a resting bot's progress.
+    /// otherwise), so regeneration is a resting bot's progress. <paramref name="ProgressHits"/>: the hits the bot landed that took a
+    /// victim's health to a new low (<see cref="PlayerbotKillObserver.ProgressHitsBy"/>), so fighting in place (hits and the killing
+    /// blow) is progress for a bot that gains no experience (level 60) and loots nothing, while a target held up by death
+    /// prevention or healed back is not.
     /// </summary>
     internal readonly record struct Fingerprint(uint Level, uint Experience, uint Money, uint Items, int Quests, int Rewarded,
-        uint Objectives, int Spells, ulong RestMark = 0);
+        uint Objectives, int Spells, ulong RestMark = 0, ulong ProgressHits = 0);
 }
 
 /// <summary>
@@ -577,7 +589,7 @@ internal sealed class PlayerbotSharedSetAsides
         (bool Quest, uint Id) key = goal switch
         {
             PlayerbotGoalKind.Quest when quest != 0 => (true, quest),
-            PlayerbotGoalKind.Quest or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount when entry != 0 => (false, entry),
+            PlayerbotGoalKind.Quest or PlayerbotGoalKind.Vendor or PlayerbotGoalKind.Train or PlayerbotGoalKind.Mount or PlayerbotGoalKind.Gather when entry != 0 => (false, entry),
             _ => default,
         };
         if (key.Id == 0) return null;

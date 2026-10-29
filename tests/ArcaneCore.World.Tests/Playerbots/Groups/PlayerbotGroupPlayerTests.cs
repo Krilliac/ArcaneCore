@@ -367,11 +367,30 @@ public sealed class PlayerbotGroupPlayerTests
                 return true;
             });
         await player.CollectAsync();
-        await player.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", bot.Name);
-        await world.RunAsync(30_000);
         // The bot's answer reaches the player as a whisper (the player's own whisper comes back as WhisperInform; other bot talk is not a whisper).
-        bool replied = (await player.CollectAsync()).Any(packet => packet.Opcode == WorldOpcode.SmsgMessagechat && packet.Payload.Length > 0 && packet.Payload[0] == (byte)ChatType.Whisper);
-        Assert.True(answered == replied, "ignoreHas=" + await world.OnWorldAsync(() => Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Has(world.World.Host.World.FindOnlinePlayer("Ignoredone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored)));
+        // A reader watches the player's socket for it while the world runs, so neither a late whisper nor a late answer depends on a quiet window.
+        int replied = 0;
+        using var stopReading = new CancellationTokenSource();
+        Task reading = Task.Run(async () =>
+        {
+            // CollectAsync reads only once bytes are available, so stopping never cuts a packet in half.
+            while (!stopReading.IsCancellationRequested && Volatile.Read(ref replied) == 0)
+            {
+                if ((await player.CollectAsync(TimeSpan.FromMilliseconds(50))).Any(p => p.Opcode == WorldOpcode.SmsgMessagechat && p.Payload.Length > 0 && p.Payload[0] == (byte)ChatType.Whisper))
+                    Volatile.Write(ref replied, 1);
+            }
+        });
+        var dispatched = new System.Collections.Concurrent.ConcurrentQueue<WorldOpcode>();
+        world.Session(bot.Id).ManagedDispatchObserver = opcode => dispatched.Enqueue(opcode);
+        await player.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", bot.Name);
+        // The bot has 30 s of game time to answer. Paced, not RunAsync: the whisper is still on its way over the socket and the answer comes from the
+        // chat worker after a typing delay, and a free-running manual clock spends all 30 s before either on a loaded machine.
+        await world.RunUntilPacedAsync(() => Volatile.Read(ref replied) == 1, 30_000);
+        // Chat the bot sent in the last ticks is still on its way to the player: wait for it (bounded) before stopping the reader.
+        if (dispatched.Contains(WorldOpcode.CmsgMessagechat)) await Task.WhenAny(reading, Task.Delay(TimeSpan.FromSeconds(10)));
+        await stopReading.CancelAsync();
+        await reading;
+        Assert.True(answered == (Volatile.Read(ref replied) == 1), "ignoreHas=" + await world.OnWorldAsync(() => Social.SocialTestKit.Social(world.World.Host).Context.Friends.Get(world.Player(bot.Id)).Has(world.World.Host.World.FindOnlinePlayer("Ignoredone")!.Guid.Low, ArcaneCore.Kernel.Social.SocialFlags.Ignored)));
     }
 
     /// <summary>A friendly emote at a bot moves its memory of the emoter and is answered; from a player on its ignore list it does neither.</summary>

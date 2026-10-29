@@ -27,9 +27,18 @@ public sealed class ComboFeature(IServiceProvider services) : IWorldFeature
 
         world.PlayerLoggingOut += combos.OnPlayerGone;
         world.MapCreated += Subscribe;
+        world.MapUnloading += Unsubscribe;
         foreach (Map map in world.Maps)
         {
             Subscribe(map);
+        }
+    }
+
+    private void Unsubscribe(Map map)
+    {
+        if (Service is { } combos && map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combos.Unobserve(combat);
         }
     }
 

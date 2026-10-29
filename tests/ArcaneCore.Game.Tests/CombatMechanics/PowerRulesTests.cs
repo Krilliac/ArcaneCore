@@ -283,6 +283,19 @@ public sealed class PowerRulesTests
         AttributesEx = discount ? (SpellAttributesEx)(uint)SpellAttributesExCombat.DiscountPowerOnMiss : 0,
     };
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static (SpellTestKit Kit, Player Caster, Player Target, FixedRules Rules) RefundKit()
     {
         var kit = new SpellTestKit(
@@ -311,6 +324,7 @@ public sealed class PowerRulesTests
             rules.Miss = SpellMissInfo.Dodge;
 
             kit.System.CastSpell(caster, RageAbility, SpellCastTargets.ForUnit(target.Guid), triggered: false);
+            FlushSpellBatch(kit);
 
             Assert.Equal(373u, SpellSystem.GetPower(caster, PowerType.Rage));   // 400 - 150 + round(150 * 0.82)
         }
@@ -325,10 +339,12 @@ public sealed class PowerRulesTests
             rules.Miss = SpellMissInfo.Miss;
 
             kit.System.CastSpell(caster, RageAbility, SpellCastTargets.ForUnit(target.Guid), triggered: false);
+            FlushSpellBatch(kit);
             Assert.Equal(250u, SpellSystem.GetPower(caster, PowerType.Rage));
 
             kit.Advance(1500);
             kit.System.CastSpell(caster, EnergyAbility, SpellCastTargets.ForUnit(target.Guid), triggered: false);
+            FlushSpellBatch(kit);
             Assert.Equal(373u, SpellSystem.GetPower(caster, PowerType.Energy));
         }
     }
@@ -340,11 +356,13 @@ public sealed class PowerRulesTests
         using (kit)
         {
             kit.System.CastSpell(caster, RageAbility, SpellCastTargets.ForUnit(target.Guid), triggered: false);
+            FlushSpellBatch(kit);
             Assert.Equal(250u, SpellSystem.GetPower(caster, PowerType.Rage));
 
             kit.Advance(1500);
             rules.Miss = SpellMissInfo.Dodge;
             kit.System.CastSpell(caster, PlainAbility, SpellCastTargets.ForUnit(target.Guid), triggered: false);
+            FlushSpellBatch(kit);
             Assert.Equal(100u, SpellSystem.GetPower(caster, PowerType.Rage));
         }
     }

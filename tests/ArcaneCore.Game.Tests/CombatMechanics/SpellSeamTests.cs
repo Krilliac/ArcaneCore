@@ -30,6 +30,19 @@ public sealed class SpellSeamTests
         DamageClass = SpellDamageClass.Melee,
     };
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static SpellTestKit Kit() => new(
         MeleeSwingSpell(NextSwing, (SpellAttributes)0x4),
         MeleeSwingSpell(NextSwingAlt, SpellAttributes.OnNextSwing),
@@ -94,6 +107,7 @@ public sealed class SpellSeamTests
         var log = new List<string>();
         var check = new RecordingCheck(SpellCheckPhase.Caster, SpellCastCheckOrder.CasterAuraState, log, "aura");
         kit.System.RegisterCastCheck(check);
+        kit.System.SpellBatchWindowMs = 0; // assumes same-call resolution: a held go adds its own non-strict check before the landing
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid)));
         kit.Advance(2000);
@@ -194,6 +208,7 @@ public sealed class SpellSeamTests
         kit.System.RegisterObserver(observer);
 
         kit.System.HandleCastRequest(caster, InstantHeal, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
 
         Assert.Equal([$"prepared:{InstantHeal}", $"cast:{InstantHeal}", $"outcome:{InstantHeal}", $"finished:{InstantHeal}:True"], observer.Events);
         SpellTargetOutcome outcome = Assert.Single(observer.Outcomes);
@@ -291,6 +306,7 @@ public sealed class SpellSeamTests
         // Effect value: heal 20 -> 25.
         caster.Health = 10;
         kit.System.HandleCastRequest(caster, InstantHeal, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
         Assert.Equal(35u, caster.Health);
         kit.Advance(1500);
 
@@ -298,12 +314,14 @@ public sealed class SpellSeamTests
         kit.System.HandleCastRequest(caster, CastBolt, SpellCastTargets.ForUnit(target.Guid));
         Assert.Equal(1000, kit.System.GetState(caster.Guid)!.CurrentCast!.CastTime);
         kit.Advance(1000);
+        FlushSpellBatch(kit);
         Assert.Equal(40u, target.Health);
         Assert.Equal(40u, SpellSystem.GetPower(caster, PowerType.Rage));
         kit.Advance(1500);
 
         // Duration 12000 -> 24000 on the applied aura.
         kit.System.HandleCastRequest(caster, DotSpell, SpellCastTargets.ForUnit(target.Guid));
+        FlushSpellBatch(kit);
         Assert.Equal(24000, kit.System.GetState(target.Guid)!.AuraHolders.Single(h => h.Spell.Id == DotSpell).MaxDuration);
 
         Assert.Contains(SpellValueKind.EffectValue, modifier.Seen);

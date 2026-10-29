@@ -507,7 +507,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("playerbot.population", ex);
                 AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"pass faulted: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
                 logger.LogFault("playerbot.population", ex, "Playerbot population pass faulted ({Type}: {Message})", ex.GetType().Name, ex.Message);
             }
@@ -734,7 +733,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; } // superseded or stopping: nothing to deliver
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("playerbot.population", ex);
                 AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"graveyard terrain lookup or creature survey failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
                 logger.LogFault("playerbot.population", ex, "Playerbot population: the graveyard terrain lookup or creature survey failed; the atlas keeps every graveyard link until the area table, graveyards, creatures or maps change");
                 result = null;
@@ -827,7 +825,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             catch (OperationCanceledException) { return; } // superseded or stopping: nothing to deliver
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("playerbot.population", ex);
                 AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"zone capacity survey failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
                 logger.LogFault("playerbot.population", ex, "Playerbot population: the zone capacity survey failed; no zone is capped until the sources change");
                 result = null;
@@ -1214,7 +1211,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot.population", ex);
             AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"pass failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
             logger.LogFault("playerbot.population", ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
             _lastError = $"{ex.GetType().Name}: {ex.Message}";
@@ -2177,7 +2173,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Backoff(botId);
-            FaultLedger.Shared.Record("playerbot.population", ex);
             AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}: {ex.Message})", origin: _world?.Identity);
             logger.LogFault("playerbot.population", ex, "Playerbot population: deleting the unplaced bot {Bot} failed", name ?? botId.ToString());
             Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried later");
@@ -2260,20 +2255,27 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         PopulationLevelRule rule = PopulationLevelRule.From(pop);
         int moved = 0;
         bool loggedNoSafe = false;
-        // Only a bot standing in a zone the atlas knows can be out-levelled. A zone outside the atlas (a capital or city, an excluded zone,
-        // another map) is somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. A bot below every place
-        // of its zone it could have been put (UnderLevelled: a low-level bot placed by an older build in Duskwood at Raven Hill, or one that
-        // walked over a border into a harder zone) is moved the same way. The worst misfit first.
-        foreach ((PopulationBotFacts bot, PopulationZone current) in ctx.Input.Running
+        // Only a bot standing in a zone the atlas knows can be out-levelled. A zone outside the atlas (a capital or city, another map) is
+        // somewhere the bot went on purpose (town, trainer, travel goals): it is left where it is. A bot below every place of its zone it
+        // could have been put (UnderLevelled: a low-level bot placed by an older build in Duskwood at Raven Hill, or one that walked over a
+        // border into a harder zone) is moved the same way. Two more kinds of bot are moved whatever their level (issue #1454: bots placed
+        // in Deadwind Pass before it was excluded stalled there for good, escaped to a bind point in the same area and stalled again):
+        // a bot standing in an excluded zone of an allowed map (the operator took the zone out, the atlas no longer knows it), and a
+        // stalled bot in an atlas zone it escaped (a recorded veto) or that holds more bots than its creatures feed (SpawnsPerBot).
+        // Those first, then the worst misfit. The vetoes are world-thread state, so the candidates are read there.
+        (PopulationBotFacts Bot, PopulationZone? Zone, bool Stuck)[] candidates = await world.InvokeAsync(() => ctx.Input.Running
             .Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Dead && !f.Vetoed)
             .Select(f => (Bot: f, Zone: atlas.Find(f.ZoneId)))
-            .Where(x => x.Zone is not null)
-            .Select(x => (x.Bot, Zone: x.Zone!))
-            .OrderByDescending(x => Misfit(x.Zone, x.Bot, rule)).ThenBy(x => x.Bot.BotId))
+            .Where(x => x.Zone is not null || Excluded(x.Bot))
+            .Select(x => (x.Bot, x.Zone, Stuck: x.Zone is null || StuckIn(x.Zone, x.Bot)))
+            .OrderByDescending(x => x.Stuck).ThenByDescending(x => x.Zone is null ? 0 : Misfit(x.Zone, x.Bot, rule)).ThenBy(x => x.Bot.BotId)
+            .ToArray(), ct).ConfigureAwait(false);
+        foreach ((PopulationBotFacts bot, PopulationZone? current, bool stuck) in candidates)
         {
             if (moved >= pop.MaxRelocationsPerInterval) break;
             PlayerbotPopulationMember member = ctx.Members[bot.BotId];
-            if (bot.Level <= current.MaxLevel + pop.OutlevelMargin && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, rule))
+            if (!stuck && current is not null && bot.Level <= current.MaxLevel + pop.OutlevelMargin
+                && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, rule))
             {
                 // Fine where it stands (it may have travelled on by itself): only record the zone.
                 if (member.ZoneId != current.ZoneId)
@@ -2314,6 +2316,15 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         }
 
         return moved;
+
+        // A zone the operator excluded, on a map bots may be placed on (another map is left alone, like a capital).
+        bool Excluded(PopulationBotFacts bot)
+            => pop.ExcludedZones.Contains(bot.ZoneId) && _options.AllowedMaps.Contains(bot.MapId);
+
+        // A stalled bot in a zone it escaped from, or in one over its capacity at the bot's level (the bot itself counts among the assigned).
+        bool StuckIn(PopulationZone zone, PopulationBotFacts bot)
+            => bot.Stalled && (_vetoes.IsVetoed(bot.BotId, zone.ZoneId, NowUnix())
+                || atlas.CapOf(zone, bot.Team, bot.Level, bot.Level) is { } cap && ctx.Assigned.GetValueOrDefault(zone.ZoneId) > cap);
 
         // How far the bot is outside its zone's levels, above or below (0 or less when it fits).
         static int Misfit(PopulationZone zone, PopulationBotFacts bot, PopulationLevelRule rule)

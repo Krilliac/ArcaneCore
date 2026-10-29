@@ -13,6 +13,9 @@ namespace ArcaneCore.Game.Tests.Spells;
 /// <summary>The cast pipeline, cooldowns, effects and auras of <see cref="SpellSystem"/>, tick by tick.</summary>
 public sealed class SpellSystemTests
 {
+    /// <summary>With spell batching on, a held go (or a held aura expiry) resolves at the next batch boundary; advancing one window always crosses it (0: no-op).</summary>
+    private static void FlushSpellBatch(SpellTestKit kit) => kit.Advance(kit.System.SpellBatchWindowMs);
+
     [Fact]
     public void InstantSpell_StartsCastsAndHeals_InVmangosPacketOrder()
     {
@@ -22,6 +25,7 @@ public sealed class SpellSystemTests
         player.Health = 30;
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, InstantHeal, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
 
         Assert.Equal(50u, player.Health);
         Assert.Equal(
@@ -67,6 +71,7 @@ public sealed class SpellSystemTests
         kit.Spellbook.Teach(player, CooldownSpell);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, CooldownSpell, SpellCastTargets.ForSelf()));
+        FlushSpellBatch(kit);
         kit.Advance(2000);
         Assert.Equal(SpellCastResult.NotReady, kit.System.HandleCastRequest(player, CooldownSpell, SpellCastTargets.ForSelf()));
         Assert.Single(kit.System.GetActiveCooldowns(player));
@@ -112,6 +117,7 @@ public sealed class SpellSystemTests
         kit.Advance(1900);
         Assert.Equal(60u, target.Health);
         kit.Advance(100);
+        FlushSpellBatch(kit);
 
         Assert.Equal(45u, target.Health);
         Assert.Equal(50u, SpellSystem.GetPower(caster, PowerType.Rage));
@@ -250,6 +256,7 @@ public sealed class SpellSystemTests
         targetSession.Clear();
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, DotSpell, SpellCastTargets.ForUnit(target.Guid)));
+        FlushSpellBatch(kit);
 
         SpellAuraHolder holder = kit.System.GetAuras(target).Single();
         Assert.Equal(32, holder.Slot);
@@ -275,6 +282,7 @@ public sealed class SpellSystemTests
         player.Health = 10;
 
         kit.System.HandleCastRequest(player, HotSpell, SpellCastTargets.ForSelf());
+        FlushSpellBatch(kit);
         SpellAuraHolder holder = kit.System.GetAuras(player).Single();
         Assert.Equal(0, holder.Slot);
         Assert.Equal(HotSpell, player.GetUInt32(UpdateFields.UnitFieldAura));
@@ -328,6 +336,7 @@ public sealed class SpellSystemTests
         Assert.True((target.UnitFlags & UnitFlags.Stunned) != 0);
 
         kit.Advance(4000);
+        FlushSpellBatch(kit);
         Assert.True((target.UnitFlags & UnitFlags.Stunned) == 0);
     }
 

@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Protocol;
@@ -96,6 +97,21 @@ public sealed class PlayerbotGatherLootWaitTests
 
         Assert.False(capture.Any(CraftFailed), capture.Describe());
         Assert.Equal(1u, await rig.Host.OnWorldAsync(() => rig.Player.Inventory.GetItemCount(GreyItem)));
+    }
+
+    /// <summary>
+    /// A gather trip holds its own goal kind. Its target is a game object node; held as a Vendor goal it made bot QA read the entry as a creature
+    /// ("creature 1617 has no spawn", GitHub #1487) and told the group and the chat the bot was heading to a vendor.
+    /// </summary>
+    [Fact]
+    public async Task AGatherTrip_HoldsTheGatherGoal_WithTheNodeEntryAsTarget()
+    {
+        await using Rig rig = await Rig.StartAsync();
+
+        Assert.True(await rig.Host.OnWorldAsync(rig.Think), "the bot did not start on the herb node");
+
+        Assert.Equal(PlayerbotGoalKind.Gather, rig.Crafting.Goal);
+        Assert.Equal(NodeChest, rig.Crafting.TargetEntry);
     }
 
     [Fact]

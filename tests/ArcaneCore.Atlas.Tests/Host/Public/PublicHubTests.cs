@@ -347,7 +347,7 @@ public sealed class PublicHubTests
 
         await socket.SendAsync(Encoding.UTF8.GetBytes("{\"op\":\"ping\",\"pad\":\"" + new string('x', 5000) + "\"}"), WebSocketMessageType.Text, true, CancellationToken.None);
 
-        Assert.Null(await socket.ReceiveTextAsync());
+        Assert.Null(await socket.ReceiveSkippingEventsAsync()); // no answer to the ping, only the close (a pushed event may come first)
         Assert.Equal(WebSocketCloseStatus.MessageTooBig, socket.CloseStatus);
     }
 
@@ -415,7 +415,7 @@ public sealed class PublicHubTests
 
         await rig.LoginAsync(guest, "gm", "pw");
 
-        Assert.Null(await socket.ReceiveTextAsync()); // closed by the server: the session it belonged to is gone
+        Assert.Null(await socket.ReceiveSkippingEventsAsync()); // closed by the server: the session it belonged to is gone
         Assert.Equal((WebSocketCloseStatus)1008, socket.CloseStatus);
     }
 }

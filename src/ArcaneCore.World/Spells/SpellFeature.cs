@@ -194,6 +194,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
         world.MapCreated += SubscribeCombat;
+        world.MapUnloading += UnsubscribeCombat;
         world.Updated += OnWorldUpdated;
         foreach (Map map in world.Maps)
         {
@@ -293,6 +294,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             _world.PlayerLoggedIn -= OnPlayerLoggedIn;
             _world.PlayerLoggingOut -= OnPlayerLoggingOut;
             _world.MapCreated -= SubscribeCombat;
+            _world.MapUnloading -= UnsubscribeCombat;
             _world.Updated -= OnWorldUpdated;
         }
 
@@ -300,13 +302,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         {
             foreach (MapCombat combat in _combatSubscriptions)
             {
-                combat.DamageDealt -= OnDamageDealt;
-                if (ReferenceEquals(combat.SpellMitigation, System))
-                {
-                    combat.SpellMitigation = null;
-                }
-                combat.UnitKilled -= OnUnitKilled;
-                combat.MeleeSwingFinished -= OnMeleeSwingFinished;
+                ReleaseCombat(combat);
             }
 
             _combatSubscriptions.Clear();
@@ -350,6 +346,47 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
     }
 
+    /// <summary>An unloading map's combat is released, so this feature does not keep the dead map alive.</summary>
+    private void UnsubscribeCombat(Map map)
+    {
+        if (map.FindUpdater<MapCombat>() is not { } combat)
+        {
+            return;
+        }
+
+        lock (_combatSubscriptions)
+        {
+            if (_combatSubscriptions.Remove(combat))
+            {
+                ReleaseCombat(combat);
+            }
+        }
+    }
+
+    private void ReleaseCombat(MapCombat combat)
+    {
+        combat.DamageDealt -= OnDamageDealt;
+        if (ReferenceEquals(combat.SpellMitigation, System))
+        {
+            combat.SpellMitigation = null;
+        }
+
+        combat.UnitKilled -= OnUnitKilled;
+        combat.MeleeSwingFinished -= OnMeleeSwingFinished;
+    }
+
+    /// <summary>How many maps' combat this feature currently follows.</summary>
+    internal int SubscribedCombatCount
+    {
+        get
+        {
+            lock (_combatSubscriptions)
+            {
+                return _combatSubscriptions.Count;
+            }
+        }
+    }
+
     /// <summary>A unit died in combat: its non-passive auras go (<see cref="SpellSystem.OnUnitDied"/>).</summary>
     private void OnUnitKilled(Unit? killer, Unit victim) => System.OnUnitDied(victim);
 
@@ -372,8 +409,8 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell.update", ex);
-            _logger.LogError(ex, "spell update failed");
+            // per tick: LogFault records into the fault ledger (one record per fault) and throttles the repeated lines
+            ArcaneCore.Kernel.Diagnostics.FaultLedgerLogging.LogFault(_logger, "spell.update", ex, "spell update failed");
         }
     }
 
