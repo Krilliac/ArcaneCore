@@ -74,18 +74,48 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         Assert.False(p.HasExited);
     }
 
-    /// <summary>Last-resort cleanup so a failing assertion never leaks a fixture process from the test host.</summary>
-    private static void BestEffortKill(int pid)
+    /// <summary>
+    /// A handle on a fixture that is known to be alive right now. The open handle pins the pid on Windows (it cannot be reused while the handle
+    /// exists), and the start time guards the Linux case, so cleanup through it can never touch an unrelated process that reused the pid.
+    /// Null for pid 0 or a process that already ended.
+    /// </summary>
+    private sealed class Pinned(Process process, DateTime startTime) : IDisposable
     {
-        try
+        public static Pinned? Open(int pid)
         {
-            using Process p = Process.GetProcessById(pid);
-            p.Kill(entireProcessTree: true);
+            if (pid <= 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                Process process = Process.GetProcessById(pid);
+                return new Pinned(process, process.StartTime);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception)
+            {
+                return null;
+            }
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or Win32Exception or AggregateException)
+
+        /// <summary>Last-resort cleanup so a failing assertion never leaks a fixture process from the test host.</summary>
+        public void KillIfStillTheSameProcess()
         {
-            // Already gone.
+            try
+            {
+                if (!process.HasExited && process.StartTime == startTime)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or AggregateException)
+            {
+                // Already gone.
+            }
         }
+
+        public void Dispose() => process.Dispose();
     }
 
     private sealed class FixedProbe(long availableMb) : IClusterCapacityProbe
@@ -107,6 +137,7 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         var launcher = new SystemProcessSupervisedLauncher();
         using ISupervisedProcess p = launcher.Launch(FixtureConfig("ignores-stdin"));
         int pid = p.ProcessId;
+        using Pinned? pin = Pinned.Open(pid);
         try
         {
             bool drained = await p.RequestDrainAsync(TimeSpan.FromMilliseconds(500));
@@ -124,7 +155,7 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         }
         finally
         {
-            BestEffortKill(pid);
+            pin?.KillIfStillTheSameProcess();
         }
     }
 
@@ -134,6 +165,7 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         var launcher = new SystemProcessSupervisedLauncher();
         using ISupervisedProcess p = launcher.Launch(FixtureConfig("cancelled-drain"));
         int pid = p.ProcessId;
+        using Pinned? pin = Pinned.Open(pid);
         try
         {
             using var cts = new CancellationTokenSource();
@@ -151,7 +183,7 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         }
         finally
         {
-            BestEffortKill(pid);
+            pin?.KillIfStillTheSameProcess();
         }
     }
 
@@ -163,6 +195,7 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         var launcher = new SystemProcessSupervisedLauncher();
         using ISupervisedProcess p = launcher.Launch(FixtureConfig("tree", $"--spawn-child --pid-file \"{pidFile}\""));
         var pids = new List<int> { p.ProcessId };
+        var pins = new List<Pinned?> { Pinned.Open(p.ProcessId) };
         try
         {
             string[] lines = [];
@@ -174,6 +207,7 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
 
             Assert.Equal(2, lines.Length);
             pids.AddRange(lines.Select(l => int.Parse(l.Split(' ')[1], System.Globalization.CultureInfo.InvariantCulture)));
+            pins.AddRange(pids.Skip(1).Select(Pinned.Open)); // the children are alive here
 
             p.KillOwnedProcess();
             p.KillOwnedProcess();
@@ -189,9 +223,10 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         }
         finally
         {
-            foreach (int pid in pids)
+            foreach (Pinned? pin in pins)
             {
-                BestEffortKill(pid);
+                pin?.KillIfStillTheSameProcess();
+                pin?.Dispose();
             }
         }
     }
@@ -202,6 +237,7 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         var launcher = new SystemProcessSupervisedLauncher();
         using ISupervisedProcess p = launcher.Launch(FixtureConfig("exits", "--exit 3"));
         int pid = p.ProcessId;
+        using Pinned? pin = Pinned.Open(pid);
         try
         {
             int code = await p.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
@@ -216,7 +252,37 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         }
         finally
         {
-            BestEffortKill(pid);
+            pin?.KillIfStillTheSameProcess();
+        }
+    }
+
+    [Fact]
+    public void Dispose_WhenTheKillWasRefused_ReportsTheChildAsStillRunning_AndKeepsItsPid()
+    {
+        // O5: after Dispose the handle is closed, but an exit that was never observed must not read as an exit.
+        var launcher = new SystemProcessSupervisedLauncher
+        {
+            KillOverride = _ => { }, // the OS refused the kill
+            KillConfirmTimeout = TimeSpan.FromMilliseconds(300),
+        };
+        ISupervisedProcess p = launcher.Launch(FixtureConfig("kill-refused"));
+        int pid = p.ProcessId;
+        using Pinned? pin = Pinned.Open(pid);
+        try
+        {
+            p.KillOwnedProcess();
+            Assert.False(p.HasExited);
+
+            p.Dispose();
+
+            Assert.False(p.HasExited);
+            Assert.Null(p.ExitCode);
+            Assert.Contains(pid, launcher.OwnedProcessIds);
+            AssertProcessAlive(pid);
+        }
+        finally
+        {
+            pin?.KillIfStillTheSameProcess();
         }
     }
 
@@ -226,10 +292,12 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         var launcher = new SystemProcessSupervisedLauncher();
         ClusterHostSupervisor supervisor = NewSupervisor(launcher, drainTimeoutMs: 500, out SupervisedOutputMultiplexer mux);
         int pid = 0;
+        Pinned? pin = null;
         try
         {
             await supervisor.StartAllAsync();
             pid = supervisor.GetSnapshot("child").ProcessId!.Value;
+            pin = Pinned.Open(pid);
 
             await supervisor.DrainAndStopAsync();
 
@@ -241,7 +309,8 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         }
         finally
         {
-            BestEffortKill(pid);
+            pin?.KillIfStillTheSameProcess();
+            pin?.Dispose();
             supervisor.Dispose();
             mux.Dispose();
         }
@@ -253,10 +322,12 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         var launcher = new SystemProcessSupervisedLauncher();
         ClusterHostSupervisor supervisor = NewSupervisor(launcher, drainTimeoutMs: 30_000, out SupervisedOutputMultiplexer mux);
         int pid = 0;
+        Pinned? pin = null;
         try
         {
             await supervisor.StartAllAsync();
             pid = supervisor.GetSnapshot("child").ProcessId!.Value;
+            pin = Pinned.Open(pid);
 
             using var cts = new CancellationTokenSource();
             cts.CancelAfter(300);
@@ -268,7 +339,8 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         }
         finally
         {
-            BestEffortKill(pid);
+            pin?.KillIfStillTheSameProcess();
+            pin?.Dispose();
             supervisor.Dispose();
             mux.Dispose();
         }
@@ -280,10 +352,12 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         var launcher = new SystemProcessSupervisedLauncher();
         ClusterHostSupervisor supervisor = NewSupervisor(launcher, drainTimeoutMs: 500, out SupervisedOutputMultiplexer mux);
         int pid = 0;
+        Pinned? pin = null;
         try
         {
             await supervisor.StartAllAsync();
             pid = supervisor.GetSnapshot("child").ProcessId!.Value;
+            pin = Pinned.Open(pid);
 
             Task dispose = Task.Run(supervisor.Dispose);
             await dispose.WaitAsync(TimeSpan.FromSeconds(30));
@@ -295,7 +369,8 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         }
         finally
         {
-            BestEffortKill(pid);
+            pin?.KillIfStillTheSameProcess();
+            pin?.Dispose();
             mux.Dispose();
         }
     }

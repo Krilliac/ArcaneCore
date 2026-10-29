@@ -507,6 +507,64 @@ public sealed class ClusterHostSupervisorTests : IDisposable
         Assert.Equal(SupervisedProcessState.Drained, supervisor.GetSnapshot("gateway").State);
     }
 
+    [Fact]
+    public async Task Drain_WhenTheKillLeavesTheChildRunning_IsFaulted_Reports_AndDoesNotThrow()
+    {
+        var launcher = new SurvivorLauncher();
+        var options = new ClusterSupervisorOptions();
+        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1 };
+        var console = new StringWriter();
+        using var mux = new SupervisedOutputMultiplexer(console);
+        await using var supervisor = new ClusterHostSupervisor(options, launcher, mux, new FakeCapacityProbe(availableMemoryMb: 16_384));
+        await supervisor.StartProcessAsync("gateway");
+
+        SupervisedProcessSnapshot snapshot = await supervisor.DrainProcessAsync("gateway");
+
+        Assert.Equal(SupervisedProcessState.Faulted, snapshot.State);
+        Assert.Equal(SupervisedProcessState.Faulted, supervisor.GetSnapshot("gateway").State);
+        Assert.True(launcher.Process.KillCalls >= 1);
+        Assert.Contains("still running after its drain timeout", console.ToString());
+        Assert.True(launcher.Process.Disposed); // the wrapper is disposed (outside the gate) even though it survived
+    }
+
+    private sealed class SurvivorLauncher : ISupervisedProcessLauncher
+    {
+        public SurvivorProcess Process { get; } = new();
+
+        public ISupervisedProcess Launch(SupervisedProcessConfig config) => Process;
+    }
+
+    /// <summary>A child the OS refuses to kill: it never drains, and KillOwnedProcess leaves HasExited false.</summary>
+    private sealed class SurvivorProcess : ISupervisedProcess
+    {
+        private int _killCalls;
+        private int _disposed;
+
+        public int KillCalls => Volatile.Read(ref _killCalls);
+
+        public bool Disposed => Volatile.Read(ref _disposed) != 0;
+
+        public int ProcessId => 4242;
+
+        public bool HasExited => false;
+
+        public int? ExitCode => null;
+
+        public event Action<string, bool>? OutputLineReceived
+        {
+            add { }
+            remove { }
+        }
+
+        public Task<int> WaitForExitAsync(CancellationToken ct = default) => new TaskCompletionSource<int>().Task.WaitAsync(ct);
+
+        public Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default) => Task.FromResult(false);
+
+        public void KillOwnedProcess() => Interlocked.Increment(ref _killCalls);
+
+        public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
+    }
+
     private sealed class OrderRecordingLauncher : ISupervisedProcessLauncher
     {
         public ConcurrentQueue<string> Launched { get; } = new();

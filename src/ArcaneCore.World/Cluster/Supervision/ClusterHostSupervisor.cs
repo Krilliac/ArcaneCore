@@ -79,7 +79,8 @@ public interface ISupervisedProcess : IDisposable
     Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default);
 
     /// <summary>
-    /// Terminates this supervisor-owned child process if it is still running.
+    /// Terminates this supervisor-owned child process if it is still running. The system implementation kills the whole process tree
+    /// and blocks the calling thread (up to 15 s) until the exit is confirmed, so it is meant for the shutdown path only.
     /// </summary>
     void KillOwnedProcess();
 }
@@ -118,6 +119,12 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
 
     /// <summary>The live owned children; empty after a completed drain or dispose.</summary>
     public IReadOnlyCollection<int> OwnedProcessIds => [.. _ownedPids.Keys];
+
+    /// <summary>Test seam: replaces the tree kill (a kill that does nothing models one the OS refused).</summary>
+    internal Action<Process>? KillOverride { get; init; }
+
+    /// <summary>Test seam: how long a kill waits for the OS to confirm the exit (default 15 s).</summary>
+    internal TimeSpan KillConfirmTimeout { get; init; } = TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// Builds the <see cref="ProcessStartInfo"/> for <paramref name="config"/>, applying the per-process
@@ -167,13 +174,14 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
 
         int pid = process.Id;
         _ownedPids[pid] = 1;
-        return new OwnedSystemSupervisedProcess(process, pid, _ownedPids);
+        return new OwnedSystemSupervisedProcess(process, pid, _ownedPids, KillOverride, KillConfirmTimeout);
     }
 
     private sealed class OwnedSystemSupervisedProcess : ISupervisedProcess
     {
         /// <summary>How long a kill waits for the OS to confirm the exit before the pid is reported as un-killable.</summary>
-        private static readonly TimeSpan KillConfirmTimeout = TimeSpan.FromSeconds(15);
+        private readonly TimeSpan _killConfirmTimeout;
+        private readonly Action<Process> _killProcess;
 
         private readonly Process _process;
         private readonly int _pid;
@@ -186,8 +194,10 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         private bool _disposed;    // after this no Process member is called; HasExited/ExitCode answer from the cache
         private int _disposeStarted;
 
-        public OwnedSystemSupervisedProcess(Process process, int pid, ConcurrentDictionary<int, byte> ownedPids)
+        public OwnedSystemSupervisedProcess(Process process, int pid, ConcurrentDictionary<int, byte> ownedPids, Action<Process>? killOverride, TimeSpan killConfirmTimeout)
         {
+            _killProcess = killOverride ?? (p => p.Kill(entireProcessTree: true));
+            _killConfirmTimeout = killConfirmTimeout;
             _process = process;
             _pid = pid;
             _ownedPids = ownedPids;
@@ -382,7 +392,7 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             try
             {
                 // The children are our own daemons (or an operator's wrapper around one); nothing in their tree may outlive them.
-                _process.Kill(entireProcessTree: true);
+                _killProcess(_process);
             }
             catch (InvalidOperationException)
             {
@@ -397,7 +407,7 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             bool exited;
             try
             {
-                exited = _process.WaitForExit((int)KillConfirmTimeout.TotalMilliseconds);
+                exited = _process.WaitForExit((int)_killConfirmTimeout.TotalMilliseconds);
             }
             catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
             {
@@ -411,7 +421,7 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             else
             {
                 FaultLedger.Shared.Record("cluster.supervisor.kill",
-                    new InvalidOperationException($"Supervised child pid {_pid} is still running {KillConfirmTimeout.TotalSeconds:0} s after Kill; it stays in the owned set."));
+                    new InvalidOperationException($"Supervised child pid {_pid} is still running {_killConfirmTimeout.TotalSeconds:0.#} s after Kill; it stays in the owned set."));
             }
         }
 
@@ -810,14 +820,20 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             }
         }
 
+        ISupervisedProcess? toDispose;
+        SupervisedProcessSnapshot snapshot;
         lock (_gate)
         {
             entry.LastExitCode = process?.ExitCode ?? entry.LastExitCode;
-            entry.Process?.Dispose();
+            toDispose = entry.Process;
             entry.Process = null;
             entry.State = stillAlive ? SupervisedProcessState.Faulted : SupervisedProcessState.Drained;
-            return entry.ToSnapshot();
+            snapshot = entry.ToSnapshot();
         }
+
+        // Outside _gate: the wrapper's Dispose kills again and can block (up to the confirm timeout) when a kill was refused; no one else may wait on that.
+        toDispose?.Dispose();
+        return snapshot;
     }
 
     /// <summary>
@@ -1042,6 +1058,10 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         }
     }
 
+    /// <summary>
+    /// Kills any child still running (whole tree, exit confirmed) and waits for the monitors. Blocks the calling thread, so it belongs on the shutdown
+    /// path only; <see cref="DisposeAsync"/> drains first.
+    /// </summary>
     public void Dispose()
     {
         List<ManagedEntry> entries;
