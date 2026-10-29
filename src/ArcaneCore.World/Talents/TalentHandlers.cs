@@ -43,7 +43,7 @@ public sealed class TalentHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != expected)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), $"talent request requires exactly {expected} bytes");
+            MalformedPacket.Throw($"talent request requires exactly {expected} bytes");
         }
     }
 }

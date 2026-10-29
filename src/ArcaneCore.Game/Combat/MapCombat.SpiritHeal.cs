@@ -11,7 +11,7 @@ public sealed partial class MapCombat
     /// a game master is not). The caller checks the Waiting to Resurrect aura (2584) and re-summons the pet; <paramref name="beforeResurrect"/>
     /// runs after the graveyard step and right before the resurrection, where vmangos removes the aura (RemoveAurasDueToSpell(2584) between
     /// RepopAtGraveyard and ResurrectPlayer), so a refused resurrection never costs the player the aura.
-    /// Returns false when the player is alive or not in this map.
+    /// Returns false when the player is alive or not in this map, or stays dead.
     /// </summary>
     public bool ResurrectBySpiritGuide(Player player, Action<Player>? beforeResurrect = null)
     {
@@ -30,7 +30,12 @@ public sealed partial class MapCombat
 
         beforeResurrect?.Invoke(player);
         ResurrectPlayer(player, 1.0f, applySickness: false);
-        SpawnCorpseBones(player);
+        if (!IsAliveState(player))
+        {
+            return false;
+        }
+
+        RemoveResurrectedCorpse(player);
         return true;
     }
 }
