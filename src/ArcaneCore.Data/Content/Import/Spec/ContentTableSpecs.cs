@@ -41,6 +41,9 @@ public static class ContentTableSpecs
         "UnitClass", "unit_class", "InhabitType", "inhabit_type", "Civilian", "RacialLeader", "racial_leader",
         "SpeedWalk", "speed_walk", "SpeedRun", "speed_run",
         "MinLevelHealth", "MaxLevelHealth", "MinLevelMana", "MaxLevelMana", "Armor",
+        // CreatureResistanceDataModule (cmangos Resistance*, vmangos *_res; vmangos Creature.cpp:606-611)
+        "ResistanceHoly", "ResistanceFire", "ResistanceNature", "ResistanceFrost", "ResistanceShadow", "ResistanceArcane",
+        "holy_res", "fire_res", "nature_res", "frost_res", "shadow_res", "arcane_res",
         "MinMeleeDmg", "MaxMeleeDmg", "MinRangedDmg", "MaxRangedDmg", "MeleeAttackPower", "RangedAttackPower",
         "MeleeBaseAttackTime", "base_attack_time", "RangedBaseAttackTime", "ranged_attack_time",
         "DamageSchool", "damage_school", "PetSpellDataId", "pet_spell_list_id", "MovementType", "movement_type",

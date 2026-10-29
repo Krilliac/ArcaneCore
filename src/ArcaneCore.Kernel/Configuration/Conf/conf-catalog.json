@@ -9314,7 +9314,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Whether holy resistance is ignored when resisting damage. Retail (vmangos Unit::CalculateDamageAbsorbAndResist, Unit.cpp:1936-1946): false, holy is resisted like any magic school. true reproduces cmangos-classic (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: \"completely ignore holy resistance value\").",
+      "meaning": "Whether holy resistance is ignored when resisting damage. Retail (vmangos Unit::CalculateDamageAbsorbAndResist, Unit.cpp:1936-1946): false; vmangos holds the holy resistance field at 0 (Player::UpdateResistances), so holy is only resisted through the level-based innate resist of higher-level creatures. true reproduces cmangos-classic (Unit::CalculateEffectiveMagicResistancePercent, Unit.cpp:3917: \"completely ignore holy resistance value\") and also drops that innate part.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#spellrules",
       "isCollection": false
@@ -22872,7 +22872,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400).",
+      "meaning": "Seconds of world time a living bot may go without any progress (it moved less than 10 yards and its level, experience, money, bags, quest log and spells did not change, and it took no target's health to a new low) before it reports a stall in `.playerbot list` and gives up its goal (`PlayerbotStallWatch`; 10..86400).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
@@ -23034,6 +23034,22 @@
       "reload": "start",
       "meaning": "A bot that goes longer than this many milliseconds (1000..3600000) of world time without a think is reported once per episode as a \"cadence think-starved\" anomaly (`PlayerbotAnomalies`); 0 turns the report off. The default is the ghost walk's stuck bound (`PlayerbotRecovery.StuckMs`). The report fires only for a bot that falls behind the rotation: its bound is the larger of this value and 1.5 times the measured time of a full pass of the main think lane (three times this value until a pass is measured), so a rotation that is slow for every bot alike raises nothing. The think budget is still sized from this value unraised.",
       "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
+      "path": "World:Playerbots:Travel:AreaTriggers",
+      "section": "World:Playerbots",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Let bots walk into same-map teleport triggers as a leg (Teldrassil's Darnassus and Rut'theran portals; on by default).",
+      "allowed": "true | false",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false
     },

@@ -470,6 +470,7 @@ public static class WorldConfigKeys
         // Not vmangos keys: multi-leg travel by boat, zeppelin, hearthstone and mage portal (docs/areas/playbots.md, Travel). The travel
         // planner and its legs read the shared PlayerbotOptions.Travel at each decision.
         LivePlayerbots("Travel:Enabled", o => o.Travel.Enabled, (o, v) => o.Travel.Enabled = v),
+        LivePlayerbots("Travel:AreaTriggers", o => o.Travel.AreaTriggers, (o, v) => o.Travel.AreaTriggers = v),
         LivePlayerbots("Travel:Boats", o => o.Travel.Boats, (o, v) => o.Travel.Boats = v),
         LivePlayerbots("Travel:Zeppelins", o => o.Travel.Zeppelins, (o, v) => o.Travel.Zeppelins = v),
         LivePlayerbots("Travel:Hearthstone", o => o.Travel.Hearthstone, (o, v) => o.Travel.Hearthstone = v),
