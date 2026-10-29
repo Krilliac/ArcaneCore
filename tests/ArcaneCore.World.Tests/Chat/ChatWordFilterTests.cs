@@ -1,4 +1,5 @@
 using ArcaneCore.Data.Content.Names;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Chat;
 using ArcaneCore.World.Chat;
 using Xunit;
@@ -13,6 +14,39 @@ public sealed class ChatWordFilterTests
         var filter = new ChatWordFilter([new ChatWordFilterRule(1, "dang", ChatWordFilterScope.Chat, ChatWordFilterAction.Censor)]);
         Assert.Equal("oh **** it, ****!", filter.Apply("oh dang it, DANG!"));
         Assert.Equal("clean", filter.Apply("clean"));
+    }
+
+    [Theory]
+    [InlineData(ChatWordFilterAction.Censor)]
+    [InlineData(ChatWordFilterAction.Block)]
+    public void ACleanMessage_IsNotRejected_WhenMatchingIsPreempted(ChatWordFilterAction action)
+    {
+        // A backreference rules out the linear-time engine, so this rule backtracks under the timeout; the exponential input and a 1 ms budget
+        // make the timeout fire every time, with no reliance on machine load.
+        var ledger = new FaultLedger();
+        var filter = new ChatWordFilter(
+            [new ChatWordFilterRule(1, @"^(a+)+\1$", ChatWordFilterScope.Chat, action)],
+            TimeSpan.FromMilliseconds(1),
+            ledger);
+        string clean = new string('a', 40) + "!";
+
+        Assert.Equal(clean, filter.Apply(clean));
+        Assert.Equal(1, ledger.Snapshot().Where(s => s.Site == "chat.word-filter-timeout").Sum(s => s.Count));
+    }
+
+    [Fact]
+    public void LinearPatternsStillMatchAfterABacktrackingRuleTimesOut()
+    {
+        var ledger = new FaultLedger();
+        var filter = new ChatWordFilter(
+            [
+                new ChatWordFilterRule(1, @"(a+)+\1$", ChatWordFilterScope.Chat, ChatWordFilterAction.Block),
+                new ChatWordFilterRule(2, "dang", ChatWordFilterScope.Chat, ChatWordFilterAction.Censor),
+            ],
+            TimeSpan.FromMilliseconds(1),
+            ledger);
+
+        Assert.Equal("oh ****" + new string('a', 40) + "!", filter.Apply("oh dang" + new string('a', 40) + "!"));
     }
 
     [Fact]
