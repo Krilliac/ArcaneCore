@@ -18540,6 +18540,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:InspectHoldSeconds",
+      "section": "World:Playerbots",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "20",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "A real player's inspect (`CMSG_INSPECT` or the Honor tab's `MSG_INSPECT_HONOR_STATS`) holds an autonomous bot still for this many seconds after the latest request, so the client's 10-yard inspect range keeps its gear visible (0..120; 0 turns it off).",
+      "allowed": "a whole number from 0 to 120; 0 turns the hold off",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:MaxActionsPerTick",
       "section": "World:Playerbots",
       "type": "int",

@@ -31,6 +31,11 @@ the SQLite results do not prove the other two (see "Hosted CI").
 | `CMSG_INSPECT`, `MSG_INSPECT_HONOR_STATS` (50 bytes) | `InspectHandlers`, `HonorPackets.InspectHonorStats` | `MiscHandler.cpp:943-1036`, wow_messages `msg_inspect_honor_stats_server.wowm` |
 | `.honor add|addkill|show|setrp|reset`, `.modify honor` | `HonorCommands` | `CharacterCommands.cpp:2321-2570`, `Chat.cpp:467-475, 596` |
 
+**Inspecting.** `SMSG_INSPECT` goes to the inspector and carries the target's guid (as in vmangos and mangoszero). The 1.12.1 client shows another player's
+equipment only while the inspector is within 10 yards (3D), and the server answers `CMSG_INSPECT` and `MSG_INSPECT_HONOR_STATS` in the same range
+(`InspectHandlers.InspectDistance`). A real player's inspect of an autonomous playerbot is therefore announced to the `IPlayerInspectReceiver` features, and
+the bot pack holds the bot still for `World:Playerbots:InspectHoldSeconds` after the latest request, so the gear stays readable across tab switches.
+
 ## Not delivered (limits)
 
 - **Battlegrounds and their bonus honor.** The seam is `IHonorAwards.Add(player, cp, HonorKind.Bonus, source)` (implemented by `HonorService`); the

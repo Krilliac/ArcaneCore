@@ -108,6 +108,12 @@ public sealed class PlayerbotOptions
     public double SlowThinkLogMs { get; set; } = 50;
 
     /// <summary>
+    /// A real player's inspect (<c>CMSG_INSPECT</c> or the Honor tab's <c>MSG_INSPECT_HONOR_STATS</c>) holds an autonomous bot still for this many seconds after the latest request, so the client's 10-yard inspect range keeps its gear visible (0..120; 0 turns it off).
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 0 to 120; 0 turns the hold off")]
+    public int InspectHoldSeconds { get; set; } = 20;
+
+    /// <summary>
     /// The most navigation-mesh search nodes the fallback path queries of one bot think may create together (the steep escape, the
     /// starts beside the bot, the hazard detours; <c>PlayerbotThinkProbe.NodeBudget</c>): past it a fallback runs with what is
     /// left, or not at all, and finds nothing (its plan may then fail, as when no such way exists). A plan's own query is neither held
@@ -328,6 +334,7 @@ public sealed class PlayerbotOptions
             throw new InvalidOperationException($"{SectionName}: ThinkStarvedGapMs must be 0 (off) or 1000..3600000.");
         if (!float.IsFinite(ChaseReplanYards) || ChaseReplanYards is < 0.5f or > 100f) throw new InvalidOperationException($"{SectionName}: ChaseReplanYards must be 0.5..100.");
         if (!double.IsFinite(SlowThinkLogMs) || SlowThinkLogMs is < 0 or > 60_000) throw new InvalidOperationException($"{SectionName}: SlowThinkLogMs must be 0..60000.");
+        if (InspectHoldSeconds is < 0 or > 120) throw new InvalidOperationException($"{SectionName}: InspectHoldSeconds must be 0..120.");
         if (MaxThinkSearchNodes != 0 && MaxThinkSearchNodes is < ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes or > 10_000_000)
             throw new InvalidOperationException($"{SectionName}: MaxThinkSearchNodes must be 0 or {ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000.");
         if (PathJobsMaxPerBot is < 1 or > 8) throw new InvalidOperationException($"{SectionName}: PathJobsMaxPerBot must be 1..8.");

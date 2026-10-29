@@ -1050,6 +1050,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotThinkProbe.Phase("pvp");
         if (TryFightPlayer(player, interval)) return;
 
+        // A real player inspecting the bot (PlayerbotOptions.InspectHoldSeconds) keeps it still within the client's 10-yard gear range; the walk resumes after.
+        if (TryHoldForInspector(player)) return;
+
         // A scenario stay (PlayerbotStay) owns the bot while its lease lives: no quest, grind or explore step chooses a destination.
         if (TryStay(player, interval)) return;
 

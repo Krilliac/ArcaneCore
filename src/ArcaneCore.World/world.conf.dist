@@ -14994,6 +14994,20 @@ World.Playerbots.Home.ReturnMode = Auto
 World.Playerbots.Home.TeleportDistanceYards = 1500
 
 #
+#    World.Playerbots.InspectHoldSeconds
+#        Description: A real player's inspect (CMSG_INSPECT or the Honor tab's
+#                     MSG_INSPECT_HONOR_STATS) holds an autonomous bot still for this many seconds
+#                     after the latest request, so the client's 10-yard inspect range keeps its gear
+#                     visible (0..120; 0 turns it off).
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number from 0 to 120; 0 turns the hold off
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.InspectHoldSeconds = 20
+
+#
 #    World.Playerbots.MaxActionsPerTick
 #        Description: The most managed client actions all bots may send in one world tick (1..512).
 #                     The tick's think time is bounded separately, by

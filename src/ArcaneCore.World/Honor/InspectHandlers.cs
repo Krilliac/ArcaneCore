@@ -3,8 +3,10 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Honor;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Honor;
 
@@ -15,6 +17,7 @@ namespace ArcaneCore.World.Honor;
 /// target, and its answer is just the guid (the equipment is read by the client from the update fields). The honor statistics are the
 /// 50-byte <see cref="HonorPackets.InspectHonorStats"/> read from the target's honor update fields, so they work for whatever the
 /// honor feature published (zeros without it).
+/// A real player inspecting a playerbot is also announced to the <see cref="IPlayerInspectReceiver"/> features, after the reply.
 /// </summary>
 public sealed class InspectHandlers : IOpcodeHandlerGroup
 {
@@ -47,6 +50,20 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
         return map.Combat.Hooks.CanAttack(inspector, target) ? null : target;
     }
 
+    /// <summary>Tell every <see cref="IPlayerInspectReceiver"/> that a real player inspected a playerbot (after the reply was sent).</summary>
+    private static void NotifyBotInspected(WorldSession session, Player inspector, Player target)
+    {
+        if (!target.Session.IsPlayerbot || inspector.Session.IsPlayerbot)
+        {
+            return;
+        }
+
+        foreach (IPlayerInspectReceiver receiver in session.Services.GetServices<IWorldFeature>().OfType<IPlayerInspectReceiver>())
+        {
+            receiver.Inspected(inspector, target);
+        }
+    }
+
     private static void HandleInspect(WorldSession session, Player player, byte[] payload)
     {
         if (payload.Length < 8)
@@ -61,6 +78,7 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
             var writer = new PacketWriter(8);
             writer.WriteUInt64(target.Guid.Value);
             session.Send(WorldOpcode.SmsgInspect, writer.ToArray());
+            NotifyBotInspected(session, player, target);
         }
     }
 
@@ -75,6 +93,7 @@ public sealed class InspectHandlers : IOpcodeHandlerGroup
         if (InspectableTarget(player, guid) is { } target)
         {
             session.Send(WorldOpcode.MsgInspectHonorStats, HonorPackets.InspectHonorStats(target));
+            NotifyBotInspected(session, player, target);
         }
     }
 }
