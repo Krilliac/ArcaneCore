@@ -18708,11 +18708,11 @@ World.Playerbots.Qa.GitHub.CommentIntervalHours = 24
 
 #
 #    World.Playerbots.Qa.GitHub.CreateWithinHours
-#        Description: A new issue is opened only for a finding met since this start-up, or last
-#                     seen within this many hours (0..8760; 0 = only findings met since this
-#                     start-up). A finding known only from history (loaded at start-up, last seen
-#                     earlier than that) never opens one, and is not looked up; an issue it already
-#                     holds (by number) is still updated.
+#        Description: A new issue is opened only for a finding met since this start-up, or last seen
+#                     within this many hours (0..8760; 0 = only findings met since this start-up). A
+#                     finding known only from history (loaded at start-up, last seen earlier than
+#                     that) never opens one, and is not looked up; an issue it already holds (by
+#                     number) is still updated.
 #        Type: int
 #        Default: 24
 #        Allowed: a whole number, -2147483648 to 2147483647

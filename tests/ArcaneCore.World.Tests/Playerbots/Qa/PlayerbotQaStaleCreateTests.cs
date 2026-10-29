@@ -264,7 +264,8 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         QaFindingView after = state.Get(stale.Id)!;
         Assert.Equal(QaPublicationState.Published, after.Publication.State);
         Assert.Equal(issue, after.Publication.Issue);
-        Assert.Equal(0, transport.Searches);
+        // The fresh finding is not in the list, so it searches once before its create; the stale one is linked from the list without a search.
+        Assert.True(transport.Searches == 1, $"only the fresh finding may search, {transport.Searches} searches were made");
     }
 
     [Fact]
