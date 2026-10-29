@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Ops;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -90,6 +91,16 @@ public interface ISupervisedProcessLauncher
 }
 
 /// <summary>
+/// The marker the host supervisor puts in every child's environment, so a World process started as a supervised
+/// child can refuse to turn into a second supervisor (a fork bomb on a copied <c>Cluster:Supervisor:Enabled</c> key).
+/// </summary>
+public static class SupervisedChild
+{
+    /// <summary>Environment variable set on every supervised child; its value is the child's process name.</summary>
+    public const string EnvironmentVariable = "ARCANECORE_SUPERVISED_CHILD";
+}
+
+/// <summary>
 /// Launches real OS child processes via <see cref="Process"/> and tracks supervisor-owned PIDs so only
 /// owned child processes can ever be terminated.
 /// </summary>
@@ -119,6 +130,8 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             RedirectStandardError = true,
             RedirectStandardInput = true,
         };
+
+        startInfo.Environment[SupervisedChild.EnvironmentVariable] = config.Name;
 
         if (!string.IsNullOrWhiteSpace(config.WorkingDirectory))
         {
@@ -292,6 +305,12 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
 }
 
 /// <summary>
+/// Outcome of <see cref="ClusterHostSupervisor.PlanStartAll"/>: the processes a start would launch, in
+/// configuration order, and the ones admission would refuse with the reason.
+/// </summary>
+public sealed record SupervisorStartPlan(IReadOnlyList<string> Admitted, IReadOnlyList<(string Name, string Reason)> Denied);
+
+/// <summary>
 /// Immutable point-in-time status snapshot of a supervised process.
 /// </summary>
 public sealed record SupervisedProcessSnapshot(
@@ -461,6 +480,79 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             LaunchEntryUnderLock(entry);
             entry.MonitorTask = Task.Run(() => MonitorProcessLoopAsync(entry, entry.StopCts.Token));
             return Task.FromResult(entry.ToSnapshot());
+        }
+    }
+
+    /// <summary>
+    /// Simulates <see cref="StartAllAsync"/> without launching anything: walks the registered processes in configuration
+    /// order and applies the admission rules cumulatively (process count, total allocated memory, the free-memory reserve
+    /// against one probe read, single-writer map ownership), so a caller can refuse a start that cannot reach its minimum
+    /// before the first child is launched.
+    /// </summary>
+    public SupervisorStartPlan PlanStartAll()
+    {
+        lock (_gate)
+        {
+            var admitted = new List<string>();
+            var denied = new List<(string Name, string Reason)>();
+            long availableMb = _capacityProbe.GetAvailableMemoryMb();
+            int count = 0;
+            long committedMb = 0;
+            var mapOwners = new Dictionary<uint, string>();
+
+            foreach (ManagedEntry entry in _entries.Values)
+            {
+                SupervisedProcessConfig cfg = entry.Config;
+                bool alreadyActive = entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff;
+                bool isWorker = string.Equals(cfg.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase);
+
+                if (!alreadyActive)
+                {
+                    string? reason = null;
+                    if (count + 1 > _options.MaxConcurrentProcesses)
+                    {
+                        reason = $"active process count ({count + 1}) would exceed MaxConcurrentProcesses ({_options.MaxConcurrentProcesses}).";
+                    }
+                    else if (_options.MaxTotalAllocatedMemoryMb is { } maxTotalMb && committedMb + cfg.RequiredMemoryMb > maxTotalMb)
+                    {
+                        reason = $"projected allocated memory ({committedMb + cfg.RequiredMemoryMb} MiB) exceeds MaxTotalAllocatedMemoryMb ({maxTotalMb} MiB).";
+                    }
+                    else if (availableMb - committedMb - cfg.RequiredMemoryMb < _options.MinFreeMemoryReserveMb)
+                    {
+                        reason = $"available host memory ({availableMb} MiB) minus memory already planned ({committedMb} MiB) and RequiredMemoryMb ({cfg.RequiredMemoryMb} MiB) is below MinFreeMemoryReserveMb ({_options.MinFreeMemoryReserveMb} MiB).";
+                    }
+                    else if (isWorker)
+                    {
+                        foreach (uint mapId in entry.MapAssignments)
+                        {
+                            if (mapOwners.TryGetValue(mapId, out string? owner))
+                            {
+                                reason = $"map {mapId} is already assigned to worker '{owner}'.";
+                                break;
+                            }
+                        }
+                    }
+
+                    if (reason is not null)
+                    {
+                        denied.Add((cfg.Name, reason));
+                        continue;
+                    }
+                }
+
+                admitted.Add(cfg.Name);
+                count++;
+                committedMb += cfg.RequiredMemoryMb;
+                if (isWorker)
+                {
+                    foreach (uint mapId in entry.MapAssignments)
+                    {
+                        mapOwners.TryAdd(mapId, cfg.Name);
+                    }
+                }
+            }
+
+            return new SupervisorStartPlan(admitted, denied);
         }
     }
 
@@ -684,6 +776,19 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 if (entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped
                     || ct.IsCancellationRequested)
                 {
+                    return;
+                }
+
+                if (exitCode == ExitCodes.InvalidConfiguration)
+                {
+                    // EX_CONFIG: the child refused its own configuration; a restart would fail the same way, forever.
+                    entry.State = SupervisedProcessState.Faulted;
+                    entry.Process?.Dispose();
+                    entry.Process = null;
+                    _multiplexer.RouteLine(
+                        entry.Config,
+                        $"FATAL: Process '{entry.Config.Name}' exited with code {exitCode} (invalid configuration); not restarting.",
+                        isStdErr: true);
                     return;
                 }
 

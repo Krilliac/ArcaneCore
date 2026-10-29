@@ -37,6 +37,17 @@ public static class SupervisedRoles
     public const string Social = "social";
     public const string Coordinator = "coordinator";
     public const string Supervisor = "supervisor";
+
+    /// <summary>True when <paramref name="role"/> is one of the canonical roles above (case-insensitive).</summary>
+    public static bool IsKnown(string? role) =>
+        role is not null
+        && (string.Equals(role, Combined, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Realm, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Gateway, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Worker, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Social, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Coordinator, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Supervisor, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -131,7 +142,13 @@ public sealed class SupervisedProcessConfig
 /// </summary>
 public sealed class ClusterSupervisorOptions
 {
-    public const string ConfigurationSection = "Cluster:Supervisor";
+    public const string SectionName = "Cluster:Supervisor";
+
+    /// <summary>
+    /// Runs this World process as the host supervisor only (default: false): it launches and watches the configured
+    /// <see cref="Processes"/> and starts no world, database, listener or feature. Off, a World start is unchanged.
+    /// </summary>
+    public bool Enabled { get; set; }
 
     /// <summary>
     /// Maximum number of concurrent supervised child processes allowed on this host (default: 9).
@@ -139,9 +156,10 @@ public sealed class ClusterSupervisorOptions
     public int MaxConcurrentProcesses { get; set; } = 9;
 
     /// <summary>
-    /// Minimum process count for a full multi-process cluster topology (realm, gateway, social, coordinator, plus workers; default: 6).
+    /// Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3).
+    /// A start that can admit fewer launches nothing and refuses with a message naming this key.
     /// </summary>
-    public int MinClusterProcesses { get; set; } = 6;
+    public int MinClusterProcesses { get; set; } = 3;
 
     /// <summary>
     /// Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB).
@@ -154,9 +172,73 @@ public sealed class ClusterSupervisorOptions
     public long? MaxTotalAllocatedMemoryMb { get; set; }
 
     /// <summary>
-    /// Supervised process definitions keyed by logical name (e.g. <c>"worker:EK"</c>).
+    /// Supervised process definitions in start order, keyed by a configuration key that must not contain <c>:</c>
+    /// (e.g. <c>worker-EK</c>); the display name may, via <see cref="SupervisedProcessConfig.Name"/> (<c>worker:EK</c>).
     /// </summary>
     public Dictionary<string, SupervisedProcessConfig> Processes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Returns every problem with these options (empty when valid), for the startup check and the supervisor host.
+    /// </summary>
+    public IEnumerable<string> Validate()
+    {
+        const string section = SectionName;
+        var problems = new List<string>();
+
+        if (MaxConcurrentProcesses is < 1 or > 64)
+            problems.Add($"{section}:MaxConcurrentProcesses must be 1 to 64 (was {MaxConcurrentProcesses}).");
+        if (MinClusterProcesses < 1 || MinClusterProcesses > MaxConcurrentProcesses)
+            problems.Add($"{section}:MinClusterProcesses must be at least 1 and no more than MaxConcurrentProcesses ({MaxConcurrentProcesses}) (was {MinClusterProcesses}).");
+        if (MinFreeMemoryReserveMb < 0)
+            problems.Add($"{section}:MinFreeMemoryReserveMb must not be negative (was {MinFreeMemoryReserveMb}).");
+        if (MaxTotalAllocatedMemoryMb is <= 0)
+            problems.Add($"{section}:MaxTotalAllocatedMemoryMb must be unset or greater than 0 (was {MaxTotalAllocatedMemoryMb}).");
+        if (Enabled && Processes.Count < MinClusterProcesses)
+            problems.Add($"{section}:Processes defines {Processes.Count} process(es) but {section}:MinClusterProcesses is {MinClusterProcesses}.");
+
+        var mapOwners = new Dictionary<uint, string>();
+        foreach ((string key, SupervisedProcessConfig config) in Processes)
+        {
+            if (key.Contains(':', StringComparison.Ordinal))
+                problems.Add($"{section}:Processes key '{key}' must not contain ':' (use e.g. 'worker-EK' and set Name to 'worker:EK').");
+
+            string name = string.IsNullOrWhiteSpace(config.Name) ? key : config.Name;
+            try
+            {
+                var effective = new SupervisedProcessConfig
+                {
+                    Name = name,
+                    Role = config.Role,
+                    ExecutablePath = config.ExecutablePath,
+                    RestartBackoffMinMs = config.RestartBackoffMinMs,
+                    RestartBackoffMaxMs = config.RestartBackoffMaxMs,
+                    DrainTimeoutMs = config.DrainTimeoutMs,
+                    RequiredMemoryMb = config.RequiredMemoryMb,
+                };
+                effective.Validate();
+            }
+            catch (InvalidOperationException ex)
+            {
+                problems.Add($"{section}:Processes:{key}: {ex.Message}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.Role) && !SupervisedRoles.IsKnown(config.Role))
+                problems.Add($"{section}:Processes:{key}:Role '{config.Role}' is not one of combined, realm, gateway, worker, social, coordinator, supervisor.");
+
+            if (string.Equals(config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (uint mapId in config.MapAssignments)
+                {
+                    if (mapOwners.TryGetValue(mapId, out string? owner))
+                        problems.Add($"{section}:Processes:{key}:MapAssignments lists map {mapId}, already assigned to '{owner}'.");
+                    else
+                        mapOwners[mapId] = key;
+                }
+            }
+        }
+
+        return problems;
+    }
 
     /// <summary>
     /// Computes capped exponential backoff in milliseconds for the given 1-based <paramref name="consecutiveFailures"/> attempt

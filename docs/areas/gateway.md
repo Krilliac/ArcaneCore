@@ -138,6 +138,10 @@ These keys are **not** in the generated configuration catalog: the catalog cover
 (`ConfigDaemon` has no Gateway value), and there is no `gateway.conf.dist` or `--check-config` for the gateway yet. The
 source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `ConfigExceptionTable.UncataloguedSourceRoots`.
 
+## Running under the host supervisor
+
+The gateway, the worker and a standby worker can be launched and watched by the host supervisor instead of by hand: start `ArcaneCore.World` with `Cluster:Supervisor:Enabled` true and list each child under `Cluster:Supervisor:Processes` (keys without `:`, for example `worker-EK`), each with its own configuration and its own `Cluster:Worker:Enabled`. The supervisor process builds no world and opens no database or listener; it refuses to start with fewer than `Cluster:Supervisor:MinClusterProcesses` admissible processes, does not restart a child that exits 78, and a child cannot itself run as a supervisor. See the M15.4 section of [CLUSTERING_DESIGN.md](../CLUSTERING_DESIGN.md).
+
 ## Where things run
 
 | Concern | Runs on | Note |
