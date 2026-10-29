@@ -144,6 +144,7 @@ public sealed class SessionTraceFeature : IWorldFeature
             trace.SetExpiry(expiresAt);
         }
 
+        trace.Security = player.Security;
         if (player.Session is WorldSession session)
         {
             trace.Attach(session);
@@ -183,11 +184,12 @@ public sealed class SessionTraceFeature : IWorldFeature
         return null;
     }
 
-    /// <summary>One <c>.debug trace session list</c> row per active trace, ordered by character name.</summary>
-    internal IReadOnlyList<string> DescribeActive()
+    /// <summary>One <c>.debug trace session list</c> row per active trace the caller may see (<paramref name="visible"/>), ordered by character name.</summary>
+    internal IReadOnlyList<string> DescribeActive(Func<SessionTrace, bool> visible)
     {
         DateTimeOffset now = _clock.GetUtcNow();
         return [.. Volatile.Read(ref _traces).Values
+            .Where(visible)
             .OrderBy(t => t.Character, StringComparer.OrdinalIgnoreCase)
             .Select(t => string.Create(
                 CultureInfo.InvariantCulture,
@@ -280,7 +282,10 @@ public sealed class SessionTraceFeature : IWorldFeature
         if (Volatile.Read(ref _traces).TryGetValue(player.Guid, out SessionTrace? trace))
         {
             trace.WriteControl("logout", string.Empty);
-            trace.DetachCurrent(); // the connection goes back to the character screen; whatever it does next is not this character
+            if (player.Session is WorldSession ended && trace.IsAttachedTo(ended))
+            {
+                trace.DetachCurrent(); // the connection goes back to the character screen; whatever it does next is not this character
+            }
         }
     }
 

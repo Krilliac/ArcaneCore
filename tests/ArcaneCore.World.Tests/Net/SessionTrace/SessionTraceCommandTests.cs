@@ -154,4 +154,28 @@ public sealed class SessionTraceCommandTests
         Assert.Null(SessionTraceTestKit.SessionOf(host, "Offgm").SessionTrace);
         Assert.DoesNotContain(logs.Entries, e => e.Category == SessionTraceFeature.LogCategory);
     }
+
+    [Fact]
+    public async Task AGameMaster_CannotTraceAnAdministratorByName_AndSeesNoRowOfOne()
+    {
+        var logs = new CapturingLoggerProvider();
+        await using WorldTestHost host = SessionTraceTestKit.Start(new FakeTimeProvider(), logs);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STSEC1", "Secgm", AccountSecurity.GameMaster);
+        await using WorldTestClient admin = await host.EnterWorldAsync("STSEC2", "Secadmin", AccountSecurity.Administrator);
+        SessionTraceFeature feature = SessionTraceTestKit.FeatureOf(host);
+        await gm.CollectAsync();
+        await admin.CollectAsync();
+
+        string refused = await SessionTraceTestKit.CommandAsync(gm, ".debug trace session Secadmin on");
+        Assert.DoesNotContain("Session trace on", refused, StringComparison.Ordinal);
+        Assert.Empty(await host.OnWorldAsync(() => feature.Active.ToArray()));
+
+        // The administrator traces itself; the lower-security GM neither sees the row nor can turn it off.
+        Assert.StartsWith("Session trace on for Secadmin", await SessionTraceTestKit.CommandAsync(admin, ".debug trace session on"), StringComparison.Ordinal);
+        Assert.Equal("No session traces.", await SessionTraceTestKit.CommandAsync(gm, ".debug trace session list"));
+        Assert.Single(await host.OnWorldAsync(() => feature.Active.ToArray()));
+        string notOff = await SessionTraceTestKit.CommandAsync(gm, ".debug trace session Secadmin off");
+        Assert.DoesNotContain("Session trace off", notOff, StringComparison.Ordinal);
+        Assert.Single(await host.OnWorldAsync(() => feature.Active.ToArray()));
+    }
 }

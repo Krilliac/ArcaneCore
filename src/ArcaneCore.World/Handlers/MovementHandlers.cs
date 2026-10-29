@@ -185,6 +185,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         session.SessionTrace?.Movement(session, player, opcode, in movement);
         ApplyObserved(session, player, opcode, movement);
         antiCheat?.AfterMovement(player);
+        session.SessionTrace?.AfterMovement(player);
         CheckAndHealLifeStateDesync(session, player, opcode, in movement);
         // MovementHandler.cpp:1115-1131: a free move that is not a long fall is the unstuck point (SaveNoUndermapPosition: z + 3, then + 2).
         if (!session.IsInChaosProbe

@@ -111,4 +111,37 @@ public sealed class SessionTraceAntiCheatTests
         Assert.True(await host.OnWorldAsync(() => anticheat.Recorded) > recorded, "the real feature recorded the finding");
         Assert.Single(SessionTraceTestKit.Lines(logs), l => l.Event == "anticheat" && l.Detail.StartsWith("Teleport ", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task AnExemptPlayerMovedByTheServer_IsNotSeenAsATeleport_ByTheShadow()
+    {
+        var logs = new CapturingLoggerProvider();
+        await using WorldTestHost host = SessionTraceTestKit.Start(new FakeTimeProvider(), logs);
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAC6", "Movedgm", AccountSecurity.GameMaster);
+        await ApplyAsync(host, new AntiCheatOptions());
+        await gm.CollectAsync();
+        Assert.StartsWith("Session trace on for Movedgm", await SessionTraceTestKit.CommandAsync(gm, ".debug trace session on"), StringComparison.Ordinal);
+
+        TraceMover mover = await SessionTraceTestKit.MoverAsync(host, gm, "Movedgm");
+        await mover.SendAsync(WorldOpcode.MsgMoveStartForward, MovementFlags.Forward);
+        await mover.StepAsync(100, 0.7f);
+        await SessionTraceTestKit.SettledAsync(host, "Movedgm", mover);
+        await host.OnWorldAsync(() => 0);
+
+        // The server relocates the player with no teleport packet (a charge, the end of a taxi ride, an observer correction); the client then moves on from there.
+        const float Jump = 200f;
+        await host.OnWorldAsync(() =>
+        {
+            ArcaneCore.Game.Entities.Player player = host.World.FindOnlinePlayer("Movedgm")!;
+            player.Relocate(player.X + Jump, player.Y, player.Z, player.Orientation, host.World.NowMs);
+        });
+        mover.X += Jump;
+        await mover.StepAsync(100, 0.7f);
+        await SessionTraceTestKit.SettledAsync(host, "Movedgm", mover);
+        await host.OnWorldAsync(() => 0);
+
+        // The block from the new spot was judged (its move line is there) and found nothing.
+        await SessionTraceTestKit.WaitForLineAsync(logs, l => l.Event == "move" && l.Detail.Contains($" clientTime={mover.Time} ", StringComparison.Ordinal), "the move line of the block after the relocation");
+        Assert.DoesNotContain(SessionTraceTestKit.Lines(logs), l => l.Event == "anticheat" && l.Detail.StartsWith("Teleport ", StringComparison.Ordinal));
+    }
 }

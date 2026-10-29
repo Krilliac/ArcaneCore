@@ -169,7 +169,7 @@ public sealed class SessionTraceCommands : ICommandExtension
             guid = online.Guid;
             display = online.Name;
         }
-        else if (feature.FindByName(name) is { } offline)
+        else if (feature.FindByName(name) is { } offline && CanSee(context, offline))
         {
             // A trace outlives the connection: a character that dropped off can still be turned off by name.
             guid = offline.Guid;
@@ -191,6 +191,23 @@ public sealed class SessionTraceCommands : ICommandExtension
         return true;
     }
 
+    /// <summary>The same rule as <see cref="CommandContext.CanActOn"/> (GmSecurity.HasLowerSecurity), without the refusal reply: the online character's security, else the one stored when the trace started.</summary>
+    private static bool CanSee(CommandContext context, SessionTrace trace)
+    {
+        if (context.IsConsole && !context.IsRemote)
+        {
+            return true;
+        }
+
+        Player? online = context.World.FindOnlinePlayer(trace.Guid);
+        if (online is not null && context.IsInvoker(online))
+        {
+            return true;
+        }
+
+        return !GmSecurity.HasLowerSecurity(context.Security, online?.Security ?? trace.Security, false, context.Commands.Gm);
+    }
+
     private static bool List(CommandContext context, string args)
     {
         if (FeatureOf(context) is not { } feature)
@@ -199,7 +216,7 @@ public sealed class SessionTraceCommands : ICommandExtension
             return true;
         }
 
-        IReadOnlyList<string> rows = feature.DescribeActive();
+        IReadOnlyList<string> rows = feature.DescribeActive(t => CanSee(context, t));
         if (rows.Count == 0)
         {
             context.Reply("No session traces.");

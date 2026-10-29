@@ -57,6 +57,17 @@ internal static class SessionTraceOutbound
     /// </summary>
     internal static string? Describe(WorldOpcode opcode, ReadOnlySpan<byte> payload, ObjectGuid self)
     {
+        if (opcode is WorldOpcode.SmsgSplineSetWalkSpeed or WorldOpcode.SmsgSplineSetRunSpeed or WorldOpcode.SmsgSplineSetRunBackSpeed
+            or WorldOpcode.SmsgSplineSetSwimSpeed or WorldOpcode.SmsgSplineSetSwimBackSpeed)
+        {
+            // Sent for every unit in view: another unit's change is dropped before anything is built.
+            var probe = new PacketReader(payload);
+            if (probe.TryReadPackedGuid(out ulong other) && other != self.Value)
+            {
+                return null;
+            }
+        }
+
         string head = string.Create(CultureInfo.InvariantCulture, $"{WorldOpcodeNames.GetName(opcode)} size={payload.Length}");
         var reader = new PacketReader(payload);
         switch (opcode)

@@ -447,10 +447,6 @@ public sealed partial class WorldSession : IPlayerSession
                 RecordHandlerLatency(packet.Handler.Opcode, handlerStart);
 
                 LogIfSlowPacket(packet.Handler.Opcode, handlerStart);
-                if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
-                {
-                    sessionTrace.Handled(packet.Handler.Opcode, handlerStart, packet.ReceivedMs);
-                }
             }
             catch (Exception ex) when (IsMalformed(ex))
             {
@@ -474,6 +470,11 @@ public sealed partial class WorldSession : IPlayerSession
                 {
                     return;
                 }
+            }
+
+            if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+            {
+                sessionTrace.Handled(packet.Handler.Opcode, handlerStart, packet.ReceivedMs);
             }
         }
     }
