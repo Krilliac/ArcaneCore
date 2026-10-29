@@ -9,6 +9,9 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" />
+    <!-- Pomelo 9.0.0 brings MySqlConnector 2.4.0, affected by GHSA-473q-m89c-ghf8 (account password sent before the TLS
+         certificate is verified in zero-configuration TLS mode). Pin the patched 2.6.1. -->
+    <PackageReference Include="MySqlConnector" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
     <!-- EF Core Sqlite 9.0.0 brings SQLitePCLRaw 2.1.10, affected by CVE-2025-6965
