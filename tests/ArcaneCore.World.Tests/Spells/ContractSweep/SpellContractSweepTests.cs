@@ -168,39 +168,46 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// (c) on a 300 ms aura, the shortest a holder gets (a Spell.dbc duration of 0 becomes 300): what is read after the action is judged by
-    /// how the aura ended. An aura the action removed is judged, even when the action's cast makes the sweep wait for the batch boundary; an
-    /// aura that ran out on its own meanwhile is "not run", never a pass, whether or not it carries the action's bit. Runs in both CI legs
-    /// (batching off and ARCANECORE_TEST_SPELL_BATCH_MS=400).
+    /// (c) judges an aura by how it ended, the same with batching off and on (both CI legs: ARCANECORE_TEST_SPELL_BATCH_MS unset and 400).
+    /// An aura the action removed is judged, even when the action's cast makes the sweep wait for the batch boundary; an aura that ran out on
+    /// its own meanwhile is "not run", never a pass, whether or not it carries the action's bit; and an aura shorter than
+    /// <see cref="SpellSweepRunner.ShortestInterruptJudgedMs"/> (the 300 ms floor a Spell.dbc duration of 0 gets) is not judged at all, in
+    /// either mode, because under batching it can run out before the action's effect lands.
     /// </summary>
     [Fact]
     public void Harness_AShortAura_IsJudgedByHowItEnded()
     {
-        // (a) A broken mapping on a short aura: "move" removes TURNING auras (RemoveMode Default), then casts (held to the boundary with
-        // batching on). The TURNING aura was removed by an action that does not fire TURNING: removed-without-flag.
+        // (a) A broken mapping: "move" removes TURNING auras (RemoveMode Default), then casts (held to the boundary with batching on). The
+        // TURNING aura was removed by an action that does not fire TURNING: removed-without-flag.
         var stripThenCast = new OneAction(new SweepAction("move", AuraInterruptMask.Moving, PlayerOnly: true, (scene, unit) =>
         {
             scene.Rig.System.RemoveAurasWithInterruptFlags(unit, SpellAuraInterruptFlags.Turning);
             return ProductionSweepActions.CastOther(scene, (Player)unit);
         }));
-        SweepResult removed = RunFaults(Aura(ShortAura, AuraType.Dummy, 300, SpellAuraInterruptFlags.Turning), "cj", stripThenCast);
+        SweepResult removed = RunFaults(Aura(ShortAura, AuraType.Dummy, 1_500, SpellAuraInterruptFlags.Turning), "cj", stripThenCast);
         Assert.Equal("move=ran", removed.Outcomes[0].Checks["c"]);
         Assert.Contains(removed.Violations, v => v.Category == SweepCategory.InterruptRemovedWithoutFlag && v.SpellId == ShortAura
             && v.Detail.StartsWith("move ", StringComparison.Ordinal));
 
-        // (b) An action that takes a second: the aura expires during it. Flagless, its end is not a removal by the action; carrying the
+        // (b) An action that takes two seconds: the aura expires during it. Flagless, its end is not a removal by the action; carrying the
         // action's bit (MOVING) with an action that removes nothing, its end is not the action honouring the bit. Neither is a pass.
         var waits = new OneAction(new SweepAction("move", AuraInterruptMask.Moving, PlayerOnly: true, (scene, _) =>
         {
-            scene.Rig.Advance(1_000);
+            scene.Rig.Advance(2_000);
             return true;
         }));
         foreach (SpellAuraInterruptFlags flags in new[] { SpellAuraInterruptFlags.None, SpellAuraInterruptFlags.Moving })
         {
-            SweepResult expired = RunFaults(Aura(ShortAura, AuraType.Dummy, 300, flags), "cj", waits);
+            SweepResult expired = RunFaults(Aura(ShortAura, AuraType.Dummy, 1_500, flags), "cj", waits);
             Assert.Equal("move=not-run:expired", expired.Outcomes[0].Checks["c"]);
             Assert.DoesNotContain(expired.Violations, v => v.Category.StartsWith("c.", StringComparison.Ordinal) || SweepCategory.IsGating(v.Category));
         }
+
+        // (c) A 300 ms aura and the production cast action (whose go waits for the boundary with batching on): not judged, in either mode.
+        var cast = new OneAction(new ProductionSweepActions().Actions.Single(a => a.Name == "cast"));
+        SweepResult shortAura = RunFaults(Aura(ShortAura, AuraType.Dummy, 300), "cj", cast);
+        Assert.Equal("cast=not-run:short-aura", shortAura.Outcomes[0].Checks["c"]);
+        Assert.DoesNotContain(shortAura.Violations, v => v.Category.StartsWith("c.", StringComparison.Ordinal) || SweepCategory.IsGating(v.Category));
     }
 
     [Fact]
