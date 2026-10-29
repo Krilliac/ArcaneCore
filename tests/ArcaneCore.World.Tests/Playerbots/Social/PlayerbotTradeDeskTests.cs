@@ -1363,4 +1363,137 @@ public sealed class PlayerbotTradeDeskTests
         Assert.True((await PartyTestHost.Feature(scene.World.Host).StopAsync(scene.Bot.ToString())).Success);
         await HelpTestKit.UntilAsync(() => scene.Owners.Count == 0, "the stopped bot's claim to be forgotten");
     }
+
+    // --- review blockers of PR 1700 -----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The fee window is seen open and then cancelled by the mage: the fee leg must forget that it saw it. A desk buy that then completes spends at least the fee; the next think with
+    /// no trade open must not call that the fee (the money fell, but not through the fee window), and the mage got nothing. Broken: FeeSeen stays set, the money drop is read as
+    /// the fee, the request is marked paid and the bot waits for a portal it never paid for.
+    /// </summary>
+    [Fact]
+    public async Task MageFee_FeeWindowSeenThenCancelled_ADeskBuyIsNotTakenForTheFee()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        await scene.AddSecondCustomerAsync(); // the mage
+        await scene.SetMoneyAsync(BotName, 50_000);
+        byte[] item = await scene.GiveAsync(CustomerName, DealEntry);
+        (MageLeg leg, PortalRequest request) = await scene.NewFeeLegAsync(Price, 0, 50_000);
+        uint now = 100;
+        await scene.PayAsync(leg, request, SecondCustomerName, now);
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgInitiateTrade) == 1, "fee initiate");
+        await scene.SecondCustomer!.SendAsync(WorldOpcode.CmsgBeginTrade, []);
+        for (int i = 0; i < 60 && !leg.FeeSeen; i++) { await scene.PayAsync(leg, request, SecondCustomerName, now += 100); await Task.Delay(50); }
+        Assert.True(leg.FeeSeen, "fee window never seen");
+        await scene.SecondCustomer.SendAsync(WorldOpcode.CmsgCancelTrade, []);
+        await HelpTestKit.UntilAsync(() => !scene.BotHasTradeAsync().Result, "fee window closed");
+        await HelpTestKit.UntilAsync(() => scene.ClaimAsync().Result.Owner == PlayerbotTradeOwner.None, "fee claim released", seconds: 20);
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Buyer, DealEntry)).Ok);
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, (await scene.HearAsync("deal")).Kind);
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgInitiateTrade) == 2, "desk initiate");
+        await scene.Customer!.SendAsync(WorldOpcode.CmsgBeginTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.Opened, "desk window");
+        await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeItem, item);
+        bool accepted = false;
+        for (int i = 0; i < 80 && !accepted; i++) { await scene.PayAsync(leg, request, SecondCustomerName, now += 100); accepted = (await scene.TradeAsync()).BotAccepted; await Task.Delay(100); }
+        Assert.True(accepted, "desk never accepted");
+        await scene.AcceptAsync(scene.Customer);
+        await HelpTestKit.UntilAsync(() => scene.Ledger(scene.CustomerGuid) is { FairDeals: > 0 }, "sale");
+        await HelpTestKit.UntilAsync(() => !scene.BotHasTradeAsync().Result, "closed");
+        Assert.Equal(50_000u - Price, await scene.MoneyAsync(BotName));
+        await scene.PayAsync(leg, request, SecondCustomerName, now += 100);
+        Assert.False(request.Paid, $"FREE PORTAL: desk buy taken as the fee; leg stage {leg.Stage}, paid {leg.PaidCopper}, mage money {await scene.MoneyAsync(SecondCustomerName)}");
+    }
+
+    /// <summary>Fill every free bag slot of the bot with a stackable filler (not the deal's item); returns the number of stacks added.</summary>
+    private static Task<int> FillBotBagsAsync(Scene scene) => scene.World.Host.OnWorldAsync(() =>
+    {
+        Player bot = HelpTestKit.Online(scene.World, BotName);
+        int n = 0;
+        while (n < 200 && bot.Inventory.AddItem(OtherEntry, 20, out _) == InventoryResult.Ok) n++;
+        return n;
+    });
+
+    /// <summary>
+    /// A buyer whose bags cannot hold the goods refuses the quote (NoSpace) and the partner is not blamed for it: once the bags have room the same pair quotes and agrees at once.
+    /// Broken: the desk quotes, the server bounces every accept until the window times out, and the partner goes into cooldown.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_BuyerWithFullBags_RefusesTheQuote_AndBlamesNobody()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        await scene.SetMoneyAsync(BotName, 50_000);
+        Assert.True(await FillBotBagsAsync(scene) > 0);
+        PlayerbotDealQuote full = await scene.QuoteAsync(PlayerbotDealRole.Buyer, DealEntry);
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, full.Refusal);
+        await scene.World.Host.OnWorldAsync(() => HelpTestKit.Online(scene.World, BotName).Inventory.DestroyItemCount(OtherEntry, 20));
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Buyer, DealEntry)).Ok);
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, (await scene.HearAsync("deal")).Kind);
+    }
+
+    /// <summary>
+    /// The bot's bags fill after it agreed to buy (window open, the partner's item in): the desk re-checks before it accepts, cancels the window, and carries no blame, so the pair
+    /// quotes again at once. Broken: the bot accepts, the server bounces the accept until the trade timeout, and the desk fails the deal blaming the partner (cooldown).
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_BuyerWhoseBagsFillAfterAgreeing_CancelsWithoutBlamingThePartner()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        await scene.SetMoneyAsync(BotName, 50_000);
+        await scene.World.Host.OnWorldAsync(() => { scene.Trading.TradeTimeoutSeconds = 10; return true; });
+        byte[] item = await scene.GiveAsync(CustomerName, DealEntry);
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Buyer, DealEntry)).Ok);
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, (await scene.HearAsync("deal")).Kind);
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgInitiateTrade) >= 1, "desk initiate");
+        await scene.Customer!.SendAsync(WorldOpcode.CmsgBeginTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.TradeAsync().Result.Opened, "desk window");
+        Assert.True(await FillBotBagsAsync(scene) > 0);
+        await scene.Customer.SendAsync(WorldOpcode.CmsgSetTradeItem, item);
+        await HelpTestKit.UntilAsync(() => !scene.BotHasTradeAsync().Result, "the bot to cancel the window", seconds: 40);
+        await Task.Delay(500);
+        Assert.Equal(1u, await scene.CountAsync(CustomerName, DealEntry));
+        await scene.World.Host.OnWorldAsync(() => HelpTestKit.Online(scene.World, BotName).Inventory.DestroyItemCount(OtherEntry, 20));
+        PlayerbotDealQuote again = await scene.QuoteAsync(PlayerbotDealRole.Buyer, DealEntry);
+        Assert.True(again.Ok, $"PARTNER BLAMED for the bot's full bags: refusal {again.Refusal}");
+    }
+
+    /// <summary>
+    /// An agreed deal waits while the bot's own fee (or tip) claim holds the trade slot with no trade open yet: the deal-life clock does not run meanwhile, so the deal is neither
+    /// dropped as the partner's flake (DealFlaked) nor blamed. The partner stands out of trade reach so the desk has not asked for a window; the fee claim appears just before the
+    /// deal's life runs out. Broken: the clock runs out under the held slot, the deal fails with a flake note and a cooldown.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_AgreedDealBehindTheBotsOwnFeeClaimWithNoTrade_DefersTheDealLifeClock()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        await scene.SetMoneyAsync(BotName, 50_000);
+        await scene.GiveAsync(BotName, DealEntry);
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            scene.World.Options.Social.Trading.Deals.DealMinutes = 1;
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            HelpTestKit.Online(scene.World, CustomerName).Relocate(bot.X + 50f, bot.Y, bot.Z, 0f, scene.World.Host.World.NowMs); // out of TradeReach: no request is made
+            return true;
+        });
+        DeskClock clock = scene.UseDeskClock();
+        scene.Owners.Clock = () => 1_000; // the registry's clock stands still: the unbound claim never heals
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry)).Ok);
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, (await scene.HearAsync("deal")).Kind);
+        int affinity = await scene.AffinityAsync();
+        await Task.Delay(400);
+
+        clock.Advance(55_000);
+        bool claimed = await scene.World.Host.OnWorldAsync(() => scene.Owners.TryClaim(HelpTestKit.Online(scene.World, BotName), PlayerbotTradeOwner.Fee, scene.CustomerGuid, null));
+        Assert.True(claimed);
+        await Task.Delay(400); // the desk's tick sees the held slot and starts deferring
+        clock.Advance(10_000); // the deal's 60 s life is now over
+        await Task.Delay(800);
+        Assert.Equal(PlayerbotDealState.Agreed, scene.Desk.StateOf(scene.Bot, scene.CustomerGuid)); // still waiting, not expired into a flake
+        Assert.Equal(affinity, await scene.AffinityAsync());
+        Assert.Equal(PlayerbotTradeOwner.Fee, (await scene.ClaimAsync()).Owner);
+    }
 }

@@ -139,6 +139,9 @@ internal sealed class MageLeg(TravelMeans means, uint spellId, TravelPlace desti
     /// <summary>The leg's own fee window (the trade slot claimed for it, with the mage) was seen open: only then does a closed trade with the money down count as the fee paid.</summary>
     public bool FeeSeen { get; set; }
 
+    /// <summary>The fee window seen open (set with <see cref="FeeSeen"/>): once it is gone, the fee is paid only when the server marked it <see cref="TradeSession.Completed"/>.</summary>
+    public TradeSession? FeeTrade { get; set; }
+
     /// <summary>The fee this leg paid the mage (0 until the trade settled): the journey charges it to its spend cap.</summary>
     public uint PaidCopper { get; set; }
 
@@ -765,15 +768,32 @@ internal static class PlayerbotMageService
         TradeSession? trade = economy.TradeOf(player);
         // The window is the fee's own when the bot's trade slot is the fee's for this mage (no registry: the fee is the sole owner) and the trade is with the mage.
         bool mine = owners?.Is(player, BotSocial.PlayerbotTradeOwner.Fee, mage.Guid, trade) != false && trade?.Involves(mage) != false;
+        // The fee window has ended when the trade now open (if any) is not the one seen. The fee is paid only if that window itself completed (the server marks the session), never from
+        // a money drop alone; a window that ended without completing (the mage cancelled) is forgotten, so a later spend by another driver is not mistaken for the fee.
+        bool feeWindowEnded = leg.FeeSeen && !ReferenceEquals(trade, leg.FeeTrade);
+        bool feeCompleted = feeWindowEnded && leg.FeeTrade is { Completed: true };
+        if (feeWindowEnded && !feeCompleted)
+        {
+            leg.FeeSeen = false;
+            leg.FeeTrade = null;
+        }
+
         if (!leg.FeeSeen) leg.MoneyBefore = player.Money; // re-based until the fee's own window has been seen open: another driver's spending is never this fee
 
-        if (leg.FeeSeen && trade is null && leg.MoneyBefore >= player.Money && leg.MoneyBefore - player.Money >= request.FeeCopper)
+        if (feeCompleted && leg.MoneyBefore >= player.Money && leg.MoneyBefore - player.Money >= request.FeeCopper)
         {
             request.Paid = true;
             leg.PaidCopper = request.FeeCopper;
             owners?.Release(player, BotSocial.PlayerbotTradeOwner.Fee);
             Enter(leg, MageLegStage.WaitPortal, now);
             return TravelLegStep.Traveling;
+        }
+
+        if (feeCompleted)
+        {
+            leg.FeeSeen = false; // completed, yet the money did not fall by the fee: not paid, start over
+            leg.FeeTrade = null;
+            leg.MoneyBefore = player.Money;
         }
 
         if (mine && trade is { Settling: true }) return TravelLegStep.Traveling;
@@ -803,6 +823,7 @@ internal static class PlayerbotMageService
         if (!mine) return TravelLegStep.Traveling; // another driver's window, or a stranger's: left alone, the fee waits (bounded by PayWaitMs)
         if (!trade.Opened || trade.Settling) return TravelLegStep.Traveling;
         leg.FeeSeen = true;
+        leg.FeeTrade = trade;
         TradeSide mineSide = trade.SideOf(player);
         if (mineSide.Gold != request.FeeCopper) session.TryManagedAction(WorldOpcode.CmsgSetTradeGold, BitConverter.GetBytes(request.FeeCopper));
         else if (!mineSide.Accepted) session.TryManagedAction(WorldOpcode.CmsgAcceptTrade, []);

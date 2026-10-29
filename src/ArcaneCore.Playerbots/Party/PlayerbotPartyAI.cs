@@ -997,7 +997,9 @@ internal sealed class PlayerbotPartyAI
 
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false;
-                TradeDesk?.WindowClosed(_botId, completed: false);
+                // CLOSE_WINDOW (12) carries an inventory error and a flag that it is the partner's bags: an error without the flag is the bot's own full bags.
+                bool ownBags = status == 12 && payload.Length >= 9 && BitConverter.ToUInt32(payload, 4) != 0 && payload[8] == 0;
+                TradeDesk?.WindowClosed(_botId, completed: false, botCaused: ownBags);
                 Owners?.ReleaseClosed(player, LiveTrade(player));
                 break;
         }

@@ -45,6 +45,9 @@ internal enum PlayerbotDealRefusal : byte
     Outflow,
     NoGoods,
     NoMoney,
+
+    /// <summary>A buyer whose bags cannot hold the goods.</summary>
+    NoSpace,
 }
 
 /// <summary>The desk's answer to <see cref="PlayerbotTradeDesk.Quote"/>: a refusal, or the price (total copper, per unit, the count) and the text the bot whispers.</summary>
@@ -286,6 +289,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             {
                 price = PlayerbotDealRules.RoundDownToQuote(PlayerbotDealRules.BuyerBid(reference, count));
                 if (bot.Money < price) return Refuse(PlayerbotDealRefusal.NoMoney, count);
+                if (!CanStore(bot, entry, count)) return Refuse(PlayerbotDealRefusal.NoSpace, count);
             }
 
             if (price > PlayerbotDealRules.DealCap(deals.MaxDealCopper, trust, Trading.LowTrustPermille)) return Refuse(PlayerbotDealRefusal.TooMuch, count);
@@ -401,7 +405,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
 
                 if (owners?.TryClaim(bot, PlayerbotTradeOwner.Desk, trader, live) == false) return false; // another driver holds the slot: no state change
                 deal.Price = deal.QuotedPrice;
-                if (Agree(deal, now) != PlayerbotDealRefusal.None)
+                if (Agree(deal, now, bot) != PlayerbotDealRefusal.None)
                 {
                     owners?.Release(bot, PlayerbotTradeOwner.Desk);
                     return false;
@@ -415,12 +419,17 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         }
     }
 
+    /// <summary>Whether the bot's bags can take <paramref name="count"/> of <paramref name="entry"/> (the inventory's own CanStoreNewItem, the check the server's trade completion stages with).</summary>
+    private static bool CanStore(Player bot, uint entry, uint count)
+        => bot.Inventory.CanStoreNewItem(entry, count, [], out _) == InventoryResult.Ok;
+
     private long DealLifeMs => Trading.Deals.DealMinutes * MinuteMs;
 
     /// <summary>The checks that turn a Quoted deal into an Agreed one (under the lock). Fixes the terms at <see cref="Deal.Price"/>.</summary>
-    private PlayerbotDealRefusal Agree(Deal deal, long now)
+    private PlayerbotDealRefusal Agree(Deal deal, long now, Player? bot = null)
     {
         if (!Enabled) return PlayerbotDealRefusal.Disabled;
+        if (bot is not null && deal.Role == PlayerbotDealRole.Buyer && !CanStore(bot, deal.Entry, deal.Count)) return PlayerbotDealRefusal.NoSpace;
         PlayerbotSocialTradingDealsOptions deals = Trading.Deals;
         PlayerbotSocialTradingLimitsOptions limits = Trading.Limits;
         PruneExpired(now);
@@ -502,13 +511,18 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             }
 
             active.GoneSinceMs = 0;
+            // A buyer whose bags cannot hold the goods (full from the start, or filled since the quote) cancels at once and without blame: the server would bounce the accept until the timeout or close the window.
+            if (active.Role == PlayerbotDealRole.Buyer && trade is not { Settling: true } && !CanStore(bot, active.Entry, active.Count))
+                return FailDeal(active, cancel: windowIsDeal, say: true, blame: false, now);
             Player? partner = windowIsDeal ? liveOther : FindPlayer(bot, active.Partner);
             // TradeTimeoutSeconds counts from the moment the window opened (adopted as Window); an unanswered initiate is bounded by DealMinutes and the initiate gap.
             bool timedOut = active.State == PlayerbotDealState.Window && now - active.WindowMs > Trading.TradeTimeoutSeconds * 1000L && trade is not { Settling: true };
             bool botDown = !bot.IsAlive || bot.Combat.IsInCombat;
             if (botDown || partner is null || !partner.IsAlive || partner.Combat.IsInCombat || timedOut)
                 return FailDeal(active, cancel: windowIsDeal, say: true, blame: !botDown, now); // the bot's own death or fight carries no blame
-            if (active.State == PlayerbotDealState.Agreed && now - active.AgreedMs >= DealLifeMs)
+            // The slot is held by the bot's own other driver (a fee or tip claim) with no live trade: the desk waits, as for another driver's window.
+            bool slotHeld = trade is null && owners?.Of(bot, null) is { Owner: not (PlayerbotTradeOwner.None or PlayerbotTradeOwner.Desk) };
+            if (active.State == PlayerbotDealState.Agreed && now - active.AgreedMs >= DealLifeMs && !slotHeld)
             {
                 // Flaked only when the bot was free, or its own request was never opened by the partner; a slot held by another driver or a stranger's request is nobody's flake.
                 bool flaked = trade is null || windowIsDeal;
@@ -518,7 +532,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
 
             if (active.State == PlayerbotDealState.Agreed)
             {
-                if (trade is not null && !windowIsDeal)
+                if ((trade is not null && !windowIsDeal) || slotHeld)
                 {
                     // Another driver's window, or a stranger's request: defer. The deal-life clock does not run while it waits, and the wait is bounded.
                     if (active.DeferredSinceMs == 0) active.DeferredSinceMs = now;
@@ -698,7 +712,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     /// forgotten; the outcome names the goods so the caller spends the bot's board post. Not completed, a deal in its Window (never an agreed one: an unrelated close leaves it alone) is
     /// Failed: pair cooldown. A bot with no such deal gets <see cref="PlayerbotDealOutcomeKind.None"/>.
     /// </summary>
-    internal PlayerbotDealOutcome WindowClosed(Guid botId, bool completed)
+    internal PlayerbotDealOutcome WindowClosed(Guid botId, bool completed, bool botCaused = false)
     {
         lock (_gate)
         {
@@ -731,7 +745,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             }
 
             if (deal.State != PlayerbotDealState.Window) return default; // an unrelated close (a tip window, the partner bouncing the initiate) leaves an agreed deal alone
-            SetCooldown(deal.BotId, deal.Partner.Value, now); // the partner closed a desk window
+            if (!botCaused) SetCooldown(deal.BotId, deal.Partner.Value, now); // the partner closed a desk window (a close the bot's own full bags caused is nobody's flake)
             RemoveDeal(deal);
             owners?.Release(deal.BotGuid, PlayerbotTradeOwner.Desk);
             return new PlayerbotDealOutcome(PlayerbotDealOutcomeKind.Failed, deal.Role, deal.Entry, deal.Count);
