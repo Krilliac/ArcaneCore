@@ -153,6 +153,36 @@ public sealed class NpcTrainerServiceTests
         Assert.Equal((byte)TrainerSpellState.Gray, rows.Single(r => r.Spell == TeachStrike2).State);
     }
 
+    [Fact] // NPCHandler.cpp:167-168: SendTrainerList ends the channel and the INTERACTING auras once the list is going out
+    public void TrainerList_EndsInteractingAuras_WhenTheListGoesOut()
+    {
+        using var rig = new Rig();
+        int cancels = 0;
+        rig.Kit.Services.InteractingCancels = _ => cancels++;
+
+        rig.Kit.Services.TrainerList(rig.Kit.Player, rig.Kit.Npc.Guid);
+
+        Assert.Single(rig.Kit.Drain(), p => p.Opcode == WorldOpcode.SmsgTrainerList);
+        Assert.Equal(1, cancels);
+    }
+
+    [Fact] // NPCHandler.cpp:319-320: after the money check, before the teaching spell is cast
+    public void BuyTrainerSpell_EndsInteractingAuras_OnlyOnceThePurchaseIsAffordable()
+    {
+        using var rig = new Rig();
+        int cancels = 0;
+        rig.Kit.Services.InteractingCancels = _ => cancels++;
+
+        rig.Kit.Player.Money = 9;
+        rig.Kit.Services.BuyTrainerSpell(rig.Kit.Player, rig.Kit.Npc.Guid, TeachStrike);
+        Assert.Equal(0, cancels); // not enough money: refused before the cancel
+
+        rig.Kit.Player.Money = 60;
+        rig.Kit.Services.BuyTrainerSpell(rig.Kit.Player, rig.Kit.Npc.Guid, TeachStrike);
+        Assert.Equal(1, cancels);
+        Assert.True(rig.Book.HasSpell(rig.Kit.Player, 100));
+    }
+
     private static void AssertFailed(NpcServiceTestKit kit, uint spell, uint reason)
     {
         byte[] failed = kit.Single(WorldOpcode.SmsgTrainerBuyFailed);

@@ -225,6 +225,25 @@ public sealed class FeignDeathMovementBreakTests
         }
     }
 
+    // --- 5b: a near teleport counts as positionChanged (vmangos Unit.cpp:9855 -> Player::SetPosition(..., teleport = true)) -----------
+
+    [Fact]
+    public async Task FeigningPlayer_LosesFeignDeath_WhenANearTeleportLands()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestClient client = await FeignedPlayerAsync(host, "FEIGNPORT", "Feignport");
+
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Feignport")!;
+            ArcaneCore.Game.Teleport.TeleportService teleports = host.WorldServices.GetRequiredService<ArcaneCore.World.Teleport.TeleportFeature>().Teleports;
+            Assert.True(teleports.TeleportTo(player, player.Map!.MapId, player.X + 5, player.Y, player.Z, player.Orientation));
+            Assert.True(teleports.HandleTeleportAck(player, player.Guid.Value));
+        });
+
+        Assert.False(await FeigningAsync(host, "Feignport"), "a landed near teleport must end Feign Death");
+    }
+
     // --- 6: regression guard (passes today): chat is allowed while feigning ---------------------------------------------------------------
 
     [Fact]

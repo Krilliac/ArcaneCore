@@ -7,7 +7,7 @@ public sealed partial class SpellSystem
     /// <summary>
     /// vmangos Unit::HandleInterruptsOnMovement (Unit.cpp:10131-10140), the aura half: <paramref name="positionChangedOrMoving"/> removes
     /// every aura whose spell carries MOVING or TURNING in its AuraInterruptFlags (Feign Death 0x3C3C, Shadowmeld 0xBC0F, ...); false (the
-    /// unit only turned) removes the TURNING ones. The cast and channel half is Spell.update's own movement check. Runs for every movement
+    /// unit only turned) removes the TURNING ones. The cast and channel half (InterruptSpellsWithInterruptFlags MOVEMENT, InterruptSpellsWithChannelFlags MOVING_CANCELS) runs first; the cast update loop keeps its own 0.5 yd check. Runs for every movement
     /// packet, so a scan that allocates nothing decides first, and only a unit that really carries such an aura reaches
     /// <see cref="RemoveAurasWithInterruptFlags(Unit, uint, uint, bool, bool, bool, IReadOnlySet{uint}?)"/>. Returns how many auras were removed.
     /// World thread.
@@ -18,6 +18,14 @@ public sealed partial class SpellSystem
         if (GetState(unit.Guid) is not { } state || !ReferenceEquals(state.Unit, unit))
         {
             return 0;
+        }
+
+        if (positionChangedOrMoving)
+        {
+            // Unit.cpp:10133-10136 order: spells with the movement interrupt flag, then channels with MOVING_CANCELS. Cancel is a no-op on
+            // a finished cast, so the cast update loop's own distance check finds nothing left and sends no second interrupt.
+            InterruptSpellsWithInterruptFlags(unit, SpellInterruptFlags.Movement);
+            InterruptChannelsWithFlags(unit, SpellAuraInterruptFlags.Moving);
         }
 
         uint mask = positionChangedOrMoving ? AuraInterruptMask.Moving | AuraInterruptMask.Turning : AuraInterruptMask.Turning;
