@@ -407,4 +407,24 @@ internal sealed class PopulationZoneAtlas
 
         return null;
     }
+
+    /// <summary>
+    /// A placement for a bot in one of the best valued zones for it (see <see cref="Rank"/>): a weighted draw among the top
+    /// <c>TopZones</c> by total value, scaled down as the zone fills towards <c>ZoneSoftCap</c>, then a safe location of the zone the bot's
+    /// level takes. A zone with no safe location is dropped and the draw repeats, first over the rest of the top zones, then over the rest
+    /// of the ranking. <paramref name="ranked"/> receives the ranking when given. Null when no valued zone is safe.
+    /// </summary>
+    internal PopulationSafeSelection? PickValued(PopulationBotProfile bot, PopulationLevelRule rule, PopulationZoneValue value,
+        PopulationValueWeights w, IReadOnlyDictionary<uint, int> assigned, Random random, Func<WorldSafeLoc, int, bool> safe,
+        Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null, IList<ZoneScore>? ranked = null)
+        => throw new NotImplementedException();
+
+    /// <summary>
+    /// The zones the bot may be sent to for their value, best first: eligible (open to the team, with a location for it, not vetoed, with
+    /// room, under the soft cap, and fitting the bot's level, or for a level-capped bot reaching it within <c>CapReach</c>), valued and
+    /// with a total above 0.
+    /// </summary>
+    internal IReadOnlyList<ZoneScore> Rank(PopulationBotProfile bot, PopulationLevelRule rule, PopulationZoneValue value, PopulationValueWeights w,
+        IReadOnlyDictionary<uint, int> assigned, Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null)
+        => throw new NotImplementedException();
 }

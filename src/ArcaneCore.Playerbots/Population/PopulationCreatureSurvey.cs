@@ -42,7 +42,7 @@ internal static class PopulationCreatureSurvey
     /// not gated by a positive game event, a known template, not civilian, no-aggro, invisible or not selectable, hostile to the player
     /// template); <paramref name="level"/> is the template <c>MinLevel</c>.
     /// </summary>
-    private static bool TryHostileLevel(CreatureSpawn spawn, FactionTemplateRecord player, Func<uint, CreatureTemplate?> templateOf,
+    internal static bool TryHostileLevel(CreatureSpawn spawn, FactionTemplateRecord player, Func<uint, CreatureTemplate?> templateOf,
         FactionTemplateCatalog factions, IReadOnlySet<uint> gated, out int level)
     {
         level = 0;
