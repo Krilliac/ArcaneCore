@@ -262,9 +262,23 @@ public sealed partial class MapCollision : IMapUpdater, IUnderMapClassifier
     /// floor in that same window (<see cref="TryGetMeshFloorUnder"/>): <see cref="UnderMapKind.Ok"/>.</item>
     /// <item>Otherwise <see cref="UnderMapKind.UnderMap"/> with depth = terrain height - z.</item>
     /// </list>
-    /// Reading the coverage may read the map's vmtree from disk the first time (<see cref="VMapManager.GetTree"/>).
+    /// This is report grade (anomaly reports, creature and bot checks); see <see cref="ClassifyUnderMapForRecovery"/> for the grade that
+    /// moves a player. Reading the coverage may read the map's vmtree from disk the first time (<see cref="VMapManager.GetTree"/>).
     /// </summary>
     public UnderMapVerdict ClassifyUnderMap(float x, float y, float z, float minDepthYards = 0f)
+        => ClassifyUnderMapCore(x, y, z, minDepthYards, requireModels: false);
+
+    /// <summary>
+    /// <see cref="ClassifyUnderMap"/> in recovery grade, for the one caller that moves a player on the verdict (the fall recall,
+    /// vmangos antiundermap1, MovementHandler.cpp:1115-1128, which compares a vmap-aware ground height): the same decision table, except
+    /// that terrain alone never convicts. When there is no model service (<c>!Enabled</c>) or the map has no model tree
+    /// (<see cref="ModelCoverage.None"/>) the answer is <see cref="UnderMapKind.Unknown"/>, because an underground city, cave or dungeon on
+    /// such a map lies below the terrain surface on purpose and nothing can say so.
+    /// </summary>
+    public UnderMapVerdict ClassifyUnderMapForRecovery(float x, float y, float z, float minDepthYards = 0f)
+        => ClassifyUnderMapCore(x, y, z, minDepthYards, requireModels: true);
+
+    private UnderMapVerdict ClassifyUnderMapCore(float x, float y, float z, float minDepthYards, bool requireModels)
     {
         if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z) || TerrainTile.TileOf(x, y) is not { } tile)
         {
@@ -292,13 +306,13 @@ public sealed partial class MapCollision : IMapUpdater, IUnderMapClassifier
         ILineOfSight models = _services.LineOfSight;
         if (!models.Enabled)
         {
-            return UnderMapVerdict.Under(depth);
+            return requireModels ? UnderMapVerdict.Unknown : UnderMapVerdict.Under(depth);
         }
 
         ModelCoverage coverage = models is IModelCoverage known ? known.CoverageAt(Map.MapId, tile.X, tile.Y) : ModelCoverage.Loaded;
         if (coverage == ModelCoverage.None)
         {
-            return UnderMapVerdict.Under(depth);
+            return requireModels ? UnderMapVerdict.Unknown : UnderMapVerdict.Under(depth);
         }
 
         if (coverage is ModelCoverage.TileNotLoaded or ModelCoverage.Unavailable)

@@ -16,7 +16,7 @@ public sealed class ShadowFlameScript : ISpellScript
     {
         if (context.Target.IsAlive && !context.System.HasAura(context.Target, 22683))
         {
-            context.System.CastSpell(context.Caster, 22682, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true);
+            context.System.CastSpell(context.Caster, 22682, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true);
         }
     }
 }

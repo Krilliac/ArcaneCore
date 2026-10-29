@@ -180,7 +180,7 @@ public sealed class DummyTriggerScript : ISpellScript
             context.System.CastCustomSpell(
                 context.Caster,
                 PersistentShieldEffect,
-                ReferenceEquals(context.Caster, context.Target) ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(context.Target.Guid),
+                ReferenceEquals(context.Caster, context.Target) ? SpellCastTargets.ForSelf() : SpellCastTargets.ForUnit(context.Target.Guid, context.Cast),
                 context.Value);
         }
     }

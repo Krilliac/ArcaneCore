@@ -7,7 +7,8 @@ namespace ArcaneCore.World.Playerbots;
 
 /// <summary>
 /// Notices a living bot that makes no progress at all: it has not moved <see cref="ProgressYards"/> from where it stood, and
-/// nothing about it changed (level, experience, money, bags, quest log, spells), for <see cref="PlayerbotOptions.StallSeconds"/>
+/// nothing about it changed (level, experience, money, bags, quest log, spells, hits that take a target's health to a new low), for
+/// <see cref="PlayerbotOptions.StallSeconds"/>
 /// of world time. Such a bot used to stand still for hours without a fault (live 2026-10-08: Ironwander re-selling an item the
 /// vendor refused, Graveweaver in the Deathknell crypt, Dawnrover beside William Pestle), and nothing told the operator.
 /// <para>
@@ -301,10 +302,13 @@ internal sealed partial class PlayerbotStallWatch
 
     /// <summary>
     /// What counts as progress besides moving. <paramref name="RestMark"/>: the most health and mana seen while the bot rests (0
-    /// otherwise), so regeneration is a resting bot's progress.
+    /// otherwise), so regeneration is a resting bot's progress. <paramref name="ProgressHits"/>: the hits the bot landed that took a
+    /// victim's health to a new low (<see cref="PlayerbotKillObserver.ProgressHitsBy"/>), so fighting in place (hits and the killing
+    /// blow) is progress for a bot that gains no experience (level 60) and loots nothing, while a target held up by death
+    /// prevention or healed back is not.
     /// </summary>
     internal readonly record struct Fingerprint(uint Level, uint Experience, uint Money, uint Items, int Quests, int Rewarded,
-        uint Objectives, int Spells, ulong RestMark = 0);
+        uint Objectives, int Spells, ulong RestMark = 0, ulong ProgressHits = 0);
 }
 
 /// <summary>

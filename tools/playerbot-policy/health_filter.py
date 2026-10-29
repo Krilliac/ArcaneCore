@@ -14,7 +14,7 @@ overruns happened in, or was measured over, a lagging world, and is dropped.
 A decision whose window is not entirely inside health coverage (a file from a build that writes no health records,
 the start of a run, a restart gap) cannot be checked: it is kept and counted as unverified, with a warning.
 
---tick-log adds overrun windows from the world's JSON-lines log (logs/*.jsonl): each "TickOverrun" warning (event
+--tick-log adds overrun windows from the world's log (logs/*.jsonl or logs/*.log; JSON lines or text, per Logging:ArcaneCore:Format): each "TickOverrun" warning (event
 7101) says "overran its N ms budget K time(s) in the last S s", so [ts - S s, ts] held K overruns (the first warning
 after a start has no "in the last" part: 30 s, the default WarnIntervalSeconds, is assumed). Those windows are coarser
 than the health records (the warning is rate limited) and only ever add drops. They also count the log's own time span
@@ -46,6 +46,8 @@ DEFAULT_LOG_TAIL_S = 30.0  # WarnIntervalSeconds: overruns in the last stretch o
 LOG_WINDOW_WIDEN_S = 1  # "in the last S s" is sinceMs / 1000 truncated
 
 _TS = re.compile(r'^\{"ts":"([^"]+)"')
+# The text format ("Logging:ArcaneCore:Format" = "Text"): "yyyy-MM-dd HH:mm:ss.fff LEVEL ...", UTC like the JSON "ts".
+_TEXT_TS = re.compile(r"^(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d\.\d{3}) (\w+) ")
 _OVERRUN = re.compile(r"overran its \d+ ms budget (\d+) time\(s\)(?: in the last (\d+) s)?")
 
 
@@ -58,7 +60,7 @@ def add_arguments(parser) -> None:
                         help="extend each decision's checked span past its outcome window by this many seconds, because the server closes an outcome on the first think after the window elapsed (default 10)")
     parser.add_argument("--tick-log-tail-s", type=float, default=DEFAULT_LOG_TAIL_S,
                         help="do not count the last this-many seconds of a --tick-log as covered (WarnIntervalSeconds; default 30)")
-    parser.add_argument("--tick-log", action="append", default=[], metavar="WORLD.jsonl",
+    parser.add_argument("--tick-log", action="append", default=[], metavar="WORLD_LOG",
                         help="also derive overrun windows from this world JSON-lines log (repeatable); needed for telemetry from builds without health records")
 
 
@@ -108,32 +110,44 @@ class Health:
         self.file_intervals[path].append((t - ms, t))
 
     def add_tick_log(self, path: str) -> int:
-        """Read overrun windows from a world JSON-lines log; returns how many it found."""
+        """Read overrun windows from a world log in either format (JSON lines or text, decided per line); returns how many it found.
+
+        Rolled segments (name-yyyyMMdd-NNN.ext) and fallback names (stem.process.ext) are separate files: pass each one."""
         found = 0
         first = last = None
         with open(path, encoding="utf-8", errors="replace") as handle:
             for line in handle:
+                text_match = None
                 m = _TS.match(line)
                 if not m:
-                    continue
-                if '"TickOverrun"' not in line:
-                    # Only the span of the log is needed from the other lines: the first and the last stamp.
-                    if first is None:
-                        first = m.group(1)
-                    last = m.group(1)
-                    continue
+                    text_match = _TEXT_TS.match(line)
+                    if not text_match:
+                        continue
+                stamp = m.group(1) if m else f"{text_match.group(1)}T{text_match.group(2)}Z"
                 if first is None:
-                    first = m.group(1)
-                last = m.group(1)
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
+                    first = stamp
+                last = stamp
+                if text_match is not None:
+                    if text_match.group(3).upper() not in ("WARN", "WARNING"):
+                        continue
+                    found_match = _OVERRUN.search(line)
+                    if found_match is None:
+                        continue
+                    end = _unix_ms(stamp)
+                    message_ok = end is not None
+                elif '"TickOverrun"' not in line:
                     continue
-                if record.get("eventName") != "TickOverrun" and record.get("eventId") != 7101:
-                    continue
-                end = _unix_ms(record.get("ts", ""))
-                found_match = _OVERRUN.search(record.get("message", ""))
-                if end is None or found_match is None:
+                else:
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if record.get("eventName") != "TickOverrun" and record.get("eventId") != 7101:
+                        continue
+                    end = _unix_ms(record.get("ts", ""))
+                    found_match = _OVERRUN.search(record.get("message", ""))
+                    message_ok = end is not None and found_match is not None
+                if not message_ok:
                     self.bad += 1
                     continue
                 window_s = int(found_match.group(2)) if found_match.group(2) else DEFAULT_LOG_WINDOW_S
@@ -230,7 +244,7 @@ def describe(health: Health, tally: Tally, max_overruns: int, out=None) -> None:
     if not health.intervals:
         print("WARNING: no health records and no --tick-log windows: the overrun filter could NOT apply; "
               "every decision was kept, including any made while the world lagged "
-              "(the server build writes no \"k\":\"health\" records; pass --tick-log WORLD.jsonl, or --no-health-filter to silence this)", file=out)
+              "(the server build writes no \"k\":\"health\" records; pass --tick-log WORLD_LOG, or --no-health-filter to silence this)", file=out)
         return
     mixed = health.mixed_files()
     if mixed:

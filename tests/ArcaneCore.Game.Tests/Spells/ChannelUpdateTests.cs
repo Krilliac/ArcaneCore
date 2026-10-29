@@ -103,7 +103,8 @@ public sealed class ChannelUpdateTests
     {
         using SpellTestKit kit = NewKit();
         (Player caster, FakeSession session) = kit.AddPlayer(1);
-        (Player enemy, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player enemy, _) = kit.AddHostilePlayer(2, 10, 0);
         (Player killer, _) = kit.AddPlayer(3, 12, 0);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, Drain, SpellCastTargets.ForUnit(enemy.Guid), triggered: false));
         Assert.True(IsChannelling(kit, caster, Drain));
@@ -124,7 +125,8 @@ public sealed class ChannelUpdateTests
     {
         using SpellTestKit kit = NewKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player enemy, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player enemy, _) = kit.AddHostilePlayer(2, 10, 0);
         (Player killer, _) = kit.AddPlayer(3, 12, 0);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, SelfAuraChannel, SpellCastTargets.ForUnit(enemy.Guid), triggered: false));
 

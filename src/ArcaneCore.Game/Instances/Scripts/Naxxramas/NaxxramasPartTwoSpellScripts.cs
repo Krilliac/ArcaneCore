@@ -120,7 +120,7 @@ public sealed class ThaddiusPolarityScript : ISpellScript
         };
         if (state.Targets == 0) state.First = charge;
         state.Targets++;
-        context.System.CastSpell(context.Caster, charge, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+        context.System.CastSpell(context.Caster, charge, SpellCastTargets.ForUnit(target.Guid, context.Cast), triggered: true);
     }
 }
 
@@ -152,7 +152,7 @@ public sealed class KelThuzadChainsScript : ISpellScript
         }
         foreach (Player target in candidates.Take(4).Append(tank))
         {
-            context.System.CastSpell(boss, 28410, SpellCastTargets.ForUnit(target.Guid), triggered: true);
+            context.System.CastSpell(boss, 28410, SpellCastTargets.ForUnit(target.Guid, context.Cast), triggered: true);
             context.System.CastSpell(target, 28409, SpellCastTargets.ForSelf(), triggered: true);
         }
     }
