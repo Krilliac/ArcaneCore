@@ -695,7 +695,8 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
     /// <summary>
     /// The teleport that followed <see cref="BeginGmMove"/> was a near teleport inside the same map object (it has no arrival): the move is
-    /// committed now. World thread.
+    /// committed now. A subject that stands in the target match's map and is not a participant is an observer and is sent the match's initial
+    /// world states, as <see cref="OnPlayerEnteredMap"/> does for an arrival. World thread.
     /// </summary>
     public void CommitGmMove(Player subject)
     {
@@ -703,6 +704,13 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         if (_manager is not null && _gmMoves.Remove(subject.Guid, out GmMove? move))
         {
             CommitMove(subject, move);
+
+            // A near teleport has no arrival, so the observer's initial world states are sent here (see OnPlayerEnteredMap).
+            if (subject.Map is { } map && ReferenceEquals(BattlegroundOf(subject.Guid), move.Target)
+                && map.MapId == move.Target.MapId && map.InstanceId == move.Target.InstanceId && move.Target.PlayerTeam(subject.Guid) is null)
+            {
+                SendInitialWorldStates(subject, map);
+            }
         }
     }
 
@@ -767,7 +775,10 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     /// bound to a match who arrived anywhere but its map left the battleground (vmangos TeleportTo far, Player.cpp:2036-2043:
     /// <c>LeaveBattleground(false)</c>); one who arrived on its match's map and holds an invitation to it enters the match (vmangos
     /// HandleMoveWorldportAckOpcode → <c>if (IsInvitedForBattleGroundInstance)</c> → <c>BattleGround::AddPlayer</c>); one bound by a GM command
-    /// stays bound and outside the match.
+    /// stays bound and outside the match as an observer (ArcaneCore rule: vmangos <c>BattleGround::SendPacketToAll</c>, BattleGround.cpp:475,
+    /// serves only its player list, so a GM inside is served here): it is sent the match's initial world states on arrival and receives the
+    /// match's all-match broadcasts (<see cref="MatchRuntime"/> SendToAll), but is never counted, scored or rewarded. A bound non-participant
+    /// arriving on the match's map without a GM move record (a relog into it) takes the same tail and is treated the same way.
     /// </summary>
     internal void OnPlayerEnteredMap(Player player, Map map)
     {
@@ -801,6 +812,12 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             JoinBattlegroundRaid(player, bg);
             SendInitialWorldStates(player, map);
             PersistBinding(player, bg, bg.PlayerTeam(player.Guid) ?? player.Team);
+        }
+        else if (bg.PlayerTeam(player.Guid) is null)
+        {
+            // An observer (bound by a GM command, not a participant) gets the match's state like a participant; the invitee branch above
+            // already sent it for one who entered, so this is never a second send.
+            SendInitialWorldStates(player, map);
         }
     }
 

@@ -94,11 +94,35 @@ internal sealed partial class MatchRuntime : IBattlegroundHost, IWrappingSpawnGa
         }
     }
 
+    /// <summary>
+    /// Whether <paramref name="player"/> observes this match: bound to it (a GM command, <see cref="BattlegroundFeature.BeginGmMove"/>) but not
+    /// one of its participants. ArcaneCore rule: vmangos <c>BattleGround::SendPacketToAll</c> (BattleGround.cpp:475) loops its player list
+    /// (<c>m_players</c>) only, so a game master standing in the match is served here as an observer of the match's all-match broadcasts.
+    /// </summary>
+    private bool IsObserver(Player player)
+        => Battleground.PlayerTeam(player.Guid) is null && ReferenceEquals(_feature.BattlegroundOf(player.Guid), Battleground);
+
+    /// <summary>
+    /// An all-match broadcast: every online participant, then every observer on the match's map (once each: an observer has no team, a
+    /// participant does). Observers are never counted, scored or rewarded; this is the only place that reaches them. The map's players are
+    /// copied first, so nothing a send triggers can disturb the enumeration. World thread.
+    /// </summary>
     private void SendToAll(WorldOpcode opcode, byte[] payload)
     {
         foreach (Player player in OnlineParticipants())
         {
             player.Session.Send(opcode, payload);
+        }
+
+        if (Map is { PlayerCount: > 0 } map)
+        {
+            foreach (Player player in map.Players.ToArray())
+            {
+                if (IsObserver(player))
+                {
+                    player.Session.Send(opcode, payload);
+                }
+            }
         }
     }
 
