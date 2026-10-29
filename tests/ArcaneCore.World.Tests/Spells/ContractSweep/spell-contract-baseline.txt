@@ -37,6 +37,7 @@ a.error-log	11391	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	11534	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	11641	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	118	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
+a.error-log	12479	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	12480	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	12824	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	12825	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
@@ -283,6 +284,7 @@ a.error-log	3245	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	3246	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	3287	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	3329	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
+a.error-log	3360	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	3363	ArcaneCore.World.Locomotion.MountDisplayFeature:error-log
 a.error-log	3416	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	4060	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
@@ -325,6 +327,7 @@ a.error-log	7946	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	7965	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	8041	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	8153	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
+a.error-log	8213	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	8219	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	8220	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	8221	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
@@ -780,7 +783,6 @@ a.unhandled-other	11352	dummy:Dummy
 a.unhandled-other	11365	dummy:Dummy
 a.unhandled-other	11372	dummy:Dummy
 a.unhandled-other	11402	dummy:Dummy
-a.unhandled-other	11403	no-consumer:Dummy
 a.unhandled-other	11411	dummy:Dummy
 a.unhandled-other	11412	dummy:Dummy
 a.unhandled-other	11446	no-consumer:Dummy
@@ -796,7 +798,6 @@ a.unhandled-other	11592	no-consumer:Dummy
 a.unhandled-other	11593	dummy:Dummy
 a.unhandled-other	11795	dummy:Dummy
 a.unhandled-other	11817	dummy:Dummy
-a.unhandled-other	11826	no-consumer:Dummy
 a.unhandled-other	11877	no-consumer:Dummy
 a.unhandled-other	11878	dummy:Dummy
 a.unhandled-other	11893	dummy:Dummy
@@ -810,7 +811,6 @@ a.unhandled-other	12379	no-consumer:OverrideClassScripts
 a.unhandled-other	12380	dummy:Dummy
 a.unhandled-other	12380	no-consumer:Dummy
 a.unhandled-other	12458	dummy:Dummy
-a.unhandled-other	12479	no-consumer:Dummy
 a.unhandled-other	12508	dummy:Dummy
 a.unhandled-other	12508	no-consumer:Dummy
 a.unhandled-other	12511	dummy:Dummy
@@ -818,7 +818,6 @@ a.unhandled-other	12512	dummy:Dummy
 a.unhandled-other	12535	no-consumer:Dummy
 a.unhandled-other	12564	dummy:Dummy
 a.unhandled-other	12565	no-consumer:Dummy
-a.unhandled-other	126	no-consumer:Dummy
 a.unhandled-other	12623	no-consumer:Dummy
 a.unhandled-other	12639	dummy:Dummy
 a.unhandled-other	12655	no-consumer:Dummy
@@ -832,7 +831,6 @@ a.unhandled-other	12690	dummy:Dummy
 a.unhandled-other	12691	dummy:Dummy
 a.unhandled-other	12710	dummy:Dummy
 a.unhandled-other	12728	dummy:Dummy
-a.unhandled-other	12774	no-consumer:Dummy
 a.unhandled-other	12816	dummy:Dummy
 a.unhandled-other	12898	no-consumer:Dummy
 a.unhandled-other	12938	dummy:Dummy
@@ -840,7 +838,6 @@ a.unhandled-other	12948	dummy:Dummy
 a.unhandled-other	13043	dummy:Dummy
 a.unhandled-other	13058	no-consumer:OverrideClassScripts
 a.unhandled-other	13059	no-consumer:OverrideClassScripts
-a.unhandled-other	13139	no-consumer:Dummy
 a.unhandled-other	13236	no-consumer:Dummy
 a.unhandled-other	13280	dummy:Dummy
 a.unhandled-other	13479	dummy:Dummy
@@ -923,7 +920,6 @@ a.unhandled-other	16510	dummy:Dummy
 a.unhandled-other	16532	no-consumer:Dummy
 a.unhandled-other	16562	dummy:Dummy
 a.unhandled-other	16572	dummy:Dummy
-a.unhandled-other	16589	dummy:Dummy
 a.unhandled-other	16604	dummy:Dummy
 a.unhandled-other	16606	no-consumer:Dummy
 a.unhandled-other	16633	dummy:Dummy
@@ -1015,19 +1011,7 @@ a.unhandled-other	19484	dummy:Dummy
 a.unhandled-other	19502	no-consumer:Dummy
 a.unhandled-other	19512	dummy:Dummy
 a.unhandled-other	19515	dummy:Dummy
-a.unhandled-other	19548	no-consumer:Dummy
 a.unhandled-other	19645	no-consumer:Dummy
-a.unhandled-other	19674	no-consumer:Dummy
-a.unhandled-other	19687	no-consumer:Dummy
-a.unhandled-other	19688	no-consumer:Dummy
-a.unhandled-other	19689	no-consumer:Dummy
-a.unhandled-other	19692	no-consumer:Dummy
-a.unhandled-other	19693	no-consumer:Dummy
-a.unhandled-other	19694	no-consumer:Dummy
-a.unhandled-other	19696	no-consumer:Dummy
-a.unhandled-other	19697	no-consumer:Dummy
-a.unhandled-other	19699	no-consumer:Dummy
-a.unhandled-other	19700	no-consumer:Dummy
 a.unhandled-other	19707	dummy:Dummy
 a.unhandled-other	19721	dummy:Dummy
 a.unhandled-other	19744	no-consumer:Dummy
@@ -1156,7 +1140,6 @@ a.unhandled-other	22578	no-consumer:Dummy
 a.unhandled-other	22579	no-consumer:Dummy
 a.unhandled-other	22580	no-consumer:Dummy
 a.unhandled-other	22581	no-consumer:Dummy
-a.unhandled-other	22646	no-consumer:Dummy
 a.unhandled-other	22650	no-consumer:Dummy
 a.unhandled-other	22659	dummy:Dummy
 a.unhandled-other	22664	dummy:Dummy
@@ -1191,7 +1174,6 @@ a.unhandled-other	23137	dummy:Dummy
 a.unhandled-other	23140	dummy:Dummy
 a.unhandled-other	23173	dummy:Dummy
 a.unhandled-other	23182	no-consumer:Dummy
-a.unhandled-other	23183	no-consumer:Dummy
 a.unhandled-other	23195	dummy:Dummy
 a.unhandled-other	23237	dummy:Dummy
 a.unhandled-other	23256	dummy:Dummy
@@ -1302,7 +1284,6 @@ a.unhandled-other	24790	no-consumer:Dummy
 a.unhandled-other	24796	dummy:Dummy
 a.unhandled-other	24803	no-consumer:Dummy
 a.unhandled-other	24886	dummy:Dummy
-a.unhandled-other	24906	no-consumer:Dummy
 a.unhandled-other	24920	no-consumer:Dummy
 a.unhandled-other	24948	no-consumer:Dummy
 a.unhandled-other	24967	dummy:Dummy
@@ -1315,7 +1296,6 @@ a.unhandled-other	25002	dummy:Dummy
 a.unhandled-other	25004	dummy:Dummy
 a.unhandled-other	25039	no-consumer:Dummy
 a.unhandled-other	25040	no-consumer:Dummy
-a.unhandled-other	25042	no-consumer:Dummy
 a.unhandled-other	25061	dummy:Dummy
 a.unhandled-other	25100	dummy:Dummy
 a.unhandled-other	25145	dummy:Dummy
@@ -1329,8 +1309,6 @@ a.unhandled-other	25168	no-consumer:Dummy
 a.unhandled-other	25169	no-consumer:Dummy
 a.unhandled-other	25171	no-consumer:Dummy
 a.unhandled-other	25182	dummy:Dummy
-a.unhandled-other	25185	no-consumer:Dummy
-a.unhandled-other	25185	script:ScriptEffect
 a.unhandled-other	25186	script:ScriptEffect
 a.unhandled-other	25194	dummy:Dummy
 a.unhandled-other	25345	no-consumer:Dummy
@@ -1387,8 +1365,6 @@ a.unhandled-other	26062	dummy:Dummy
 a.unhandled-other	26063	no-consumer:Dummy
 a.unhandled-other	26075	script:ScriptEffect
 a.unhandled-other	26076	script:ScriptEffect
-a.unhandled-other	26077	no-consumer:Dummy
-a.unhandled-other	26077	script:ScriptEffect
 a.unhandled-other	26080	dummy:Dummy
 a.unhandled-other	26101	script:ScriptEffect
 a.unhandled-other	26104	dummy:Dummy
@@ -1399,7 +1375,6 @@ a.unhandled-other	26183	dummy:Dummy
 a.unhandled-other	26205	script:ScriptEffect
 a.unhandled-other	26217	script:ScriptEffect
 a.unhandled-other	26219	script:ScriptEffect
-a.unhandled-other	26234	no-consumer:Dummy
 a.unhandled-other	26235	no-consumer:Dummy
 a.unhandled-other	26237	script:ScriptEffect
 a.unhandled-other	26256	dummy:Dummy
@@ -1709,7 +1684,6 @@ a.unhandled-other	31748	no-consumer:Dummy
 a.unhandled-other	31751	dummy:Dummy
 a.unhandled-other	31951	no-consumer:Dummy
 a.unhandled-other	31954	no-consumer:Dummy
-a.unhandled-other	3360	dummy:Dummy
 a.unhandled-other	3644	dummy:Dummy
 a.unhandled-other	3659	dummy:Dummy
 a.unhandled-other	3660	dummy:Dummy
@@ -1765,7 +1739,6 @@ a.unhandled-other	6236	dummy:Dummy
 a.unhandled-other	6238	no-consumer:Dummy
 a.unhandled-other	6245	dummy:Dummy
 a.unhandled-other	6270	dummy:Dummy
-a.unhandled-other	6272	no-consumer:Dummy
 a.unhandled-other	6273	dummy:Dummy
 a.unhandled-other	6277	no-consumer:Dummy
 a.unhandled-other	6354	dummy:Dummy
@@ -1844,12 +1817,10 @@ a.unhandled-other	7962	dummy:Dummy
 a.unhandled-other	7974	no-consumer:Dummy
 a.unhandled-other	7977	dummy:Dummy
 a.unhandled-other	799	script:ScriptEffect
-a.unhandled-other	8063	dummy:Dummy
 a.unhandled-other	8067	no-consumer:Dummy
 a.unhandled-other	8128	no-consumer:Dummy
 a.unhandled-other	8128	script:ScriptEffect
 a.unhandled-other	8136	dummy:Dummy
-a.unhandled-other	8213	dummy:Dummy
 a.unhandled-other	8268	dummy:Dummy
 a.unhandled-other	831	dummy:Dummy
 a.unhandled-other	8345	no-consumer:Dummy
@@ -1929,6 +1900,7 @@ b.removed-early	14621	gone before its duration
 b.removed-early	18657	gone before its duration
 b.removed-early	3410	gone before its duration
 b.removed-early	6410	gone before its duration
+b.removed-early	8326	permanent aura gone after 1 s
 b.removed-early	9484	gone before its duration
 b.state-not-restored	10256	stat2
 b.state-not-restored	10257	stat2
@@ -2097,6 +2069,12 @@ c.removed-without-flag	6118	melee-swing flags=0x0
 c.removed-without-flag	7423	melee-hit-taken flags=0x0
 c.removed-without-flag	7447	melee-hit-taken flags=0x0
 c.removed-without-flag	7848	melee-hit-taken flags=0x0
+c.removed-without-flag	8326	cast flags=0x0
+c.removed-without-flag	8326	melee-hit-taken flags=0x0
+c.removed-without-flag	8326	mount flags=0x0
+c.removed-without-flag	8326	move flags=0x0
+c.removed-without-flag	8326	stand-up flags=0x0
+c.removed-without-flag	8326	turn flags=0x0
 d.cast-not-interrupted	16053	channel move
 d.cast-not-interrupted	6115	channel move
 e.category-cooldown-missing	11427	category=85 recovery=6000
