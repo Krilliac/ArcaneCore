@@ -135,10 +135,16 @@ internal sealed class RiskTestWorld : IAsyncDisposable
     public Task<T> OnWorldAsync<T>(Func<T> action) => Host.OnWorldAsync(action);
 
     /// <summary>Spawned creatures become visible to the bot on the next world update.</summary>
+    /// <remarks>
+    /// The waiting ticks move no game time (<c>AdvanceClockAsync(0)</c>: one whole tick, map update included, with a zero diff). The look
+    /// is a world command, and a command posted while the world thread is still running the spawn's tick's commands runs in that same
+    /// drain, before the map update that shows the spawn; that happens or not with thread-pool timing, so a wait that advanced a think's
+    /// 100 ms moved a pinned clock (a kite test's phase 350 started at 50 on hosted CI, RiskTestWorldClockTests).
+    /// </remarks>
     public async Task SeeAsync(params Creature[] creatures)
     {
         for (int i = 0; i < 20 && !await OnWorldAsync(() => creatures.All(c => Player.VisibleObjects.Contains(c.Guid))); i++)
-            await Host.World.AdvanceClockAsync(ThinkMs);
+            await Host.World.AdvanceClockAsync(0);
         if (!await OnWorldAsync(() => creatures.All(c => Player.VisibleObjects.Contains(c.Guid))))
             throw new InvalidOperationException("the bot does not see the spawned creatures");
     }
