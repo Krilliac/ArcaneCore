@@ -26,7 +26,7 @@ public sealed class NaxxramasSpellScripts : ISpellScript
         };
         if (child != 0)
             context.System.CastSpell(context.Caster, child,
-                SpellCastTargets.ForUnit(target.Guid), triggered: true);
+                SpellCastTargets.ForUnit(target.Guid, context.Cast), triggered: true);
     }
 }
 

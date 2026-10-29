@@ -120,7 +120,8 @@ public sealed class SpellDeathTests
     {
         using var kit = Kit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         (Player killer, _) = kit.AddPlayer(3, 2);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, spellId, SpellCastTargets.ForUnit(target.Guid), triggered: false));
         target.Map!.FindUpdater<MapCombat>()!.Kill(killer, target);
@@ -152,7 +153,8 @@ public sealed class SpellDeathTests
     {
         using var kit = new SpellTestKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         (Player killer, _) = kit.AddPlayer(3, 2);
         kit.Spellbook.Teach(caster, CastBolt);
         SpellSystem.SetPower(caster, PowerType.Rage, 100);

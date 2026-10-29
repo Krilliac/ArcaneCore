@@ -26,7 +26,7 @@ public sealed class WorldPersistenceProbesTests
     private static readonly string[] LiveQueueNames =
     [
         "character saves", "social", "reputation", "instances", "honor", "quests and taxi mask", "spell state", "rest",
-        "explored zones", "taxi routes", "spellbook", "talents", "skills", "pets", "gm audit",
+        "explored zones", "taxi routes", "spellbook", "talents", "skills", "pets", "gm audit", "account data",
     ];
 
     [Fact]

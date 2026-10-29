@@ -22,6 +22,13 @@ public sealed class WorldRuntimeOptions
     /// </summary>
     public int TickLateToleranceMs { get; set; } = 2;
 
+    /// <summary>
+    /// ArcaneCore hardening: the shortest time (milliseconds) between two account data or tutorial writes of one account. A change inside
+    /// it is kept in memory at once and written when the interval ends, coalesced to the latest value per type (never dropped). 0 = write
+    /// every change at once. vmangos writes every CMSG_UPDATE_ACCOUNT_DATA (MiscHandler.cpp HandleUpdateAccountData).
+    /// </summary>
+    public int AccountDataWriteIntervalMs { get; set; } = 1000;
+
     /// <summary>Maximum queued world commands admitted before the map pass of one tick.</summary>
     public int MaxCommandsPerTick { get; set; } = 1024;
 

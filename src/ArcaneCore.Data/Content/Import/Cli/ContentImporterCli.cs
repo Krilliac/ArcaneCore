@@ -13,11 +13,13 @@ using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.World.GameObjects;
 using ArcaneCore.Data.World.Procs;
 using ArcaneCore.Data.World.Pools;
+using ArcaneCore.Data.World.Threat;
 using ArcaneCore.Data.World.SpawnGroups;
 using ArcaneCore.Data.World.SpecialLoot;
 using ArcaneCore.Data.World.WorldState;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.Data.World.PlayerStats;
+using ArcaneCore.Data.World.Pets;
 using ArcaneCore.Data.World.Totems;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Npc;
@@ -53,14 +55,15 @@ public static partial class ContentImporterCli
           import <dump>...      import the creature, game object, loot, item, quest, kill-reputation and
                                 new-character (start position, starting spell, teleport target) and
                                 location (portal, GM teleport) and totem spell tables
-                                (and the starting outfit, playercreateinfo_item), and the world-state
+                                (and the starting outfit, playercreateinfo_item), the enchantment tables
+                                spell_proc_item_enchant and spell_enchant_charges, and the world-state
                                 tables game_weather (zone weather chances) and exploration_basexp, and the seven
                                 game-event tables (game_event, game_event_time, game_event_creature, game_event_gameobject,
                                 game_event_creature_data, game_event_quest, game_event_mail; both dialects)
           import-dbc <dir>      import the five spell DBCs from a client DBFilesClient directory; Map.dbc and
                                 AreaTable.dbc (and WMOAreaTable.dbc) there also fill map_template, area_template and
                                 wmo_area_template when those are empty (as import-map-dbc would); AreaTrigger.dbc,
-                                TaxiNodes.dbc and TaxiPath.dbc likewise fill areatrigger_template, taxi_nodes, taxi_path
+                                TaxiNodes.dbc, TaxiPath.dbc and ChrRaces.dbc likewise fill areatrigger_template, taxi_nodes, taxi_path, race_taxi_start
           import-map-dbc <Map.dbc> <AreaTable.dbc> [<WMOAreaTable.dbc>]
                                 import every map and area (map_template, area_template) using the build-5875
                                 layouts; --dump <file> takes the dungeon columns (player limit, reset delay, ghost
@@ -75,6 +78,10 @@ public static partial class ContentImporterCli
                                 family masks) with the dump's rows for build 5875; vmangos rows outside
                                 the build range are dropped (--cooldown-unit ms|seconds: classic-db dumps
                                 before z2829 store seconds; --dry-run writes nothing)
+          spell-threat <dump>... replace spell_threat (flat spell threat and threat multipliers) with the dump's
+                                rows for build 5875: classic-db (entry, Threat, multiplier, ap_bonus) or vmangos
+                                (threat, multiplier, inverse_effect_mask, build_min, build_max); a non-zero ap_bonus is
+                                refused (--dry-run writes nothing)
           refresh <dump>...     replace, in one transaction, only the world tables a world built by an older importer
                                 lacks: world_safe_locs and game_graveyard_zone, the four battleground tables,
                                 exploration_basexp and game_weather, areatrigger_tavern, instance_encounter (the dungeon
@@ -85,7 +92,7 @@ public static partial class ContentImporterCli
                                 gossip_texts) in creature_ai_texts by entry and the script_waypoint/waypoint_path copies in
                                 creature_movement_template (their path namespaces only), the ships' gameobject_template rows (type 15;
                                 other objects are left alone), and from --dbc-dir: areatrigger_template (AreaTrigger.dbc),
-                                taxi_nodes (TaxiNodes.dbc) and taxi_path (TaxiPath.dbc); WorldSafeLocs.dbc there adds the safe
+                                taxi_nodes (TaxiNodes.dbc), taxi_path (TaxiPath.dbc) and race_taxi_start (ChrRaces.dbc); WorldSafeLocs.dbc there adds the safe
                                 locations the dump lacks, TaxiPathNode.dbc there checks every ship's route; Map.dbc and
                                 AreaTable.dbc there (both or neither) replace map_template (every map, the dungeon columns
                                 from the dump's instance_template) and area_template (every area).
@@ -163,6 +170,7 @@ public static partial class ContentImporterCli
                 "verify" => await VerifyAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "class-masks" => ClassMasks(arguments, output),
                 "proc-events" => await ProcEventsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
+                "spell-threat" => await SpellThreatAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh" => await RefreshAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 "refresh-portals" => await RefreshPortalsAsync(arguments, output, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
@@ -334,6 +342,58 @@ public static partial class ContentImporterCli
         return ExitCodes.Ok;
     }
 
+    // --- spell-threat ------------------------------------------------------------------------
+
+    /// <summary>
+    /// <c>spell-threat</c>: <see cref="SpellThreatDumpImporter"/> from the command line. The whole dump is parsed (and the build filter applied)
+    /// before any database is opened, and the table is replaced in one transaction, so a malformed dump changes nothing.
+    /// </summary>
+    private static async Task<int> SpellThreatAsync(CliArguments a, TextWriter o, CancellationToken ct)
+    {
+        RequireInputs(a);
+        bool dryRun = a.Flag("--dry-run");
+        Target? target = dryRun && a.Value("--database") is null && a.Value("--provider") is null ? null : ResolveTarget(a);
+        if (!dryRun)
+        {
+            GuardPath(target!.FilePath);
+        }
+
+        (IReadOnlyList<DumpInput> inputs, _) = OpenInputs(a.Positional);
+        SpellThreatParseResult result;
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            result = SpellThreatDumpImporter.Parse(reader);
+        }
+
+        if (result.RowsRead == 0)
+        {
+            throw new CliException(ExitCodes.Schema, "the dump has no spell_threat rows (is it a classic-db or vmangos world dump?)");
+        }
+
+        string counts = $"spell_threat: {result.RowsRead} row(s) read, {result.RowsFilteredByBuild} outside build {SpellThreatDumpImporter.SupportedBuild}";
+        if (dryRun)
+        {
+            o.WriteLine($"{counts}, {result.Content.Count} to import (dry run: no database written)");
+            return ExitCodes.Ok;
+        }
+
+        o.WriteLine($"target: {target!.Describe}");
+        int written;
+        try
+        {
+            await using WorldDbContext db = OpenWorld(target);
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            written = await SpellThreatDumpImporter.ImportAsync(db, result.Content, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
+        {
+            throw DatabaseError(ex, target);
+        }
+
+        o.WriteLine($"{counts}, {written} imported; a running world picks them up with .reload spell_threats");
+        return ExitCodes.Ok;
+    }
+
     // --- import ------------------------------------------------------------------------------
 
     private static async Task<int> ImportAsync(CliArguments a, TextWriter o, CancellationToken ct)
@@ -370,6 +430,7 @@ public static partial class ContentImporterCli
         var itemsAndQuests = new ItemQuestDumpImporter { QuestXp = ParseQuestXp(a) };
         var onKill = new OnKillReputationDumpImporter();
         var reputationTemplates = new ReputationTemplatesDumpImporter();
+        var enchantProcs = new EnchantProcDumpImporter();
         var playerCreate = new PlayerCreateDumpImporter();
         var startActions = new PlayerCreateActionDumpImporter();
         var locations = new LocationDumpImporter();
@@ -382,6 +443,7 @@ public static partial class ContentImporterCli
         var battlegrounds = new BattlegroundDumpImporter();
         var spawnGroups = new SpawnGroupDumpImporter();
         var pools = new PoolDumpImporter();
+        var pets = new PetDumpImporter();
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             creatures.Read(reader);
@@ -405,6 +467,11 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             reputationTemplates.Read(reader);
+        }
+
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            enchantProcs.Read(reader);
         }
 
         using (TextReader reader = ChainedTextReader.Create(inputs))
@@ -483,6 +550,12 @@ public static partial class ContentImporterCli
             pools.Read(reader);
         }
 
+        // pet_levelstats and petcreateinfo_spell (classic-db and vmangos column names).
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            pets.Read(reader);
+        }
+
         IReadOnlyList<string> appliedStatsMigrations = [];
         if (a.Value("--player-stats-migrations-dir") is { } statsMigrationsDirectory)
         {
@@ -545,6 +618,7 @@ public static partial class ContentImporterCli
         ItemQuestImportReport itemQuestReport = itemsAndQuests.BuildReport();
         ReputationOnKillImportReport onKillReport = onKill.BuildReport();
         ReputationTemplatesImportReport reputationTemplatesReport = reputationTemplates.BuildReport();
+        EnchantProcImportReport enchantProcReport = enchantProcs.BuildReport();
         PlayerCreateImportReport playerReport = playerCreate.BuildReport();
         PlayerCreateActionImportReport startActionReport = startActions.BuildReport();
         LocationImportReport locationReport = locations.BuildReport();
@@ -557,6 +631,7 @@ public static partial class ContentImporterCli
         BattlegroundImportReport battlegroundReport = battlegrounds.BuildReport();
         SpawnGroupImportReport spawnGroupReport = spawnGroups.BuildReport();
         PoolImportReport poolReport = pools.BuildReport();
+        PetImportReport petReport = pets.BuildReport();
         if (!dryRun)
         {
             o.WriteLine($"target: {target!.Describe}");
@@ -571,6 +646,7 @@ public static partial class ContentImporterCli
                     itemQuestReport = await itemsAndQuests.WriteAsync(db, replace, token).ConfigureAwait(false);
                     onKillReport = await onKill.WriteAsync(db, replace, token).ConfigureAwait(false);
                     reputationTemplatesReport = await reputationTemplates.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    enchantProcReport = await enchantProcs.WriteAsync(db, replace, token).ConfigureAwait(false);
                     playerReport = await playerCreate.WriteAsync(db, replace, token).ConfigureAwait(false);
                     startActionReport = await startActions.WriteAsync(db, replace, token).ConfigureAwait(false);
                     locationReport = await locations.WriteAsync(db, replace, token).ConfigureAwait(false);
@@ -585,6 +661,7 @@ public static partial class ContentImporterCli
                     battlegroundReport = await battlegrounds.WriteAsync(db, replace, token).ConfigureAwait(false);
                     spawnGroupReport = await spawnGroups.WriteAsync(db, replace, token).ConfigureAwait(false);
                     poolReport = await pools.WriteAsync(db, replace, token).ConfigureAwait(false);
+                    petReport = await pets.WriteAsync(db, replace, token).ConfigureAwait(false);
                 }, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -598,6 +675,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(itemQuestReport.Warnings);
         warnings.AddRange(onKillReport.Warnings);
         warnings.AddRange(reputationTemplatesReport.Warnings);
+        warnings.AddRange(enchantProcReport.Warnings);
         warnings.AddRange(playerReport.Warnings);
         warnings.AddRange(startActionReport.Warnings);
         warnings.AddRange(locationReport.Warnings);
@@ -608,6 +686,7 @@ public static partial class ContentImporterCli
         warnings.AddRange(battlegroundReport.Warnings);
         warnings.AddRange(spawnGroupReport.Warnings);
         warnings.AddRange(poolReport.Warnings);
+        warnings.AddRange(petReport.Warnings);
         if (poolReport.RowsOutsidePatch > 0)
         {
             warnings.Add($"pool tables: {poolReport.RowsOutsidePatch} vmangos row(s) outside patch 10 dropped");
@@ -639,6 +718,8 @@ public static partial class ContentImporterCli
         skipped["game_event_creature_orphans"] = gameEventReport.OrphanCreatureRows;
         skipped["game_event_gameobject_orphans"] = gameEventReport.OrphanGameObjectRows;
         AddEventOrphanWarning(warnings, gameEventReport);
+        imported["spell_proc_item_enchant"] = enchantProcReport.ProcEnchants;
+        imported["spell_enchant_charges"] = enchantProcReport.EnchantCharges;
         imported["game_weather"] = worldState.Weather.Count;
         imported["exploration_basexp"] = worldState.BaseXp.Count;
         imported["world_safe_locs"] = graveyardReport.SafeLocs;
@@ -680,6 +761,9 @@ public static partial class ContentImporterCli
         imported[PoolDataModule.GameObjectTable] = poolReport.GameObjects;
         imported[PoolDataModule.GameObjectTemplateTable] = poolReport.GameObjectTemplates;
         imported[PoolDataModule.PoolPoolTable] = poolReport.PoolPools;
+        imported["pet_levelstats"] = petReport.LevelStats;
+        imported["petcreateinfo_spell"] = petReport.CreateSpells;
+        skipped["pet_levelstats_rows"] = petReport.SkippedRows;
         skipped["npc_service_rows"] = npcReport.Skipped;
         o.WriteLine(dryRun ? "would import:" : "imported:");
         foreach ((string table, long count) in imported)
@@ -846,6 +930,7 @@ public static partial class ContentImporterCli
         IReadOnlyList<AreaTriggerTemplateRow>? triggers = ReadOptionalDbc(directory, "AreaTrigger.dbc", "areatrigger_template", AreaTriggerDbcReader.Load, dbcWarnings);
         IReadOnlyList<TaxiNode>? taxiNodes = ReadOptionalDbc(directory, "TaxiNodes.dbc", "taxi_nodes", NpcServiceDbcReaders.LoadTaxiNodes, dbcWarnings);
         IReadOnlyList<TaxiPath>? taxiPaths = ReadOptionalDbc(directory, "TaxiPath.dbc", "taxi_path", NpcServiceDbcReaders.LoadTaxiPaths, dbcWarnings);
+        IReadOnlyList<RaceTaxiStart>? raceTaxiStarts = ReadOptionalDbc(directory, "ChrRaces.dbc", "race_taxi_start", NpcServiceDbcReaders.LoadRaceTaxiStarts, dbcWarnings);
         var kept = new List<string>();
         var imported = new List<string>();
 
@@ -908,6 +993,19 @@ public static partial class ContentImporterCli
                     {
                         await ImportBatch.InsertAsync(db, taxiPaths, token).ConfigureAwait(false);
                         imported.Add($"Imported {taxiPaths.Count} taxi paths (taxi_path) from TaxiPath.dbc.");
+                    }
+                }
+
+                if (raceTaxiStarts is not null)
+                {
+                    if (await db.Set<RaceTaxiStart>().AnyAsync(token).ConfigureAwait(false))
+                    {
+                        kept.Add("race_taxi_start");
+                    }
+                    else
+                    {
+                        await ImportBatch.InsertAsync(db, raceTaxiStarts, token).ConfigureAwait(false);
+                        imported.Add($"Imported {raceTaxiStarts.Count} race starting flight masks (race_taxi_start) from ChrRaces.dbc.");
                     }
                 }
             }, ct).ConfigureAwait(false);
@@ -1100,6 +1198,8 @@ public static partial class ContentImporterCli
                 ("areatrigger_involvedrelation", await db.Set<AreaTriggerQuestRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("game_tele", await db.Set<GameTeleRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("totem_spell", await db.Set<TotemSpellRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("pet_levelstats", await db.Set<PetLevelStatsRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("petcreateinfo_spell", await db.Set<PetCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)

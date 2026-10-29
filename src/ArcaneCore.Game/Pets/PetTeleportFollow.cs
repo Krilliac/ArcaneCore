@@ -36,9 +36,10 @@ public sealed class PetTeleportFollow
 
     private void OnFarTeleportExecuting(Player player) => _summons.UnsummonPetTemporarily(player);
 
-    private void OnNearTeleportStarting(Player player, TeleportDestination destination)
+    private void OnNearTeleportStarting(Player player, TeleportDestination destination, TeleportOptions options)
     {
-        if (player.PetGuid.IsEmpty || player.Map is not { } map || map.FindObject(player.PetGuid) is not Unit pet)
+        // TELE_TO_NOT_UNSUMMON_PET: the pet stays whatever the distance (Player.cpp:1913).
+        if ((options & TeleportOptions.NotUnsummonPet) != 0 || player.PetGuid.IsEmpty || player.Map is not { } map || map.FindObject(player.PetGuid) is not Unit pet)
         {
             return;
         }

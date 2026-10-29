@@ -43,6 +43,21 @@ public sealed class ChannelManager(SocialContext context)
             return;
         }
 
+        // World:Social:MaxChannelNameLength / MaxChannelPassphraseLength: refused before any Channel object is created.
+        int maxName = context.Options.MaxChannelNameLength;
+        if (maxName > 0 && name.Length > maxName)
+        {
+            player.Session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.InvalidName, name[..maxName]));
+            return;
+        }
+
+        int maxPassword = context.Options.MaxChannelPassphraseLength;
+        if (maxPassword > 0 && password.Length > maxPassword)
+        {
+            player.Session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.WrongPassword, name));
+            return;
+        }
+
         Dictionary<string, Channel> channels = Channels(player.Team);
         string key = name.ToLowerInvariant();
         if (MaxJoinedChannels > 0
@@ -105,7 +120,15 @@ public sealed class ChannelManager(SocialContext context)
     public void List(Player player, string name) => Get(player, name)?.List(player);
 
     /// <summary>CMSG_CHANNEL_PASSWORD.</summary>
-    public void SetPassword(Player player, string name, string password) => Get(player, name)?.SetPassword(player, password);
+    public void SetPassword(Player player, string name, string password)
+    {
+        if (context.Options.MaxChannelPassphraseLength > 0 && password.Length > context.Options.MaxChannelPassphraseLength)
+        {
+            return; // World:Social:MaxChannelPassphraseLength
+        }
+
+        Get(player, name)?.SetPassword(player, password);
+    }
 
     /// <summary>CMSG_CHANNEL_SET_OWNER.</summary>
     public void SetOwner(Player player, string name, string target) => Get(player, name)?.SetOwner(player, target);

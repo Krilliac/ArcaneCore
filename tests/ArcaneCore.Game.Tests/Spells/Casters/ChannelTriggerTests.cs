@@ -80,7 +80,8 @@ public sealed class ChannelTriggerTests
     {
         using SpellTestKit kit = NewKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player enemy, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player enemy, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, Missiles);
         List<(Unit Caster, Unit Target)> hits = [];
         kit.System.SpellHit += (c, t, s) =>
@@ -151,7 +152,8 @@ public sealed class ChannelTriggerTests
         // spares the corpse, not the channel ending (vmangos HasValidUnitPresentInTargetList).
         using SpellTestKit kit = NewKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player enemy, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player enemy, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, DeadChannelMissiles);
         int liveHits = 0;
         int corpseHits = 0;
@@ -179,7 +181,8 @@ public sealed class ChannelTriggerTests
     {
         using SpellTestKit kit = NewKit();
         (Player caster, _) = kit.AddPlayer(1);
-        (Player enemy, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player enemy, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, DeadMissiles);
         int corpseHits = 0;
         kit.System.SpellHit += (c, t, s) => corpseHits += s.Id == DeadMissile && !t.IsAlive ? 1 : 0;

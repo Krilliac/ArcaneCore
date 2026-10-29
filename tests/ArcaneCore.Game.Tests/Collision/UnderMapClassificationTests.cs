@@ -74,6 +74,8 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
         return kit.Map.Collision.ClassifyUnderMap(X, Y, z, minDepth);
     }
 
+    // Report grade (anomaly reports, creature and bot checks): terrain alone convicts when there are no models. The recovery grade that
+    // moves a player is asserted below (RecoveryGrade_*) and never convicts on terrain alone.
     [Fact]
     public void NoModelService_TheTerrainComparisonDecides()
     {
@@ -83,6 +85,40 @@ public sealed class UnderMapClassificationTests(ITestOutputHelper output)
 
         Assert.Equal(UnderMapKind.Ok, Classify(null, Ground - 15f, minDepth: 15f).Kind); // exactly at the margin
         Assert.Equal(UnderMapKind.Ok, Classify(null, Ground + 5f).Kind);                 // above the ground
+    }
+
+    private static UnderMapVerdict ClassifyForRecovery(ILineOfSight? models, float z, float minDepth = 0f)
+    {
+        using var kit = new HazardTestKit(liquid: null);
+        if (models is not null)
+        {
+            WorldCollision.Of(kit.Kit.World).Install(lineOfSight: models);
+        }
+
+        return kit.Map.Collision.ClassifyUnderMapForRecovery(X, Y, z, minDepth);
+    }
+
+    [Fact]
+    public void RecoveryGrade_WithNoModelService_IsUnknown_NotATerrainOnlyConviction()
+    {
+        Assert.Equal(UnderMapKind.Unknown, ClassifyForRecovery(null, Ground - 120f, minDepth: 100f).Kind);
+        Assert.Equal(UnderMapKind.Ok, ClassifyForRecovery(null, Ground + 5f).Kind); // above the ground is still Ok
+    }
+
+    [Theory]
+    [InlineData(ModelCoverage.Unavailable)]
+    [InlineData(ModelCoverage.TileNotLoaded)]
+    public void RecoveryGrade_WithUnavailableOrUnloadedModels_IsUnknown(ModelCoverage coverage)
+        => Assert.Equal(UnderMapKind.Unknown, ClassifyForRecovery(new ScriptedModels(coverage), Ground - 120f, minDepth: 100f).Kind);
+
+    [Fact]
+    public void RecoveryGrade_WithCoverageNone_IsUnknown_AndLoadedCoverageStillConvicts()
+    {
+        Assert.Equal(UnderMapKind.Unknown, ClassifyForRecovery(new ScriptedModels(ModelCoverage.None), Ground - 120f, minDepth: 100f).Kind);
+
+        UnderMapVerdict loaded = ClassifyForRecovery(new ScriptedModels(ModelCoverage.Loaded), Ground - 120f, minDepth: 100f);
+        Assert.Equal(UnderMapKind.UnderMap, loaded.Kind);
+        Assert.Equal(120f, loaded.DepthYards, 0.01f);
     }
 
     [Fact]

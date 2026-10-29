@@ -49,6 +49,38 @@ public sealed class PlayerbotEconomyOptions
     /// </summary>
     public bool BuyBankSlots { get; set; } = true;
 
+    /// <summary>
+    /// Buy the reagents of the recipes the bot wants to craft that it carries fewer of than one craft uses at the faction auction house during a
+    /// visit (on by default): at most 2 auctions a visit, within the visit budget. Guards: a reagent a vendor stocks is never bought; an auction
+    /// holds at most twice the shortfall; a buyout per unit is at most <see cref="BuyBelowAskPercent"/> percent of the bot floor of the item
+    /// (an item with no vendor sell price is never bought). Off: no reagent is searched or bought. Reagents a wanted recipe uses are never listed either way.
+    /// </summary>
+    public bool BuyReagents { get; set; } = true;
+
+    /// <summary>The bot floor of a common (white) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut).</summary>
+    public int ListMarkupPercentCommon { get; set; } = 500;
+
+    /// <summary>The bot floor of an uncommon (green) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut).</summary>
+    public int ListMarkupPercentUncommon { get; set; } = 300;
+
+    /// <summary>The bot floor of a rare (blue) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut).</summary>
+    public int ListMarkupPercentRare { get; set; } = 800;
+
+    /// <summary>The bot floor of an epic or better item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut).</summary>
+    public int ListMarkupPercentEpic { get; set; } = 10000;
+
+    /// <summary>The most a bot pays per unit at the house (reagents and gear) as a percent of the bot floor of that item, so no bot ever pays what a bot asks.</summary>
+    public int BuyBelowAskPercent { get; set; } = 50;
+
+    /// <summary>The markup percent for an item of <paramref name="quality"/>: poor and common use the common one, then uncommon, rare, and epic or above.</summary>
+    public int ListMarkupPercentFor(uint quality) => quality switch
+    {
+        <= 1 => ListMarkupPercentCommon,
+        2 => ListMarkupPercentUncommon,
+        3 => ListMarkupPercentRare,
+        _ => ListMarkupPercentEpic,
+    };
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Economy";
@@ -58,5 +90,12 @@ public sealed class PlayerbotEconomyOptions
             throw new InvalidOperationException($"{section}: BuyUpgradeBudgetFraction must be 0..1.");
         if (VisitIntervalMinutes is < 1 or > MaxVisitIntervalMinutes)
             throw new InvalidOperationException($"{section}: VisitIntervalMinutes must be 1..{MaxVisitIntervalMinutes}.");
+        foreach ((string name, int value) in new[]
+        {
+            (nameof(ListMarkupPercentCommon), ListMarkupPercentCommon), (nameof(ListMarkupPercentUncommon), ListMarkupPercentUncommon),
+            (nameof(ListMarkupPercentRare), ListMarkupPercentRare), (nameof(ListMarkupPercentEpic), ListMarkupPercentEpic),
+        })
+            if (value is < 100 or > 100000) throw new InvalidOperationException($"{section}: {name} must be 100..100000.");
+        if (BuyBelowAskPercent is < 1 or > 99) throw new InvalidOperationException($"{section}: BuyBelowAskPercent must be 1..99.");
     }
 }
