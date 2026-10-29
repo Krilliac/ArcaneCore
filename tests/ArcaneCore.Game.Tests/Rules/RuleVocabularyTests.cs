@@ -7,15 +7,19 @@ namespace ArcaneCore.Game.Tests.Rules;
 public sealed class RuleVocabularyTests
 {
     [Fact]
-    public void Default_HoldsTheSharedPrimitives_AndNoHost()
+    public void Default_HoldsTheSharedPrimitives_AndTheBotHost()
     {
         RuleVocabulary vocabulary = RuleVocabulary.Default;
 
-        Assert.Empty(vocabulary.Hosts);
+        Assert.Equal(["bot"], vocabulary.Hosts.Select(h => h.Name));
         Assert.Equal(
-            ["action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "target 1 self", "target 2 invoker"],
+            [
+                "event 1 bot.goal_evaluate", "event 2 bot.gold_below", "event 3 bot.free_bag_slots_below",
+                "action 1 set_phase", "action 2 start_rule_list", "action 3 say", "action 4 cast", "action 100 bot.propose_goal", "action 101 bot.suppress_goal",
+                "target 1 self", "target 2 invoker",
+            ],
             vocabulary.Primitives.Select(p => $"{p.Kind.ToString().ToLowerInvariant()} {p.Id} {p.Name}"));
-        Assert.All(vocabulary.Primitives, p => Assert.Equal(RuleHostKind.Any, p.Host));
+        Assert.All(vocabulary.Primitives, p => Assert.True(p.Host is RuleHostKind.Any or RuleHostKind.Bot));
         Assert.All(vocabulary.Primitives, p => Assert.True(p.IsBuiltIn));
         Assert.All(vocabulary.Primitives, p => Assert.False(string.IsNullOrWhiteSpace(p.Description)));
     }
@@ -30,7 +34,7 @@ public sealed class RuleVocabularyTests
         Assert.NotNull(vocabulary.FindEvent(RuleTestKit.Kind, RuleTestKit.Ping));
         Assert.NotNull(vocabulary.FindAction(RuleTestKit.Kind, RuleTestKit.Record));
         Assert.Null(vocabulary.FindAction(RuleHostKind.Any, RuleTestKit.Record));
-        Assert.Null(vocabulary.FindEvent(RuleHostKind.Bot, RuleTestKit.Ping));
+        Assert.Null(vocabulary.FindEvent(RuleHostKind.Creature, RuleTestKit.Ping));
         Assert.Equal("test", vocabulary.FindHost("TEST")!.Name);
         Assert.Contains(vocabulary.For(RuleTestKit.Kind), p => p.Name == "test.record");
         Assert.Contains(vocabulary.For(RuleTestKit.Kind), p => p.Name == "say");
