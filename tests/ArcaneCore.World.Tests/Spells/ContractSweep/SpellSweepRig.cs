@@ -13,6 +13,7 @@ using ArcaneCore.TestSupport;
 using ArcaneCore.World.Bans;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -107,7 +108,42 @@ internal sealed class SpellSweepRig : IDisposable
         Map = World.GetMap(MapId);
         Creatures = Map.FindUpdater<CreatureMapSystem>() ?? AddUpdater(new CreatureMapSystem(Map, new CreatureContent([], [], [], [], []), random: new Random(1)));
         Objects = Map.FindUpdater<GameObjectMapSystem>();
-        World.RunTick(0);
+        World.RunTick(0); // runs the creature feature's posted (empty) content install first, so the install below is the last one
+        _services.GetRequiredService<CreatureWorldFeature>().Install(new CreatureContent(DisplayTemplates(store), [], [], [], []));
+    }
+
+    /// <summary>
+    /// Creature entries a Transform or Mounted aura names that the retail world database (classic-db creature_template) has no row for, so
+    /// the live server logs them too (vmangos Aura::HandleAuraTransform / HandleAuraMounted: "not found in database"). 6029: spell 8324.
+    /// </summary>
+    private static readonly HashSet<uint> s_entriesMissingInRetail = [6029];
+
+    /// <summary>The display every stand-in template carries: any real CreatureDisplayInfo model serves, the sweep checks no model.</summary>
+    public const uint StandInDisplay = ProductionSweepActions.MountDisplay;
+
+    /// <summary>
+    /// The world content the live server has and the sweep would otherwise lack: a creature template for every entry a Transform or Mounted
+    /// aura names in its misc value. Both auras read only the template's display (vmangos SpellAuras.cpp, Aura::HandleAuraTransform and
+    /// Aura::HandleAuraMounted), so a stand-in with one display is enough. No spawns: nothing else in the world changes.
+    /// </summary>
+    private static IEnumerable<CreatureTemplate> DisplayTemplates(SpellStore store)
+    {
+        SortedSet<uint> entries = [];
+        foreach (SpellInfo spell in store.All)
+        {
+            foreach (SpellEffectInfo effect in spell.Effects)
+            {
+                if (effect.AuraType is AuraType.Transform or AuraType.Mounted && effect.MiscValue > 0 && !s_entriesMissingInRetail.Contains((uint)effect.MiscValue))
+                {
+                    entries.Add((uint)effect.MiscValue);
+                }
+            }
+        }
+
+        return entries.Select(entry => new CreatureTemplate
+        {
+            Entry = entry, Name = "Sweep Display " + entry, MinLevel = 1, MaxLevel = 1, DisplayIds = [StandInDisplay], DisplayProbabilities = [1],
+        });
     }
 
     private static Dictionary<string, string?> DbcSettings(string directory)

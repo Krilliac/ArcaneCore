@@ -495,7 +495,10 @@ internal sealed class SpellSweepRunner
                     return;
                 }
 
-                bool expected = (flags & action.FlagsFor(unit)) != 0;
+                // A mounted player who casts a spell without AllowWhileMounted is dismounted whatever the mount's interrupt flags say
+                // (vmangos Spell::CheckCast, Spell.cpp: Unmount and RemoveSpellsCausingAura(SPELL_AURA_MOUNTED)); the cast driver is such a cast.
+                bool expected = (flags & action.FlagsFor(unit)) != 0
+                    || (action.Name == "cast" && unit is Player && spell.HasAura(AuraType.Mounted));
                 IReadOnlyList<SpellAuraHolder> held = _probe.Holders(_rig.System, unit, spell.Id);
                 if (!action.Perform(scene, unit))
                 {
