@@ -239,6 +239,23 @@ public sealed class PetTeleportTests : IDisposable
     }
 
     [Fact]
+    public void NearTeleport_BeyondTheActivationDistance_WithNotUnsummonPet_LeavesThePetSummoned()
+    {
+        // TELE_TO_NOT_UNSUMMON_PET (UnitDefines.h:774; Player.cpp:1913): the pet is not put away whatever the distance.
+        (Player warlock, _) = Owner();
+        Cast(warlock, SummonImp);
+        Creature imp = Assert.Single(Summons(EasternKingdoms));
+        float far = EasternKingdoms.Grids.Options.GridActivationDistance + 50f;
+
+        Assert.True(_teleports.TeleportTo(warlock, 0, far, 0f, 83.5f, 0f, TeleportOptions.NotLeaveCombat | TeleportOptions.NotUnsummonPet));
+
+        Assert.Same(imp, Assert.Single(Summons(EasternKingdoms)));
+        Assert.Equal(imp.Guid, warlock.PetGuid);
+        Assert.True(_teleports.HandleTeleportAck(warlock, warlock.Guid.Value));
+        Assert.Same(imp, Assert.Single(Summons(EasternKingdoms)));
+    }
+
+    [Fact]
     public void LoggingOutDuringTheTransfer_ForgetsThePet()
     {
         (Player warlock, _) = Owner();
