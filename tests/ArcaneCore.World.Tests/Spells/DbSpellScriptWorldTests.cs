@@ -66,9 +66,11 @@ public sealed class DbSpellScriptWorldTests
             AttachScriptExecutor(host, player);
             Assert.False(spells.HasAura(player, expected));
             Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, LunarCapStormwind, SpellCastTargets.ForUnit(player.Guid), triggered: true));
-            Assert.True(spells.HasAura(player, expected), $"spell_scripts {LunarCapStormwind} should cast {expected}");
-            Assert.False(spells.HasAura(player, notExpected));
         });
+
+        // With spell batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the effect, and so the script, runs at the batch boundary.
+        await host.WaitForWorldAsync(() => spells.HasAura(player, expected), $"spell_scripts {LunarCapStormwind} should cast {expected}");
+        Assert.False(await host.OnWorldAsync(() => spells.HasAura(player, notExpected)));
     }
 
     [Fact]
@@ -84,8 +86,10 @@ public sealed class DbSpellScriptWorldTests
         {
             AttachScriptExecutor(host, player);
             Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, RiftSpawnManifestation, SpellCastTargets.ForSelf(), triggered: true));
-            Assert.True(spells.HasAura(player, RiftSpawnBecomesVisible), $"dbscripts_on_spell {RiftSpawnManifestation} should cast {RiftSpawnBecomesVisible}");
         });
+
+        await host.WaitForWorldAsync(() => spells.HasAura(player, RiftSpawnBecomesVisible),
+            $"dbscripts_on_spell {RiftSpawnManifestation} should cast {RiftSpawnBecomesVisible}");
     }
 
     /// <summary>
