@@ -91,7 +91,8 @@ start or in progress the server casts the ordinary Deserter debuff (26013, 15 mi
 vmangos Player::LeaveBattleground), and the bot queues for nothing until it wears off. The party AI's own flag follows only at the bot's next
 think, too late for a port sent the same tick, so it is not what decides.
 
-An invitation into a match that already holds `MaxBotsPerBattleground` bots (participants plus bots porting in) is declined
+An invitation into a match that already holds the type's effective cap (`MaxBotsPerBattleground`, raised by `RaiseCapToMatchMinimum`)
+in bots (participants plus bots porting in) is declined
 (CMSG_BATTLEFIELD_PORT action 0). A bot that a controller, a real player's party or a bot group takes while it walks, joins or waits
 leaves the queue. Back in the world (the server teleports it to where it queued, the battleground entry point) the brain resumes with its
 quests, suspensions and memories; only its route, target and rest belong to another place (`PlayerbotBrain.ResumeAfterGroup`).
