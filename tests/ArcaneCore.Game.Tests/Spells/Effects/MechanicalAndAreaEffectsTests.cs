@@ -20,6 +20,19 @@ public sealed class MechanicalAndAreaEffectsTests
     private static SpellInfo Instant(uint id, params SpellEffectInfo[] effects)
         => Spell(id, effects) with { StartRecoveryCategory = 0, StartRecoveryTime = 0, Duration = new SpellDuration(-1, 0, -1), SpellVisual = 1 };
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a cast that goes off is held until the next window boundary: advance
+    /// the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static SpellTestKit Kit() => new(
         Instant(PatchKit, Effect(SpellEffectName.HealMechanical, 100)),
         Instant(FriendHeal, Effect(SpellEffectName.HealMechanical, 100, SpellImplicitTarget.UnitFriend)),
@@ -116,7 +129,7 @@ public sealed class MechanicalAndAreaEffectsTests
         MapCombat.ClearInCombat(healer);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(healer, FriendHeal, SpellCastTargets.ForUnit(ally.Guid), triggered: false));
-        kit.Advance(100);
+        FlushSpellBatch(kit);
 
         Assert.Equal(1_100u, ally.Health);
         Assert.Equal(0f, wolf.Combat.Threat.GetThreat(healer));
@@ -139,7 +152,7 @@ public sealed class MechanicalAndAreaEffectsTests
         kit.System.ProcEventProcessed += (_, e) => events.Add(e);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(healer, FriendHeal, SpellCastTargets.ForUnit(ally.Guid), triggered: false));
-        kit.Advance(100);
+        FlushSpellBatch(kit);
 
         Assert.Equal(1_100u, ally.Health);
         List<ProcEvent> hits = events.Where(e => (e.Extra & ProcFlagsEx.CastEnd) == 0).ToList(); // the cast-end event is a separate one
