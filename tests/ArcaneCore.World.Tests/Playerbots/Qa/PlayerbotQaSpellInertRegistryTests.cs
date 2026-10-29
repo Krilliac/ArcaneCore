@@ -112,7 +112,7 @@ public sealed class PlayerbotQaSpellInertRegistryTests
     public void AnUnusedEffect_IsCoveredOnlyByAnEntryThatNamesIt()
     {
         InertSpell stealth = DeliberatelyInertSpells.All.First(e => e.Unhandled == nameof(SpellEffectName.Stealth));
-        InertSpell evade = DeliberatelyInertSpells.All.First(e => e.Unhandled == nameof(SpellEffectName.Evade));
+        InertSpell evade = DeliberatelyInertSpells.All.First(e => e.Reason == InertSpellReason.UnusedEffect && e.Unhandled != nameof(SpellEffectName.Stealth));
         SpellInfo own = Spell(stealth.SpellId, Effect(SpellEffectName.Stealth, 0)), other = Spell(evade.SpellId, Effect(SpellEffectName.Stealth, 0));
         var analyzer = new PlayerbotQaSpellGapAnalyzer(System(own, other));
 

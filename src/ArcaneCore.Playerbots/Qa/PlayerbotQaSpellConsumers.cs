@@ -169,8 +169,6 @@ internal static partial class QaSpellConsumers
             "the Silithus wind-stone summons (vmangos silithus.cpp:76-90)"),
         new(24790, K.SpellHitHandler, "ArcaneCore.Game/GameObjects/GameObjectMapSystem.SpellActions.cs", "24790",
             "the Silithus wind-stone summons (vmangos silithus.cpp:76-90)"),
-        new(26374, K.SpellHitHandler, "ArcaneCore.Game/Holidays/LunarFestivalScripts.cs", "26374",
-            "the Lunar Festival spell hit on Omen"),
         new(28281, K.SpellHitHandler, "ArcaneCore.World/WorldState/ScourgeInvasionScripts.cs", "28281",
             "the Scourge Invasion communique spell-hit switches"),
         new(28326, K.SpellHitHandler, "ArcaneCore.World/WorldState/ScourgeInvasionScripts.cs", "28326",

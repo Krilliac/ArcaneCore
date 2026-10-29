@@ -205,7 +205,6 @@ public static partial class DeliberatelyInertSpells
         new(26640, R.Deprecated, WhyDeprecated, NoCore),
         new(27731, R.Deprecated, WhyDeprecated, NoCore),
         new(27765, R.Deprecated, WhyDeprecated, NoCore),
-        new(28171, R.Deprecated, WhyDeprecated, NoCore),
         new(28180, R.Deprecated, WhyDeprecated, NoCore),
         new(28309, R.Deprecated, "\"Copy of\" spell kept in Spell.dbc", NoCore),
         new(28436, R.Deprecated, WhyDeprecated, NoCore),
