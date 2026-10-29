@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Ranged;
@@ -1143,25 +1144,27 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
-    /// vmangos Spell::update (Spell.cpp:4031-4049): a channel that applies a root or stun aura to its own caster does not cancel on
-    /// movement while the caster is rooted (or a root is pending), because the player may move a little before the root is acknowledged.
-    /// The first such effect decides. Player.IsRooted is set when the root is ordered, which covers the pending change.
+    /// vmangos Spell::update (Spell.cpp:4031-4049): a channel with an ApplyAura ModRoot or ModStun effect aimed at its own caster
+    /// (TARGET_UNIT_CASTER in TargetA) does not cancel on movement while the caster has the Root movement flag or a root change still
+    /// awaiting its client acknowledgement (HasPendingMovementChange(ROOT)), because the player may move a little before the root is
+    /// acknowledged. The first such effect decides; a root aimed at another unit does not qualify.
     /// </summary>
     private static bool ChannelSurvivesMoveBecauseSelfRooted(SpellInfo spell, Player caster)
     {
-        foreach (SpellEffectInfo effect in spell.Effects)
+        IReadOnlyList<SpellEffectInfo> effects = spell.Effects;
+        for (int i = 0; i < effects.Count; i++)
         {
+            SpellEffectInfo effect = effects[i];
             if (effect.Effect == SpellEffectName.ApplyAura
                 && (effect.AuraType == AuraType.ModRoot || effect.AuraType == AuraType.ModStun)
                 && effect.TargetA == SpellImplicitTarget.UnitCaster)
             {
-                return caster.IsRooted || caster.Movement.HasFlag(MovementFlags.Root);
+                return caster.Movement.HasFlag(MovementFlags.Root) || caster.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root);
             }
         }
 
         return false;
     }
-
     /// <summary>
     /// vmangos SpellAuraHolder::UpdateHolder (SpellAuras.cpp:7338-7376): while the channel's aura sits on its channel target,
     /// the channel is interrupted when the combat distance passes the spell's maximum range times 1.33 for a hostile target, or
