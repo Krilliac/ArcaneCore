@@ -8,7 +8,6 @@
 #     dotnet test tests/ArcaneCore.World.Tests --filter "FullyQualifiedName~SpellContractSweepTests.Sweep_"
 # The same run rewrites spell-contract-coverage.txt (which checks ran per spell; a check that stops running also fails the sweep).
 # Then review both diffs: every removed line here should be a fix you expected, every added line a regression to explain.
-# Known failure kept on purpose: Feign Death (5384) does not break on movement (c.interrupt-not-removed move); a fix lane owns it.
 a.error-log	10018	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	10253	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	10267	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
@@ -1991,70 +1990,9 @@ b.state-not-restored	8269	scale
 b.state-not-restored	839	base-attack-time0
 b.state-not-restored	8599	base-attack-time0
 b.state-not-restored	9177	stat3
-c.interrupt-not-removed	10255	move flags=0x1019
-c.interrupt-not-removed	10255	turn flags=0x1019
-c.interrupt-not-removed	11206	turn flags=0x101E
-c.interrupt-not-removed	12380	move flags=0x101F
-c.interrupt-not-removed	12380	turn flags=0x101F
-c.interrupt-not-removed	12508	move flags=0x101F
-c.interrupt-not-removed	12508	turn flags=0x101F
-c.interrupt-not-removed	12883	move flags=0xABC0D
-c.interrupt-not-removed	13236	move flags=0x101F
-c.interrupt-not-removed	13236	turn flags=0x101F
-c.interrupt-not-removed	13540	move flags=0x101F
-c.interrupt-not-removed	13540	turn flags=0x101F
-c.interrupt-not-removed	14775	move flags=0x1019
-c.interrupt-not-removed	14775	turn flags=0x1019
-c.interrupt-not-removed	14915	move flags=0x4000A
-c.interrupt-not-removed	15533	move flags=0x1019
-c.interrupt-not-removed	15533	turn flags=0x1019
-c.interrupt-not-removed	16093	move flags=0x43C1F
-c.interrupt-not-removed	16093	turn flags=0x43C1F
-c.interrupt-not-removed	16532	turn flags=0x101E
-c.interrupt-not-removed	18400	move flags=0xBC8E
-c.interrupt-not-removed	1864	move flags=0x3C0C
-c.interrupt-not-removed	20580	move flags=0xBC0F
-c.interrupt-not-removed	21157	move flags=0x101F
-c.interrupt-not-removed	21157	turn flags=0x101F
-c.interrupt-not-removed	21227	move flags=0x101F
-c.interrupt-not-removed	21227	turn flags=0x101F
-c.interrupt-not-removed	21389	move flags=0x101F
-c.interrupt-not-removed	21389	turn flags=0x101F
-c.interrupt-not-removed	21392	move flags=0x101F
-c.interrupt-not-removed	21392	turn flags=0x101F
-c.interrupt-not-removed	23017	move flags=0x101F
-c.interrupt-not-removed	23017	turn flags=0x101F
-c.interrupt-not-removed	23676	move flags=0x1C
-c.interrupt-not-removed	23676	turn flags=0x1C
-c.interrupt-not-removed	24390	move flags=0x100B
-c.interrupt-not-removed	25027	move flags=0x8
-c.interrupt-not-removed	25247	move flags=0x8BC0D
-c.interrupt-not-removed	2638	move flags=0x43C0F
-c.interrupt-not-removed	2640	move flags=0x43C0F
-c.interrupt-not-removed	2642	move flags=0x43C0F
-c.interrupt-not-removed	2644	move flags=0x43C0F
-c.interrupt-not-removed	2646	move flags=0x43C0F
-c.interrupt-not-removed	27573	move flags=0x480008
-c.interrupt-not-removed	27575	turn flags=0x101E
-c.interrupt-not-removed	29532	turn flags=0x1016
-c.interrupt-not-removed	5384	move flags=0x3C3C
-c.interrupt-not-removed	5384	turn flags=0x3C3C
 c.interrupt-not-removed	5388	melee-hit-taken flags=0x3C87
-c.interrupt-not-removed	5858	move flags=0x8
-c.interrupt-not-removed	595	move flags=0x3C0C
-c.interrupt-not-removed	6606	move flags=0x4000A
-c.interrupt-not-removed	6920	move flags=0x3C0F
-c.interrupt-not-removed	7291	move flags=0x43C0F
 c.interrupt-not-removed	7331	melee-hit-taken flags=0x3
-c.interrupt-not-removed	743	move flags=0x3C0F
 c.interrupt-not-removed	7967	melee-hit-taken flags=0x2
-c.interrupt-not-removed	8226	move flags=0x3C3C
-c.interrupt-not-removed	8226	turn flags=0x3C3C
-c.interrupt-not-removed	8359	move flags=0x3C0C
-c.interrupt-not-removed	8734	move flags=0x101F
-c.interrupt-not-removed	8734	turn flags=0x101F
-c.interrupt-not-removed	9572	move flags=0x8
-c.interrupt-not-removed	994	move flags=0x3C0C
 c.removed-without-flag	10250	melee-swing flags=0x40080
 c.removed-without-flag	10257	melee-swing flags=0x40080
 c.removed-without-flag	1131	melee-swing flags=0x40080

@@ -61,22 +61,24 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// The live report: Feign Death does not end when the hunter moves (AuraInterruptFlags carries MOVING). A known failure another lane is
-    /// fixing; when the fix lands this test fails and says to delete the baseline line, so the regression check takes over.
+    /// The live report, fixed by #1771: Feign Death (AuraInterruptFlags carries MOVING and TURNING) ends when the hunter moves or turns
+    /// through the client movement path. A control: the move and turn actions run and leave no c.interrupt-not-removed line.
     /// </summary>
     [RealClientDbcFact]
-    public void FeignDeath_5384_DoesNotBreakOnMove_KnownFailure()
+    public void FeignDeath_5384_BreaksOnMoveAndTurn()
     {
         SpellSweepCatalog catalog = SpellSweepCatalog.Shared;
         SpellInfo feign = catalog.Store.Get(5384) ?? throw new InvalidOperationException("Spell.dbc has no 5384");
-        Assert.True(feign.AuraInterruptFlags.HasFlag(SpellAuraInterruptFlags.Moving), $"5384 AuraInterruptFlags=0x{(uint)feign.AuraInterruptFlags:X}");
+        Assert.True(feign.AuraInterruptFlags.HasFlag(SpellAuraInterruptFlags.Moving) && feign.AuraInterruptFlags.HasFlag(SpellAuraInterruptFlags.Turning),
+            $"5384 AuraInterruptFlags=0x{(uint)feign.AuraInterruptFlags:X}");
         using var rig = new SpellSweepRig(SweepStore(catalog.Spells), RealClientDbcFactAttribute.DbcDirectory);
         SweepResult result = new SpellSweepRunner(rig, catalog) { Contracts = "cj" }.Run([feign], 1, full: false);
         output.WriteLine(string.Join('\n', result.Violations.Select(v => v.Key)));
-        SweepViolation? violation = result.Violations.FirstOrDefault(v => v.Category == SweepCategory.InterruptNotRemoved && v.Detail.StartsWith("move ", StringComparison.Ordinal));
-        Assert.True(violation is not null,
-            "Feign Death now breaks on movement: the known failure is fixed. Delete its c.interrupt-not-removed move line from the baseline and this test.");
-        Assert.Contains(violation!.Key, SpellSweepBaseline.Load(SpellSweepBaseline.SourcePath).Keys);
+        string checks = result.Outcomes[0].Checks["c"];
+        Assert.Contains("move=ran", checks, StringComparison.Ordinal);
+        Assert.Contains("turn=ran", checks, StringComparison.Ordinal);
+        Assert.DoesNotContain(result.Violations, v => v.Category == SweepCategory.InterruptNotRemoved
+            && (v.Detail.StartsWith("move ", StringComparison.Ordinal) || v.Detail.StartsWith("turn ", StringComparison.Ordinal)));
     }
 
     // ---- the harness can fail ------------------------------------------------------------------------------------------
@@ -156,15 +158,16 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
     }
 
     /// <summary>
-    /// What the sweep found on the production movement path: a player's MOVING_CANCELS aura survives a client move (no caller of
-    /// RemoveAurasWithInterruptFlags(Moving) on it), the generic form of the Feign Death report. Known failure; flips when it is fixed.
+    /// The production movement path, fixed by #1771: a player's MOVING_CANCELS aura ends on a client move (the generic form of the Feign
+    /// Death report). A control: the move action runs and leaves no c.interrupt-not-removed line.
     /// </summary>
     [Fact]
-    public void Production_AMovingCancelsAura_SurvivesAClientMove_KnownFailure()
+    public void Production_AMovingCancelsAura_BreaksOnAClientMove()
     {
         SweepResult result = RunFaults(Aura(MoveBreaks, AuraType.Dummy, 30_000, SpellAuraInterruptFlags.Moving), "cj");
-        Assert.True(result.Violations.Any(v => v.Category == SweepCategory.InterruptNotRemoved && v.Detail.StartsWith("move ", StringComparison.Ordinal)),
-            "a MOVING aura now breaks on a client move: the known failure is fixed; turn this into a passing control and refresh the baseline");
+        Assert.Contains("move=ran", result.Outcomes[0].Checks["c"], StringComparison.Ordinal);
+        Assert.DoesNotContain(result.Violations, v => v.Category == SweepCategory.InterruptNotRemoved && v.Detail.StartsWith("move ", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Violations, v => SweepCategory.IsGating(v.Category));
     }
 
     /// <summary>
