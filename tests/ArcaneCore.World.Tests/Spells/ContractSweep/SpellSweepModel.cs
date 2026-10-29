@@ -54,6 +54,9 @@ internal static class SweepCategory
     public const string StuckCasting = "j.stuck-casting";
     public const string TickStopped = "j.tick-stopped";
 
+    /// <summary>A cast go or white swing still held for the spell batch one window after the sweep started waiting for it.</summary>
+    public const string BatchNotSettled = "j.batch-not-settled";
+
     /// <summary>The categories that fail the test outright: (a) exceptions (thrown or caught-and-logged) and (j) invariant breaks.</summary>
     public static bool IsGating(string category) => category.StartsWith("j.", StringComparison.Ordinal)
         || category is Exception or LoggedFault;

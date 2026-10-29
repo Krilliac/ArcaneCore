@@ -82,7 +82,8 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
     // ---- the harness can fail ------------------------------------------------------------------------------------------
 
     private const uint MoveBreaks = 990_950, ShortBuff = 990_951, StunNoClear = 990_952, StandBreaks = 990_953, CastBreaks = 990_954,
-        Cooled = 990_955, Costly = 990_956, Ranged = 990_957, Stacker = 990_958, MagicBuff = 990_959, Dispeller = 990_960, TickThrows = 990_961;
+        Cooled = 990_955, Costly = 990_956, Ranged = 990_957, Stacker = 990_958, MagicBuff = 990_959, Dispeller = 990_960, TickThrows = 990_961,
+        ShortAura = 990_962;
 
     /// <summary>An instant (or <paramref name="castMs"/>) self Dummy with no aura.</summary>
     private static SpellInfo SelfSpell(uint id, int castMs = 0) => new()
@@ -166,6 +167,42 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
             "a MOVING aura now breaks on a client move: the known failure is fixed; turn this into a passing control and refresh the baseline");
     }
 
+    /// <summary>
+    /// (c) on a 300 ms aura, the shortest a holder gets (a Spell.dbc duration of 0 becomes 300): what is read after the action is judged by
+    /// how the aura ended. An aura the action removed is judged, even when the action's cast makes the sweep wait for the batch boundary; an
+    /// aura that ran out on its own meanwhile is "not run", never a pass, whether or not it carries the action's bit. Runs in both CI legs
+    /// (batching off and ARCANECORE_TEST_SPELL_BATCH_MS=400).
+    /// </summary>
+    [Fact]
+    public void Harness_AShortAura_IsJudgedByHowItEnded()
+    {
+        // (a) A broken mapping on a short aura: "move" removes TURNING auras (RemoveMode Default), then casts (held to the boundary with
+        // batching on). The TURNING aura was removed by an action that does not fire TURNING: removed-without-flag.
+        var stripThenCast = new OneAction(new SweepAction("move", AuraInterruptMask.Moving, PlayerOnly: true, (scene, unit) =>
+        {
+            scene.Rig.System.RemoveAurasWithInterruptFlags(unit, SpellAuraInterruptFlags.Turning);
+            return ProductionSweepActions.CastOther(scene, (Player)unit);
+        }));
+        SweepResult removed = RunFaults(Aura(ShortAura, AuraType.Dummy, 300, SpellAuraInterruptFlags.Turning), "cj", stripThenCast);
+        Assert.Equal("move=ran", removed.Outcomes[0].Checks["c"]);
+        Assert.Contains(removed.Violations, v => v.Category == SweepCategory.InterruptRemovedWithoutFlag && v.SpellId == ShortAura
+            && v.Detail.StartsWith("move ", StringComparison.Ordinal));
+
+        // (b) An action that takes a second: the aura expires during it. Flagless, its end is not a removal by the action; carrying the
+        // action's bit (MOVING) with an action that removes nothing, its end is not the action honouring the bit. Neither is a pass.
+        var waits = new OneAction(new SweepAction("move", AuraInterruptMask.Moving, PlayerOnly: true, (scene, _) =>
+        {
+            scene.Rig.Advance(1_000);
+            return true;
+        }));
+        foreach (SpellAuraInterruptFlags flags in new[] { SpellAuraInterruptFlags.None, SpellAuraInterruptFlags.Moving })
+        {
+            SweepResult expired = RunFaults(Aura(ShortAura, AuraType.Dummy, 300, flags), "cj", waits);
+            Assert.Equal("move=not-run:expired", expired.Outcomes[0].Checks["c"]);
+            Assert.DoesNotContain(expired.Violations, v => v.Category.StartsWith("c.", StringComparison.Ordinal) || SweepCategory.IsGating(v.Category));
+        }
+    }
+
     [Fact]
     public void Harness_ANeverExpiringAura_IsCaught()
     {
@@ -202,20 +239,24 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
     public void Harness_AnExceptionInAnApplyHandler_IsCaughtAsGating()
     {
         AuraType unhandled = AuraSupport.Entries.First(e => e.Level == AuraSupportLevel.Unsupported).Type;
+        uint window = 0;
         SweepResult result = RunFaults(Aura(StunNoClear, unhandled, 2_000), "aj", arrange: rig =>
+        {
+            window = rig.System.SpellBatchWindowMs;
             rig.System.RegisterAura(unhandled, new AuraHandler((_, _, _, apply) =>
             {
                 if (apply)
                 {
                     throw new InvalidOperationException("injected");
                 }
-            }, null)));
+            }, null));
+        });
         // The cast pipeline counts it in the ledger (spell.script) and lets it out of Cast. Without spell batching that is out of CastSpell,
         // into the sweep: both reach the report, both gate. With batching on (ARCANECORE_TEST_SPELL_BATCH_MS) the go is held to the batch
         // boundary and runs inside the world tick, where the batch flush catches it so the rest of the batch still goes off (SpellSystem.GoHeld)
         // and counts it again (spell.batch): the second signal is that ledger record instead, and it gates too.
         Assert.Contains(result.Violations, v => v.Category == SweepCategory.LoggedFault && v.Detail.StartsWith("spell.script:System.InvalidOperationException", StringComparison.Ordinal));
-        if (SpellSystem.DefaultSpellBatchWindowMs == 0)
+        if (window == 0)
         {
             Assert.Contains(result.Violations, v => v.Category == SweepCategory.Exception && v.Detail.StartsWith("InvalidOperationException at", StringComparison.Ordinal));
         }
@@ -361,6 +402,14 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
         [
             .. _real.Actions.Select(a => a.Name == "stand-up" ? a with { Perform = (scene, unit) => ProductionSweepActions.Turn(scene, (Player)unit) } : a),
         ];
+
+        public bool Move(SweepScene scene, Player player) => ProductionSweepActions.Move(scene, player);
+    }
+
+    /// <summary>One action, and the production move for (d).</summary>
+    private sealed class OneAction(SweepAction action) : ISweepActions
+    {
+        public IReadOnlyList<SweepAction> Actions { get; } = [action];
 
         public bool Move(SweepScene scene, Player player) => ProductionSweepActions.Move(scene, player);
     }
