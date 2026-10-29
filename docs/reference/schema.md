@@ -11,7 +11,7 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 |---|---|---|
 | `auth` | 6 | `account`, `realmlist` |
 | `characters` | 66 | `characters` |
-| `world` | 60 | `player_create_info`, `race_info`, `class_info` |
+| `world` | 61 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
