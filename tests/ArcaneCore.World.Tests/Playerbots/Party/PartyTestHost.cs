@@ -13,6 +13,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using ArcaneCore.World.Bots;
@@ -44,7 +45,7 @@ internal static class PartyTestHost
             };
             configure?.Invoke(options);
             configureServices?.Invoke(services);
-            services.AddSingleton<IManagedPlayerbotStore>(new MemoryBotStore());
+            services.TryAddSingleton<IManagedPlayerbotStore>(new MemoryBotStore()); // a test may bring its own store (configureServices runs first)
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
             services.AddSingleton<IManagedPlayerbotProvisionStore>(sp => new MemoryProvisionStore(sp.GetRequiredService<IAccountStore>()));
         });

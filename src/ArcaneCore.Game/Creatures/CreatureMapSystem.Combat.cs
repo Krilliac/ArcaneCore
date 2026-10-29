@@ -361,7 +361,8 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
             return true;
         }
 
-        if ((creature.UnitFlags & LostControl) != 0)
+        // vmangos Creature::Update (Creature.cpp:986-989): UNIT_STATE_NO_FREE_MOVE (root, stun, taxi flight, confused, fleeing).
+        if ((creature.UnitFlags & (LostControl | UnitFlags.TaxiFlight)) != 0 || creature.Movement.HasFlag(MovementFlags.Root))
         {
             RefreshLeashExtension(creature);
         }

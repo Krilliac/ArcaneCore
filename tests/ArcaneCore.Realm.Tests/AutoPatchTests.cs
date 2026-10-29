@@ -108,6 +108,7 @@ public sealed class AutoPatchTests : IDisposable
         Assert.Equal((byte)AuthResult.VersionInvalid, head[2]);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task ActivePatchDownload_ExtendsTheSessionCap_ButAnIdleConnectionStillCloses()
     {
