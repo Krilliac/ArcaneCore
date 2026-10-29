@@ -728,6 +728,7 @@ public static partial class ContentImporterCli
         imported["gossip_menu"] = npcReport.GossipMenus;
         imported["gossip_menu_option"] = npcReport.GossipOptions;
         imported["npc_text"] = npcReport.NpcTexts;
+        imported[NpcTextBroadcastDataModule.Table] = npcReport.TextBroadcasts;
         imported["npc_vendor"] = npcReport.Vendors;
         imported["npc_vendor_template"] = npcReport.VendorTemplates;
         imported["npc_trainer"] = npcReport.Trainers;

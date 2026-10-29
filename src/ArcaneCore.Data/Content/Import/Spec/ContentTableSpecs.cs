@@ -262,6 +262,7 @@ public static class ContentTableSpecs
         new("gossip_menu", [new KeyColumn("entry"), new KeyColumn("text_id"), new KeyColumn("condition_id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu", c)),
         new("gossip_menu_option", [new KeyColumn("menu_id"), new KeyColumn("id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu_option", c)),
         new("npc_text", [new KeyColumn("ID")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text", c)),
+        new("npc_text_broadcast_text", [new KeyColumn("Id")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text_broadcast_text", c)),
         new("npc_vendor", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor", c)),
         new("npc_vendor_template", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor_template", c)),
         new("npc_trainer", [new KeyColumn("entry"), new KeyColumn("spell")], [], [], c => NpcDumpImporter.ReadsColumn("npc_trainer", c)),
