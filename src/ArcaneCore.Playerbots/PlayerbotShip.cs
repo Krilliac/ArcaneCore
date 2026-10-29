@@ -507,7 +507,7 @@ internal static partial class PlayerbotShip
         {
             uint since = unchecked(now - trip.LastStepMs);
             if (since < StepIntervalMs) return;
-            if (!PlayerbotMotion.Speed(player, trip.Options.MoveSpeed, out float speed, out _)) speed = Unit.BaseRunSpeed;
+            if (!PlayerbotMotion.Speed(player, trip.Options.MoveSpeed, swimming: false, out float speed, out _)) speed = Unit.BaseRunSpeed;
             float stride = MathF.Min(left, MathF.Max(1f, speed * Math.Min(since, 2_000u) / 1000f));
             Vector3 next = left - stride <= OnDeckYards ? deck : at + ((deck - at) * (stride / left));
             if (PlayerbotMotion.SendStepOff(session, player, next, Heading(at, deck)))

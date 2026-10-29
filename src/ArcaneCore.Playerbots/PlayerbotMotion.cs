@@ -78,6 +78,8 @@ internal static partial class PlayerbotMotion
         internal float Heading;
         internal float Speed;
         internal bool Walk;
+        /// <summary>Whether the bot is at swim depth (<see cref="SwimAt"/>) as of its last packet: <see cref="Speed"/> is its swim speed then.</summary>
+        internal bool Swim;
         internal float MoveSpeedCap;
         /// <summary>The live options the bot follows its routes with (<c>.reload config</c> changes them in place).</summary>
         internal PlayerbotOptions? Options;
@@ -327,7 +329,7 @@ internal static partial class PlayerbotMotion
             return false;
         }
 
-        if (!Speed(player, options.MoveSpeed, out float speed, out bool walk))
+        if (!Speed(player, options.MoveSpeed, SwimAt(map, player, new Vector3(player.X, player.Y, player.Z)), out float speed, out bool walk))
         {
             if (!keepMotion) Stop(session, player);
             return false;
@@ -371,6 +373,14 @@ internal static partial class PlayerbotMotion
                 return false;
             }
         }
+        // The speed is the one at the place the walk starts: swim speed in swimmable water.
+        bool swim = SwimAt(map, player, current);
+        if (!Speed(player, options.MoveSpeed, swim, out speed, out walk))
+        {
+            if (!keepMotion) Stop(session, player);
+            return false;
+        }
+
         // The first stretch must be walkable before anything is announced.
         float probeStep = MathF.Max(speed * (HeartbeatIntervalMs / 1000f), 2f);
         Vector3 probe = Walk(route, current, route.NextPoint, probeStep,
@@ -437,6 +447,7 @@ internal static partial class PlayerbotMotion
         state.Heading = heading;
         state.Speed = speed;
         state.Walk = walk;
+        state.Swim = swim;
         state.MoveSpeedCap = options.MoveSpeed;
         state.RenewedMs = now;
         state.LeaseMs = Lease(options, state);
@@ -525,7 +536,12 @@ internal static partial class PlayerbotMotion
             return;
         }
 
-        if (!turned && !entering && age < HeartbeatIntervalMs) return;
+        // Entering or leaving swimmable water changes the bot's speed: re-anchor there at once (a client sends MSG_MOVE_START_SWIM /
+        // MSG_MOVE_STOP_SWIM as it crosses), so the next step is walked from here at the new speed and the position does not jump.
+        // One liquid query per bot per tick.
+        bool swimNow = SwimAt(map, player, position);
+        bool swimFlip = swimNow != state.Swim;
+        if (!turned && !entering && !swimFlip && age < HeartbeatIntervalMs) return;
         if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position, out string? rejectReason) is not { } valid)
         {
             // The route is no longer walkable here: stop where the last packet put the bot.
@@ -538,7 +554,8 @@ internal static partial class PlayerbotMotion
             return;
         }
 
-        if (!Send(session, player, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false))
+        WorldOpcode stepOpcode = !swimFlip ? WorldOpcode.MsgMoveHeartbeat : swimNow ? WorldOpcode.MsgMoveStartSwim : WorldOpcode.MsgMoveStopSwim;
+        if (!Send(session, player, stepOpcode, valid, heading, state.Walk, moving: true, now, budgeted: false))
         {
             string mode = MoveModeOf(route, route.NextPoint, nextPoint);
             AdvancePastRejectedWaypoint(route, state.Anchor);
@@ -558,7 +575,15 @@ internal static partial class PlayerbotMotion
         state.Anchor = valid;
         state.AnchorMs = now;
         state.Heading = heading;
-        PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, state, route, walkedFromAt, walkedFrom, nextPoint, valid, now);
+        PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, state, route, walkedFromAt, walkedFrom, nextPoint, valid, now, age, state.Swim);
+        // A client always moves at its current speed (a mount gone at swim depth or after a dismount, a swim speed left behind on the
+        // shore): the next step is walked at it. After the overspeed check, which judged the step at the speed it was walked at.
+        state.Swim = swimNow;
+        if (Speed(player, state.MoveSpeedCap, state.Swim, out float currentSpeed, out bool currentWalk))
+        {
+            state.Speed = currentSpeed;
+            state.Walk = currentWalk;
+        }
         if (state.Loops.OnPosition(valid, travelled, now) is { } loop) GiveUp(session, player, state, loop, now);
         // Last: a trigger may teleport the bot (the next pump then finds it between maps and forgets the route).
         PlayerbotAreaTriggers.Update(session, player, map, position, tracker);
@@ -705,7 +730,7 @@ internal static partial class PlayerbotMotion
     internal static void RefreshSpeed(Player player)
     {
         if (States.TryGetValue(player, out MotionState? state) && state.Active
-            && Speed(player, state.MoveSpeedCap, out float speed, out bool walk) && walk == state.Walk)
+            && Speed(player, state.MoveSpeedCap, state.Swim, out float speed, out bool walk) && walk == state.Walk)
             state.Speed = speed;
     }
 
@@ -719,12 +744,34 @@ internal static partial class PlayerbotMotion
     /// </para>
     /// </summary>
     internal static bool Speed(Player player, float cap, out float speed, out bool walk)
+        => Speed(player, cap, swimming: false, out speed, out walk);
+
+    /// <summary><see cref="Speed(Player, float, out float, out bool)"/> for a bot that is (<paramref name="swimming"/>) or is not at swim depth.</summary>
+    internal static bool Speed(Player player, float cap, bool swimming, out float speed, out bool walk)
     {
+        if (swimming)
+        {
+            // In swimmable water a player swims whatever it rides or runs at: the mounted and run speed auras only change the run speed
+            // (UnitSpeed), and a mount does not survive the water (AURA_INTERRUPT_UNDER_WATER_CANCELS, LiquidEnvironment.SetFlags).
+            walk = false;
+            speed = UnitSpeed.Get(player, MoveType.Swim);
+            return float.IsFinite(speed) && speed > 0;
+        }
+
         float run = UnitSpeed.Get(player, MoveType.Run);
         walk = float.IsFinite(cap) && cap < MathF.Min(run, Unit.BaseRunSpeed) - 0.001f;
         speed = walk ? UnitSpeed.Get(player, MoveType.Walk) : run;
         return float.IsFinite(speed) && speed > 0;
     }
+
+    /// <summary>
+    /// Whether a bot at <paramref name="at"/> on <paramref name="map"/> is at swim depth, by the rule the server applies to its
+    /// environment flags (<see cref="LiquidEnvironment.IsSwimDepth(Map, float, float, float, float)"/>, vmangos
+    /// Player::UpdateTerainEnvironmentFlags). Never aboard a transport.
+    /// </summary>
+    internal static bool SwimAt(Map map, Player player, Vector3 at)
+        => player.Transport is null && (player.Movement.Flags & MovementFlags.OnTransport) == 0
+            && LiquidEnvironment.IsSwimDepth(map, at.X, at.Y, at.Z, player.Locomotion.CollisionHeight);
 
     /// <summary>
     /// Walk <paramref name="distance"/> horizontal yards along <paramref name="route"/> from <paramref name="from"/>,
@@ -823,6 +870,11 @@ internal static partial class PlayerbotMotion
         if (moving) movement.Flags |= MovementFlags.Forward;
         if (walk) movement.Flags |= MovementFlags.WalkMode;
         movement.Flags |= extra;
+        // MOVEFLAG_SWIMMING follows the position of every packet (MaskMoving does not include it, so a stale one would survive onto land).
+        movement.Flags &= ~MovementFlags.Swimming;
+        if (seat is not { Aboard: true } && (movement.Flags & (MovementFlags.FallingFar | MovementFlags.Jumping)) == 0
+            && player.Map is { } swimMap && SwimAt(swimMap, player, position))
+            movement.Flags |= MovementFlags.Swimming;
         if (seat is { } place)
         {
             if (place.Aboard) movement.Flags |= MovementFlags.OnTransport;
