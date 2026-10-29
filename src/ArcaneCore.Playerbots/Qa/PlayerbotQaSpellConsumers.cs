@@ -43,9 +43,9 @@ internal sealed record QaSpellConsumer(uint SpellId, QaSpellConsumerKind Kind, s
 /// consumer file and a needle the file must contain; the tests check both against the source tree, so an entry cannot outlive its consumer.
 /// Immutable after type initialisation; safe from any thread.
 /// </summary>
-internal static class QaSpellConsumers
+internal static partial class QaSpellConsumers
 {
-    private static readonly FrozenDictionary<uint, QaSpellConsumer> s_byId = Index(Build());
+    private static readonly FrozenDictionary<uint, QaSpellConsumer> s_byId = Index([.. Build(), .. BuildResearched()]);
 
     /// <summary>Every entry.</summary>
     internal static IReadOnlyCollection<QaSpellConsumer> All => s_byId.Values;

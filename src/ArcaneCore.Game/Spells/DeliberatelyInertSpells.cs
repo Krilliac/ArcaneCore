@@ -27,6 +27,9 @@ public enum InertSpellReason
 
     /// <summary>Cast by a creature AI or a DB script for its visual or marker; the effect itself has no handler in any reference core.</summary>
     ScriptCarrier,
+
+    /// <summary>Nothing casts it: no reference core, world DB script, EventAI row, spell list, item, game object or cast spell's trigger reaches it.</summary>
+    NeverCast,
 }
 
 /// <summary>One deliberately inert spell: why, and the evidence.</summary>
@@ -52,7 +55,7 @@ public sealed record InertSpell(uint SpellId, InertSpellReason Reason, string Wh
 /// vmangos, cmangos and mangoszero source trees and the vmangos world DB. Immutable after type initialisation; safe from any thread.
 /// </para>
 /// </summary>
-public static class DeliberatelyInertSpells
+public static partial class DeliberatelyInertSpells
 {
     private const string WhyDeprecated = "deprecated or not-yet-implemented spell kept in Spell.dbc (zzOLD, DONOTREUSE, NYI, Copy of)";
     private const string WhyCarrier = "cast by a creature AI or DB script for its visual or marker; the effect itself has no handler in any core";
@@ -66,7 +69,7 @@ public static class DeliberatelyInertSpells
     private const string CitMindSpells = "vmangos SpellAuras.cpp:7752 and 7820 list rank 1 only in CalculateForDebuffLimit (debuff slots), not as a DUMMY reader";
     private const string WhyTest = "test spell (the name says test)";
 
-    private static readonly InertSpell[] s_all = Build();
+    private static readonly InertSpell[] s_all = [.. Build(), .. BuildResearched()];
     private static readonly FrozenDictionary<uint, InertSpell> s_byId = Index(s_all);
 
     /// <summary>Every entry, grouped by reason.</summary>
