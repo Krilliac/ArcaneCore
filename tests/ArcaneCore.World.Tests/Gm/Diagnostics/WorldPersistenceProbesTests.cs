@@ -22,7 +22,7 @@ public sealed class WorldPersistenceProbesTests
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(30);
 
-    /// <summary>The queues the live test host resolves, in registration order (creature respawns, groups and account addresses belong to features the test host does not load): a new persistence queue must be added here, and to WorldPersistenceProbes, on purpose.</summary>
+    /// <summary>The queues the live test host resolves, in registration order (creature and game object respawns, groups and account addresses belong to features the test host does not load): a new persistence queue must be added here, and to WorldPersistenceProbes, on purpose.</summary>
     private static readonly string[] LiveQueueNames =
     [
         "character saves", "social", "reputation", "instances", "honor", "quests and taxi mask", "spell state", "rest",
