@@ -65,6 +65,7 @@ public sealed class TeleportFeature(IServiceProvider services, IServiceScopeFact
 
         _service = new TeleportService(world, SendBeforeAddToMap, SendAfterAddToMap, logger);
         world.PlayerLoggingOut += _service.Forget;
+        _service.NearArrived = player => services.GetService<SpellFeature>()?.System.RemoveAurasOnMovement(player, true);
         _service.HonorlessTargetDue += CastHonorlessTarget;
     }
 

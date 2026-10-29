@@ -336,6 +336,7 @@ public sealed partial class CreatureMapSystem
         uint healthPercent = creature.MaxHealth == 0 ? 100 : (uint)((ulong)creature.Health * 100 / creature.MaxHealth);
         bool inCombat = (creature.UnitFlags & UnitFlags.InCombat) != 0;
         creature.ChangeTemplate(template);
+        creature.ResetImmunitySet(); // cmangos Creature::UpdateEntry ends with UpdateImmunitiesSet(0) (Creature.cpp:613)
         creature.InitializeFields();
         creature.Health = Math.Max(1u, (uint)((ulong)creature.MaxHealth * healthPercent / 100));
         if (inCombat)

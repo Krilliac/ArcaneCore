@@ -18,13 +18,13 @@ internal sealed class CliArguments
     private static readonly Dictionary<string, string[]> s_allowed = new(StringComparer.Ordinal)
     {
         ["plan"] = ["--dialect", "--report", "--verbose"],
-        ["import"] = ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--player-stats-migrations-dir", "--replace", "--dry-run", "--verbose"],
-        ["import-dbc"] = ["--database", "--provider", "--connection-string"],
-        ["import-map-dbc"] = ["--database", "--provider", "--connection-string", "--replace", "--report", "--dump"],
+        ["import"] = ["--dialect", "--report", "--database", "--provider", "--connection-string", "--dbc-dir", "--quest-xp", "--level-stats-file", "--player-stats-migrations-dir", "--replace", "--dry-run", "--verbose", "--migrate"],
+        ["import-dbc"] = ["--database", "--provider", "--connection-string", "--migrate"],
+        ["import-map-dbc"] = ["--database", "--provider", "--connection-string", "--replace", "--report", "--dump", "--migrate"],
         ["verify"] = ["--database", "--provider", "--connection-string"],
         ["class-masks"] = ["--class-mask-file", "--dry-run"],
-        ["proc-events"] = ["--database", "--provider", "--connection-string", "--cooldown-unit", "--dry-run"],
-        ["spell-threat"] = ["--database", "--provider", "--connection-string", "--dry-run"],
+        ["proc-events"] = ["--database", "--provider", "--connection-string", "--cooldown-unit", "--dry-run", "--migrate"],
+        ["spell-threat"] = ["--database", "--provider", "--connection-string", "--dry-run", "--migrate"],
         ["refresh"] = ["--database", "--provider", "--connection-string", "--dbc-dir", "--cooldown-unit", "--report", "--dry-run", "--migrate"],
         ["refresh-portals"] = ["--dialect", "--database", "--provider", "--connection-string", "--dry-run"],
     };

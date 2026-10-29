@@ -287,6 +287,14 @@ public sealed partial class QuestNpcFeature : IWorldFeature, ICharacterHooks, IA
     public void InstallSpellEffects(SpellSystem spells)
     {
         ArgumentNullException.ThrowIfNull(spells);
+
+        // HandleGossipHelloOpcode (NPCHandler.cpp:354-355) and its siblings: the channel, then the auras, that INTERACTING_CANCELS ends.
+        Services.InteractingCancels = player =>
+        {
+            spells.InterruptChannelsWithFlags(player, (SpellAuraInterruptFlags)AuraInterruptMask.Interacting);
+            spells.RemoveAurasWithInterruptFlags(player, AuraInterruptMask.Interacting);
+        };
+
         spells.RegisterEffect(SpellEffectName.Bind, context =>
         {
             if (context.Target is Player player)

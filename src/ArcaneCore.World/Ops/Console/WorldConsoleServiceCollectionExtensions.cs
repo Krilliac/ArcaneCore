@@ -17,6 +17,7 @@ public static class WorldConsoleServiceCollectionExtensions
     {
         services.Configure<WorldConsoleOptions>(configuration.GetSection(WorldConsoleOptions.SectionName));
         services.TryAddSingleton(_ => ConsoleInputSource.Default());
+        services.AddHostedService<SupervisedChildDrain>(); // a child of the cluster host supervisor stops gracefully on its stdin "drain" line or EOF (the console itself stays off on redirected input)
         services.AddHostedService<WorldConsole>();
         return services;
     }

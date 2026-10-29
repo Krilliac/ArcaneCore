@@ -86,7 +86,8 @@ public static class HotModuleServiceCollectionExtensions
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger("ArcaneCore.HotModules"),
                 spellScripts: () => Feature<ArcaneCore.World.Spells.Utility.SpellScriptFeature>(sp)?.Registry,
                 instanceScripts: () => InstanceScripts(sp),
-                eventAi: () => EventAiRegistry.Default)));
+                eventAi: () => EventAiRegistry.Default,
+                spellHandlers: () => Feature<ArcaneCore.World.Spells.SpellFeature>(sp)?.System)));
         services.AddHostedService<HotModuleHost>();
         return services;
     }

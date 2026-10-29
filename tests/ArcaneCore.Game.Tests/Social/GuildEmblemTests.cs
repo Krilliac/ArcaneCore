@@ -136,6 +136,22 @@ public sealed class GuildEmblemTests
         Assert.Equal((-1, int.MaxValue, int.MinValue, 0, 99999), (guild.EmblemStyle, guild.EmblemColor, guild.BorderStyle, guild.BorderColor, guild.BackgroundColor));
     }
 
+    [Fact] // NPCHandler.cpp:58-59: an interactable tabard designer ends the INTERACTING auras and the channel; a refused one does not
+    public void TabardVendorActivate_EndsInteractingAuras_OnlyForAnInteractableDesigner()
+    {
+        using var k = new PetitionTestKit();
+        Player a = k.Add(1);
+        int cancels = 0;
+        k.Services.InteractingCancels = _ => cancels++;
+
+        k.Guilds.ActivateTabardVendor(a, k.Npc.Guid);
+        Assert.Equal(1, cancels);
+
+        k.Npc = k.Npc with { NpcFlags = NpcFlags.TabardDesigner, X = 90 };
+        k.Guilds.ActivateTabardVendor(a, k.Npc.Guid);
+        Assert.Equal(1, cancels);
+    }
+
     [Fact] // NPCHandler.cpp:49-69
     public void TabardVendorActivate_EchoesTheGuid_OnlyForAnInteractableTabardDesigner()
     {

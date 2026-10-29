@@ -54,6 +54,23 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// vmangos SpellCaster::InterruptSpellsWithInterruptFlags (SpellCaster.cpp:2051-2058): stop the unit's cast while it is preparing (or a
+    /// running channel) when the spell has a cast time, is not a next-swing spell, not triggered, and its Spell.dbc InterruptFlags carry any
+    /// of <paramref name="flags"/>. A cast that is already finished is untouched, so a second interrupt of the same cast sends nothing.
+    /// </summary>
+    public void InterruptSpellsWithInterruptFlags(Unit unit, SpellInterruptFlags flags)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        if (GetState(unit.Guid)?.CurrentCast is { } cast
+            && cast.State is SpellCastState.Preparing or SpellCastState.Casting
+            && cast.CastTime != 0 && !cast.IsTriggered && !cast.Spell.IsNextMeleeSwing
+            && (cast.Spell.InterruptFlags & flags) != 0)
+        {
+            Cancel(cast);
+        }
+    }
+
+    /// <summary>
     /// vmangos Unit::InterruptSpellsWithChannelFlags: stop the unit's channel when its channel interrupt flags carry any of
     /// <paramref name="flags"/> (a channeled spell that ends when the caster mounts, for instance).
     /// </summary>

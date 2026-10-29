@@ -209,3 +209,19 @@ public sealed class SetDeathPreventionAction : EventAiActionHandler
         return true;
     }
 }
+
+/// <summary>
+/// ACTION_T_SET_IMMUNITY_SET (63): SetId; switches the creature to that <c>creature_immunities</c> set of its entry (CreatureEventAI.cpp:1363-1366,
+/// Creature::UpdateImmunitiesSet, Creature.cpp:2462-2481). A set the entry has no rows for changes nothing. The set lasts until the next switch or
+/// the creature's respawn.
+/// </summary>
+public sealed class SetImmunitySetAction : EventAiActionHandler
+{
+    public override byte ActionType => 63;
+
+    public override bool Execute(EventAiContext context, CreatureAiAction action, EventAiInvocation invocation)
+    {
+        context.Me.UpdateImmunitySet((uint)action.Param1);
+        return true;
+    }
+}

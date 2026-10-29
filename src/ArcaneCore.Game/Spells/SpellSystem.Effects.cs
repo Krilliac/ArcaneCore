@@ -55,13 +55,48 @@ public sealed partial class SpellSystem
     /// Install or replace the handler of an effect (seam for other areas: e.g. the items area
     /// registers SPELL_EFFECT_CREATE_ITEM, quests SPELL_EFFECT_QUEST_COMPLETE).
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The current handler is a spell script chain (<see cref="RegisterTransparentEffectWrapper"/>, the spell script dispatcher's Dispel wrapper) that the
+    /// caller never read through <see cref="GetEffectHandler"/>: replacing it blindly would drop every script hook chained on the effect without a trace.
+    /// A feature that builds on the effect reads the current handler first and calls it from the new one.
+    /// </exception>
     public void RegisterEffect(SpellEffectName effect, SpellEffectHandler handler)
-        => EffectHandlers[effect] = handler ?? throw new ArgumentNullException(nameof(handler));
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        if (EffectHandlers.TryGetValue(effect, out SpellEffectHandler? current) && _scriptChains.Contains(current) && !_scriptChainsRead.Contains(current))
+        {
+            throw new InvalidOperationException(
+                $"effect {effect}: the installed handler carries spell script hooks; read it with {nameof(GetEffectHandler)} and call it from the new handler instead of replacing it");
+        }
+
+        EffectHandlers[effect] = handler;
+    }
 
     public bool HasEffectHandler(SpellEffectName effect) => EffectHandlers.ContainsKey(effect);
 
     /// <summary>The handler currently installed for <paramref name="effect"/>, or null; lets a module that shares an effect chain to the earlier one instead of replacing it.</summary>
-    public SpellEffectHandler? GetEffectHandler(SpellEffectName effect) => EffectHandlers.GetValueOrDefault(effect);
+    public SpellEffectHandler? GetEffectHandler(SpellEffectName effect)
+    {
+        SpellEffectHandler? handler = EffectHandlers.GetValueOrDefault(effect);
+        if (handler is not null && _scriptChains.Contains(handler))
+        {
+            _scriptChainsRead.Add(handler); // the caller now holds the chain and can call it from a replacement
+        }
+
+        return handler;
+    }
+
+    /// <summary>Handlers that carry spell script hooks: a plain <see cref="RegisterEffect"/> over one of them throws unless the caller read it first.</summary>
+    private readonly HashSet<SpellEffectHandler> _scriptChains = new(ReferenceEqualityComparer.Instance);
+
+    private readonly HashSet<SpellEffectHandler> _scriptChainsRead = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>Mark <paramref name="handler"/> (already registered through <see cref="RegisterEffect"/>) as a spell script chain, see <see cref="RegisterEffect"/>.</summary>
+    internal void GuardScriptChain(SpellEffectHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _scriptChains.Add(handler);
+    }
 
     /// <summary>
     /// Wrappers installed through <see cref="RegisterTransparentEffectWrapper"/>, keyed by the wrapper delegate: the handler each one wraps
@@ -82,6 +117,7 @@ public sealed partial class SpellSystem
         ArgumentNullException.ThrowIfNull(isTransparent);
         RegisterEffect(effect, wrapper);
         _transparentWrappers[wrapper] = (inner, isTransparent);
+        _scriptChains.Add(wrapper);
     }
 
     /// <summary>

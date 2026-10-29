@@ -24,6 +24,22 @@ public sealed class NpcTravelServiceTests
 
     // ---- innkeeper ----------------------------------------------------------------------------
 
+    [Fact] // NPCHandler.cpp:491-492: after GetNPCIfCanInteractWith, before SendBindPoint's instance check
+    public void BinderActivate_EndsInteractingAuras_EvenInAnInstance_ButNotForAnUnreachableInnkeeper()
+    {
+        using var kit = new NpcServiceTestKit(NpcFlags.Innkeeper | NpcFlags.Gossip, extra: new QuestNpcDependencies(Maps: new FakeMaps(true, 12)));
+        int cancels = 0;
+        kit.Services.InteractingCancels = _ => cancels++;
+
+        kit.Npc = kit.Npc with { X = kit.Player.X + 60 };
+        kit.Services.BinderActivate(kit.Player, kit.Npc.Guid);
+        Assert.Equal(0, cancels);
+
+        kit.Npc = kit.Npc with { X = kit.Player.X + 1 };
+        kit.Services.BinderActivate(kit.Player, kit.Npc.Guid);
+        Assert.Equal(1, cancels);
+    }
+
     [Fact]
     public void BinderActivate_MovesTheHomeBindAndAnswers()
     {

@@ -32,6 +32,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player); // vmangos HandleBinderActivateOpcode, NPCHandler.cpp:491-492 (before SendBindPoint's instance check)
         bool instanceable = Deps.Maps?.IsInstanceable(player.MapId) ?? player.MapId is not (0 or 1);
         if (instanceable)
         {
