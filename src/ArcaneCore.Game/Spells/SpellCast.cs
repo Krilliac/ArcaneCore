@@ -233,31 +233,100 @@ public sealed class SpellCast
 /// <summary>Per-unit spell state kept by <see cref="SpellSystem"/> (world thread).</summary>
 public sealed class UnitSpellState
 {
-    internal UnitSpellState(Unit unit) => Unit = unit;
+    private readonly SpellSystem _owner;
+
+    internal UnitSpellState(SpellSystem owner, Unit unit, long seq)
+    {
+        _owner = owner;
+        Unit = unit;
+        Seq = seq;
+        SpellCooldowns = new WakingTimerMap<uint>(this, SpellWakeReason.Cooldown);
+        CategoryCooldowns = new WakingTimerMap<uint>(this, SpellWakeReason.Cooldown);
+        GlobalCooldowns = new WakingTimerMap<uint>(this, SpellWakeReason.Cooldown);
+        SchoolLockouts = new WakingTimerMap<SpellSchool>(this, SpellWakeReason.SchoolLockout);
+        Auras = new WakingHolderList(this);
+    }
+
+    /// <summary>Creation order (monotonic per <see cref="SpellSystem"/>); the active set is kept sorted by it, so the active-set update visits in creation-sequence order. (The old visit-all loop enumerated a Dictionary, which reuses freed slots, so its order matched creation order only until the first removal.)</summary>
+    internal long Seq { get; }
+
+    /// <summary>Physically in the spell system's active list (it may still be waiting for compaction after going dormant).</summary>
+    internal bool InActiveList { get; set; }
+
+    /// <summary>Wants a visit at the next <see cref="SpellSystem.Update"/>; a state leaves the active set only when its own update proves it dormant (<see cref="SpellSystem.IsDormant"/>).</summary>
+    internal bool IsActive { get; set; }
+
+    /// <summary>No longer the state in the spell system's table for its guid (forgotten, idle-removed or replaced); wakes are ignored.</summary>
+    internal bool Detached { get; set; }
+
+    /// <summary>The spell system's update tick during which this state was detached; lets the loop that detached it still visit it (the old snapshot did).</summary>
+    internal long DetachedTick { get; set; }
+
+    /// <summary>Put this state in the active set (one branch when it is already there). See <see cref="SpellWakeReason"/>.</summary>
+    internal void Wake(SpellWakeReason reason)
+    {
+        if (!IsActive)
+        {
+            _owner.WakeState(this, reason);
+        }
+    }
 
     public Unit Unit { get; }
 
     /// <summary>The cast in progress (one generic/channeled slot; the auto-repeat spell has its own, <see cref="AutoRepeatCast"/>).</summary>
-    public SpellCast? CurrentCast { get; internal set; }
+    public SpellCast? CurrentCast
+    {
+        get;
+        internal set
+        {
+            field = value;
+            if (value is not null)
+            {
+                Wake(SpellWakeReason.CastStarted);
+            }
+        }
+    }
 
     /// <summary>
     /// The auto-repeat spell toggled on (vmangos CURRENT_AUTOREPEAT_SPELL; Auto Shot, wand Shoot). It never casts itself: it stays in
     /// the Preparing state until cancelled and <see cref="SpellSystem"/> fires a triggered copy of it each time the ranged swing
     /// timer is ready (vmangos Unit::_UpdateAutoRepeatSpell). Ranged (autorepeat lane).
     /// </summary>
-    public SpellCast? AutoRepeatCast { get; internal set; }
+    public SpellCast? AutoRepeatCast
+    {
+        get;
+        internal set
+        {
+            field = value;
+            if (value is not null)
+            {
+                Wake(SpellWakeReason.AutoRepeatStarted);
+            }
+        }
+    }
 
     /// <summary>vmangos Unit::m_autoRepeatFirstCast: the next shot waits at least 500 ms (the wind-up) after a toggle, a cast or movement.</summary>
     internal bool AutoRepeatFirstCast { get; set; }
 
     /// <summary>The queued next-swing spell (vmangos CURRENT_MELEE_SPELL); it casts when the melee swing fires, see <see cref="SpellSystem.CastQueuedMeleeSpell"/>.</summary>
-    public SpellCast? MeleeCast { get; internal set; }
+    public SpellCast? MeleeCast
+    {
+        get;
+        internal set
+        {
+            field = value;
+            if (value is not null)
+            {
+                Wake(SpellWakeReason.MeleeQueued);
+            }
+        }
+    }
 
     /// <summary>spell id → absolute expiry (WorldRuntime ms clock).</summary>
-    internal Dictionary<uint, uint> SpellCooldowns { get; } = [];
+    internal WakingTimerMap<uint> SpellCooldowns { get; }
 
     /// <summary>Spell.dbc Category → absolute expiry.</summary>
-    internal Dictionary<uint, uint> CategoryCooldowns { get; } = [];
+    internal WakingTimerMap<uint> CategoryCooldowns { get; }
 
     /// <summary>
     /// Category -> the spell that started the running category cooldown (vmangos CooldownMap m_categoryMap: "we must keep original category cd
@@ -266,14 +335,14 @@ public sealed class UnitSpellState
     internal Dictionary<uint, uint> CategoryOwners { get; } = [];
 
     /// <summary>StartRecoveryCategory → absolute expiry of the global cooldown.</summary>
-    internal Dictionary<uint, uint> GlobalCooldowns { get; } = [];
+    internal WakingTimerMap<uint> GlobalCooldowns { get; }
 
     internal Dictionary<uint, ItemCooldownOwner> CooldownOwners { get; } = [];
 
     /// <summary>School → absolute end of an interrupt lockout (vmangos Unit::ProhibitSpellSchool).</summary>
-    internal Dictionary<SpellSchool, uint> SchoolLockouts { get; } = [];
+    internal WakingTimerMap<SpellSchool> SchoolLockouts { get; }
 
-    internal List<SpellAuraHolder> Auras { get; } = [];
+    internal WakingHolderList Auras { get; }
 
     public IReadOnlyList<SpellAuraHolder> AuraHolders => Auras;
 
@@ -287,7 +356,18 @@ public sealed class UnitSpellState
     /// Milliseconds until the channel fields of a channel that ended normally are cleared (vmangos ChannelResetEvent and
     /// UNIT_STATE_PENDING_CHANNEL_RESET, Spell.cpp:4814-4820); 0 when no reset is pending.
     /// </summary>
-    internal uint PendingChannelResetMs { get; set; }
+    internal uint PendingChannelResetMs
+    {
+        get;
+        set
+        {
+            field = value;
+            if (value != 0)
+            {
+                Wake(SpellWakeReason.ChannelResetPending);
+            }
+        }
+    }
 
     /// <summary>One <c>channel-object-without-active-cast</c> report per episode; cleared when the channel object is empty again.</summary>
     internal bool ChannelObjectOrphanReported { get; set; }

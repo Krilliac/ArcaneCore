@@ -26,6 +26,7 @@ How to read the tables:
 - [`ClientData`](#clientdata)
 - [`Cluster:Fencing`](#clusterfencing)
 - [`Cluster:NodeBridge`](#clusternodebridge)
+- [`Cluster:Supervisor`](#clustersupervisor)
 - [`Cluster:Worker`](#clusterworker)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
@@ -313,6 +314,17 @@ How to read the tables:
 | `Cluster:NodeBridge:Enabled` | `bool` | `false` | - | `true` starts the node bridge: the World connects to each endpoint in `Endpoints`, logs node connection events and heartbeats, and syncs live worker placement. `false`, the default, does nothing at all: no sockets, no log lines, no background task. Read once when the daemon starts. |
 | `Cluster:NodeBridge:Endpoints` | `string` | `"worker:EK\|Worker\|127.0.0.1:19081\|0;worker:Kalimdor\|Worker\|127.0.0.1:19082\|1;worker:instances\|Worker\|127.0.0.1:19083\|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway\|Gateway\|127.0.0.1:19084\|-;social\|Social\|127.0.0.1:19085\|-;coordinator\|Coordinator\|127.0.0.1:19086\|-;supervisor\|Supervisor\|127.0.0.1:19087\|-"` | - | The nodes the bridge monitors, as `;`-separated entries of `nodeId\|role\|host:port\|maps`, where `maps` is a comma list of map ids or `-` for a realm-wide node. The default is the seven local nodes: worker:EK 19081, worker:Kalimdor 19082, worker:instances 19083, gateway 19084, social 19085, coordinator 19086, supervisor 19087. A blank value means the seven default nodes. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set, replaces it but does not turn the bridge on (a warning is logged when `Enabled` is false). Only read when `Enabled` is true. |
 
+## `Cluster:Supervisor`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Supervisor:Enabled` | `bool` | `false` | - | Runs this World process as the host supervisor only (default: false): it launches and watches the configured `Processes` and starts no world, database, listener or feature. Off, a World start is unchanged. |
+| `Cluster:Supervisor:MaxConcurrentProcesses` | `int` | `9` | - | Maximum number of concurrent supervised child processes allowed on this host (default: 9). |
+| `Cluster:Supervisor:MaxTotalAllocatedMemoryMb` | `long?` | `null` | - | Optional cap on the sum of `SupervisedProcessConfig.RequiredMemoryMb` across all active supervised processes. |
+| `Cluster:Supervisor:MinClusterProcesses` | `int` | `3` | - | Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3). A start that can admit fewer launches nothing and refuses with a message naming this key. |
+| `Cluster:Supervisor:MinFreeMemoryReserveMb` | `long` | `1024` | - | Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB). |
+| `Cluster:Supervisor:Processes` | `Dictionary<string, SupervisedProcessConfig>` | `{}` | - | Supervised process definitions, started in ascending `SupervisedProcessConfig.StartOrder` (ties by key), keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`). |
+
 ## `Cluster:Worker`
 
 | Key | Type | Default | Reload | Meaning |
@@ -596,19 +608,20 @@ How to read the tables:
 |---|---|---|---|---|
 | `Logging:ArcaneCore:Console:Mode` | `ConsoleMode` | `Color` | - | `Color` (default), `Plain` or `Off`. Live at reload; colour is still disabled when stdout is not a terminal or `NO_COLOR` is set. Values: `Color`, `Plain`, `Off`. |
 | `Logging:ArcaneCore:Console:QueueCapacity` | `int` | `4096` | - | Lines the console writer thread may hold before new lines are dropped (and the drop counted and reported). Restart-only. |
-| `Logging:ArcaneCore:File:Enabled` | `bool` | `false` | - | `true` writes the plain text log to `Path`. Default off. |
-| `Logging:ArcaneCore:File:Path` | `string` | `"logs/arcanecore.log"` | - | The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`. |
+| `Logging:ArcaneCore:File:Enabled` | `bool` | `false` | - | `true` writes the one log file, in the chosen `Format`, to `Path`. Default off. |
+| `Logging:ArcaneCore:File:Path` | `string` | `null` | - | The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`. Not set means `logs/arcanecore.jsonl` for a Json file and `logs/arcanecore.log` for a Text file. |
 | `Logging:ArcaneCore:File:QueueCapacity` | `int` | `8192` | - | Lines the file writer thread may hold before new lines are dropped (counted and reported in the file itself). The world thread never waits on the disk. |
 | `Logging:ArcaneCore:File:Retain` | `int` | `14` | - | Rolled segments kept next to the active file; the oldest beyond this count are deleted after each roll. 0 keeps all. |
 | `Logging:ArcaneCore:File:RollDaily` | `bool` | `true` | - | `true` rolls at the first line of a new day (in the `Timestamps` clock). |
 | `Logging:ArcaneCore:File:RollSizeMb` | `int` | `64` | - | Roll when the active file would exceed this many MiB; 0 never rolls by size. |
+| `Logging:ArcaneCore:Format` | `LogFileFormat?` | `null` | - | The content format of the one log file: `Json` (one JSON object per line, structured properties kept) or `Text` (the plain console line format). Not set means the legacy `File`/`Json` switches decide; with nothing configured the default is `Json`: JSON keeps the structured state properties for ingestion, and the console already gives a text view. The file is configured under `File`. Restart-only. Values: `Text`, `Json`. |
 | `Logging:ArcaneCore:IncludeScopes` | `bool` | `true` | - | `true` appends the active logger scopes to each line (`=&gt; scope`). Live at reload. |
-| `Logging:ArcaneCore:Json:Enabled` | `bool` | `false` | - | `true` writes one JSON object per log event to `Path`. Default off. |
-| `Logging:ArcaneCore:Json:Path` | `string` | `"logs/arcanecore.jsonl"` | - | The active JSON-lines file; relative paths resolve against the working directory. Rolls like the text file. |
-| `Logging:ArcaneCore:Json:QueueCapacity` | `int` | `8192` | - | Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line). |
-| `Logging:ArcaneCore:Json:Retain` | `int` | `14` | - | Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all. |
-| `Logging:ArcaneCore:Json:RollDaily` | `bool` | `true` | - | `true` rolls at the first line of a new day (in the `Timestamps` clock). |
-| `Logging:ArcaneCore:Json:RollSizeMb` | `int` | `64` | - | Roll when the active file would exceed this many MiB; 0 never rolls by size. |
+| `Logging:ArcaneCore:Json:Enabled` | `bool` | `false` | - | Deprecated: use `File:Enabled` with `Format=Json`. `true` writes one JSON object per log event to `Path`. Default off. |
+| `Logging:ArcaneCore:Json:Path` | `string` | `null` | - | Deprecated: use `File:Path`. The active JSON-lines file; relative paths resolve against the working directory. Not set means `logs/arcanecore.jsonl`. |
+| `Logging:ArcaneCore:Json:QueueCapacity` | `int` | `8192` | - | Deprecated: use `File:QueueCapacity`. Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line). |
+| `Logging:ArcaneCore:Json:Retain` | `int` | `14` | - | Deprecated: use `File:Retain`. Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all. |
+| `Logging:ArcaneCore:Json:RollDaily` | `bool` | `true` | - | Deprecated: use `File:RollDaily`. `true` rolls at the first line of a new day (in the `Timestamps` clock). |
+| `Logging:ArcaneCore:Json:RollSizeMb` | `int` | `64` | - | Deprecated: use `File:RollSizeMb`. Roll when the active file would exceed this many MiB; 0 never rolls by size. |
 | `Logging:ArcaneCore:Timestamps` | `TimestampKind` | `Utc` | - | The clock timestamps are taken from: `Utc` (default) or `Local`. Live at reload. Values: `Utc`, `Local`. |
 
 ## `Loot`
@@ -687,7 +700,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `Ops:Diagnostics:Dumps:Directory` | `string` | `""` | - | The directory the dump files are written to. Empty (default) means `dumps` beside the text log file (`Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump. |
+| `Ops:Diagnostics:Dumps:Directory` | `string` | `""` | - | The directory the dump files are written to. Empty (default) means `dumps` beside the log file (the resolved `Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump. |
 | `Ops:Diagnostics:Dumps:Enabled` | `bool` | `false` | - | `true` lets an administrator write a dump of the running world with `.debug dump`. Default false, because a dump holds everything in memory: session keys, password material in flight, character data. Keep the dump directory private and delete the files when the analysis is done. |
 | `Ops:Diagnostics:Dumps:MinIntervalSeconds` | `int` | `600` | - | The least seconds between two dumps, so a repeated command cannot suspend the process again and again or fill the disk. 0 disables the limit. Default 600. |
 
@@ -1562,19 +1575,30 @@ How to read the tables:
 | `World:Playerbots:Contention:HelpChance` | `float` | `0.35` | live | Base chance (0..1) that a bot walking to a mob another player has tagged decides to help that player instead of leaving the mob alone. It is scaled by the bot's own sociability (a stable 0..1 from its guid), doubled for a real player's tag and raised by half when both share the kill quest, and only asked when the tagger is within 30 yards and losing and the bot is healthy. 0 never helps. |
 | `World:Playerbots:Contention:InvincibleTargetAbandonSeconds` | `int` | `8` | live | Seconds a bot may hold a target whose health stays at or below its death-prevention threshold (`InvincibilityHpThreshold`: a creature an EventAI script keeps at 1 health until some condition is met, such as the Blasted Lands servants of quest 2681) before it sets the creature aside as one it cannot kill (1..600). |
 | `World:Playerbots:Contention:SomeoneElsesMemorySeconds` | `int` | `15` | live | Seconds a bot leaves a mob alone after it found it to be someone else's (1..600), and the least between two decisions about the same mob. |
+| `World:Playerbots:CornerCentringMaxYards` | `float` | `4` | - | The most (yards, 0..10) the centring part of a `PathShaping` move can be: a corner in a corridor bounded on both sides (a road between two walls) is pushed away from the inside of the turn by the larger of the clearance still missing and its way to the middle of the corridor, and this caps that way to the middle only, so it never lowers the clearance push. 0 turns road centring off. A corner is never moved closer than 0.5 yard to the far side. |
+| `World:Playerbots:CornerClearanceYards` | `float` | `2` | - | The clearance (yards, 0.5..5) kept from the obstacle on the inside of a turn when `PathShaping` moves a route corner. The navigation mesh is built with a 0.2 yard agent radius, so an unshaped corner sits that close to the wall or post it goes around. |
+| `World:Playerbots:CornerTurnLeadYards` | `float` | `2.5` | - | How far before a corner (yards, 0..6) `PathShaping` starts to turn it: the tangent length of the arc that rounds a turn sharper than about 34 degrees. 0 turns rounding off; the lead is also held to 40% of the shorter leg beside the corner. |
 | `World:Playerbots:CutRegionMaxPolygons` | `int` | `5000` | - | The most polygons a cut region (a navigation region that is the only way between two large parts of the mesh, such as the Timbermaw Hold tunnel) may hold and still be exempt from shared world pins and from refusing a bot's pinned plan end (0..1000000; 0: no region is exempt). The exemption judges the whole region, so a larger bound lets more real snags go unshared. The default, 5000, keeps the Timbermaw Hold tunnel's largest measured region inside it, with about 2% headroom; re-check after regenerating mmaps. Bots only; no retail behaviour depends on it. |
 | `World:Playerbots:Economy:BankDeposit` | `bool` | `true` | live | Deposit goods the bot does not need (trade goods and reagents no spell of its own uses, gems, recipes, stackable curios) at a banker while it stays at its capital home (on by default). Gear, food, potions, ammunition, bags, grays and quest items are never deposited. |
 | `World:Playerbots:Economy:BuyBankSlots` | `bool` | `true` | live | Buy the next bank bag slot at a banker while the bot stays at its capital home when the bank has fewer than 5 free slots and the price is at most 40% of the bot's gold (on by default). A bought slot is only space once a bag is put in it, which bots do not do yet, so the bank-nearly-full gate keeps the purchase rare. |
 | `World:Playerbots:Economy:BuyBelowAskPercent` | `int` | `50` | live | The most a bot pays per unit at the house (reagents and gear) as a percent of the bot floor of that item, so no bot ever pays what a bot asks. |
 | `World:Playerbots:Economy:BuyReagents` | `bool` | `true` | live | Buy the reagents of the recipes the bot wants to craft that it carries fewer of than one craft uses at the faction auction house during a visit (on by default): at most 2 auctions a visit, within the visit budget. Guards: a reagent a vendor stocks is never bought; an auction holds at most twice the shortfall; a buyout per unit is at most `BuyBelowAskPercent` percent of the bot floor of the item (an item with no vendor sell price is never bought). Off: no reagent is searched or bought. Reagents a wanted recipe uses are never listed either way. |
 | `World:Playerbots:Economy:BuyUpgradeBudgetFraction` | `float` | `0.25` | live | The share of the money a bot holds at the start of a visit that the visit may spend in all (0..1): listing deposits and the buyout of an upgrade count against it. 0 spends nothing. |
+| `World:Playerbots:Economy:ConsumableKeepCount` | `int` | `20` | live | Per consumable entry, the count (1..200) a bot always keeps before a stack of it is surplus. |
 | `World:Playerbots:Economy:Enabled` | `bool` | `true` | live | Let bots list, buy and collect at the auction house (on by default). Off: no visit starts; a running one is dropped. |
+| `World:Playerbots:Economy:HouseBuyoutsPerHour` | `int` | `200` | live | The most auctions all bots together buy out at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot buy there. A soft limit: a buyout counts when the house confirms it, so bots with buyouts in flight together can overshoot it by their number. |
+| `World:Playerbots:Economy:HouseListingsPerHour` | `int` | `400` | live | The most auctions all bots together list at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot list there. A soft limit: a listing counts when the house confirms it, so bots with listings in flight together can overshoot it by their number. |
 | `World:Playerbots:Economy:ListChancePerVisit` | `int` | `50` | live | The chance in percent (0..100) that a visit lists anything: one roll per visit, then the bot lists up to its free listing slots. 0 lists nothing (a bot may still buy and collect); 100 always lists. |
 | `World:Playerbots:Economy:ListMarkupPercentCommon` | `int` | `500` | live | The bot floor of a common (white) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut). |
 | `World:Playerbots:Economy:ListMarkupPercentEpic` | `int` | `10000` | live | The bot floor of an epic or better item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut). |
 | `World:Playerbots:Economy:ListMarkupPercentRare` | `int` | `800` | live | The bot floor of a rare (blue) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut). |
 | `World:Playerbots:Economy:ListMarkupPercentUncommon` | `int` | `300` | live | The bot floor of an uncommon (green) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut). |
+| `World:Playerbots:Economy:ListSurplusConsumables` | `bool` | `true` | live | List stacks of consumables (food, drink, potions, bandages, elixirs, scrolls) beyond the keep count (on by default). |
+| `World:Playerbots:Economy:MaxBuyoutsPerHour` | `int` | `6` | live | The most auctions one bot buys out, reagents and upgrades together, in any 60 minutes of world time (0..100); 0 buys nothing. |
 | `World:Playerbots:Economy:MaxListingsPerBot` | `int` | `5` | live | The most auctions one bot has listed at once (0..50), counted from the auction house's own owner list; 0 lists nothing. |
+| `World:Playerbots:Economy:MaxListingsPerHour` | `int` | `10` | live | The most auctions one bot lists in any 60 minutes of world time (0..100); 0 lists nothing. |
+| `World:Playerbots:Economy:MoneyGoal` | `bool` | `true` | live | A bot short of money lists every visit and gets 3 more listing slots (on by default). Short means its budget reserves more than it has, or its money is below MoneyGoalCopperPerLevel times its level. It only raises listing, and never when ListChancePerVisit or MaxListingsPerBot is 0. |
+| `World:Playerbots:Economy:MoneyGoalCopperPerLevel` | `int` | `500` | live | The money floor per character level of the money goal, in copper (0..100000); 0: only what the budget reserves counts. |
 | `World:Playerbots:Economy:VisitIntervalMinutes` | `int` | `30` | live | Minutes between two visits of one bot (1..1440). Bots start at a random point of the first interval. |
 | `World:Playerbots:Enabled` | `bool` | `false` | - | Run server-managed playerbots (off by default). |
 | `World:Playerbots:FaultBackoffSeconds` | `int` | `30` | - | Seconds a bot waits in quarantine after an action fault before it is logged in again (1..3600); each further fault in `FaultWindowSeconds` doubles the wait, up to an hour. The bot stays desired meanwhile. |
@@ -1700,6 +1724,7 @@ How to read the tables:
 | `World:Playerbots:PathJobsMaxInFlight` | `int` | `64` | live | The most bot path jobs in flight together (1..1024); a bot past it waits in line, oldest first, and answers "pending" until a slot frees; one held that long still runs a single search on the world thread after `PathJobWaitMaxMs`, held to `SyncPathQueryMaxMs`. |
 | `World:Playerbots:PathJobsMaxInFlightNodes` | `long` | `262144` | live | The most search nodes (the sum of the jobs' `MaxSearchNodes`) the bot path jobs in flight may hold together: it bounds pool time, not only the job count (4096..100000000). |
 | `World:Playerbots:PathJobsMaxPerBot` | `int` | `1` | live | The most path jobs one bot may have in flight (1..8). |
+| `World:Playerbots:PathShaping` | `bool` | `true` | - | Whether a navigated bot route is shaped after its corners are found (`PlayerbotPathShaping`): a corner is moved off the obstacle on the inside of the turn (a post, a wall corner) and toward the middle of a bounded corridor, and a sharp turn is rounded with a short arc. Every shaped leg is checked against the walkable mesh and the line of sight; a corner that cannot be shaped safely (a doorway, a bridge) keeps its mesh position. This is the master switch for `CornerClearanceYards`, `CornerCentringMaxYards` and `CornerTurnLeadYards`. |
 | `World:Playerbots:Policy:AbPolicyShare` | `double` | `1` | - | The share of bots (0..1) in the policy arm of an A/B comparison; the rest are in the ladder arm, which takes snapshots and scores them but never promotes or explores, so its telemetry is the ladder's. A bot's arm is fixed by a hash of its guid. 1 (the default): every bot uses the policy. |
 | `World:Playerbots:Policy:Enabled` | `bool` | `false` | - | Score each bot's goals off the world thread and let the scores re-rank the ladder's choice (off by default). |
 | `World:Playerbots:Policy:ExplorationRate` | `double` | `0` | - | The chance (0..0.2) that a snapshot's choice is instead one of the ladder's eligible runner-up goals, picked at random, for gathering telemetry the ladder alone never produces. 0 (the default) never explores. |
@@ -1890,15 +1915,17 @@ How to read the tables:
 | `World:Playerbots:Social:Rivalry:Safeguards:SafeAreas` | `string` | `"35,392,976,2255,2361,2268"` | live | Area ids (comma separated; the sub-zone a character stands in, not its zone) where no rude emote is sent, on top of every capital city, which is always quiet. The default is the six neutral towns with a guard post for both factions: 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook, 2361 Nighthaven and 2268 Light's Hope Chapel. Empty keeps only the capitals. |
 | `World:Playerbots:Social:Trading:AcceptGifts` | `bool` | `true` | live | Accept gift windows (an empty bot side) from partners the rules allow (on by default). |
 | `World:Playerbots:Social:Trading:AnswerTrades` | `bool` | `true` | live | Busy or ignore a trade window nobody expected, and open an allowed one as a gift window (on by default). |
+| `World:Playerbots:Social:Trading:Deals:BuyMaxPremiumPercent` | `int` | `50` | live | The most a buying bot pays over the item's reference price in percent; never more than the reference divided by 0.67 (0..100, default 50). |
+| `World:Playerbots:Social:Trading:Deals:CounterTolerancePercent` | `int` | `10` | live | A counter-offer the bot accepts: at most this share under its ask when selling (never under the vendor value); one counter per deal, then it holds its price (0..50, default 10). |
 | `World:Playerbots:Social:Trading:Deals:DealMinutes` | `int` | `5` | live | The minutes an agreed deal stays open (1..60, default 5). |
 | `World:Playerbots:Social:Trading:Deals:DislikeMarkupPercent` | `int` | `25` | live | The ask markup in percent for a partner the bot dislikes, scaled by the negative affinity (0..200, default 25). |
 | `World:Playerbots:Social:Trading:Deals:Enabled` | `bool` | `true` | live | Fixed-price WTS completion (on by default). |
 | `World:Playerbots:Social:Trading:Deals:FriendDiscountPercent` | `int` | `20` | live | The ask discount in percent for a friend at full affinity, scaled by the bot's giving affinity (0..100, default 20). |
 | `World:Playerbots:Social:Trading:Deals:MaxDealCopper` | `int` | `500000` | live | The most a single deal may be worth in copper (0..100000000, default 500000 = 50 g; 0 disables deals). |
 | `World:Playerbots:Social:Trading:Deals:PairCooldownMinutes` | `int` | `10` | live | The minutes a pair waits after a deal expired, was declined or was cancelled before a new one (0..1440, default 10). |
-| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | The hours an auction house observation is kept in the price book (1..720, default 24). |
-| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). |
-| `World:Playerbots:Social:Trading:Enabled` | `bool` | `true` | live | Master switch (on by default). Once the trade desk lands (a later P4 step), off will cancel every window it drives at its next pass; no effect until then. |
+| `World:Playerbots:Social:Trading:Deals:PriceBookHours` | `int` | `24` | live | The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk. |
+| `World:Playerbots:Social:Trading:Deals:PriceBookMinSellers` | `int` | `3` | live | The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk. |
+| `World:Playerbots:Social:Trading:Enabled` | `bool` | `true` | live | Master switch (on by default). Off stops the trade desk quoting and agreeing deals and cancels every window it drives at its next pass. |
 | `World:Playerbots:Social:Trading:GiftMinValueCopper` | `int` | `100` | live | The vendor value in copper below which a gift earns no affinity and a stranger's gift is cancelled (0..1000000, default 100). |
 | `World:Playerbots:Social:Trading:Gifts:Enabled` | `bool` | `true` | live | Group gifts after a run (on by default). |
 | `World:Playerbots:Social:Trading:Gifts:GiftClaimSeconds` | `int` | `15` | live | The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15). |

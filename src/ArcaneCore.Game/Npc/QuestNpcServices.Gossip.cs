@@ -104,6 +104,16 @@ public sealed partial class QuestNpcServices
     public Func<IReadOnlyCollection<uint>>? ScriptCreditedQuests { get; set; }
 
     /// <summary>
+    /// Ends the player's channel and auras that carry INTERACTING_CANCELS (0x400; Feign Death among them). Each site runs it where vmangos
+    /// does, which is mostly after the NPC passed the interactable check (HandleGossipHelloOpcode NPCHandler.cpp:354-355, SendListInventory
+    /// ItemHandler.cpp:720-721, HandleBattlemasterHelloOpcode BattleGroundHandler.cpp:66-67, the trainer, spirit healer, binder, stable and
+    /// repair handlers) and the interaction then proceeds. The exception is HandleGossipSelectOptionOpcode (NPCHandler.cpp:376-377): it
+    /// cancels right after the coded-option check, before the NPC is looked up. Unset: nothing is cancelled. Set by QuestNpcFeature when
+    /// the spell system is available.
+    /// </summary>
+    public Action<Player>? InteractingCancels { get; set; }
+
+    /// <summary>
     /// CMSG_GOSSIP_HELLO and CMSG_QUESTGIVER_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368; HandleQuestgiverHelloOpcode,
     /// QuestHandler.cpp:79-105): the creature pauses its movement (<see cref="PauseInteractionMovement"/>; NPCHandler.cpp:357-358,
     /// QuestHandler.cpp:93-95), a spirit guide sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (NPCHandler.cpp:360-361), then the
@@ -119,6 +129,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player);
         PauseInteractionMovement(player, npc);
         if ((npc.NpcFlags & NpcFlags.SpiritGuide) != 0)
         {
@@ -196,6 +207,9 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        // vmangos HandleGossipSelectOptionOpcode (NPCHandler.cpp:376-377): right after the coded-option check and before the NPC is looked up,
+        // so a select for an unreachable or non-interactable NPC still ends the channel and the INTERACTING auras.
+        InteractingCancels?.Invoke(player);
         if (InteractableNpc(player, guid, NpcFlags.None) is not { } npc)
         {
             LogMissing("GossipSelectOption", guid);

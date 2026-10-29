@@ -37,6 +37,8 @@ public static class ContentTableSpecs
         "VendorTemplateId", "vendor_id",
         // CreatureEquipmentDataModule (ClassicDB EquipmentTemplateId, vmangos equipment_id; ObjectMgr.cpp:1301)
         "EquipmentTemplateId", "equipment_id",
+        // CreatureImmunityDataModule (cmangos MechanicImmuneMask, SchoolImmuneMask; vmangos mechanic_immune_mask, school_immune_mask; ObjectMgr.cpp:1304)
+        "MechanicImmuneMask", "SchoolImmuneMask", "mechanic_immune_mask", "school_immune_mask",
         "UnitFlags", "DynamicFlags", "CreatureTypeFlags", "CreatureType", "type", "Family", "pet_family", "Rank",
         "UnitClass", "unit_class", "InhabitType", "inhabit_type", "Civilian", "RacialLeader", "racial_leader",
         "SpeedWalk", "speed_walk", "SpeedRun", "speed_run",
@@ -160,6 +162,8 @@ public static class ContentTableSpecs
         // creature_equip_template: ClassicDB equipentry1..3; vmangos item1..3 with a probability and a patch range (ObjectMgr.cpp:1735).
         new("creature_equip_template", [new KeyColumn("entry")],
             ["equipentry1", "equipentry2", "equipentry3", "item1", "item2", "item3", "probability", "patch_min", "patch_max"], []),
+        // creature_immunities (cmangos only): Entry, SetId, Type (enum SpellImmunity 0..5), Value (mangos-classic ObjectMgr::LoadCreatureImmunities).
+        new("creature_immunities", [new KeyColumn("Entry"), new KeyColumn("SetId"), new KeyColumn("Type"), new KeyColumn("Value")], [], []),
         new("creature_addon", [new KeyColumn("guid")],
             ["mount", "mount_display_id", "stand_state", "sheath_state", "emote", "emote_state"], []),
         new("creature_classlevelstats", [new KeyColumn("class"), new KeyColumn("level")],
@@ -237,12 +241,17 @@ public static class ContentTableSpecs
         new("pickpocketing_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("disenchant_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("skill_fishing_base_level", [new KeyColumn("entry")], ["skill"], []),
+        new("spell_proc_item_enchant", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsProcColumn),
+        new("spell_enchant_charges", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsChargesColumn),
         new("item_template", [new KeyColumn("entry")], [], s_itemSignatures, ItemQuestDumpImporter.ReadsItemColumn),
         new("quest_template", [new KeyColumn("entry")], [], s_questSignatures, ItemQuestDumpImporter.ReadsQuestColumn),
         new("creature_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
         new("creature_involvedrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
         new("playercreateinfo_item", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("itemid")], ["amount"], []),
         new("creature_onkill_reputation", [new KeyColumn("creature_id")], [], s_onKillSignatures, OnKillReputationDumpImporter.ReadsColumn),
+        // Same layout in cmangos and vmangos, no patch column (vmangos ObjectMgr.cpp:8832, :8976).
+        new("reputation_spillover_template", [new KeyColumn("faction")], [], [], ReputationTemplatesDumpImporter.ReadsSpilloverColumn),
+        new("reputation_reward_rate", [new KeyColumn("faction")], [], [], ReputationTemplatesDumpImporter.ReadsRateColumn),
         new("playercreateinfo", [new KeyColumn("race"), new KeyColumn("class")], [], [], PlayerCreateDumpImporter.ReadsStartColumn),
         new("playercreateinfo_spell", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("spell")], [], s_buildRangeSignatures, PlayerCreateDumpImporter.ReadsSpellColumn),
         new("playercreateinfo_action", [new KeyColumn("race"), new KeyColumn("class"), new KeyColumn("button")], [], [], PlayerCreateActionDumpImporter.ReadsColumn),
@@ -260,6 +269,7 @@ public static class ContentTableSpecs
         new("gossip_menu", [new KeyColumn("entry"), new KeyColumn("text_id"), new KeyColumn("condition_id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu", c)),
         new("gossip_menu_option", [new KeyColumn("menu_id"), new KeyColumn("id")], [], [], c => NpcDumpImporter.ReadsColumn("gossip_menu_option", c)),
         new("npc_text", [new KeyColumn("ID")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text", c)),
+        new("npc_text_broadcast_text", [new KeyColumn("Id")], [], [], c => NpcDumpImporter.ReadsColumn("npc_text_broadcast_text", c)),
         new("npc_vendor", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor", c)),
         new("npc_vendor_template", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor_template", c)),
         new("npc_trainer", [new KeyColumn("entry"), new KeyColumn("spell")], [], [], c => NpcDumpImporter.ReadsColumn("npc_trainer", c)),
@@ -274,6 +284,9 @@ public static class ContentTableSpecs
         // spell_threat: SpellThreatDumpImporter reads by name; classic-db has Threat/ap_bonus (ap_bonus must be zero), vmangos threat/inverse_effect_mask and the build range.
         new("spell_threat", [new KeyColumn("entry")], ["Threat", "threat", "multiplier", "ap_bonus", "inverse_effect_mask", "build_min", "build_max"], s_buildRangeSignatures),
         new("world_safe_locs_facing", [new KeyColumn("id")], ["orientation"], []),
+        // pet_levelstats: classic-db keys it by creature_entry, vmangos by entry (PetDumpImporter).
+        new("pet_levelstats", [new KeyColumn("entry", "creature_entry"), new KeyColumn("level")], [], [], PetDumpImporter.ReadsLevelColumn),
+        new("petcreateinfo_spell", [new KeyColumn("entry")], [], [], PetDumpImporter.ReadsSpellColumn),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =

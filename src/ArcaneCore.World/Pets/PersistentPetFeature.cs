@@ -19,6 +19,9 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
     private readonly Lock _pendingGate = new();
     private readonly Dictionary<Player, LoadedPet> _pending = [];
     private PetsFeature? _pets;
+    private WorldRuntime? _world;
+    private Action<Player>? _onLoggedIn;
+    private Action<Player>? _onLoggingOut;
 
     public void Attach(WorldRuntime world)
     {
@@ -53,8 +56,11 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             await scope.ServiceProvider.GetRequiredService<IPersistentPetStore>().DeleteAsync(id, ct).ConfigureAwait(false);
         };
-        world.PlayerLoggedIn += player => PublishLoaded(world, player, pets);
-        world.PlayerLoggingOut += player => _ = SaveAsync(player, pets);
+        _world = world;
+        _onLoggedIn = player => PublishLoaded(world, player, pets);
+        _onLoggingOut = player => _ = SaveAsync(player, pets);
+        world.PlayerLoggedIn += _onLoggedIn;
+        world.PlayerLoggingOut += _onLoggingOut;
     }
 
     public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
@@ -142,7 +148,19 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
         return Task.CompletedTask;
     }
 
-    public Task StopAsync() => _pets?.Service.StopAsync() ?? Task.CompletedTask;
+    public Task StopAsync()
+    {
+        if (_world is { } world)
+        {
+            world.PlayerLoggedIn -= _onLoggedIn;
+            world.PlayerLoggingOut -= _onLoggingOut;
+            _world = null;
+            _onLoggedIn = null;
+            _onLoggingOut = null;
+        }
+
+        return _pets?.Service.StopAsync() ?? Task.CompletedTask;
+    }
 
     private sealed record LoadedPet(PersistentPetSnapshot? Snapshot, long Generation);
 }

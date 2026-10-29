@@ -37,6 +37,17 @@ public static class SupervisedRoles
     public const string Social = "social";
     public const string Coordinator = "coordinator";
     public const string Supervisor = "supervisor";
+
+    /// <summary>True when <paramref name="role"/> is one of the canonical roles above (case-insensitive).</summary>
+    public static bool IsKnown(string? role) =>
+        role is not null
+        && (string.Equals(role, Combined, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Realm, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Gateway, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Worker, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Social, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Coordinator, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, Supervisor, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -93,7 +104,7 @@ public sealed class SupervisedProcessConfig
     public int RestartBackoffMaxMs { get; set; } = 60_000;
 
     /// <summary>
-    /// Graceful drain timeout in milliseconds before the supervisor forcibly terminates an owned child process.
+    /// Graceful drain timeout in milliseconds before the supervisor forcibly terminates an owned child process (1 to 600000; default 30000).
     /// </summary>
     public int DrainTimeoutMs { get; set; } = 30_000;
 
@@ -106,6 +117,16 @@ public sealed class SupervisedProcessConfig
     /// Static map IDs assigned to this worker (empty for non-worker roles or dynamically assigned workers).
     /// </summary>
     public IReadOnlyList<uint> MapAssignments { get; set; } = [];
+
+    /// <summary>
+    /// Position in the start sequence (default 0): processes start in ascending order, ties broken by the configuration key
+    /// (ordinal), and drain in the reverse. Needed because configuration binding returns keys sorted, not in file order;
+    /// for example give <c>realm</c> 0, <c>gateway</c> 1 and the workers 2. Also decides which process is denied first when admission runs out.
+    /// </summary>
+    public int StartOrder { get; set; }
+
+    /// <summary>Upper bound of <see cref="DrainTimeoutMs"/> (10 minutes): the host's shutdown time is sized from the sum of these.</summary>
+    public const int MaxDrainTimeoutMs = 600_000;
 
     public void Validate()
     {
@@ -121,6 +142,8 @@ public sealed class SupervisedProcessConfig
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' RestartBackoffMaxMs must be >= RestartBackoffMinMs.");
         if (DrainTimeoutMs <= 0)
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' DrainTimeoutMs must be positive.");
+        if (DrainTimeoutMs > MaxDrainTimeoutMs)
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' DrainTimeoutMs must be at most {MaxDrainTimeoutMs} (10 minutes).");
         if (RequiredMemoryMb < 0)
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' RequiredMemoryMb must be non-negative.");
     }
@@ -131,7 +154,13 @@ public sealed class SupervisedProcessConfig
 /// </summary>
 public sealed class ClusterSupervisorOptions
 {
-    public const string ConfigurationSection = "Cluster:Supervisor";
+    public const string SectionName = "Cluster:Supervisor";
+
+    /// <summary>
+    /// Runs this World process as the host supervisor only (default: false): it launches and watches the configured
+    /// <see cref="Processes"/> and starts no world, database, listener or feature. Off, a World start is unchanged.
+    /// </summary>
+    public bool Enabled { get; set; }
 
     /// <summary>
     /// Maximum number of concurrent supervised child processes allowed on this host (default: 9).
@@ -139,9 +168,10 @@ public sealed class ClusterSupervisorOptions
     public int MaxConcurrentProcesses { get; set; } = 9;
 
     /// <summary>
-    /// Minimum process count for a full multi-process cluster topology (realm, gateway, social, coordinator, plus workers; default: 6).
+    /// Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3).
+    /// A start that can admit fewer launches nothing and refuses with a message naming this key.
     /// </summary>
-    public int MinClusterProcesses { get; set; } = 6;
+    public int MinClusterProcesses { get; set; } = 3;
 
     /// <summary>
     /// Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB).
@@ -154,9 +184,98 @@ public sealed class ClusterSupervisorOptions
     public long? MaxTotalAllocatedMemoryMb { get; set; }
 
     /// <summary>
-    /// Supervised process definitions keyed by logical name (e.g. <c>"worker:EK"</c>).
+    /// Supervised process definitions, started in ascending <see cref="SupervisedProcessConfig.StartOrder"/> (ties by key), keyed by a configuration key that must not contain <c>:</c>
+    /// (e.g. <c>worker-EK</c>); the display name may, via <see cref="SupervisedProcessConfig.Name"/> (<c>worker:EK</c>).
     /// </summary>
     public Dictionary<string, SupervisedProcessConfig> Processes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Added to the sum of the children's drain timeouts when the host's shutdown timeout is sized.</summary>
+    public static readonly TimeSpan ShutdownMargin = TimeSpan.FromSeconds(15);
+
+    /// <summary>The longest host shutdown the supervisor asks for; a drain sum above it is a <see cref="Warnings"/> entry.</summary>
+    public static readonly TimeSpan MaxShutdown = TimeSpan.FromHours(1);
+
+    /// <summary>Sum of every child's <see cref="SupervisedProcessConfig.DrainTimeoutMs"/> (each clamped to <see cref="SupervisedProcessConfig.MaxDrainTimeoutMs"/>): children drain one after another.</summary>
+    public TimeSpan TotalDrainBudget => TimeSpan.FromMilliseconds(Processes.Values.Sum(p => (long)Math.Clamp(p.DrainTimeoutMs, 0, SupervisedProcessConfig.MaxDrainTimeoutMs)));
+
+    /// <summary>Non-fatal findings (empty when none), for the startup check.</summary>
+    public IEnumerable<string> Warnings()
+    {
+        if (Enabled && TotalDrainBudget + ShutdownMargin > MaxShutdown)
+        {
+            yield return $"{SectionName}:Processes drain timeouts add up to {TotalDrainBudget.TotalMinutes:0.#} min, but the host's shutdown timeout is capped at {MaxShutdown.TotalMinutes:0} min; the children last in the drain order can be killed before their DrainTimeoutMs elapses.";
+        }
+    }
+
+    /// <summary>
+    /// Returns every problem with these options (empty when valid), for the startup check and the supervisor host.
+    /// </summary>
+    public IEnumerable<string> Validate()
+    {
+        const string section = SectionName;
+        var problems = new List<string>();
+
+        if (MaxConcurrentProcesses is < 1 or > 64)
+            problems.Add($"{section}:MaxConcurrentProcesses must be 1 to 64 (was {MaxConcurrentProcesses}).");
+        if (MinClusterProcesses < 1 || MinClusterProcesses > MaxConcurrentProcesses)
+            problems.Add($"{section}:MinClusterProcesses must be at least 1 and no more than MaxConcurrentProcesses ({MaxConcurrentProcesses}) (was {MinClusterProcesses}).");
+        if (MinFreeMemoryReserveMb < 0)
+            problems.Add($"{section}:MinFreeMemoryReserveMb must not be negative (was {MinFreeMemoryReserveMb}).");
+        if (MaxTotalAllocatedMemoryMb is <= 0)
+            problems.Add($"{section}:MaxTotalAllocatedMemoryMb must be unset or greater than 0 (was {MaxTotalAllocatedMemoryMb}).");
+        if (Enabled && Processes.Count < MinClusterProcesses)
+            problems.Add($"{section}:Processes defines {Processes.Count} process(es) but {section}:MinClusterProcesses is {MinClusterProcesses}.");
+
+        var mapOwners = new Dictionary<uint, string>();
+        var nameOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach ((string key, SupervisedProcessConfig config) in Processes)
+        {
+            if (key.Contains(':', StringComparison.Ordinal))
+                problems.Add($"{section}:Processes key '{key}' must not contain ':' (use e.g. 'worker-EK' and set Name to 'worker:EK').");
+
+            string name = string.IsNullOrWhiteSpace(config.Name) ? key : config.Name;
+            if (nameOwners.TryGetValue(name, out string? sameNameKey))
+                problems.Add($"{section}:Processes:{key} has the same name '{name}' as {section}:Processes:{sameNameKey}; names must be unique (case-insensitive).");
+            else
+                nameOwners[name] = key;
+
+            try
+            {
+                var effective = new SupervisedProcessConfig
+                {
+                    Name = name,
+                    Role = config.Role,
+                    ExecutablePath = config.ExecutablePath,
+                    RestartBackoffMinMs = config.RestartBackoffMinMs,
+                    RestartBackoffMaxMs = config.RestartBackoffMaxMs,
+                    DrainTimeoutMs = config.DrainTimeoutMs,
+                    RequiredMemoryMb = config.RequiredMemoryMb,
+                    StartOrder = config.StartOrder,
+                };
+                effective.Validate();
+            }
+            catch (InvalidOperationException ex)
+            {
+                problems.Add($"{section}:Processes:{key}: {ex.Message}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(config.Role) && !SupervisedRoles.IsKnown(config.Role))
+                problems.Add($"{section}:Processes:{key}:Role '{config.Role}' is not one of combined, realm, gateway, worker, social, coordinator, supervisor.");
+
+            if (string.Equals(config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (uint mapId in config.MapAssignments)
+                {
+                    if (mapOwners.TryGetValue(mapId, out string? owner))
+                        problems.Add($"{section}:Processes:{key}:MapAssignments lists map {mapId}, already assigned to '{owner}'.");
+                    else
+                        mapOwners[mapId] = key;
+                }
+            }
+        }
+
+        return problems;
+    }
 
     /// <summary>
     /// Computes capped exponential backoff in milliseconds for the given 1-based <paramref name="consecutiveFailures"/> attempt

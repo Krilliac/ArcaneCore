@@ -373,6 +373,58 @@ public sealed class PlayerbotPartyTradeTests
         Assert.Equal(before, await scene.AffinityAsync(scene.StrangerGuid));
     }
 
+    /// <summary>
+    /// The same close, with the bot's intake held (a solo bot drains its capture queue once per ThinkIntervalMs): the bot's own second
+    /// CMSG_INITIATE_TRADE opens window two before it reads the busy status 0, so status 0 (and 2 and 4 of window two) are all read while window two is
+    /// open. The bot must still forget the first window's partner: its unbound claim and gift partner may never adopt window two.
+    /// </summary>
+    [Fact]
+    public async Task ABusyAnswer_ReadWhileALaterWindowIsOpen_StillForgetsThePartner_NoAffinity()
+    {
+        await using Scene scene = await Scene.StartAsync(chat: true);
+        await scene.AddStrangerAsync();
+        await HelpTestKit.StandAsync(scene.World, BotName, (StrangerName, 2f));
+        PlayerbotOptions options = PartyTestHost.Feature(scene.World.Host).BotOptions;
+        int think = options.ThinkIntervalMs;
+
+        await scene.Stranger!.SendChatAsync(ChatType.Whisper, Language.Common, "trade me", BotName);
+        await HelpTestKit.UntilAsync(() => scene.World.Log.Count(BotName, WorldOpcode.CmsgInitiateTrade) > 0, "the bot to initiate the trade", seconds: 60);
+        options.ThinkIntervalMs = 60_000; // hold the bot's intake: nothing below is read until it is released
+        await scene.Stranger.SendAsync(WorldOpcode.CmsgBusyTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false }, "the busy answer to close the first invitation");
+        await scene.World.Host.OnWorldAsync(() => HelpTestKit.RecorderOf(scene.World).NoteById(scene.Bot, scene.BotGuid, scene.StrangerGuid, PlayerbotSocialEvent.ChatExchange));
+        int before = await scene.AffinityAsync(scene.StrangerGuid);
+
+        var initiate = new PacketWriter(8);
+        initiate.WriteUInt64(scene.StrangerGuid.Value);
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgInitiateTrade, initiate.ToArray()));
+        await scene.Stranger.SendAsync(WorldOpcode.CmsgBeginTrade, []);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result.Opened, "the second window to open");
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgSetTradeGold, Gold(5)));
+        await scene.AcceptAsync(scene.Stranger);
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false } or { PlayerAccepted: true }, "the stranger's accept to reach the server");
+
+        // Release the intake and run it once by hand, in one world-thread action: statuses 0, 2 and 4 are read in one drain with window two provably open, whatever the host's load.
+        // The hold held only if the bot is solo and not engaged (the idle-intake throttle, PlayerbotPartyAI.Intake), so the statuses are all still queued here.
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            ArcaneCore.World.Playerbots.Party.PlayerbotPartyAI party = PartyTestHost.Feature(scene.World.Host).FindPartyAI(scene.Bot)!;
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.False(party.IsEngaged, "the hold only works for a solo, unengaged bot");
+            Assert.True(scene.Economy.TradeOf(bot) is { Opened: true, Settling: false }, "window two must be open before the intake drains");
+            options.ThinkIntervalMs = 0; // no throttle for this one call
+            party.Intake(bot);
+            options.ThinkIntervalMs = think;
+            Assert.True(scene.Economy.TradeOf(bot) is { Opened: true, Settling: false }, "window two must still be open after the drain");
+            return true;
+        });
+        Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgAcceptTrade, Gold(1)));
+        await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false }, "the tip window to complete");
+        await scene.WaitForBotToSeeCompletionAsync();
+
+        Assert.Equal(before, await scene.AffinityAsync(scene.StrangerGuid));
+    }
+
     /// <summary>A trade that gives the bot nothing (an empty window) is not a trade for its memory.</summary>
     [Fact]
     public async Task AnEmptyWindow_GivesNoAffinity()

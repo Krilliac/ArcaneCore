@@ -135,7 +135,7 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
   system does not publish; `Player::CastItemCombatSpell` (`Player.cpp:7310-7355`) is not delivered. The enchantment is stored, shown and timed; it never procs.
 - **Rogue poisons**: the poison item spells (for example 2823) have enchant id 0 in both classic-db and the 1.12 `Spell.dbc`, so vmangos resolves them in spell scripts, which
   this lane does not have; poisons are not applied.
-- **`spell_enchant_charges`** (vmangos `SpellMgr.cpp:1889-1923`) is not in classic-db: temporary enchantments get 0 charges (duration only).
+- **`spell_enchant_charges`** (vmangos `SpellMgr.cpp:1889-1923`) is not in classic-db, so a classic-db import leaves the table as it is. `import` reads it from a vmangos dump (with `spell_proc_item_enchant`, which both dumps carry) and the catalog gives a held-item or temporary enchantment its charges. With no rows, an enchantment gets 0 charges (duration only).
 - **Skill discovery and extra-item procs are not built because they are TBC features** (vmangos dropped both tables as empty, `sql/old_migrations/20181108192531_world.sql:12-14`; every classic-db
   `skill_discovery_template` row names a spell above 25000 that 1.12 lacks, and every `skill_extra_item_template` row needs an absent TBC specialisation spell). Retail behaviour is
   "no discovery".

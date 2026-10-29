@@ -50,6 +50,9 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
     /// <summary>True when the player can use the stable master <c>npc</c> (vmangos GetNPCIfCanInteractWith(guid, UNIT_NPC_FLAG_STABLEMASTER)); unset fails closed.</summary>
     public Func<Player, ObjectGuid, bool>? IsStableMaster { get; set; }
 
+    /// <summary>Ends the player's channel and its INTERACTING_CANCELS auras once a stable master request passed its checks (vmangos NPCHandler.cpp:517-518, :623-624, :708-709, :821-822, :852-853). Unset: nothing is cancelled.</summary>
+    public Action<Player>? InteractingCancels { get; set; }
+
     /// <summary>Raised on the world thread after the player's money changed (the world saves it).</summary>
     public event Action<Player>? MoneyChanged;
 
@@ -96,6 +99,11 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             return;
         }
 
+        if (npc != player.Guid) // the .stable command is not an NPC interaction (vmangos SendStablePet)
+        {
+            InteractingCancels?.Invoke(player);
+        }
+
         WithState(player, failWhenBusy: false, state => player.Session.Send(WorldOpcode.MsgListStabledPets, BuildList(player, npc, state)));
     }
 
@@ -108,6 +116,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             return;
         }
 
+        InteractingCancels?.Invoke(player);
         WithState(player, failWhenBusy: true, state =>
         {
             int id = Id(player);
@@ -150,6 +159,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             return;
         }
 
+        InteractingCancels?.Invoke(player);
         WithState(player, failWhenBusy: true, state =>
         {
             if (state.PurchasedSlots >= MaxStableSlots || Store is not { } store)
@@ -250,6 +260,7 @@ public sealed class PetStableController(SummonService summons, ILogger? logger =
             return;
         }
 
+        InteractingCancels?.Invoke(player);
         WithState(player, failWhenBusy: true, state =>
         {
             int id = Id(player);

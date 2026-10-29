@@ -25,6 +25,7 @@
     <ProjectReference Include="..\ThirdParty\WowWorldMessages\WowWorldMessages.Vanilla.csproj" />
     <ProjectReference Include="..\..\tools\ArcaneCore.Sniff\ArcaneCore.Sniff.csproj" />
     <ProjectReference Include="..\ArcaneCore.TestSupport\ArcaneCore.TestSupport.csproj" />
+    <ProjectReference Include="..\fixtures\SupervisedChildFixture\SupervisedChildFixture.csproj" />
   </ItemGroup>
 
   <ItemGroup>

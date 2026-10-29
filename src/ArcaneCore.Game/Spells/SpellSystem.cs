@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Game.Items.ItemUse;
 using ArcaneCore.Game.Ranged;
@@ -249,31 +250,32 @@ public sealed partial class SpellSystem
         UpdateSpellBatch(); // casts held for the spell batch window go off together (SpellSystem.Batching.cs)
         if (_states.Count == 0)
         {
+            PublishStateCounters(0, 0);
             return;
         }
 
         uint now = NowMs;
-        int stateCount = _states.Count;
-        UnitSpellState[] states = System.Buffers.ArrayPool<UnitSpellState>.Shared.Rent(stateCount);
-        _states.Values.CopyTo(states, 0);
-        try
+        if (!ActiveSetEnabled)
         {
-            for (int i = 0; i < stateCount; i++)
+            FlushPendingWakes(); // the all-states loop does not read the list: merge pending wakes and drop detached states so it stays bounded
+            _active.RemoveAll(LeavesActiveList);
+            int allVisited = UpdateAllStates(diffMs, now);
+            int activeStates = 0;
+            foreach (UnitSpellState s in _states.Values)
             {
-                try
+                if (s.IsActive)
                 {
-                    UpdateState(states[i], diffMs, now);
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                {
-                    FaultLedger.Shared.Record("spell.update", ex);
+                    activeStates++;
                 }
             }
+
+            PublishStateCounters(allVisited, activeStates);
+            return;
         }
-        finally
-        {
-            System.Buffers.ArrayPool<UnitSpellState>.Shared.Return(states, clearArray: true);
-        }
+
+        int visited = UpdateActiveStates(diffMs, now);
+        PublishStateCounters(visited, _active.Count + _pendingWakes.Count);
+        AuditDormantStates();
     }
 
     private void UpdateState(UnitSpellState state, uint diffMs, uint now)
@@ -341,7 +343,7 @@ public sealed partial class SpellSystem
         ExpireCooldowns(state, now);
         if (state.IsIdle)
         {
-            _states.Remove(state.Unit.Guid);
+            DropState(state);
         }
     }
 
@@ -981,14 +983,24 @@ public sealed partial class SpellSystem
             return;
         }
 
-        if (cast.Caster is Player && cast.Timer != 0 && cast.HasMoved
+        // vmangos Spell::update (Spell.cpp:4027-4057): a spell with HIDE_CHANNEL_BAR never move-cancels, and Stuck (Hearthstone-style
+        // unstuck) is exempt while the player is falling far.
+        if (cast.Caster is Player mover && cast.Timer != 0 && !cast.Spell.HidesChannelBar && cast.HasMoved
+            && (cast.Spell.Effects[0].Effect != SpellEffectName.Stuck || !mover.Movement.HasFlag(MovementFlags.FallingFar))
             && (cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement)
                 || cast.Spell.AuraInterruptFlags.HasFlag(SpellAuraInterruptFlags.Moving)
                 || cast.Spell.ChannelInterruptFlags.HasFlag(SpellAuraInterruptFlags.Moving)))
         {
             // vmangos Spell::update: channels always cancel; casts only with the movement interrupt flag.
-            if (cast.State == SpellCastState.Casting
-                || (!cast.IsTriggered && cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement)))
+            if (cast.State == SpellCastState.Casting)
+            {
+                if (!ChannelSurvivesMoveBecauseSelfRooted(cast.Spell, mover))
+                {
+                    Cancel(cast);
+                    return;
+                }
+            }
+            else if (!cast.IsTriggered && cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement))
             {
                 Cancel(cast);
                 return;
@@ -1131,6 +1143,28 @@ public sealed partial class SpellSystem
         return target.IsAlive ? !cast.Spell.IsDeathOnly : cast.Spell.CanTargetDead;
     }
 
+    /// <summary>
+    /// vmangos Spell::update (Spell.cpp:4031-4049): a channel with an ApplyAura ModRoot or ModStun effect aimed at its own caster
+    /// (TARGET_UNIT_CASTER in TargetA) does not cancel on movement while the caster has the Root movement flag or a root change still
+    /// awaiting its client acknowledgement (HasPendingMovementChange(ROOT)), because the player may move a little before the root is
+    /// acknowledged. The first such effect decides; a root aimed at another unit does not qualify.
+    /// </summary>
+    private static bool ChannelSurvivesMoveBecauseSelfRooted(SpellInfo spell, Player caster)
+    {
+        IReadOnlyList<SpellEffectInfo> effects = spell.Effects;
+        for (int i = 0; i < effects.Count; i++)
+        {
+            SpellEffectInfo effect = effects[i];
+            if (effect.Effect == SpellEffectName.ApplyAura
+                && (effect.AuraType == AuraType.ModRoot || effect.AuraType == AuraType.ModStun)
+                && effect.TargetA == SpellImplicitTarget.UnitCaster)
+            {
+                return caster.Movement.HasFlag(MovementFlags.Root) || caster.Locomotion.Pending.HasPendingOfType(MovementChangeType.Root);
+            }
+        }
+
+        return false;
+    }
     /// <summary>
     /// vmangos SpellAuraHolder::UpdateHolder (SpellAuras.cpp:7338-7376): while the channel's aura sits on its channel target,
     /// the channel is interrupted when the combat distance passes the spell's maximum range times 1.33 for a hostile target, or
@@ -1290,7 +1324,7 @@ public sealed partial class SpellSystem
         }
 
         state.Auras.Clear();
-        _states.Remove(state.Unit.Guid);
+        DropState(state);
     }
 
     // --- checks -------------------------------------------------------------------------
@@ -1935,8 +1969,16 @@ public sealed partial class SpellSystem
     {
         if (!_states.TryGetValue(unit.Guid, out UnitSpellState? state) || !ReferenceEquals(state.Unit, unit))
         {
-            state = new UnitSpellState(unit);
+            if (state is not null)
+            {
+                Detach(state); // a different Unit object with the same guid
+            }
+
+            state = new UnitSpellState(this, unit, _nextStateSeq++);
             _states[unit.Guid] = state;
+            _all.Add(state);
+            unit.SpellState = state;
+            state.Wake(SpellWakeReason.StateCreated);
         }
 
         return state;

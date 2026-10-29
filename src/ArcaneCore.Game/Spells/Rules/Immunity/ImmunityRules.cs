@@ -69,7 +69,8 @@ public static class ImmunityRules
 
     /// <summary>
     /// vmangos Unit::IsImmuneToSchoolMask (Unit.cpp:10497-10508): any school-immunity aura covers a school of the mask,
-    /// whatever its polarity. Used to absorb all damage of an immune unit.
+    /// whatever its polarity, and so does a creature school or damage immunity (template mask and creature_immunities rows of type 2 and 3;
+    /// mangos-classic Unit::IsImmuneToDamage, Unit.cpp:7326-7341, covers melee too, Unit.cpp:1924, 8929). Used to absorb all damage of an immune unit.
     /// </summary>
     public static bool IsImmuneToSchoolMask(SpellSystem system, Unit unit, uint schoolMask)
     {
@@ -80,7 +81,7 @@ public static class ImmunityRules
             return false;
         }
 
-        if (system.CreatureImmunities is { } creatures && (creatures.SchoolImmuneMask(unit) & schoolMask) != 0)
+        if (system.CreatureImmunities is { } creatures && ((creatures.SchoolImmuneMask(unit) | creatures.DamageImmuneMask(unit)) & schoolMask) != 0)
         {
             return true;
         }
@@ -110,7 +111,8 @@ public static class ImmunityRules
             return false;
         }
 
-        if (system.CreatureImmunities is { } creatures && (creatures.SchoolImmuneMask(target) & schoolMask) != 0)
+        if (system.CreatureImmunities is { } creatures
+            && ((creatures.SchoolImmuneMask(target) | creatures.DamageImmuneMask(target)) & schoolMask) != 0)
         {
             return true;
         }
@@ -198,6 +200,13 @@ public static class ImmunityRules
             {
                 return true;
             }
+
+            // creature_immunities dispel rows: any spell of the dispel type, whatever its polarity (mangos-classic Unit::IsImmuneToSpell, Unit.cpp:7343-7354).
+            // Unlike mangos-classic, self-casts are exempt (deliberate, as for the template masks above).
+            if (spell.Dispel < 32 && (creatures.DispelImmuneMask(target) & (1u << (int)spell.Dispel)) != 0)
+            {
+                return true;
+            }
         }
 
         bool incoming = spell.IsPositive;
@@ -258,6 +267,13 @@ public static class ImmunityRules
             && (creatures.MechanicImmuneMask(target) & SpellMechanics.Mask(mechanic)) != 0)
         {
             return true;
+        }
+
+        if (!castOnSelf && system.CreatureImmunities is { } rows
+            && ((!effect.IsEmpty && rows.IsImmuneToEffect(target, effect.Effect))
+                || (effect.AuraType != AuraType.None && rows.IsImmuneToAuraState(target, effect.AuraType))))
+        {
+            return true; // creature_immunities effect and state rows (mangos-classic Unit::IsImmuneToSpellEffect, Unit.cpp:7385-7418: the state row is checked for every effect that carries an aura name, area and persistent auras included; self-casts are exempt here, not there)
         }
 
         bool incoming = spell.IsPositive;

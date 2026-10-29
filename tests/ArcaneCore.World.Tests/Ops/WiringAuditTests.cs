@@ -109,9 +109,12 @@ public sealed class WiringAuditTests
             Assert.NotNull(services.GetRequiredService<UnhandledOpcodeTracker>());
             string[] hosted = [.. services.GetServices<IHostedService>().Select(s => s.GetType().Name)];
             Assert.Contains("WorldConsole", hosted);
+            Assert.Contains("SupervisedChildDrain", hosted);
             Assert.Contains("MetricsHost", hosted);
             Assert.Contains("WorldHost", hosted);
             Assert.Contains("WorldServer", hosted);
+            // WorldServer stops first, closing every socket session (each posts its RemovePlayer, so logout hooks run) before WorldHost stops the world and SaveAll runs (wiring audit D5).
+            Assert.True(Array.IndexOf(hosted, "WorldHost") < Array.IndexOf(hosted, "WorldServer"), "WorldServer must be registered after WorldHost so its sessions close before the world stops");
             // Hosted services stop in reverse order: the WAL checkpointer (registered by AddAuthDatabase) must stop, and run its final checkpoint, after WorldHost has drained the save queue.
             Assert.False(services.GetRequiredService<IOptions<HostOptions>>().Value.ServicesStopConcurrently, "concurrent stop would run the WAL checkpointer's final checkpoint before the save queue drains");
             Assert.Contains("SqliteCheckpointService", hosted);

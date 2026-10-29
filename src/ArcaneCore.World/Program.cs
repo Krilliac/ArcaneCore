@@ -66,6 +66,13 @@ if (startupReport.IsInvalid)
     return ExitCodes.InvalidConfiguration;
 }
 
+// Supervisor mode (Cluster:Supervisor:Enabled, docs/CLUSTERING_DESIGN.md M15.4): this executable only launches and watches the configured
+// child processes. It runs before anything below opens a database, a listener or a diagnostics hook, and never calls AddWorldProductionServices.
+if (ArcaneCore.World.Cluster.Supervision.ClusterSupervisorHosting.IsEnabled(builder.Configuration))
+{
+    return await ArcaneCore.World.Cluster.Supervision.ClusterSupervisorHosting.RunAsync(builder, Console.Error).ConfigureAwait(false);
+}
+
 // Name the console window (worldserver), so an operator running both daemons can tell them apart (no window: skipped).
 ArcaneCore.Kernel.Ops.ServerConsole.ServerConsoleTitle.TrySet("worldserver", builder.Configuration["World:Port"]);
 

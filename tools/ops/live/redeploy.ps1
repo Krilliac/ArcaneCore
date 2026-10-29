@@ -152,7 +152,7 @@ function Stop-Graceful([string]$Role, [int]$ProcId, [int]$TimeoutSec) {
     # stopping, so Ctrl-Break goes out only when the log shows Ctrl-C did not start the shutdown.
     $p = Get-Process -Id $ProcId -ErrorAction SilentlyContinue
     if (-not $p) { "PID $ProcId already gone"; return }
-    $log = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome
+    $log = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -LiveProfile $LiveProfile
     $from = if (Test-Path -LiteralPath $log) { (Get-Item -LiteralPath $log).Length } else { 0 }
     Send-ConsoleCtrl $ProcId 0
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
@@ -187,7 +187,7 @@ $realm = Get-LiveDaemon Realm
 if ($world) { Stop-Graceful World $world.Id $WorldStopTimeoutSec }
 if ($realm) { Stop-Graceful Realm $realm.Id $RealmStopTimeoutSec }
 
-$tail = Get-Content (Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome) -Tail 3000 -ErrorAction SilentlyContinue | Select-String 'saved and stopped' | Select-Object -Last 1
+$tail = Get-Content (Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome -LiveProfile $LiveProfile) -Tail 3000 -ErrorAction SilentlyContinue | Select-String 'saved and stopped' | Select-Object -Last 1
 "last stop line: $tail"
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
@@ -241,7 +241,7 @@ $fallbacks = @(foreach ($role in 'Realm', 'World') { Get-LiveLogFallback -Role $
 if ($fallbacks.Count -gt 0) {
     throw "the daemons are running, but a log name is owned by another writer; fallback files written since the start: $($fallbacks.FullName -join ', ')"
 }
-"logs: $(Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome), $(Get-LiveDaemonLogPath -Role Realm -LiveHome $LiveHome)"
+"logs: $(Get-LiveDaemonLogPath -Role World -LiveHome $LiveHome -LiveProfile $LiveProfile), $(Get-LiveDaemonLogPath -Role Realm -LiveHome $LiveHome -LiveProfile $LiveProfile)"
 Write-DeployRecord -LiveHome $LiveHome -Record (New-DeployRecordData -Live $live -Src $Src -Method restart -Modules $restartModules)
 "deployed $($live.Worktree.Sha) recorded in $(Get-DeployRecordPath -LiveHome $LiveHome)"
 # robocopy's 1-7 are success codes; don't let the last one leak out as the script's exit code.

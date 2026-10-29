@@ -107,7 +107,7 @@ Section `Ops:Diagnostics:Dumps` (World daemon, restart-only; listed in [the conf
 | Key | Default | Meaning |
 |---|---|---|
 | `Ops:Diagnostics:Dumps:Enabled` | `false` | Allow `.debug dump`. |
-| `Ops:Diagnostics:Dumps:Directory` | empty = `dumps` beside `Logging:ArcaneCore:File:Path` (so `logs/dumps`) | Where dump files go; created on first use. |
+| `Ops:Diagnostics:Dumps:Directory` | empty = `dumps` beside `Logging:ArcaneCore:File:Path` (so `logs/dumps`, whichever format the file uses) | Where dump files go; created on first use. |
 | `Ops:Diagnostics:Dumps:MinIntervalSeconds` | `600` | Least seconds between two dumps; 0 disables the limit. |
 
 ## Watchdog memory line

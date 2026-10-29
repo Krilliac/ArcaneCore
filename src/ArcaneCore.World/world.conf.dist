@@ -1770,6 +1770,87 @@ Cluster.NodeBridge.Enabled = false
 Cluster.NodeBridge.Endpoints = "worker:EK|Worker|127.0.0.1:19081|0;worker:Kalimdor|Worker|127.0.0.1:19082|1;worker:instances|Worker|127.0.0.1:19083|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway|Gateway|127.0.0.1:19084|-;social|Social|127.0.0.1:19085|-;coordinator|Coordinator|127.0.0.1:19086|-;supervisor|Supervisor|127.0.0.1:19087|-"
 
 #----------------------------------------------------------------------------
+# Cluster:Supervisor
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Supervisor.Enabled
+#        Description: Runs this World process as the host supervisor only (default: false): it
+#                     launches and watches the configured Processes and starts no world, database,
+#                     listener or feature. Off, a World start is unchanged.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.Enabled = false
+
+#
+#    Cluster.Supervisor.MaxConcurrentProcesses
+#        Description: Maximum number of concurrent supervised child processes allowed on this host
+#                     (default: 9).
+#        Type: int
+#        Default: 9
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.MaxConcurrentProcesses = 9
+
+#
+#    Cluster.Supervisor.MaxTotalAllocatedMemoryMb
+#        Description: Optional cap on the sum of SupervisedProcessConfig.RequiredMemoryMb across all
+#                     active supervised processes.
+#        Type: long?
+#        Default: (not set)
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+# Cluster.Supervisor.MaxTotalAllocatedMemoryMb =
+
+#
+#    Cluster.Supervisor.MinClusterProcesses
+#        Description: Minimum number of supervised processes a supervisor start must be able to
+#                     admit (realm, gateway and one worker; default: 3). A start that can admit
+#                     fewer launches nothing and refuses with a message naming this key.
+#        Type: int
+#        Default: 3
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.MinClusterProcesses = 3
+
+#
+#    Cluster.Supervisor.MinFreeMemoryReserveMb
+#        Description: Minimum free host memory reserve in MiB that must remain after admitting a
+#                     child process (default: 1024 MiB).
+#        Type: long
+#        Default: 1024
+#        Allowed: a whole number, -9223372036854775808 to 9223372036854775807
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.MinFreeMemoryReserveMb = 1024
+
+#
+#    Cluster.Supervisor.Processes
+#        Description: Supervised process definitions, started in ascending
+#                     SupervisedProcessConfig.StartOrder (ties by key), keyed by a configuration key
+#                     that must not contain : (e.g. worker-EK); the display name may, via
+#                     SupervisedProcessConfig.Name (worker:EK).
+#        Type: Dictionary<string, SupervisedProcessConfig>
+#        Default: (empty)
+#        Allowed: a map: one key per entry name; each entry is a group of keys
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+# Empty by default.
+# Cluster.Supervisor.Processes.<Name> =
+
+#----------------------------------------------------------------------------
 # Cluster:Worker
 #----------------------------------------------------------------------------
 
@@ -4751,7 +4832,7 @@ Logging.ArcaneCore.Console.QueueCapacity = 4096
 
 #
 #    Logging.ArcaneCore.File.Enabled
-#        Description: true writes the plain text log to Path. Default off.
+#        Description: true writes the one log file, in the chosen Format, to Path. Default off.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -4763,14 +4844,15 @@ Logging.ArcaneCore.File.Enabled = false
 #
 #    Logging.ArcaneCore.File.Path
 #        Description: The active log file; relative paths resolve against the working directory.
-#                     Rolled segments sit next to it as name-yyyyMMdd-NNN.ext.
+#                     Rolled segments sit next to it as name-yyyyMMdd-NNN.ext. Not set means
+#                     logs/arcanecore.jsonl for a Json file and logs/arcanecore.log for a Text file.
 #        Type: string
-#        Default: "logs/arcanecore.log"
+#        Default: (not set)
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#loggingarcanecore
 #
-Logging.ArcaneCore.File.Path = "logs/arcanecore.log"
+# Logging.ArcaneCore.File.Path =
 
 #
 #    Logging.ArcaneCore.File.QueueCapacity
@@ -4819,6 +4901,22 @@ Logging.ArcaneCore.File.RollDaily = true
 Logging.ArcaneCore.File.RollSizeMb = 64
 
 #
+#    Logging.ArcaneCore.Format
+#        Description: The content format of the one log file: Json (one JSON object per line,
+#                     structured properties kept) or Text (the plain console line format). Not set
+#                     means the legacy File/Json switches decide; with nothing configured the
+#                     default is Json: JSON keeps the structured state properties for ingestion, and
+#                     the console already gives a text view. The file is configured under File.
+#                     Restart-only. Values: Text, Json.
+#        Type: LogFileFormat?
+#        Default: (not set)
+#        Allowed: Text | Json
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#loggingarcanecore
+#
+# Logging.ArcaneCore.Format =
+
+#
 #    Logging.ArcaneCore.IncludeScopes
 #        Description: true appends the active logger scopes to each line (=&gt; scope). Live at
 #                     reload.
@@ -4832,7 +4930,8 @@ Logging.ArcaneCore.IncludeScopes = true
 
 #
 #    Logging.ArcaneCore.Json.Enabled
-#        Description: true writes one JSON object per log event to Path. Default off.
+#        Description: Deprecated: use File:Enabled with Format=Json. true writes one JSON object per
+#                     log event to Path. Default off.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -4843,20 +4942,20 @@ Logging.ArcaneCore.Json.Enabled = false
 
 #
 #    Logging.ArcaneCore.Json.Path
-#        Description: The active JSON-lines file; relative paths resolve against the working
-#                     directory. Rolls like the text file.
+#        Description: Deprecated: use File:Path. The active JSON-lines file; relative paths resolve
+#                     against the working directory. Not set means logs/arcanecore.jsonl.
 #        Type: string
-#        Default: "logs/arcanecore.jsonl"
+#        Default: (not set)
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#loggingarcanecore
 #
-Logging.ArcaneCore.Json.Path = "logs/arcanecore.jsonl"
+# Logging.ArcaneCore.Json.Path =
 
 #
 #    Logging.ArcaneCore.Json.QueueCapacity
-#        Description: Lines the JSON writer thread may hold before new lines are dropped (counted
-#                     and reported as a JSON line).
+#        Description: Deprecated: use File:QueueCapacity. Lines the JSON writer thread may hold
+#                     before new lines are dropped (counted and reported as a JSON line).
 #        Type: int
 #        Default: 8192
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -4867,8 +4966,8 @@ Logging.ArcaneCore.Json.QueueCapacity = 8192
 
 #
 #    Logging.ArcaneCore.Json.Retain
-#        Description: Rolled segments kept; the oldest beyond this count are deleted after each
-#                     roll. 0 keeps all.
+#        Description: Deprecated: use File:Retain. Rolled segments kept; the oldest beyond this
+#                     count are deleted after each roll. 0 keeps all.
 #        Type: int
 #        Default: 14
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -4879,7 +4978,8 @@ Logging.ArcaneCore.Json.Retain = 14
 
 #
 #    Logging.ArcaneCore.Json.RollDaily
-#        Description: true rolls at the first line of a new day (in the Timestamps clock).
+#        Description: Deprecated: use File:RollDaily. true rolls at the first line of a new day (in
+#                     the Timestamps clock).
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -4890,7 +4990,8 @@ Logging.ArcaneCore.Json.RollDaily = true
 
 #
 #    Logging.ArcaneCore.Json.RollSizeMb
-#        Description: Roll when the active file would exceed this many MiB; 0 never rolls by size.
+#        Description: Deprecated: use File:RollSizeMb. Roll when the active file would exceed this
+#                     many MiB; 0 never rolls by size.
 #        Type: int
 #        Default: 64
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -5577,8 +5678,8 @@ Net.Protection.WorldPacketsPerSecond = 4000
 #
 #    Ops.Diagnostics.Dumps.Directory
 #        Description: The directory the dump files are written to. Empty (default) means dumps
-#                     beside the text log file (Logging:ArcaneCore:File:Path, so logs/dumps by
-#                     default). It is created on the first dump.
+#                     beside the log file (the resolved Logging:ArcaneCore:File:Path, so logs/dumps
+#                     by default). It is created on the first dump.
 #        Type: string
 #        Default: ""
 #        Allowed: text
@@ -13938,6 +14039,50 @@ World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
+#    World.Playerbots.CornerCentringMaxYards
+#        Description: The most (yards, 0..10) the centring part of a PathShaping move can be: a
+#                     corner in a corridor bounded on both sides (a road between two walls) is
+#                     pushed away from the inside of the turn by the larger of the clearance still
+#                     missing and its way to the middle of the corridor, and this caps that way to
+#                     the middle only, so it never lowers the clearance push. 0 turns road centring
+#                     off. A corner is never moved closer than 0.5 yard to the far side.
+#        Type: float
+#        Default: 4
+#        Allowed: a number from 0 to 10 ('.' is the decimal point); 0 turns road centring off
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CornerCentringMaxYards = 4
+
+#
+#    World.Playerbots.CornerClearanceYards
+#        Description: The clearance (yards, 0.5..5) kept from the obstacle on the inside of a turn
+#                     when PathShaping moves a route corner. The navigation mesh is built with a 0.2
+#                     yard agent radius, so an unshaped corner sits that close to the wall or post
+#                     it goes around.
+#        Type: float
+#        Default: 2
+#        Allowed: a number from 0.5 to 5 ('.' is the decimal point)
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CornerClearanceYards = 2
+
+#
+#    World.Playerbots.CornerTurnLeadYards
+#        Description: How far before a corner (yards, 0..6) PathShaping starts to turn it: the
+#                     tangent length of the arc that rounds a turn sharper than about 34 degrees. 0
+#                     turns rounding off; the lead is also held to 40% of the shorter leg beside the
+#                     corner.
+#        Type: float
+#        Default: 2.5
+#        Allowed: a number from 0 to 6 ('.' is the decimal point); 0 turns corner rounding off
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CornerTurnLeadYards = 2.5
+
+#
 #    World.Playerbots.CutRegionMaxPolygons
 #        Description: The most polygons a cut region (a navigation region that is the only way
 #                     between two large parts of the mesh, such as the Timbermaw Hold tunnel) may
@@ -14028,6 +14173,18 @@ World.Playerbots.Economy.BuyReagents = true
 World.Playerbots.Economy.BuyUpgradeBudgetFraction = 0.25
 
 #
+#    World.Playerbots.Economy.ConsumableKeepCount
+#        Description: Per consumable entry, the count (1..200) a bot always keeps before a stack of
+#                     it is surplus.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ConsumableKeepCount = 20
+
+#
 #    World.Playerbots.Economy.Enabled
 #        Description: Let bots list, buy and collect at the auction house (on by default). Off: no
 #                     visit starts; a running one is dropped.
@@ -14038,6 +14195,34 @@ World.Playerbots.Economy.BuyUpgradeBudgetFraction = 0.25
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.Enabled = true
+
+#
+#    World.Playerbots.Economy.HouseBuyoutsPerHour
+#        Description: The most auctions all bots together buy out at one auction house in any 60
+#                     minutes of world time (0..100000); 0 lets no bot buy there. A soft limit: a
+#                     buyout counts when the house confirms it, so bots with buyouts in flight
+#                     together can overshoot it by their number.
+#        Type: int
+#        Default: 200
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.HouseBuyoutsPerHour = 200
+
+#
+#    World.Playerbots.Economy.HouseListingsPerHour
+#        Description: The most auctions all bots together list at one auction house in any 60
+#                     minutes of world time (0..100000); 0 lets no bot list there. A soft limit: a
+#                     listing counts when the house confirms it, so bots with listings in flight
+#                     together can overshoot it by their number.
+#        Type: int
+#        Default: 400
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.HouseListingsPerHour = 400
 
 #
 #    World.Playerbots.Economy.ListChancePerVisit
@@ -14101,6 +14286,30 @@ World.Playerbots.Economy.ListMarkupPercentRare = 800
 World.Playerbots.Economy.ListMarkupPercentUncommon = 300
 
 #
+#    World.Playerbots.Economy.ListSurplusConsumables
+#        Description: List stacks of consumables (food, drink, potions, bandages, elixirs, scrolls)
+#                     beyond the keep count (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.ListSurplusConsumables = true
+
+#
+#    World.Playerbots.Economy.MaxBuyoutsPerHour
+#        Description: The most auctions one bot buys out, reagents and upgrades together, in any 60
+#                     minutes of world time (0..100); 0 buys nothing.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MaxBuyoutsPerHour = 6
+
+#
 #    World.Playerbots.Economy.MaxListingsPerBot
 #        Description: The most auctions one bot has listed at once (0..50), counted from the auction
 #                     house's own owner list; 0 lists nothing.
@@ -14111,6 +14320,44 @@ World.Playerbots.Economy.ListMarkupPercentUncommon = 300
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Economy.MaxListingsPerBot = 5
+
+#
+#    World.Playerbots.Economy.MaxListingsPerHour
+#        Description: The most auctions one bot lists in any 60 minutes of world time (0..100); 0
+#                     lists nothing.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MaxListingsPerHour = 10
+
+#
+#    World.Playerbots.Economy.MoneyGoal
+#        Description: A bot short of money lists every visit and gets 3 more listing slots (on by
+#                     default). Short means its budget reserves more than it has, or its money is
+#                     below MoneyGoalCopperPerLevel times its level. It only raises listing, and
+#                     never when ListChancePerVisit or MaxListingsPerBot is 0.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MoneyGoal = true
+
+#
+#    World.Playerbots.Economy.MoneyGoalCopperPerLevel
+#        Description: The money floor per character level of the money goal, in copper (0..100000);
+#                     0: only what the budget reserves counts.
+#        Type: int
+#        Default: 500
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Economy.MoneyGoalCopperPerLevel = 500
 
 #
 #    World.Playerbots.Economy.VisitIntervalMinutes
@@ -15671,6 +15918,24 @@ World.Playerbots.PathJobsMaxInFlightNodes = 262144
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.PathJobsMaxPerBot = 1
+
+#
+#    World.Playerbots.PathShaping
+#        Description: Whether a navigated bot route is shaped after its corners are found
+#                     (PlayerbotPathShaping): a corner is moved off the obstacle on the inside of
+#                     the turn (a post, a wall corner) and toward the middle of a bounded corridor,
+#                     and a sharp turn is rounded with a short arc. Every shaped leg is checked
+#                     against the walkable mesh and the line of sight; a corner that cannot be
+#                     shaped safely (a doorway, a bridge) keeps its mesh position. This is the
+#                     master switch for CornerClearanceYards, CornerCentringMaxYards and
+#                     CornerTurnLeadYards.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathShaping = true
 
 #
 #    World.Playerbots.Policy.AbPolicyShare
@@ -18115,6 +18380,31 @@ World.Playerbots.Social.Trading.AcceptGifts = true
 World.Playerbots.Social.Trading.AnswerTrades = true
 
 #
+#    World.Playerbots.Social.Trading.Deals.BuyMaxPremiumPercent
+#        Description: The most a buying bot pays over the item's reference price in percent; never
+#                     more than the reference divided by 0.67 (0..100, default 50).
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.BuyMaxPremiumPercent = 50
+
+#
+#    World.Playerbots.Social.Trading.Deals.CounterTolerancePercent
+#        Description: A counter-offer the bot accepts: at most this share under its ask when selling
+#                     (never under the vendor value); one counter per deal, then it holds its price
+#                     (0..50, default 10).
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Social.Trading.Deals.CounterTolerancePercent = 10
+
+#
 #    World.Playerbots.Social.Trading.Deals.DealMinutes
 #        Description: The minutes an agreed deal stays open (1..60, default 5).
 #        Type: int
@@ -18187,7 +18477,7 @@ World.Playerbots.Social.Trading.Deals.PairCooldownMinutes = 10
 #
 #    World.Playerbots.Social.Trading.Deals.PriceBookHours
 #        Description: The hours an auction house observation is kept in the price book (1..720,
-#                     default 24).
+#                     default 24). Read by the price book (design lane T1), not yet by the desk.
 #        Type: int
 #        Default: 24
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18199,7 +18489,8 @@ World.Playerbots.Social.Trading.Deals.PriceBookHours = 24
 #
 #    World.Playerbots.Social.Trading.Deals.PriceBookMinSellers
 #        Description: The distinct seller accounts an item needs before an auction house reading
-#                     prices a deal (1..20, default 3).
+#                     prices a deal (1..20, default 3). Read by the price book (design lane T1), not
+#                     yet by the desk.
 #        Type: int
 #        Default: 3
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18210,8 +18501,8 @@ World.Playerbots.Social.Trading.Deals.PriceBookMinSellers = 3
 
 #
 #    World.Playerbots.Social.Trading.Enabled
-#        Description: Master switch (on by default). Once the trade desk lands (a later P4 step),
-#                     off will cancel every window it drives at its next pass; no effect until then.
+#        Description: Master switch (on by default). Off stops the trade desk quoting and agreeing
+#                     deals and cancels every window it drives at its next pass.
 #        Type: bool
 #        Default: true
 #        Allowed: true | false

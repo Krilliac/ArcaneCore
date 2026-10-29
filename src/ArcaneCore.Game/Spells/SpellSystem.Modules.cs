@@ -49,6 +49,7 @@ public sealed partial class SpellSystem
             }
 
             _modules.Add(type);
+            RecordModuleAdds(type, effectsBefore, aurasBefore);
         }
     }
 }
