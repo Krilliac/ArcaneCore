@@ -13915,6 +13915,50 @@ World.Playerbots.Contention.InvincibleTargetAbandonSeconds = 8
 World.Playerbots.Contention.SomeoneElsesMemorySeconds = 15
 
 #
+#    World.Playerbots.CornerCentringMaxYards
+#        Description: The most (yards, 0..10) the centring part of a PathShaping move can be: a
+#                     corner in a corridor bounded on both sides (a road between two walls) is
+#                     pushed away from the inside of the turn by the larger of the clearance still
+#                     missing and its way to the middle of the corridor, and this caps that way to
+#                     the middle only, so it never lowers the clearance push. 0 turns road centring
+#                     off. A corner is never moved closer than 0.5 yard to the far side.
+#        Type: float
+#        Default: 4
+#        Allowed: a number from 0 to 10 ('.' is the decimal point); 0 turns road centring off
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CornerCentringMaxYards = 4
+
+#
+#    World.Playerbots.CornerClearanceYards
+#        Description: The clearance (yards, 0.5..5) kept from the obstacle on the inside of a turn
+#                     when PathShaping moves a route corner. The navigation mesh is built with a 0.2
+#                     yard agent radius, so an unshaped corner sits that close to the wall or post
+#                     it goes around.
+#        Type: float
+#        Default: 2
+#        Allowed: a number from 0.5 to 5 ('.' is the decimal point)
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CornerClearanceYards = 2
+
+#
+#    World.Playerbots.CornerTurnLeadYards
+#        Description: How far before a corner (yards, 0..6) PathShaping starts to turn it: the
+#                     tangent length of the arc that rounds a turn sharper than about 34 degrees. 0
+#                     turns rounding off; the lead is also held to 40% of the shorter leg beside the
+#                     corner.
+#        Type: float
+#        Default: 2.5
+#        Allowed: a number from 0 to 6 ('.' is the decimal point); 0 turns corner rounding off
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.CornerTurnLeadYards = 2.5
+
+#
 #    World.Playerbots.CutRegionMaxPolygons
 #        Description: The most polygons a cut region (a navigation region that is the only way
 #                     between two large parts of the mesh, such as the Timbermaw Hold tunnel) may
@@ -15648,6 +15692,24 @@ World.Playerbots.PathJobsMaxInFlightNodes = 262144
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.PathJobsMaxPerBot = 1
+
+#
+#    World.Playerbots.PathShaping
+#        Description: Whether a navigated bot route is shaped after its corners are found
+#                     (PlayerbotPathShaping): a corner is moved off the obstacle on the inside of
+#                     the turn (a post, a wall corner) and toward the middle of a bounded corridor,
+#                     and a sharp turn is rounded with a short arc. Every shaped leg is checked
+#                     against the walkable mesh and the line of sight; a corner that cannot be
+#                     shaped safely (a doorway, a bridge) keeps its mesh position. This is the
+#                     master switch for CornerClearanceYards, CornerCentringMaxYards and
+#                     CornerTurnLeadYards.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.PathShaping = true
 
 #
 #    World.Playerbots.Policy.AbPolicyShare

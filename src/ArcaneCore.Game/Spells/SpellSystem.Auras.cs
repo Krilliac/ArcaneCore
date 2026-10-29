@@ -502,7 +502,9 @@ public sealed partial class SpellSystem
         // Idle fast path: when every holder is a valid permanent passive with nothing to tick, UpdateAuraHolder would only re-validate
         // fields that are already valid, so the rent/copy/clear/return is skipped. The count is a read-only scan over the live list rather
         // than a figure maintained at each add/remove: holder state (Duration, AreaParent, IsRemoved, heartbeat fields, an aura's period)
-        // is mutated from many files, so a scan cannot go stale. Units that do tick take the unchanged path below, in the same order.
+        // is mutated from many files, so a scan cannot go stale. Whether the unit is visited at all is the active set's job
+        // (SpellSystem.ActiveSet.cs): those same fields wake the state when they change, and a state goes dormant only when IsDormant (which
+        // includes this scan) holds after its own update. Units that do tick take the unchanged path below, in the same order.
         bool ticking = AuraIdleFastPathEnabled ? AnyTickingHolder(state) : true;
         state.HasTickingHolders = ticking;
         if (!ticking)

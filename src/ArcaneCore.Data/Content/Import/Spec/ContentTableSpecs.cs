@@ -237,6 +237,8 @@ public static class ContentTableSpecs
         new("pickpocketing_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("disenchant_loot_template", [new KeyColumn("entry"), new KeyColumn("item")], s_lootColumns, s_lootSignatures),
         new("skill_fishing_base_level", [new KeyColumn("entry")], ["skill"], []),
+        new("spell_proc_item_enchant", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsProcColumn),
+        new("spell_enchant_charges", [new KeyColumn("entry")], [], [], EnchantProcDumpImporter.ReadsChargesColumn),
         new("item_template", [new KeyColumn("entry")], [], s_itemSignatures, ItemQuestDumpImporter.ReadsItemColumn),
         new("quest_template", [new KeyColumn("entry")], [], s_questSignatures, ItemQuestDumpImporter.ReadsQuestColumn),
         new("creature_questrelation", [new KeyColumn("id"), new KeyColumn("quest")], ["patch_min", "patch_max"], s_relationSignatures),
@@ -274,6 +276,9 @@ public static class ContentTableSpecs
         // spell_threat: SpellThreatDumpImporter reads by name; classic-db has Threat/ap_bonus (ap_bonus must be zero), vmangos threat/inverse_effect_mask and the build range.
         new("spell_threat", [new KeyColumn("entry")], ["Threat", "threat", "multiplier", "ap_bonus", "inverse_effect_mask", "build_min", "build_max"], s_buildRangeSignatures),
         new("world_safe_locs_facing", [new KeyColumn("id")], ["orientation"], []),
+        // pet_levelstats: classic-db keys it by creature_entry, vmangos by entry (PetDumpImporter).
+        new("pet_levelstats", [new KeyColumn("entry", "creature_entry"), new KeyColumn("level")], [], [], PetDumpImporter.ReadsLevelColumn),
+        new("petcreateinfo_spell", [new KeyColumn("entry")], [], [], PetDumpImporter.ReadsSpellColumn),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =
