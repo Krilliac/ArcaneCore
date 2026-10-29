@@ -104,7 +104,7 @@ public sealed class SupervisedProcessConfig
     public int RestartBackoffMaxMs { get; set; } = 60_000;
 
     /// <summary>
-    /// Graceful drain timeout in milliseconds before the supervisor forcibly terminates an owned child process.
+    /// Graceful drain timeout in milliseconds before the supervisor forcibly terminates an owned child process (1 to 600000; default 30000).
     /// </summary>
     public int DrainTimeoutMs { get; set; } = 30_000;
 
@@ -125,6 +125,9 @@ public sealed class SupervisedProcessConfig
     /// </summary>
     public int StartOrder { get; set; }
 
+    /// <summary>Upper bound of <see cref="DrainTimeoutMs"/> (10 minutes): the host's shutdown time is sized from the sum of these.</summary>
+    public const int MaxDrainTimeoutMs = 600_000;
+
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(Name))
@@ -139,6 +142,8 @@ public sealed class SupervisedProcessConfig
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' RestartBackoffMaxMs must be >= RestartBackoffMinMs.");
         if (DrainTimeoutMs <= 0)
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' DrainTimeoutMs must be positive.");
+        if (DrainTimeoutMs > MaxDrainTimeoutMs)
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' DrainTimeoutMs must be at most {MaxDrainTimeoutMs} (10 minutes).");
         if (RequiredMemoryMb < 0)
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' RequiredMemoryMb must be non-negative.");
     }
@@ -204,12 +209,18 @@ public sealed class ClusterSupervisorOptions
             problems.Add($"{section}:Processes defines {Processes.Count} process(es) but {section}:MinClusterProcesses is {MinClusterProcesses}.");
 
         var mapOwners = new Dictionary<uint, string>();
+        var nameOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach ((string key, SupervisedProcessConfig config) in Processes)
         {
             if (key.Contains(':', StringComparison.Ordinal))
                 problems.Add($"{section}:Processes key '{key}' must not contain ':' (use e.g. 'worker-EK' and set Name to 'worker:EK').");
 
             string name = string.IsNullOrWhiteSpace(config.Name) ? key : config.Name;
+            if (nameOwners.TryGetValue(name, out string? sameNameKey))
+                problems.Add($"{section}:Processes:{key} has the same name '{name}' as {section}:Processes:{sameNameKey}; names must be unique (case-insensitive).");
+            else
+                nameOwners[name] = key;
+
             try
             {
                 var effective = new SupervisedProcessConfig

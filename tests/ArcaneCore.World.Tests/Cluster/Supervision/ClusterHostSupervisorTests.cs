@@ -488,11 +488,36 @@ public sealed class ClusterHostSupervisorTests : IDisposable
         Assert.Empty(plan.Denied);
     }
 
+    [Fact]
+    public async Task Drain_WhenTheCallersTokenFires_StillKillsTheChild_AndDoesNotThrow()
+    {
+        var launcher = new OrderRecordingLauncher { DrainWaitsForToken = true };
+        var options = new ClusterSupervisorOptions();
+        options.Processes["gateway"] = new SupervisedProcessConfig { Name = "gateway", Role = SupervisedRoles.Gateway, ExecutablePath = "x", RequiredMemoryMb = 1 };
+        using var mux = new SupervisedOutputMultiplexer(TextWriter.Null);
+        await using var supervisor = new ClusterHostSupervisor(options, launcher, mux, new FakeCapacityProbe(availableMemoryMb: 16_384));
+        await supervisor.StartProcessAsync("gateway");
+
+        using var cts = new CancellationTokenSource();
+        Task drain = supervisor.DrainAndStopAsync(cts.Token);
+        await cts.CancelAsync();
+        await drain;
+
+        Assert.Equal(1, launcher.Killed);
+        Assert.Equal(SupervisedProcessState.Drained, supervisor.GetSnapshot("gateway").State);
+    }
+
     private sealed class OrderRecordingLauncher : ISupervisedProcessLauncher
     {
         public ConcurrentQueue<string> Launched { get; } = new();
 
         public ConcurrentQueue<string> Drained { get; } = new();
+
+        public bool DrainWaitsForToken { get; init; }
+
+        private int _killed;
+
+        public int Killed => Volatile.Read(ref _killed);
 
         public ISupervisedProcess Launch(SupervisedProcessConfig config)
         {
@@ -521,11 +546,26 @@ public sealed class ClusterHostSupervisorTests : IDisposable
             public Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default)
             {
                 owner.Drained.Enqueue(name);
+                if (owner.DrainWaitsForToken)
+                {
+                    return WaitForTokenAsync(ct);
+                }
+
                 _exit.TrySetResult(0);
                 return Task.FromResult(true);
             }
 
-            public void KillOwnedProcess() => _exit.TrySetResult(-1);
+            private static async Task<bool> WaitForTokenAsync(CancellationToken ct)
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+                return true;
+            }
+
+            public void KillOwnedProcess()
+            {
+                Interlocked.Increment(ref owner._killed);
+                _exit.TrySetResult(-1);
+            }
 
             public void Dispose()
             {

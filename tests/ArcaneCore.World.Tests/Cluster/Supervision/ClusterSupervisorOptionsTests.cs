@@ -123,6 +123,31 @@ public sealed class ClusterSupervisorOptionsTests
     }
 
     [Fact]
+    public void Validate_TwoKeysWithTheSameEffectiveName_IsError()
+    {
+        var options = new ClusterSupervisorOptions();
+        options.Processes["worker-a"] = Process(SupervisedRoles.Worker, "worker:EK");
+        options.Processes["worker-b"] = Process(SupervisedRoles.Worker, "WORKER:ek"); // names compare case-insensitively
+        options.Processes["worker:EK"] = new SupervisedProcessConfig { Role = SupervisedRoles.Worker, ExecutablePath = "dotnet" }; // no Name: the key is the name
+
+        string[] problems = [.. options.Validate()];
+
+        Assert.Contains(problems, p => p.Contains("same name", StringComparison.Ordinal) && p.Contains("worker-b", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.Contains("same name", StringComparison.Ordinal) && p.Contains("'worker:EK'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Validate_DrainTimeoutAboveTenMinutes_IsError()
+    {
+        var options = new ClusterSupervisorOptions();
+        options.Processes["slow"] = new SupervisedProcessConfig { Name = "slow", Role = SupervisedRoles.Realm, ExecutablePath = "dotnet", DrainTimeoutMs = 600_001 };
+
+        Assert.Contains(options.Validate(), p => p.Contains("DrainTimeoutMs", StringComparison.Ordinal));
+        options.Processes["slow"].DrainTimeoutMs = 600_000;
+        Assert.Empty(options.Validate());
+    }
+
+    [Fact]
     public void ConfigChecks_ReportBindFailures_AndSupervisorWithWorkerMode()
     {
         var check = new ClusterSupervisorConfigChecks();

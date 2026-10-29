@@ -75,6 +75,11 @@ public sealed class ClusterSupervisorHostedService : IHostedService
 public static class ClusterSupervisorHosting
 {
     private static readonly TimeSpan ShutdownMargin = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MaxShutdown = TimeSpan.FromHours(1);
+
+    private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
+
+    private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
 
     /// <summary>Whether <c>Cluster:Supervisor:Enabled</c> is true in <paramref name="configuration"/>.</summary>
     public static bool IsEnabled(IConfiguration configuration)
@@ -94,18 +99,15 @@ public static class ClusterSupervisorHosting
         services.AddArcaneCoreLogging(configuration);
         services.Configure<ClusterSupervisorOptions>(configuration.GetSection(ClusterSupervisorOptions.SectionName));
 
-        // HostOptions is not bound by the default builder. The hosted service drains its children one after the other, so unless
-        // HostOptions:ShutdownTimeout is configured the host waits the sum of the children's drain timeouts plus a margin, not the 30 s default.
+        // HostOptions is not bound by the default builder, and appsettings.json ships a 1 minute ShutdownTimeout. The hosted service drains its
+        // children one after the other, so the effective timeout is never below the sum of the children's DrainTimeoutMs plus a margin
+        // (a larger configured value is kept), capped at one hour.
         services.Configure<HostOptions>(configuration.GetSection("HostOptions"));
         var sized = new ClusterSupervisorOptions();
         configuration.GetSection(ClusterSupervisorOptions.SectionName).Bind(sized);
-        if (string.IsNullOrEmpty(configuration["HostOptions:ShutdownTimeout"]))
-        {
-            long drainMs = sized.Processes.Values.Sum(p => (long)p.DrainTimeoutMs);
-            TimeSpan shutdown = TimeSpan.FromMilliseconds(drainMs) + ShutdownMargin;
-            services.PostConfigure<HostOptions>(o => o.ShutdownTimeout = shutdown);
-        }
-
+        long drainMs = sized.Processes.Values.Sum(p => (long)Math.Clamp(p.DrainTimeoutMs, 0, SupervisedProcessConfig.MaxDrainTimeoutMs));
+        TimeSpan needed = TimeSpan.FromMilliseconds(drainMs) + ShutdownMargin;
+        services.PostConfigure<HostOptions>(o => o.ShutdownTimeout = Min(Max(o.ShutdownTimeout, needed), MaxShutdown));
         services.TryAddSingleton<ISupervisedProcessLauncher, SystemProcessSupervisedLauncher>();
         services.TryAddSingleton<IClusterCapacityProbe, SystemClusterCapacityProbe>();
         services.AddSingleton(sp => new ClusterHostSupervisor(
@@ -158,8 +160,9 @@ public static class ClusterSupervisorHosting
         {
             await host.WaitForShutdownAsync().ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
+            // Host.StopAsync rethrows a single hosted-service stop failure unchanged, a cancellation included: none may escape Program.cs.
             await error.WriteLineAsync($"ArcaneCore.World supervisor failed while stopping: {ex.Message}").ConfigureAwait(false);
             return ExitCodes.Failure;
         }

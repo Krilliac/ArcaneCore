@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
@@ -92,12 +93,13 @@ public interface ISupervisedProcessLauncher
 
 /// <summary>
 /// The marker the host supervisor puts in every child's environment, so a World process started as a supervised
-/// child can refuse to turn into a second supervisor (a fork bomb on a copied <c>Cluster:Supervisor:Enabled</c> key).
+/// child can refuse to turn into a second supervisor (a fork bomb on a copied <c>Cluster:Supervisor:Enabled</c> key), and so
+/// the child reads the supervisor's <c>drain</c> line on stdin (<see cref="SupervisedChildDrain"/>).
 /// </summary>
 public static class SupervisedChild
 {
     /// <summary>Environment variable set on every supervised child; its value is the child's process name.</summary>
-    public const string EnvironmentVariable = "ARCANECORE_SUPERVISED_CHILD";
+    public const string EnvironmentVariable = SupervisedChildDrain.EnvironmentVariable;
 }
 
 /// <summary>
@@ -624,7 +626,21 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         if (process is not null)
         {
             var timeout = TimeSpan.FromMilliseconds(entry.Config.DrainTimeoutMs);
-            bool exitedCleanly = await process.RequestDrainAsync(timeout, ct).ConfigureAwait(false);
+            bool exitedCleanly = false;
+            try
+            {
+                exitedCleanly = await process.RequestDrainAsync(timeout, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // The caller (the host's shutdown timeout) gave up waiting; the child still gets its kill below, never a half-finished drain.
+            }
+            catch
+            {
+                process.KillOwnedProcess();
+                throw;
+            }
+
             if (!exitedCleanly)
             {
                 process.KillOwnedProcess();

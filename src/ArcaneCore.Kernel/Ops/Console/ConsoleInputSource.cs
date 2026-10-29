@@ -10,12 +10,14 @@ namespace ArcaneCore.Kernel.Ops.ServerConsole;
 /// <param name="Output">The reply sink; must be safe to write from several threads.</param>
 /// <param name="IsInputRedirected">Whether standard input is a pipe or file (services, tests, the deploy scripts): no reader is started then.</param>
 /// <param name="IsUserInteractive">Whether the process runs in an interactive session (false for a Windows service).</param>
-public sealed record ConsoleInputSource(TextReader Input, TextWriter Output, bool IsInputRedirected, bool IsUserInteractive)
+/// <param name="IsSupervisedChild">Whether the cluster host supervisor launched this process (<see cref="SupervisedChildDrain.EnvironmentVariable"/> is set): its redirected stdin carries the supervisor's <c>drain</c> line.</param>
+public sealed record ConsoleInputSource(TextReader Input, TextWriter Output, bool IsInputRedirected, bool IsUserInteractive, bool IsSupervisedChild = false)
 {
     /// <summary>Whether a reader may be started on this source.</summary>
     public bool IsInteractive => !IsInputRedirected && IsUserInteractive;
 
     /// <summary>The process console: <see cref="Console.In"/> and a synchronized <see cref="Console.Out"/>.</summary>
     public static ConsoleInputSource Default()
-        => new(Console.In, TextWriter.Synchronized(Console.Out), Console.IsInputRedirected, Environment.UserInteractive);
+        => new(Console.In, TextWriter.Synchronized(Console.Out), Console.IsInputRedirected, Environment.UserInteractive,
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(SupervisedChildDrain.EnvironmentVariable)));
 }

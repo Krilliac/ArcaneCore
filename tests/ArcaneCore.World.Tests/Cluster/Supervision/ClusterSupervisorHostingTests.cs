@@ -111,6 +111,76 @@ public sealed class ClusterSupervisorHostingTests
         Assert.False(ClusterSupervisorHosting.IsEnabled(new ConfigurationBuilder().Build()));
     }
 
+    [Fact]
+    public async Task ShutdownTimeout_IsRaisedToTheSumOfDrainTimeouts_EvenWhenAppsettingsConfiguresLess()
+    {
+        // appsettings.json ships HostOptions:ShutdownTimeout = 00:01:00; three children with a 2 minute drain each need 6 minutes plus the margin.
+        IConfiguration configuration = Config(min: 3, processCount: 3,
+            ("HostOptions:ShutdownTimeout", "00:01:00"),
+            ("Cluster:Supervisor:Processes:p0:DrainTimeoutMs", "120000"),
+            ("Cluster:Supervisor:Processes:p1:DrainTimeoutMs", "120000"),
+            ("Cluster:Supervisor:Processes:p2:DrainTimeoutMs", "120000"));
+        await using ServiceProvider provider = Build(configuration, new RecordingLauncher());
+
+        Assert.Equal(TimeSpan.FromSeconds(375), provider.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+
+        // A larger configured value is kept, and nothing exceeds one hour.
+        await using ServiceProvider larger = Build(Config(min: 3, processCount: 3, ("HostOptions:ShutdownTimeout", "00:10:00")), new RecordingLauncher());
+        Assert.Equal(TimeSpan.FromMinutes(10), larger.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+        await using ServiceProvider capped = Build(Config(min: 3, processCount: 3, ("HostOptions:ShutdownTimeout", "05:00:00")), new RecordingLauncher());
+        Assert.Equal(TimeSpan.FromHours(1), capped.GetRequiredService<IOptions<HostOptions>>().Value.ShutdownTimeout);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenTheDrainIsCancelledDuringStop_ReturnsFailure_AndDoesNotThrow()
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        builder.Configuration.AddConfiguration(Config(min: 1, processCount: 1));
+        builder.Services.AddSingleton<ISupervisedProcessLauncher>(sp => new StopOnLaunchLauncher(sp.GetRequiredService<IHostApplicationLifetime>()));
+        var error = new StringWriter();
+
+        int exit = await ClusterSupervisorHosting.RunAsync(builder, error).WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.Equal(1, exit);
+        Assert.Contains("failed while stopping", error.ToString(), StringComparison.Ordinal);
+    }
+
+    private sealed class StopOnLaunchLauncher(IHostApplicationLifetime lifetime) : ISupervisedProcessLauncher
+    {
+        public ISupervisedProcess Launch(SupervisedProcessConfig config)
+        {
+            _ = Task.Run(lifetime.StopApplication);
+            return new CancellingProcess();
+        }
+
+        private sealed class CancellingProcess : ISupervisedProcess
+        {
+            private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            public int ProcessId => 1;
+
+            public bool HasExited => false;
+
+            public int? ExitCode => null;
+
+            public event Action<string, bool>? OutputLineReceived
+            {
+                add { }
+                remove { }
+            }
+
+            public Task<int> WaitForExitAsync(CancellationToken ct = default) => _exit.Task.WaitAsync(ct);
+
+            public Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default) => throw new OperationCanceledException("drain cancelled");
+
+            public void KillOwnedProcess() => _exit.TrySetResult(-1);
+
+            public void Dispose()
+            {
+            }
+        }
+    }
+
     private sealed class FixedProbe(long availableMb) : IClusterCapacityProbe
     {
         public long GetAvailableMemoryMb() => availableMb;
