@@ -54,6 +54,7 @@ public sealed class CreatureRowAction : RuleAction
 
         var flags = (CreatureRuleIds.RowFlags)context.Action.Param(1);
         int count = context.Action.Param(2);
+        runner.SettleLivePhase();
         ref CreatureFireFrame frame = ref runner.Frame;
         frame.Random = runner.Context.NextRandom();
         frame.RandomDrawn = true;

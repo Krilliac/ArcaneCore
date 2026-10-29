@@ -108,6 +108,30 @@ internal static partial class ParityFixtures
 
         yield return new ParityScenario
         {
+            Name = "phase-set-then-increment-in-one-batch",
+            Rows =
+            [
+                Row(156, 0, 500, 500, 0, 0, a1: Phase(2)),
+                Row(157, 0, 500, 500, 0, 0, a1: Act(23, 1)),
+                Row(158, 0, 1000, 1000, 1000, 1000, inversePhase: ~8u, flags: Repeatable, a1: Mark(158)),
+            ],
+            Steps = [Pull(), Wait(2500)],
+        };
+
+        yield return new ParityScenario
+        {
+            Name = "phase-set-then-back-in-one-batch",
+            Rows =
+            [
+                Row(170, 0, 500, 500, 0, 0, a1: Phase(2)),
+                Row(171, 0, 500, 500, 0, 0, a1: Phase(0)),
+                Row(172, 0, 1000, 1000, 1000, 1000, inversePhase: ~1u, flags: Repeatable, a1: Mark(172)),
+            ],
+            Steps = [Pull(), Wait(2500)],
+        };
+
+        yield return new ParityScenario
+        {
             Name = "every-target-type",
             Rows =
             [
