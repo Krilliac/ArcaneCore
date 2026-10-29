@@ -2,8 +2,8 @@
 
 Branch `ccr-build/infra-logging`. The structured logging subsystem in `src/ArcaneCore.Kernel/Logging`: one
 `ILoggerProvider` (`ArcaneLoggerProvider`, alias `ArcaneCore`) that replaces the .NET host's default console provider in
-both daemons, selectable from configuration, with a colour console, a plain console, a rolling text file and a JSON-lines
-file. Per-category minimum levels stay where they were (`Logging:LogLevel`). `LogSafe` (CWE-117 escaping of
+both daemons, selectable from configuration, with a colour console, a plain console and one rolling log file whose format
+is either text or JSON lines (`Logging:ArcaneCore:Format`). A daemon never writes two log files. Per-category minimum levels stay where they were (`Logging:LogLevel`). `LogSafe` (CWE-117 escaping of
 client-controlled text) is unchanged and still the caller's job; the sinks append the message as given.
 
 No third-party package is used. Serilog or NLog would have given the file and JSON sinks for free, but the repo has no
@@ -34,22 +34,92 @@ Section `Logging:ArcaneCore` (every key also in `docs/reference/configuration.md
 |---|---|---|---|
 | `Logging:ArcaneCore:Console:Mode` | `Color` | live | `Color`: ANSI colour per level, timestamp/category/scopes dimmed. `Plain`: no escape codes, fixed four-character level column (journald, CI, redirected stdout). `Off`: nothing on stdout. |
 | `Logging:ArcaneCore:Console:QueueCapacity` | `4096` | restart | Lines the console writer thread may hold before new lines are dropped. |
-| `Logging:ArcaneCore:File:Enabled` | `false` | restart | Plain text file sink on or off. |
-| `Logging:ArcaneCore:File:Path` | `logs/arcanecore.log` (shipped files: `logs/realm.log`, `logs/world.log`) | restart | Active file; relative to the working directory. Directory created on first write. One writer per file, across processes (a lock on `<path>.lock`, released when the writer closes or the process dies): a writer that finds the path owned writes `<name>.<process>.<ext>` instead (then `<name>.<process>.<pid>.<ext>`), says so once on stderr, and rolls that file under its own name. Give each daemon its own path. |
+| `Logging:ArcaneCore:Format` | `Json` when unset and no legacy key decides (see below) | restart | Content of the one log file: `Text` (same line layout as the plain console) or `Json` (one object per event, structured state kept). `Json` is the default because JSON keeps the structured state properties for ingestion, the console already gives a human-readable text view, and `Text` is one setting away (the in-repo log readers, `livecheck.ps1` and `tools/playerbot-policy/health_filter.py --tick-log`, read either format). Shipped `appsettings.json` files set `Json`. |
+| `Logging:ArcaneCore:File:Enabled` | `false` | restart | The log file on or off. |
+| `Logging:ArcaneCore:File:Path` | `logs/arcanecore.jsonl` for `Json`, `logs/arcanecore.log` for `Text` (shipped files: `logs/realm.jsonl`, `logs/world.jsonl`) | restart | Active file; relative to the working directory. Directory created on first write. One writer per file, across processes (a lock on `<path>.lock`, released when the writer closes or the process dies): a writer that finds the path owned writes `<name>.<process>.<ext>` instead (then `<name>.<process>.<pid>.<ext>`), says so once on stderr, and rolls that file under its own name. Give each daemon its own path. |
 | `Logging:ArcaneCore:File:RollSizeMb` | `64` | restart | Roll before a write would take the file past this size; `0` never rolls by size. |
 | `Logging:ArcaneCore:File:RollDaily` | `true` | restart | Roll at the first line of a new day (in the `Timestamps` clock). |
 | `Logging:ArcaneCore:File:Retain` | `14` | restart | Rolled segments kept; oldest beyond this deleted after each roll. `0` keeps all. |
 | `Logging:ArcaneCore:File:QueueCapacity` | `8192` | restart | Lines the file writer thread may hold before dropping. |
-| `Logging:ArcaneCore:Json:Enabled` | `false` | restart | JSON-lines sink on or off. |
-| `Logging:ArcaneCore:Json:Path` | `logs/arcanecore.jsonl` (shipped: `logs/realm.jsonl`, `logs/world.jsonl`) | restart | Active JSON file. Must differ from the text file path when both are on. |
-| `Logging:ArcaneCore:Json:RollSizeMb` / `RollDaily` / `Retain` / `QueueCapacity` | `64` / `true` / `14` / `8192` | restart | As for the text file. |
+| `Logging:ArcaneCore:Json:Enabled` | `false` | restart | Deprecated alias, kept for old configs. With `Format` set it only switches the file on (like `Logging:ArcaneCore:File:Enabled`); with `Format` unset it selects the legacy JSON sink. |
+| `Logging:ArcaneCore:Json:Path` | `logs/arcanecore.jsonl` | restart | Deprecated alias. With `Format` set (either format) it is used only when `Logging:ArcaneCore:File:Path` is unset; with `Format` unset it is the JSON file's path. |
+| `Logging:ArcaneCore:Json:RollSizeMb` / `RollDaily` / `Retain` / `QueueCapacity` | `64` / `true` / `14` / `8192` | restart | Deprecated aliases. Read only when `Format` is unset and `Logging:ArcaneCore:Json:Enabled` selects the JSON sink; with `Format` set the tuning comes from `Logging:ArcaneCore:File:*`. |
 | `Logging:ArcaneCore:Timestamps` | `Utc` | live | `Utc` or `Local`. Text: `yyyy-MM-dd HH:mm:ss.fff`. JSON: ISO 8601 with `Z` or the local offset. |
 | `Logging:ArcaneCore:IncludeScopes` | `true` | live | Append active logger scopes (` => scope`) to text lines, `"scopes":[...]` to JSON. |
 | `Logging:LogLevel:*` | host default | live | Unchanged: category minimum levels, applied by the logger factory before the provider sees an event. `Logging:ArcaneCore:LogLevel:*` overrides them for this provider alone (standard provider-alias rule). |
 
+**One file, how it is resolved.** `LogFileSinkPlan` is the single resolution that the provider, the config checks, the
+crash dialog and the dump directory all use.
+
+- `Format` set (`Text` or `Json`): the file is switched on by `Logging:ArcaneCore:File:Enabled` or by the deprecated `Logging:ArcaneCore:Json:Enabled`. The path
+  precedence, for both formats, is `Logging:ArcaneCore:File:Path` > the legacy `Logging:ArcaneCore:Json:Path` > the default for the format, so per-role
+  environment `Json` paths never collapse the realm and the world onto one default. Rolling and queue
+  tuning come from `Logging:ArcaneCore:File:*`. If `Logging:ArcaneCore:Json:Enabled` is true, a startup Warning (key `Logging:ArcaneCore:Json:Enabled`) says
+  it is deprecated and the file is configured under `Logging:ArcaneCore:File`. Otherwise, if `Logging:ArcaneCore:Json:Path` is set and differs from
+  `Logging:ArcaneCore:File:Path`, the same Warning is keyed `Logging:ArcaneCore:Json:Path`; a `Logging:ArcaneCore:Json:Path` equal to `Logging:ArcaneCore:File:Path`
+  (compared as full paths) with `Logging:ArcaneCore:Json:Enabled` false does not warn.
+- The section not in force (`Logging:ArcaneCore:Json:*` when the file section is `Logging:ArcaneCore:File`, and the reverse for a legacy `Json` file) is
+  not used, but an out-of-range `RollSizeMb`, `Retain` or `QueueCapacity` in it is reported by `check-config` as a WARNING naming that key and saying
+  the section is not in force. The same values in the section in force are errors.
+- `Format` unset (legacy configs): `Logging:ArcaneCore:File:Enabled` alone writes `Text` at `Logging:ArcaneCore:File:Path`; `Logging:ArcaneCore:Json:Enabled` alone writes `Json` at
+  `Logging:ArcaneCore:Json:Path` with the `Logging:ArcaneCore:Json:*` tuning; both enabled writes `Json` only at `Logging:ArcaneCore:Json:Path`, and a startup Warning names both
+  paths and says the text sink is not being written; neither enabled writes no file. `Logging:ArcaneCore:Json:Enabled` alone (no `Format`) is
+  a deprecated alias and also warns: set `Format=Json` and move `Enabled`/`Path`/tuning to `File`.
+- Every one of these warnings is reported by `check-config` as a WARNING issue (key, message, fix) and logged at startup.
+  Warnings never fail startup or sink construction, except that `Startup:Strict=true` turns every config-check warning into a startup
+  failure, as for every other check; only errors fail otherwise.
+- The locked-path fallback (`<stem>.<process>.<ext>`) and rolled segment names (`name-yyyyMMdd-NNN.ext`) apply to whichever
+  file is written.
+
+### Migrating from File+Json
+
+A config that enabled both sinks used to write two files. It now writes one, so choose which format you want and move the
+settings to `Logging:ArcaneCore:File`.
+
+Before (two files; with no `Format` the daemon now writes only the JSON file and warns):
+
+```json
+"Logging": {
+  "ArcaneCore": {
+    "File": { "Enabled": true, "Path": "logs/world.log" },
+    "Json": { "Enabled": true, "Path": "logs/world.jsonl", "Retain": 7 }
+  }
+}
+```
+
+After, JSON lines (the structured state properties are kept):
+
+```json
+"Logging": {
+  "ArcaneCore": {
+    "Format": "Json",
+    "File": { "Enabled": true, "Path": "logs/world.jsonl", "Retain": 7 }
+  }
+}
+```
+
+After, text (read by eye or `grep`):
+
+```json
+"Logging": {
+  "ArcaneCore": {
+    "Format": "Text",
+    "File": { "Enabled": true, "Path": "logs/world.log", "Retain": 7 }
+  }
+}
+```
+
+The live launchers follow the same rules. With `Logging:ArcaneCore:Format` set (environment or the profile's `appsettings.json`) they set only
+`Logging__ArcaneCore__File__Path` per role (`<role>.debug.jsonl` or `.log`) and remove `Logging__ArcaneCore__Json__Path`, so the daemon has no
+deprecated key to warn about. With `Format` unset (legacy) they set distinct `<role>.debug.log` (File) and `<role>.debug.jsonl` (Json) paths per role, so
+the legacy resolution picks the right one and an older daemon binary that rejected equal paths still starts.
+
+Environment variables work the same way (`Logging__ArcaneCore__Format=Text`, `Logging__ArcaneCore__File__Path=...`). Remove
+the `Json` section once moved; leaving it in only produces the deprecation warning.
+
 **Fail closed.** Every value is checked at start (`LoggingConfigChecks`): unknown enum text, non-numeric or out-of-range
-numbers (`QueueCapacity` 1..1000000, `RollSizeMb`/`Retain` ≥ 0), an empty or directory-shaped `Path` on an enabled sink,
-the text and JSON paths equal with both sinks enabled. The world lists them with its other config problems and exits 78;
+numbers (`QueueCapacity` 1..1000000, `RollSizeMb`/`Retain` ≥ 0), an empty or directory-shaped path on the enabled file (the
+key named is the one the path came from), a `Format` that is neither `Json` nor `Text`. The world lists them with its other config problems and exits 78;
 the realm throws from `AddArcaneCoreLogging` before the host is built (one exception with every problem listed). The
 raw-configuration check (`Check`, behind `check-config`) and the bound-options check (`ThrowIfInvalid`, run when the
 provider is built and on every reload) are one rule set over the same typed values, defaults filled in, so a configuration
@@ -67,7 +137,7 @@ reloads the same way, as it always did.
 
 ## Formats
 
-Text (console and file; the colour variant differs only by SGR codes around the same fields, so
+Text (console, and the file when `Format=Text`; the colour variant differs only by SGR codes around the same fields, so
 `sed 's/\x1b\[[0-9;]*m//g'` turns one into the other):
 
 ```text
@@ -81,7 +151,7 @@ Level column: `TRCE DBUG INFO WARN FAIL CRIT`. Event id: `[Name:Id]`, `[Name]` o
 Exception lines are indented six spaces. Colours: trace grey, debug white, information green, warning yellow, error red,
 critical white on red.
 
-JSON lines (one object per event, keys stable, absent data omits its key):
+JSON lines (the file when `Format=Json`; one object per event, keys stable, absent data omits its key):
 
 ```json
 {"ts":"2026-10-04T12:34:56.789Z","level":"Warning","category":"ArcaneCore.Realm.Net.LogonServer","eventId":12,"eventName":"Auth","message":"Account TESTER failed 3 times","template":"Account {Account} failed {Attempts} times","props":{"Account":"TESTER","Attempts":3},"scopes":["peer 10.0.0.1"],"exception":"..."}
@@ -100,7 +170,7 @@ after a reload to `Color`, and a reload to `Color` on a redirected stdout stays 
 
 ## Rolling and retention
 
-`RollingFileWriter`: the active file is `Path`; a rolled segment is renamed to `name-yyyyMMdd-NNN.ext` beside it (date
+`RollingFileWriter`: the active file is the resolved path (`Logging:ArcaneCore:File:Path` or its default); a rolled segment is renamed to `name-yyyyMMdd-NNN.ext` beside it (date
 the segment was opened, `NNN` counts rolls that day), then segments beyond `Retain` are deleted, newest kept. On start an
 existing active file is continued (its size counts toward the size roll) and, with `RollDaily`, archived first when its
 last write is from an earlier day. UTF-8 without BOM. I/O failure (disk full, permissions): the file is closed, one line
@@ -146,6 +216,8 @@ reporting and rejection of an invalid reload).
 
 - Colour and VT enabling on a real Windows console were not run here (Linux box); the P/Invoke path is guarded and
   falls back to plain on any failure.
+- One file per daemon: there is no text and JSON pair any more. For a human view alongside a JSON file, use the console
+  (`Console:Mode=Plain`) or switch `Format` to `Text`.
 - No syslog/journald native sink: journald captures stdout, use `Console:Mode=Plain`.
 - Per-sink minimum levels (`Logging:ArcaneCore:LogLevel`) apply to the provider as a whole, not per sink; a sink-level
   filter would be a second rule set and is not built.

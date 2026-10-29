@@ -5762,7 +5762,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "`true` writes the plain text log to `Path`. Default off.",
+      "meaning": "`true` writes the one log file, in the chosen `Format`, to `Path`. Default off.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#loggingarcanecore",
       "isCollection": false
@@ -5774,11 +5774,11 @@
       "kind": "scalar",
       "elementType": "string",
       "enumValues": null,
-      "default": "logs/arcanecore.log",
+      "default": null,
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`.",
+      "meaning": "The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`. Not set means `logs/arcanecore.jsonl` for a Json file and `logs/arcanecore.log` for a Text file.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#loggingarcanecore",
       "isCollection": false
@@ -5848,6 +5848,25 @@
       "isCollection": false
     },
     {
+      "path": "Logging:ArcaneCore:Format",
+      "section": "Logging:ArcaneCore",
+      "type": "LogFileFormat?",
+      "kind": "scalar",
+      "elementType": "LogFileFormat?",
+      "enumValues": [
+        "Text",
+        "Json"
+      ],
+      "default": null,
+      "defaultEntries": [],
+      "daemons": "Both",
+      "reload": "start",
+      "meaning": "The content format of the one log file: `Json` (one JSON object per line, structured properties kept) or `Text` (the plain console line format). Not set means the legacy `File`/`Json` switches decide; with nothing configured the default is `Json`: JSON keeps the structured state properties for ingestion, and the console already gives a text view. The file is configured under `File`. Restart-only. Values: `Text`, `Json`.",
+      "allowed": "Text | Json",
+      "docs": "docs/reference/configuration.md#loggingarcanecore",
+      "isCollection": false
+    },
+    {
       "path": "Logging:ArcaneCore:IncludeScopes",
       "section": "Logging:ArcaneCore",
       "type": "bool",
@@ -5874,7 +5893,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "`true` writes one JSON object per log event to `Path`. Default off.",
+      "meaning": "Deprecated: use `File:Enabled` with `Format=Json`. `true` writes one JSON object per log event to `Path`. Default off.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#loggingarcanecore",
       "isCollection": false
@@ -5886,11 +5905,11 @@
       "kind": "scalar",
       "elementType": "string",
       "enumValues": null,
-      "default": "logs/arcanecore.jsonl",
+      "default": null,
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "The active JSON-lines file; relative paths resolve against the working directory. Rolls like the text file.",
+      "meaning": "Deprecated: use `File:Path`. The active JSON-lines file; relative paths resolve against the working directory. Not set means `logs/arcanecore.jsonl`.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#loggingarcanecore",
       "isCollection": false
@@ -5906,7 +5925,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line).",
+      "meaning": "Deprecated: use `File:QueueCapacity`. Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#loggingarcanecore",
       "isCollection": false
@@ -5922,7 +5941,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all.",
+      "meaning": "Deprecated: use `File:Retain`. Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#loggingarcanecore",
       "isCollection": false
@@ -5938,7 +5957,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "`true` rolls at the first line of a new day (in the `Timestamps` clock).",
+      "meaning": "Deprecated: use `File:RollDaily`. `true` rolls at the first line of a new day (in the `Timestamps` clock).",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#loggingarcanecore",
       "isCollection": false
@@ -5954,7 +5973,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "Roll when the active file would exceed this many MiB; 0 never rolls by size.",
+      "meaning": "Deprecated: use `File:RollSizeMb`. Roll when the active file would exceed this many MiB; 0 never rolls by size.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#loggingarcanecore",
       "isCollection": false
@@ -6741,7 +6760,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "The directory the dump files are written to. Empty (default) means `dumps` beside the text log file (`Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump.",
+      "meaning": "The directory the dump files are written to. Empty (default) means `dumps` beside the log file (the resolved `Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump.",
       "allowed": "text",
       "docs": "docs/reference/configuration.md#opsdiagnostics",
       "isCollection": false

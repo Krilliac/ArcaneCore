@@ -108,8 +108,8 @@ public sealed class ProcessDumpService
     public string Directory => _directory;
 
     /// <summary>
-    /// The configured directory, or (when empty) <c>dumps</c> beside the text log file <paramref name="logFilePath"/>
-    /// (<c>Logging:ArcaneCore:File:Path</c>). Relative paths resolve against the working directory.
+    /// The configured directory, or (when empty) <c>dumps</c> beside the log file <paramref name="logFilePath"/>
+    /// (the resolved <c>Logging:ArcaneCore:File:Path</c>, either format). Relative paths resolve against the working directory.
     /// </summary>
     public static string ResolveDirectory(DumpDiagnosticsOptions options, string logFilePath)
     {
