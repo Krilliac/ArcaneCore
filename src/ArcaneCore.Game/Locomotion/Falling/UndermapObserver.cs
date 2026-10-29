@@ -1,6 +1,8 @@
+using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
@@ -14,9 +16,16 @@ namespace ArcaneCore.Game.Locomotion;
 /// again. vmangos repeats this for every packet while the client keeps falling ("this is actually called many times"),
 /// so it is idempotent by construction.
 /// <para>
-/// Not delivered: antiundermap1 (<c>UndermapRecall</c>, :1105-1127: more than 100 yards below the ground height while
-/// falling, back to the last safe position and Warsong Gulch below z = 250), which needs a safe-position record and the
-/// ground height under the player from the pathfinding and collision lanes.
+/// Antiundermap1 (<c>UndermapRecall</c>, MovementHandler.cpp:1115-1128, Player.h:1789-1801): only while the client says it is
+/// falling far (<see cref="MovementFlags.FallingFar"/>) and is more than <see cref="RecallDepthYards"/> below a model-aware ground
+/// (<see cref="MapCollision.ClassifyUnderMapForRecovery"/>; terrain alone never convicts, so an underground city on a map without
+/// models is left alone), or on Warsong Gulch below z = 250, the player is returned to <see cref="Player.LastSafePosition"/> through
+/// the near teleport (MSG_MOVE_TELEPORT_ACK, so the client and the server agree on where it is) when that position is on the same
+/// map and within <see cref="RecallRangeYards"/> in the plane. A recall disarms <see cref="Player.UndermapRecallArmed"/> (Player.h:1795,1799), as does a safe position out of range or on
+/// another map. Deviation: the recall inherits this observer's exclusions (game masters, transports, taxi, flying, swimming, below the
+/// void height), which vmangos antiundermap1 does not have (MovementHandler.cpp:1116). Nothing here rewrites a living player's position
+/// behind the client's back; the terrain-based
+/// <c>move/under-map</c> report (deeper than <see cref="UnderTerrainThresholdYards"/>) only reports.
 /// </para>
 /// </summary>
 [MovementObserver(Order = 40)]
@@ -28,13 +37,20 @@ public sealed class UndermapObserver : IClientMovementObserver
     /// <summary>Threshold below loaded terrain/WMO floor beyond which a player is considered under the map.</summary>
     public const float UnderTerrainThresholdYards = 50.0f;
 
-    /// <summary>Depth below loaded terrain/WMO floor beyond which an ungrounded player is snapped back to the surface.</summary>
-    public const float UnderTerrainRecoveryYards = 8.0f;
+    /// <summary>Depth below the model-aware ground beyond which a far-falling player is recalled (MovementHandler.cpp:1121).</summary>
+    public const float RecallDepthYards = 100.0f;
+
+    /// <summary>Largest 2D distance to <see cref="Player.LastSafePosition"/> for a recall (Player.h:1793).</summary>
+    public const float RecallRangeYards = 100.0f;
+
+    /// <summary>Warsong Gulch recall height: a far-falling player below it is recalled whatever the ground (MovementHandler.cpp:1123).</summary>
+    public const float WarsongRecallHeight = 250.0f;
 
     /// <summary>Minimum interval (ms) between terrain-floor samples for <c>move/under-map</c>.</summary>
     public const uint TerrainSampleIntervalMs = 1000;
 
-    private const float SurfaceSnapOffset = 0.05f;
+    /// <summary>A report episode ends once the player is no deeper than this below the terrain (the depth that used to start a recovery).</summary>
+    private const float ReportEpisodeEndYards = 8.0f;
 
     public void BeforeApply(MovementObserverContext context, in MovementInfo previous, ref MovementInfo incoming)
     {
@@ -61,6 +77,49 @@ public sealed class UndermapObserver : IClientMovementObserver
         }
     }
 
+    /// <summary>
+    /// vmangos <c>UndermapRecall</c> (Player.h:1789-1801) behind the antiundermap1 test (MovementHandler.cpp:1116-1127). Returns whether a
+    /// near teleport to <see cref="Player.LastSafePosition"/> was started. Cheap exits first: it only looks at the ground while far-falling.
+    /// </summary>
+    private static bool TryRecall(MovementObserverContext context, Player player, Maps.Map map)
+    {
+        if ((player.Movement.Flags & MovementFlags.FallingFar) == 0 || !player.UndermapRecallArmed || player.LastSafePosition is not { } safe)
+        {
+            return false;
+        }
+
+        float z = player.Movement.Z;
+        bool undermap = z < WarsongRecallHeight && map.MapId == BattlegroundManager.MapOfType(BattlegroundType.WarsongGulch);
+        if (!undermap)
+        {
+            undermap = map.Collision.ClassifyUnderMapForRecovery(player.X, player.Y, z, RecallDepthYards).Kind == UnderMapKind.UnderMap;
+        }
+
+        if (!undermap)
+        {
+            return false;
+        }
+
+        TeleportService? teleports = TeleportService.Of(context.World);
+        if (teleports is null || teleports.IsBeingTeleported(player))
+        {
+            return false;
+        }
+
+        float dx = safe.X - player.X;
+        float dy = safe.Y - player.Y;
+        if (safe.MapId != map.MapId || !float.IsFinite(dx * dx + dy * dy) || dx * dx + dy * dy > RecallRangeYards * RecallRangeYards)
+        {
+            player.UndermapRecallArmed = false;
+            return false;
+        }
+
+        // TELE_TO_NOT_LEAVE_COMBAT | TELE_TO_NOT_UNSUMMON_PET (Player.h:1798). LastSafePosition itself stays: the unstuck spell reads it.
+        bool started = teleports.TeleportTo(player, safe.MapId, safe.X, safe.Y, safe.Z, safe.O, TeleportOptions.NotLeaveCombat | TeleportOptions.NotUnsummonPet);
+        player.UndermapRecallArmed = false;
+        return started;
+    }
+
     public void AfterApply(MovementObserverContext context, in MovementInfo previous)
     {
         Player player = context.Player;
@@ -77,12 +136,17 @@ public sealed class UndermapObserver : IClientMovementObserver
                 && (player.UnitFlags & UnitFlags.TaxiFlight) == 0
                 && (player.Movement.Flags & (MovementFlags.OnTransport | MovementFlags.Flying | MovementFlags.Swimming)) == 0)
             {
+                if (TryRecall(context, player, map))
+                {
+                    return;
+                }
+
                 uint nowMs = context.World.NowMs;
                 if (state.LastUndermapSampleMs is null || unchecked(nowMs - state.LastUndermapSampleMs.Value) >= TerrainSampleIntervalMs)
                 {
                     state.LastUndermapSampleMs = nowMs;
                     // Terrain alone convicts a player in a cave or a city; the models decide (MapCollision.ClassifyUnderMap; Unknown never convicts).
-                    UnderMapVerdict verdict = map.Collision.ClassifyUnderMap(player.X, player.Y, player.Movement.Z, UnderTerrainRecoveryYards);
+                    UnderMapVerdict verdict = map.Collision.ClassifyUnderMap(player.X, player.Y, player.Movement.Z, ReportEpisodeEndYards);
                     if (verdict.Kind == UnderMapKind.UnderMap
                         && !map.Collision.LevelWithAnyNearbyFloor(player.X, player.Y, player.Movement.Z))
                     {
@@ -100,17 +164,6 @@ public sealed class UndermapObserver : IClientMovementObserver
                                     AnomalySeverity.Error,
                                     map.WorldIdentity);
                             }
-                        }
-
-                        if (float.IsFinite(floorZ) && floorZ > VoidHeight)
-                        {
-                            MovementInfo recovered = player.Movement with
-                            {
-                                Z = floorZ + SurfaceSnapOffset,
-                                Flags = player.Movement.Flags & ~(MovementFlags.Jumping | MovementFlags.FallingFar),
-                                FallTime = 0,
-                            };
-                            player.ApplyClientMovement(recovered, nowMs);
                         }
                     }
                     else

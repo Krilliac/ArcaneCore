@@ -55,13 +55,13 @@ public sealed record CreatureTemplate
 
     /// <summary>
     /// vmangos <c>mechanic_immune_mask</c> / cmangos <c>MechanicImmuneMask</c>: bit <c>mechanic - 1</c> set for every Spell.dbc mechanic the creature is
-    /// immune to (vmangos Creature::IsImmuneToSpell, Creature.cpp:2445). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 60).
+    /// immune to (vmangos Creature::IsImmuneToSpell, Creature.cpp:2445). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 61).
     /// </summary>
     public uint MechanicImmuneMask { get; init; }
 
     /// <summary>
     /// vmangos <c>school_immune_mask</c> / cmangos <c>SchoolImmuneMask</c>: bit <c>school</c> set for every spell school the creature is immune to
-    /// (Creature.cpp:2448, :2460). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 60).
+    /// (Creature.cpp:2448, :2460). Unioned with the active <c>creature_immunities</c> set. Added by CreatureImmunityDataModule (world 61).
     /// </summary>
     public uint SchoolImmuneMask { get; init; }
 

@@ -28,7 +28,11 @@ namespace ArcaneCore.Game.Creatures;
 /// no path (the point is off the mesh, or a point drawn off the mesh whose path ends on another storey) is skipped and tried again 1-1.5 s
 /// later, the wait doubling for each further leg in a row without a path up to 16-24 s (<see cref="NoPathRetryDelay"/>). A leg the path
 /// budget cannot serve, or whose tiles are still loading, waits 1-1.5 s (4-10 s in a crowded wander pass); one queued on the path-job pool
-/// asks again after 100 ms (<see cref="PathJobRetryMs"/>). Flying creatures (<c>CanFly</c>, :28-44) keep the ground wander.
+/// asks again after 100 ms (<see cref="PathJobRetryMs"/>). With <c>Creatures:Movement:PathJobsWander</c> the point pick and the path are
+/// one pooled job (<see cref="ICreaturePathQuery.TryWanderByJob"/>): the creature idles, asking again every update
+/// (<see cref="WanderJobRetryMs"/>), until the map applies the answer; the leg starts one update later than the synchronous route, and the
+/// map's RNG gives one draw per leg (the job's seed) instead of the point's draws. A restart of the generator (<see cref="Epoch"/>) makes a
+/// job submitted earlier stale. Flying creatures (<c>CanFly</c>, :28-44) keep the ground wander.
 /// </para>
 /// </summary>
 internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
@@ -65,6 +69,15 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
 
     /// <summary>How soon (ms) a leg whose search went to the path-job pool asks again for the answer.</summary>
     public const int PathJobRetryMs = 100;
+
+    /// <summary>How soon (ms) a wander leg whose point pick and path run as one job asks again for the answer (the very next update).</summary>
+    public const int WanderJobRetryMs = 1;
+
+    /// <summary>
+    /// Counts the generator's restarts (initialize, resume, interrupt, finish), so a wander job submitted under an earlier run can be
+    /// told apart from the current one.
+    /// </summary>
+    internal int Epoch { get; private set; }
 
     public const int NoPathRetryMaxMs = FleeingMovementGenerator.NoPathRetryMaxMs;
 
@@ -112,7 +125,14 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         _nextMoveMs = 1000;
         _wanderSteps = 0;
         _consecutiveNoPath = 0;
+        Epoch++;
     }
+
+    /// <summary>Another generator was pushed on top: a wander job in flight is stale (the epoch changes; the map drops it).</summary>
+    public void Interrupt(Creature creature, ICreatureMover mover) => Epoch++;
+
+    /// <summary>The generator is leaving the stack: a wander job in flight is stale.</summary>
+    public void Finish(Creature creature, ICreatureMover mover, bool completed) => Epoch++;
 
     public bool Update(Creature creature, ICreatureMover mover, uint diffMs)
     {
@@ -150,13 +170,6 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
             return true;
         }
 
-        if (mover is ICreaturePathQuery { HasPathBudget: false, CanQueuePathJob: false } budgeted)
-        {
-            budgeted.NoteDeferred(creature);
-            _nextMoveMs = budgeted.IsCrowdedRandomPass ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
-            return true;
-        }
-
         float wander = WanderOf(creature);
         CreatureHome home = _center ?? creature.Home;
         float destX = home.X;
@@ -168,34 +181,79 @@ internal sealed class RandomMovementGenerator : ICreatureMovementGenerator
         // point below stays: drawn around the spawn point, on the floor there (terrain or a static model, Map.cpp:3399-3401) when that
         // is within MaxFallbackLegDropYards of the spawn height.
         bool onMesh = false;
-        if (wander >= 0.1f && mover.TryGetRandomMeshPoint(creature, new Vector3(home.X, home.Y, home.Z), wander, out Vector3 meshPoint))
+        bool jobApplied = false;
+        bool skipMeshPick = false;
+        PlannedPath plan = default;
+        bool wanderNotQueued = true;
+        if (wander >= 0.1f && mover is ICreaturePathQuery wanderQuery)
         {
-            onMesh = true;
-            destX = meshPoint.X;
-            destY = meshPoint.Y;
-            destZ = meshPoint.Z;
-        }
-
-        // WorldObject::GetRandomPoint: below 0.1 yd the spawn point itself.
-        if (!onMesh && wander >= 0.1f)
-        {
-            double angle = mover.NextDouble() * 2 * Math.PI;
-            double distance = wander * Math.Sqrt(mover.NextDouble());
-            destX = home.X + (float)(distance * Math.Cos(angle));
-            destY = home.Y + (float)(distance * Math.Sin(angle));
-            if (mover.GetHeight(creature.MapId, destX, destY, home.Z) is { } ground
-                && float.IsFinite(ground)
-                && MathF.Abs(ground - home.Z) <= MaxFallbackLegDropYards)
+            // PathJobsWander: the point pick and the path run as one job on the pool (CreatureMapSystem.WanderJobs.cs); the creature idles
+            // until the map applies the answer. NotQueued leaves the synchronous route below unchanged.
+            // It runs before the synchronous search-budget gate: wander jobs have their own cap, and the drape budget is checked at apply.
+            switch (wanderQuery.TryWanderByJob(creature, this, new Vector3(home.X, home.Y, home.Z), wander, out plan))
             {
-                destZ = ground;
+                case WanderJobAnswer.Waiting:
+                    _nextMoveMs = WanderJobRetryMs;
+                    return true;
+                case WanderJobAnswer.Throttled:
+                    _nextMoveMs = PathJobRetryMs;
+                    return true;
+                case WanderJobAnswer.Applied:
+                    wanderNotQueued = false;
+                    jobApplied = true;
+                    onMesh = true;
+                    break;
+                case WanderJobAnswer.NoMeshPoint:
+                    wanderNotQueued = false;
+                    skipMeshPick = true;
+                    break;
             }
         }
 
-        bool run = _run ?? ShouldRun(creature, mover);
+        if (wanderNotQueued && mover is ICreaturePathQuery { HasPathBudget: false, CanQueuePathJob: false } budgeted)
+        {
+            budgeted.NoteDeferred(creature);
+            _nextMoveMs = budgeted.IsCrowdedRandomPass ? mover.URand(4, 10) * 1000 : mover.URand(NoPathRetryMinMs, NoPathRetryMaxMs);
+            return true;
+        }
 
-        // The leg goes through the pathfinder whether or not the point came from the mesh: a floor-height point on a map that has a mesh
-        // but nothing at that spot (a house, a wall) has no path, and a wandering creature never walks a straight line through geometry.
-        PlannedPath plan = mover.PlanPath(creature, new Vector3(destX, destY, destZ));
+        bool run;
+        if (jobApplied)
+        {
+            run = _run ?? ShouldRun(creature, mover);
+        }
+        else
+        {
+            if (!skipMeshPick && wander >= 0.1f && mover.TryGetRandomMeshPoint(creature, new Vector3(home.X, home.Y, home.Z), wander, out Vector3 meshPoint))
+            {
+                onMesh = true;
+                destX = meshPoint.X;
+                destY = meshPoint.Y;
+                destZ = meshPoint.Z;
+            }
+
+            // WorldObject::GetRandomPoint: below 0.1 yd the spawn point itself.
+            if (!onMesh && wander >= 0.1f)
+            {
+                double angle = mover.NextDouble() * 2 * Math.PI;
+                double distance = wander * Math.Sqrt(mover.NextDouble());
+                destX = home.X + (float)(distance * Math.Cos(angle));
+                destY = home.Y + (float)(distance * Math.Sin(angle));
+                if (mover.GetHeight(creature.MapId, destX, destY, home.Z) is { } ground
+                    && float.IsFinite(ground)
+                    && MathF.Abs(ground - home.Z) <= MaxFallbackLegDropYards)
+                {
+                    destZ = ground;
+                }
+            }
+
+            run = _run ?? ShouldRun(creature, mover);
+
+            // The leg goes through the pathfinder whether or not the point came from the mesh: a floor-height point on a map that has a mesh
+            // but nothing at that spot (a house, a wall) has no path, and a wandering creature never walks a straight line through geometry.
+            plan = mover.PlanPath(creature, new Vector3(destX, destY, destZ));
+        }
+
         if (plan.Outcome == PathOutcome.NoPath)
         {
             // Skip this leg and pick again later (vmangos' mesh point is always reachable, so it never meets this). A spawn that keeps

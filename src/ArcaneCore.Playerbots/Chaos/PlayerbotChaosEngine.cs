@@ -452,6 +452,7 @@ public sealed class PlayerbotChaosEngine
         float prevX = player.X, prevY = player.Y, prevZ = player.Z, prevO = player.Orientation;
         MovementInfo prevMovement = player.Movement;
         var prevLastSafe = player.LastSafePosition;
+        bool prevRecallArmed = player.UndermapRecallArmed;
         StandState prevStandState = player.StandState;
         bool prevAlive = player.IsAlive;
         bool prevMayReclaim = MayReclaimCorpse(player);
@@ -502,6 +503,10 @@ public sealed class PlayerbotChaosEngine
             prevStandState,
             prevAlive,
             prevMayReclaim);
+
+        // The heal restores LastSafePosition; its recall arming goes with it, so a probe neither arms nor spends the under-map recall.
+        // Defensive: today a probe cannot change it (MovementHandlers skips the save during a probe, and the probe suppresses the observer).
+        player.UndermapRecallArmed = prevRecallArmed;
     }
 
     private void DispatchProbePacket(WorldSession session, Player player, WorldOpcode opcode, byte[] payload)

@@ -48,7 +48,7 @@ public sealed record CreatureImportReport(
     /// <summary><c>creature_equip_template</c> rows (item entries per equipment id; world schema 56).</summary>
     public int Equipment { get; init; }
 
-    /// <summary><c>creature_immunities</c> rows (static creature immunity sets; world schema 60).</summary>
+    /// <summary><c>creature_immunities</c> rows (static creature immunity sets; world schema 61).</summary>
     public int Immunities { get; init; }
 
     /// <summary><c>creature_spawn_entry</c> rows (the entries a spawn can become; vmangos <c>id2</c> ... <c>id5</c> included).</summary>
@@ -162,7 +162,7 @@ public sealed class CreatureDumpImporter
     public bool HasResistanceColumns => _sawResistanceColumns;
 
     /// <summary>
-    /// Content refresh of the creature template magic resistances (world schema 60): set the six resistance columns of the templates
+    /// Content refresh of the creature template magic resistances (world schema 57): set the six resistance columns of the templates
     /// already in the world from the dump, so a database upgraded to 57 gets the values without a full reimport. Runs only when the dump
     /// carried the columns. Runs inside the caller's <see cref="Content.Import.ImportTransaction"/>. Returns the templates changed.
     /// </summary>
@@ -244,7 +244,7 @@ public sealed class CreatureDumpImporter
     public IReadOnlyCollection<CreatureImmunityRow> ImmunitySnapshot() => [.. _immunities.Values];
 
     /// <summary>
-    /// Content refresh of creature immunities (world schema 60): replace <c>creature_immunities</c> with the rows read (a dump that carries the table with no valid rows empties it), and set
+    /// Content refresh of creature immunities (world schema 61): replace <c>creature_immunities</c> with the rows read (a dump that carries the table with no valid rows empties it), and set
     /// <c>creature_template.MechanicImmuneMask</c> / <c>SchoolImmuneMask</c> of the templates already in the world from the dump. Each half runs only when
     /// the dump carried it (the table; the template columns), so a dump without either leaves the world as it is. Runs inside the caller's
     /// <see cref="Content.Import.ImportTransaction"/>. Returns the immunity rows written and the templates changed.

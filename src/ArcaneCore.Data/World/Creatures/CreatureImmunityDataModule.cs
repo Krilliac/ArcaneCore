@@ -21,15 +21,15 @@ public sealed class CreatureImmunityRow
 }
 
 /// <summary>
-/// World schema 60: <c>creature_immunities</c> and the <c>creature_template</c> columns <c>MechanicImmuneMask</c> and <c>SchoolImmuneMask</c>, so
+/// World schema 61: <c>creature_immunities</c> and the <c>creature_template</c> columns <c>MechanicImmuneMask</c> and <c>SchoolImmuneMask</c>, so
 /// creatures are immune to the mechanics, schools, dispel types, effects and auras the reference databases give them. Filled by the content
-/// importer from a ClassicDB / cmangos (table and masks) or vmangos (masks) dump; a database upgraded to 60 keeps its creatures without
+/// importer from a ClassicDB / cmangos (table and masks) or vmangos (masks) dump; a database upgraded to 61 keeps its creatures without
 /// immunities until <c>arcane-db refresh</c> backfills them (<see cref="CreatureDumpImporter.RefreshImmunitiesAsync"/>).
 /// </summary>
 public sealed class CreatureImmunityDataModule : IDataModule
 {
     /// <summary>The world schema version this module arrives in.</summary>
-    public const int Version = 60;
+    public const int Version = 61;
 
     public const string ImmunityTable = "creature_immunities";
 
