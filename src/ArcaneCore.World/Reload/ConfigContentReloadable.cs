@@ -37,6 +37,35 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
     /// <summary>vmangos <c>reload all</c> does not include the config (ServerCommands.cpp:885-905).</summary>
     public bool IncludedInAll => false;
 
+    /// <summary>
+    /// How this reload treats a changed configuration path (colon form, any case): true when it applies the new value (a live
+    /// <see cref="WorldConfigKeys"/> key, the AntiCheat section, which is applied as a whole, or the script modules' section), false
+    /// when it keeps the current value and reports that a restart is needed (a restart-only key), null when it does not read the
+    /// path at all, so the value takes effect only at the next start.
+    /// </summary>
+    internal static bool? Classify(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        foreach (WorldConfigKey key in WorldConfigKeys.All)
+        {
+            if (string.Equals(path, key.Path, StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith(key.Path + ":", StringComparison.OrdinalIgnoreCase))
+            {
+                return key.Live;
+            }
+        }
+
+        foreach (string whole in new[] { AntiCheatOptions.SectionName, Scripting.ScriptModuleContext.ModulesSectionName })
+        {
+            if (string.Equals(path, whole, StringComparison.OrdinalIgnoreCase) || path.StartsWith(whole + ":", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return null;
+    }
+
     public Task<ContentCandidate> BuildAsync(CancellationToken cancellationToken)
     {
         IConfiguration configuration = services.GetService<IConfiguration>()

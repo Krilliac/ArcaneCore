@@ -99,6 +99,7 @@ How to read the tables:
 - [`World:PacketHeuristics`](#worldpacketheuristics)
 - [`World:Playerbots`](#worldplayerbots)
 - [`World:Playerbots:Qa`](#worldplayerbotsqa)
+- [`World:Realm`](#worldrealm)
 - [`World:RemoteAdmin`](#worldremoteadmin)
 - [`World:Social`](#worldsocial)
 - [`World:Social:WriteQueue`](#worldsocialwritequeue)
@@ -550,8 +551,9 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `HotReload:ApplyConfigFileChanges` | `bool` | `false` | - | Apply an edit of world.conf or appsettings*.json while the world runs: once the edits settle, the configuration is re-read through the same pipeline as `.reload config` (live keys change on the world thread, restart keys keep their value and are logged), whether or not `Commands` is on. Default false, the retail behaviour: vmangos has no file watcher, a mangosd.conf edit applies only through `.reload config` (ServerCommands.cpp:1016). True is an opt-in ArcaneCore convenience. Needs the host's file watching (`hostBuilder:reloadConfigOnChange`, default true). Read once when the world starts. |
 | `HotReload:BuildTimeoutMs` | `int` | `60000` | - | How long a candidate may take to build (database read plus indexing) before the reload is abandoned. 0 = no limit. |
-| `HotReload:Commands` | `bool` | `false` | - | The one switch for live reload. Default false: a production server does not carry the reload machinery (vmangos registers the `reload` root, Chat.cpp:1212, but ArcaneCore's operator-initiated hot reload is a development tool, so it is opt-in). When false the reload coordinator is not built, no reloadable is registered and the `.reload` root does not exist (the chat reply is "There is no such command"). A development server turns it on with `HotReload:Commands=true`. Read once when the world starts. |
+| `HotReload:Commands` | `bool` | `false` | - | The one switch for live reload. Default false: a production server does not carry the reload machinery (vmangos registers the `reload` root, Chat.cpp:1212, but ArcaneCore's operator-initiated hot reload is a development tool, so it is opt-in). When false the reload coordinator is not built, no reloadable is registered and the `.reload` root does not exist (the chat reply is "There is no such command"); `ApplyConfigFileChanges` then runs the config reload on a coordinator of its own that holds only `config`. A development server turns it on with `HotReload:Commands=true`. Read once when the world starts. |
 | `HotReload:CommitTimeoutMs` | `int` | `30000` | - | How long to wait for the world thread to run the swap before abandoning the reload. A swap that has not started by then is cancelled and never runs later. 0 = no limit. |
 | `HotReload:EmptyTables` | `EmptyTablePolicy` | `Retail` | - | What a reload does when item_template, game_tele or areatrigger_teleport comes back empty. Default Retail: vmangos clears the loaded rows first (ObjectMgr.cpp:3817, 10468, 7708), so the table ends up empty. Values: `Retail`, `KeepLoaded`. |
 | `HotReload:NegativeNumbers` | `InvalidNumberPolicy` | `Retail` | - | What `.reload config` does with a negative interval or range. Default Retail: vmangos logs an error and uses the default (World.cpp:2949-2977 setConfigPos/setConfigMin). Values: `Retail`, `Reject`. |
@@ -2006,6 +2008,13 @@ How to read the tables:
 | `World:Playerbots:Qa:SignalQueueCapacity` | `int` | `4096` | - | Warnings waiting for the aggregator at once (64..1000000); a full queue drops the oldest and counts it. |
 | `World:Playerbots:Qa:StaleHours` | `int` | `24` | - | Hours after which a finding not seen again and not published or known-closed is dropped, on load and on every pass (0..8760; 0 keeps them for ever). |
 | `World:Playerbots:Qa:TickHangWarmupMinutes` | `int` | `5` | - | Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5). |
+
+## `World:Realm`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:Realm:Id` | `int` | `1` | - | The realm-list id this world serves (vmangos RealmID; mangosd.conf.dist.in ships 1). The world clears its Offline flag at start and sets it at a clean stop, so the realm list shows the realm offline while the world is down. 0 = this world does not write the realm list (ArcaneCore-specific: vmangos refuses to start without a RealmID, Master.cpp:475-480). |
+| `World:Realm:PlayerLimit` | `int` | `100` | - | The population formula's player limit (vmangos PlayerLimit, default 100, SystemConfig.h:91): the realm list's population hint is 2 x sessions / PlayerLimit, written when a session is added (World.cpp:340-353). 0 = the population is never written (vmangos skips it when the limit is 0). ArcaneCore has no login queue, so only the hint reads this value. |
 
 ## `World:RemoteAdmin`
 
