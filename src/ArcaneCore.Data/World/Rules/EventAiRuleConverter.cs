@@ -13,6 +13,9 @@ public enum EventAiConversionOutcome
     /// <summary>The row was written as a disabled rule (the old executor never runs it) and the reason says why.</summary>
     Disabled,
 
+    /// <summary>Informational: the row was written as an enabled rule, but a parameter was changed to a value the rule accepts (the old executor clamped it the same way).</summary>
+    Adjusted,
+
     /// <summary>The row could not be expressed as a rule and was not written.</summary>
     Unconvertible,
 }
@@ -31,6 +34,9 @@ public sealed record EventAiConversion(RuleContent Content, IReadOnlyList<EventA
     public int Disabled => Issues.Count(i => i.Outcome == EventAiConversionOutcome.Disabled);
 
     public int Unconvertible => Issues.Count(i => i.Outcome == EventAiConversionOutcome.Unconvertible);
+
+    /// <summary>How many findings are informational adjustments (<see cref="EventAiConversionOutcome.Adjusted"/>); the rows count as converted.</summary>
+    public int Adjusted => Issues.Count(i => i.Outcome == EventAiConversionOutcome.Adjusted);
 }
 
 /// <summary>
@@ -236,7 +242,8 @@ public static class EventAiRuleConverter
         int converted = 0;
         foreach (CreatureAiEvent row in content.AllEvents.OrderBy(r => r.Id))
         {
-            RuleRecord? rule = ConvertRow(content, row, actions, texts, out string? failure, out string? disabledReason);
+            var notes = new List<string>();
+            RuleRecord? rule = ConvertRow(content, row, actions, texts, notes, out string? failure, out string? disabledReason);
             if (rule is null)
             {
                 issues.Add(new EventAiConversionIssue(row.Id, EventAiConversionOutcome.Unconvertible, failure ?? "unknown"));
@@ -244,6 +251,7 @@ public static class EventAiRuleConverter
             }
 
             rules.Add(rule);
+            issues.AddRange(notes.Select(n => new EventAiConversionIssue(row.Id, EventAiConversionOutcome.Adjusted, n)));
             if (disabledReason is not null)
             {
                 issues.Add(new EventAiConversionIssue(row.Id, EventAiConversionOutcome.Disabled, disabledReason));
@@ -268,6 +276,7 @@ public static class EventAiRuleConverter
         CreatureAiEvent row,
         List<RuleActionRecord> actionSink,
         SortedDictionary<int, RuleTextRecord> textSink,
+        List<string> notes,
         out string? failure,
         out string? disabledReason)
     {
@@ -275,7 +284,7 @@ public static class EventAiRuleConverter
         disabledReason = null;
         if (row.Id > CreatureRuleIds.MaxConvertedSourceId)
         {
-            failure = $"source id above {CreatureRuleIds.MaxConvertedSourceId} does not fit the converted id band";
+            failure = $"source id above {CreatureRuleIds.MaxConvertedSourceId} does not fit the EventAI id sub-band (2^30 + 2^26 ids)";
             return null;
         }
 
@@ -344,13 +353,18 @@ public static class EventAiRuleConverter
             return null;
         }
 
+        if (row.Chance > 100)
+        {
+            notes.Add($"chance {row.Chance} written as 100: a chance is a percentage");
+        }
+
         int ruleId = RuleIdOf(row.Id);
         var converted = new List<RuleActionRecord>(sourceActions.Length + 1);
         var rowTexts = new List<RuleTextRecord>();
         byte seq = 1;
         foreach (CreatureAiAction action in sourceActions)
         {
-            RuleActionRecord? record = ConvertAction(content, ruleId, seq, action, rowTexts, out string? actionFailure);
+            RuleActionRecord? record = ConvertAction(content, ruleId, seq, action, rowTexts, notes, out string? actionFailure);
             if (record is null)
             {
                 failure = actionFailure;
@@ -470,6 +484,7 @@ public static class EventAiRuleConverter
         byte seq,
         CreatureAiAction action,
         List<RuleTextRecord> rowTexts,
+        List<string> notes,
         out string? failure)
     {
         failure = null;
@@ -517,6 +532,11 @@ public static class EventAiRuleConverter
 
             case ActionSetPhase:
                 parameters[0] = Math.Clamp(source[0], 0, MaxPhase);
+                if (parameters[0] != source[0])
+                {
+                    notes.Add($"SET_PHASE {source[0]} written as {parameters[0]}: the old executor clamps a phase to 0..{MaxPhase}");
+                }
+
                 break;
 
             case ActionSummonId:

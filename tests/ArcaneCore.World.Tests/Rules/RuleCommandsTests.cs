@@ -102,7 +102,7 @@ public sealed class RuleCommandsTests
         await using WorldTestHost host = WorldTestHost.Start();
 
         string[] lines = await ConsoleAsync(host, ".rules vocab");
-        Assert.EndsWith(" primitive(s).", lines[^1], StringComparison.Ordinal); // host lanes add their primitives to the shared six
+        Assert.Equal("106 primitive(s).", lines[^1]); // the 6 shared primitives plus the 100 of the creature host
         Assert.Contains(lines, l => l.StartsWith("action 4 cast(spell_id:SpellId, cast_flags:NonNegative) [shared]: ", StringComparison.Ordinal));
 
         string[] bot = await ConsoleAsync(host, ".rules vocab bot");

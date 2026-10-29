@@ -74,7 +74,7 @@ public static partial class ContentImporterCli
         }
 
         string counts = string.Create(CultureInfo.InvariantCulture,
-            $"creature_ai_scripts: {conversion.SourceRows} row(s), {conversion.Converted} converted, {conversion.Disabled} written disabled, {conversion.Unconvertible} not converted");
+            $"creature_ai_scripts: {conversion.SourceRows} row(s), {conversion.Converted} converted, {conversion.Disabled} written disabled, {conversion.Unconvertible} not converted{AdjustedNote(conversion)}");
         if (written is null)
         {
             o.WriteLine($"{counts} (dry run: no database written)");
@@ -87,6 +87,9 @@ public static partial class ContentImporterCli
 
         return ExitCodes.Ok;
     }
+
+    private static string AdjustedNote(EventAiConversion conversion)
+        => conversion.Adjusted > 0 ? string.Create(CultureInfo.InvariantCulture, $" ({conversion.Adjusted} converted with an adjusted parameter)") : string.Empty;
 
     private static void WriteConversionReport(string path, EventAiConversion conversion)
     {

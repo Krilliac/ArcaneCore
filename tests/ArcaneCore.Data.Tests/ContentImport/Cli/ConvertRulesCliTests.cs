@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.World.Rules;
+using ArcaneCore.Kernel.Rules;
 using ArcaneCore.Kernel.Rules.Creatures;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -42,6 +43,13 @@ public sealed class ConvertRulesCliTests : IDisposable
 
         string first = await SnapshotAsync(db);
         Assert.Contains("rule 5 authored", first, StringComparison.Ordinal);
+        foreach (int id in new[] { RuleIdBands.CustomStart + 2, RuleIdBands.EventAi - 1, RuleIdBands.DbScripts, RuleIdBands.SmartAi + 9 })
+        {
+            Assert.Contains($"rule {id} foreign", first, StringComparison.Ordinal);
+            Assert.Contains($"action {id}/0 ", first, StringComparison.Ordinal);
+            Assert.Contains($"text {id} Foreign text", first, StringComparison.Ordinal);
+        }
+
         Assert.Contains($"rule {(1 << 30) + 9300101} ", first, StringComparison.Ordinal);
         Assert.DoesNotContain($"rule {(1 << 30) + 9300103} ", first, StringComparison.Ordinal);
         Assert.Contains($"text {(1 << 30) + 500_000 + 9301} Grunt!", first, StringComparison.Ordinal);
@@ -121,6 +129,14 @@ public sealed class ConvertRulesCliTests : IDisposable
         await using WorldDbContext db = Open(path);
         db.Set<RuleRow>().Add(new RuleRow { Id = 5, Host = CreatureRuleIds.Host, OwnerKind = CreatureRuleIds.OwnerEntry, OwnerId = 930001, EventType = CreatureRuleIds.EventAggro, Comment = "authored" });
         db.Set<RuleTextRow>().Add(new RuleTextRow { Id = 5, ContentDefault = "Authored text" });
+        // Rows a converter does not own: custom content below the converted range, and the reserved DB-script and SmartAI sub-bands.
+        foreach (int id in new[] { RuleIdBands.CustomStart + 2, RuleIdBands.EventAi - 1, RuleIdBands.DbScripts, RuleIdBands.SmartAi + 9 })
+        {
+            db.Set<RuleRow>().Add(new RuleRow { Id = id, Host = CreatureRuleIds.Host, OwnerKind = CreatureRuleIds.OwnerEntry, OwnerId = 930001, EventType = CreatureRuleIds.EventAggro, Comment = "foreign" });
+            db.Set<RuleActionRow>().Add(new RuleActionRow { RuleId = id, Seq = 0, ActionType = 1, TargetType = 1, Param1 = 1 });
+            db.Set<RuleTextRow>().Add(new RuleTextRow { Id = id, ContentDefault = "Foreign text" });
+        }
+
         await db.SaveChangesAsync();
     }
 

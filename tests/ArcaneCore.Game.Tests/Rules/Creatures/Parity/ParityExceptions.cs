@@ -9,8 +9,9 @@ internal static class ParityExceptions
     public static IReadOnlyList<ParityException> Approved { get; } =
     [
         new("disabled-rows", ParitySide.Engine, "cast 1213 at",
-            "A disabled row (chance 0, debug-only, every phase masked) is written disabled by the converter, so it no longer rolls its chance each tick; "
-            + "the old executor still drew one value per tick for it. The shared map stream therefore runs ahead on the old side, and the chance-50 row "
-            + "beside it rolls a different (equally valid) sequence. Nothing is lost: the disabled rows never ran."),
+            "Of the three disabled rows only the chance-0 row (210) rolled in the old executor: it drew one value per tick before failing. A debug-only row "
+            + "(211) is filtered when the rows load and an all-phases-masked row (212) fails the phase gate before the roll, so neither drew. The converter writes "
+            + "row 210 disabled, so it no longer draws; the shared map stream therefore runs ahead on the old side, and the chance-50 row beside them rolls a "
+            + "different (equally valid) sequence. Nothing is lost: the disabled rows never ran."),
     ];
 }

@@ -13,8 +13,8 @@ public sealed record EventAiRuleImportResult(int RulesWritten, int ActionsWritte
 /// <summary>
 /// The database side of the EventAI converter: reads the imported EventAI tables into a <see cref="CreatureAiContent"/> and writes a
 /// <see cref="EventAiConversion"/> into <c>rule</c>, <c>rule_action</c> and <c>rule_text</c>. The converter's rows live at ids at or above
-/// <see cref="CreatureRuleIds.ConvertedRuleIdBase"/>; a run removes exactly that band first and writes the new rows in the same transaction,
-/// so running it twice leaves the same rows and a row below the band (authored or shipped content) is never read, changed or removed.
+/// <see cref="CreatureRuleIds.ConvertedRuleIdBase"/>; a run removes exactly its sub-band (2^30 up to 2^30 + 2^26 - 1) first and writes the new rows in the same transaction,
+/// so running it twice leaves the same rows and a row outside the sub-band (authored, shipped or another converter's content) is never read, changed or removed.
 /// Owned by the caller's thread; the context is used in place (not thread-safe).
 /// </summary>
 public static class EventAiRuleImporter
@@ -36,20 +36,21 @@ public static class EventAiRuleImporter
             summons.Select(s => new CreatureAiSummon(s.Id, s.X, s.Y, s.Z, s.Orientation, s.SpawnTimeSeconds)));
     }
 
-    /// <summary>Replaces the converter's id band with <paramref name="conversion"/> in one transaction.</summary>
+    /// <summary>Replaces the converter's id sub-band (2^30 up to 2^30 + 2^26 - 1, RuleIdBands.EventAi) with <paramref name="conversion"/> in one transaction.</summary>
     public static async Task<EventAiRuleImportResult> ImportAsync(WorldDbContext db, EventAiConversion conversion, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(conversion);
-        const int band = CreatureRuleIds.ConvertedRuleIdBase;
+        const int first = RuleIdBands.EventAi;
+        const int end = RuleIdBands.EventAi + RuleIdBands.SubBandSize;
         RuleRow[] rules = [.. conversion.Content.Rules.OrderBy(r => r.Id).Select(ToRow)];
         RuleActionRow[] actions = [.. conversion.Content.Actions.OrderBy(a => a.OwnerId).ThenBy(a => a.Seq).Select(ToRow)];
         RuleTextRow[] texts = [.. conversion.Content.Texts.OrderBy(t => t.Id).Select(ToRow)];
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        int actionsRemoved = await db.Set<RuleActionRow>().Where(a => a.RuleId >= band).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        int rulesRemoved = await db.Set<RuleRow>().Where(r => r.Id >= band).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
-        int textsRemoved = await db.Set<RuleTextRow>().Where(t => t.Id >= band).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        int actionsRemoved = await db.Set<RuleActionRow>().Where(a => a.RuleId >= first && a.RuleId < end).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        int rulesRemoved = await db.Set<RuleRow>().Where(r => r.Id >= first && r.Id < end).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        int textsRemoved = await db.Set<RuleTextRow>().Where(t => t.Id >= first && t.Id < end).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await AddAsync(db, texts, cancellationToken).ConfigureAwait(false);
         await AddAsync(db, rules, cancellationToken).ConfigureAwait(false);
         await AddAsync(db, actions, cancellationToken).ConfigureAwait(false);

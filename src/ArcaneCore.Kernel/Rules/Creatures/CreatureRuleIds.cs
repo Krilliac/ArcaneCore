@@ -137,18 +137,18 @@ public static class CreatureRuleIds
     // --- id schemes of converted content ---------------------------------------------------------------------------------------
 
     /// <summary>
-    /// Converted <c>creature_ai_scripts</c> rows get <c>rule.id = ConvertedRuleIdBase + creature_ai_scripts.id</c> (2^30 plus the source id).
-    /// Source ids reach into the millions (the classic EventAI ids are creature entry times 100 plus an index), so they cannot all fit
-    /// below the 1 000 000 that the design reserves for shipped content; the band starts above the custom range (1 000 000 up to
-    /// 2^30 - 1), so a converted id never collides with a rule authored on a server.
+    /// Converted <c>creature_ai_scripts</c> rows get <c>rule.id = ConvertedRuleIdBase + creature_ai_scripts.id</c>. The base is the EventAI sub-band of
+    /// <see cref="RuleIdBands"/> (2^30 up to 2^30 + 2^26 - 1): source ids reach into the millions (the classic EventAI ids are creature entry times
+    /// 100 plus an index), so they cannot sit below the 1 000 000 that the design reserves for shipped content, and the converted range is
+    /// split per converter so that one converter's rerun never removes another's rows.
     /// </summary>
-    public const int ConvertedRuleIdBase = 1 << 30;
+    public const int ConvertedRuleIdBase = RuleIdBands.EventAi;
 
-    /// <summary>The largest <c>creature_ai_scripts.id</c> the id scheme can carry.</summary>
-    public const uint MaxConvertedSourceId = (1u << 30) - 1;
+    /// <summary>The largest <c>creature_ai_scripts.id</c> the EventAI sub-band can carry (a larger id is reported as not convertible).</summary>
+    public const uint MaxConvertedSourceId = RuleIdBands.SubBandSize - 1;
 
-    /// <summary>Converted texts live in the same band as converted rules: <c>rule_text.id = ConvertedTextIdBase + offset</c>, so everything at or above it is the converter's and nothing authored (below it) is ever touched.</summary>
-    public const int ConvertedTextIdBase = 1 << 30;
+    /// <summary>Converted texts live in the same EventAI sub-band as converted rules: <c>rule_text.id = ConvertedTextIdBase + offset</c>, so the importer removes exactly that sub-band and nothing authored (below it) or owned by another converter (above it) is touched.</summary>
+    public const int ConvertedTextIdBase = RuleIdBands.EventAi;
 
     /// <summary>A positive EventAI text id (a <c>broadcast_text</c> id) has offset equal to the id, below this bound.</summary>
     public const int BroadcastTextIdLimit = 500_000;

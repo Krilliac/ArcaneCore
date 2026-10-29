@@ -56,7 +56,7 @@ For each rule of the fired event, lowest `priority` first (ties by `id`), the ev
 
 Every action names a target. An action's `delay_ms` counts from the previous action of its sequence; the rest of the sequence then waits in one of the subject's 4 pending slots. Lists nest at most 8 deep (checked when they run: a deeper start fails and is counted), and a list that starts itself again with no delay in between is rejected at load.
 
-Ids below 1000000 are shipped or converted content; server-authored rows use 1000000 and up. `playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, or 1000 and up for a custom goal.
+Rule and rule_text ids below 1000000 are shipped content; server-authored rows use 1000000 up to 1073741823. From 1073741824 (2^30) up the ids belong to the converters, one sub-band of 67108864 (2^26) ids each: EventAI at 1073741824, DB scripts at 1140850688 (reserved), SmartAI at 1207959552 (reserved). A converter rewrites only its own sub-band, and a row at or above 1275068416 is rejected at load. `playerbot_goal.goal_id` is a `PlayerbotGoalKind` value, or 1000 and up for a custom goal.
 
 ## Parameter kinds
 

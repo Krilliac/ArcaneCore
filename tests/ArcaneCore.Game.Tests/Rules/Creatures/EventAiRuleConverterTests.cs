@@ -194,6 +194,20 @@ public sealed class EventAiRuleConverterTests
     }
 
     [Fact]
+    public void AChanceAbove100_AndAPhaseOutOfRange_AreReportedAsAdjustments_AndTheRowsStayConverted()
+    {
+        EventAiConversion conversion = Convert(Row(1, chance: 150), Row(2, action: new CreatureAiAction(22, 40, 0, 0)), Row(3, action: new CreatureAiAction(22, -3, 0, 0)), Row(4));
+
+        Assert.Equal(4, conversion.Converted);
+        Assert.Equal(3, conversion.Adjusted);
+        Assert.All(conversion.Issues, i => Assert.Equal(EventAiConversionOutcome.Adjusted, i.Outcome));
+        Assert.Equal(100, conversion.Content.Rules.Single(r => r.Id == EventAiRuleConverter.RuleIdOf(1)).ChancePct);
+        Assert.Contains("chance 150 written as 100", conversion.Issues[0].Reason, StringComparison.Ordinal);
+        Assert.Contains("SET_PHASE 40 written as 31", conversion.Issues[1].Reason, StringComparison.Ordinal);
+        Assert.Contains("SET_PHASE -3 written as 0", conversion.Issues[2].Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ASourceIdAboveTheBand_IsReported()
     {
         EventAiConversion conversion = Convert(Row(CreatureRuleIds.MaxConvertedSourceId), Row(CreatureRuleIds.MaxConvertedSourceId + 1));

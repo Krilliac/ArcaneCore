@@ -111,7 +111,7 @@ playerbot_goal      -- the goal catalogue, keyed by the existing enum value
   comment
 ```
 
-**Id ranges.** Shipped and converted content uses ids below 1 000 000. Rows authored on a server (custom) use 1 000 000 and up, so they never clash with shipped updates. Converted rows get deterministic ids derived from their source (for example source table, source id and row index), so re-running the importer is idempotent. This follows the existing reserved custom range for game events (900-999).
+**Id ranges** (amended in P2a; applies to `rule` and `rule_text`). Shipped content uses ids below 1 000 000. Rows authored on a server (custom) use 1 000 000 up to 2^30 - 1 (1 073 741 823), so they never clash with shipped updates. Converted content uses ids from 2^30 (1 073 741 824) up, split into one sub-band of 2^26 (67 108 864) ids per converter: EventAI at 2^30, DB scripts at 2^30 + 2^26 (reserved), SmartAI at 2^30 + 2 * 2^26 (reserved). Converted rows get deterministic ids derived from their source (EventAI: 2^30 + the `creature_ai_scripts` id, so source ids reach 2^26 - 1; texts use the same sub-band), so re-running the importer is idempotent, and each converter deletes and rewrites only its own sub-band. The catalog accepts an id from 2^30 up only inside a named sub-band, so an authored or shipped row at 1 500 000 000 is rejected at load; it cannot tell a converted row from an authored one, so a custom row inside a sub-band is accepted and is the operator's to avoid. A source id that does not fit its sub-band is reported as not convertible, never wrapped. This follows the existing reserved custom range for game events (900-999).
 
 ## 5. Behaviour
 
@@ -243,7 +243,7 @@ The inventory is a living list. New candidates go in this table, and a test (`Ru
 ## 11. Calls made by Claude (not decided by the project owner)
 
 - Reuse the existing `conditions` table and evaluator instead of a new predicate system.
-- The table names and the custom id range (1 000 000+).
+- The table names and the custom id range (1 000 000 up to 2^30 - 1), with converted content from 2^30 in one 2^26-id sub-band per converter (EventAI, DB scripts, SmartAI; section 4).
 - Two chance kinds: a per-firing roll and a stable per-subject share.
 - The bot ladder becomes shipped rules with weights, and the policy layer remains a proposal source.
 - Old script tables stay as import input only; the runtime reads rules only.
@@ -278,4 +278,6 @@ The inventory is a living list. New candidates go in this table, and a test (`Ru
 - The evaluator calls host code (`RuleEvent.Matches`, `RuleTarget.Resolve`, `RuleAction.Execute`, the condition gate) without a try/catch. The first host wraps its `Fire`/`Update` calls in the fault-ledger idiom, and guards against an action that synchronously fires the same event again (`MaxListDepth` limits list nesting only).
 - A chain of more than 8 lists with no delay between them passes the catalog and is cut at run time (`DepthLimited`); the first host phase either rejects such chains at load or keeps this documented.
 - The 24-hour caps on `cooldown_max_ms` and `delay_ms` may reject converted EventAI/SmartAI/DB-script rows with longer timers; the P2 converters check their corpus against them.
+- P2a (EventAI creature host): `CreatureRuleAI` is registered as "RuleAI" but nothing in `src` assigns it to a creature, and EventAI stays the live executor; the cutover is a later step. Before cutover the host needs P1's `TryFire` (fault-ledger wrapping and the re-entrancy guard) and its invoker-guid resolver, so that a delayed run re-resolves the invoker; until then the host holds the invoker unit itself and wraps `Fire` at its own boundary.
+- P2a (EventAI converter): a debug-only row is written disabled, so parity differs when `Creatures:EventAi:DebugOnlyEvents` is true; the cooldown columns carry the EventAI repeat range (the spec cooldown does not apply to creature non-timer events); one unconvertible action drops the whole row. All three are in `docs/reference/rules-conversion.md`.
 - The evaluator counters (`RuleEvaluatorCounters`) belong to each host's evaluator; P0 has none in the world, so no command prints them yet.

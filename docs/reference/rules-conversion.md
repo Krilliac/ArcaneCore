@@ -16,7 +16,7 @@ arcane-content-importer convert-rules --database <file> [--dry-run] [--report <f
 ```
 
 It reads the imported `creature_ai_scripts`, `creature_ai_texts`, `broadcast_text` and `creature_ai_summons` rows, deletes the rows of its own
-id bands in `rule`, `rule_action` and `rule_text` and writes the converted ones, so running it twice gives the same database. Every row it does
+id sub-band in `rule`, `rule_action` and `rule_text` (2^30 up to 2^30 + 2^26 - 1) and writes the converted ones, so running it twice gives the same database. Every row it does
 not convert is printed with its `creature_ai_scripts.id` and the reason (`--report` writes the whole list to a file outside the repository). A database
 without `creature_ai_scripts` rows is refused with exit code 3 and nothing is written; `--provider` and `--connection-string` select a MariaDB or
 PostgreSQL world instead of a SQLite file.
@@ -27,15 +27,12 @@ All ids are a pure function of the source id, so a re-run writes the same ids an
 
 | Table | Id | Range |
 |---|---|---|
-| `rule.id` | `1073741824 + creature_ai_scripts.id` (`2^30` plus the source id) | `2^30` up to `2^31 - 1` |
+| `rule.id` | `1073741824 + creature_ai_scripts.id` (`2^30` plus the source id) | `2^30` up to `2^30 + 2^26 - 1` |
 | `rule_action.rule_id` | the rule's id | same |
 | `rule_text.id` for a positive text id (a `broadcast_text` row) | `2^30 +` the broadcast text id | `2^30 + 1` to `2^30 + 499999` |
 | `rule_text.id` for a negative text id `-N` (a `creature_ai_texts` row) | `2^30 + 500000 + N` | `2^30 + 500001` to `2^30 + 999999` |
 
-Everything at or above `2^30` in these tables is the converter's: the importer replaces exactly that band and never touches a row below it, where
-authored and shipped rules live (the design keeps ids below 1,000,000 for shipped content and 1,000,000 up to `2^30 - 1` for server-authored content).
-Source ids reach into the millions, so a band below 1,000,000 does not fit; the converter reports a row whose source id is above `2^30 - 1`. A
-broadcast text id of 500000 or more, or a negative text id of `-500000` or less, cannot be represented and the row is reported.
+The id plan (`RuleIdBands`, spec section 4): shipped rows are below 1,000,000, server-authored rows are 1,000,000 up to `2^30 - 1`, and converted rows are `2^30` and up, one sub-band of `2^26` (67,108,864) ids per converter. The EventAI converter owns `2^30` up to `2^30 + 2^26 - 1`; `2^30 + 2^26` is reserved for the DB-script converter and `2^30 + 2 * 2^26` for SmartAI. The importer replaces exactly its own sub-band and never reads, changes or removes a row outside it. The catalog rejects a `rule` or `rule_text` row at `2^30 + 3 * 2^26` or above (for example 1,500,000,000) at load; it cannot tell a converted row from an authored one inside a named sub-band, so authored rows must stay below `2^30`. A source id of `2^26` or more is reported as not convertible (EventAI ids are the creature entry times 100 plus an index, so entries up to 671,087 fit). A broadcast text id of 500000 or more, or a negative text id of `-500000` or less, cannot be represented and the row is reported.
 
 ## Row layout
 
@@ -86,14 +83,18 @@ random value at the place the old executor draws it, so a seeded run draws in th
 ### Rows written disabled
 
 A row the old executor never runs is written with `enabled = 0` and listed in the report so that it stays visible: chance 0, the debug-only
-flag (`0x80`) and the all-32-bits inverse mask. A chance above 100 is written as 100.
+flag (`0x80`) and the all-32-bits inverse mask. A chance above 100 is written as 100. A chance above 100 and a SET_PHASE outside 0 to 31 are written clamped (as the old executor reads them) and listed as informational `Adjusted` findings; the row still counts as converted.
+
+The debug-only flag is a gate in the old executor (`Creatures:EventAi:DebugOnlyEvents`, off by default), so a debug-only row is written disabled: with `DebugOnlyEvents=true` the old executor runs it and the converted rule does not, and parity differs for those rows.
+
+The repeat range of an EventAI row is carried in the `cooldown_min_ms` and `cooldown_max_ms` columns. That is the EventAI meaning (a timer re-armed after the row ran); the spec cooldown (a minimum gap between firings) does not apply to the creature host's non-timer events.
 
 ### Rows that are not converted
 
 Reported by id with a reason, never written: an event or action type the executor does not support, an action target type it does not support
 (13 and 14), a `spawned` condition other than 0 to 2, a text id that does not exist or is empty, a `TEXT_NEW` action with a text template
 (random template texts arrive with the DB scripts lane), a combat-action row with an empty first action, a summon position that does not exist,
-a parameter outside what the primitive accepts (a negative spell id, for example), a timer over the cap, a source id above `2^30 - 1`.
+a parameter outside what the primitive accepts (a negative spell id, for example), a timer over the cap, a source id of `2^26` or more. One unconvertible action drops the whole row: no part of it is written.
 
 ## Events
 
@@ -237,7 +238,8 @@ parameter of 13 or 14 is not supported by the executor and the row is reported.
 These are the places where a converted row does not behave exactly like the old executor. The parity harness lists each as an approved
 exception with its reason.
 
-* Rows written disabled (chance 0, debug-only, all-bits inverse mask) no longer draw random numbers from the creature's random stream.
+* A chance-0 row written disabled no longer draws a random number each tick from the creature's random stream (a debug-only row is filtered at load and an all-bits-masked row fails the phase gate before the roll, so neither drew); the stream shifts for the rows around it.
+* With `Creatures:EventAi:DebugOnlyEvents=true` the old executor runs debug-only rows and the converted rules do not.
 * `creature.summon_at` keeps the summon position as the bits of single-precision floats.
 * While a rule is processed its invoker is held by the host's own unit wrapper; a rule list that outlives the invoker is not re-resolved until the
   engine keeps the invoker's guid (tracked with the engine core).
