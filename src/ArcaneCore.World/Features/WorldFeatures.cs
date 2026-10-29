@@ -16,7 +16,7 @@ namespace ArcaneCore.World.Features;
 public static class WorldFeatures
 {
     /// <summary>Seam interfaces a feature is additionally registered as, when it implements them.</summary>
-    private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(Chat.IChatMuteSource), typeof(ICharacterHooks), typeof(ICharacterDeleteHook), typeof(ICharacterSettlementBarrier), typeof(ISpellSummonSink), typeof(Game.Creatures.ICreatureHostility)];
+    private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(Chat.IChatMuteSource), typeof(ICharacterHooks), typeof(ICharacterDeleteHook), typeof(ICharacterSettlementBarrier), typeof(ISpellSummonSink), typeof(Game.Creatures.ICreatureHostility), typeof(ArcaneCore.Kernel.Ops.ServerConsole.ISupervisedLifecycleRequestHandler)];
 
     /// <summary>Every feature type of the startup set (<see cref="WorldCodeAssemblies.Startup"/>: World plus the built-in packs), ordered by full name, then assembly name (deterministic, the order of before the pack moved out).</summary>
     public static IReadOnlyList<Type> FeatureTypes { get; } = AssemblyDiscovery.FindTypes<IWorldFeature>();

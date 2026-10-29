@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Kernel.Ops.ServerConsole;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -27,17 +28,127 @@ public sealed class SupervisedChildDrainTests
 
     private sealed class FakeLifetime : IHostApplicationLifetime
     {
+        private readonly CancellationTokenSource _stopping = new();
         private int _stops;
 
         public int Stops => Volatile.Read(ref _stops);
 
         public CancellationToken ApplicationStarted => CancellationToken.None;
 
-        public CancellationToken ApplicationStopping => CancellationToken.None;
+        public CancellationToken ApplicationStopping => _stopping.Token;
 
         public CancellationToken ApplicationStopped => CancellationToken.None;
 
-        public void StopApplication() => Interlocked.Increment(ref _stops);
+        public void StopApplication()
+        {
+            Interlocked.Increment(ref _stops);
+            _stopping.Cancel(); // runs the ApplicationStopping callbacks on this thread, as the real host does
+        }
+    }
+
+    private sealed class RecordingHandler : ISupervisedLifecycleRequestHandler
+    {
+        public ConcurrentQueue<SupervisorLifecycleRequest> Requests { get; } = new();
+
+        public ConcurrentQueue<SupervisorLifecycleResult> Results { get; } = new();
+
+        public void Request(SupervisorLifecycleRequest request) => Requests.Enqueue(request);
+
+        public void Result(SupervisorLifecycleResult result) => Results.Enqueue(result);
+    }
+
+    private static ConsoleInputSource ProtocolSource(TextReader reader, TextWriter output, bool protocol = true)
+        => new(reader, output, IsInputRedirected: true, IsUserInteractive: true, IsSupervisedChild: true, SupervisorProtocol: protocol);
+
+    [Theory]
+    [InlineData(2, "restart")]
+    [InlineData(0, "shutdown")]
+    [InlineData(5, "failure")]
+    public async Task SupervisedChildDrain_Stopping_AnnouncesIntentAndCode(int code, string intent)
+    {
+        int saved = ExitCodes.Current;
+        var reader = new BlockingReader();
+        var output = new StringWriter();
+        var lifetime = new FakeLifetime();
+        var drain = new SupervisedChildDrain(ProtocolSource(reader, output), lifetime, NullLoggerFactory.Instance);
+        try
+        {
+            await drain.StartAsync(CancellationToken.None);
+            ExitCodes.Current = code;
+
+            lifetime.StopApplication();
+
+            Assert.Equal($"lifecycle stopping intent={intent} code={code}{Environment.NewLine}", output.ToString());
+        }
+        finally
+        {
+            ExitCodes.Current = saved;
+            reader.Post(null);
+            await drain.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task SupervisedChildDrain_NoProtocolEnv_AnnouncesNothing()
+    {
+        var reader = new BlockingReader();
+        var output = new StringWriter();
+        var lifetime = new FakeLifetime();
+        var drain = new SupervisedChildDrain(ProtocolSource(reader, output, protocol: false), lifetime, NullLoggerFactory.Instance);
+
+        await drain.StartAsync(CancellationToken.None);
+        lifetime.StopApplication();
+
+        Assert.Equal(string.Empty, output.ToString());
+        reader.Post(null);
+        await drain.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SupervisedChildDrain_ForwardedLifecycleLine_RequestsTheCommand()
+    {
+        var reader = new BlockingReader();
+        var lifetime = new FakeLifetime();
+        var handler = new RecordingHandler();
+        var drain = new SupervisedChildDrain(ProtocolSource(reader, new StringWriter()), lifetime, NullLoggerFactory.Instance, handler);
+
+        await drain.StartAsync(CancellationToken.None);
+        reader.Post("lifecycle restart delay=30 code=2 by=Admin");
+        reader.Post("lifecycle result realm=4 status=unknown-realm by=Admin");
+        reader.Post("lifecycle restart delay=notanumber code=2 by=Admin");
+
+        await WaitForAsync(() => handler.Requests.Count >= 1 && handler.Results.Count >= 1);
+        await Task.Delay(50);
+        SupervisorLifecycleRequest request = Assert.Single(handler.Requests);
+        Assert.Equal(SupervisorLifecycleAction.Restart, request.Action);
+        Assert.Equal(30u, request.DelaySeconds);
+        Assert.Equal(2, request.ExitCode);
+        Assert.Equal("Admin", request.By);
+        SupervisorLifecycleResult result = Assert.Single(handler.Results);
+        Assert.Equal(SupervisorLifecycleStatus.UnknownRealm, result.Status);
+        Assert.Equal(4, result.RealmId);
+        Assert.Equal(0, lifetime.Stops); // a lifecycle line is a request to the lifecycle feature, never a direct stop
+
+        reader.Post("drain"); // the drain line still works beside the new lines
+        await WaitForAsync(() => lifetime.Stops >= 1);
+        reader.Post(null);
+        await drain.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task SupervisedChildDrain_ForwardedLifecycleLine_WithoutAHandler_IsIgnored()
+    {
+        var reader = new BlockingReader();
+        var lifetime = new FakeLifetime();
+        var drain = new SupervisedChildDrain(ProtocolSource(reader, new StringWriter()), lifetime, NullLoggerFactory.Instance);
+
+        await drain.StartAsync(CancellationToken.None);
+        reader.Post("lifecycle shutdown delay=0 code=0 by=Admin");
+        await Task.Delay(100);
+
+        Assert.Equal(0, lifetime.Stops);
+        reader.Post(null);
+        await drain.StopAsync(CancellationToken.None);
     }
 
     private static ConsoleInputSource Source(TextReader reader, bool supervised, bool redirected = true)
