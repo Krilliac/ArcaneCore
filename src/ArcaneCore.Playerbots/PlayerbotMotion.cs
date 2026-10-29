@@ -378,6 +378,10 @@ internal static partial class PlayerbotMotion
         // is put at swim depth first (SwimHeight), so the start packet, the speed and the environment flags agree.
         current = SwimHeight(map, player, current);
         bool swim = SwimAt(map, player, current);
+        // A fresh start is walked from rest in the state of where it starts: SendStep compares with state.Swim, so seeding it here keeps a
+        // start in water a START_FORWARD with MOVEFLAG_SWIMMING and no START_SWIM/STOP_SWIM. A running bot keeps the state of its last packet,
+        // so a route switch at the shore still reports the crossing.
+        if (!moving) state.Swim = swim;
         if (!Speed(player, options.MoveSpeed, swim, out speed, out walk))
         {
             if (!keepMotion) Stop(session, player);
@@ -419,7 +423,8 @@ internal static partial class PlayerbotMotion
         float heading = HeadingTo(current, route.Points[route.NextPoint]);
         // A deliberate start spends the caller's action budget; a running bot changing its route does not.
         WorldOpcode opcode = moving ? WorldOpcode.MsgMoveHeartbeat : WorldOpcode.MsgMoveStartForward;
-        if (!Send(session, player, opcode, current, heading, walk, moving: true, now, budgeted: !moving, swim: swim))
+        if (!SendStep(session, player, map, state, opcode, current, heading, walk, moving: true, now, budgeted: !moving,
+                out current, out _, out swim))
         {
             // A start the caller's action budget refused is its own back-off, not the server refusing the move.
             if (hadBudget || moving)
@@ -557,11 +562,8 @@ internal static partial class PlayerbotMotion
             return;
         }
 
-        valid = SwimHeight(map, player, valid);
-        bool swimNow = SwimAt(map, player, valid);
-        bool swimFlip = swimNow != state.Swim;
-        WorldOpcode stepOpcode = !swimFlip ? WorldOpcode.MsgMoveHeartbeat : swimNow ? WorldOpcode.MsgMoveStartSwim : WorldOpcode.MsgMoveStopSwim;
-        if (!Send(session, player, stepOpcode, valid, heading, state.Walk, moving: true, now, budgeted: false, swim: swimNow))
+        if (!SendStep(session, player, map, state, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false,
+                out valid, out bool swam, out bool swimNow))
         {
             string mode = MoveModeOf(route, route.NextPoint, nextPoint);
             AdvancePastRejectedWaypoint(route, state.Anchor);
@@ -582,17 +584,10 @@ internal static partial class PlayerbotMotion
         state.AnchorMs = now;
         state.Heading = heading;
         bool walkedInWalkMode = state.Walk;
-        PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, state, route, walkedFromAt, walkedFrom, nextPoint, valid, now, age, state.Swim, walkedInWalkMode);
-        // A client always moves at its current speed (a mount gone at swim depth or after a dismount, a swim speed left behind on the
-        // shore): the next step is walked at it. After the overspeed check, which judged the step at the speed it was walked at.
-        // The walk mode is not changed here by a changed cap alone (Follow decides it, as before); it is adopted when the swim state
-        // flipped, so that leaving the water always drops the swim speed even if the cap now asks for walking.
-        state.Swim = swimNow;
-        if (Speed(player, state.MoveSpeedCap, state.Swim, out float currentSpeed, out bool currentWalk) && (currentWalk == walkedInWalkMode || swimFlip))
-        {
-            state.Speed = currentSpeed;
-            state.Walk = currentWalk;
-        }
+        // The overspeed check judges the step in the swim state it was walked in (swam), not the one SendStep just stored.
+        PlayerbotMotionAnomalies.AfterHeartbeat(session, player, map, state, route, walkedFromAt, walkedFrom, nextPoint, valid, now, age, swam, walkedInWalkMode);
+        // After the overspeed check, which judged the step at the speed it was walked at.
+        AdoptCurrentSpeed(player, state, walkedInWalkMode, swimFlip: swimNow != swam);
         if (state.Loops.OnPosition(valid, travelled, now) is { } loop) GiveUp(session, player, state, loop, now);
         // Last: a trigger may teleport the bot (the next pump then finds it between maps and forgets the route).
         PlayerbotAreaTriggers.Update(session, player, map, position, tracker);
@@ -678,8 +673,11 @@ internal static partial class PlayerbotMotion
         MotionState state = Of(player);
         state.World = session.World;
         if (state.Active || !CanMove(player)) return false;
+        // The swim state is decided here, not by SwimAt: SwimAt reads player.Transport at call time, and the transport is still attached
+        // while this packet (the one that leaves it) is built, so SwimAt would never report the water the bot steps into.
         return Send(session, player, WorldOpcode.MsgMoveHeartbeat, world, heading, walk: false, moving: false, session.World.NowMs,
-            budgeted: false, seat: new Seat(false, 0, default, 0));
+            budgeted: false, seat: new Seat(false, 0, default, 0),
+            swim: player.Map is { } m && LiquidEnvironment.IsSwimDepth(m, world.X, world.Y, world.Z, player.Locomotion.CollisionHeight));
     }
 
     private readonly record struct Seat(bool Aboard, ulong Guid, Vector3 Offset, float Orientation);
@@ -704,22 +702,29 @@ internal static partial class PlayerbotMotion
     /// </summary>
     internal static void Flush(WorldSession session, Player player, uint now)
     {
+        // Ordering hazards: Flush runs before the ack packet is built (PlayerbotMovementControl), so the stored movement block the ack
+        // carries is the one this heartbeat leaves; and RefreshSpeed reads state.Swim after Flush, so Flush must leave state.Swim (and the
+        // speed) matching the position it reported. Both hold because the step goes through SendStep, like Pump's.
         if (!States.TryGetValue(player, out MotionState? state) || state.Route is not { } route || player.Map is not { } map) return;
         Pump(session, player, now);
+        // Pump already sent a packet this tick (or stopped the motion): the stored block is current.
         if (!state.Active || Age(now, state.AnchorMs) == 0) return;
         Vector3 position = Walk(route, state.Anchor, route.NextPoint, state.Speed * Age(now, state.AnchorMs) / 1000f,
             state.Heading, out int nextPoint, out float heading, out _, out _);
+        bool walkedInWalkMode = state.Walk;
         if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) is not { } valid
-            || !Send(session, player, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now, budgeted: false))
+            || !SendStep(session, player, map, state, WorldOpcode.MsgMoveHeartbeat, valid, heading, state.Walk, moving: true, now,
+                budgeted: false, out Vector3 at, out bool swam, out bool swimNow))
         {
             state.Clear();
             return;
         }
 
         route.NextPoint = nextPoint;
-        state.Anchor = valid;
+        state.Anchor = at;
         state.AnchorMs = now;
         state.Heading = heading;
+        AdoptCurrentSpeed(player, state, walkedInWalkMode, swimFlip: swimNow != swam);
     }
 
     /// <summary>
@@ -755,7 +760,14 @@ internal static partial class PlayerbotMotion
     internal static bool Speed(Player player, float cap, out float speed, out bool walk)
         => Speed(player, cap, swimming: false, out speed, out walk);
 
-    /// <summary><see cref="Speed(Player, float, out float, out bool)"/> for a bot that is (<paramref name="swimming"/>) or is not at swim depth.</summary>
+    /// <summary>
+    /// <see cref="Speed(Player, float, out float, out bool)"/> for a bot that is (<paramref name="swimming"/>) or is not at swim depth.
+    /// <para>
+    /// Swimming deliberately ignores the walk toggle and the MoveSpeed cap: the bot swims at its swim speed. This matches retail, where a
+    /// swimming client moves at its swim speed whatever its walk mode, and vmangos' movement anticheat tests MOVEFLAG_SWIMMING before
+    /// MOVEFLAG_WALK_MODE when it picks the speed a packet is judged at (MovementAnticheat::GetMoveTypeForMovementInfo, MovementAnticheat.cpp).
+    /// </para>
+    /// </summary>
     internal static bool Speed(Player player, float cap, bool swimming, out float speed, out bool walk)
     {
         // The MoveSpeed cap is not applied in water: the bot swims at its swim speed.
@@ -894,11 +906,54 @@ internal static partial class PlayerbotMotion
         int nextPoint, uint now)
     {
         PlayerbotRoute? route = state.Route;
-        if (player.Map is { } stopMap) position = SwimHeight(stopMap, player, position); // the stop agrees with the heartbeats before it
         state.Clear();
-        if (Send(session, player, WorldOpcode.MsgMoveStop, position, heading, state.Walk, moving: false, now, budgeted: false)
-            && route is not null)
+        // The stop agrees with the heartbeats before it: at swim depth, with the swim state decided on that position (SendStep).
+        bool stopped = player.Map is { } stopMap
+            ? SendStep(session, player, stopMap, state, WorldOpcode.MsgMoveStop, position, heading, state.Walk, moving: false, now,
+                budgeted: false, out _, out _, out _)
+            : Send(session, player, WorldOpcode.MsgMoveStop, position, heading, state.Walk, moving: false, now, budgeted: false);
+        if (stopped && route is not null)
             route.NextPoint = nextPoint;
+    }
+
+    /// <summary>
+    /// One route step (a heartbeat, a start or a stop) at <paramref name="validated"/>: put at swim depth first (<see cref="SwimHeight"/>,
+    /// returned as <paramref name="at"/>), its swim state decided once on that position (<paramref name="swimNow"/>; <paramref name="swam"/>
+    /// is the state the step was walked in). A moving heartbeat whose swim state flips is MSG_MOVE_START_SWIM / MSG_MOVE_STOP_SWIM, as a
+    /// client sends at the crossing. On success state.Swim is the new state, which RefreshSpeed and the next step read.
+    /// <para>
+    /// SwimHeight and SwimAt read player.Transport when they are called: a caller whose packet changes the transport state (a step off a
+    /// ship) must not come through here; <see cref="SendStepOff"/> passes its swim state explicitly instead.
+    /// </para>
+    /// </summary>
+    private static bool SendStep(WorldSession session, Player player, Map map, MotionState state, WorldOpcode opcode, Vector3 validated,
+        float heading, bool walk, bool moving, uint now, bool budgeted, out Vector3 at, out bool swam, out bool swimNow)
+    {
+        at = SwimHeight(map, player, validated);
+        swimNow = SwimAt(map, player, at);
+        swam = state.Swim;
+        // Only a heartbeat becomes the crossing opcode: a fresh start stays MSG_MOVE_START_FORWARD (Follow seeds state.Swim so it never
+        // flips) and a stop stays MSG_MOVE_STOP.
+        if (moving && swimNow != swam && opcode == WorldOpcode.MsgMoveHeartbeat)
+            opcode = swimNow ? WorldOpcode.MsgMoveStartSwim : WorldOpcode.MsgMoveStopSwim;
+        if (!Send(session, player, opcode, at, heading, walk, moving, now, budgeted, swim: swimNow)) return false;
+        state.Swim = swimNow;
+        return true;
+    }
+
+    /// <summary>
+    /// A client always moves at its current speed (a mount gone at swim depth or after a dismount, a swim speed left behind on the shore):
+    /// the next step is walked at it. The walk mode is not changed here by a changed cap alone (Follow decides it, as before); it is adopted
+    /// when the swim state flipped (<paramref name="swimFlip"/>), so that leaving the water always drops the swim speed even if the cap now
+    /// asks for walking.
+    /// </summary>
+    private static void AdoptCurrentSpeed(Player player, MotionState state, bool walkedInWalkMode, bool swimFlip)
+    {
+        if (Speed(player, state.MoveSpeedCap, state.Swim, out float currentSpeed, out bool currentWalk) && (currentWalk == walkedInWalkMode || swimFlip))
+        {
+            state.Speed = currentSpeed;
+            state.Walk = currentWalk;
+        }
     }
 
     /// <summary>
