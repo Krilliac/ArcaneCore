@@ -322,6 +322,16 @@ internal sealed class PopulationZoneAtlas
         => level <= zone.MaxLevel && zone.OpenTo(team) && zone.LocationsFor(team).Any(l => zone.LowestLevelAt(l, team, rule) <= level);
 
     /// <summary>
+    /// Whether a level-capped bot (<see cref="PlayerbotPopulationOptions.MaxLevel"/>) counts as fitting <paramref name="zone"/> when the
+    /// zone value routes it: the zone is open to the team, its highest level is within <paramref name="capReach"/> of the level, and one
+    /// of the team's locations takes the level. One rule shared by <see cref="Rank"/> (eligibility) and the relocation pass (so a capped
+    /// bot standing in a zone <see cref="Rank"/> would send it to is not out-levelled and moved on).
+    /// </summary>
+    public static bool CapReaches(PopulationZone zone, int level, Team team, PopulationLevelRule rule, int capReach)
+        => level >= PlayerbotPopulationOptions.MaxLevel && zone.MaxLevel >= level - capReach && zone.OpenTo(team)
+            && zone.LocationsFor(team).Any(l => zone.LowestLevelAt(l, team, rule) <= level);
+
+    /// <summary>
     /// Whether a bot of <paramref name="level"/> is below every place in <paramref name="zone"/> it could have been put
     /// (<see cref="PopulationZone.LowestLevelFor"/> the team under the same <paramref name="rule"/> placement uses). Such a bot could not
     /// have been placed there, and a bot placed anywhere is never under-levelled where it was placed, so relocation does not ping-pong.
@@ -491,7 +501,6 @@ internal sealed class PopulationZoneAtlas
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(w);
         ArgumentNullException.ThrowIfNull(assigned);
-        bool capped = bot.Level >= PlayerbotPopulationOptions.MaxLevel;
         var scores = new List<ZoneScore>();
         foreach (PopulationZone zone in _zones)
         {
@@ -499,9 +508,7 @@ internal sealed class PopulationZoneAtlas
             int inZone = assigned.GetValueOrDefault(zone.ZoneId);
             if (w.ZoneSoftCap > 0 && inZone >= w.ZoneSoftCap) continue;
             if (!HasRoom(zone, bot.Team, bot.Level, bot.Level, assigned)) continue;
-            bool reaches = Fits(zone, bot.Level, bot.Team, rule)
-                || (capped && zone.MaxLevel >= bot.Level - w.CapReach && zone.LocationsFor(bot.Team).Any(l => zone.LowestLevelAt(l, bot.Team, rule) <= bot.Level));
-            if (!reaches) continue;
+            if (!Fits(zone, bot.Level, bot.Team, rule) && !CapReaches(zone, bot.Level, bot.Team, rule, w.CapReach)) continue;
             ZoneScore score = PopulationZoneScoring.Score(zone, value.Find(zone.ZoneId), bot, w, trouble?.Invoke(zone.ZoneId) ?? 0, inZone);
             if (score.Valued && score.Total > 0) scores.Add(score);
         }

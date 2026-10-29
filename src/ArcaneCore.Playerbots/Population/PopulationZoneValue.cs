@@ -16,7 +16,14 @@ namespace ArcaneCore.World.Playerbots.Population;
 /// <paramref name="RepFactions"/> are the factions of <c>RewRepFaction1..5</c> whose <c>RewRepValue</c> is above 0.
 /// </summary>
 internal sealed record ZoneQuestFact(uint QuestId, int MinLevel, int QuestLevel, uint RequiredRaces, uint RequiredClasses,
-    IReadOnlyList<uint> RepFactions);
+    IReadOnlyList<uint> RepFactions)
+{
+    /// <summary>Whether a giver of the quest is not hostile to the Alliance (a team cannot take a quest from a giver it must fight).</summary>
+    public bool AllianceGiver { get; init; } = true;
+
+    /// <summary>Whether a giver of the quest is not hostile to the Horde.</summary>
+    public bool HordeGiver { get; init; } = true;
+}
 
 /// <summary>An on-kill reputation source in the zone: kills of it stop paying at <paramref name="MaxRank"/> (the entry's <c>MaxStanding</c>).</summary>
 internal sealed record ZoneRepSource(uint FactionId, ReputationRank MaxRank);
@@ -141,7 +148,7 @@ internal sealed class PopulationZoneValue
                 if (zoneId == 0) continue;
                 ZoneAccumulator zone = ZoneAccumulator.Of(zones, zoneId);
                 foreach (ZoneQuestFact quest in facts.Quests)
-                    if (zone.QuestIds.Add(quest.QuestId)) zone.Quests.Add(quest);
+                    zone.AddQuest(quest);
                 foreach (ZoneRepSource source in facts.RepSources)
                     zone.RepRanks[source.FactionId] = zone.RepRanks.TryGetValue(source.FactionId, out ReputationRank known) && known >= source.MaxRank ? known : source.MaxRank;
                 if (facts.VendorGear.Length > 0 && zone.VendorEntries.Add(spawn.Entry))
@@ -255,6 +262,15 @@ internal sealed class PopulationZoneValue
             if (sources.TemplateOf(entry) is { } template) facts.Elite = template.Rank >= 1;
             facts.Skinnable = sources.Loot.FindCreature(entry) is { SkinningLootId: not 0 };
 
+            bool giverHostileToAlliance = false, giverHostileToHorde = false;
+            if (sources.TemplateOf(entry) is { } giver)
+            {
+                if (sources.Factions.Find(PopulationCreatureSurvey.PlayerTemplateOf(Team.Alliance)) is { } alliance)
+                    giverHostileToAlliance = PopulationCreatureSurvey.IsHostileTo(giver, alliance, sources.Factions);
+                if (sources.Factions.Find(PopulationCreatureSurvey.PlayerTemplateOf(Team.Horde)) is { } horde)
+                    giverHostileToHorde = PopulationCreatureSurvey.IsHostileTo(giver, horde, sources.Factions);
+            }
+
             var quests = new List<ZoneQuestFact>();
             foreach (uint id in sources.QuestStartersOf(entry))
             {
@@ -265,7 +281,11 @@ internal sealed class PopulationZoneValue
                     (quest.RewRepFaction4, quest.RewRepValue4), (quest.RewRepFaction5, quest.RewRepValue5),
                 ];
                 uint[] factions = [.. rewards.Where(r => r.Faction != 0 && r.Value > 0).Select(r => r.Faction).Distinct()];
-                quests.Add(new ZoneQuestFact(id, quest.MinLevel, quest.QuestLevel, quest.RequiredRaces, quest.RequiredClasses, factions));
+                quests.Add(new ZoneQuestFact(id, quest.MinLevel, quest.QuestLevel, quest.RequiredRaces, quest.RequiredClasses, factions)
+                {
+                    AllianceGiver = !giverHostileToAlliance,
+                    HordeGiver = !giverHostileToHorde,
+                });
             }
 
             facts.Quests = [.. quests];
@@ -295,8 +315,7 @@ internal sealed class PopulationZoneValue
 
     private sealed class ZoneAccumulator
     {
-        public readonly HashSet<uint> QuestIds = [];
-        public readonly List<ZoneQuestFact> Quests = [];
+        public readonly Dictionary<uint, ZoneQuestFact> Quests = [];
         public readonly Dictionary<uint, ReputationRank> RepRanks = [];
         public readonly Dictionary<(uint Item, bool Vendor), ZoneGearFact> Gear = [];
         public readonly HashSet<uint> VendorEntries = [];
@@ -309,6 +328,14 @@ internal sealed class PopulationZoneValue
         {
             if (!zones.TryGetValue(zoneId, out ZoneAccumulator? zone)) zones[zoneId] = zone = new ZoneAccumulator();
             return zone;
+        }
+
+        // A quest several givers start is open to a team when any of them is not hostile to it.
+        public void AddQuest(ZoneQuestFact quest)
+        {
+            Quests[quest.QuestId] = Quests.TryGetValue(quest.QuestId, out ZoneQuestFact? known)
+                ? known with { AllianceGiver = known.AllianceGiver || quest.AllianceGiver, HordeGiver = known.HordeGiver || quest.HordeGiver }
+                : quest;
         }
 
         public void AddHostile(Team team, int level, bool elite)
@@ -325,7 +352,7 @@ internal sealed class PopulationZoneValue
 
         public ZoneContentFacts ToFacts(uint zoneId) => new(zoneId)
         {
-            Quests = [.. Quests.OrderBy(q => q.QuestId)],
+            Quests = [.. Quests.Values.OrderBy(q => q.QuestId)],
             RepSources = [.. RepRanks.OrderBy(p => p.Key).Select(p => new ZoneRepSource(p.Key, p.Value))],
             Gear = [.. Gear.Values.OrderBy(g => g.ItemId).ThenBy(g => g.FromVendor)],
             DungeonMaps = [.. DungeonMaps],

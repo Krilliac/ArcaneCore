@@ -407,4 +407,50 @@ public sealed class PopulationZoneValueTests
         // Boundaries are accepted: 0 turns the soft cap off, 100 is the top weight.
         new PlayerbotPopulationOptions { ValueZoneSoftCap = 0, ValueQuestWeight = 100, ValueTopZones = 1, ValueChecksPerPass = 0 }.Validate();
     }
+
+    private static PopulationZone ZoneOne() => Atlas((ValuedZone, 55, 62)).Find(ValuedZone)!;
+
+    private static ZoneScore ScoreOf(ZoneContentFacts facts, PopulationBotProfile bot)
+        => PopulationZoneScoring.Score(ZoneOne(), facts, bot, PopulationValueWeights.Default);
+
+    [Fact]
+    public void FreshProfileHasNoPosition_SoDistanceIsZero_WhileAPositionedProfileOnAnotherMapPaysIt()
+    {
+        PopulationValueWeights w = PopulationValueWeights.Default;
+        Assert.Equal(0.0, PopulationZoneScoring.Score(ZoneOne(), null, Fresh60(), w).Distance);
+        var elsewhere = new PopulationBotProfile(Capped, Team.Alliance, 1, 1, 0, 1, 0f, 0f);
+        Assert.Equal((double)w.Distance, PopulationZoneScoring.Score(ZoneOne(), null, elsewhere, w).Distance);
+    }
+
+    [Fact]
+    public void UnknownRace_UsesTheRacesOfTheBotsTeam()
+    {
+        const uint hordeOnly = (1u << 1) | (1u << 4) | (1u << 5) | (1u << 7);
+        var facts = new ZoneContentFacts(ValuedZone) { Quests = [new ZoneQuestFact(1, 50, 58, hordeOnly, 0, [])] };
+        Assert.Equal(0.0, ScoreOf(facts, PopulationBotProfile.Fresh(Capped, Team.Alliance)).Quest);
+        Assert.True(ScoreOf(facts, PopulationBotProfile.Fresh(Capped, Team.Horde)).Quest > 0);
+    }
+
+    [Fact]
+    public void AQuestWhoseGiverIsHostileToTheTeam_IsNotCountedForIt()
+    {
+        var facts = new ZoneContentFacts(ValuedZone) { Quests = [new ZoneQuestFact(1, 50, 58, 0, 0, []) { HordeGiver = false }] };
+        Assert.True(ScoreOf(facts, PopulationBotProfile.Fresh(Capped, Team.Alliance)).Quest > 0);
+        Assert.Equal(0.0, ScoreOf(facts, PopulationBotProfile.Fresh(Capped, Team.Horde)).Quest);
+    }
+
+    [Fact]
+    public void ALevelScaledQuest_CountsAsTheBotsLevel_NotGrey()
+    {
+        var facts = new ZoneContentFacts(ValuedZone) { Quests = [new ZoneQuestFact(1, 1, 0, 0, 0, [])] };
+        Assert.True(ScoreOf(facts, Fresh60()).Quest > 0);
+    }
+
+    [Fact]
+    public void GearTheBotCannotUse_IsNotAnUpgrade()
+    {
+        ZoneContentFacts facts = Valued(ValuedZone);
+        Assert.True(ScoreOf(facts, Fresh60()).Gear > 0);
+        Assert.Equal(0.0, ScoreOf(facts, Fresh60() with { CanUse = _ => false }).Gear);
+    }
 }

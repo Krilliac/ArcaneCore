@@ -19,8 +19,15 @@ internal sealed record PopulationBotProfile(int Level, Team Team, byte Race, byt
     /// <summary>The lowest equipped item level among the slots an inventory type fits (0 = a slot is empty).</summary>
     public Func<uint, int> EquippedItemLevel { get; init; } = _ => 0;
 
+    /// <summary>Whether the bot can use (equip) the item: class, race, skills and proficiency, as equipping checks them.</summary>
+    public Func<uint, bool> CanUse { get; init; } = _ => true;
+
+    /// <summary>Whether <see cref="MapId"/>, <see cref="X"/> and <see cref="Y"/> are the bot's real position; a profile without one scores no distance.</summary>
+    public bool HasPosition { get; init; } = true;
+
     /// <summary>A bot of the level and team that has done nothing, is neutral with everyone, wears nothing and has no money. Race and class 0 mean "any".</summary>
-    public static PopulationBotProfile Fresh(int level, Team team, byte race = 0, byte cls = 0) => new(level, team, race, cls, 0, 0, 0f, 0f);
+    public static PopulationBotProfile Fresh(int level, Team team, byte race = 0, byte cls = 0)
+        => new(level, team, race, cls, 0, 0, 0f, 0f) { HasPosition = false };
 }
 
 /// <summary>The weights and thresholds of the zone value, from the population options.</summary>
@@ -53,6 +60,10 @@ internal readonly record struct ZoneScore(uint ZoneId, double Quest, double Repu
 /// </summary>
 internal static class PopulationZoneScoring
 {
+    // Race bits (1 << (race - 1)): Human, Dwarf, Night Elf, Gnome and Orc, Undead, Tauren, Troll.
+    private const uint AllianceRaces = (1u << 0) | (1u << 2) | (1u << 3) | (1u << 6);
+    private const uint HordeRaces = (1u << 1) | (1u << 4) | (1u << 5) | (1u << 7);
+
     public static ZoneScore Score(PopulationZone zone, ZoneContentFacts? facts, PopulationBotProfile bot, PopulationValueWeights w,
         int recentTrouble = 0, int assigned = 0)
     {
@@ -66,12 +77,16 @@ internal static class PopulationZoneScoring
         // Quests and the factions their rewards raise.
         int available = 0;
         HashSet<uint>? factions = null;
-        uint raceBit = bot.Race is >= 1 and <= 32 ? 1u << (bot.Race - 1) : 0;
+        // Race 0 (unknown): the races of the bot's team.
+        uint raceBit = bot.Race is >= 1 and <= 32 ? 1u << (bot.Race - 1) : bot.Team == Team.Horde ? HordeRaces : AllianceRaces;
         uint classBit = bot.Class is >= 1 and <= 32 ? 1u << (bot.Class - 1) : 0;
         foreach (ZoneQuestFact quest in facts.Quests)
         {
-            if (quest.MinLevel > bot.Level || quest.QuestLevel < bot.Level - w.QuestGrayMargin) continue;
-            if (quest.RequiredRaces != 0 && raceBit != 0 && (quest.RequiredRaces & raceBit) == 0) continue;
+            // A quest level of 0 or less scales with the player: it is never grey.
+            int questLevel = quest.QuestLevel <= 0 ? bot.Level : quest.QuestLevel;
+            if (quest.MinLevel > bot.Level || questLevel < bot.Level - w.QuestGrayMargin) continue;
+            if (!(bot.Team == Team.Horde ? quest.HordeGiver : quest.AllianceGiver)) continue;
+            if (quest.RequiredRaces != 0 && (quest.RequiredRaces & raceBit) == 0) continue;
             if (quest.RequiredClasses != 0 && classBit != 0 && (quest.RequiredClasses & classBit) == 0) continue;
             if (bot.QuestDone(quest.QuestId)) continue;
             available++;
@@ -88,6 +103,7 @@ internal static class PopulationZoneScoring
         {
             if (gear.InventoryType >= 32 || (upgrades & (1u << (int)gear.InventoryType)) != 0 || gear.RequiredLevel > bot.Level) continue;
             if (gear.AllowableClass is not (0 or uint.MaxValue) && classBit != 0 && (gear.AllowableClass & classBit) == 0) continue;
+            if (!bot.CanUse(gear.ItemId)) continue;
             if (gear.FromVendor && (bot.RankOf(gear.RequiredFaction) < gear.RequiredRank || gear.BuyPrice > bot.Money)) continue;
             if (gear.ItemLevel > bot.EquippedItemLevel(gear.InventoryType)) upgrades |= 1u << (int)gear.InventoryType;
         }
@@ -111,6 +127,7 @@ internal static class PopulationZoneScoring
 
     private static double DistanceFraction(PopulationZone zone, PopulationBotProfile bot)
     {
+        if (!bot.HasPosition) return 0.0;
         if (bot.MapId != zone.MapId) return 1.0;
         IReadOnlyList<WorldSafeLoc> locations = zone.LocationsFor(bot.Team);
         if (locations.Count == 0) return 1.0;
