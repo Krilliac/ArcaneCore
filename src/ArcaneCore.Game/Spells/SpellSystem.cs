@@ -982,14 +982,24 @@ public sealed partial class SpellSystem
             return;
         }
 
-        if (cast.Caster is Player && cast.Timer != 0 && cast.HasMoved
+        // vmangos Spell::update (Spell.cpp:4027-4057): a spell with HIDE_CHANNEL_BAR never move-cancels, and Stuck (Hearthstone-style
+        // unstuck) is exempt while the player is falling far.
+        if (cast.Caster is Player mover && cast.Timer != 0 && !cast.Spell.HidesChannelBar && cast.HasMoved
+            && (cast.Spell.Effects[0].Effect != SpellEffectName.Stuck || !mover.Movement.HasFlag(MovementFlags.FallingFar))
             && (cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement)
                 || cast.Spell.AuraInterruptFlags.HasFlag(SpellAuraInterruptFlags.Moving)
                 || cast.Spell.ChannelInterruptFlags.HasFlag(SpellAuraInterruptFlags.Moving)))
         {
             // vmangos Spell::update: channels always cancel; casts only with the movement interrupt flag.
-            if (cast.State == SpellCastState.Casting
-                || (!cast.IsTriggered && cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement)))
+            if (cast.State == SpellCastState.Casting)
+            {
+                if (!ChannelSurvivesMoveBecauseSelfRooted(cast.Spell, mover))
+                {
+                    Cancel(cast);
+                    return;
+                }
+            }
+            else if (!cast.IsTriggered && cast.Spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement))
             {
                 Cancel(cast);
                 return;
@@ -1130,6 +1140,26 @@ public sealed partial class SpellSystem
         }
 
         return target.IsAlive ? !cast.Spell.IsDeathOnly : cast.Spell.CanTargetDead;
+    }
+
+    /// <summary>
+    /// vmangos Spell::update (Spell.cpp:4031-4049): a channel that applies a root or stun aura to its own caster does not cancel on
+    /// movement while the caster is rooted (or a root is pending), because the player may move a little before the root is acknowledged.
+    /// The first such effect decides. Player.IsRooted is set when the root is ordered, which covers the pending change.
+    /// </summary>
+    private static bool ChannelSurvivesMoveBecauseSelfRooted(SpellInfo spell, Player caster)
+    {
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.Effect == SpellEffectName.ApplyAura
+                && (effect.AuraType == AuraType.ModRoot || effect.AuraType == AuraType.ModStun)
+                && effect.TargetA == SpellImplicitTarget.UnitCaster)
+            {
+                return caster.IsRooted || caster.Movement.HasFlag(MovementFlags.Root);
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

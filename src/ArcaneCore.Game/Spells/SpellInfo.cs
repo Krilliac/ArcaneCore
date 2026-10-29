@@ -268,6 +268,12 @@ public sealed partial record SpellInfo
     /// <summary>vmangos SPELL_ATTR_EX3_ONLY_ON_GHOSTS (SpellDefines.h, AttributesEx3 bit 12).</summary>
     private const uint Ex3OnlyOnGhosts = 0x00001000;
 
+    /// <summary>vmangos SPELL_ATTR_EX3_HIDE_CHANNEL_BAR (SpellDefines.h:959, AttributesEx3 bit 13).</summary>
+    private const uint Ex3HideChannelBar = 0x00002000;
+
+    /// <summary>The client shows no channel bar for this spell (AttributesEx3 HIDE_CHANNEL_BAR); Spell::update never move-cancels it.</summary>
+    public bool HidesChannelBar => (AttributesEx3 & Ex3HideChannelBar) != 0;
+
     /// <summary>vmangos SPELL_ATTR_EX3_ALLOW_AURA_WHILE_DEAD (SpellDefines.h:967, AttributesEx3 bit 20).</summary>
     private const uint Ex3AllowAuraWhileDead = 0x00100000;
 
