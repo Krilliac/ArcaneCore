@@ -121,4 +121,12 @@ public sealed class TuningWorldTests
             TuningCatalog.Replace(before);
         }
     }
+
+    [Fact]
+    public void MissingTables_NamesEveryTableWithoutRows()
+    {
+        Assert.Empty(TuningFeature.MissingTables(TuningDefaults.Content));
+        Assert.Equal(["playerbot_ship_route", "playerbot_tram_network"],
+            TuningFeature.MissingTables(TuningDefaults.Content with { Ships = [], Trams = [] }));
+    }
 }

@@ -741,107 +741,116 @@ AuctionHouseBot.Houses = "2,6,7"
 
 #
 #    AuctionHouseBot.LootCreatureElite
-#        Description: Loot of rank 1 (elite) creatures; see LootCreatureNormal.
+#        Description: Deprecated override of the "creature elite" row (rank 1, elite creatures); see
+#                     LootCreatureNormal.
 #        Type: string
-#        Default: "30,34,1,2"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootCreatureElite = "30,34,1,2"
+AuctionHouseBot.LootCreatureElite = ""
 
 #
 #    AuctionHouseBot.LootCreatureNormal
-#        Description: Loot sources (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates,
-#                     minRolls, maxRolls". Each sell pass draws between min and max loot tables of
-#                     the source (a negative min makes an empty draw more likely) and rolls each one
-#                     minRolls..maxRolls times; every item that drops is added to the listing pool.
-#                     "0,0,0,0" turns a source off.
+#        Description: Deprecated override of the auction_bot_loot row "creature normal" (cMaNGOS
+#                     AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls".
+#                     Each sell pass draws between min and max loot tables of the source (a negative
+#                     min makes an empty draw more likely) and rolls each one minRolls..maxRolls
+#                     times; every item that drops is added to the listing pool. "0,0,0,0" turns a
+#                     source off. Empty (the default) takes the rows; a value overrides them and
+#                     logs a warning at start. The key goes in a later release.
 #        Type: string
-#        Default: "30,35,8,12"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootCreatureNormal = "30,35,8,12"
+AuctionHouseBot.LootCreatureNormal = ""
 
 #
 #    AuctionHouseBot.LootCreatureRare
-#        Description: Loot of rank 4 (rare) creatures; see LootCreatureNormal.
+#        Description: Deprecated override of the "creature rare" row (rank 4, rare creatures); see
+#                     LootCreatureNormal.
 #        Type: string
-#        Default: "0,10,1,1"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootCreatureRare = "0,10,1,1"
+AuctionHouseBot.LootCreatureRare = ""
 
 #
 #    AuctionHouseBot.LootCreatureRareElite
-#        Description: Loot of rank 2 (rare elite) creatures; see LootCreatureNormal.
+#        Description: Deprecated override of the "creature rare elite" row (rank 2); see
+#                     LootCreatureNormal.
 #        Type: string
-#        Default: "-10,2,1,1"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootCreatureRareElite = "-10,2,1,1"
+AuctionHouseBot.LootCreatureRareElite = ""
 
 #
 #    AuctionHouseBot.LootCreatureWorldBoss
-#        Description: Loot of rank 3 (world boss) creatures; see LootCreatureNormal.
+#        Description: Deprecated override of the "creature world boss" row (rank 3); see
+#                     LootCreatureNormal.
 #        Type: string
-#        Default: "-20,1,1,1"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootCreatureWorldBoss = "-20,1,1,1"
+AuctionHouseBot.LootCreatureWorldBoss = ""
 
 #
 #    AuctionHouseBot.LootDisenchant
-#        Description: disenchant_loot_template; see LootCreatureNormal.
+#        Description: Deprecated override of the "disenchant" row (disenchant_loot_template); see
+#                     LootCreatureNormal.
 #        Type: string
-#        Default: "10,12,1,1"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootDisenchant = "10,12,1,1"
+AuctionHouseBot.LootDisenchant = ""
 
 #
 #    AuctionHouseBot.LootFishing
-#        Description: fishing_loot_template; see LootCreatureNormal.
+#        Description: Deprecated override of the "fishing" row (fishing_loot_template); see
+#                     LootCreatureNormal.
 #        Type: string
-#        Default: "3,5,30,40"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootFishing = "3,5,30,40"
+AuctionHouseBot.LootFishing = ""
 
 #
 #    AuctionHouseBot.LootGameobject
-#        Description: gameobject_loot_template (every table; cMaNGOS only takes chests that
-#                     respawn); see LootCreatureNormal.
+#        Description: Deprecated override of the "gameobject" row (gameobject_loot_template, every
+#                     table; cMaNGOS only takes chests that respawn); see LootCreatureNormal.
 #        Type: string
-#        Default: "13,16,7,11"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootGameobject = "13,16,7,11"
+AuctionHouseBot.LootGameobject = ""
 
 #
 #    AuctionHouseBot.LootSkinning
-#        Description: skinning_loot_template; see LootCreatureNormal.
+#        Description: Deprecated override of the "skinning" row (skinning_loot_template); see
+#                     LootCreatureNormal.
 #        Type: string
-#        Default: "3,5,50,50"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.LootSkinning = "3,5,50,50"
+AuctionHouseBot.LootSkinning = ""
 
 #
 #    AuctionHouseBot.MaxAuctionsPerHouse
@@ -977,87 +986,90 @@ AuctionHouseBot.UpdateIntervalSeconds = 20
 
 #
 #    AuctionHouseBot.ValueArtifact
-#        Description: Price of artifact items per item class (cMaNGOS
-#                     AuctionHouseBot.Value.Artifact; all 0 by default).
+#        Description: Deprecated override of the quality 6 (artifact) auction_bot_value rows; see
+#                     ValuePoor (cMaNGOS AuctionHouseBot.Value.Artifact).
 #        Type: string
-#        Default: "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.ValueArtifact = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+AuctionHouseBot.ValueArtifact = ""
 
 #
 #    AuctionHouseBot.ValueEpic
-#        Description: Price of epic items per item class (cMaNGOS AuctionHouseBot.Value.Epic).
+#        Description: Deprecated override of the quality 4 (epic) auction_bot_value rows; see
+#                     ValuePoor (cMaNGOS AuctionHouseBot.Value.Epic).
 #        Type: string
-#        Default: "800,800,800,800,800,800,800,800,0,800,0,800,800,800,0,800,800"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.ValueEpic = "800,800,800,800,800,800,800,800,0,800,0,800,800,800,0,800,800"
+AuctionHouseBot.ValueEpic = ""
 
 #
 #    AuctionHouseBot.ValueLegendary
-#        Description: Price of legendary items per item class (cMaNGOS
-#                     AuctionHouseBot.Value.Legendary; all 0 by default).
+#        Description: Deprecated override of the quality 5 (legendary) auction_bot_value rows; see
+#                     ValuePoor (cMaNGOS AuctionHouseBot.Value.Legendary).
 #        Type: string
-#        Default: "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.ValueLegendary = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+AuctionHouseBot.ValueLegendary = ""
 
 #
 #    AuctionHouseBot.ValueNormal
-#        Description: Price of common (white) items per item class (cMaNGOS
-#                     AuctionHouseBot.Value.Normal).
+#        Description: Deprecated override of the quality 1 (common, white) auction_bot_value rows;
+#                     see ValuePoor (cMaNGOS AuctionHouseBot.Value.Normal).
 #        Type: string
-#        Default: "100,100,0,100,0,100,100,100,0,100,0,100,100,100,0,100,100"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.ValueNormal = "100,100,0,100,0,100,100,100,0,100,0,100,100,100,0,100,100"
+AuctionHouseBot.ValueNormal = ""
 
 #
 #    AuctionHouseBot.ValuePoor
-#        Description: Price of poor items per item class as a percent of the vendor price, 17
-#                     comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or
-#                     bought).
+#        Description: Deprecated override of the auction_bot_value rows (quality 0, poor): price of
+#                     poor items per item class as a percent of the vendor price, 17 comma-separated
+#                     values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). Empty
+#                     (the default) takes the rows; a value overrides them and logs a warning at
+#                     start. The key goes in a later release.
 #        Type: string
-#        Default: "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.ValuePoor = "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"
+AuctionHouseBot.ValuePoor = ""
 
 #
 #    AuctionHouseBot.ValueRare
-#        Description: Price of rare (blue) items per item class (cMaNGOS
-#                     AuctionHouseBot.Value.Rare).
+#        Description: Deprecated override of the quality 3 (rare, blue) auction_bot_value rows; see
+#                     ValuePoor (cMaNGOS AuctionHouseBot.Value.Rare).
 #        Type: string
-#        Default: "400,400,400,400,400,400,400,400,0,400,0,400,400,400,0,400,400"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.ValueRare = "400,400,400,400,400,400,400,400,0,400,0,400,400,400,0,400,400"
+AuctionHouseBot.ValueRare = ""
 
 #
 #    AuctionHouseBot.ValueUncommon
-#        Description: Price of uncommon (green) items per item class (cMaNGOS
-#                     AuctionHouseBot.Value.Uncommon).
+#        Description: Deprecated override of the quality 2 (uncommon, green) auction_bot_value rows;
+#                     see ValuePoor (cMaNGOS AuctionHouseBot.Value.Uncommon).
 #        Type: string
-#        Default: "200,200,200,200,200,200,200,200,0,200,0,200,200,200,0,200,200"
+#        Default: ""
 #        Allowed: text
 #        Reload: Start-up (read once when the daemon starts)
 #        Docs: docs/reference/configuration.md#auctionhousebot
 #
-AuctionHouseBot.ValueUncommon = "200,200,200,200,200,200,200,200,0,200,0,200,200,200,0,200,200"
+AuctionHouseBot.ValueUncommon = ""
 
 #
 #    AuctionHouseBot.ValueVariance

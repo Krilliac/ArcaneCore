@@ -18,7 +18,7 @@ $script:ReloadableContent = @(
     'gameobject_template', 'gossip_menu', 'gossip_menu_option', 'instance_encounter', 'item_loot_template', 'item_template', 'npc_gossip',
     'npc_text', 'npc_trainer', 'npc_vendor', 'pickpocketing_loot_template', 'points_of_interest', 'quest_template', 'reference_loot_template',
     'reputation_reward_rate', 'reputation_spillover_template', 'reserved_name', 'rules', 'skill_fishing_base_level', 'skinning_loot_template',
-    'spell_enchant_charges', 'spell_proc_event', 'spell_proc_item_enchant', 'spell_template', 'spell_threats'
+    'spell_enchant_charges', 'spell_proc_event', 'spell_proc_item_enchant', 'spell_template', 'spell_threats', 'tuning'
 )
 
 # Repository paths that never reach the daemons' binaries or configuration (documentation, tests, operator tools, CI).

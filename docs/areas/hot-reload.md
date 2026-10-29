@@ -252,6 +252,8 @@ overrides and the temporary-enchantment charge counts (vmangos loads `spell_ench
 has no reload command for it, so its reload name is an ArcaneCore addition) are read off the world thread and swapped on the world thread; a failed read keeps the previous table. Each joins
 `.reload all` only when its SQL store is registered.
 
+**`tuning`** (`TuningContentReloadable`, an ArcaneCore addition; [tuning tables](tuning-tables.md)): the auction bot value and loot rows and the bot ship, lift and tram rows are read and validated off the world thread and swapped as one catalog on the world thread. Any rejected row rejects the reload and the active rows stay; with `HotReload:EmptyTables = KeepLoaded` empty tables keep them. Joins `.reload all`.
+
 **`reserved_name`** (`ReservedNameContentReloadable`, `NameCatalogFeature.ReplaceReservedExact`): the SQL exact-name set is loaded through the registered `IReservedNameStore` off the world thread and published as a complete immutable catalog on the world thread. The startup-loaded NamesProfanity/NamesReserved DBC regex arrays and provenance are retained across the swap. A failed read or publish leaves the previous catalog in place; an empty successful SQL snapshot removes only SQL exact names. Character creation captures one catalog reference for its request, while the existing pet veto resolves the feature catalog dynamically for each rename.
 
 ## Deviations from retail

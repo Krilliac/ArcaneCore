@@ -36,7 +36,13 @@ public sealed class TuningFeature(IServiceScopeFactory scopes, ILogger<TuningFea
             logger.LogInformation("Tuning: seeded {Rows} shipped rows into empty tuning tables", seeded);
         }
 
-        TuningCatalog catalog = TuningCatalog.Build(store.LoadAsync().GetAwaiter().GetResult());
+        TuningContent content = store.LoadAsync().GetAwaiter().GetResult();
+        foreach (string missing in MissingTables(content))
+        {
+            logger.LogWarning("Tuning: table {Table} holds no rows; its shipped behaviour is off (apply sql/content/world/<provider>/0002_tuning_tables.sql or restart to seed it)", missing);
+        }
+
+        TuningCatalog catalog = TuningCatalog.Build(content);
         TuningCatalog.Replace(catalog);
         foreach (TuningRejection rejection in catalog.Rejected.Take(LoggedRejections))
         {
@@ -45,6 +51,19 @@ public sealed class TuningFeature(IServiceScopeFactory scopes, ILogger<TuningFea
 
         logger.LogInformation("Tuning: {Summary}{More}", catalog.Summary,
             catalog.Rejected.Count > LoggedRejections ? $" ({catalog.Rejected.Count - LoggedRejections} more rejections)" : "");
+    }
+
+    /// <summary>The tuning tables <paramref name="content"/> holds no row of (the shipped content has rows in every one).</summary>
+    public static IReadOnlyList<string> MissingTables(TuningContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        var missing = new List<string>();
+        if (content.Values.Count == 0) missing.Add("auction_bot_value");
+        if (content.Loot.Count == 0) missing.Add("auction_bot_loot");
+        if (content.Ships.Count == 0) missing.Add("playerbot_ship_route");
+        if (content.Elevators.Count == 0) missing.Add("playerbot_elevator_region");
+        if (content.Trams.Count == 0) missing.Add("playerbot_tram_network");
+        return missing;
     }
 
     /// <summary>Read the tuning tables (no store registered: none). Off the world thread.</summary>

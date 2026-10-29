@@ -32,6 +32,12 @@ public sealed class AuctionBotConfigChecks : IConfigCheck
             issues.Add(new ConfigIssue(ConfigSeverity.Warning, key, fix, "set a value in the documented range"));
         }
 
+        foreach (string deprecated in options.DeprecatedOverrides())
+        {
+            issues.Add(new ConfigIssue(ConfigSeverity.Warning, deprecated[..deprecated.IndexOf(' ', StringComparison.Ordinal)], deprecated,
+                "remove the key and edit the tuning rows instead (docs/areas/tuning-tables.md)"));
+        }
+
         foreach ((string name, string? text) in new[]
         {
             (nameof(AuctionBotOptions.ValuePoor), section[nameof(AuctionBotOptions.ValuePoor)]),
@@ -43,7 +49,7 @@ public sealed class AuctionBotConfigChecks : IConfigCheck
             (nameof(AuctionBotOptions.ValueArtifact), section[nameof(AuctionBotOptions.ValueArtifact)]),
         })
         {
-            if (text is null)
+            if (string.IsNullOrWhiteSpace(text))
             {
                 continue;
             }

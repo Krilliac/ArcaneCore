@@ -173,15 +173,15 @@ How to read the tables:
 | `AuctionHouseBot:DailyItemBudget` | `uint` | `5000` | - | Custody limit: most items the bot may create into the houses per UTC day, all houses together (MaNGOS Zero custody; 0 = none). |
 | `AuctionHouseBot:Enabled` | `bool` | `false` | - | Run the bot (default false). With false nothing is listed, bought or minted. |
 | `AuctionHouseBot:Houses` | `string` | `"2,6,7"` | - | The auction houses the bot serves, comma-separated AuctionHouse.dbc ids (2 Alliance, 6 Horde, 7 neutral; cMaNGOS serves all three). |
-| `AuctionHouseBot:LootCreatureElite` | `string` | `"30,34,1,2"` | - | Loot of rank 1 (elite) creatures; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootCreatureNormal` | `string` | `"30,35,8,12"` | - | Loot sources (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls". Each sell pass draws between min and max loot tables of the source (a negative min makes an empty draw more likely) and rolls each one minRolls..maxRolls times; every item that drops is added to the listing pool. "0,0,0,0" turns a source off. |
-| `AuctionHouseBot:LootCreatureRare` | `string` | `"0,10,1,1"` | - | Loot of rank 4 (rare) creatures; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootCreatureRareElite` | `string` | `"-10,2,1,1"` | - | Loot of rank 2 (rare elite) creatures; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootCreatureWorldBoss` | `string` | `"-20,1,1,1"` | - | Loot of rank 3 (world boss) creatures; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootDisenchant` | `string` | `"10,12,1,1"` | - | disenchant_loot_template; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootFishing` | `string` | `"3,5,30,40"` | - | fishing_loot_template; see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootGameobject` | `string` | `"13,16,7,11"` | - | gameobject_loot_template (every table; cMaNGOS only takes chests that respawn); see `LootCreatureNormal`. |
-| `AuctionHouseBot:LootSkinning` | `string` | `"3,5,50,50"` | - | skinning_loot_template; see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureElite` | `string` | `""` | - | Deprecated override of the "creature elite" row (rank 1, elite creatures); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureNormal` | `string` | `""` | - | Deprecated override of the `auction_bot_loot` row "creature normal" (cMaNGOS AuctionHouseBot.Loot.*): "minTemplates, maxTemplates, minRolls, maxRolls". Each sell pass draws between min and max loot tables of the source (a negative min makes an empty draw more likely) and rolls each one minRolls..maxRolls times; every item that drops is added to the listing pool. "0,0,0,0" turns a source off. Empty (the default) takes the rows; a value overrides them and logs a warning at start. The key goes in a later release. |
+| `AuctionHouseBot:LootCreatureRare` | `string` | `""` | - | Deprecated override of the "creature rare" row (rank 4, rare creatures); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureRareElite` | `string` | `""` | - | Deprecated override of the "creature rare elite" row (rank 2); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootCreatureWorldBoss` | `string` | `""` | - | Deprecated override of the "creature world boss" row (rank 3); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootDisenchant` | `string` | `""` | - | Deprecated override of the "disenchant" row (disenchant_loot_template); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootFishing` | `string` | `""` | - | Deprecated override of the "fishing" row (fishing_loot_template); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootGameobject` | `string` | `""` | - | Deprecated override of the "gameobject" row (gameobject_loot_template, every table; cMaNGOS only takes chests that respawn); see `LootCreatureNormal`. |
+| `AuctionHouseBot:LootSkinning` | `string` | `""` | - | Deprecated override of the "skinning" row (skinning_loot_template); see `LootCreatureNormal`. |
 | `AuctionHouseBot:MaxAuctionsPerHouse` | `uint` | `2000` | - | Most bot auctions open in one house at once; a sell action never lists past it (ArcaneCore guard, 0 = no listing). |
 | `AuctionHouseBot:MaxRequiredLevel` | `uint` | `60` | - | Highest required level of a listed item (cMaNGOS AuctionHouseBot.Level.MaxRequired, 1-255, default 60). Below 60 the item level is capped at this + 5. |
 | `AuctionHouseBot:RandomProperties` | `bool` | `true` | - | Roll random properties ("of the Bear") for minted items whose template has them (cMaNGOS Item::CreateItem). Default true. |
@@ -193,13 +193,13 @@ How to read the tables:
 | `AuctionHouseBot:TimeMaxHours` | `uint` | `24` | - | Longest listing in hours (cMaNGOS AuctionHouseBot.Time.Max, 1-72, default 24). |
 | `AuctionHouseBot:TimeMinHours` | `uint` | `2` | - | Shortest listing in hours (cMaNGOS AuctionHouseBot.Time.Min, 1-72, default 2). |
 | `AuctionHouseBot:UpdateIntervalSeconds` | `uint` | `20` | - | Seconds between bot actions. Each action handles one house, alternating the sell then the buy pass over the houses (cMaNGOS AuctionHouseBot::Update m_houseAction). |
-| `AuctionHouseBot:ValueArtifact` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of artifact items per item class (cMaNGOS AuctionHouseBot.Value.Artifact; all 0 by default). |
-| `AuctionHouseBot:ValueEpic` | `string` | `"800,800,800,800,800,800,800,800,0,800,0,800,800,800,0,800,800"` | - | Price of epic items per item class (cMaNGOS AuctionHouseBot.Value.Epic). |
-| `AuctionHouseBot:ValueLegendary` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of legendary items per item class (cMaNGOS AuctionHouseBot.Value.Legendary; all 0 by default). |
-| `AuctionHouseBot:ValueNormal` | `string` | `"100,100,0,100,0,100,100,100,0,100,0,100,100,100,0,100,100"` | - | Price of common (white) items per item class (cMaNGOS AuctionHouseBot.Value.Normal). |
-| `AuctionHouseBot:ValuePoor` | `string` | `"0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"` | - | Price of poor items per item class as a percent of the vendor price, 17 comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). |
-| `AuctionHouseBot:ValueRare` | `string` | `"400,400,400,400,400,400,400,400,0,400,0,400,400,400,0,400,400"` | - | Price of rare (blue) items per item class (cMaNGOS AuctionHouseBot.Value.Rare). |
-| `AuctionHouseBot:ValueUncommon` | `string` | `"200,200,200,200,200,200,200,200,0,200,0,200,200,200,0,200,200"` | - | Price of uncommon (green) items per item class (cMaNGOS AuctionHouseBot.Value.Uncommon). |
+| `AuctionHouseBot:ValueArtifact` | `string` | `""` | - | Deprecated override of the quality 6 (artifact) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Artifact). |
+| `AuctionHouseBot:ValueEpic` | `string` | `""` | - | Deprecated override of the quality 4 (epic) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Epic). |
+| `AuctionHouseBot:ValueLegendary` | `string` | `""` | - | Deprecated override of the quality 5 (legendary) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Legendary). |
+| `AuctionHouseBot:ValueNormal` | `string` | `""` | - | Deprecated override of the quality 1 (common, white) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Normal). |
+| `AuctionHouseBot:ValuePoor` | `string` | `""` | - | Deprecated override of the `auction_bot_value` rows (quality 0, poor): price of poor items per item class as a percent of the vendor price, 17 comma-separated values (cMaNGOS AuctionHouseBot.Value.Poor; 0 = never sold or bought). Empty (the default) takes the rows; a value overrides them and logs a warning at start. The key goes in a later release. |
+| `AuctionHouseBot:ValueRare` | `string` | `""` | - | Deprecated override of the quality 3 (rare, blue) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Rare). |
+| `AuctionHouseBot:ValueUncommon` | `string` | `""` | - | Deprecated override of the quality 2 (uncommon, green) `auction_bot_value` rows; see `ValuePoor` (cMaNGOS AuctionHouseBot.Value.Uncommon). |
 | `AuctionHouseBot:ValueVariance` | `uint` | `10` | - | Random price spread in percent (cMaNGOS AuctionHouseBot.Value.Variance, 0-100, default 10). |
 | `AuctionHouseBot:VendorValue` | `bool` | `true` | - | Price an item that a vendor sells at 100 % of the vendor price, so it cannot be bought and resold for profit (cMaNGOS AuctionHouseBot.Value.Vendor, default true). |
 
