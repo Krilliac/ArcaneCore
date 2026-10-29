@@ -51,9 +51,9 @@ $env:DOTNET_ENVIRONMENT = 'Development'
 # The live server runs as Development, so the environment alone does not keep the map feed's packet tools (console, inject, send, tap)
 # off it. This marker does: the World refuses the tools whenever it is "1", whatever the configuration says (WorldPacketToolsOptions).
 $env:ARCANECORE_LIVE_SERVER = '1'
-# Each daemon its own log (<LiveHome>\logs\<role>.debug.log/.jsonl): both read the profile's appsettings.json, and a log file has one
+# Each daemon its own log (<LiveHome>\logs\<role>.debug.jsonl or .log by the configured Logging:ArcaneCore:Format): both read the profile's appsettings.json, and a log file has one
 # writer, so with one shared path the daemon started second (the World, in redeploy.ps1) would write a fallback name instead.
-Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome
+Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome -LiveProfile $LiveProfile
 # The GC turns aggressive (blocking compacting gen2, 2-15 s ticks) when the MACHINE's memory load passes its high-memory threshold
 # (default 90%). On a shared box the load comes from builds and tests, not the daemon, so compacting the daemon cannot relieve it.
 # Both roles: a Realm left at 90% compacts first and stalls logins (2026-10-25: Realm MemoryPressure at 88% while the World sat at 97%).
