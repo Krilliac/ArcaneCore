@@ -8392,6 +8392,21 @@ Warden.StaffNoticeCooldownSeconds = 30
 #----------------------------------------------------------------------------
 
 #
+#    World.AccountDataWriteIntervalMs
+#        Description: ArcaneCore hardening: the shortest time (milliseconds) between two account
+#                     data or tutorial writes of one account. A change inside it is kept in memory
+#                     at once and written when the interval ends, coalesced to the latest value per
+#                     type (never dropped). 0 = write every change at once. vmangos writes every
+#                     CMSG_UPDATE_ACCOUNT_DATA (MiscHandler.cpp HandleUpdateAccountData).
+#        Type: int
+#        Default: 1000
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#world
+#
+World.AccountDataWriteIntervalMs = 1000
+
+#
 #    World.AllowTwoSideChat
 #        Description: Allow whispers and custom emotes across factions, and send Common/Orcish as
 #                     Universal (vmangos AllowTwoSide.Interaction.Chat, default off).
@@ -9998,6 +10013,39 @@ World.Chat.FloodMuteSeconds = 10
 #        Docs: docs/reference/configuration.md#worldchat
 #
 World.Chat.GmWhisperingTo = 0
+
+#
+#    World.Chat.MaxAwayMessageLength
+#        Description: ArcaneCore hardening: the longest AFK or DND reply kept on the player
+#                     (characters), which is sent to every whisperer; longer text is cut to this
+#                     length at a safe boundary (never inside a link or a surrogate pair). 0 = no
+#                     cap. The stock client's own limit is UNVERIFIED (not captured from a real
+#                     client); the 255-character chat edit box is a belief, not a measurement. The
+#                     default (1024) is chosen to sit well above it. This cap, not MaxMessageLength,
+#                     applies to AFK and DND text.
+#        Type: int
+#        Default: 1024
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldchat
+#
+World.Chat.MaxAwayMessageLength = 1024
+
+#
+#    World.Chat.MaxMessageLength
+#        Description: ArcaneCore hardening: the longest CMSG_MESSAGECHAT text (characters) accepted;
+#                     a longer message is dropped before any gate or broadcast. 0 = no cap. Not
+#                     applied to AFK and DND text (MaxAwayMessageLength cuts that instead). The
+#                     stock client's limit is UNVERIFIED (not captured from a real client); the
+#                     default (1024) assumes an edit box of about 255 characters, which is
+#                     unconfirmed, and leaves a wide margin above it.
+#        Type: int
+#        Default: 1024
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldchat
+#
+World.Chat.MaxMessageLength = 1024
 
 #
 #    World.Chat.StrictLinkKick
@@ -19327,6 +19375,34 @@ World.Social.AllowTwoSideGroup = false
 World.Social.AllowTwoSideGuild = false
 
 #
+#    World.Social.MaxChannelNameLength
+#        Description: ArcaneCore hardening: the longest channel name (characters) a join accepts; a
+#                     longer one gets INVALID_NAME and no channel is created. 0 = no cap. vmangos
+#                     has none and the stock client's limit is UNVERIFIED (not captured from a real
+#                     client). The default (255) assumes a chat edit box of that length, which is
+#                     unconfirmed; if the client allows longer names, raise it or set 0.
+#        Type: int
+#        Default: 255
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldsocial
+#
+World.Social.MaxChannelNameLength = 255
+
+#
+#    World.Social.MaxChannelPassphraseLength
+#        Description: ArcaneCore hardening: the longest channel password (characters) accepted on
+#                     join or when set; over it a join gets WRONG_PASSWORD and a set is ignored. 0 =
+#                     no cap. Default 255, as for MaxChannelNameLength.
+#        Type: int
+#        Default: 255
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldsocial
+#
+World.Social.MaxChannelPassphraseLength = 255
+
+#
 #    World.Social.MaxJoinedChannels
 #        Description: Most channels one player may be in; 0 = unlimited. vmangos has no cap
 #                     (ChannelMgr.cpp:52-69), so the retail default is 0; a positive value is opt-in
@@ -19351,6 +19427,23 @@ World.Social.MaxJoinedChannels = 0
 #        Docs: docs/reference/configuration.md#worldsocial
 #
 World.Social.OfflineLeaderDelaySeconds = 300
+
+#
+#    World.Social.ReadyCheckAnswerIntervalMs
+#        Description: ArcaneCore hardening: the shortest time (milliseconds) between two ready-check
+#                     answers of one member that are forwarded to the leader; answers inside it are
+#                     dropped (a dropped answer is not replayed, so the leader can keep a stale
+#                     one), and a new ready check resets it. Off (0) by default, as in vmangos,
+#                     which forwards every answer, pending check or not (GroupHandler.cpp
+#                     HandleRaidReadyCheckOpcode): set it only to defend against a member spamming
+#                     the leader.
+#        Type: int
+#        Default: 0
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldsocial
+#
+World.Social.ReadyCheckAnswerIntervalMs = 0
 
 #
 #    World.Social.VmangosChannelExtensions

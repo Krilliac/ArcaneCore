@@ -103,6 +103,8 @@ public static class WorldConfigKeys
         Live("MaxCommandsPerTick", o => o.MaxCommandsPerTick, (o, v) => o.MaxCommandsPerTick = v,
             value => value > 0 ? null : "must be positive"),
         LiveNonNegative("CommandTimeBudgetMs", o => o.CommandTimeBudgetMs, (o, v) => o.CommandTimeBudgetMs = v),
+        // AccountDataFeature reads it at each account data or tutorial write (0 = write every change at once).
+        LiveNonNegative("AccountDataWriteIntervalMs", o => o.AccountDataWriteIntervalMs, (o, v) => o.AccountDataWriteIntervalMs = v),
         LiveNonNegative("CharactersPerRealm", o => o.CharactersPerRealm, (o, v) => o.CharactersPerRealm = v),
         Live("Motd", o => o.Motd, (o, v) => o.Motd = v),
         LiveNonNegative("ListenRangeSay", o => o.ListenRangeSay, (o, v) => o.ListenRangeSay = v),
@@ -148,6 +150,11 @@ public static class WorldConfigKeys
 
         // Opt-in channel-join cap (security hardening lane; 0 = unlimited, the retail behaviour): ChannelManager reads it at each join.
         LiveSocialCount("MaxJoinedChannels", o => o.MaxJoinedChannels, (o, v) => o.MaxJoinedChannels = v),
+        // Not vmangos keys: channel name and password length caps (0 = none), read at each join or password change.
+        LiveSocialCount("MaxChannelNameLength", o => o.MaxChannelNameLength, (o, v) => o.MaxChannelNameLength = v),
+        LiveSocialCount("MaxChannelPassphraseLength", o => o.MaxChannelPassphraseLength, (o, v) => o.MaxChannelPassphraseLength = v),
+        // Not a vmangos key: the ready-check answer rate limit (0 = off), read at each answer.
+        LiveSocialCount("ReadyCheckAnswerIntervalMs", o => o.ReadyCheckAnswerIntervalMs, (o, v) => o.ReadyCheckAnswerIntervalMs = v),
         // vmangos Group.OfflineLeaderDelay (World.cpp:811): seconds before an offline group leader yields; 0 disables. GroupManager reads it at each tick.
         LiveSocialCount("OfflineLeaderDelaySeconds", o => o.OfflineLeaderDelaySeconds, (o, v) => o.OfflineLeaderDelaySeconds = v),
         // Not a vmangos key: the switch for its custom "World"/"China" channel names, read when a channel is created.
