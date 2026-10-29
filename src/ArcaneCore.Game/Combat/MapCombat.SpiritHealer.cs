@@ -22,11 +22,12 @@ public sealed partial class MapCombat
 
         Death.CorpsePlace? place = c.Corpse is { } body ? new Death.CorpsePlace(body.MapId, body.X, body.Y, body.Z) : null;
         ResurrectPlayer(player, CombatConstants.CorpseReclaimRestorePercent, applySickness: true);
-        if (c.Corpse is { } corpse)
+        if (!IsAliveState(player))
         {
-            RemoveCorpse(corpse);
-            c.Corpse = null;
+            return false;
         }
+
+        RemoveResurrectedCorpse(player);
 
         if (Death.DeathSeams.Find(_world)?.Graveyards is { } graveyards)
         {

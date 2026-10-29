@@ -101,6 +101,9 @@ public sealed partial record SpellInfo
         return targetB != 0 ? IsPositiveTarget(targetB, 0) : true;
     }
 
+    /// <summary>Warlock Hellfire (family flag, icon 937, visual 5423; SpellEntry.cpp:817-823): the self-damaging periodic tick on the caster.</summary>
+    internal bool IsHellfire => IsFitToFamily(FamilyWarlock, WarlockHellfireBit) && SpellIconId == 937 && SpellVisual == 5423;
+
     /// <summary>
     /// vmangos IsPositiveSpell (SpellEntry.cpp:795-806). <paramref name="lookup"/> resolves a periodic-trigger spell
     /// (null = skip that check). <paramref name="friendlyDispel"/> is the caster/victim friendliness for DISPEL effects
@@ -139,7 +142,7 @@ public sealed partial record SpellInfo
         }
 
         // Hellfire damages the caster but is positive (SpellEntry.cpp:817-823).
-        if (IsFitToFamily(FamilyWarlock, WarlockHellfireBit) && SpellIconId == 937 && SpellVisual == 5423)
+        if (IsHellfire)
         {
             return true;
         }

@@ -43,7 +43,8 @@ CI runs exactly these commands (`.github/workflows/ci.yml`; a test compares this
 ```
 dotnet restore ArcaneCore.slnx --locked-mode
 dotnet build ArcaneCore.slnx -c Release --no-restore
-dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal --logger trx --results-directory TestResults
+dotnet test ArcaneCore.slnx -c Release --no-build -m:1 --verbosity normal --filter "Category!=Timing" --logger trx --results-directory TestResults
+bash tools/ops/ci/test-stages.sh --stage timing --logs timing-logs ArcaneCore.slnx
 dotnet run --project tools/ArcaneCore.MockClient -c Release --no-build -- self-test
 ```
 
@@ -53,6 +54,17 @@ line on one solution filter of `ArcaneCore.slnx` (`tests/ci/<suite>.slnf`), and 
 
 Warnings are errors, but through `Directory.Build.props` (`TreatWarningsAsErrors`), not a command-line flag, so a warning anywhere fails the build locally and in CI. That includes broken doc comments: XML documentation is generated so the compiler resolves them (the `.xml` files stay in `obj`, out of build, publish and deploy output), so a `<see cref>` that no longer resolves (CS1574) or a `<paramref>` naming a parameter that is gone (CS1734) fails the build; when you rename or move a member, fix the comments that name it. Test projects run serially
 (`-m:1`) because first-time database fixture start-up has a bounded deadline. The `.trx` files land in `TestResults/` (ignored by git); CI uploads them and `test-report.yml` posts the summary on the PR. A count of 0 tests, or a run that prints no summary line, means the check did not run.
+
+#### Timing-sensitive tests
+
+A test whose outcome depends on wall-clock time or on scheduling under load (a real timeout, a `Stopwatch` bound, a wait for a packet
+or a background thread) carries `[Trait("Category", "Timing")]`, on the method or, when every test in it is like that, on the class.
+The test step leaves those out (`Category!=Timing`), and the next step (`tools/ops/ci/test-stages.sh --stage timing`) runs them on their
+own, serially, with no parallel test collections. A timing test that fails gets exactly one isolated rerun: if it passes, the step passes
+but prints `FLAKY (passed on rerun): <test>` and records it in `timing-logs/flake-ledger.txt` (uploaded as the `timing-gate-*`
+artifact); if it fails again, the step fails. A timing stage that runs 0 tests also fails, so a lost tag or a broken filter cannot read
+green. A flaky test is still a bug to fix, not a pass: the ledger is the list to work from. Node CI (`tools/ops/ci/node-ci.ps1`) runs the
+same two stages with the same script.
 
 ### Package lock files
 

@@ -508,7 +508,18 @@ internal static partial class PlayerbotMotion
         bool entering = PlayerbotAreaTriggers.WouldEnter(session, player, map, position, tracker);
         if (arrived)
         {
-            Vector3 arrivedAt = Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position) ?? position;
+            if (Validate(map, route, route.NextPoint, nextPoint, state.Anchor, position, out string? arrivalReject) is not { } arrivedAt)
+            {
+                // The last step is refused: the bot stays where the last packet put it, and the route is not complete (it is
+                // reported and damped like a refused heartbeat, so a brain that re-plans to the same target does not loop silently).
+                string arrivalMode = MoveModeOf(route, route.NextPoint, nextPoint);
+                AdvancePastRejectedWaypoint(route, state.Anchor);
+                int arrivalRejections = NoteStepRejected(session, player, state, route, now);
+                PlayerbotMotionAnomalies.ReportRouteBlocked(session, player, route, state.Anchor, now, arrivalRejections, arrivalReject ?? "NoGroundSupport", arrivalMode);
+                StopAt(session, player, state, state.Anchor, state.Heading, route.NextPoint, now);
+                return;
+            }
+
             StopAt(session, player, state, arrivedAt, heading, nextPoint, now);
             if (ReferenceEquals(player.Map, map)) PlayerbotAreaTriggers.Update(session, player, map, arrivedAt, tracker);
             return;
@@ -893,7 +904,10 @@ internal static partial class PlayerbotMotion
     /// <list type="bullet">
     /// <item><description>A route without a navigation-mesh proof (<see cref="PlayerbotRoute.Navigated"/>, the terrain stepper): a floor
     /// within 2 yards, probed from 2 yards above, and a clear line of sight from <paramref name="from"/>.</description></item>
-    /// <item><description>A mesh route: never refused for its height or for a line of sight. Its legs are straight lines between the
+    /// <item><description>A mesh route: refused for its height only when the step changes storey (more than
+    /// <see cref="PlayerbotMoveCheck.DirectStepMaxStepUpYards"/> up or down) and neither the mesh's proof (<see cref="PlayerbotMotionAnomalies.StaysOnMesh"/>)
+    /// nor any chest-height sight line (to the draped, the probed or the raw height) clears it; keeping the old height needs a
+    /// floor within one step height under it. Never refused for a level step's line of sight. Its legs are straight lines between the
     /// mesh's corners; the floor under a leg (stairs, the lip of a ramp) can lie a few yards off, and a probe from 2 yards above
     /// then finds the storey below or nothing. Two positions on either side of a corner see each other through the obstacle the
     /// corner goes around. Both refused every start out of the Deathknell crypt and, in the Goldshire inn, every start towards
@@ -991,9 +1005,17 @@ internal static partial class PlayerbotMotion
                         resolved = rawCandidate;
                     }
                     else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
-                        && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = from.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
+                        && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = from.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true)
+                        && HasFloorBelow(map, rawCandidate.X, rawCandidate.Y, from.Z))
                     {
+                        // Keeping the old height is only safe with a floor within reach under it (live: a dock edge over a seabed 20 yd down).
                         resolved = rawCandidate with { Z = from.Z };
+                    }
+                    else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards)
+                    {
+                        // No sight line clears the storey change: returning `resolved` would put the bot through a floor or slab.
+                        rejectReason = "NoGroundSupport";
+                        return null;
                     }
                 }
             }
@@ -1012,6 +1034,13 @@ internal static partial class PlayerbotMotion
         if (!PlayerbotMoveCheck.TryValidateStep(map, from, candidate, out Vector3 draped, out rejectReason))
             return null;
         return draped;
+    }
+
+    /// <summary>True when walkable floor lies at or just under <paramref name="z"/> at x/y, within one step height (a client falls, it does not hover).</summary>
+    private static bool HasFloorBelow(Map map, float x, float y, float z)
+    {
+        float floor = ResolveWalkFloor(map, x, y, z, 0f, z + 1.25f);
+        return ValidHeight(floor) && z - floor <= PlayerbotMoveCheck.DirectStepMaxStepUpYards;
     }
 
     private static string MoveModeOf(PlayerbotRoute route, int fromPoint, int toPoint)

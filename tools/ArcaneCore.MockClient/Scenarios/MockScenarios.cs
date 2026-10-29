@@ -33,15 +33,31 @@ public static partial class MockScenarios
     private const int QuestIdField = 0x00C6;
     private const int QuestCountField = 0x00C7;
     private const int NpcQuestIdField = 0x00C9;
-    private static readonly TimeSpan ScenarioTimeout = TimeSpan.FromSeconds(45);
+    // Wall-clock hang guard, not a performance bound. The scenario is strictly sequential request/response, so its
+    // runtime scales with host CPU load; passing runs on a loaded CI node measured up to ~44 s against the old 45 s
+    // limit. The TimeoutException names the last check that passed; the hung step is the one after it.
+    private static readonly TimeSpan ScenarioTimeout = TimeSpan.FromSeconds(180);
 
     public static async Task<MockScenarioReport> RunAsync(CancellationToken ct = default)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(ScenarioTimeout);
-        CancellationToken token = deadline.Token;
         var elapsed = Stopwatch.StartNew();
         var checks = new List<MockScenarioCheck>();
+        try
+        {
+            return await RunScenarioAsync(deadline.Token, elapsed, checks).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            string last = checks.Count == 0 ? "none" : checks[^1].Name;
+            throw new TimeoutException(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"self-test exceeded its {ScenarioTimeout.TotalSeconds:F0} s hang guard after {elapsed.Elapsed.TotalSeconds:F1} s; last check passed: {last}"));
+        }
+    }
+
+    private static async Task<MockScenarioReport> RunScenarioAsync(CancellationToken token, Stopwatch elapsed, List<MockScenarioCheck> checks)
+    {
         ulong characterGuid;
         int framesReceived = 0;
 

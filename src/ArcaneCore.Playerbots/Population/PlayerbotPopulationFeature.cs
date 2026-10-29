@@ -507,7 +507,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("playerbot.population", ex);
                 AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"pass faulted: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
                 logger.LogFault("playerbot.population", ex, "Playerbot population pass faulted ({Type}: {Message})", ex.GetType().Name, ex.Message);
             }
@@ -734,7 +733,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; } // superseded or stopping: nothing to deliver
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("playerbot.population", ex);
                 AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"graveyard terrain lookup or creature survey failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
                 logger.LogFault("playerbot.population", ex, "Playerbot population: the graveyard terrain lookup or creature survey failed; the atlas keeps every graveyard link until the area table, graveyards, creatures or maps change");
                 result = null;
@@ -827,7 +825,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             catch (OperationCanceledException) { return; } // superseded or stopping: nothing to deliver
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                FaultLedger.Shared.Record("playerbot.population", ex);
                 AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"zone capacity survey failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
                 logger.LogFault("playerbot.population", ex, "Playerbot population: the zone capacity survey failed; no zone is capped until the sources change");
                 result = null;
@@ -1214,7 +1211,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("playerbot.population", ex);
             AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"pass failed: {ex.GetType().Name}: {ex.Message}", origin: _world?.Identity);
             logger.LogFault("playerbot.population", ex, "Playerbot population pass failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
             _lastError = $"{ex.GetType().Name}: {ex.Message}";
@@ -2177,7 +2173,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             Backoff(botId);
-            FaultLedger.Shared.Record("playerbot.population", ex);
             AnomalyLedger.Shared.Report("bot-population", "pass-fault", "population", $"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}: {ex.Message})", origin: _world?.Identity);
             logger.LogFault("playerbot.population", ex, "Playerbot population: deleting the unplaced bot {Bot} failed", name ?? botId.ToString());
             Fail($"delete of unplaced bot {name ?? botId.ToString()} failed ({ex.GetType().Name}); retried later");

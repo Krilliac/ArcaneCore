@@ -500,7 +500,7 @@ public sealed class PercentStatAurasTests
         Item robe = Equip(player, ResistRobe);
         Item shield = Equip(player, Shield);
         (int[] wornFields, int[] wornLedger) = Resistances(player);
-        Assert.Equal(new[] { 105, 5, 10, 15, 20, 25, 30 }, wornFields);
+        Assert.Equal(new[] { 105, 0, 10, 15, 20, 25, 30 }, wornFields); // the robe's holy 5 never lands in the holy field
         Assert.Equal(wornFields, wornLedger);
         Assert.Equal(20.0f, player.StatState.ShieldBlockFlat);
 

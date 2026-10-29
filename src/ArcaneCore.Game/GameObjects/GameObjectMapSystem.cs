@@ -1961,7 +1961,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         ConfigureQuestFlags(go);
         NotifyInstanceScript(go);
         go.ClearChangedFields();
-        Map.AddObject(go);
+        Map.AddObject(go, isNewObject: true); // only Summon places a runtime object; vmangos Map::Add announces it with CREATE_OBJECT2 (SetIsNewObject)
     }
 
     /// <summary>

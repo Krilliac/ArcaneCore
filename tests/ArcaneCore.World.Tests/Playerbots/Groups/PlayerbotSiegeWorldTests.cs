@@ -2869,8 +2869,21 @@ public sealed class PlayerbotSiegeWorldTests(ITestOutputHelper output)
         Assert.Null(ofLeader);
         Assert.Same(guard, ofMember);
 
-        // And once the raid has dealt with the guard the leader reaches the waypoint.
-        Assert.True(await world.RunUntilAsync(240_000, () => siege.Step >= 1), "the leader never reached the waypoint: " + raid.LastFacts + Environment.NewLine + await world.TraceAsync());
+        // And once the raid has dealt with the guard the leader reaches the waypoint. A creature that is hit keeps its leash fresh (vmangos
+        // SetInCombatWithAggressor), so the guard now fights on until it dies instead of leashing away early; the bots it wounded are topped up
+        // here, because a hurt raid waits for a heal this fixture does not provide.
+        Assert.True(await world.RunUntilAsync(240_000, () =>
+        {
+            foreach (var member in raid.Group!.Members)
+            {
+                if (!member.Real && world.World.Host.World.FindOnlinePlayer(member.Guid) is { } bot)
+                {
+                    bot.Health = bot.MaxHealth;
+                }
+            }
+
+            return siege.Step >= 1;
+        }), "the leader never reached the waypoint: " + raid.LastFacts + Environment.NewLine + await world.TraceAsync());
     }
 
     /// <summary>

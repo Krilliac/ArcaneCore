@@ -53,6 +53,8 @@ branch per packet), and the world loop pays one null check per tick and per map.
 | `arcanecore_creature_path_no_path_total` | counter | creature path searches that found no path (chase stands, flee/wander wait, home teleports). A chaser standing at an unreachable target searches every 100 ms, so it adds about 10 per second to this counter |
 | `arcanecore_creature_path_deferred_total` | counter | creature path requests put off to a later update because the per-update search budget was spent, or whose tiles were still being read (`TilesPending`) |
 | `arcanecore_creature_path_home_teleports_total` | counter | evade returns done by teleport because no whole mesh path led home |
+| `arcanecore_creature_drape_shared_total` | counter | creature leg ground drapes answered from loaded tiles outside the world's serial gate (parallel maps phase, ungated wander legs) |
+| `arcanecore_creature_drape_gate_fallbacks_total` | counter | creature leg ground drapes that needed a tile or navmesh lookup the shared drape may not do and ran again inside the serial gate; the hit rate is shared / (shared + fallbacks) |
 | `arcanecore_db_save_queue_depth` | gauge | characters with a snapshot queued or being written; the queue keeps one per character (TC `db_queue_*`) |
 | `arcanecore_db_save_queue_oldest_age_milliseconds` | gauge | age of the longest-waiting character snapshot, queued or in its write; 0 when none (the `World:SaveQueueWarnAgeMs` check, [persistence](../areas/persistence.md)) |
 | `arcanecore_map_players` / `_creatures` / `_objects` `{map,instance}` | gauge | per map, sampled every `MapSampleIntervalSeconds` on the world thread (TC `map_creatures`, `map_players`) |

@@ -126,7 +126,7 @@ public sealed partial class PlayerStatState
     internal void AddItemResistances(ItemTemplate template, int sign)
     {
         _itemResistance[0] += template.Armor * sign;
-        _itemResistance[1] += template.HolyRes * sign;
+        // Holy is not tallied: the holy resistance field stays 0 (vmangos Player::UpdateResistances, StatSystem.cpp:117-126).
         _itemResistance[2] += template.FireRes * sign;
         _itemResistance[3] += template.NatureRes * sign;
         _itemResistance[4] += template.FrostRes * sign;

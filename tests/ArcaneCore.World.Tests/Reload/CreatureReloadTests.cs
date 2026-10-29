@@ -188,6 +188,9 @@ public sealed class CreatureReloadTests
     {
         await using WorldTestHost host = Start(ContentOf(Wolf()), out CreatureTestContext context);
         CreatureWorldFeature feature = context.Feature!;
+        // The startup content is installed by a command the feature posts to the world thread at attach. A failed build never reaches the
+        // world thread, so without this wait the assertion below can read Content before that install has run (Empty, so no wolf).
+        await host.WaitForWorldAsync(() => feature.ContentInstalled, "creature content installation");
         ReloadCoordinator coordinator = Reloader(host, feature, new FixedStore(null!) { Failure = new InvalidOperationException("world database unavailable") });
 
         ReloadResult result = await coordinator.ReloadAsync("creature_template");
