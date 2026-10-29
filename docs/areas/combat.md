@@ -269,7 +269,7 @@ system) for the world; worlds without it use `CombatEnvironment.Default`.
 - **Emotes.** No EMOTE_ONESHOT_WOUNDCRITICAL.
 - **Create blocks.** No UPDATEFLAG_MELEE_ATTACKING.
 - **Visibility.** Ghosts and the living are separated by `GhostVisibilityRule` (graveyards-resurrection lane).
-- **Persistence.** Death state and corpses are not persisted across logout.
+- **Persistence.** Corpses and ghost state are saved with the character and restored at login (`CharacterLife` corpse snapshot, `RestoreGhost`). See [graveyards and resurrection](graveyards-resurrection.md).
 - **Corpse query in dungeons.** A corpse in a dungeon, seen from another map, is shown at the dungeon's ghost
   entrance from `map_template` (graveyards-resurrection lane).
 - **Creature combat.** Creature combat exit/evade and in-combat mana belong to the AI and

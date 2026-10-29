@@ -323,6 +323,6 @@ All of these are minimal and additive unless stated otherwise.
 
 ## Next slice
 
-- Persisted instance state (`creature_respawn`, `gameobject_respawn` per instance) once
-  `feat/creature-ai` and `feat/gameobjects-loot` expose respawn seams.
+- Persisted per-instance `gameobject_respawn` once `feat/gameobjects-loot` exposes a respawn seam. (`creature_respawn` per instance
+  is delivered by `CreatureRespawnFeature`.)
 - The 5-instances-per-hour limit.
