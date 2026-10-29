@@ -467,6 +467,9 @@ public static partial class ContentImporterCli
                     await relays.RefreshSpellScriptTargetsAsync(db, token).ConfigureAwait(false);
                     await relays.RefreshCreatureLinksAsync(db, token).ConfigureAwait(false);
                     await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
+                    warnings.AddRange(dbScripts.Warnings);
+                    warnings.AddRange(dbScripts.VmangosSpellScriptRejections.OrderBy(pair => pair.Key)
+                        .Select(pair => $"spell_scripts {pair.Key} not imported: {pair.Value}"));
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
                     await gossip.RefreshVendorTemplatesAsync(db, token).ConfigureAwait(false);
                     if (procs is not null)

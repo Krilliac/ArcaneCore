@@ -188,13 +188,21 @@ public static class ContentTableSpecs
                 "z", "o", "speed", "condition_id",
             ], []),
         // World schema 42: the quest, gossip and event DB scripts (the relay layout, no key; DbScriptDumpImporter) and ScriptDev2's escort paths.
-        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event", "dbscripts_on_creature_movement" }.Select(table => new TableSpec(table,
+        .. new[] { "dbscripts_on_quest_start", "dbscripts_on_quest_end", "dbscripts_on_gossip", "dbscripts_on_event", "dbscripts_on_creature_movement", "dbscripts_on_spell" }.Select(table => new TableSpec(table,
             [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),
              new KeyColumn("buddy_entry"), new KeyColumn("dataint"), new KeyColumn("x"), new KeyColumn("y")],
             [
                 "datalong2", "datalong3", "search_radius", "data_flags", "dataint2", "dataint3", "dataint4", "datafloat",
                 "z", "o", "speed", "condition_id",
             ], [])),
+        // World schema 62: vmangos spell_scripts, translated into dbscripts_on_spell (VmangosSpellScriptTranslator; no key in vmangos either).
+        new("spell_scripts",
+            [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),
+             new KeyColumn("datalong2"), new KeyColumn("data_flags"), new KeyColumn("condition_id")],
+            [
+                "datalong3", "datalong4", "target_param1", "target_param2", "target_type", "dataint", "dataint2", "dataint3", "dataint4",
+                "x", "y", "z", "o",
+            ], []),
         new("script_waypoint", [new KeyColumn("Entry"), new KeyColumn("PathId"), new KeyColumn("Point")],
             ["PositionX", "PositionY", "PositionZ", "Orientation", "WaitTime", "ScriptId"], []),
         new("creature_template_spells", [new KeyColumn("entry"), new KeyColumn("setId")], Enumerable.Range(1, 10).Select(i => "spell" + i), []),
