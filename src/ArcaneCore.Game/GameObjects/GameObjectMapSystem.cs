@@ -91,7 +91,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// <summary>How many quest objects currently hold per-viewer dynamic flag baselines in <c>_questFlagsSent</c> (diagnostics, tests).</summary>
     internal int QuestFlagsTrackedObjectCount => _questFlagsSent.Count;
 
-    public GameObjectMapSystem(Map map, GameObjectContent content, LootService? loot = null, ILootQuestJournal? quests = null, ILogger? logger = null, Random? random = null)
+    public GameObjectMapSystem(Map map, GameObjectContent content, LootService? loot = null, ILootQuestJournal? quests = null, ILogger? logger = null, Random? random = null,
+        IGameObjectRespawnPersistence? respawnPersistence = null, IRespawnClock? respawnClock = null)
     {
         ArgumentNullException.ThrowIfNull(map);
         ArgumentNullException.ThrowIfNull(content);
@@ -102,6 +103,8 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         _content = content;
+        _respawnPersistence = respawnPersistence;
+        _respawnClock = respawnClock ?? SystemRespawnClock.Instance;
         Loot = loot;
         Quests = quests;
         _logger = logger ?? NullLogger.Instance;
@@ -1652,6 +1655,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         go.LootState = GameObjectLootState.JustDeactivated;
         go.RespawnAtMs = go.Spawn.SpawnTimeSeconds >= 0 ? _clockMs + (DurableKeyOf(go) is null ? ScaleRespawnDelayMs(go.Spawn, RespawnDelayMs(go)) : RespawnDelayMs(go)) : 0;
         OnPoolMemberDespawned(go); // cmangos GameObject.cpp GO_JUST_DEACTIVATED: a pooled object lets its pool choose what comes back
+        SaveRespawnOnDespawn(go);
     }
 
     /// <summary>Respawn a despawned object now (GM command, script, event spawn of a negative spawntimesecs object).</summary>
@@ -1694,6 +1698,11 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     {
         go.InitializeFields();
         go.RespawnAtMs = 0;
+        if (go.Spawn is { } respawned)
+        {
+            DeletePersistedRespawn(respawned.Guid);
+        }
+
         go.CooldownUntilMs = 0;
         go.ClearChangedFields();
         if (_mapWideElevators.Contains(go))
@@ -1837,6 +1846,13 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         bool pending = _respawnAt.Remove(spawn.Guid, out long respawnAt);
+        if (!pending && TryRestorePersistedRespawn(spawn, out long restoredAt))
+        {
+            // A restart (or an instance map recreated while its save lives on) keeps a looted chest or a mined node despawned for what is left of its time.
+            pending = true;
+            respawnAt = restoredAt;
+        }
+
         if (pending && respawnAt > _clockMs)
         {
             go.LootState = GameObjectLootState.JustDeactivated;
@@ -1850,6 +1866,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return;
         }
 
+        DeletePersistedRespawn(spawn.Guid); // it spawns now: a stored time that is not still ahead (an in-memory timer ran out first) is stale
         go.ClearChangedFields();
         Map.AddObject(go);
     }

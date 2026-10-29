@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.World.Bans;
 using ArcaneCore.World.Creatures;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Honor;
 using ArcaneCore.World.Instances;
@@ -59,6 +60,7 @@ public static class WorldPersistenceProbes
 
         // World queues
         Queue(registry, "creature respawns", () => sp.GetService<CreatureRespawnFeature>()?.Persistence as CreatureRespawnQueue, q => q.Pending, q => q.RetainedKeys);
+        Queue(registry, "game object respawns", () => sp.GetService<GameObjectRespawnFeature>()?.Persistence as GameObjectRespawnQueue, q => q.Pending, q => q.RetainedKeys);
 
         // Keyed store queues
         Queue(registry, "gm audit", () => sp.GetService<GmAuditFeature>()?.Writes, q => q.Pending, q => q.RetainedKeys, retainedFailure: q => q.LastFailure);
