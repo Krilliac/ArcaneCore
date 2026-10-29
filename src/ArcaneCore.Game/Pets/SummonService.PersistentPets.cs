@@ -774,6 +774,12 @@ public sealed partial class SummonService
             creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, 0, TotemSlots.None, 0);
             ApplyOwner(creature, owner, 0);
             InitPet(creature, SummonKind.Pet, owner, snapshot.PetNumber);
+            if (owner.Class == Class.Hunter)
+            {
+                creature.IgnoreTemplateResistances = true; // a tamed beast loses its innate resistances (Patch 1.3.0)
+                creature.ApplyCreateResistances();
+            }
+
             if (creature.Summon.Charm is { } initCharm)
             {
                 initCharm.Name = string.IsNullOrWhiteSpace(snapshot.Name) ? creature.Template.Name : snapshot.Name;

@@ -85,6 +85,20 @@ public interface ISpellGroupResolver
 
         return false;
     }
+
+    /// <summary>
+    /// Appends exactly <c>GetGroupMembers(unit, raid)</c> to <paramref name="into"/>, in the same order, without allocating once
+    /// <paramref name="into"/> has capacity. Implementations should override; the default enumerates the collection.
+    /// </summary>
+    void AppendGroupMembers(Unit unit, bool raid, List<ObjectGuid> into)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(into);
+        foreach (ObjectGuid guid in GetGroupMembers(unit, raid))
+        {
+            into.Add(guid);
+        }
+    }
 }
 
 /// <summary>Default <see cref="ISpellGroupResolver"/>: nobody is grouped, a unit's party is itself.</summary>
@@ -102,6 +116,13 @@ public sealed class NoGroupResolver : ISpellGroupResolver
     {
         ArgumentNullException.ThrowIfNull(unit);
         return unit.Guid == other;
+    }
+
+    public void AppendGroupMembers(Unit unit, bool raid, List<ObjectGuid> into)
+    {
+        ArgumentNullException.ThrowIfNull(unit);
+        ArgumentNullException.ThrowIfNull(into);
+        into.Add(unit.Guid);
     }
 }
 

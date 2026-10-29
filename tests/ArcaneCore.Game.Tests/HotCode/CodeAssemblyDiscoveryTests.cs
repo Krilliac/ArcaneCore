@@ -11,6 +11,7 @@ namespace ArcaneCore.Game.Tests.HotCode;
 /// Game discovery sites over a <see cref="CodeAssemblies"/> set: the built-in set finds exactly what is in force today, and a
 /// second assembly registered as a pack (this test assembly) has its types found by the same rules.
 /// </summary>
+[Collection(DefaultMapUpdatersCollection.Name)]
 public sealed class CodeAssemblyDiscoveryTests
 {
     private static CodeAssemblies GameOnly => CodeAssemblies.Of(typeof(DefaultMapUpdaters).Assembly);
@@ -21,11 +22,14 @@ public sealed class CodeAssemblyDiscoveryTests
         CodeAssemblies withPack = DefaultMapUpdaters.BuiltIn.WithPack(typeof(HotProbeUpdater).Assembly);
 
         IReadOnlyList<Type> types = DefaultMapUpdaters.DiscoverCandidate(withPack).Types;
+        // A fresh scan of the built-in set, not the process-wide DefaultMapUpdaters.Types: a hot-reload test may have
+        // committed HotProbeUpdater into that set while this runs.
+        IReadOnlyList<Type> builtIns = DefaultMapUpdaters.DiscoverCandidate(DefaultMapUpdaters.BuiltIn).Types;
 
         Assert.Contains(typeof(HotProbeUpdater), types);
-        Assert.DoesNotContain(typeof(HotProbeUpdater), DefaultMapUpdaters.Types);
+        Assert.DoesNotContain(typeof(HotProbeUpdater), builtIns);
         // Order int.MaxValue: it runs after every built-in, which are all still there in their order.
-        Assert.Equal(DefaultMapUpdaters.Types.Append(typeof(HotProbeUpdater)), types);
+        Assert.Equal(builtIns.Append(typeof(HotProbeUpdater)), types);
     }
 
     [Fact]

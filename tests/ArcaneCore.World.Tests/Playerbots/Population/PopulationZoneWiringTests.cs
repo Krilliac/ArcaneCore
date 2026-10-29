@@ -68,8 +68,19 @@ public sealed class PopulationZoneWiringTests
 
     // Issue #1454: bots placed in Deadwind Pass before the operator excluded it stalled there for good. The zone left the atlas, so
     // the relocation pass skipped them like bots in a capital; a stalled bot that escaped to its bind point in the same area came back.
-    private static Task StallAsync(PopulationTestHost world, Guid bot)
-        => world.Host.OnWorldAsync(() => world.Bots.FindBrain(bot)!.StallWatch.ReportExternal("test: stalled"));
+    // The bot keeps thinking (every 100 ms) between the report and the pass. The report has to outlive those thinks, as a stall does until
+    // the bot makes progress: before, the first look after ReportExternal cleared it, and the pass saw a stall only when it beat that think.
+    private static async Task StallAsync(PopulationTestHost world, Guid bot)
+    {
+        long thinks = await world.Host.OnWorldAsync(() =>
+        {
+            PlayerbotBrain brain = world.Bots.FindBrain(bot)!;
+            brain.StallWatch.ReportExternal("test: stalled");
+            return brain.ThinkCount;
+        });
+        await world.Host.WaitForWorldAsync(() => world.Bots.FindBrain(bot)!.ThinkCount >= thinks + 3, "three thinks after the stall report");
+        Assert.NotNull(await world.Host.OnWorldAsync(() => world.Bots.FindBrain(bot)!.StallReport));
+    }
 
     private static void SeedZone(PopulationTestHost world, uint zone)
         => world.Members.Seed(Assert.Single(world.Members.Snapshot) with { ZoneId = zone });
@@ -104,6 +115,7 @@ public sealed class PopulationZoneWiringTests
         Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task AStalledBotInAZoneItEscaped_IsRelocated_ThoughItFitsTheZone()
     {
@@ -136,6 +148,7 @@ public sealed class PopulationZoneWiringTests
         Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task AStalledBotInAZoneOverItsCapacity_IsRelocated()
     {

@@ -160,6 +160,31 @@ public sealed partial class ConditionFeature(IServiceProvider services, IService
     private void Install(WorldRuntime world, ConditionTable table)
         => Volatile.Write(ref _current, new ConditionEvaluator(table, BuildContext(world)));
 
+    /// <summary>The loaded conditions table (empty before <see cref="Attach"/>).</summary>
+    public ConditionTable Table => Volatile.Read(ref _table) ?? ConditionTable.Empty;
+
+    /// <summary>
+    /// Swap in <paramref name="table"/> (<c>.reload conditions</c>, world thread): the evaluator is rebuilt over it with the current
+    /// collaborators, and every reader that goes through this feature (gossip, vendors, quests, loot, spawn groups, the DB script engine)
+    /// sees it from its next evaluation. Returns the table it replaced.
+    /// </summary>
+    public ConditionTable Replace(ConditionTable table)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ConditionTable previous = Table;
+        Volatile.Write(ref _table, table);
+        if (_world is not null)
+        {
+            Install(_world, table);
+        }
+        else
+        {
+            Volatile.Write(ref _current, new ConditionEvaluator(table, new ConditionContext()));
+        }
+
+        return previous;
+    }
+
     /// <summary>Rebuild the evaluator over the loaded table once a collaborator became available after <see cref="Attach"/>.</summary>
     public void RefreshCollaborators()
     {
