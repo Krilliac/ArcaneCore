@@ -43,10 +43,15 @@ public sealed class WorldRuntimePositionTests
         // identifies exactly that read.
         long reads = 0, sawIdle = 0, sawFeatures = 0, torn = 0, unverifiedReads = 0;
         string? firstTorn = null;
-        long deadline = Environment.TickCount64 + 400;
+        // At least 400 ms of reads, and on until both phases were read often: on a loaded runner the writer thread can get no core for the
+        // whole 400 ms (Node1, five gates at once: 679,437 reads, every one Idle), which is a starved writer, not a verdict on the reads.
+        // The 60 s cap only ends a run whose writer never runs; the vacuous-run assertion below then fails it.
+        const long MinimumMs = 400, CapMs = 60_000, EnoughOfEach = 1_000;
+        long started = Environment.TickCount64;
         try
         {
-            while (Environment.TickCount64 < deadline)
+            while (Environment.TickCount64 - started is var ms && ms < CapMs
+                && (ms < MinimumMs || sawIdle < EnoughOfEach || sawFeatures < EnoughOfEach))
             {
                 long unverifiedBefore = world.PositionReadsUnverified;
                 TickPosition p = world.CurrentPosition;
@@ -65,7 +70,7 @@ public sealed class WorldRuntimePositionTests
             Assert.True(writer.Join(TimeSpan.FromSeconds(10)), "writer thread did not stop");
         }
 
-        Assert.True(sawIdle > 0 && sawFeatures > 0, $"vacuous run: {reads} reads, {sawIdle} Idle, {sawFeatures} Features");
+        Assert.True(sawIdle >= EnoughOfEach && sawFeatures >= EnoughOfEach, $"vacuous run: {reads} reads, {sawIdle} Idle, {sawFeatures} Features");
         Assert.True(unverifiedReads * 100 < reads, $"{unverifiedReads} of {reads} reads ran out the read budget");
         Assert.True(torn == 0, $"{torn} of {reads - unverifiedReads} verified reads were torn ({unverifiedReads} unverified reads excluded); first: {firstTorn}");
     }

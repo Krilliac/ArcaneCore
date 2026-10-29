@@ -117,7 +117,7 @@ public sealed class QuestNpcInteractionHandlers : IOpcodeHandlerGroup
     {
         if (payload.Length != expected)
         {
-            throw new ArgumentOutOfRangeException(nameof(payload), $"quest interaction requires exactly {expected} bytes");
+            MalformedPacket.Throw($"quest interaction requires exactly {expected} bytes");
         }
     }
 }

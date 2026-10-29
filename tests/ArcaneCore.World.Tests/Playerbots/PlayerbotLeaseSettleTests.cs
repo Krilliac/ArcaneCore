@@ -316,6 +316,7 @@ public sealed class PlayerbotLeaseSettleTests
     /// A gate-only think of the party AI keeps it: the settle must renew it. Fails if the settle only trusts the follower's route slot, or
     /// never renews.
     /// </summary>
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task PartyFollowerWalkToDropEdge_AGateOnlyThinkKeepsIt_AndTheSettleRenewsItsLease()
     {

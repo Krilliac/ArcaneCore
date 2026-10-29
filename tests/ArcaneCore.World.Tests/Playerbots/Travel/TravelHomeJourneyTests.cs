@@ -52,6 +52,23 @@ public sealed class TravelHomeJourneyTests(ITestOutputHelper output)
         public bool IsTraveling(Player player) => _traveling;
     }
 
+    /// <summary>A travel seam whose attempts succeed without beginning a journey (the bot already stands at the goal): nothing is ever travelling.</summary>
+    private sealed class BeginsNothingTravel : IPlayerbotTravel
+    {
+        public int Attempts { get; private set; }
+
+        public bool CanReach(WorldSession session, Player player, uint toMap, Vector3 to) => true;
+
+        public bool TryBegin(WorldSession session, Player player, uint toMap, Vector3 to, out string? why)
+        {
+            Attempts++;
+            why = null;
+            return true;
+        }
+
+        public bool IsTraveling(Player player) => false;
+    }
+
     private static Task ThinkAsync(ShipTestWorld world, PlayerbotBrain brain) => world.OnWorldAsync(() => brain.Update(100));
 
     private async Task TraceAsync(ShipTestWorld world, PlayerbotBrain brain)
@@ -202,6 +219,36 @@ public sealed class TravelHomeJourneyTests(ITestOutputHelper output)
                 Assert.Equal(journeys ? 1 : 0, travel.Begun.Count);
                 Assert.Equal(0, brain.HomeReturn.Teleports);
             });
+        }
+        finally
+        {
+            brain.Stop();
+        }
+    }
+
+    /// <summary>
+    /// An attempt that succeeds without a journey under way (the bot already stands at the goal) waits the transit backoff like a refused
+    /// one: each attempt builds the travel facts, which read navmesh tiles on the world thread, so five thinks in a row must not make five.
+    /// </summary>
+    [Fact]
+    public async Task AnAttemptThatBeginsNoJourney_IsNotRepeatedEveryThink()
+    {
+        PlayerbotOptions options = Options(PlayerbotHomeReturnMode.Auto);
+        options.Travel.TransitBackoffSeconds = 60;
+        var travel = new BeginsNothingTravel();
+        await using ShipTestWorld world = await ShipTestWorld.StartAsync(configureServices: services => services.AddSingleton<IPlayerbotTravel>(travel));
+        await world.PlaceAsync(1, OnTeldrassil);
+        var brain = new PlayerbotBrain(world.Session, options);
+        try
+        {
+            await world.OnWorldAsync(() => brain.Home = new PlayerbotHomeArea(1, DarkshoreHome, 100f, "Darkshore"));
+            for (int i = 0; i < 5; i++)
+            {
+                await ThinkAsync(world, brain);
+                await world.AdvanceAsync(100);
+            }
+
+            Assert.Equal(1, travel.Attempts);
         }
         finally
         {

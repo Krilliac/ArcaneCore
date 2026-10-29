@@ -45,6 +45,7 @@ public sealed class CodexNetAuthRealmTests
         Assert.True(await ReadsNothingThenClosesAsync(c), "the oversized claim must be dropped at once, not buffered until the session limit");
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task StalledConnections_CannotExceedTheCap_AndTheirSlotsComeBack()
     {

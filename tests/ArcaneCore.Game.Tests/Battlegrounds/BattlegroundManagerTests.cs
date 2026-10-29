@@ -20,6 +20,9 @@ internal sealed class RecordingManagerHost : IBattlegroundManagerHost
     public readonly List<Battleground> Deleted = [];
     public uint NextInstance = 101;
 
+    /// <summary>Called after each recorded status (a test's re-entrant host reaction).</summary>
+    public Action<ObjectGuid, BattlegroundStatus>? OnStatus;
+
     public bool IsOnline(ObjectGuid player) => !Offline.Contains(player);
 
     public IBattlegroundHost CreateMatchHost(BattlegroundType type, uint instanceId)
@@ -32,7 +35,10 @@ internal sealed class RecordingManagerHost : IBattlegroundManagerHost
     public uint AllocateInstanceId() => NextInstance++;
 
     public void SendStatus(ObjectGuid player, uint queueSlot, BattlegroundStatusSubject subject, BattlegroundStatus status, uint time1, uint time2)
-        => Statuses.Add((player, queueSlot, subject, status, time1, time2));
+    {
+        Statuses.Add((player, queueSlot, subject, status, time1, time2));
+        OnStatus?.Invoke(player, status);
+    }
 
     public void SendGroupJoined(ObjectGuid player, uint result) => GroupJoined.Add((player, result));
 

@@ -308,12 +308,28 @@ public sealed partial class SpellSystem
         return best;
     }
 
+    /// <summary>Test seam: one <see cref="ExpireCooldowns"/> pass for <paramref name="unit"/>'s state at clock <paramref name="now"/> (allocation tests).</summary>
+    internal void ExpireCooldownsOf(Unit unit, uint now)
+    {
+        if (GetState(unit.Guid) is { } state)
+        {
+            ExpireCooldowns(state, now);
+        }
+    }
+
     private static void ExpireCooldowns(UnitSpellState state, uint now)
     {
+        if (state.SpellCooldowns.Count == 0 && state.CategoryCooldowns.Count == 0 && state.GlobalCooldowns.Count == 0
+            && state.SchoolLockouts.Count == 0)
+        {
+            return;
+        }
+
+        // Dictionary.Remove(key) of the current entry during enumeration is legal since .NET Core 3.0 (Remove and Clear only), so no snapshot.
         Expire(state.SpellCooldowns, now);
         Expire(state.CategoryCooldowns, now);
         Expire(state.GlobalCooldowns, now);
-        foreach ((SpellSchool school, uint until) in state.SchoolLockouts.ToArray())
+        foreach ((SpellSchool school, uint until) in state.SchoolLockouts)
         {
             if (until <= now)
             {
@@ -323,7 +339,7 @@ public sealed partial class SpellSystem
 
         static void Expire(Dictionary<uint, uint> cooldowns, uint now)
         {
-            foreach ((uint key, uint until) in cooldowns.ToArray())
+            foreach ((uint key, uint until) in cooldowns)
             {
                 if (until <= now)
                 {

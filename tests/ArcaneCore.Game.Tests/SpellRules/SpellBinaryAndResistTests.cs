@@ -105,8 +105,8 @@ public sealed class SpellBinaryAndResistTests
     [Theory]
     [InlineData(200, 0.5f)]
     [InlineData(400, 0.75f)] // capped
-    [InlineData(-150, -0.5f)] // vulnerability: -150 / (5 * 60)
-    [InlineData(-900, -0.75f)]
+    [InlineData(-150, 0f)] // a negative total on a unit with no negative base resistance counts as 0 (RetailResistFixesTests covers a real vulnerability)
+    [InlineData(-900, 0f)]
     public void ResistChance_FromTheVictimsResistance(int resistance, float expected)
     {
         using var kit = new SpellTestKit();
