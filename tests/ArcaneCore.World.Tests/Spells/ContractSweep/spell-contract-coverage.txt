@@ -21839,7 +21839,7 @@
 29146	CastOk
 29150	CastOk
 29151	CastOk	g
-29153	CastOk	b c:move,turn,melee-hit-taken,melee-swing,cast,mount,stand-up
+29153	CastOk	b c:move,turn,melee-hit-taken,melee-swing,mount,stand-up
 29154	CastOk	c:move,turn,melee-hit-taken,cast,mount,stand-up
 29155	CastOk	g
 29156	DontReport

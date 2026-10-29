@@ -18,6 +18,9 @@ internal sealed class SpellSweepCatalog
     /// <summary>Set to 1 to sweep every Spell.dbc row instead of the default selection.</summary>
     public const string FullVariable = "ARCANECORE_SPELL_SWEEP_FULL";
 
+    /// <summary>Comma-separated spell ids: sweep only those rows (a lane's focused RED/GREEN run; never with the baseline write).</summary>
+    public const string IdsVariable = "ARCANECORE_SPELL_SWEEP_IDS";
+
     /// <summary>The seed of the default run's sample of the non-player spells (fixed, so a run is reproducible).</summary>
     public const int SampleSeed = 5875;
 
@@ -108,6 +111,12 @@ internal sealed class SpellSweepCatalog
     /// </summary>
     public IReadOnlyList<SpellInfo> Select(bool full, int sampleSize = DefaultSampleSize)
     {
+        if (Environment.GetEnvironmentVariable(IdsVariable) is { Length: > 0 } ids)
+        {
+            HashSet<uint> wanted = [.. ids.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(uint.Parse)];
+            return [.. Spells.Where(s => wanted.Contains(s.Id))];
+        }
+
         if (full)
         {
             return Spells;
