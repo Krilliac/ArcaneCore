@@ -82,8 +82,7 @@ When a server and the docs disagree, the server wins and the conflict is listed 
    - `tests/ArcaneCore.Data.Tests/Spells`: schema upgrade, stores, DBC importer on SQLite, MariaDB and PostgreSQL.
    - `tests/ArcaneCore.World.Tests/Spells`: loopback end to end.
 3. With a client:
-   - Run `arcane-spell-import <WoW 1.12.1>/Data/DBFilesClient` after extracting the DBCs the client actually uses: each file from `patch-2.MPQ` if it has it, else `patch.MPQ`, else `dbc.MPQ` (the base archive holds older copies of some files, e.g. `SpellShapeshiftForm.dbc`). `D:
-efsient-dbc-5875-effective` holds verified extractions.
+   - Run `arcane-spell-import <WoW 1.12.1>/Data/DBFilesClient` after extracting the DBCs the client actually uses: each file from `patch-2.MPQ` if it has it, else `patch.MPQ`, else `dbc.MPQ` (the base archive holds older copies of some files, e.g. `SpellShapeshiftForm.dbc`). The effective client DBC set (`client-dbc-5875-effective` under the refs directory) holds verified extractions.
    - Fill `playercreateinfo_spell` from classic-db (M8 importer) or by hand.
    - Log in: the spellbook shows the starting spells.
    - Cast a spell with a cast time and watch the cast bar, the GCD and the cooldown.
@@ -152,13 +151,10 @@ instead of by editing `SpellSystem.Effects.cs` / `SpellSystem.Auras.cs`:
 - A spell script chain is guarded: `RegisterEffect` over the handler the spell script dispatcher wrapped (Dummy, ScriptEffect, Dispel, and any
   effect a script declares in `ExecuteEffects`) throws unless the caller read it first with `GetEffectHandler` and calls it from the new handler,
   so a later feature cannot silently drop the script hooks.
-- Effects with a handler since the wiring review (vmangos SpellEffects.cpp table): HEAL_MECHANICAL 75 (`EffectHealMechanical` :1835, `DealHeal` only: no crit, no heal
-  procs, no assist threat and no combat for the healer (`HealingOrigin.NoThreat`); the one Spell.dbc user is Mechanical Patch Kit 15057), EVADE 21 and NOSTALRIUS 131 (empty bodies; Evade (DND) 108 is the one user of 21),
-  APPLY_AREA_AURA_FRIEND 128 and APPLY_AREA_AURA_ENEMY 129 (`EffectApplyAreaAura` :2323; the one user is the test spell Sam's Test Aura 26659). The effect
-  applies to any live unit target; the caster's own aura spreads (the enemy kind gives the caster a holder of aura type NONE) and a unit that holds the
-  spell's aura at that effect index, whoever cast it, gets no second one. The friend
-  and enemy area auras pick their units once when the effect runs; vmangos re-evaluates them every update (`AreaAuraFriendEnemyEffects.cs`).
-  Effects 126, 127 (`EffectUnused`) and 132, 133 (past the end of vmangos's table) stay unregistered.
+- Effects with a handler since the wiring review (vmangos SpellEffects.cpp table): HEAL_MECHANICAL 75 (`EffectHealMechanical` :1835, `DealHeal` only: no crit,
+  no heal proc (the hit fires the plain proc with amount 0), no assist threat (`HealingOrigin.NoThreat`); a cast that is not triggered still puts the caster in
+  combat with an in-combat ally, as any assist does, Spell.cpp:1713-1718; the one Spell.dbc user is Mechanical Patch Kit 15057), EVADE 21 and NOSTALRIUS 131
+  (empty bodies; Evade (DND) 108 is the one user of 21). Effects 126, 127 (`EffectUnused`) and 132, 133 (past the end of vmangos's table) stay unregistered.
 - Fail closed: a module that replaces a handler installed before it ran (built-in, an earlier module, or a seam
   registration), is applied twice, is abstract or lacks the constructor makes startup throw naming the module and the
   effect or aura. Nothing is skipped silently. `RegisterEffect` / `RegisterAura` called directly replace the handler (the module path is the one that fails closed); `RegisterEffect` over a script-wrapped
