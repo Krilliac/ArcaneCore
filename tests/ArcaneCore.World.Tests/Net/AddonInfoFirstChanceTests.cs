@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Net;
@@ -30,10 +32,14 @@ public sealed class AddonInfoFirstChanceTests
             block[i] = (byte)(i - 4);
         }
 
-        (byte[] response, List<Exception> raised) = Record(() => AddonInfo.BuildResponse(block));
+        var log = new CapturingLogger<AddonInfoFirstChanceTests>();
+        (byte[] response, List<Exception> raised) = Record(() => AddonInfo.BuildResponse(block, log, "1.2.3.4:5"));
 
         Assert.Empty(raised);
         Assert.Empty(response);
+        CapturedLog line = Assert.Single(log.Entries);
+        Assert.Equal(LogLevel.Debug, line.Level);
+        Assert.Equal("[1.2.3.4:5] addon block is not zlib (CMF 0x00, len 20); sending empty addon info", line.Message);
     }
 
     [Fact]

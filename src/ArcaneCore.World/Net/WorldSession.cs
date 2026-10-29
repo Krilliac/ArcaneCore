@@ -130,6 +130,9 @@ public sealed partial class WorldSession : IPlayerSession
     private IClientProtocol _protocol = ClientProtocols.PreAuth;
     private readonly IWorldHeaderCrypt _crypt = ClientProtocols.PreAuth.CreateHeaderCrypt();
     private readonly object _sendLock = new();
+    // True from sending SMSG_NEW_WORLD until the read loop parses the client's MSG_MOVE_WORLDPORT_ACK: bad-header diagnostics only
+    // (the read loop is off the world thread, so it cannot ask TeleportService).
+    private volatile bool _worldportPending;
     private readonly Channel<byte[]> _outbound = Channel.CreateUnbounded<byte[]>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
     private readonly ConcurrentQueue<QueuedPacket> _worldQueue = new();
@@ -317,6 +320,11 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         ObserveOutbound(opcode, payload);
+
+        if (opcode == WorldOpcode.SmsgNewWorld)
+        {
+            _worldportPending = true;
+        }
 
         if (_remoteOutput is not null)
         {
@@ -635,6 +643,8 @@ public sealed partial class WorldSession : IPlayerSession
     private async Task ReadLoopAsync(CancellationToken token)
     {
         byte[] header = new byte[_crypt.IncomingHeaderLength];
+        byte[] cipherHeader = new byte[header.Length]; // the header as received, kept for the bad-header diagnostics
+        var trail = new ClientFrameTrail();
 
         // Net:Protection:FrameReadTimeout: once the first byte of a header is in, the rest of the
         // header and the payload must follow within the budget (slowloris). One deadline per
@@ -653,16 +663,19 @@ public sealed partial class WorldSession : IPlayerSession
             deadline.Arm();
             byte[] payload;
             uint rawOpcode;
+            bool cipherEngaged;
             try
             {
                 await _stream.ReadExactlyAsync(header.AsMemory(1), deadline.Token).ConfigureAwait(false);
+                header.CopyTo(cipherHeader, 0);
+                (byte Index, byte Previous) position = _crypt.ReceivePosition;
+                cipherEngaged = _crypt.IsInitialized;
                 _crypt.DecryptHeader(header);
 
                 // The size is checked against the frame bound before anything is allocated for it.
                 if (!WorldFrameCodec.TryParseClientHeader(header, out ushort size, out rawOpcode))
                 {
-                    _logger.LogWarning("[{Endpoint}] bad packet header (size {Size}, opcode 0x{Opcode:X}); disconnecting",
-                        RemoteEndpoint, size, rawOpcode);
+                    LogBadHeader(size, rawOpcode, cipherHeader, header, position, trail);
                     HeuristicsBadHeader(size, rawOpcode);
                     return;
                 }
@@ -690,6 +703,12 @@ public sealed partial class WorldSession : IPlayerSession
 
             deadline.Disarm();
             WorldOpcode opcode = _protocol.Opcodes.FromWire(rawOpcode);
+            trail.Record(opcode, header.Length + payload.Length, Clock.Milliseconds(), cipherEngaged);
+            if (opcode == WorldOpcode.MsgMoveWorldportAck)
+            {
+                _worldportPending = false;
+            }
+
             ArcaneCore.Kernel.Ops.Metrics.ArcaneMeters.PacketIn(header.Length + payload.Length);
             ArcaneCore.World.Ops.Metrics.WorldPacketMetrics.Table.RecordIn(rawOpcode, header.Length + payload.Length);
             CapturePacket(true, opcode, payload);
@@ -698,6 +717,21 @@ public sealed partial class WorldSession : IPlayerSession
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// One WARN for a rejected client header: the classification, the cipher and plain bytes, the cipher position before the frame and
+    /// what the connection did before it (see <see cref="BadClientHeader"/>). Read loop only.
+    /// </summary>
+    private void LogBadHeader(ushort size, uint rawOpcode, ReadOnlySpan<byte> cipherHeader, ReadOnlySpan<byte> plainHeader, (byte Index, byte Previous) position, ClientFrameTrail trail)
+    {
+        BadClientHeaderKind kind = BadClientHeader.Classify(size, rawOpcode);
+        _logger.LogWarning(
+            "[{Endpoint}] bad packet header {Kind} ({Detail}): size {Size}, opcode 0x{Opcode:X8}, cipher {Cipher}, plain {Plain}, recv cipher index {Index} previous {Previous}, "
+            + "{Frames} frames / {Bytes} bytes since the cipher engaged, last good {LastGood}, state {State}, teleport pending {Teleport}; disconnecting",
+            RemoteEndpoint, BadClientHeader.Label(kind), BadClientHeader.Describe(kind, cipherHeader, rawOpcode), size, rawOpcode,
+            Convert.ToHexString(cipherHeader), Convert.ToHexString(plainHeader), position.Index, position.Previous,
+            trail.Frames, trail.Bytes, trail.LastGood(Clock.Milliseconds()), _state, _worldportPending);
     }
 
     /// <summary>
@@ -1036,7 +1070,7 @@ public sealed partial class WorldSession : IPlayerSession
         _logger.LogInformation("[{Endpoint}] '{Account}' authenticated", RemoteEndpoint, account);
 
         SendAuthResponse(AuthResponseCode.Ok);
-        Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(request.AddonBlock.Span));
+        Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(request.AddonBlock.Span, _logger, RemoteEndpoint));
         Services.GetService<Warden.WardenFeature>()?.OnAuthenticated(this, request.Build, stored.SessionKey); // vmangos WorldSession::InitWarden
         return true;
     }
