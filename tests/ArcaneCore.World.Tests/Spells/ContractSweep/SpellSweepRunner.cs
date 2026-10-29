@@ -388,8 +388,11 @@ internal sealed class SpellSweepRunner
         }
 
         bool permanent = baseMs == -1;
+        // vmangos SpellAuraHolder ctor (SpellAuras.cpp:6682-6688) raises a computed duration below 200 ms to 300 ms ("fixes how very
+        // short duration buffs are displayed in the combat log", the PvP trinket's immunity): such a holder matches its row.
+        bool floored = holder.MaxDuration == ShortAuraFloorMs && Math.Min(baseMs, maxMs) < ShortAuraThresholdMs;
         if (permanent ? !holder.IsPermanent && holder.MaxDuration != -1
-            : holder.MaxDuration < Math.Min(baseMs, maxMs) || holder.MaxDuration > Math.Max(baseMs, maxMs))
+            : !floored && (holder.MaxDuration < Math.Min(baseMs, maxMs) || holder.MaxDuration > Math.Max(baseMs, maxMs)))
         {
             Violate(SweepCategory.DurationMismatch, spell.Id, $"dbc={baseMs}..{maxMs} holder={holder.MaxDuration}");
         }
@@ -436,6 +439,17 @@ internal sealed class SpellSweepRunner
     /// </summary>
     private void CheckRestored(SweepScene scene, SpellInfo spell, Unit unit)
     {
+        // An aura of a spell this one triggers (Food's Well Fed, a growth stack) has a lifetime of its own and rightly outlives the
+        // swept aura. Take those off through the production removal first, so the picture is this spell's own restore, and theirs.
+        foreach (uint triggered in spell.Effects.Select(e => e.TriggerSpell).Where(id => id != 0 && id != spell.Id).Distinct())
+        {
+            if (_probe.Holders(_rig.System, unit, triggered).Count > 0)
+            {
+                _rig.System.RemoveAuras(unit, triggered);
+            }
+        }
+
+        _rig.World.RunTick(0);
         Snapshot reference = unit is Player p
             ? Snapshot.Of(scene.AddPlayer((Class)p.Class, (byte)p.Level, 20f, 20f))
             : Snapshot.Of(scene.AddCreature(hostile: true, (byte)unit.Level, 20f, 20f));
@@ -444,6 +458,9 @@ internal sealed class SpellSweepRunner
             Violate(SweepCategory.NotRestored, spell.Id, field);
         }
     }
+
+    /// <summary>vmangos SpellAuraHolder: a duration below <see cref="ShortAuraThresholdMs"/> becomes <see cref="ShortAuraFloorMs"/>.</summary>
+    private const int ShortAuraFloorMs = 300, ShortAuraThresholdMs = 200;
 
     private void Advance(uint ms, uint step)
     {
