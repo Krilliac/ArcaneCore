@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
@@ -537,7 +538,7 @@ internal sealed class SpellSweepRunner
                     return;
                 }
 
-                bool expected = (flags & action.FlagsFor(unit)) != 0;
+                bool expected = (flags & ExpectedFlags(spell, action, unit)) != 0;
                 IReadOnlyList<SpellAuraHolder> held = _probe.Holders(_rig.System, unit, spell.Id);
                 if (held.Any(h => !h.IsPermanent && h.MaxDuration >= 0 && h.MaxDuration < ShortestInterruptJudgedMs))
                 {
@@ -545,6 +546,7 @@ internal sealed class SpellSweepRunner
                     return;
                 }
 
+                Isolate(scene);
                 if (!action.Perform(scene, unit))
                 {
                     state = "not-run:action-failed";
@@ -566,6 +568,7 @@ internal sealed class SpellSweepRunner
                     return;
                 }
 
+                bool ranOut = held.Count > 0 && held.All(h => h.IsRemoved && (h.RemoveMode == AuraRemoveMode.Expire || IsUsedUpShield(h)));
                 state = "ran";
                 if (expected && present)
                 {
@@ -586,6 +589,47 @@ internal sealed class SpellSweepRunner
 
         Checked('c', string.Join(',', states));
     }
+
+    /// <summary>
+    /// The bits <paramref name="action"/> fires on <paramref name="unit"/> for this spell. A melee hit's DAMAGE break skips an aura whose spell
+    /// has procFlags (vmangos Unit::DealDamage, Unit.cpp:903-905, RemoveAurasWithInterruptFlags with checkProcFlags; the proc engine ends those),
+    /// which the production damage break mirrors under <see cref="AuraOptions.ProcEngineBreaksDamageAuras"/>.
+    /// </summary>
+    private uint ExpectedFlags(SpellInfo spell, SweepAction action, Unit unit)
+    {
+        uint fired = action.FlagsFor(unit);
+        if (action.Name == ProductionSweepActions.MeleeHitTakenName && spell.ProcFlags != ProcFlags.None && _rig.System.AuraOptions.ProcEngineBreaksDamageAuras)
+        {
+            fired &= ~AuraInterruptMask.Damage;
+        }
+
+        return fired;
+    }
+
+    /// <summary>
+    /// Only the action may act on the aura: every unit of the scene stops its white swings and its creatures stop reacting, so a melee the cast
+    /// started (Charge attacks its target) or a creature answering a hit does not deal damage the action did not (a damage-breaking stun, food
+    /// stood up by the answering hit, an absorb shield used up). The action's own drivers still swing (MapCombat.AttackerStateUpdate).
+    /// </summary>
+    private void Isolate(SweepScene scene)
+    {
+        foreach (Unit unit in scene.Units)
+        {
+            _rig.Map.Combat.AttackStop(unit);
+            if (unit is Creature creature)
+            {
+                creature.ReactState = CreatureReactState.Passive;
+            }
+        }
+    }
+
+    /// <summary>
+    /// An absorb aura that damage used up: vmangos CalculateDamageAbsorbAndResist (HandleSchoolAbsorb, Unit.cpp:2019-2035; HandleManaShield, Unit.cpp:2075-2079) removes
+    /// it once its amount reaches 0, whatever its AuraInterruptFlags say. Not an interrupt.
+    /// </summary>
+    private static bool IsUsedUpShield(SpellAuraHolder holder)
+        => holder.RemoveMode == AuraRemoveMode.ShieldBreak
+            || holder.Auras.Any(a => a is { Type: AuraType.SchoolAbsorb or AuraType.ManaShield, Amount: <= 0 });
 
     // ---- (d) cast and channel interrupt flags ---------------------------------------------------------------------------
 
@@ -619,6 +663,15 @@ internal sealed class SpellSweepRunner
                 return;
             }
 
+            // A channel with a cast time is still on its cast bar here: vmangos Spell::update (Spell.cpp:4027-4057) cancels a cast bar on
+            // movement only with SPELL_INTERRUPT_FLAG_MOVEMENT, whatever the channel flags; the channel's own movement check starts from where
+            // the channel begins (UpdateCastStartPosition, Spell.cpp:4106-4110).
+            bool moveExpected = expectMove;
+            if (channel && _rig.System.GetState(scene.Caster.Guid)?.CurrentCast is { State: SpellCastState.Preparing })
+            {
+                moveExpected = spell.InterruptFlags.HasFlag(SpellInterruptFlags.Movement);
+            }
+
             // The move handlers may reject a step (speed, collision): a rejected move moved nothing and proves nothing.
             (float x, float y) = (scene.Caster.X, scene.Caster.Y);
             if (!_actions.Move(scene, scene.Caster) || (scene.Caster.X == x && scene.Caster.Y == y))
@@ -631,11 +684,11 @@ internal sealed class SpellSweepRunner
             _rig.World.RunTick(50);
             bool cancelled = !IsCasting(scene.Caster);
             state = "ran";
-            if (expectMove && !cancelled)
+            if (moveExpected && !cancelled)
             {
                 Violate(SweepCategory.CastNotInterrupted, spell.Id, $"{(channel ? "channel" : "cast")} move");
             }
-            else if (!expectMove && cancelled && !channel)
+            else if (!moveExpected && cancelled && !channel)
             {
                 Violate(SweepCategory.CastInterruptedWithoutFlag, spell.Id, "cast move");
             }
