@@ -276,6 +276,29 @@ public sealed class PlayerbotHolidayCatalogTests
         Assert.Equal("festival", PlayerbotHolidayCatalog.Flavour(376, "Test").Key);
     }
 
+    [Fact]
+    public void TheEmoteOrder_IsKeptPerHoliday_AndTheDefaultCrowdIsCheerWaveDance()
+    {
+        static uint[] Ordered(uint holiday) => [.. PlayerbotHolidayCatalog.Flavour(holiday, "x").Emotes];
+
+        Assert.Equal([TextEmotes.Dance, TextEmotes.Cheer], Ordered(341));
+        Assert.Equal([TextEmotes.Cheer, TextEmotes.Applaud], Ordered(141));
+        Assert.Equal([TextEmotes.Bow, TextEmotes.Cheer], Ordered(327));
+        Assert.Equal([TextEmotes.Laugh, TextEmotes.Cheer], Ordered(324));
+        Assert.Equal([TextEmotes.Cheer, TextEmotes.Applaud, TextEmotes.Laugh], Ordered(374));
+        Assert.Equal([TextEmotes.Cheer, TextEmotes.Applaud, TextEmotes.Laugh], Ordered(375));
+        Assert.Equal([TextEmotes.Cheer, TextEmotes.Wave, TextEmotes.Dance], Ordered(301));
+        Assert.Equal([TextEmotes.Cheer, TextEmotes.Wave, TextEmotes.Dance], Ordered(9999));
+    }
+
+    [Fact]
+    public void AnUnknownHoliday_TrimsItsDescription_AndAFestivalWithoutOneIsCalledTheFestival()
+    {
+        Assert.Equal("Brewfest", PlayerbotHolidayCatalog.Flavour(9999, "  Brewfest ").Name);
+        Assert.Equal("the festival", PlayerbotHolidayCatalog.Flavour(9999, "").Name);
+        Assert.Equal("the festival", PlayerbotHolidayCatalog.Flavour(9999, "   ").Name);
+    }
+
     [Theory]
     [InlineData("midsummer")]
     [InlineData("winterveil")]
