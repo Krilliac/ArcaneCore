@@ -173,6 +173,10 @@ public static class TalentEffectCoverage
         new(ExternalReaderKind.DummySpell, SpellSystem.SpiritOfRedemptionTalent, 0, "Spells/SpellSystem.SpiritOfRedemption.cs",
             @"HasAura\(priest, SpiritOfRedemptionTalent\)"),
 
+        // Mind Exhaustion (23958): the Orb of Domination refuses a player who carries it (vmangos GOHello_go_orb_of_domination).
+        new(ExternalReaderKind.DummySpell, 23958, 0, "Instances/Scripts/BlackwingLair/BlackwingLairInstance.Events.cs",
+            @"HasAura\(player, MindExhaustion\)"),
+
         // Demonic Sacrifice: removed when a demon is summoned (SummonService) and kept through death (ResurrectEffects).
         new(ExternalReaderKind.ClassScript, (uint)DemonicSacrificeScript.ClassScriptMisc, 0, "Pets/SummonService.Demons.cs",
             @"a\.MiscValue == DemonicSacrificeScript\.ClassScriptMisc"),

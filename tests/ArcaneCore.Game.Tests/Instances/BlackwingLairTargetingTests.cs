@@ -102,6 +102,33 @@ public sealed class BlackwingLairTargetingTests
         Assert.False(bwl.Kit.System.HasAura(player, 19832));
     }
 
+    // Spell.dbc 5875 23958 Mind Exhaustion: effect 0 APPLY_AURA DUMMY target A 25 (TARGET_UNIT), duration index 3 (60 s).
+    private static SpellInfo MindExhaustion() => SpellTestKit.Spell(23958,
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.Unit, AuraType.Dummy))
+        with { RangeIndex = 6, Range = new SpellRange(0, 100), Duration = new SpellDuration(60000, 0, 60000) };
+
+    [Fact]
+    public void Orb_ExhaustsTheUsersMind_AndAnExhaustedPlayerCannotPossessAgain()
+    {
+        // vmangos GOHello_go_orb_of_domination: no possession while the user carries Mind Exhaustion; otherwise exhaust, then possess.
+        using var bwl = new Bwl([Possess(), MindExhaustion()], [12435, 12557], [177808]);
+        Creature razorgore = bwl.Spawn(12435, 20);
+        GameObject orb = bwl.Objects.Summon(177808, 1, 0, Z, 0)!;
+        Player player = bwl.AddPlayer(1, 0);
+        bwl.Raid.CastPlayerTargetSpell = (p, spell, target) =>
+            bwl.Kit.System.CastSpell(p, spell, SpellCastTargets.ForUnit(target), triggered: true);
+        bwl.Raid.SetData(0, EncounterState.InProgress);
+        bwl.Map.Combat.Kill(player, bwl.Spawn(12557, 5));
+
+        Assert.True(bwl.Raid.OnGameObjectUse(player, orb));
+        Assert.True(bwl.Kit.System.HasAura(player, 23958));
+        Assert.True(bwl.Kit.System.HasAura(razorgore, 19832));
+
+        bwl.Kit.System.RemoveAuras(razorgore, 19832); // the possession ends
+        Assert.True(bwl.Raid.OnGameObjectUse(player, orb));
+        Assert.False(bwl.Kit.System.HasAura(razorgore, 19832));
+    }
+
     [Fact]
     public void DestroyEgg_PossessedRazorgoreBreaksTheNearestEggInRange_WithoutAnObjectTarget()
     {

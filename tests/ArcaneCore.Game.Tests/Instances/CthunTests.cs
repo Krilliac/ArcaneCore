@@ -6,6 +6,10 @@ using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.TempleOfAhnQiraj;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets.Control;
+using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Tests.Pets;
+using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
@@ -132,5 +136,52 @@ public sealed class CthunTests
         Assert.Contains(arena.Casts.Casts, c => c.Spell == 26139);
         arena.Map.Combat.Kill(arena.Player, claw);
         Assert.DoesNotContain(arena.Creatures.Creatures, c => c.Entry == 15904);
+    }
+}
+
+/// <summary>
+/// Despawn Tent Port (26404) through a real <see cref="SpellSystem"/>: the dying Giant Claw Tentacle casts it and its DUMMY, aimed by the ClassicDB
+/// spell_script_target rows (15904, 15910), despawns the portal (mangos-classic boss_cthun.cpp DespawnTentPort). Spell.dbc 5875: DUMMY at
+/// TARGET_UNIT_SCRIPT_NEAR_CASTER (38), range index 12.
+/// </summary>
+public sealed class CthunDespawnTentPortTests
+{
+    [Fact]
+    public void GiantClawDeath_CastsDespawnTentPort_WhichDespawnsTheNearestPortalOnly()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        Map map = world.GetMap(531);
+        map.AddUpdater(new TempleOfAhnQirajInstance(map)); // the tentacle AIs come from the instance's script table
+        SpellInfo despawn = SpellTestKit.Spell(26404, SpellTestKit.Effect(SpellEffectName.Dummy, 1, SpellImplicitTarget.UnitScriptNearCaster))
+            with { RangeIndex = 12, Range = new SpellRange(0, 100) };
+        var spells = new SpellSystem(new SpellStore([despawn], [], [], [new(26404, 1, 15904, 0), new(26404, 1, 15910, 0)]), () => 10000)
+            { Units = new MapObjectResolver() };
+        SpellScriptDispatcher.Install(spells, new SpellScriptRegistry([new CthunDespawnTentPortScript()]));
+        var content = new CreatureContent([Template(15728), Template(15910), Template(15800)], [], [], [], []);
+        var creatures = new CreatureMapSystem(map, content, random: new Random(1),
+            aiServices: new CreatureAiServices { Spells = new SpellSystemCreatureCaster(spells), Hostility = new AlwaysHostile() });
+        map.AddUpdater(creatures);
+        Player player = TestWorld.CreatePlayer(1, -8570, 1986, new FakeSession(), 531);
+        player.Relocate(-8570, 1986, 100.4f, 0, 0);
+        world.AddPlayer(player);
+        world.RunTick(0);
+
+        // A portal the claw does not own, next to it: the spell's own target selection (nearest listed entry) picks it.
+        Creature claw = creatures.SpawnTemporary(content.FindTemplate(15728)!, -8560, 1986, 100.4f, 0);
+        Assert.IsType<CthunTentacleAI>(claw.AI);
+        Creature bystander = creatures.SpawnTemporary(content.FindTemplate(15800)!, -8561, 1986, 100.4f, 0);
+        Creature stray = creatures.SpawnTemporary(content.FindTemplate(15910)!, -8560.5f, 1986, 100.4f, 0);
+        // The claw's own portal (OnRespawn) goes first, so the AI's direct portal removal has nothing left to remove: only the spell can
+        // despawn the stray.
+        Creature own = Assert.Single(creatures.Creatures, c => c.Entry == 15910 && c != stray);
+        creatures.ForcedDespawn(own, 0);
+        world.RunTick(0);
+        Assert.Contains(stray, creatures.Creatures);
+        map.Combat.Kill(player, claw);
+        world.RunTick(0);
+
+        Assert.DoesNotContain(creatures.Creatures, c => c.Entry == 15910);
+        Assert.Contains(bystander, creatures.Creatures);
+        Assert.DoesNotContain(stray, creatures.Creatures);
     }
 }

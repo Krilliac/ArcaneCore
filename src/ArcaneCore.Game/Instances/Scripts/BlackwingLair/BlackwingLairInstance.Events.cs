@@ -121,9 +121,16 @@ public sealed partial class BlackwingLairInstance
             || GetSingleCreatureFromStorage(12557) is { IsAlive: true }
             || GetSingleCreatureFromStorage(12435) is not { IsAlive: true } razorgore)
             return true;
+        // vmangos instance_blackwing_lair.cpp GOHello_go_orb_of_domination: a player still under Mind Exhaustion (23958, one minute) cannot
+        // take Razorgore again; otherwise the use exhausts the player's mind first, then possesses him.
+        if (Instance.FindUpdater<CreatureMapSystem>()?.HasAura(player, MindExhaustion) == true) return true;
+        CastPlayerTargetSpell?.Invoke(player, MindExhaustion, player.Guid);
         CastPlayerTargetSpell?.Invoke(player, 19832, razorgore.Guid);
         return true;
     }
+
+    /// <summary>vmangos instance_blackwing_lair.cpp SPELL_MIND_EXHAUSTION: "Unable to use the Orb of Domination."</summary>
+    public const uint MindExhaustion = 23958;
 
     public override void OnAreaTrigger(Player player, uint triggerId)
     {
