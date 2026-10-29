@@ -41,6 +41,19 @@ internal enum PlayerbotCorpsePlace
     OtherMap,
 }
 
+/// <summary>What the enemy players at a ghost's body mean for its reclaim (<see cref="PlayerbotRecovery.JudgePvpCamp"/>).</summary>
+internal enum PlayerbotPvpCampVerdict
+{
+    /// <summary>Not outnumbered (or nobody there): reclaim as usual.</summary>
+    Clear,
+
+    /// <summary>Outnumbered: stay a ghost.</summary>
+    Wait,
+
+    /// <summary>Outnumbered for the whole bounded wait: take the spirit healer or guide.</summary>
+    GiveUp,
+}
+
 /// <summary>What a dead bot does next (<see cref="PlayerbotRecovery.Decide"/>).</summary>
 internal enum PlayerbotRecoveryStep
 {
@@ -65,6 +78,9 @@ internal enum PlayerbotRecoveryStep
 
     /// <summary>Stand within reclaim range while a hostile creature is near the ghost (where the reclaim revives it).</summary>
     WaitForHostiles,
+
+    /// <summary>Stand in reclaim range, still a ghost, while enemy players near the body outnumber the bot and its allies (<see cref="PlayerbotRecovery.JudgePvpCamp"/>).</summary>
+    WaitForEnemyPlayers,
 
     /// <summary>
     /// Walk to a spot inside the reclaim radius of the body that no hostile creature camps and the navigation mesh reaches, and
@@ -463,8 +479,9 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
     /// <paramref name="reviveSpotKnown"/>: a clear, reachable spot inside the reclaim radius exists while a hostile camps the ghost.
     /// </summary>
     internal static PlayerbotRecoveryStep Decide(bool ghost, PlayerbotCorpsePlace corpse, bool entranceKnown, bool atCorpse,
-        long reclaimWaitSeconds, bool hostileNearCorpse, bool stalled, bool fallback, bool reviveSpotKnown = false)
+        long reclaimWaitSeconds, bool hostileNearCorpse, bool stalled, bool fallback, bool reviveSpotKnown = false, bool enemyPlayersCampCorpse = false)
     {
+        _ = enemyPlayersCampCorpse; // PHASE-1 STUB: accepted, not yet acted on
         if (!ghost) return stalled ? PlayerbotRecoveryStep.Fault : PlayerbotRecoveryStep.Release;
         if (fallback || stalled) return PlayerbotRecoveryStep.SpiritHealer;
         switch (corpse)
@@ -484,6 +501,46 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
         if (!hostileNearCorpse) return PlayerbotRecoveryStep.Reclaim;
         return reviveSpotKnown ? PlayerbotRecoveryStep.WalkToReviveSpot : PlayerbotRecoveryStep.WaitForHostiles;
     }
+
+    /// <summary>
+    /// What the enemy players at a ghost's body mean for its reclaim, free of world state. Waits when enemies - (1 + allies) reaches
+    /// <paramref name="margin"/> (one more at a contested battleground objective), gives up once <paramref name="waitedMs"/> reaches <paramref name="maxWaitMs"/>.
+    /// </summary>
+    internal static PlayerbotPvpCampVerdict JudgePvpCamp(int enemies, int allies, int margin, bool contestedObjective, long waitedMs, long maxWaitMs)
+    {
+        _ = (enemies, allies, margin, contestedObjective, waitedMs, maxWaitMs);
+        return PlayerbotPvpCampVerdict.Clear; // PHASE-1 STUB
+    }
+
+    /// <summary>
+    /// Living enemy players (who could attack the bot once revived) and allied players within <paramref name="radius"/> yards (3D) of
+    /// <paramref name="body"/>, among the ghost's visible objects.
+    /// </summary>
+    internal static (int Enemies, int Allies) PlayersNearBody(Player bot, Vector3 body, float radius)
+    {
+        _ = (bot, body, radius);
+        return (0, 0); // PHASE-1 STUB
+    }
+
+    /// <summary>Set by the battleground AI: whether a contested objective lies at the body. Null: none.</summary>
+    internal Func<Player, Vector3, bool>? ContestedObjectiveNear { get; set; }
+
+    /// <summary>Enemy players counted at the body on the last check (inspection and tests).</summary>
+    internal int PvpCampEnemies { get; private set; }
+
+    /// <summary>Allied players counted at the body on the last check (inspection and tests).</summary>
+    internal int PvpCampAllies { get; private set; }
+
+    /// <summary>This death's wait for enemy players ran out (inspection and tests).</summary>
+    internal bool PvpCampGaveUp { get; private set; }
+
+    /// <summary>This battleground death runs back to the body instead of the spirit guide (inspection and tests).</summary>
+    internal bool BattlegroundBodyRun => _bgBodyRun;
+
+    private bool _bgBodyRun = false;
+
+    /// <summary>A battleground ghost takes the corpse run over the spirit guide only for a body this close (straight line) to it. ArcaneCore choice.</summary>
+    internal const float BattlegroundBodyRunMaxYards = 250f;
 
     /// <summary>The spirit-healer fallback, free of world state.</summary>
     /// <param name="bodyRunLeft">The body lies on the ghost's map and the corpse run was not resumed yet for this death.</param>

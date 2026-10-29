@@ -16404,6 +16404,54 @@ World.Playerbots.Population.ZoneLevelSlack = 4
 World.Playerbots.Population.ZoneLevelSlackMaxFloor = 12
 
 #
+#    World.Playerbots.Recovery.PvpCampMargin
+#        Description: The bot waits when enemies - (1 + allies) is at least this (0..20): 1 is two
+#                     enemies against a lone bot, 0 waits at even numbers too.
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Recovery.PvpCampMargin = 1
+
+#
+#    World.Playerbots.Recovery.PvpCampMaxWaitSeconds
+#        Description: Total seconds the bot waits per death before it takes the spirit healer or the
+#                     battleground spirit guide (5..600); in a battleground at most one spirit-guide
+#                     wave (30 s).
+#        Type: int
+#        Default: 90
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Recovery.PvpCampMaxWaitSeconds = 90
+
+#
+#    World.Playerbots.Recovery.PvpCampRadiusYards
+#        Description: Enemy and allied players are counted within this many yards (3D) of the body
+#                     (10..100).
+#        Type: float
+#        Default: 40
+#        Allowed: a number, '.' is the decimal point
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Recovery.PvpCampRadiusYards = 40
+
+#
+#    World.Playerbots.Recovery.PvpCampWait
+#        Description: Weigh enemy players at the body before reclaiming (on by default).
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Recovery.PvpCampWait = true
+
+#
 #    World.Playerbots.RestoreOnStartup
 #        Description: Log the saved managed bots back in when the world starts.
 #        Type: bool
