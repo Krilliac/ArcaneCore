@@ -40,6 +40,35 @@ internal interface ICreaturePathQuery
     /// path-job pool (not because the budget was spent): the answer is typically ready by the next update, so ask again soon.
     /// </summary>
     bool LastPlanQueued => false;
+
+    /// <summary>
+    /// Asks for a wander leg (random point pick and path) as one path-job. <see cref="WanderJobAnswer.NotQueued"/> means the caller
+    /// takes the synchronous route.
+    /// </summary>
+    WanderJobAnswer TryWanderByJob(Creature creature, RandomMovementGenerator generator, Vector3 center, float radius, out PlannedPath plan)
+    {
+        plan = default;
+        return WanderJobAnswer.NotQueued;
+    }
+}
+
+/// <summary>The answer of <see cref="ICreaturePathQuery.TryWanderByJob"/>.</summary>
+internal enum WanderJobAnswer
+{
+    /// <summary>No job for this leg: use the synchronous point pick and path.</summary>
+    NotQueued = 0,
+
+    /// <summary>The leg's job is queued or running: idle and ask again.</summary>
+    Waiting = 1,
+
+    /// <summary>The per-map in-flight cap is full: idle and ask again later.</summary>
+    Throttled = 2,
+
+    /// <summary>The job finished and its plan is in <c>plan</c>.</summary>
+    Applied = 3,
+
+    /// <summary>The mesh holds no point within reach: take the disc fallback.</summary>
+    NoMeshPoint = 4,
 }
 
 /// <summary>
