@@ -40,10 +40,9 @@ public static class CreatureAnomalies
     public const string RespawnDuplicateCode = "duplicate";
 
     /// <summary>
-    /// The evade reason of a scripted EventAI evade (ACTION_T_EVADE): a fight a script ends on purpose is no evade loop. A shared constant,
+    /// The evade reason of a scripted evade (EventAI ACTION_T_EVADE, SmartAI SMART_ACTION_EVADE): a fight a script ends on purpose is no evade loop. A shared constant,
     /// not a caller name, so the exemption cannot drift from what production passes (<c>GetType().Name + "." + caller</c> never read "Execute").
-    /// Only the EventAI action passes it: SmartAI's SMART_ACTION_EVADE (<c>SmartScript</c>) is deliberately not exempt, and no fight against a
-    /// player, or a unit a player owns or charms, is ever exempt.
+    /// Only those two script actions pass it, and no fight against a player, or a unit a player owns or charms, is ever exempt.
     /// </summary>
     public const string ScriptedEvadeReason = "EventAi.Evade";
 

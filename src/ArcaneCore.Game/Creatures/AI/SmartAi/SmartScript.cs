@@ -547,9 +547,9 @@ public sealed class SmartScript
                     foreach (Unit u in targets.OfType<Unit>()) u.SetUInt32(UpdateFields.UnitNpcEmotestate, r.ActionParam1);
                     break;
                 case SmartAction.Evade:
-                    // SMART_ACTION_EVADE: only `me` evades (the target is ignored). The reason is the calling member, so unlike EventAI's evade
-                    // (CreatureAnomalies.ScriptedEvadeReason) a SmartAI evade loop is reported as creature/evade-loop.
-                    if (system is not null && me is { IsAlive: true }) system.EnterEvadeMode(me);
+                    // SMART_ACTION_EVADE: only `me` evades (the target is ignored). Like EventAI's evade it passes
+                    // CreatureAnomalies.ScriptedEvadeReason: a fight a script ends on purpose is no creature/evade-loop.
+                    if (system is not null && me is { IsAlive: true }) system.EnterEvadeMode(me, CreatureAnomalies.ScriptedEvadeReason);
                     break;
                 case SmartAction.RemoveAurasFromSpell:
                     // SMART_ACTION_REMOVEAURASFROMSPELL: spell 0 strips every aura (creature targets only here), else the spell's auras go.
