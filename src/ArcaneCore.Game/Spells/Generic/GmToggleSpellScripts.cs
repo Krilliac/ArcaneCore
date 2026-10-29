@@ -97,3 +97,27 @@ public sealed class ClearAllCooldownsScript : ISpellScript
         }
     }
 }
+
+/// <summary>
+/// BM Only OFF 20114, BM OFF 24675, BM Only ON 20115 and BM ON 24676 (vmangos spell_special.cpp:193-232): Player::SetCheatBeastmaster, which sets or
+/// clears UNIT_FLAG_NOT_ATTACKABLE_1 on the caster (Player.cpp:2762-2773) so that creatures leave the player alone; the combat rules here already
+/// read that flag. Needs a GameMaster.
+/// </summary>
+[SpellScript(20114, 24675, 20115, 24676)]
+public sealed class BeastmasterSpellScript : ISpellScript
+{
+    public const string On = "BEASTMASTER mode is ON", Off = "BEASTMASTER mode is OFF";
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (GmToggleSpells.Allowed(context, AccountSecurity.GameMaster) is not { } player)
+        {
+            return;
+        }
+
+        bool on = context.Spell.Id is 20115 or 24676;
+        player.UnitFlags = on ? player.UnitFlags | UnitFlags.NotAttackable1 : player.UnitFlags & ~UnitFlags.NotAttackable1;
+        GmToggleSpells.Notify(player, on ? On : Off);
+    }
+}

@@ -234,4 +234,20 @@ public sealed class G1ScriptsTests
 
         Assert.Empty(kit.System.GetActiveCooldowns(gm));
     }
+
+    [Fact]
+    public void BeastmasterSpells_ToggleTheNotAttackableFlag_OnlyForAGameMaster()
+    {
+        using SpellTestKit kit = Kit(Script(20115), Script(24675));
+        (Player gm, _) = kit.AddPlayer(1, security: AccountSecurity.GameMaster);
+        (Player plain, _) = kit.AddPlayer(2, 2);
+
+        kit.System.CastSpell(plain, 20115, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.False(plain.UnitFlags.HasFlag(UnitFlags.NotAttackable1));
+
+        kit.System.CastSpell(gm, 20115, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.True(gm.UnitFlags.HasFlag(UnitFlags.NotAttackable1));
+        kit.System.CastSpell(gm, 24675, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.False(gm.UnitFlags.HasFlag(UnitFlags.NotAttackable1));
+    }
 }

@@ -1039,8 +1039,6 @@ a.unhandled-other	19869	dummy:Dummy
 a.unhandled-other	19976	no-consumer:Dummy
 a.unhandled-other	20001	dummy:Dummy
 a.unhandled-other	20041	dummy:Dummy
-a.unhandled-other	20114	script:ScriptEffect
-a.unhandled-other	20115	script:ScriptEffect
 a.unhandled-other	20173	dummy:Dummy
 a.unhandled-other	20183	no-consumer:Dummy
 a.unhandled-other	20211	script:ScriptEffect
@@ -1269,8 +1267,6 @@ a.unhandled-other	24596	no-consumer:Dummy
 a.unhandled-other	24601	dummy:Dummy
 a.unhandled-other	24660	script:ScriptEffect
 a.unhandled-other	24663	script:ScriptEffect
-a.unhandled-other	24675	script:ScriptEffect
-a.unhandled-other	24676	script:ScriptEffect
 a.unhandled-other	24702	no-consumer:Dummy
 a.unhandled-other	24734	no-consumer:Dummy
 a.unhandled-other	24744	no-consumer:Dummy
