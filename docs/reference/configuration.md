@@ -596,19 +596,20 @@ How to read the tables:
 |---|---|---|---|---|
 | `Logging:ArcaneCore:Console:Mode` | `ConsoleMode` | `Color` | - | `Color` (default), `Plain` or `Off`. Live at reload; colour is still disabled when stdout is not a terminal or `NO_COLOR` is set. Values: `Color`, `Plain`, `Off`. |
 | `Logging:ArcaneCore:Console:QueueCapacity` | `int` | `4096` | - | Lines the console writer thread may hold before new lines are dropped (and the drop counted and reported). Restart-only. |
-| `Logging:ArcaneCore:File:Enabled` | `bool` | `false` | - | `true` writes the plain text log to `Path`. Default off. |
-| `Logging:ArcaneCore:File:Path` | `string` | `"logs/arcanecore.log"` | - | The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`. |
+| `Logging:ArcaneCore:File:Enabled` | `bool` | `false` | - | `true` writes the one log file, in the chosen `Format`, to `Path`. Default off. |
+| `Logging:ArcaneCore:File:Path` | `string` | `null` | - | The active log file; relative paths resolve against the working directory. Rolled segments sit next to it as `name-yyyyMMdd-NNN.ext`. Not set means `logs/arcanecore.jsonl` for a Json file and `logs/arcanecore.log` for a Text file. |
 | `Logging:ArcaneCore:File:QueueCapacity` | `int` | `8192` | - | Lines the file writer thread may hold before new lines are dropped (counted and reported in the file itself). The world thread never waits on the disk. |
 | `Logging:ArcaneCore:File:Retain` | `int` | `14` | - | Rolled segments kept next to the active file; the oldest beyond this count are deleted after each roll. 0 keeps all. |
 | `Logging:ArcaneCore:File:RollDaily` | `bool` | `true` | - | `true` rolls at the first line of a new day (in the `Timestamps` clock). |
 | `Logging:ArcaneCore:File:RollSizeMb` | `int` | `64` | - | Roll when the active file would exceed this many MiB; 0 never rolls by size. |
+| `Logging:ArcaneCore:Format` | `LogFileFormat?` | `null` | - | The content format of the one log file: `Json` (one JSON object per line, structured properties kept) or `Text` (the plain console line format). Not set means the legacy `File`/`Json` switches decide; with nothing configured the default is `Json`: JSON keeps the structured state properties for ingestion, and the console already gives a text view. The file is configured under `File`. Restart-only. Values: `Text`, `Json`. |
 | `Logging:ArcaneCore:IncludeScopes` | `bool` | `true` | - | `true` appends the active logger scopes to each line (`=&gt; scope`). Live at reload. |
-| `Logging:ArcaneCore:Json:Enabled` | `bool` | `false` | - | `true` writes one JSON object per log event to `Path`. Default off. |
-| `Logging:ArcaneCore:Json:Path` | `string` | `"logs/arcanecore.jsonl"` | - | The active JSON-lines file; relative paths resolve against the working directory. Rolls like the text file. |
-| `Logging:ArcaneCore:Json:QueueCapacity` | `int` | `8192` | - | Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line). |
-| `Logging:ArcaneCore:Json:Retain` | `int` | `14` | - | Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all. |
-| `Logging:ArcaneCore:Json:RollDaily` | `bool` | `true` | - | `true` rolls at the first line of a new day (in the `Timestamps` clock). |
-| `Logging:ArcaneCore:Json:RollSizeMb` | `int` | `64` | - | Roll when the active file would exceed this many MiB; 0 never rolls by size. |
+| `Logging:ArcaneCore:Json:Enabled` | `bool` | `false` | - | Deprecated: use `File:Enabled` with `Format=Json`. `true` writes one JSON object per log event to `Path`. Default off. |
+| `Logging:ArcaneCore:Json:Path` | `string` | `null` | - | Deprecated: use `File:Path`. The active JSON-lines file; relative paths resolve against the working directory. Not set means `logs/arcanecore.jsonl`. |
+| `Logging:ArcaneCore:Json:QueueCapacity` | `int` | `8192` | - | Deprecated: use `File:QueueCapacity`. Lines the JSON writer thread may hold before new lines are dropped (counted and reported as a JSON line). |
+| `Logging:ArcaneCore:Json:Retain` | `int` | `14` | - | Deprecated: use `File:Retain`. Rolled segments kept; the oldest beyond this count are deleted after each roll. 0 keeps all. |
+| `Logging:ArcaneCore:Json:RollDaily` | `bool` | `true` | - | Deprecated: use `File:RollDaily`. `true` rolls at the first line of a new day (in the `Timestamps` clock). |
+| `Logging:ArcaneCore:Json:RollSizeMb` | `int` | `64` | - | Deprecated: use `File:RollSizeMb`. Roll when the active file would exceed this many MiB; 0 never rolls by size. |
 | `Logging:ArcaneCore:Timestamps` | `TimestampKind` | `Utc` | - | The clock timestamps are taken from: `Utc` (default) or `Local`. Live at reload. Values: `Utc`, `Local`. |
 
 ## `Loot`
@@ -687,7 +688,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `Ops:Diagnostics:Dumps:Directory` | `string` | `""` | - | The directory the dump files are written to. Empty (default) means `dumps` beside the text log file (`Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump. |
+| `Ops:Diagnostics:Dumps:Directory` | `string` | `""` | - | The directory the dump files are written to. Empty (default) means `dumps` beside the log file (the resolved `Logging:ArcaneCore:File:Path`, so `logs/dumps` by default). It is created on the first dump. |
 | `Ops:Diagnostics:Dumps:Enabled` | `bool` | `false` | - | `true` lets an administrator write a dump of the running world with `.debug dump`. Default false, because a dump holds everything in memory: session keys, password material in flight, character data. Keep the dump directory private and delete the files when the analysis is done. |
 | `Ops:Diagnostics:Dumps:MinIntervalSeconds` | `int` | `600` | - | The least seconds between two dumps, so a repeated command cannot suspend the process again and again or fill the disk. 0 disables the limit. Default 600. |
 
@@ -1570,13 +1571,21 @@ How to read the tables:
 | `World:Playerbots:Economy:BuyBelowAskPercent` | `int` | `50` | live | The most a bot pays per unit at the house (reagents and gear) as a percent of the bot floor of that item, so no bot ever pays what a bot asks. |
 | `World:Playerbots:Economy:BuyReagents` | `bool` | `true` | live | Buy the reagents of the recipes the bot wants to craft that it carries fewer of than one craft uses at the faction auction house during a visit (on by default): at most 2 auctions a visit, within the visit budget. Guards: a reagent a vendor stocks is never bought; an auction holds at most twice the shortfall; a buyout per unit is at most `BuyBelowAskPercent` percent of the bot floor of the item (an item with no vendor sell price is never bought). Off: no reagent is searched or bought. Reagents a wanted recipe uses are never listed either way. |
 | `World:Playerbots:Economy:BuyUpgradeBudgetFraction` | `float` | `0.25` | live | The share of the money a bot holds at the start of a visit that the visit may spend in all (0..1): listing deposits and the buyout of an upgrade count against it. 0 spends nothing. |
+| `World:Playerbots:Economy:ConsumableKeepCount` | `int` | `20` | live | Per consumable entry, the count (1..200) a bot always keeps before a stack of it is surplus. |
 | `World:Playerbots:Economy:Enabled` | `bool` | `true` | live | Let bots list, buy and collect at the auction house (on by default). Off: no visit starts; a running one is dropped. |
+| `World:Playerbots:Economy:HouseBuyoutsPerHour` | `int` | `200` | live | The most auctions all bots together buy out at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot buy there. A soft limit: a buyout counts when the house confirms it, so bots with buyouts in flight together can overshoot it by their number. |
+| `World:Playerbots:Economy:HouseListingsPerHour` | `int` | `400` | live | The most auctions all bots together list at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot list there. A soft limit: a listing counts when the house confirms it, so bots with listings in flight together can overshoot it by their number. |
 | `World:Playerbots:Economy:ListChancePerVisit` | `int` | `50` | live | The chance in percent (0..100) that a visit lists anything: one roll per visit, then the bot lists up to its free listing slots. 0 lists nothing (a bot may still buy and collect); 100 always lists. |
 | `World:Playerbots:Economy:ListMarkupPercentCommon` | `int` | `500` | live | The bot floor of a common (white) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut). |
 | `World:Playerbots:Economy:ListMarkupPercentEpic` | `int` | `10000` | live | The bot floor of an epic or better item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut). |
 | `World:Playerbots:Economy:ListMarkupPercentRare` | `int` | `800` | live | The bot floor of a rare (blue) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut). |
 | `World:Playerbots:Economy:ListMarkupPercentUncommon` | `int` | `300` | live | The bot floor of an uncommon (green) item as a percent of its vendor sell price (never below the reference price or the vendor floor after the cut). |
+| `World:Playerbots:Economy:ListSurplusConsumables` | `bool` | `true` | live | List stacks of consumables (food, drink, potions, bandages, elixirs, scrolls) beyond the keep count (on by default). |
+| `World:Playerbots:Economy:MaxBuyoutsPerHour` | `int` | `6` | live | The most auctions one bot buys out, reagents and upgrades together, in any 60 minutes of world time (0..100); 0 buys nothing. |
 | `World:Playerbots:Economy:MaxListingsPerBot` | `int` | `5` | live | The most auctions one bot has listed at once (0..50), counted from the auction house's own owner list; 0 lists nothing. |
+| `World:Playerbots:Economy:MaxListingsPerHour` | `int` | `10` | live | The most auctions one bot lists in any 60 minutes of world time (0..100); 0 lists nothing. |
+| `World:Playerbots:Economy:MoneyGoal` | `bool` | `true` | live | A bot short of money lists every visit and gets 3 more listing slots (on by default). Short means its budget reserves more than it has, or its money is below MoneyGoalCopperPerLevel times its level. It only raises listing, and never when ListChancePerVisit or MaxListingsPerBot is 0. |
+| `World:Playerbots:Economy:MoneyGoalCopperPerLevel` | `int` | `500` | live | The money floor per character level of the money goal, in copper (0..100000); 0: only what the budget reserves counts. |
 | `World:Playerbots:Economy:VisitIntervalMinutes` | `int` | `30` | live | Minutes between two visits of one bot (1..1440). Bots start at a random point of the first interval. |
 | `World:Playerbots:Enabled` | `bool` | `false` | - | Run server-managed playerbots (off by default). |
 | `World:Playerbots:FaultBackoffSeconds` | `int` | `30` | - | Seconds a bot waits in quarantine after an action fault before it is logged in again (1..3600); each further fault in `FaultWindowSeconds` doubles the wait, up to an hour. The bot stays desired meanwhile. |

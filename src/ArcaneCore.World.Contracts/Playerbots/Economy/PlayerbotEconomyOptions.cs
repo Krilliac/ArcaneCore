@@ -81,6 +81,38 @@ public sealed class PlayerbotEconomyOptions
         _ => ListMarkupPercentEpic,
     };
 
+    /// <summary>
+    /// A bot short of money lists every visit and gets 3 more listing slots (on by default). Short means its budget reserves more than it
+    /// has, or its money is below MoneyGoalCopperPerLevel times its level. It only raises listing, and never when
+    /// ListChancePerVisit or MaxListingsPerBot is 0.
+    /// </summary>
+    public bool MoneyGoal { get; set; } = true;
+
+    /// <summary>The money floor per character level of the money goal, in copper (0..100000); 0: only what the budget reserves counts.</summary>
+    public int MoneyGoalCopperPerLevel { get; set; } = 500;
+
+    /// <summary>The most auctions one bot buys out, reagents and upgrades together, in any 60 minutes of world time (0..100); 0 buys nothing.</summary>
+    public int MaxBuyoutsPerHour { get; set; } = 6;
+
+    /// <summary>The most auctions one bot lists in any 60 minutes of world time (0..100); 0 lists nothing.</summary>
+    public int MaxListingsPerHour { get; set; } = 10;
+
+    /// <summary>
+    /// The most auctions all bots together buy out at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot buy there. A soft limit: a buyout counts when the house confirms it, so bots with buyouts in flight together can overshoot it by their number.
+    /// </summary>
+    public int HouseBuyoutsPerHour { get; set; } = 200;
+
+    /// <summary>
+    /// The most auctions all bots together list at one auction house in any 60 minutes of world time (0..100000); 0 lets no bot list there. A soft limit: a listing counts when the house confirms it, so bots with listings in flight together can overshoot it by their number.
+    /// </summary>
+    public int HouseListingsPerHour { get; set; } = 400;
+
+    /// <summary>List stacks of consumables (food, drink, potions, bandages, elixirs, scrolls) beyond the keep count (on by default).</summary>
+    public bool ListSurplusConsumables { get; set; } = true;
+
+    /// <summary>Per consumable entry, the count (1..200) a bot always keeps before a stack of it is surplus.</summary>
+    public int ConsumableKeepCount { get; set; } = 20;
+
     public void Validate()
     {
         const string section = PlayerbotOptions.SectionName + ":Economy";
@@ -90,6 +122,12 @@ public sealed class PlayerbotEconomyOptions
             throw new InvalidOperationException($"{section}: BuyUpgradeBudgetFraction must be 0..1.");
         if (VisitIntervalMinutes is < 1 or > MaxVisitIntervalMinutes)
             throw new InvalidOperationException($"{section}: VisitIntervalMinutes must be 1..{MaxVisitIntervalMinutes}.");
+        if (MoneyGoalCopperPerLevel is < 0 or > 100000) throw new InvalidOperationException($"{section}: MoneyGoalCopperPerLevel must be 0..100000.");
+        if (MaxBuyoutsPerHour is < 0 or > 100) throw new InvalidOperationException($"{section}: MaxBuyoutsPerHour must be 0..100.");
+        if (MaxListingsPerHour is < 0 or > 100) throw new InvalidOperationException($"{section}: MaxListingsPerHour must be 0..100.");
+        if (HouseBuyoutsPerHour is < 0 or > 100000) throw new InvalidOperationException($"{section}: HouseBuyoutsPerHour must be 0..100000.");
+        if (HouseListingsPerHour is < 0 or > 100000) throw new InvalidOperationException($"{section}: HouseListingsPerHour must be 0..100000.");
+        if (ConsumableKeepCount is < 1 or > 200) throw new InvalidOperationException($"{section}: ConsumableKeepCount must be 1..200.");
         foreach ((string name, int value) in new[]
         {
             (nameof(ListMarkupPercentCommon), ListMarkupPercentCommon), (nameof(ListMarkupPercentUncommon), ListMarkupPercentUncommon),
