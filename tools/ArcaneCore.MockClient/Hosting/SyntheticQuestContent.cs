@@ -65,9 +65,11 @@ public static class SyntheticQuestContent
             ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
             var baseline = new HashSet<string>(StringComparer.Ordinal)
             {
-                // The tables WorldDbInitializer seeds on every world database, the Warden scans (world 49) and the shipped tuning rows
-                // (auction bot values and loot, bot ship routes, lift regions, the tram network; world 62) included.
+                // The tables WorldDbInitializer seeds on every world database, the Warden scans (world 49), the bot holiday flavours
+                // (world 62) and the shipped tuning rows (auction bot values and loot, bot ship routes, lift regions, the tram network;
+                // world 63) included.
                 "player_create_info", "race_info", "class_info", ArcaneCore.Data.World.Warden.WardenDataModule.Table,
+                ArcaneCore.Data.World.WorldState.HolidayFlavourDataModule.Table,
                 ArcaneCore.Data.World.Tuning.TuningDataModule.ValueTable, ArcaneCore.Data.World.Tuning.TuningDataModule.LootTable,
                 ArcaneCore.Data.World.Tuning.TuningDataModule.ShipTable, ArcaneCore.Data.World.Tuning.TuningDataModule.ElevatorTable,
                 ArcaneCore.Data.World.Tuning.TuningDataModule.TramTable,

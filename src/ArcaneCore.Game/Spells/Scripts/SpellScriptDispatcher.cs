@@ -66,7 +66,7 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
         registry.ScriptsChanged += () => dispatcher.ChainExecuteEffects(system);
 
         SpellEffectHandler? dispel = system.GetEffectHandler(SpellEffectName.Dispel);
-        system.RegisterEffect(SpellEffectName.Dispel, context =>
+        SpellEffectHandler dispelWrapper = context =>
         {
             ISpellScript? script = registry.Find(context.Spell.Id);
             if (script is null)
@@ -82,7 +82,9 @@ public sealed class SpellScriptDispatcher : ISpellCastCheck, ISpellCastObserver
             {
                 script.OnSuccessfulDispel(context, removed);
             }
-        });
+        };
+        system.RegisterEffect(SpellEffectName.Dispel, dispelWrapper);
+        system.GuardScriptChain(dispelWrapper);
         return dispatcher;
     }
 

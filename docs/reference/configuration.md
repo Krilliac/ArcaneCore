@@ -26,6 +26,7 @@ How to read the tables:
 - [`ClientData`](#clientdata)
 - [`Cluster:Fencing`](#clusterfencing)
 - [`Cluster:NodeBridge`](#clusternodebridge)
+- [`Cluster:Supervisor`](#clustersupervisor)
 - [`Cluster:Worker`](#clusterworker)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
@@ -312,6 +313,17 @@ How to read the tables:
 |---|---|---|---|---|
 | `Cluster:NodeBridge:Enabled` | `bool` | `false` | - | `true` starts the node bridge: the World connects to each endpoint in `Endpoints`, logs node connection events and heartbeats, and syncs live worker placement. `false`, the default, does nothing at all: no sockets, no log lines, no background task. Read once when the daemon starts. |
 | `Cluster:NodeBridge:Endpoints` | `string` | `"worker:EK\|Worker\|127.0.0.1:19081\|0;worker:Kalimdor\|Worker\|127.0.0.1:19082\|1;worker:instances\|Worker\|127.0.0.1:19083\|33,34,36,43,47,48,70,90,109,129,189,209,229,230,249,289,309,329,349,389,409,429,469,489,509,529,531,533;gateway\|Gateway\|127.0.0.1:19084\|-;social\|Social\|127.0.0.1:19085\|-;coordinator\|Coordinator\|127.0.0.1:19086\|-;supervisor\|Supervisor\|127.0.0.1:19087\|-"` | - | The nodes the bridge monitors, as `;`-separated entries of `nodeId\|role\|host:port\|maps`, where `maps` is a comma list of map ids or `-` for a realm-wide node. The default is the seven local nodes: worker:EK 19081, worker:Kalimdor 19082, worker:instances 19083, gateway 19084, social 19085, coordinator 19086, supervisor 19087. A blank value means the seven default nodes. The ARCANECORE_CLUSTER_ENDPOINTS environment variable, when set, replaces it but does not turn the bridge on (a warning is logged when `Enabled` is false). Only read when `Enabled` is true. |
+
+## `Cluster:Supervisor`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Supervisor:Enabled` | `bool` | `false` | - | Runs this World process as the host supervisor only (default: false): it launches and watches the configured `Processes` and starts no world, database, listener or feature. Off, a World start is unchanged. |
+| `Cluster:Supervisor:MaxConcurrentProcesses` | `int` | `9` | - | Maximum number of concurrent supervised child processes allowed on this host (default: 9). |
+| `Cluster:Supervisor:MaxTotalAllocatedMemoryMb` | `long?` | `null` | - | Optional cap on the sum of `SupervisedProcessConfig.RequiredMemoryMb` across all active supervised processes. |
+| `Cluster:Supervisor:MinClusterProcesses` | `int` | `3` | - | Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3). A start that can admit fewer launches nothing and refuses with a message naming this key. |
+| `Cluster:Supervisor:MinFreeMemoryReserveMb` | `long` | `1024` | - | Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB). |
+| `Cluster:Supervisor:Processes` | `Dictionary<string, SupervisedProcessConfig>` | `{}` | - | Supervised process definitions, started in ascending `SupervisedProcessConfig.StartOrder` (ties by key), keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`). |
 
 ## `Cluster:Worker`
 
@@ -1428,11 +1440,12 @@ How to read the tables:
 | `World:Playerbots:AllowedMaps` | `uint[]` | `[0, 1]` | - | The maps bots may act and travel on (non-empty, no duplicates; a configured list replaces the default continents 0 and 1). |
 | `World:Playerbots:AsyncNavigationEnabled` | `bool` | `false` | restart | Run far playerbot navigation queries on the bounded private worker (off by default during rollout). Restart required: the worker is created when the feature attaches. |
 | `World:Playerbots:Battlegrounds:Enabled` | `bool` | `true` | live | Let free bots queue for battlegrounds (on by default). Off: no bot starts a queue; bots already walking to a battlemaster, queued or in a match finish. |
-| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `int` | `20` | live | The most bots in one battleground (0..80; 0 queues none). Bots waiting for one battleground type and level bracket never exceed it, a team never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many. |
+| `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `int` | `20` | live | The most bots in one battleground (0..80; 0 queues none), unless `RaiseCapToFillTemplate` raises it for a type whose template minimum needs more. Bots waiting for one battleground type and level bracket do not exceed the (effective) cap, a team never gets more than half of it (rounded up) and a bot declines an invitation into a match that already holds this many. |
 | `World:Playerbots:Battlegrounds:MaxQueueWaitMinutes` | `int` | `30` | live | Minutes a bot waits in a queue before it leaves it (1..240); it then does not queue for that type again for 10 minutes. |
 | `World:Playerbots:Battlegrounds:MaxTravelYards` | `int` | `1500` | live | The farthest, in yards, a battlemaster may stand from a bot for the bot to walk to it (100..20000): a straight line on the bot's own map, to a battlemaster whose faction is not hostile to the bot. |
 | `World:Playerbots:Battlegrounds:PreferFillingRealPlayerQueues` | `bool` | `true` | live | Let bots fill the queues real players wait in, so their games start (on by default): a bracket with a real player waiting gets bots at once (no chance roll) up to the minimum both teams need, and they pick the type and bracket the player waits for. |
 | `World:Playerbots:Battlegrounds:QueueChancePerMinute` | `float` | `0.05` | live | The chance, per minute, that a free bot of a fitting level starts to queue (0..1; 0 never, 1 at the next scan). The chance of one scan is `1 - (1 - p)^(scanSeconds / 60)`, so the rate does not depend on how often the coordinator looks. |
+| `World:Playerbots:Battlegrounds:RaiseCapToFillTemplate` | `bool` | `true` | live | Raise the cap of any battleground type whose 2 x `MinPlayersPerTeam` exceeds `MaxBotsPerBattleground` to 2 x `MaxPlayersPerTeam` (on by default), so bots alone can start it, fill it to the template's maximum and backfill a leaver's slot. At the default cap of 20 that is Alterac Valley (20 per team minimum, 40 maximum: 80 bots); Warsong Gulch and Arathi Basin only when the cap is set below twice their minimum (10 and 16 in the z2815 rows). One warning names each raised type and its new cap, once the coordinator scans (once bots are online), and again after a reload that changes the cap, this option or the templates. Off: the configured cap is kept for every type, with no raise and no refusal, as before this option (a type whose minimum the cap does not cover then does not start from bots alone, but its bots still help a real player's queue). The retail template values are never changed. |
 | `World:Playerbots:Budget:ClassLevelsAhead` | `int` | `2` | live | How many levels ahead of its own the bot saves for class spells (0..10): the spells its class trainer teaches at levels up to this many above the bot's, plus the ones it can learn now, are reserved at the trainer's prices, so lower-priority spending (riding, the auction house) cannot eat the money they cost. 0 reserves only what can be learned now. |
 | `World:Playerbots:Budget:DiscretionaryFloorFraction` | `float` | `0.1` | live | The share of its current money (0..1) a bot may always spend on discretionary purchases (auction upgrades), even when the reserves leave nothing over: a reserve the bot may never reach (a tier far above its means) does not stop its optional buying for good. 0 lets the reserves take everything. Auction listing deposits are never limited by the reserves. |
 | `World:Playerbots:Budget:Enabled` | `bool` | `true` | live | Let bots save for what they will need (on by default). Off: nothing is reserved and every spend site may spend all the bot's money. |

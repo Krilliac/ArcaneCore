@@ -39,7 +39,7 @@ public sealed class TuningFeature(IServiceScopeFactory scopes, ILogger<TuningFea
         TuningContent content = store.LoadAsync().GetAwaiter().GetResult();
         foreach (string missing in MissingTables(content))
         {
-            logger.LogWarning("Tuning: table {Table} holds no rows; its shipped behaviour is off (apply sql/content/world/<provider>/0002_tuning_tables.sql or restart to seed it)", missing);
+            logger.LogWarning("Tuning: table {Table} holds no rows; its shipped behaviour is off (apply sql/content/world/<provider>/0003_tuning_tables.sql or restart to seed it)", missing);
         }
 
         TuningCatalog catalog = TuningCatalog.Build(content);

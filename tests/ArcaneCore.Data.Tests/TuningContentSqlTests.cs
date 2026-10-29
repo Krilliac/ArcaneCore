@@ -11,13 +11,13 @@ using Xunit;
 namespace ArcaneCore.Data.Tests;
 
 /// <summary>
-/// <c>sql/content/world/&lt;provider&gt;/0002_tuning_tables.sql</c> carries the rows of <see cref="TuningDefaults"/> for a manual install. The
+/// <c>sql/content/world/&lt;provider&gt;/0003_tuning_tables.sql</c> carries the rows of <see cref="TuningDefaults"/> for a manual install. The
 /// files are generated from the defaults (<c>ARCANECORE_UPDATE_SQL=1</c> rewrites them, as for <c>sql/updates</c>), kept equal by a golden
 /// comparison, and the SQLite file is applied twice to a clean world database: the rows are the defaults and nothing is duplicated.
 /// </summary>
 public sealed class TuningContentSqlTests : IAsyncLifetime
 {
-    private const string FileName = "0002_tuning_tables.sql";
+    private const string FileName = "0003_tuning_tables.sql";
 
     private readonly TestDatabases _databases = new();
 

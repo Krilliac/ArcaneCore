@@ -34,6 +34,8 @@ It prints fields using the generated build-5875 WoWDBDefs layout; `File` can be 
 
 World schema 57 adds the six creature magic resistance columns to `creature_template`, all 0 after the upgrade. Run the content importer's `refresh` ([content import](../areas/content-import.md)) with a ClassicDB, cmangos or vmangos dump once after step 6 to fill them: the report line `creature_template (magic resistances)` counts the templates changed. A dump without the resistance columns leaves them as they are.
 
+World schema 62 adds `holiday_flavour` (how bots tell each festival). The step creates the table empty; the next world daemon start fills an empty table with the shipped rows (the world database initializer), so there is nothing to apply by hand. A table that already has rows is left alone, and `sql/content/world/<provider>/0002_holiday_flavour.sql` is only for an operator who wants to reset or edit the shipped rows.
+
 Configuration is the `Database` section the daemons use (`appsettings.json` next to the tool, an extra file with
 `--config <file>`, or environment variables such as `Database__Characters__ConnectionString`); keep passwords in the
 environment, not on the command line. Every line the tool prints is scrubbed of passwords.

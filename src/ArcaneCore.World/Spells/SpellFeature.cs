@@ -13,6 +13,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Reflection;
 using ArcaneCore.Kernel.WorldData.Items;
 using ArcaneCore.Kernel.Skills;
 using ArcaneCore.World.Characters;
@@ -52,11 +53,15 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
     private readonly object _stagedLock = new();
     private readonly ConditionalWeakTable<Player, SpellStateSnapshot> _staged = [];
     private readonly HashSet<MapCombat> _combatSubscriptions = new(ReferenceEqualityComparer.Instance);
+    private readonly CodeAssemblies? _moduleAssemblies;
     private WorldRuntime? _world;
     private uint _lastUpdateMs;
 
-    public SpellFeature(IServiceScopeFactory scopes, ILogger<SpellFeature> logger, TimeProvider? timeProvider = null, IItemEnchantmentCatalog? itemEnchantments = null)
+    /// <param name="moduleAssemblies">The code set whose <see cref="ISpellHandlerModule"/> types are applied at attach (default <see cref="WorldCodeAssemblies.Startup"/>: World and the built-in packs, so a pack's handler modules are found like Game's); tests pass their own.</param>
+    public SpellFeature(IServiceScopeFactory scopes, ILogger<SpellFeature> logger, TimeProvider? timeProvider = null, IItemEnchantmentCatalog? itemEnchantments = null,
+        CodeAssemblies? moduleAssemblies = null)
     {
+        _moduleAssemblies = moduleAssemblies;
         _scopes = scopes ?? throw new ArgumentNullException(nameof(scopes));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _clock = timeProvider ?? TimeProvider.System;
@@ -151,6 +156,10 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             });
             scope.ServiceProvider.GetService<ArcaneCore.World.Npc.QuestNpcFeature>()?.InstallSpellEffects(System);
             InstallUnstuck(scope.ServiceProvider.GetService<ArcaneCore.World.Teleport.TeleportFeature>());
+
+            // The Game assembly's handler modules were applied by the SpellSystem constructor; the pack-aware discovery (SpellHandlerModules.Discover(CodeAssemblies))
+            // adds those of World and the built-in packs, after every handler this feature installs so a module that claims one fails startup instead of replacing it.
+            System.RegisterModules(_moduleAssemblies ?? WorldCodeAssemblies.Startup);
 
             // The enchantments are the enchanting feature's SpellItemEnchantment.dbc catalog (Enchanting:SpellItemEnchantmentDbcPath; that feature
             // attaches before this one); item combat procs and trade enchant planning read them through this catalog, layered with the SQL

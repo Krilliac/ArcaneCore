@@ -1,7 +1,7 @@
 namespace ArcaneCore.Kernel.Tuning;
 
 /// <summary>
-/// The tuning rows the server ships (the same rows as <c>sql/content/world/&lt;provider&gt;/0002_tuning_tables.sql</c>, which a test keeps
+/// The tuning rows the server ships (the same rows as <c>sql/content/world/&lt;provider&gt;/0003_tuning_tables.sql</c>, which a test keeps
 /// equal). They are the seed of an empty tuning table at world start and the catalog a process uses before any database was read
 /// (tools, unit tests); once the tables hold rows, the rows are the source.
 /// <para>

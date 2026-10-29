@@ -79,7 +79,7 @@ public sealed class PlayerbotTramNetworkRow
 }
 
 /// <summary>
-/// World schema 62: the plain tuning tables of rule engine phase P5 (docs/superpowers/specs/2026-10-28-rule-engine-design.md; data, not
+/// World schema 63: the plain tuning tables of rule engine phase P5 (docs/superpowers/specs/2026-10-28-rule-engine-design.md; data, not
 /// rules): <c>auction_bot_value</c> and <c>auction_bot_loot</c> (the auction bot's value and loot matrices, formerly CSV strings in
 /// <c>AuctionHouseBot</c>), <c>playerbot_ship_route</c>, <c>playerbot_elevator_region</c> and <c>playerbot_tram_network</c> (the bots'
 /// transport networks). The schema step bundles no rows: the world seeds an empty table with the shipped rows at start
@@ -89,7 +89,7 @@ public sealed class PlayerbotTramNetworkRow
 public sealed class TuningDataModule : IDataModule
 {
     /// <summary>The world schema version of this step.</summary>
-    public const int Version = 62;
+    public const int Version = 63;
 
     public const string ValueTable = "auction_bot_value";
     public const string LootTable = "auction_bot_loot";

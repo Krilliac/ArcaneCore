@@ -2,7 +2,7 @@
 
 Plain data tables that hold numbers the server used to carry in config strings or in code: the auction house bot's value and loot
 matrices, and the bots' transport networks (ship routes, lift regions, the Deeprun Tram). They are data, not rules: no events, no actions
-(design: `docs/superpowers/specs/2026-10-28-rule-engine-design.md`, phase P5). World schema step 62
+(design: `docs/superpowers/specs/2026-10-28-rule-engine-design.md`, phase P5). World schema step 63
 ([schema reference](../reference/schema.md)).
 
 ## Tables
@@ -21,7 +21,7 @@ network is built.
 
 ## Where the rows come from
 
-- At world start an **empty** table is seeded with the shipped rows (the same rows as `sql/content/world/<provider>/0002_tuning_tables.sql`,
+- At world start an **empty** table is seeded with the shipped rows (the same rows as `sql/content/world/<provider>/0003_tuning_tables.sql`,
   which can also be applied by hand; see [shipped content SQL](../../sql/content/README.md)). A table that holds any row is left as the
   operator has it, so edit the rows to tune; they survive upgrades.
 - Every row is validated when it is loaded (quality and class in range, known loot source, min at most max, known ship means and access,
