@@ -300,6 +300,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     }
 
     private Events.PlayerbotWorldEventBoard? _eventBoard;
+    private volatile Events.PlayerbotFestivalFlavours _holidayFlavours = Events.PlayerbotFestivalFlavours.Empty;
     private BotSocial.PlayerbotSocialFeature? _socialFeature;
 
     /// <summary>
@@ -308,7 +309,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// world thread (it is dropped at a detach, and the next attach makes a new one).
     /// </summary>
     internal Events.PlayerbotWorldEventBoard EventBoard => _eventBoard ??= new Events.PlayerbotWorldEventBoard(
-        services, _options, EventClockMs, () => _setAsideTime.GetUtcNow().ToUnixTimeSeconds(), ZoneAt);
+        services, _options, EventClockMs, () => _setAsideTime.GetUtcNow().ToUnixTimeSeconds(), ZoneAt, () => _holidayFlavours);
 
     private long EventClockMs() => (_socialFeature ??= services.GetService<BotSocial.PlayerbotSocialFeature>()) is { } social ? social.ClockMs : _world?.NowMs ?? 0;
 
@@ -855,6 +856,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
         await LoadTradeLedgerAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+        if (scope.ServiceProvider.GetService<ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore>() is { } flavourStore)
+            _holidayFlavours = new Events.PlayerbotFestivalFlavours(await flavourStore.LoadAsync(cancellationToken).ConfigureAwait(false));
         if (scope.ServiceProvider.GetService<IManagedPlayerbotHomeStore>() is { } homeStore)
         {
             _homeStore = true;

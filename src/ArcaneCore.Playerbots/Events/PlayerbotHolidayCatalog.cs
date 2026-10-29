@@ -1,5 +1,5 @@
 using ArcaneCore.Game.WorldState.Events;
-using static ArcaneCore.World.Playerbots.BotSocial.PlayerbotSocialEmotes;
+using ArcaneCore.Kernel.WorldData.WorldState;
 
 namespace ArcaneCore.World.Playerbots.Events;
 
@@ -14,7 +14,7 @@ internal sealed record PlayerbotFestivalFlavour(string Key, string Name, IReadOn
 /// this catalog only reads it: a festival <b>root</b> is an event with a client holiday id (Call to Arms aside, and any event the operator
 /// excluded), a <b>member</b> is an event whose <c>LinkedTo</c> chain reaches a root (Hallow's End and its two sub-events 24 and 25 in classic-db
 /// z2815). Event 21 (Winter Veil: Gifts) is not linked in the data and is not a member in slice 1; it is held for the event-quest stage (H6). Only the flavour (key, name,
-/// emotes) is curated. Pure and stateless; any thread.
+/// emotes) is data: <see cref="PlayerbotFestivalFlavours"/>, the rows of <c>holiday_flavour</c>. Pure and stateless; any thread.
 /// </summary>
 internal static class PlayerbotHolidayCatalog
 {
@@ -22,8 +22,6 @@ internal static class PlayerbotHolidayCatalog
     internal const int MaxLinks = 4;
 
     private const uint CallToArmsFirst = 283, CallToArmsLast = 285;
-
-    private static readonly uint[] DefaultEmotes = [TextEmotes.Cheer, TextEmotes.Wave, TextEmotes.Dance];
 
     /// <summary>Whether the event is a festival root: a holiday id, not Call to Arms, not excluded.</summary>
     internal static bool IsRoot(GameEventDefinition definition, IReadOnlySet<ushort> excluded)
@@ -71,23 +69,55 @@ internal static class PlayerbotHolidayCatalog
             if (RootOf(id, find, excluded) is { } root && running.Contains(root)) members[id] = root;
         return members;
     }
+}
+
+/// <summary>
+/// The festival flavours of <c>holiday_flavour</c> (inventory 19 of the rule-engine design): how each client holiday is told. Immutable;
+/// any thread. A holiday the table does not name (or names with a blank name) gets the row of holiday id 0 with the event's description as its name; with no row 0 either
+/// (a database without the shipped content) it is a gathering festival with the key <c>festival</c> and no crowd emotes.
+/// </summary>
+internal sealed class PlayerbotFestivalFlavours
+{
+    private const string FallbackKey = "festival";
+    private const string FallbackName = "the festival";
+
+    private readonly Dictionary<uint, PlayerbotFestivalFlavour> _byHoliday = [];
+    private readonly PlayerbotFestivalFlavour? _default;
+
+    internal PlayerbotFestivalFlavours(IEnumerable<HolidayFlavourRecord> records)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        foreach (HolidayFlavourRecord record in records)
+        {
+            var flavour = new PlayerbotFestivalFlavour(record.FlavourKey, record.Name, Emotes(record), record.Gather);
+            if (record.HolidayId == 0) _default = flavour;
+            else _byHoliday[record.HolidayId] = flavour;
+        }
+    }
+
+    /// <summary>No rows.</summary>
+    internal static PlayerbotFestivalFlavours Empty { get; } = new([]);
+
+    /// <summary>The number of named holidays (the default row not counted).</summary>
+    internal int Count => _byHoliday.Count;
 
     /// <summary>
-    /// The flavour of a holiday id; an unknown id gets the key <c>festival</c>, <paramref name="description"/> as its name and the default
-    /// crowd (it gathers). Ids 62 and 376 are not in the classic-db data and not in this table.
+    /// The flavour of holiday <paramref name="holidayId"/>; one the table does not name takes the default row (or the built-in fallback) and
+    /// is named by <paramref name="description"/>, trimmed, or "the festival" when that is blank.
     /// </summary>
-    internal static PlayerbotFestivalFlavour Flavour(uint holidayId, string description) => holidayId switch
+    internal PlayerbotFestivalFlavour For(uint holidayId, string description)
     {
-        341 => new("midsummer", "Midsummer", [TextEmotes.Dance, TextEmotes.Cheer], true),
-        141 => new("winterveil", "Winter Veil", [TextEmotes.Cheer, TextEmotes.Applaud], true),
-        327 => new("lunar", "Lunar Festival", [TextEmotes.Bow, TextEmotes.Cheer], true),
-        335 => new("love", "Love is in the Air", DefaultEmotes, true),
-        181 => new("noblegarden", "Noblegarden", DefaultEmotes, true),
-        201 => new("children", "Children's Week", DefaultEmotes, true),
-        324 => new("hallows", "Hallow's End", [TextEmotes.Laugh, TextEmotes.Cheer], true),
-        321 => new("harvest", "Harvest Festival", DefaultEmotes, true),
-        374 or 375 => new("darkmoon", "Darkmoon Faire", [TextEmotes.Cheer, TextEmotes.Applaud, TextEmotes.Laugh], true),
-        301 => new("fishing", "Fishing Extravaganza", DefaultEmotes, false),
-        _ => new("festival", string.IsNullOrWhiteSpace(description) ? "the festival" : description.Trim(), DefaultEmotes, true),
-    };
+        PlayerbotFestivalFlavour? named = null;
+        if (holidayId != 0 && _byHoliday.TryGetValue(holidayId, out named) && named.Name.Length > 0) return named;
+        PlayerbotFestivalFlavour basis = named ?? _default ?? new PlayerbotFestivalFlavour(FallbackKey, string.Empty, [], true);
+        return basis with { Name = string.IsNullOrWhiteSpace(description) ? FallbackName : description.Trim() };
+    }
+
+    private static uint[] Emotes(HolidayFlavourRecord record)
+    {
+        List<uint> emotes = new(3);
+        foreach (uint emote in new[] { record.Emote1, record.Emote2, record.Emote3 })
+            if (emote != 0) emotes.Add(emote);
+        return [.. emotes];
+    }
 }

@@ -15,6 +15,8 @@ public sealed class PlayerbotHolidayCatalogTests
 {
     private static readonly IReadOnlySet<ushort> None = new HashSet<ushort>();
 
+    private static PlayerbotFestivalFlavours Flavours => HolidayFlavourFixture.Shipped;
+
     private static GameEventDefinition Event(ushort id, uint holiday, string description = "event", ushort linkedTo = 0)
         => new(id, new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero), new DateTimeOffset(2045, 1, 1, 0, 0, 0, TimeSpan.Zero), 525_600, 1_440, holiday, description)
         {
@@ -231,7 +233,7 @@ public sealed class PlayerbotHolidayCatalogTests
     [InlineData(301u, "fishing", "Fishing Extravaganza")]
     public void TheHolidayIds_MapToTheirFlavourKeyAndName(uint holiday, string key, string name)
     {
-        PlayerbotFestivalFlavour flavour = PlayerbotHolidayCatalog.Flavour(holiday, "whatever the data calls it");
+        PlayerbotFestivalFlavour flavour = Flavours.For(holiday, "whatever the data calls it");
 
         Assert.Equal(key, flavour.Key);
         Assert.Equal(name, flavour.Name);
@@ -241,14 +243,14 @@ public sealed class PlayerbotHolidayCatalogTests
     public void OnlyTheFishingExtravaganza_DoesNotGather()
     {
         foreach (uint holiday in new[] { 341u, 141u, 327u, 335u, 181u, 201u, 324u, 321u, 374u, 375u })
-            Assert.True(PlayerbotHolidayCatalog.Flavour(holiday, "x").Gather, holiday.ToString());
-        Assert.False(PlayerbotHolidayCatalog.Flavour(301, "x").Gather);
+            Assert.True(Flavours.For(holiday, "x").Gather, holiday.ToString());
+        Assert.False(Flavours.For(301, "x").Gather);
     }
 
     [Fact]
     public void TheEmoteSets_AreTheDesignsOnes_FromThe112TextEmotes()
     {
-        static uint[] Set(uint holiday) => [.. PlayerbotHolidayCatalog.Flavour(holiday, "x").Emotes.OrderBy(e => e)];
+        static uint[] Set(uint holiday) => [.. Flavours.For(holiday, "x").Emotes.OrderBy(e => e)];
         static uint[] Of(params uint[] emotes) => [.. emotes.OrderBy(e => e)];
 
         Assert.Equal(Of(TextEmotes.Dance, TextEmotes.Cheer), Set(341));
@@ -264,7 +266,7 @@ public sealed class PlayerbotHolidayCatalogTests
     [Fact]
     public void AnUnknownHoliday_FallsBackToAFestivalNamedByTheEventsDescription_AndGathers()
     {
-        PlayerbotFestivalFlavour unknown = PlayerbotHolidayCatalog.Flavour(9999, "Brewfest");
+        PlayerbotFestivalFlavour unknown = Flavours.For(9999, "Brewfest");
 
         Assert.Equal("festival", unknown.Key);
         Assert.Equal("Brewfest", unknown.Name);
@@ -272,14 +274,14 @@ public sealed class PlayerbotHolidayCatalogTests
         Assert.NotEmpty(unknown.Emotes);
 
         // 62 and 376 are not in the z2815 data and not in the table.
-        Assert.Equal("festival", PlayerbotHolidayCatalog.Flavour(62, "Test").Key);
-        Assert.Equal("festival", PlayerbotHolidayCatalog.Flavour(376, "Test").Key);
+        Assert.Equal("festival", Flavours.For(62, "Test").Key);
+        Assert.Equal("festival", Flavours.For(376, "Test").Key);
     }
 
     [Fact]
     public void TheEmoteOrder_IsKeptPerHoliday_AndTheDefaultCrowdIsCheerWaveDance()
     {
-        static uint[] Ordered(uint holiday) => [.. PlayerbotHolidayCatalog.Flavour(holiday, "x").Emotes];
+        static uint[] Ordered(uint holiday) => [.. Flavours.For(holiday, "x").Emotes];
 
         Assert.Equal([TextEmotes.Dance, TextEmotes.Cheer], Ordered(341));
         Assert.Equal([TextEmotes.Cheer, TextEmotes.Applaud], Ordered(141));
@@ -294,9 +296,9 @@ public sealed class PlayerbotHolidayCatalogTests
     [Fact]
     public void AnUnknownHoliday_TrimsItsDescription_AndAFestivalWithoutOneIsCalledTheFestival()
     {
-        Assert.Equal("Brewfest", PlayerbotHolidayCatalog.Flavour(9999, "  Brewfest ").Name);
-        Assert.Equal("the festival", PlayerbotHolidayCatalog.Flavour(9999, "").Name);
-        Assert.Equal("the festival", PlayerbotHolidayCatalog.Flavour(9999, "   ").Name);
+        Assert.Equal("Brewfest", Flavours.For(9999, "  Brewfest ").Name);
+        Assert.Equal("the festival", Flavours.For(9999, "").Name);
+        Assert.Equal("the festival", Flavours.For(9999, "   ").Name);
     }
 
     [Theory]

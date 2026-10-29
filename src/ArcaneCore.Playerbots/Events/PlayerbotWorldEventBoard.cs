@@ -64,7 +64,8 @@ internal sealed class PlayerbotFestival(ushort root, uint holidayId, string desc
 /// Thread affinity: world thread only (the listener is told on the world thread).
 /// </summary>
 internal sealed class PlayerbotWorldEventBoard(
-    IServiceProvider services, PlayerbotOptions options, Func<long> clock, Func<long> unixSeconds, Func<uint, Vector3, uint> zoneAt) : IGameEventListener, IDisposable
+    IServiceProvider services, PlayerbotOptions options, Func<long> clock, Func<long> unixSeconds, Func<uint, Vector3, uint> zoneAt,
+    Func<PlayerbotFestivalFlavours> flavours) : IGameEventListener, IDisposable
 {
     /// <summary>The most placed NPCs a festival keeps per map.</summary>
     internal const int MaxSpawnsPerMap = 512;
@@ -276,7 +277,7 @@ internal sealed class PlayerbotWorldEventBoard(
             if (service.Find(root) is not { } definition) continue;
             spawns.Sort(static (a, b) => a.Spawn.Guid.CompareTo(b.Spawn.Guid));
             _festivals[root] = new PlayerbotFestival(root, definition.HolidayId, definition.Description,
-                PlayerbotHolidayCatalog.Flavour(definition.HolidayId, definition.Description), spawns);
+                flavours().For(definition.HolidayId, definition.Description), spawns);
         }
     }
 
