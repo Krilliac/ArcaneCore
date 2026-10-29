@@ -80,7 +80,8 @@ public sealed class DruidFinisherScriptTests : IDisposable
             },
             Spell(Other, Effect(SpellEffectName.SchoolDamage, 100, SpellImplicitTarget.UnitEnemy)) with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 });
         (_druid, _) = _kit.AddPlayer(1);
-        (_enemy, _) = _kit.AddPlayer(2, 3, 0);
+        SpellTestKit.FlagForPvp(_druid);
+        (_enemy, _) = _kit.AddHostilePlayer(2, 3, 0);
         _combos = new ComboPointService(_kit.System, (_, guid) => _kit.World.FindOnlinePlayer(guid));
         _combos.Install();
         DruidFinisherScripts.Install(_kit.System, _combos);

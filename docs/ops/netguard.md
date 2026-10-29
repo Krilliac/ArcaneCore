@@ -60,6 +60,32 @@ A failure prints the seed, the iteration and the bytes, so it replays. `PacketRe
 the regression (`ReadByte` on an empty payload is the controlled outcome) and that the `Try`
 surface allocates zero bytes (`GC.GetAllocatedBytesForCurrentThread`).
 
+#### Opcode handler fuzz
+
+`tests/ArcaneCore.World.Tests/Fuzz/OpcodeHandlerFuzzTests.cs` (helpers in `OpcodeHandlerFuzzKit.cs`) fuzzes every handler of the
+real opcode table (the one `WorldSession` dispatches through, sorted by opcode; stripped developer opcodes are counted, not
+invoked). World handlers run on the world thread between ticks against a logged-in character; session handlers run on the
+in-world session or, when they only allow the character screen, on a character-select session. Layouts are learnt from the
+handler's own reads (a test-only trace seam in `PacketReader`, inert unless a test opens a scope); a handler that reads its
+payload without the reader gets byte-level shapes. Mutations (truncation at field boundaries, oversized payloads, typed extremes
+per field, GUIDs, random edits) are deterministic per opcode.
+
+- **Strict rule:** the only allowed exception is `ArgumentOutOfRangeException` with `ParamName == "packet"` (`MalformedPacket`).
+  `MalformedPacket.Is` accepts any `ArgumentOutOfRangeException`; the fuzz does not, because a List indexer failing inside a
+  handler is a server bug that would look like a client fault.
+- **Invariants after every case:** finite and bounded position, the player on a map whose id matches, health within bounds and
+  consistent with the death state and ghost flag, money and the item multiset unchanged unless the opcode is in the explicit
+  `MayChangeInventoryOrMoney` set (and then money within the cap and stacks within their template maximum), the world tick still
+  advancing, no new fault recorded on the world thread, no session kick or exhausted recovery outside the checked-in allowlists.
+- **Coverage guards:** a filter that selects no opcode, a run with fewer traced handlers or cases than the floors, or a missing
+  fixture creature or gameobject fails the test instead of passing.
+- **Environment:** `ARCANECORE_HANDLER_FUZZ_ITERATIONS` (random cases per opcode, default 8; heavy runs use 2000),
+  `ARCANECORE_HANDLER_FUZZ_SEED` (base seed) and `ARCANECORE_HANDLER_FUZZ_OPCODE` (only this opcode, by wire or enum name).
+- **Reading a failure:** each finding prints its payload as a C# byte array. That literal is the reproducer. The seed and opcode
+  variables regenerate the same payloads, but the world state they run against can differ in a filtered run.
+
+`HandlerFuzzPipelineTests` runs the same loop over planted defective handlers to show every kind of finding is reported.
+
 ## 2. Transport: what `ConnectionLimiter` did and what was added
 
 `ConnectionLimiter` (`Kernel/Net`) already enforced a global cap and a per-address cap before any

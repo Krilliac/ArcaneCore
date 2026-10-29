@@ -79,7 +79,8 @@ public sealed class RangedCastPipelineTests
     private static (Player Player, FakeSession Session, Player Target) Shooter(SpellTestKit kit, float targetDistance = 20)
     {
         (Player player, FakeSession session) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, targetDistance);
+        SpellTestKit.FlagForPvp(player);
+        (Player target, _) = kit.AddHostilePlayer(2, targetDistance);
         player.Inventory.Templates = new ItemTemplateStore([.. ItemTestData.Templates, .. Templates]);
         player.Inventory.GuidAllocator = new ItemGuidAllocator();
         kit.Spellbook.Teach(player, Shot, ExoticShot, SchoolShot, SlowShot, MultiShot, MultiNoTimers, BareShot, MeleeStrike, Blind);

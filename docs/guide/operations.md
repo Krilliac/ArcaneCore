@@ -74,8 +74,8 @@ stdout) that is withheld while the world thread hangs. See [runtime health watch
 Latency and rates: game masters get full percentile lines (p50 to p99.9, mean, stddev) for the tick body and frame over the last 1 and 15 minutes in `.server info`; the world also logs a latency summary at Information level every 5 minutes (character saves, SQLite checkpoints, path queries, login to in-world, slowest packet handlers). The fault and anomaly ledgers report rates per hour (last 15 minutes and last hour), first/last seen and the top subjects; see [operations and performance](../areas/ops-perf.md).
 
 Both daemons log through the `Logging:ArcaneCore` provider: a colour console by default (plain automatically when stdout is a pipe or `NO_COLOR` is set;
-`Logging:ArcaneCore:Console:Mode=Plain` for journald), an optional rolling text file (`Logging:ArcaneCore:File:Enabled`) and an optional JSON-lines file
-(`Logging:ArcaneCore:Json:Enabled`) for a log shipper. File paths need a restart; the console mode and the `Logging:LogLevel` rules reload when the file changes.
+`Logging:ArcaneCore:Console:Mode=Plain` for journald), an optional rolling log file (`Logging:ArcaneCore:File:Enabled`), one file per daemon, as JSON lines or plain text
+(`Logging:ArcaneCore:Format`, default `Json`, which suits a log shipper). The file keys need a restart; the console mode and the `Logging:LogLevel` rules reload when the file changes.
 See [logging](../ops/logging.md).
 
 ## Release caveats

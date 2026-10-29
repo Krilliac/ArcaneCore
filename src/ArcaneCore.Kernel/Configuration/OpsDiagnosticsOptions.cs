@@ -26,8 +26,8 @@ public sealed class DumpDiagnosticsOptions
     public bool Enabled { get; set; }
 
     /// <summary>
-    /// The directory the dump files are written to. Empty (default) means <c>dumps</c> beside the text log file
-    /// (<c>Logging:ArcaneCore:File:Path</c>, so <c>logs/dumps</c> by default). It is created on the first dump.
+    /// The directory the dump files are written to. Empty (default) means <c>dumps</c> beside the log file
+    /// (the resolved <c>Logging:ArcaneCore:File:Path</c>, so <c>logs/dumps</c> by default). It is created on the first dump.
     /// </summary>
     public string Directory { get; set; } = string.Empty;
 

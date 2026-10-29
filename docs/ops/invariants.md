@@ -111,7 +111,7 @@ why not.
 **What it shows.** The daemon (`ArcaneCore.World`, `ArcaneCore.Realm`), its informational version (with the commit when the build
 stamped one) and pid; what happens when the box is closed and which key decided it; the exception type and message; the crashing
 thread's id and name; the time in UTC and local time; the fault-ledger site and signature id (`.server faults show ID` after a
-restart, from the crash journal); the paths of the crash report file, the crash journal (`crash-faults.<daemon>.jsonl`), the text log
+restart, from the crash journal); the paths of the crash report file, the crash journal (`crash-faults.<daemon>.jsonl`), the log file
 when `Logging:ArcaneCore:File:Enabled` is on, and the dump location when `DOTNET_DbgEnableMiniDump=1` is set; then the full stack
 trace, outer exception first and every inner exception after it. The box shows at most 40 lines of 400 characters, so its OK button
 stays on the screen; Ctrl+C in the box copies its text. Before the box opens, its full text and the whole crash report are written to

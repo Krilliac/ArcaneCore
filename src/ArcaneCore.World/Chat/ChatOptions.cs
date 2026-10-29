@@ -95,4 +95,20 @@ public sealed class ChatOptions
 
     /// <summary>Path of the developer's own 1.12.1 Emotes.dbc (whether an emote is a one-shot animation or a state, vmangos Unit::HandleEmote). See <see cref="EmotesTextDbcPath"/>.</summary>
     public string EmotesDbcPath { get; set; } = string.Empty;
+
+    /// <summary>
+    /// ArcaneCore hardening: the longest AFK or DND reply kept on the player (characters), which is sent to every whisperer; longer text is
+    /// cut to this length at a safe boundary (never inside a link or a surrogate pair). 0 = no cap. The stock client's own limit is
+    /// UNVERIFIED (not captured from a real client); the 255-character chat edit box is a belief, not a measurement. The default (1024)
+    /// is chosen to sit well above it. This cap, not <see cref="MaxMessageLength"/>, applies to AFK and DND text.
+    /// </summary>
+    public int MaxAwayMessageLength { get; set; } = 1024;
+
+    /// <summary>
+    /// ArcaneCore hardening: the longest CMSG_MESSAGECHAT text (characters) accepted; a longer message is dropped before any gate or
+    /// broadcast. 0 = no cap. Not applied to AFK and DND text (<see cref="MaxAwayMessageLength"/> cuts that instead). The stock client's
+    /// limit is UNVERIFIED (not captured from a real client); the default (1024) assumes an edit box of about 255 characters, which is
+    /// unconfirmed, and leaves a wide margin above it.
+    /// </summary>
+    public int MaxMessageLength { get; set; } = 1024;
 }
