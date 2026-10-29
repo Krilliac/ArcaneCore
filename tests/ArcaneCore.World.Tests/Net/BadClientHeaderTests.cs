@@ -39,6 +39,32 @@ public sealed class BadClientHeaderTests
     }
 
     [Fact]
+    public void FormatWarning_PutsEachFieldInItsOwnPlace()
+    {
+        var trail = new ClientFrameTrail();
+        trail.Record(WorldOpcode.CmsgPing, 10, 1000, cipherEngaged: true);
+        trail.Record(WorldOpcode.CmsgCharEnum, 6, 1200, cipherEngaged: true);
+        trail.Record(WorldOpcode.CmsgAuthSession, 99, 1300, cipherEngaged: false); // before the cipher engaged: not counted
+        byte[] cipher = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+        byte[] plain = [0x00, 0x04, 0xDC, 0x00, 0xE4, 0x3C];
+
+        string text = BadClientHeader.FormatWarning("9.8.7.6:5", 4, 0x3CE400DC, cipher, plain, (Index: 37, Previous: 201), trail, 1750, "InWorld", teleportPending: true);
+
+        Assert.StartsWith("[9.8.7.6:5] bad packet header client-malformed-opcode (", text, StringComparison.Ordinal);
+        Assert.Contains("size 4, opcode 0x3CE400DC, ", text, StringComparison.Ordinal);
+        Assert.Contains("cipher 112233445566, plain 0004DC00E43C, ", text, StringComparison.Ordinal);
+        Assert.Contains("recv cipher index 37 previous 201, ", text, StringComparison.Ordinal);
+        Assert.Contains("2 frames / 16 bytes since the cipher engaged, ", text, StringComparison.Ordinal);
+        Assert.Contains("last good CMSG_AUTH_SESSION 450 ms ago, ", text, StringComparison.Ordinal);
+        Assert.Contains("state InWorld, ", text, StringComparison.Ordinal);
+        Assert.EndsWith("teleport pending True; disconnecting", text, StringComparison.Ordinal);
+
+        string none = BadClientHeader.FormatWarning("e", 4, 0x3CE400DC, cipher, plain, (0, 0), new ClientFrameTrail(), 5, "Connected", teleportPending: false);
+        Assert.Contains("last good none, ", none, StringComparison.Ordinal);
+        Assert.EndsWith("teleport pending False; disconnecting", none, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Desync_ReportsWhetherTheCiphertextIsAValidPlaintextHeader()
     {
         // Ciphertext 00 04 DC 00 00 00 is a valid plaintext header (size 4, MSG_MOVE_WORLDPORT_ACK): a client that never engaged its cipher.

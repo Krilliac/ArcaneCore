@@ -724,15 +724,7 @@ public sealed partial class WorldSession : IPlayerSession
     /// what the connection did before it (see <see cref="BadClientHeader"/>). Read loop only.
     /// </summary>
     private void LogBadHeader(ushort size, uint rawOpcode, ReadOnlySpan<byte> cipherHeader, ReadOnlySpan<byte> plainHeader, (byte Index, byte Previous) position, ClientFrameTrail trail)
-    {
-        BadClientHeaderKind kind = BadClientHeader.Classify(size, rawOpcode);
-        _logger.LogWarning(
-            "[{Endpoint}] bad packet header {Kind} ({Detail}): size {Size}, opcode 0x{Opcode:X8}, cipher {Cipher}, plain {Plain}, recv cipher index {Index} previous {Previous}, "
-            + "{Frames} frames / {Bytes} bytes since the cipher engaged, last good {LastGood}, state {State}, teleport pending {Teleport}; disconnecting",
-            RemoteEndpoint, BadClientHeader.Label(kind), BadClientHeader.Describe(kind, cipherHeader, rawOpcode), size, rawOpcode,
-            Convert.ToHexString(cipherHeader), Convert.ToHexString(plainHeader), position.Index, position.Previous,
-            trail.Frames, trail.Bytes, trail.LastGood(Clock.Milliseconds()), _state, _worldportPending);
-    }
+        => _logger.LogWarning("{Diagnostic}", BadClientHeader.FormatWarning(RemoteEndpoint, size, rawOpcode, cipherHeader, plainHeader, position, trail, Clock.Milliseconds(), _state.ToString(), _worldportPending));
 
     /// <summary>
     /// Only the controlled outcome the readers raise deliberately (<see cref="MalformedPacket"/>) is

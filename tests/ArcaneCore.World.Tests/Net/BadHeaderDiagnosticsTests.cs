@@ -35,6 +35,7 @@ public sealed class BadHeaderDiagnosticsTests
         Assert.Contains("MSG_MOVE_WORLDPORT_ACK", warn, StringComparison.Ordinal);
         Assert.Contains("plain 0004DC00E43C", warn, StringComparison.Ordinal);
         Assert.Contains("cipher " + Convert.ToHexString(cipher), warn, StringComparison.Ordinal);
+        AssertSessionSide(warn);
         Assert.True(closed, "the session still disconnects");
     }
 
@@ -49,6 +50,7 @@ public sealed class BadHeaderDiagnosticsTests
         Assert.DoesNotContain("client-malformed-opcode", warn, StringComparison.Ordinal);
         Assert.Contains("plain FFFF01000000", warn, StringComparison.Ordinal);
         Assert.Contains("cipher " + Convert.ToHexString(cipher), warn, StringComparison.Ordinal);
+        AssertSessionSide(warn);
         Assert.True(closed, "the session still disconnects");
     }
 
@@ -88,6 +90,21 @@ public sealed class BadHeaderDiagnosticsTests
         {
             Assert.DoesNotContain(log.Messages, m => m.Contains("bad packet header", StringComparison.Ordinal));
         }
+    }
+
+    /// <summary>
+    /// The session-side fields, derived from the protocol sequence: the cipher engages after CMSG_AUTH_SESSION (whose header travels in plaintext, so it
+    /// is the last good frame but is not counted), the receive cipher has decrypted nothing yet, the bad header is the first enciphered frame, the
+    /// session is at the character screen and no SMSG_NEW_WORLD was sent. Teleport pending True needs a world-entered client and a far teleport; it
+    /// is covered by <see cref="BadClientHeaderTests"/> on the formatter instead.
+    /// </summary>
+    private static void AssertSessionSide(string warn)
+    {
+        Assert.Contains("recv cipher index 0 previous 0,", warn, StringComparison.Ordinal);
+        Assert.Contains(" 0 frames / 0 bytes since the cipher engaged,", warn, StringComparison.Ordinal);
+        Assert.Contains("last good CMSG_AUTH_SESSION ", warn, StringComparison.Ordinal);
+        Assert.Contains("state CharacterSelect,", warn, StringComparison.Ordinal);
+        Assert.Contains("teleport pending False;", warn, StringComparison.Ordinal);
     }
 
     // --- harness -----------------------------------------------------------------

@@ -43,6 +43,17 @@ public sealed class AddonInfoFirstChanceTests
     }
 
     [Fact]
+    public void BlockTooShortForAZlibHeader_LogsCmfNotAvailable()
+    {
+        byte[] block = [16, 0, 0, 0]; // size only, no CMF byte
+        var log = new CapturingLogger<AddonInfoFirstChanceTests>();
+
+        Assert.Empty(AddonInfo.BuildResponse(block, log, "e"));
+
+        Assert.Equal("[e] addon block is not zlib (CMF n/a, len 4); sending empty addon info", Assert.Single(log.Entries).Message);
+    }
+
+    [Fact]
     public void ValidBlock_AnswersPerRecord_WithoutFirstChanceException()
     {
         var inner = new PacketWriter(128);
