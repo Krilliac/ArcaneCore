@@ -358,7 +358,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         var lines = new List<string>
         {
             string.Create(CultureInfo.InvariantCulture,
-                $"Bot battlegrounds: {(o.Enabled ? "enabled" : "disabled")}, chance {o.QueueChancePerMinute}/min, at most {o.MaxBotsPerBattleground} bots per battleground; {_tracked.Count} bots busy; queued {Totals.Queued}, entered {Totals.Entered}, left {Totals.Left}, declined {Totals.Declined}, queues given up {Totals.QueueTimeouts}."),
+                $"Bot battlegrounds: {(o.Enabled ? "enabled" : "disabled")}, chance {o.QueueChancePerMinute}/min, at most {o.MaxBotsPerBattleground} bots per battleground{(o.RaiseCapToMatchMinimum ? " (raised to a type's template minimum)" : string.Empty)}; {_tracked.Count} bots busy; queued {Totals.Queued}, entered {Totals.Entered}, left {Totals.Left}, declined {Totals.Declined}, queues given up {Totals.QueueTimeouts}."),
         };
         foreach (Tracked t in _tracked.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
             lines.Add(string.Create(CultureInfo.InvariantCulture,

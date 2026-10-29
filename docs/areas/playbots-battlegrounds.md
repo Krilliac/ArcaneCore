@@ -19,7 +19,7 @@ server's own rules (below).
 | File (`src/ArcaneCore.Playerbots/Battlegrounds/`) | What it does |
 |---|---|
 | `PlayerbotBattlegroundOptions.cs` | `World:Playerbots:Battlegrounds` (every key live through `.reload config`). |
-| `PlayerbotBattlegroundBrackets.cs` | Which types and brackets a bot of a level may join; refuses Alterac Valley, a missing template, missing objective content and no battlemaster in reach. Unit tested. |
+| `PlayerbotBattlegroundBrackets.cs` | Which types and brackets a bot of a level may join; refuses a missing template, a cap below the template minimum (`CapBelowMinimum`, with the raise off), missing objective content and no battlemaster in reach. Unit tested. |
 | `PlayerbotBattlegroundDemand.cs` | The demand snapshot and the caps: per (type, bracket, team) real players waiting and bots committed; the pick. Unit tested. |
 | `PlayerbotBattlegroundQueueMachine.cs` | One bot's queue-to-leave life as a pure state machine (phases and the packet of each transition). Unit tested. |
 | `PlayerbotBattlegroundRoles.cs` | Who attacks, escorts and defends in a match. Unit tested. |
@@ -48,10 +48,10 @@ The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal l
 | Check | Refusal |
 |---|---|
 | Warsong Gulch, Arathi Basin or Alterac Valley | `Unsupported` |
-| with `RaiseCapToMatchMinimum` off: `MaxBotsPerBattleground` at least twice the template's `MinPlayersPerTeam` (bots alone could never start the match) | `CapBelowMinimum` |
 | a `battleground_template` row for the type | `NoTemplate` |
 | the bot's level within the template's minimum and maximum; the bracket is the manager's (`BracketOfLevel`, vmangos `Player::GetBattleGroundBracketIdFromLevel`) | `LevelOutOfRange` (not logged) |
-| the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), and the banner spell 21651 in the spell store, known by the bot (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
+| with `RaiseCapToMatchMinimum` off: `MaxBotsPerBattleground` at least twice the template's `MinPlayersPerTeam` (bots alone could never start the match) | `CapBelowMinimum` |
+| the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), Alterac Valley (map 30) a template for map 30 and, when its node banners exist, at least one the match routes to the node click; and the banner spell 21651 in the spell store, known by the bot for Arathi Basin and Alterac Valley (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
 | a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), in a walking region the bot's own joins (by the navigation mesh's region graph, no path search; an indoor end is let through; a master that stands still is preferred to one that walks waypoints), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
 
 Then the pick (`PlayerbotBattlegroundDemand.Pick`): a (type, bracket) a real player waits in, whose team still needs bots to reach the
@@ -195,8 +195,8 @@ where the group would be, the goal `Battleground` (or `Recover` on a corpse run)
 
 ## Tests
 
-* Unit (`tests/ArcaneCore.World.Tests/Playerbots/Battlegrounds/`): brackets and refusals (Alterac Valley `Unsupported` at every level
-  with a template and content), the demand and caps, the queue machine, the roles, the options and their validation;
+* Unit (`tests/ArcaneCore.World.Tests/Playerbots/Battlegrounds/`): brackets and refusals (Alterac Valley accepted at levels 51-60 with
+  a template and content), the demand and caps, the queue machine, the roles, the options and their validation;
   `PlayerbotMapPolicyTests.Allows_ABattleground_OnlyToItsParticipants`.
 * World (`PlayerbotBattlegroundWorldTests`, the real handlers and the manual clock, `BattlegroundBotTestContent`): two autonomous bots
   walk to their battlemasters, receive SMSG_BATTLEFIELD_LIST, queue, port into one Warsong Gulch match, and leave through
@@ -212,7 +212,9 @@ where the group would be, the goal `Battleground` (or `Recover` on a corpse run)
   autonomous bot claims the stables through 21651 and the trigger spell
   (`Ab_WithTheRealGooberNeutralBanner_AutonomousBotClaimsTheStables_ThroughTheTriggerSpell`: SMSG_SPELL_GO of 21651 and of 23932, the node
   contested by the Alliance); a goober banner whose spell is no banner trigger is refused and never queued
-  (`Ab_WithANeutralGooberWhoseSpellIsNoBannerTrigger_IsRefused_NoBotQueues`); Alterac Valley is refused and never queued.
+  (`Ab_WithANeutralGooberWhoseSpellIsNoBannerTrigger_IsRefused_NoBotQueues`); with a cap under twice Alterac Valley's minimum the cap is raised and bots alone start the match
+  (`Av_CapBelowTwiceTheTemplateMinimum_IsRaised_SoBotsAloneStartTheMatch_AndPlayTheObjective`), or with the raise off the type is refused
+  (`Av_RaiseCapOff_RefusesTheTypeWithCapBelowMinimum_AndNoBotQueues`).
   With the coordinator's group check, its banner routing rule and its real-player filter removed, the party, race, unrouted-goober and
   managed-bot tests go red.
 * Buffs (`PlayerbotBattlegroundBuffTests`): the classic-db templates are recognised; a hurt bot prefers restoration over a closer
@@ -244,7 +246,7 @@ without it the 21651 cast went through and nothing was claimed, which is how the
   (docs/areas/battlegrounds.md).
 * **Opening a banner needs the skills feature.** The open-lock effect of 21651 is installed by the skills feature only when it has its skill
   catalog (`Skills:*DbcPath`, docs/areas/skills.md); without one the cast completes and nothing opens, for bots and players alike.
-* **Navigation needs the battleground maps' mmaps** (489, 529; 30 for Alterac Valley would be needed if it were in scope). Without a
+* **Navigation needs the battleground maps' mmaps** (489, 529 and 30). Without a
   navigation mesh the bot's routes fall back to the terrain stepper, which refuses steep and unknown ground: the bots stand at the start.
 * **The battlemaster walk is on one map**, a straight-line `MaxTravelYards` check: no flight paths, boats, elevators or portals to a
   battlemaster. The server's join needs the battlemaster in interaction reach (vmangos HandleBattlemasterJoinOpcode through
