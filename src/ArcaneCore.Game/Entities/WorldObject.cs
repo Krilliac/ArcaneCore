@@ -145,6 +145,14 @@ public abstract class WorldObject
     {
     }
 
+    /// <summary>
+    /// Called after every write of <see cref="Map"/> (entering, leaving or changing maps). A unit wakes its spell state so the spell tick
+    /// re-checks <see cref="IsInWorld"/> (SpellSystem.UpdateState forgets a unit that left the world).
+    /// </summary>
+    private protected virtual void OnMapWritten()
+    {
+    }
+
     /// <summary>The map this object is in, or null when not in the world.</summary>
     public Map? Map
     {
@@ -153,6 +161,7 @@ public abstract class WorldObject
         {
             field = value;
             _hasNotifiedPosition = false; // a new map computes visibility from scratch
+            OnMapWritten();
         }
     }
 
