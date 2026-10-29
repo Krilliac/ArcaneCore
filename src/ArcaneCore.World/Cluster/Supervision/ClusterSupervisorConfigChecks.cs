@@ -30,6 +30,11 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
             issues.Add(new ConfigIssue(ConfigSeverity.Error, ClusterSupervisorOptions.SectionName, problem, "see the M15.4 section of docs/CLUSTERING_DESIGN.md"));
         }
 
+        foreach (string warning in options.Warnings())
+        {
+            issues.Add(new ConfigIssue(ConfigSeverity.Warning, $"{ClusterSupervisorOptions.SectionName}:Processes", warning, "lower the DrainTimeoutMs values or split the children across supervisors"));
+        }
+
         if (options.Enabled && configuration.GetSection(GatewayWorkerOptions.SectionName).GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)))
         {
             issues.Add(new ConfigIssue(ConfigSeverity.Error, $"{ClusterSupervisorOptions.SectionName}:Enabled",

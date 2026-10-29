@@ -148,6 +148,56 @@ public sealed class ClusterSupervisorOptionsTests
     }
 
     [Fact]
+    public void Options_Warnings_WhenDrainTimeoutsExceedTheShutdownCap()
+    {
+        static ClusterSupervisorOptions WithProcesses(int count, bool enabled)
+        {
+            var options = new ClusterSupervisorOptions { Enabled = enabled, MinClusterProcesses = 1 };
+            for (int i = 0; i < count; i++)
+            {
+                options.Processes[$"p{i}"] = new SupervisedProcessConfig { Name = $"p{i}", Role = SupervisedRoles.Worker, ExecutablePath = "dotnet", DrainTimeoutMs = 600_000 };
+            }
+
+            return options;
+        }
+
+        Assert.Single(WithProcesses(7, enabled: true).Warnings()); // 70 min + margin > 1 h
+        Assert.Empty(WithProcesses(5, enabled: true).Warnings()); // 50 min + margin
+        Assert.Empty(WithProcesses(7, enabled: false).Warnings());
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Cluster:Supervisor:Enabled"] = "true",
+            ["Cluster:Supervisor:MinClusterProcesses"] = "1",
+            ["Cluster:Supervisor:MaxConcurrentProcesses"] = "9",
+            ["Cluster:Supervisor:Processes:p0:Role"] = "worker",
+            ["Cluster:Supervisor:Processes:p0:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:p0:DrainTimeoutMs"] = "600000",
+            ["Cluster:Supervisor:Processes:p1:Role"] = "worker",
+            ["Cluster:Supervisor:Processes:p1:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:p1:DrainTimeoutMs"] = "600000",
+            ["Cluster:Supervisor:Processes:p2:Role"] = "worker",
+            ["Cluster:Supervisor:Processes:p2:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:p2:DrainTimeoutMs"] = "600000",
+            ["Cluster:Supervisor:Processes:p3:Role"] = "worker",
+            ["Cluster:Supervisor:Processes:p3:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:p3:DrainTimeoutMs"] = "600000",
+            ["Cluster:Supervisor:Processes:p4:Role"] = "worker",
+            ["Cluster:Supervisor:Processes:p4:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:p4:DrainTimeoutMs"] = "600000",
+            ["Cluster:Supervisor:Processes:p5:Role"] = "worker",
+            ["Cluster:Supervisor:Processes:p5:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:p5:DrainTimeoutMs"] = "600000",
+            ["Cluster:Supervisor:Processes:p6:Role"] = "worker",
+            ["Cluster:Supervisor:Processes:p6:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:p6:DrainTimeoutMs"] = "600000",
+        }).Build();
+
+        ConfigIssue issue = Assert.Single(new ClusterSupervisorConfigChecks().Check(configuration));
+        Assert.Equal(ConfigSeverity.Warning, issue.Severity);
+    }
+
+    [Fact]
     public void ConfigChecks_ReportBindFailures_AndSupervisorWithWorkerMode()
     {
         var check = new ClusterSupervisorConfigChecks();

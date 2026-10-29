@@ -64,7 +64,7 @@ internal static class ConfProcess
         return new Result(process.ExitCode, await stdout + await stderr);
     }
 
-    private static string DotnetMuxer()
+    internal static string DotnetMuxer()
     {
         string? current = Environment.ProcessPath;
         if (current is not null && Path.GetFileNameWithoutExtension(current).Equals("dotnet", StringComparison.OrdinalIgnoreCase))

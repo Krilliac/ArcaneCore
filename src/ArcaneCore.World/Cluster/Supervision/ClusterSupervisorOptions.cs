@@ -189,6 +189,24 @@ public sealed class ClusterSupervisorOptions
     /// </summary>
     public Dictionary<string, SupervisedProcessConfig> Processes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Added to the sum of the children's drain timeouts when the host's shutdown timeout is sized.</summary>
+    public static readonly TimeSpan ShutdownMargin = TimeSpan.FromSeconds(15);
+
+    /// <summary>The longest host shutdown the supervisor asks for; a drain sum above it is a <see cref="Warnings"/> entry.</summary>
+    public static readonly TimeSpan MaxShutdown = TimeSpan.FromHours(1);
+
+    /// <summary>Sum of every child's <see cref="SupervisedProcessConfig.DrainTimeoutMs"/> (each clamped to <see cref="SupervisedProcessConfig.MaxDrainTimeoutMs"/>): children drain one after another.</summary>
+    public TimeSpan TotalDrainBudget => TimeSpan.FromMilliseconds(Processes.Values.Sum(p => (long)Math.Clamp(p.DrainTimeoutMs, 0, SupervisedProcessConfig.MaxDrainTimeoutMs)));
+
+    /// <summary>Non-fatal findings (empty when none), for the startup check.</summary>
+    public IEnumerable<string> Warnings()
+    {
+        if (Enabled && TotalDrainBudget + ShutdownMargin > MaxShutdown)
+        {
+            yield return $"{SectionName}:Processes drain timeouts add up to {TotalDrainBudget.TotalMinutes:0.#} min, but the host's shutdown timeout is capped at {MaxShutdown.TotalMinutes:0} min; the children last in the drain order can be killed before their DrainTimeoutMs elapses.";
+        }
+    }
+
     /// <summary>
     /// Returns every problem with these options (empty when valid), for the startup check and the supervisor host.
     /// </summary>

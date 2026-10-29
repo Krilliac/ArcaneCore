@@ -3,6 +3,7 @@ using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Kernel.Ops.ServerConsole;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.Diagnostics;
 
 namespace ArcaneCore.World.Cluster.Supervision;
@@ -108,8 +109,14 @@ public static class SupervisedChild
 /// </summary>
 public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
 {
+    /// <summary>
+    /// Pids of children this launcher started whose exit it has not yet observed. A pid leaves only when the OS reports the exit
+    /// (never on a cancelled wait, never on the kill call itself); a child whose kill failed stays here and is reported as a fault.
+    /// In memory only: it does not survive a supervisor restart (M15.4 restart reconciliation is an open gap).
+    /// </summary>
     private readonly ConcurrentDictionary<int, byte> _ownedPids = new();
 
+    /// <summary>The live owned children; empty after a completed drain or dispose.</summary>
     public IReadOnlyCollection<int> OwnedProcessIds => [.. _ownedPids.Keys];
 
     /// <summary>
@@ -165,12 +172,19 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
 
     private sealed class OwnedSystemSupervisedProcess : ISupervisedProcess
     {
+        /// <summary>How long a kill waits for the OS to confirm the exit before the pid is reported as un-killable.</summary>
+        private static readonly TimeSpan KillConfirmTimeout = TimeSpan.FromSeconds(15);
+
         private readonly Process _process;
         private readonly int _pid;
         private readonly ConcurrentDictionary<int, byte> _ownedPids;
         private readonly Task _stdoutPump;
         private readonly Task _stderrPump;
-        private int _disposed;
+        private readonly Lock _sync = new();
+        private bool _exited;      // set once, by OnExited, under _sync
+        private int? _exitCode;    // read while the handle was still open
+        private bool _disposed;    // after this no Process member is called; HasExited/ExitCode answer from the cache
+        private int _disposeStarted;
 
         public OwnedSystemSupervisedProcess(Process process, int pid, ConcurrentDictionary<int, byte> ownedPids)
         {
@@ -178,8 +192,14 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             _pid = pid;
             _ownedPids = ownedPids;
 
+            // Launch set EnableRaisingEvents before Start, so the wait thread exists; Exited is the one observer that removes the pid.
+            _process.Exited += (_, _) => OnExited();
             _stdoutPump = Task.Run(() => PumpStreamAsync(_process.StandardOutput, isStdErr: false));
             _stderrPump = Task.Run(() => PumpStreamAsync(_process.StandardError, isStdErr: true));
+
+            // The exit may have been raised before the handler above was attached (Process raises it once); observe it directly.
+            if (ProcessHasExited())
+                OnExited();
         }
 
         public int ProcessId => _pid;
@@ -188,14 +208,21 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         {
             get
             {
-                try
+                lock (_sync)
                 {
-                    return _process.HasExited;
+                    if (_exited)
+                        return true;
+                    if (_disposed)
+                        return false; // disposed without an observed exit: the kill failed; never report a live child as gone
                 }
-                catch
+
+                if (ProcessHasExited())
                 {
+                    OnExited();
                     return true;
                 }
+
+                return false;
             }
         }
 
@@ -203,18 +230,49 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         {
             get
             {
-                try
-                {
-                    return _process.HasExited ? _process.ExitCode : null;
-                }
-                catch
-                {
+                if (!HasExited)
                     return null;
+                lock (_sync)
+                {
+                    return _exitCode;
                 }
             }
         }
 
         public event Action<string, bool>? OutputLineReceived;
+
+        private bool ProcessHasExited()
+        {
+            try
+            {
+                return _process.HasExited;
+            }
+            catch (InvalidOperationException)
+            {
+                return false; // no associated process (handle closed): nothing was observed
+            }
+        }
+
+        /// <summary>The one place a pid leaves the owned set: the OS reported the exit.</summary>
+        private void OnExited()
+        {
+            lock (_sync)
+            {
+                if (_exited)
+                    return;
+                _exited = true;
+                try
+                {
+                    _exitCode = _process.ExitCode;
+                }
+                catch (InvalidOperationException)
+                {
+                    // Handle already closed. Dispose confirms the exit before closing, so this is unreachable in practice; the code stays null.
+                }
+            }
+
+            _ownedPids.TryRemove(_pid, out _);
+        }
 
         private async Task PumpStreamAsync(StreamReader reader, bool isStdErr)
         {
@@ -225,85 +283,163 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
                     OutputLineReceived?.Invoke(line, isStdErr);
                 }
             }
-            catch
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
             {
-                // Stream closed on process exit.
+                // Stream closed on process exit or dispose.
             }
         }
 
         public async Task<int> WaitForExitAsync(CancellationToken ct = default)
         {
-            try
+            if (!HasExited)
             {
+                // A cancellation here abandons this wait only: the child, and its pid in the owned set, are untouched.
                 await _process.WaitForExitAsync(ct).ConfigureAwait(false);
-                await Task.WhenAll(_stdoutPump, _stderrPump).ConfigureAwait(false);
-                return _process.ExitCode;
+                OnExited();
             }
-            finally
+
+            await Task.WhenAll(_stdoutPump, _stderrPump).WaitAsync(ct).ConfigureAwait(false);
+            lock (_sync)
             {
-                _ownedPids.TryRemove(_pid, out _);
+                return _exitCode ?? throw new ObjectDisposedException(nameof(OwnedSystemSupervisedProcess), $"Supervised child pid {_pid} exited, but its handle was closed before the exit code was read.");
             }
         }
 
         public async Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default)
         {
             if (HasExited)
-            {
-                _ownedPids.TryRemove(_pid, out _);
                 return true;
-            }
 
-            try
-            {
-                await _process.StandardInput.WriteLineAsync("drain").ConfigureAwait(false);
-                await _process.StandardInput.FlushAsync(ct).ConfigureAwait(false);
-                _process.StandardInput.Close();
-            }
-            catch
-            {
-                // Child may not read stdin or may have already closed it.
-            }
+            SendDrainAndCloseStdin();
 
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeout);
             try
             {
-                await WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                await _process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+                OnExited();
                 return true;
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                return HasExited;
+                return HasExited; // the drain timeout: the child is still ours, still owned; the caller kills it
+            }
+            catch (InvalidOperationException)
+            {
+                return HasExited; // disposed concurrently; Dispose has already killed and confirmed
+            }
+        }
+
+        /// <summary>
+        /// Writes the drain line and closes stdin so the child also sees EOF. Synchronous and token-free on purpose: six bytes into a fresh
+        /// pipe never block (4 KiB on Windows, 64 KiB on Linux), and the close must happen whatever the write did.
+        /// </summary>
+        private void SendDrainAndCloseStdin()
+        {
+            StreamWriter stdin;
+            try
+            {
+                stdin = _process.StandardInput;
+            }
+            catch (InvalidOperationException)
+            {
+                return; // not redirected or no associated process
+            }
+
+            try
+            {
+                stdin.WriteLine(SupervisedChildDrain.DrainLine);
+                stdin.Flush();
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+            {
+                // The child does not read stdin, or already closed it (a second drain request).
+            }
+            finally
+            {
+                try
+                {
+                    stdin.Close();
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                {
+                    // Already closed.
+                }
             }
         }
 
         public void KillOwnedProcess()
         {
-            if (!_ownedPids.TryRemove(_pid, out _))
-                return;
+            if (HasExited)
+                return; // idempotent: nothing to do for an observed exit
+
+            lock (_sync)
+            {
+                if (_disposed)
+                    return; // handle gone; Dispose already ran the kill below
+            }
 
             try
             {
-                if (!_process.HasExited)
-                {
-                    _process.Kill(entireProcessTree: true);
-                }
+                // The children are our own daemons (or an operator's wrapper around one); nothing in their tree may outlive them.
+                _process.Kill(entireProcessTree: true);
             }
-            catch
+            catch (InvalidOperationException)
             {
-                // Process already exited.
+                // Exited between the check and the kill.
+            }
+            catch (Exception ex) when (ex is Win32Exception or AggregateException or NotSupportedException)
+            {
+                FaultLedger.Shared.Record("cluster.supervisor.kill", ex);
+            }
+
+            // Confirm before anyone closes the handle: WaitForExit raises Exited, which removes the pid and completes every pending WaitForExitAsync.
+            bool exited;
+            try
+            {
+                exited = _process.WaitForExit((int)KillConfirmTimeout.TotalMilliseconds);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+            {
+                exited = ProcessHasExited();
+            }
+
+            if (exited)
+            {
+                OnExited();
+            }
+            else
+            {
+                FaultLedger.Shared.Record("cluster.supervisor.kill",
+                    new InvalidOperationException($"Supervised child pid {_pid} is still running {KillConfirmTimeout.TotalSeconds:0} s after Kill; it stays in the owned set."));
             }
         }
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
                 return;
 
-            KillOwnedProcess();
+            KillOwnedProcess(); // exit confirmed (or recorded as a fault) while the handle is still open
+
+            lock (_sync)
+            {
+                _disposed = true;
+            }
+
+            try
+            {
+                _process.StandardInput.Close(); // Process.Close leaves a stdin we accessed open
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or IOException or ObjectDisposedException)
+            {
+                // Never opened or already closed.
+            }
+
             _process.Dispose();
         }
     }
+
 }
 
 /// <summary>
@@ -647,6 +783,16 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             }
         }
 
+        bool stillAlive = process is not null && !process.HasExited;
+        if (stillAlive)
+        {
+            _multiplexer.RouteLine(
+                entry.Config,
+                $"ERROR: Process '{entry.Config.Name}' (pid {process!.ProcessId}) is still running after its drain timeout and a kill; it remains in the owned set.",
+                isStdErr: true);
+            AnomalyLedger.Shared.Report("cluster", "supervisor-kill-failed", entry.Config.Name, $"pid={process.ProcessId}", AnomalySeverity.Error);
+        }
+
         if (stopCts is not null)
         {
             await stopCts.CancelAsync().ConfigureAwait(false);
@@ -669,7 +815,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             entry.LastExitCode = process?.ExitCode ?? entry.LastExitCode;
             entry.Process?.Dispose();
             entry.Process = null;
-            entry.State = SupervisedProcessState.Drained;
+            entry.State = stillAlive ? SupervisedProcessState.Faulted : SupervisedProcessState.Drained;
             return entry.ToSnapshot();
         }
     }
@@ -798,8 +944,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             {
                 exitCode = await currentProcess.WaitForExitAsync(ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            catch (Exception) when (ct.IsCancellationRequested)
             {
+                // Stop or dispose: a cancelled wait, or a handle closed by the wrapper's Dispose after it confirmed the exit. Not a fault.
                 return;
             }
 
@@ -897,19 +1044,53 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     public void Dispose()
     {
+        List<ManagedEntry> entries;
         lock (_gate)
         {
             if (_disposed)
                 return;
 
             _disposed = true;
-            _supervisorStop.Cancel();
-
-            foreach (ManagedEntry entry in _entries.Values)
+            entries = [.. _entries.Values];
+            foreach (ManagedEntry entry in entries)
             {
-                entry.Process?.Dispose();
+                if (entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Draining)
+                    entry.State = SupervisedProcessState.Stopped; // the monitor loop returns at its next check instead of relaunching
+            }
+        }
+
+        // Outside _gate from here: the monitors take _gate after their waits complete, and the waits complete because each wrapper's
+        // Dispose kills the child (whole tree) and confirms the exit before it closes the handle. Nothing here depends on cancellation timing.
+        _supervisorStop.Cancel(); // ends backoff delays and parked waits
+        foreach (ManagedEntry entry in entries)
+        {
+            ISupervisedProcess? process;
+            lock (_gate)
+            {
+                process = entry.Process;
                 entry.Process = null;
+            }
+
+            process?.Dispose();
+        }
+
+        Task[] monitors = [.. entries.Select(e => e.MonitorTask).OfType<Task>()];
+        try
+        {
+            Task.WaitAll(monitors, TimeSpan.FromSeconds(30));
+        }
+        catch (AggregateException)
+        {
+            // Cancellations and dispose races surfacing from the monitors; the children are already confirmed gone or recorded as faults.
+        }
+
+        lock (_gate)
+        {
+            foreach (ManagedEntry entry in entries)
+            {
                 entry.StopCts?.Dispose();
+                entry.StopCts = null;
+                entry.MonitorTask = null;
             }
 
             _supervisorStop.Dispose();

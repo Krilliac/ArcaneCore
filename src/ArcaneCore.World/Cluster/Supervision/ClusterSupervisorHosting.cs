@@ -74,9 +74,6 @@ public sealed class ClusterSupervisorHostedService : IHostedService
 /// </summary>
 public static class ClusterSupervisorHosting
 {
-    private static readonly TimeSpan ShutdownMargin = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan MaxShutdown = TimeSpan.FromHours(1);
-
     private static TimeSpan Max(TimeSpan a, TimeSpan b) => a > b ? a : b;
 
     private static TimeSpan Min(TimeSpan a, TimeSpan b) => a < b ? a : b;
@@ -105,9 +102,8 @@ public static class ClusterSupervisorHosting
         services.Configure<HostOptions>(configuration.GetSection("HostOptions"));
         var sized = new ClusterSupervisorOptions();
         configuration.GetSection(ClusterSupervisorOptions.SectionName).Bind(sized);
-        long drainMs = sized.Processes.Values.Sum(p => (long)Math.Clamp(p.DrainTimeoutMs, 0, SupervisedProcessConfig.MaxDrainTimeoutMs));
-        TimeSpan needed = TimeSpan.FromMilliseconds(drainMs) + ShutdownMargin;
-        services.PostConfigure<HostOptions>(o => o.ShutdownTimeout = Min(Max(o.ShutdownTimeout, needed), MaxShutdown));
+        TimeSpan needed = sized.TotalDrainBudget + ClusterSupervisorOptions.ShutdownMargin;
+        services.PostConfigure<HostOptions>(o => o.ShutdownTimeout = Min(Max(o.ShutdownTimeout, needed), ClusterSupervisorOptions.MaxShutdown));
         services.TryAddSingleton<ISupervisedProcessLauncher, SystemProcessSupervisedLauncher>();
         services.TryAddSingleton<IClusterCapacityProbe, SystemClusterCapacityProbe>();
         services.AddSingleton(sp => new ClusterHostSupervisor(
