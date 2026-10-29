@@ -57,7 +57,9 @@ Then the pick (`PlayerbotBattlegroundDemand.Pick`): a (type, bracket) a real pla
 template's minimum per team, is taken at once (`PreferFillingRealPlayerQueues`); otherwise the bot rolls its per-minute chance
 (`QueueChancePerMinute`, as `1 - (1 - p)^(scan seconds / 60)`) and takes a random one of the open choices. A choice is open while the
 bracket holds fewer than `MaxBotsPerBattleground` committed bots, the bot's team fewer than `min(MaxPlayersPerTeam, ceil(cap / 2))`, and
-no running match of the bracket with room already holds the cap in bots.
+no running match of the bracket with room already holds the cap in bots. With `RaiseCapToMatchMinimum` (on) a type whose template
+needs more than the cap (2 x `MinPlayersPerTeam`, Alterac Valley's 20 per team against the default cap of 20) uses that minimum as its cap
+(never above 2 x `MaxPlayersPerTeam`), so bots alone can start it; with it off such a type is refused (`CapBelowMinimum`, logged once).
 
 The snapshot behind these numbers is rebuilt at every scan from the battleground manager itself: the real players (sessions that are
 not managed) waiting in each queue and not yet invited, the bots this coordinator committed (walking, joining, queued, invited,
@@ -179,6 +181,7 @@ s (and leaves that buff alone for 30 s) and forgets a buff that despawned or som
 | `World:Playerbots:Battlegrounds:QueueChancePerMinute` | `0.05` | 0..1. The chance per minute that a free, eligible bot starts to queue; each 2-second scan rolls `1 - (1 - p)^(seconds / 60)`. A real player's queue that needs bots is filled without a roll. |
 | `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `20` | 0..80. Bots committed to one (type, bracket) never exceed it, a team never more than `min(MaxPlayersPerTeam, ceil(cap / 2))`, a running match holding it blocks its bracket, and an invitation into a match holding it is declined. 0 queues no bot. |
 | `World:Playerbots:Battlegrounds:PreferFillingRealPlayerQueues` | `true` | A (type, bracket) a real player waits in gets bots at once, up to the template's minimum per team, before any random choice. |
+| `World:Playerbots:Battlegrounds:RaiseCapToMatchMinimum` | `true` | A type whose template minimum needs more bots than `MaxBotsPerBattleground` (2 x `MinPlayersPerTeam`, e.g. Alterac Valley's 20 per team) gets that minimum as its cap, never above 2 x `MaxPlayersPerTeam`, so bots alone can start it. Off: the type is refused for bots (`CapBelowMinimum`). Template values are never changed. |
 | `World:Playerbots:Battlegrounds:MaxTravelYards` | `1500` | 100..20000. The farthest (straight line, same map) a battlemaster may stand for a bot to choose it. |
 | `World:Playerbots:Battlegrounds:MaxQueueWaitMinutes` | `30` | 1..240. A bot leaves a queue after this long and does not queue for that type again for 10 minutes. |
 

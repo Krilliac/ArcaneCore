@@ -38,8 +38,11 @@ public sealed class PlayerbotBattlegroundDemandTests
     [InlineData(80, 20)] // limited by 2 teams x MaxPlayersPerTeam (10), not by the cap
     public void BotsWaiting_NeverExceedMaxBotsPerBattleground(int cap, int expectedAdmitted)
     {
+        // The configured cap as it is: a cap under the template minimum (Wsg 5 per team) is raised by default (RaiseCapToMatchMinimum, tested below).
         var demand = new PlayerbotBattlegroundDemand();
-        int admitted = Fill(demand, Options(cap));
+        PlayerbotBattlegroundOptions options = Options(cap);
+        options.RaiseCapToMatchMinimum = false;
+        int admitted = Fill(demand, options);
         Assert.Equal(expectedAdmitted, admitted);
         Assert.Equal(admitted, demand.BotsCommitted(BattlegroundType.WarsongGulch, 2));
         Assert.True(demand.BotsCommitted(BattlegroundType.WarsongGulch, 2) <= cap);
@@ -50,9 +53,9 @@ public sealed class PlayerbotBattlegroundDemandTests
     {
         var demand = new PlayerbotBattlegroundDemand();
         for (int i = 0; i < 3; i++) demand.AddBotCommitted(BattlegroundType.WarsongGulch, 2, Team.Alliance);
-        Assert.False(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Horde, Wsg, 3));
-        Assert.True(demand.CanQueue(BattlegroundType.WarsongGulch, 3, Team.Horde, Wsg, 3));
-        Assert.True(demand.CanQueue(BattlegroundType.ArathiBasin, 2, Team.Horde, Wsg, 3));
+        Assert.False(demand.CanQueue(BattlegroundType.WarsongGulch, 2, Team.Horde, Wsg, 3, raiseToMinimum: false));
+        Assert.True(demand.CanQueue(BattlegroundType.WarsongGulch, 3, Team.Horde, Wsg, 3, raiseToMinimum: false));
+        Assert.True(demand.CanQueue(BattlegroundType.ArathiBasin, 2, Team.Horde, Wsg, 3, raiseToMinimum: false));
     }
 
     [Fact]
@@ -235,5 +238,129 @@ public sealed class PlayerbotBattlegroundDemandTests
         Assert.Equal((int)Wsg.MinPlayersPerTeam, demand.BotsCommitted(type, 2, Team.Horde));
         Assert.Null(demand.Pick(OneChoice, Team.Alliance, Templates, options, chanceHit: false, pick: 0));
         Assert.Null(demand.Pick(OneChoice, Team.Horde, Templates, options, chanceHit: false, pick: 0));
+    }
+
+    // --- Alterac Valley: the real row asks 20 per team (battleground_template: min 20, max 40, levels 51-60), above half the default cap ---
+
+    private static readonly BattlegroundTemplate Av = PlayerbotBattlegroundBracketTests.Template(BattlegroundType.AlteracValley, 51, 60, minPerTeam: 20, maxPerTeam: 40);
+    private static readonly PlayerbotBattlegroundChoice[] AvChoice = [new(BattlegroundType.AlteracValley, 0)];
+
+    private static BattlegroundTemplate? AvTemplates(BattlegroundType type) => type == BattlegroundType.AlteracValley ? Av : null;
+
+    [Fact]
+    public void EffectiveCap_RaisesToTwiceTheTeamMinimum_ClampedToTwiceTheTeamMaximum()
+    {
+        Assert.Equal(40, PlayerbotBattlegroundDemand.EffectiveCap(Av, 20, raiseToMinimum: true));
+        Assert.Equal(20, PlayerbotBattlegroundDemand.EffectiveCap(Av, 20, raiseToMinimum: false));
+        Assert.Equal(0, PlayerbotBattlegroundDemand.EffectiveCap(Av, 0, raiseToMinimum: true));
+        Assert.Equal(0, PlayerbotBattlegroundDemand.EffectiveCap(Av, 0, raiseToMinimum: false));
+        Assert.Equal(0, PlayerbotBattlegroundDemand.EffectiveCap(Av, -1, raiseToMinimum: true));
+        Assert.Equal(80, PlayerbotBattlegroundDemand.EffectiveCap(Av, 80, raiseToMinimum: true)); // already covers the minimum
+        Assert.Equal(60, PlayerbotBattlegroundDemand.EffectiveCap(Av, 60, raiseToMinimum: true));
+        Assert.Equal(40, PlayerbotBattlegroundDemand.EffectiveCap(Av, 39, raiseToMinimum: true)); // one short of 2 x 20: raised
+
+        // Warsong Gulch (min 5 per team): a cap that covers 10 stays as set.
+        Assert.Equal(20, PlayerbotBattlegroundDemand.EffectiveCap(Wsg, 20, raiseToMinimum: true));
+        Assert.Equal(10, PlayerbotBattlegroundDemand.EffectiveCap(Wsg, 10, raiseToMinimum: true));
+        Assert.Equal(10, PlayerbotBattlegroundDemand.EffectiveCap(Wsg, 4, raiseToMinimum: true));
+        Assert.Equal(4, PlayerbotBattlegroundDemand.EffectiveCap(Wsg, 4, raiseToMinimum: false));
+
+        // A template whose minimum exceeds its maximum is clamped to 2 x the maximum.
+        BattlegroundTemplate odd = PlayerbotBattlegroundBracketTests.Template(BattlegroundType.AlteracValley, 51, 60, minPerTeam: 30, maxPerTeam: 25);
+        Assert.Equal(50, PlayerbotBattlegroundDemand.EffectiveCap(odd, 20, raiseToMinimum: true));
+    }
+
+    [Fact]
+    public void AlteracValley_CapOfTwenty_RaisedOn_LetsTwentyBotsPerTeamCommit()
+    {
+        var demand = new PlayerbotBattlegroundDemand();
+        BattlegroundType type = BattlegroundType.AlteracValley;
+        for (int i = 0; i < 20; i++)
+        {
+            Assert.True(demand.CanQueue(type, 0, Team.Alliance, Av, 20, true), $"Alliance bot {i + 1} refused");
+            demand.AddBotCommitted(type, 0, Team.Alliance);
+            Assert.True(demand.CanQueue(type, 0, Team.Horde, Av, 20, true), $"Horde bot {i + 1} refused");
+            demand.AddBotCommitted(type, 0, Team.Horde);
+        }
+
+        Assert.Equal(40, demand.BotsCommitted(type, 0));
+        Assert.False(demand.CanQueue(type, 0, Team.Alliance, Av, 20, true));
+        Assert.False(demand.CanQueue(type, 0, Team.Horde, Av, 20, true));
+    }
+
+    [Fact]
+    public void AlteracValley_CapOfTwenty_RaisedOff_StopsAtTenPerTeam()
+    {
+        var demand = new PlayerbotBattlegroundDemand();
+        BattlegroundType type = BattlegroundType.AlteracValley;
+        for (int i = 0; i < 10; i++)
+        {
+            demand.AddBotCommitted(type, 0, Team.Alliance);
+            demand.AddBotCommitted(type, 0, Team.Horde);
+        }
+
+        Assert.False(demand.CanQueue(type, 0, Team.Alliance, Av, 20, false));
+        Assert.False(demand.CanQueue(type, 0, Team.Horde, Av, 20, false));
+    }
+
+    [Fact]
+    public void AlteracValley_CanQueue_TeamsAreBoundedByTheirOwnAllowance_NotTheOthersFill()
+    {
+        var demand = new PlayerbotBattlegroundDemand();
+        BattlegroundType type = BattlegroundType.AlteracValley;
+        for (int i = 0; i < 20; i++) demand.AddBotCommitted(type, 0, Team.Alliance);
+        Assert.False(demand.CanQueue(type, 0, Team.Alliance, Av, 20, true)); // the 21st Alliance bot
+        Assert.True(demand.CanQueue(type, 0, Team.Horde, Av, 20, true));
+
+        // A running match already full of bots still blocks, whatever the cap.
+        demand.BlockBracket(type, 0);
+        Assert.False(demand.CanQueue(type, 0, Team.Horde, Av, 20, true));
+    }
+
+    [Fact]
+    public void AlteracValley_Pick_FillsTheOtherTeamToTheMinimum_WhenOneBotWaitsAndNoMatchRuns()
+    {
+        var demand = new PlayerbotBattlegroundDemand();
+        PlayerbotBattlegroundOptions options = Options(20);
+        demand.AddBotCommitted(BattlegroundType.AlteracValley, 0, Team.Alliance);
+
+        int horde = 0;
+        while (demand.Pick(AvChoice, Team.Horde, AvTemplates, options, chanceHit: false, pick: 0) is { } choice)
+        {
+            Assert.Equal(AvChoice[0], choice);
+            demand.AddBotCommitted(choice.Type, choice.Bracket, Team.Horde);
+            Assert.True(++horde <= 20, "Horde was filled past the template minimum.");
+        }
+
+        Assert.Equal(20, horde);
+        Assert.Equal(20, demand.BotsCommitted(BattlegroundType.AlteracValley, 0, Team.Horde));
+
+        // The Alliance side then fills its remaining 19 the same way and stops at 20.
+        int alliance = 1;
+        while (demand.Pick(AvChoice, Team.Alliance, AvTemplates, options, chanceHit: false, pick: 0) is { } choice)
+        {
+            demand.AddBotCommitted(choice.Type, choice.Bracket, Team.Alliance);
+            Assert.True(++alliance <= 20, "Alliance was filled past the template minimum.");
+        }
+
+        Assert.Equal(20, alliance);
+    }
+
+    [Fact]
+    public void AlteracValley_Pick_WithRaiseOff_AdmitsNoMoreThanTheUnraisedAllowance()
+    {
+        var demand = new PlayerbotBattlegroundDemand();
+        PlayerbotBattlegroundOptions options = Options(20);
+        options.RaiseCapToMatchMinimum = false;
+        int admitted = 0;
+        for (int i = 0; i < 100; i++)
+        {
+            Team team = i % 2 == 0 ? Team.Alliance : Team.Horde;
+            if (demand.Pick(AvChoice, team, AvTemplates, options, chanceHit: true, pick: 0) is not { } choice) break;
+            demand.AddBotCommitted(choice.Type, choice.Bracket, team);
+            admitted++;
+        }
+
+        Assert.Equal(20, admitted);
     }
 }

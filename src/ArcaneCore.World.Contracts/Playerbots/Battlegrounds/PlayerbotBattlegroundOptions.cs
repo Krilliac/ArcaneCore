@@ -30,6 +30,14 @@ public sealed class PlayerbotBattlegroundOptions
     public bool PreferFillingRealPlayerQueues { get; set; } = true;
 
     /// <summary>
+    /// Raise the cap of a battleground type whose template minimum needs more bots than <see cref="MaxBotsPerBattleground"/> allows (on by
+    /// default): 2 x <c>MinPlayersPerTeam</c>, for example Alterac Valley's 20 per team against the default cap of 20, becomes that type's
+    /// cap (never above 2 x <c>MaxPlayersPerTeam</c>), so bots alone can start it. Off: such a type is refused for bots
+    /// (<c>CapBelowMinimum</c>) instead of queues that can never pop. The retail template values are never changed.
+    /// </summary>
+    public bool RaiseCapToMatchMinimum { get; set; } = true;
+
+    /// <summary>
     /// The farthest, in yards, a battlemaster may stand from a bot for the bot to walk to it (100..20000): a straight line on the bot's own map,
     /// to a battlemaster whose faction is not hostile to the bot.
     /// </summary>

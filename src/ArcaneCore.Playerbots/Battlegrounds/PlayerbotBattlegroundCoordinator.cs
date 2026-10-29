@@ -442,7 +442,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             QueueSlot = state.SlotOf(queue) >= 0,
             InvitedInstance = invited,
             MatchHoldsCap = invited != 0 && PlayerbotBattlegroundDemand.MustDecline(BotsIn(manager.GetBattleground(invited, t.Type), invited, t.BotId, player.Guid),
-                _options.Battlegrounds.MaxBotsPerBattleground),
+                CapOf(manager, t.Type)),
             QueuedTooLong = t.Phase == PlayerbotBattlegroundPhase.Queued
                 && unchecked(Now - t.QueuedSinceMs) >= (uint)Math.Clamp(_options.Battlegrounds.MaxQueueWaitMinutes, 1, 240) * 60_000u,
             Taken = !bot.Free || InOtherGroup(player),
@@ -534,7 +534,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 if (facts.MatchHoldsCap && facts.InvitedInstance != 0)
                 {
                     Totals = (Totals.Queued, Totals.Entered, Totals.Left, Totals.Declined + 1, Totals.QueueTimeouts);
-                    Note($"{t.Name} declines {t.Type} match {facts.InvitedInstance}: it holds {_options.Battlegrounds.MaxBotsPerBattleground} bots already");
+                    Note($"{t.Name} declines {t.Type} match {facts.InvitedInstance}: it holds {CapOf(feature.Manager, t.Type)} bots already");
                 }
                 else if (facts.QueuedTooLong)
                 {
@@ -745,7 +745,9 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             checkedRefusalsThisScan = true;
             List<PlayerbotBattlegroundChoice> eligible = PlayerbotBattlegroundBrackets.Eligible(player.Level, manager.TemplateOf,
                 type => HasObjectiveContent(feature, type) && (type is not (BattlegroundType.ArathiBasin or BattlegroundType.AlteracValley) || KnowsBannerSpell(player)),
-                type => !IsSetAside(bot.BotId, type) && FindMaster(player, type) is not null, Refused);
+                type => !IsSetAside(bot.BotId, type) && FindMaster(player, type) is not null, Refused,
+                type => options.RaiseCapToMatchMinimum || options.MaxBotsPerBattleground <= 0 || manager.TemplateOf(type) is not { } template
+                    || PlayerbotBattlegroundDemand.EffectiveCap(template, options.MaxBotsPerBattleground, false) >= 2 * (int)template.MinPlayersPerTeam);
             if (eligible.Count == 0 || (!roll && !anyRealWaiting)) continue;
             if (_demand.Pick(eligible, player.Team, manager.TemplateOf, options, roll, _random.NextDouble()) is not { } choice
                 || FindMaster(player, choice.Type) is not { } master) continue;
@@ -811,6 +813,12 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         return !feature.IsDeserter(player);
     }
 
+    /// <summary>The bot cap of one type's matches: the configured cap, raised to the template minimum when the option asks for it.</summary>
+    private int CapOf(BattlegroundManager manager, BattlegroundType type)
+        => manager.TemplateOf(type) is { } template
+            ? PlayerbotBattlegroundDemand.EffectiveCap(template, _options.Battlegrounds.MaxBotsPerBattleground, _options.Battlegrounds.RaiseCapToMatchMinimum)
+            : _options.Battlegrounds.MaxBotsPerBattleground;
+
     private void Refused(BattlegroundType type, PlayerbotBattlegroundRefusal why)
     {
         // Logged once per type and reason: a level out of range or no battlemaster in reach is an ordinary per-bot fact.
@@ -847,7 +855,6 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 or PlayerbotBattlegroundPhase.Invited or PlayerbotBattlegroundPhase.Entering)
                 _demand.AddBotCommitted(t.Type, t.Bracket, t.Team);
 
-        int cap = _options.Battlegrounds.MaxBotsPerBattleground;
         foreach (Battleground match in manager.RunningBattlegrounds)
         {
             if (!PlayerbotBattlegroundBrackets.Supported(match.Type) || match.Status == BattlegroundStatus.WaitLeave) continue;
@@ -861,7 +868,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
                 _demand.AddBotCommitted(match.Type, match.Bracket, team);
             }
 
-            if (bots >= cap) _demand.BlockBracket(match.Type, match.Bracket);
+            if (bots >= CapOf(manager, match.Type)) _demand.BlockBracket(match.Type, match.Bracket);
         }
     }
 

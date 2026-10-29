@@ -10,7 +10,9 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// <b>Caps.</b> <c>World:Playerbots:Battlegrounds:MaxBotsPerBattleground</c> bounds the bots committed to one (type, bracket) at once
 /// (queued, invited or on their way into a match, plus the bots of a running match that still has room, which a new queuer would join),
 /// and one team never holds more than the template's <c>MaxPlayersPerTeam</c> nor more than half of the cap rounded up. A bot also
-/// declines an invitation into a match that holds the cap already (<see cref="MustDecline"/>).
+/// declines an invitation into a match that holds the cap already (<see cref="MustDecline"/>). With <c>RaiseCapToMatchMinimum</c> (on by
+/// default) a type whose two teams need more than the cap, such as Alterac Valley's 20 per team, uses 2 x <c>MinPlayersPerTeam</c> as its
+/// cap instead (never above 2 x <c>MaxPlayersPerTeam</c>; <see cref="EffectiveCap"/>), so bots alone can fill it.
 /// </para>
 /// <para>
 /// <b>Real players.</b> With <c>PreferFillingRealPlayerQueues</c>, a (type, bracket) a real player waits in needs bots until both teams
@@ -79,11 +81,26 @@ internal sealed class PlayerbotBattlegroundDemand
     /// <paramref name="maxBots"/> committed bots, the team fewer than <see cref="TeamAllowance"/>, and no running match of the bracket is
     /// already full of bots.
     /// </summary>
-    internal bool CanQueue(BattlegroundType type, int bracket, Team team, BattlegroundTemplate template, int maxBots)
+    internal bool CanQueue(BattlegroundType type, int bracket, Team team, BattlegroundTemplate template, int maxBots, bool raiseToMinimum = true)
     {
         ArgumentNullException.ThrowIfNull(template);
-        if (maxBots <= 0 || _blocked.Contains((type, bracket))) return false;
-        return BotsCommitted(type, bracket) < maxBots && BotsCommitted(type, bracket, team) < TeamAllowance(template.MaxPlayersPerTeam, maxBots);
+        int cap = EffectiveCap(template, maxBots, raiseToMinimum);
+        if (cap <= 0 || _blocked.Contains((type, bracket))) return false;
+        return BotsCommitted(type, bracket) < cap && BotsCommitted(type, bracket, team) < TeamAllowance(template.MaxPlayersPerTeam, cap);
+    }
+
+    /// <summary>
+    /// The bot cap that applies to a template: <paramref name="maxBots"/> (0 or less: 0). With <paramref name="raiseToMinimum"/> it is raised
+    /// to 2 x <c>MinPlayersPerTeam</c> when that is larger, but never above 2 x <c>MaxPlayersPerTeam</c>; a cap that already covers the
+    /// minimum is never lowered.
+    /// </summary>
+    internal static int EffectiveCap(BattlegroundTemplate template, int maxBots, bool raiseToMinimum)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        if (maxBots <= 0) return 0;
+        if (!raiseToMinimum) return maxBots;
+        long floor = 2L * Math.Min(template.MinPlayersPerTeam, template.MaxPlayersPerTeam);
+        return (int)Math.Max(maxBots, floor);
     }
 
     /// <summary>
@@ -129,7 +146,7 @@ internal sealed class PlayerbotBattlegroundDemand
         var open = new List<PlayerbotBattlegroundChoice>(eligible.Count);
         foreach (PlayerbotBattlegroundChoice choice in eligible)
         {
-            if (templates(choice.Type) is not { } template || !CanQueue(choice.Type, choice.Bracket, team, template, options.MaxBotsPerBattleground)) continue;
+            if (templates(choice.Type) is not { } template || !CanQueue(choice.Type, choice.Bracket, team, template, options.MaxBotsPerBattleground, options.RaiseCapToMatchMinimum)) continue;
             if (RealNeed(options.PreferFillingRealPlayerQueues, choice.Type, choice.Bracket, team, template) > 0
                 && (RealWaiting(choice.Type, choice.Bracket) > 0 || options.QueueChancePerMinute > 0f))
                 return choice;

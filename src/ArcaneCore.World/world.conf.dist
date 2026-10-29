@@ -12219,6 +12219,22 @@ World.Playerbots.Battlegrounds.PreferFillingRealPlayerQueues = true
 World.Playerbots.Battlegrounds.QueueChancePerMinute = 0.05
 
 #
+#    World.Playerbots.Battlegrounds.RaiseCapToMatchMinimum
+#        Description: Raise the cap of a battleground type whose template minimum needs more bots
+#                     than MaxBotsPerBattleground allows (on by default): 2 x MinPlayersPerTeam, for
+#                     example Alterac Valley's 20 per team against the default cap of 20, becomes
+#                     that type's cap (never above 2 x MaxPlayersPerTeam), so bots alone can start
+#                     it. Off: such a type is refused for bots (CapBelowMinimum) instead of queues
+#                     that can never pop. The retail template values are never changed.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Battlegrounds.RaiseCapToMatchMinimum = true
+
+#
 #    World.Playerbots.Budget.ClassLevelsAhead
 #        Description: How many levels ahead of its own the bot saves for class spells (0..10): the
 #                     spells its class trainer teaches at levels up to this many above the bot's,

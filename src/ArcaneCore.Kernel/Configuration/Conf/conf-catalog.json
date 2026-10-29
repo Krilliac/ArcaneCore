@@ -14943,6 +14943,22 @@
       "isCollection": false
     },
     {
+      "path": "World:Playerbots:Battlegrounds:RaiseCapToMatchMinimum",
+      "section": "World:Playerbots",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "true",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Raise the cap of a battleground type whose template minimum needs more bots than `MaxBotsPerBattleground` allows (on by default): 2 x `MinPlayersPerTeam`, for example Alterac Valley's 20 per team against the default cap of 20, becomes that type's cap (never above 2 x `MaxPlayersPerTeam`), so bots alone can start it. Off: such a type is refused for bots (`CapBelowMinimum`) instead of queues that can never pop. The retail template values are never changed.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldplayerbots",
+      "isCollection": false
+    },
+    {
       "path": "World:Playerbots:Budget:ClassLevelsAhead",
       "section": "World:Playerbots",
       "type": "int",
