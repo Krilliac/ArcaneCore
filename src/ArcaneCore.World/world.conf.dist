@@ -17616,18 +17616,6 @@ World.Playerbots.Social.Memory.AffinityPerTradeScam = -15
 World.Playerbots.Social.Memory.AffinityPerWatchedDie = -12
 
 #
-#    World.Playerbots.Social.Memory.AnswerHelpEnabled
-#        Description: Let a managed bot that is asked for help join the fight, by its helpfulness
-#                     and its liking for the asker.
-#        Type: bool
-#        Default: true
-#        Allowed: true | false
-#        Reload: Live (.reload config applies it to the running server)
-#        Docs: docs/reference/configuration.md#worldplayerbots
-#
-World.Playerbots.Social.Memory.AnswerHelpEnabled = true
-
-#
 #    World.Playerbots.Social.Memory.BystanderMinHealthPercent
 #        Description: The least health percent a bystander needs to count as able to help (1..100).
 #        Type: int
@@ -18069,7 +18057,8 @@ World.Playerbots.Social.Rivalry.Safeguards.SafeAreas = "35,392,976,2255,2361,226
 
 #
 #    World.Playerbots.Social.Trading.AcceptGifts
-#        Description: Accept gift windows (an empty bot side) from partners the rules allow (on by
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect.
+#                     Accept gift windows (an empty bot side) from partners the rules allow (on by
 #                     default).
 #        Type: bool
 #        Default: true
@@ -18081,7 +18070,8 @@ World.Playerbots.Social.Trading.AcceptGifts = true
 
 #
 #    World.Playerbots.Social.Trading.AnswerTrades
-#        Description: Busy or ignore a trade window nobody expected, and open an allowed one as a
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect.
+#                     Busy or ignore a trade window nobody expected, and open an allowed one as a
 #                     gift window (on by default).
 #        Type: bool
 #        Default: true
@@ -18093,7 +18083,8 @@ World.Playerbots.Social.Trading.AnswerTrades = true
 
 #
 #    World.Playerbots.Social.Trading.Deals.DealMinutes
-#        Description: The minutes an agreed deal stays open (1..60, default 5).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     minutes an agreed deal stays open (1..60, default 5).
 #        Type: int
 #        Default: 5
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18104,8 +18095,9 @@ World.Playerbots.Social.Trading.Deals.DealMinutes = 5
 
 #
 #    World.Playerbots.Social.Trading.Deals.DislikeMarkupPercent
-#        Description: The ask markup in percent for a partner the bot dislikes, scaled by the
-#                     negative affinity (0..200, default 25).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     ask markup in percent for a partner the bot dislikes, scaled by the negative
+#                     affinity (0..200, default 25).
 #        Type: int
 #        Default: 25
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18116,7 +18108,8 @@ World.Playerbots.Social.Trading.Deals.DislikeMarkupPercent = 25
 
 #
 #    World.Playerbots.Social.Trading.Deals.Enabled
-#        Description: Fixed-price WTS completion (on by default).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect.
+#                     Fixed-price WTS completion (on by default).
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -18127,7 +18120,8 @@ World.Playerbots.Social.Trading.Deals.Enabled = true
 
 #
 #    World.Playerbots.Social.Trading.Deals.FriendDiscountPercent
-#        Description: The ask discount in percent for a friend at full affinity, scaled by the bot's
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     ask discount in percent for a friend at full affinity, scaled by the bot's
 #                     giving affinity (0..100, default 20).
 #        Type: int
 #        Default: 20
@@ -18139,8 +18133,9 @@ World.Playerbots.Social.Trading.Deals.FriendDiscountPercent = 20
 
 #
 #    World.Playerbots.Social.Trading.Deals.MaxDealCopper
-#        Description: The most a single deal may be worth in copper (0..100000000, default 500000 =
-#                     50 g; 0 disables deals).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     most a single deal may be worth in copper (0..100000000, default 500000 = 50
+#                     g; 0 disables deals).
 #        Type: int
 #        Default: 500000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18151,7 +18146,8 @@ World.Playerbots.Social.Trading.Deals.MaxDealCopper = 500000
 
 #
 #    World.Playerbots.Social.Trading.Deals.PairCooldownMinutes
-#        Description: The minutes a pair waits after a deal expired, was declined or was cancelled
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     minutes a pair waits after a deal expired, was declined or was cancelled
 #                     before a new one (0..1440, default 10).
 #        Type: int
 #        Default: 10
@@ -18163,8 +18159,9 @@ World.Playerbots.Social.Trading.Deals.PairCooldownMinutes = 10
 
 #
 #    World.Playerbots.Social.Trading.Deals.PriceBookHours
-#        Description: The hours an auction house observation is kept in the price book (1..720,
-#                     default 24).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     hours an auction house observation is kept in the price book (1..720, default
+#                     24).
 #        Type: int
 #        Default: 24
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18175,8 +18172,9 @@ World.Playerbots.Social.Trading.Deals.PriceBookHours = 24
 
 #
 #    World.Playerbots.Social.Trading.Deals.PriceBookMinSellers
-#        Description: The distinct seller accounts an item needs before an auction house reading
-#                     prices a deal (1..20, default 3).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     distinct seller accounts an item needs before an auction house reading prices
+#                     a deal (1..20, default 3).
 #        Type: int
 #        Default: 3
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18187,7 +18185,8 @@ World.Playerbots.Social.Trading.Deals.PriceBookMinSellers = 3
 
 #
 #    World.Playerbots.Social.Trading.Enabled
-#        Description: Master switch (on by default). Once the trade desk lands (a later P4 step),
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect.
+#                     Master switch (on by default). Once the trade desk lands (a later P4 step),
 #                     off will cancel every window it drives at its next pass; no effect until then.
 #        Type: bool
 #        Default: true
@@ -18199,8 +18198,9 @@ World.Playerbots.Social.Trading.Enabled = true
 
 #
 #    World.Playerbots.Social.Trading.GiftMinValueCopper
-#        Description: The vendor value in copper below which a gift earns no affinity and a
-#                     stranger's gift is cancelled (0..1000000, default 100).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     vendor value in copper below which a gift earns no affinity and a stranger's
+#                     gift is cancelled (0..1000000, default 100).
 #        Type: int
 #        Default: 100
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18211,7 +18211,8 @@ World.Playerbots.Social.Trading.GiftMinValueCopper = 100
 
 #
 #    World.Playerbots.Social.Trading.Gifts.Enabled
-#        Description: Group gifts after a run (on by default).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect.
+#                     Group gifts after a run (on by default).
 #        Type: bool
 #        Default: true
 #        Allowed: true | false
@@ -18222,8 +18223,9 @@ World.Playerbots.Social.Trading.Gifts.Enabled = true
 
 #
 #    World.Playerbots.Social.Trading.Gifts.GiftClaimSeconds
-#        Description: The seconds a bot listens for an answer to its "anyone need" line (5..120,
-#                     default 15).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     seconds a bot listens for an answer to its "anyone need" line (5..120, default
+#                     15).
 #        Type: int
 #        Default: 15
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18234,8 +18236,9 @@ World.Playerbots.Social.Trading.Gifts.GiftClaimSeconds = 15
 
 #
 #    World.Playerbots.Social.Trading.Gifts.MaxGiftValueCopper
-#        Description: The most a gift may be worth in copper at level 60, scaled down by the bot's
-#                     level (0..1000000, default 5000; 0 means no gifts).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     most a gift may be worth in copper at level 60, scaled down by the bot's level
+#                     (0..1000000, default 5000; 0 means no gifts).
 #        Type: int
 #        Default: 5000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18246,7 +18249,8 @@ World.Playerbots.Social.Trading.Gifts.MaxGiftValueCopper = 5000
 
 #
 #    World.Playerbots.Social.Trading.Limits.DailyOutflowCopperPerAccount
-#        Description: The copper one real account, all its characters together, may receive from all
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     copper one real account, all its characters together, may receive from all
 #                     bots per UTC day (0..100000000, default 20000 = 2 g).
 #        Type: int
 #        Default: 20000
@@ -18258,8 +18262,9 @@ World.Playerbots.Social.Trading.Limits.DailyOutflowCopperPerAccount = 20000
 
 #
 #    World.Playerbots.Social.Trading.Limits.DailyOutflowCopperPerBot
-#        Description: The copper one bot may give real players per UTC day, gifts and discounts
-#                     counted (0..100000000, default 20000 = 2 g).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     copper one bot may give real players per UTC day, gifts and discounts counted
+#                     (0..100000000, default 20000 = 2 g).
 #        Type: int
 #        Default: 20000
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18270,7 +18275,8 @@ World.Playerbots.Social.Trading.Limits.DailyOutflowCopperPerBot = 20000
 
 #
 #    World.Playerbots.Social.Trading.Limits.DailyOutflowCopperServer
-#        Description: The copper all bots together may give real players per UTC day (0..1000000000,
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     copper all bots together may give real players per UTC day (0..1000000000,
 #                     default 2000000 = 200 g).
 #        Type: int
 #        Default: 2000000
@@ -18282,7 +18288,8 @@ World.Playerbots.Social.Trading.Limits.DailyOutflowCopperServer = 2000000
 
 #
 #    World.Playerbots.Social.Trading.Limits.MaxConcurrentTrades
-#        Description: The trade windows open at once in the world (0..256, default 16).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     trade windows open at once in the world (0..256, default 16).
 #        Type: int
 #        Default: 16
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18293,7 +18300,8 @@ World.Playerbots.Social.Trading.Limits.MaxConcurrentTrades = 16
 
 #
 #    World.Playerbots.Social.Trading.Limits.MaxTradesPerAccountPerHour
-#        Description: The trades all bots together may complete toward one real account in an hour
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     trades all bots together may complete toward one real account in an hour
 #                     (0..120, default 10).
 #        Type: int
 #        Default: 10
@@ -18305,8 +18313,8 @@ World.Playerbots.Social.Trading.Limits.MaxTradesPerAccountPerHour = 10
 
 #
 #    World.Playerbots.Social.Trading.Limits.MaxTradesPerBotPerHour
-#        Description: The trades one bot may complete with real players in an hour (0..120, default
-#                     6).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     trades one bot may complete with real players in an hour (0..120, default 6).
 #        Type: int
 #        Default: 6
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18317,8 +18325,9 @@ World.Playerbots.Social.Trading.Limits.MaxTradesPerBotPerHour = 6
 
 #
 #    World.Playerbots.Social.Trading.LowTrustPermille
-#        Description: The trust (permille) below which a partner's deals are capped at a quarter of
-#                     the deal maximum (0..1000, default 350).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     trust (permille) below which a partner's deals are capped at a quarter of the
+#                     deal maximum (0..1000, default 350).
 #        Type: int
 #        Default: 350
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18329,7 +18338,8 @@ World.Playerbots.Social.Trading.LowTrustPermille = 350
 
 #
 #    World.Playerbots.Social.Trading.MaxGiftsReceivedPerHour
-#        Description: The gifts one bot accepts from one partner in an hour (0..120, default 10).
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     gifts one bot accepts from one partner in an hour (0..120, default 10).
 #        Type: int
 #        Default: 10
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -18365,7 +18375,8 @@ World.Playerbots.Social.Trading.ScamMemoryDays = 30
 
 #
 #    World.Playerbots.Social.Trading.TradeTimeoutSeconds
-#        Description: The seconds one trade may take from the initiate to the close, a running
+#        Description: Not yet implemented: no code reads this key, so changing it has no effect. The
+#                     seconds one trade may take from the initiate to the close, a running
 #                     settlement not counted (10..300, default 45).
 #        Type: int
 #        Default: 45

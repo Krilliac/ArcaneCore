@@ -690,7 +690,6 @@ public static class WorldConfigKeys
             v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
         LivePlayerbotsValue("Social:Memory:CallForHelpSociabilityWeight", o => o.Social.Memory.CallForHelpSociabilityWeight, (o, v) => o.Social.Memory.CallForHelpSociabilityWeight = v,
             v => float.IsFinite(v) && v is >= 0f and <= 1f ? null : "must be 0..1"),
-        LivePlayerbots("Social:Memory:AnswerHelpEnabled", o => o.Social.Memory.AnswerHelpEnabled, (o, v) => o.Social.Memory.AnswerHelpEnabled = v),
         LivePlayerbotsValue("Social:Memory:MaxRelationsPerBot", o => o.Social.Memory.MaxRelationsPerBot, (o, v) => o.Social.Memory.MaxRelationsPerBot = v,
             v => v is >= 16 and <= 1024 ? null : "must be 16..1024"),
         LivePlayerbotsValue("Social:Memory:AffinityPerChat", o => o.Social.Memory.AffinityPerChat, (o, v) => o.Social.Memory.AffinityPerChat = v,

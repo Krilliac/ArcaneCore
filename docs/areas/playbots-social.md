@@ -158,9 +158,8 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   asked unit. Going alone says nothing. `CallForHelpEnabled` off means the bot never asks (and so blames nobody).
 - *Watched me die.* If the bot dies in the window (not a duel, window at least `BystanderMinSeconds`), each asked candidate that still
   qualifies at death and never helped gets WatchedMeDie (`AffinityPerWatchedDie`). A bot that went alone blames nobody.
-- *Answering* (`AnswerHelpEnabled`): the answer probability is `helpfulness * (1 + affinity / 100)` clamped to 0..1 as a hash of the
-  answering bot, the asker and the call (`PlayerbotCallForHelp.Answers`). The function is in place and tested, but the answer is not wired to
-  the brain's assist lane yet (that moves to P2); nothing acts on a help emote today.
+- *Answering* (`AnswerHelp`, in the Helping lane below): the answer probability is `helpfulness * (1 + affinity / 100)` clamped to 0..1 as a hash of the
+  answering bot, the asker and the call (`PlayerbotCallForHelp.Answers`). The old Memory AnswerHelpEnabled key never had a reader and was removed; `AnswerHelp` is the only switch.
 
 **Forgiveness, caps, bad group behaviour, reliability and War Mode** (all in `PlayerbotSocialMemory`, all live):
 
@@ -439,7 +438,7 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
 
 ## Trading (`World:Playerbots:Social:Trading`, P4a foundation)
 
-Status: the 26 Trading keys are registered and documented, but until the trade desk and the deal steps land (later P4 steps) nothing reads them except `ScamMemoryDays` and `NinjaMemoryDays`, which the trade ledger applies when it reads a row. Setting the others changes no bot behaviour yet.
+Status: the 26 Trading keys are registered and documented; 24 of them are marked "Not yet implemented" in the option summaries (and so in the configuration reference), because until the trade desk and the deal steps land (later P4 steps) nothing reads them except `ScamMemoryDays` and `NinjaMemoryDays`, which the trade ledger applies when it reads a row. Setting the others changes no bot behaviour yet.
 
 The trade ledger (`playerbot_trade_record`, characters schema) keeps, per bot and partner, the fair deals and scams counted, the last scam and ninja times and the last UTC day a gift counted: counts and times only, no items, prices or chat. It is fed by the social recorder (a scam, ninja loot or gift note) whether or not `World:Playerbots:Social:Trading:Enabled` or `World:Playerbots:Social:Memory:Enabled` is on; the switches gate what bots do with it, not what is counted. It holds at most 4096 partners per bot and is written at the bot's checkpoint only when it changed. Deleting a bot removes its own rows and the rows other bots hold about it (written again without them right away, like the relation table). Rows about a real player have no time expiry: they stay until the bot's 4096-partner bound evicts them (a partner with no scam or ninja loot inside its window and the fewest fair deals goes first). A bot that was deleted is not fed again.
 
