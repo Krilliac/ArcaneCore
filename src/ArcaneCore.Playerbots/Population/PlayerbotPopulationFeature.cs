@@ -2274,27 +2274,33 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // a bot standing in an excluded zone of an allowed map (the operator took the zone out, the atlas no longer knows it), and a
         // stalled bot in an atlas zone it escaped (a recorded veto) or that holds more bots than its creatures feed (SpawnsPerBot).
         // Those first, then the worst misfit. The vetoes are world-thread state, so the candidates are read there.
+        PopulationZoneValue? value = ctx.Input.ZoneValue;
+        PopulationValueWeights weights = PopulationValueWeights.From(pop);
+        // With the zone value in force, a level-capped bot in a zone it reaches within CapReach counts as fitting (the rule Rank uses).
+        bool valued = pop.ValueRouting && value is not null;
+        bool Reaches(PopulationZone zone, PopulationBotFacts bot)
+            => valued && PopulationZoneAtlas.CapReaches(zone, bot.Level, bot.Team, rule, weights.CapReach);
         (PopulationBotFacts Bot, PopulationZone? Zone, bool Stuck)[] candidates = await world.InvokeAsync(() => ctx.Input.Running
             .Where(f => ctx.Members.ContainsKey(f.BotId) && f.Autonomous && !f.Busy && !f.Dead && !f.Vetoed)
             .Select(f => (Bot: f, Zone: atlas.Find(f.ZoneId)))
             .Where(x => x.Zone is not null || Excluded(x.Bot))
             .Select(x => (x.Bot, x.Zone, Stuck: x.Zone is null || StuckIn(x.Zone, x.Bot)))
-            .OrderByDescending(x => x.Stuck).ThenByDescending(x => x.Zone is null ? 0 : Misfit(x.Zone, x.Bot, rule)).ThenBy(x => x.Bot.BotId)
+            .OrderByDescending(x => x.Stuck).ThenByDescending(x => x.Zone is null || Reaches(x.Zone, x.Bot) ? 0 : Misfit(x.Zone, x.Bot, rule)).ThenBy(x => x.Bot.BotId)
             .ToArray(), ct).ConfigureAwait(false);
-        // With the zone value on: a level-capped bot that has stayed a while in a zone worth much less than the best zone for it moves
-        // there. After the stuck and misfit bots, a few bots per pass in turn (by BotId), so the check costs the same every pass.
-        PopulationZoneValue? value = ctx.Input.ZoneValue;
-        PopulationValueWeights weights = PopulationValueWeights.From(pop);
+        // With the zone value on: a level-capped bot that fits where it stands and has stayed a while in a zone worth much less than the
+        // best zone for it moves there. A few such bots per pass in turn (round robin by BotId, a cursor across passes), so the check
+        // costs the same every pass. The bots that would otherwise take the "fine where it stands" branch are the ones checked.
         Func<uint, int> troubleOf = zone => _trouble.Count(zone, NowUnix());
         var lowValue = new HashSet<Guid>();
-        if (value is not null && pop.ValueChecksPerPass > 0)
+        if (valued && pop.ValueChecksPerPass > 0 && pop.ValueRelocateBelowPct > 0)
         {
-            HashSet<Guid> listed = [.. candidates.Select(c => c.Bot.BotId)];
             long stayedSince = NowUnix() - pop.ValueRelocateMinStayMinutes * 60L;
-            PopulationBotFacts[] eligible = [.. ctx.Input.Running
-                .Where(f => !listed.Contains(f.BotId) && f.Level >= PlayerbotPopulationOptions.MaxLevel && f.Autonomous && !f.Busy && !f.Dead && !f.Vetoed && !f.Stalled
-                    && ctx.Members.TryGetValue(f.BotId, out PlayerbotPopulationMember? m) && m.UpdatedUnix <= stayedSince
-                    && atlas.Find(f.ZoneId) is { } zone && PopulationZoneAtlas.Fits(zone, f.Level, f.Team, rule))
+            PopulationBotFacts[] eligible = [.. candidates
+                .Where(c => !c.Stuck && c.Zone is not null && c.Bot.Level >= PlayerbotPopulationOptions.MaxLevel && !c.Bot.Stalled
+                    && ctx.Members.TryGetValue(c.Bot.BotId, out PlayerbotPopulationMember? m) && m.UpdatedUnix <= stayedSince
+                    && (c.Bot.Level <= c.Zone.MaxLevel + pop.OutlevelMargin || Reaches(c.Zone, c.Bot))
+                    && !PopulationZoneAtlas.UnderLevelled(c.Zone, c.Bot.Level, c.Bot.Team, rule))
+                .Select(c => c.Bot)
                 .OrderBy(f => f.BotId)];
             int start = Array.FindIndex(eligible, f => f.BotId.CompareTo(_valueCursor) > 0);
             PopulationBotFacts[] checks = [.. Enumerable.Range(0, Math.Min(pop.ValueChecksPerPass, eligible.Length))
@@ -2304,7 +2310,6 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 _valueCursor = checks[^1].BotId;
                 Guid[] low = await world.InvokeAsync(() => checks.Where(f => IsLowValue(f)).Select(f => f.BotId).ToArray(), ct).ConfigureAwait(false);
                 lowValue.UnionWith(low);
-                candidates = [.. candidates, .. checks.Where(f => lowValue.Contains(f.BotId)).Select(f => (Bot: f, Zone: atlas.Find(f.ZoneId), Stuck: false))];
             }
         }
 
@@ -2313,7 +2318,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             if (moved >= pop.MaxRelocationsPerInterval) break;
             PlayerbotPopulationMember member = ctx.Members[bot.BotId];
             bool lowValueMove = lowValue.Contains(bot.BotId);
-            if (!stuck && !lowValueMove && current is not null && bot.Level <= current.MaxLevel + pop.OutlevelMargin
+            if (!stuck && !lowValueMove && current is not null && (bot.Level <= current.MaxLevel + pop.OutlevelMargin || Reaches(current, bot))
                 && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, rule))
             {
                 // Fine where it stands (it may have travelled on by itself): only record the zone.
@@ -2334,9 +2339,9 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 Func<WorldSafeLoc, int, bool> safe = (location, level) => _provisioner.IsSafe(ctx.Input.Facts!, location, checked((byte)level), player.FactionTemplate);
                 Func<uint, bool> vetoed = zone => _vetoes.IsVetoed(bot.BotId, zone, NowUnix());
                 PopulationSafeSelection? picked = null;
-                if (value is not null)
-                    picked = atlas.PickValued(ProfileOf(player), rule, value, weights, ctx.Assigned, _random, safe,
-                        lowValueMove ? zone => zone == bot.ZoneId || vetoed(zone) : vetoed, troubleOf);
+                if (valued)
+                    picked = atlas.PickValued(ProfileOf(player), rule, value!, weights, ctx.Assigned, _random, safe,
+                        zone => zone == bot.ZoneId || vetoed(zone), troubleOf);
                 // A bot that only wants a better zone stays put rather than going to a random fitting one.
                 if (picked is null && !lowValueMove) picked = atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random, safe, vetoed);
                 return (picked, false);
@@ -2366,12 +2371,13 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         // World thread: the bot's zone is worth less than ValueRelocateBelowPct percent of the best zone for it, and the best is another zone.
         bool IsLowValue(PopulationBotFacts bot)
         {
+            if (pop.ValueRelocateBelowPct <= 0) return false;
             if (ctx.Input.Managed.FindSession(bot.BotId)?.Player is not { } player || PopulationProvisioner.IsInTransit(player)) return false;
             if (atlas.Find(bot.ZoneId) is not { } zone) return false;
             PopulationBotProfile profile = ProfileOf(player);
             IReadOnlyList<ZoneScore> ranking = atlas.Rank(profile, rule, value!, weights, ctx.Assigned,
-                zoneId => _vetoes.IsVetoed(bot.BotId, zoneId, NowUnix()), troubleOf);
-            if (ranking.Count == 0 || ranking[0].ZoneId == bot.ZoneId) return false;
+                zoneId => zoneId == bot.ZoneId || _vetoes.IsVetoed(bot.BotId, zoneId, NowUnix()), troubleOf);
+            if (ranking.Count == 0) return false;
             ZoneScore here = PopulationZoneScoring.Score(zone, value!.Find(zone.ZoneId), profile, weights, troubleOf(zone.ZoneId), ctx.Assigned.GetValueOrDefault(zone.ZoneId));
             return here.Total < ranking[0].Total * pop.ValueRelocateBelowPct / 100.0;
         }

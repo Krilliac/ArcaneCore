@@ -80,6 +80,7 @@ public sealed partial class PlayerbotPopulationFeature
         QuestNpcServices? questNpc = null;
         LootContent? loot = null;
         GameItems.ItemsFeature? itemsFeature = null;
+        IItemTemplateStore? itemStore = null;
         FactionTemplateCatalog? factions = null;
         ReputationService? reputation = null;
         if (fake is null)
@@ -88,6 +89,7 @@ public sealed partial class PlayerbotPopulationFeature
             loot = services.GetService<GameObjectLootFeature>()?.LootContent;
             itemsFeature = services.GetService<GameItems.ItemsFeature>();
             factions = FactionTemplatesOf(world);
+            itemStore = itemsFeature?.LoadedStore; // once: the key and the item reads see the same store
             if (creatures is null || !terrain.Enabled || questNpc is null || loot is null || itemsFeature is null || factions is not { Count: > 0 }) return;
             reputation = services.GetService<ReputationFeature>()?.Service;
         }
@@ -105,7 +107,7 @@ public sealed partial class PlayerbotPopulationFeature
             : string.Create(CultureInfo.InvariantCulture,
                 $"{allowed}|{creatures!.DefinitionsVersion}|{RuntimeHelpers.GetHashCode(areas)}|{RuntimeHelpers.GetHashCode(creatures)}"
                 + $"|{RuntimeHelpers.GetHashCode(questNpc!.Quests)}|{RuntimeHelpers.GetHashCode(questNpc.Npcs)}|{RuntimeHelpers.GetHashCode(loot!)}"
-                + $"|{RuntimeHelpers.GetHashCode(itemsFeature!.LoadedStore)}|{RuntimeHelpers.GetHashCode(maps.AreaTriggers)}"
+                + $"|{RuntimeHelpers.GetHashCode(itemStore!)}|{RuntimeHelpers.GetHashCode(maps.AreaTriggers)}"
                 + $"|{RuntimeHelpers.GetHashCode(reputation?.OnKillEntries)}|{RuntimeHelpers.GetHashCode(factions!)}");
         if (key == _zoneValueKey) return;
         _zoneValueKey = key;
@@ -136,7 +138,7 @@ public sealed partial class PlayerbotPopulationFeature
 
             QuestStore quests = questNpc!.Quests;
             NpcStore npcs = questNpc.Npcs;
-            IItemTemplateStore items = itemsFeature!.Templates;
+            IItemTemplateStore items = itemStore!;
             CreatureContent content = creatures!;
             sources = new PopulationZoneValueSources(
                 [.. _options.AllowedMaps],
@@ -226,11 +228,19 @@ public sealed partial class PlayerbotPopulationFeature
         QuestNpcServices? questNpc = services.GetService<QuestNpcFeature>()?.Services;
         PlayerQuestLog? log = questNpc?.StateOf(player)?.Quests;
         ReputationService? reputation = services.GetService<ReputationFeature>()?.Service;
+        IItemTemplateStore? itemStore = services.GetService<GameItems.ItemsFeature>()?.Templates;
         var worn = new Dictionary<uint, int>();
+        var usable = new Dictionary<uint, bool>();
         return new PopulationBotProfile(player.Level, player.Team, (byte)player.Race, (byte)player.Class, player.Money, player.MapId, player.X, player.Y)
         {
             QuestDone = id => log is not null && questNpc!.Quests.Get(id) is { } quest && (log.RewardStatus(quest) || log.IsCurrent(id)),
             RankOf = faction => reputation is null ? ReputationRank.Neutral : reputation.GetRank(player, faction),
+            CanUse = itemId =>
+            {
+                if (!usable.TryGetValue(itemId, out bool can))
+                    usable[itemId] = can = itemStore?.Find(itemId) is { } template && player.Inventory.CanUseItem(template) == InventoryResult.Ok;
+                return can;
+            },
             EquippedItemLevel = inventoryType =>
             {
                 if (!worn.TryGetValue(inventoryType, out int level)) worn[inventoryType] = level = EquippedItemLevelOf(player, inventoryType);
