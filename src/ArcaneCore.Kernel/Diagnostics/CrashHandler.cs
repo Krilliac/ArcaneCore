@@ -259,6 +259,12 @@ public sealed class CrashHandler : IDisposable
             return true;
         }
 
+        // Task.Wait / WaitAll at shutdown wrap cancelled tasks in an AggregateException: the same expected cancellation signal.
+        if (exception is AggregateException aggregate && IsCancellationOnly(aggregate))
+        {
+            return true;
+        }
+
         if (exception is ArgumentOutOfRangeException { ParamName: "packet" or "payload" })
         {
             return true;
@@ -293,6 +299,25 @@ public sealed class CrashHandler : IDisposable
         }
 
         return false;
+    }
+
+    private static bool IsCancellationOnly(AggregateException aggregate)
+    {
+        System.Collections.ObjectModel.ReadOnlyCollection<Exception> inner = aggregate.Flatten().InnerExceptions;
+        if (inner.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (Exception e in inner)
+        {
+            if (e is not OperationCanceledException)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static bool InnerChainContainsCancellationOrSocket(Exception exception)

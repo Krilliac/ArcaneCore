@@ -96,6 +96,17 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                 var options = new PlayerbotOptions { Enabled = true };
                 var destinations = new PlayerbotWorldDestinations(session, options);
                 var goals = new PlayerbotQuestGoals(session, options);
+                // The candidate scan stops judging starters once the quest phase's 25 ms wall budget is spent. On a loaded runner it was,
+                // and the supported giver read as no candidate. A probe on a manual clock holds the phase's time still, so the filter
+                // (not the machine's speed) decides each answer, the "no candidate" ones included.
+                var clock = new PlayerbotThinkProbeTests.ManualClock();
+                bool HasCandidate()
+                {
+                    var probe = new PlayerbotThinkProbe(clock);
+                    probe.Begin();
+                    try { return goals.HasCandidate(player); }
+                    finally { probe.End(); }
+                }
 
                 // When only the unsupported quests are rewardable, neither travel nor the visible giver selects them.
                 services.Options.RewardMode = QuestRewardMode.AllowlistOnly;
@@ -111,7 +122,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                 ];
                 Assert.False(destinations.HasQuestCandidate(player));
                 player.VisibleObjects.Add(UnsupportedMechanicsFixture.GiverGuid);
-                Assert.False(goals.HasCandidate(player));
+                Assert.False(HasCandidate());
 
                 // Adding the supported kill quest makes the giver eligible for that quest only.
                 services.Options.OrdinaryRewardQuestIds =
@@ -119,7 +130,7 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
                     .. services.Options.OrdinaryRewardQuestIds,
                     UnsupportedMechanicsFixture.SupportedKillQuest,
                 ];
-                Assert.True(goals.HasCandidate(player));
+                Assert.True(HasCandidate());
                 return true;
             });
         }

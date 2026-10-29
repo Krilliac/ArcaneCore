@@ -187,6 +187,49 @@ public sealed class PlayerbotTravelPlannerTests
         Assert.Equal([TravelMeans.Walk, TravelMeans.MagePortal, TravelMeans.Walk], Means(r));
     }
 
+    // The Teldrassil layout of issue cluster #1456/#1485/#1569, on Kalimdor: the upper level of the tree, the Rut'theran landing and the
+    // mainland are three walking components that no walk joins. The coordinates are the live ones (trigger 527's volume and exit, the
+    // Rut'theran dock, a goal in Ashenvale); the Auberdine port is a stand-in west of x = 7000.
+    internal static readonly TravelPlace TreeStart = Tp(9054f, 1599f, 1335f);
+    internal static readonly TravelPlace DarnassusPortal = Tp(9947.48f, 2630.04f, 1318.6f);
+    internal static readonly TravelPlace RuttheranLanding = Tp(8786f, 969f, 30f);
+    internal static readonly TravelPlace RuttheranPort = Tp(8600f, 800f, 0f);
+    internal static readonly TravelPlace AuberdinePort = Tp(6500f, 800f, 0f);
+    internal static readonly TravelPlace AshenvaleGoal = Tp(3522f, 1190f, -18f);
+
+    internal static TravelPlace Tp(float x, float y, float z) => new(Kalimdor, new Vector3(x, y, z));
+
+    /// <summary>0: the tree's upper level, 1: the Rut'theran landing and dock, 2: the mainland, -1: nowhere known.</summary>
+    internal static int TeldrassilComponent(TravelPlace p)
+    {
+        Vector3 v = p.Position;
+        if (v.X > 9000f && v.Y > 1000f) return 0;
+        if (v.X is > 8500f and < 9000f && v.Z < 100f) return 1;
+        return v.X < 7000f ? 2 : -1;
+    }
+
+    internal static TravelFacts TeldrassilFacts() => Facts() with
+    {
+        Walkable = (a, b) => TeldrassilComponent(a) == TeldrassilComponent(b),
+        Ships = [Ship(176244, TravelMeans.Boat, RuttheranPort, AuberdinePort, 300)],
+    };
+
+    /// <summary>
+    /// The guard of the Teldrassil stub: with no trigger edge, the bot on the tree's upper level has no route to the mainland, which is
+    /// the live "the replan from here found no route". It also proves the stub really separates the three components.
+    /// </summary>
+    [Fact]
+    public void TeldrassilStub_WithoutATriggerEdge_HasNoRouteOffTheTree()
+    {
+        TravelFacts f = TeldrassilFacts();
+        Assert.False(f.Walkable!(TreeStart, RuttheranLanding));
+        Assert.False(f.Walkable(RuttheranPort, AuberdinePort));
+        Assert.False(f.Walkable(TreeStart, AshenvaleGoal));
+        Assert.True(f.Walkable(RuttheranLanding, RuttheranPort));
+        Assert.Null(PlayerbotTravelPlanner.Plan(f, TreeStart, AshenvaleGoal));
+        Assert.Null(PlayerbotTravelPlanner.Plan(f, TreeStart, AuberdinePort));
+    }
+
     [Fact]
     public void Unreachable_IsNull()
     {

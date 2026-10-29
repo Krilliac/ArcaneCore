@@ -77,15 +77,27 @@ public sealed class DeathOutcomeWatcher : IDisposable
         _world.WorldTick -= OnWorldTick;
         foreach (Map map in _world.Maps)
         {
-            map.Combat.UnitKilled -= OnKilled;
+            Unsubscribe(map);
         }
 
         _watched.Clear();
     }
 
-    private void Subscribe(Map map) => map.Combat.UnitKilled += OnKilled;
+    private void Subscribe(Map map)
+    {
+        if (map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combat.UnitKilled += OnKilled;
+        }
+    }
 
-    private void Unsubscribe(Map map) => map.Combat.UnitKilled -= OnKilled;
+    private void Unsubscribe(Map map)
+    {
+        if (map.FindUpdater<MapCombat>() is { } combat)
+        {
+            combat.UnitKilled -= OnKilled;
+        }
+    }
 
     private void OnWorldTick(uint diffMs)
     {

@@ -109,17 +109,17 @@ public sealed class ProgressionFeature : IWorldFeature, ICharacterHooks, IDispos
 
     private void OnMapCreated(Map map)
     {
-        if (_combat.Add(map.Combat))
+        if (map.FindUpdater<MapCombat>() is { } combat && _combat.Add(combat))
         {
-            map.Combat.UnitKilled += OnUnitKilled;
+            combat.UnitKilled += OnUnitKilled;
         }
     }
 
     private void OnMapUnloading(Map map)
     {
-        if (_combat.Remove(map.Combat))
+        if (map.FindUpdater<MapCombat>() is { } combat && _combat.Remove(combat))
         {
-            map.Combat.UnitKilled -= OnUnitKilled;
+            combat.UnitKilled -= OnUnitKilled;
         }
     }
 

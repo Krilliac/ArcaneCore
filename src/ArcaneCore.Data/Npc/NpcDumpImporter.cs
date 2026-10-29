@@ -183,7 +183,7 @@ public sealed class NpcDumpImporter
     }
 
     /// <summary>
-    /// Refresh the broadcast-text form of the NPC texts (world schema 57) without touching the inline texts. A dump with no
+    /// Refresh the broadcast-text form of the NPC texts (world schema 60) without touching the inline texts. A dump with no
     /// <c>npc_text_broadcast_text</c> row leaves the table as it is.
     /// </summary>
     public async Task<int> RefreshTextBroadcastsAsync(WorldDbContext db, CancellationToken cancellationToken = default)

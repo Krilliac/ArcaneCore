@@ -537,6 +537,7 @@ public sealed class PlayerbotChatSafetyTests
         Assert.True(filter.Size.Terms > 50);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public void Screening_LongAndHostileInput_TakesLinearTime()
     {

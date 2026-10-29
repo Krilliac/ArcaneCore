@@ -52,8 +52,8 @@ public sealed class DuelEndToEndTests
         byte[] requestedB = await b.ReadUntilAsync(WorldOpcode.SmsgDuelRequested);
         Assert.Equal(requestedA, requestedB);
         ulong flag = await host.PlayerStateAsync("Duela", p => p.DuelArbiter);
-        await FlagSeenAsync(host, flag);
         Assert.NotEqual(0ul, flag);
+        await FlagSeenAsync(host, flag);
         Assert.Equal([.. Guid(flag), .. Guid(ga)], requestedA);
 
         // The initiator cannot accept its own challenge: nothing starts.

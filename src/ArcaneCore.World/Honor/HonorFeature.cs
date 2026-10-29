@@ -211,16 +211,28 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
             world.PlayerLoggingOut -= OnPlayerLoggingOut;
             foreach (Map map in world.Maps)
             {
-                _rewards?.Detach(map.Combat);
+                OnMapUnloading(map);
             }
         }
 
         await StopAsync().ConfigureAwait(false);
     }
 
-    private void OnMapCreated(Map map) => _rewards?.Attach(map.Combat);
+    private void OnMapCreated(Map map)
+    {
+        if (_rewards is { } rewards && map.FindUpdater<MapCombat>() is { } combat)
+        {
+            rewards.Attach(combat);
+        }
+    }
 
-    private void OnMapUnloading(Map map) => _rewards?.Detach(map.Combat);
+    private void OnMapUnloading(Map map)
+    {
+        if (_rewards is { } rewards && map.FindUpdater<MapCombat>() is { } combat)
+        {
+            rewards.Detach(combat);
+        }
+    }
 
     private void OnPlayerLoggingOut(Player player)
     {

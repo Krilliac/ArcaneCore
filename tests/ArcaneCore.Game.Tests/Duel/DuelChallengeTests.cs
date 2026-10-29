@@ -67,6 +67,49 @@ public sealed class DuelChallengeTests
     }
 
     [Fact]
+    public void TheFlagCreate_ReachesEveryDuellist_BeforeTheDuelRequested()
+    {
+        using var rig = new DuelRig();
+        rig.World.Options.UpdateCompressionThreshold = 0; // plain SMSG_UPDATE_OBJECT, so the create block's guid can be read
+        rig.ClearPackets();
+
+        Assert.Equal(SpellCastResult.CastOk, CastDuel(rig, rig.A, rig.B));
+
+        GameObject flag = Assert.Single(Flags(rig));
+        byte[][] markers = [.. new[] { ObjectUpdateType.CreateObject, ObjectUpdateType.CreateObject2 }.Select(type =>
+        {
+            var create = new PacketWriter(16);
+            create.WriteByte((byte)type);
+            create.WritePackedGuid(flag.Guid.Value);
+            return create.ToArray();
+        })];
+        foreach (FakeSession session in new[] { rig.SessionA, rig.SessionB })
+        {
+            List<(WorldOpcode Opcode, byte[] Payload)> sent = [.. session.Sent.ToArray().Select(p => (p.Opcode, p.Payload))];
+            int created = sent.FindIndex(p => p.Opcode == WorldOpcode.SmsgUpdateObject && markers.Any(marker => p.Payload.AsSpan().IndexOf(marker) >= 0));
+            int requested = sent.FindIndex(p => p.Opcode == WorldOpcode.SmsgDuelRequested);
+            Assert.True(created >= 0, "the flag create was never sent");
+            Assert.True(requested >= 0, "SMSG_DUEL_REQUESTED was never sent");
+            Assert.True(created < requested, $"flag create at {created} must precede SMSG_DUEL_REQUESTED at {requested}");
+        }
+    }
+
+    [Fact]
+    public void AnnounceObject_IgnoresAPlayer_AndAnObjectThatIsNotInThisMap()
+    {
+        using var rig = new DuelRig();
+        var stray = new OwnedUnit(); // never spawned: its Map is null
+        rig.ClearPackets();
+
+        rig.Map.AnnounceObject(rig.B);
+        rig.Map.AnnounceObject(stray);
+
+        Assert.Empty(rig.SessionA.Sent);
+        Assert.Empty(rig.SessionB.Sent);
+        Assert.Throws<ArgumentNullException>(() => rig.Map.AnnounceObject(null!));
+    }
+
+    [Fact]
     public void TheCastCheck_RefusesNonPlayerTargets_AndSelf()
     {
         using var rig = new DuelRig();

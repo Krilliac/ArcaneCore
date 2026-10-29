@@ -51,11 +51,11 @@ public sealed class NpcTextBroadcastRow
     public uint BroadcastTextId7 { get; set; }
 }
 
-/// <summary>World schema 57: <c>npc_text_broadcast_text</c>, the broadcast-text form of gossip greeting texts.</summary>
+/// <summary>World schema 60: <c>npc_text_broadcast_text</c>, the broadcast-text form of gossip greeting texts.</summary>
 public sealed class NpcTextBroadcastDataModule : IDataModule
 {
     /// <summary>The world schema version this module arrives in.</summary>
-    public const int Version = 57;
+    public const int Version = 60;
 
     public const string Table = "npc_text_broadcast_text";
 

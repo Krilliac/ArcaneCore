@@ -324,6 +324,7 @@ public sealed class SqliteWriteGateFairnessTests
         Assert.Null(gate.Current);
     }
 
+    [Trait("Category", "Timing")]
     [Fact]
     public async Task ATimedOutWaiter_ReturnsNull_WithinItsBound_AndLeavesTheQueue()
     {
