@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Rules.Bot;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Rules;
 using ArcaneCore.Protocol;
@@ -41,26 +42,17 @@ internal static class PlayerbotLadder
         return LadderStep.Continue;
     }
 
-    /// <summary>The ladder's order before it became rules: the order the brain called the rungs in.</summary>
-    internal static readonly PlayerbotLadderRung[] HardCodedOrder =
-    [
-        PlayerbotLadderRung.HelpErrand,
-        PlayerbotLadderRung.Equipment,
-        PlayerbotLadderRung.ClassUpkeep,
-        PlayerbotLadderRung.ReturnHome,
-        PlayerbotLadderRung.UrgentTown,
-        PlayerbotLadderRung.Policy,
-        PlayerbotLadderRung.Quests,
-        PlayerbotLadderRung.Town,
-        PlayerbotLadderRung.SicknessStandDown,
-        PlayerbotLadderRung.Crafting,
-        PlayerbotLadderRung.Economy,
-        PlayerbotLadderRung.Bank,
-        PlayerbotLadderRung.Opportunities,
-        PlayerbotLadderRung.Trainers,
-        PlayerbotLadderRung.Riding,
-        PlayerbotLadderRung.QuestDestinations,
-    ];
+    /// <summary>The same loop over the ranked candidates of a rule pass (best first).</summary>
+    internal static LadderStep Dispatch(IPlayerbotRungRunner runner, ReadOnlySpan<BotCandidate> candidates)
+    {
+        foreach (BotCandidate candidate in candidates)
+        {
+            LadderStep step = runner.Run(candidate.Rung);
+            if (step != LadderStep.Continue) return step;
+        }
+
+        return LadderStep.Continue;
+    }
 }
 
 /// <summary>
@@ -73,6 +65,7 @@ internal sealed partial class PlayerbotBrain : IPlayerbotRungRunner
     private uint _ladderInterval;
     private bool _ladderTownBegun;
     private bool? _ladderVisibleQuestTarget;
+    private PlayerbotRuleSubject? _ruleSubject;
 
     private LadderStep RunLadder(Player player, uint interval)
     {
@@ -82,11 +75,16 @@ internal sealed partial class PlayerbotBrain : IPlayerbotRungRunner
         _ladderVisibleQuestTarget = null;
         try
         {
-            return PlayerbotLadder.Dispatch(this, PlayerbotLadder.HardCodedOrder);
+            PlayerbotRuleLadder host = PlayerbotRuleLadder.For(_session.Services);
+            PlayerbotRuleSubject subject = _ruleSubject ??= new PlayerbotRuleSubject();
+            subject.Bind(player);
+            host.Ladder.Choose(subject, host.Catalog(), _session.World.NowMs);
+            return PlayerbotLadder.Dispatch(this, subject.Candidates);
         }
         finally
         {
             _ladderPlayer = null;
+            _ruleSubject?.Unbind();
         }
     }
 

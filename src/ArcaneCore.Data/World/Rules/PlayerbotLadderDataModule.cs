@@ -88,3 +88,33 @@ public sealed class PlayerbotLadderDataModule : IDataModule
     {
     }
 }
+
+/// <summary>
+/// The shipped bot content as EF rows, for <c>WorldDbInitializer</c>: each table is filled from <see cref="PlayerbotLadderContent"/> only
+/// when it is empty (the Warden check precedent), so a database that did not get the schema step's rows (a baseline install, a wiped table)
+/// still has the ladder, and a table a server edited is left alone. One source: <see cref="PlayerbotLadderContent"/>, which the schema step
+/// and the brain's fallback use too.
+/// </summary>
+public static class PlayerbotLadderSeed
+{
+    public static IEnumerable<PlayerbotGoalRow> Goals() => PlayerbotLadderContent.Goals.Select(g => new PlayerbotGoalRow
+    {
+        GoalId = g.GoalId, Name = g.Name, BasePriority = g.BasePriority, Enabled = (byte)(g.Enabled ? 1 : 0), Driver = g.Driver,
+        DriverParam1 = g.DriverParam1, DriverParam2 = g.DriverParam2, DriverParam3 = g.DriverParam3, DriverParam4 = g.DriverParam4, Comment = g.Comment,
+    });
+
+    public static IEnumerable<RuleRow> Rules() => PlayerbotLadderContent.Rules.Select(r => new RuleRow
+    {
+        Id = r.Id, Host = r.Host, OwnerKind = r.OwnerKind, OwnerId = r.OwnerId, EventType = r.EventType, EventParam1 = r.EventParam1,
+        EventParam2 = r.EventParam2, EventParam3 = r.EventParam3, EventParam4 = r.EventParam4, PhaseMask = r.PhaseMask, FilterId = r.FilterId,
+        ChancePct = r.ChancePct, ConditionId = r.ConditionId, CooldownMinMs = r.CooldownMinMs, CooldownMaxMs = r.CooldownMaxMs,
+        Priority = r.Priority, Flags = r.Flags, Enabled = (byte)(r.Enabled ? 1 : 0), Comment = r.Comment,
+    });
+
+    public static IEnumerable<RuleActionRow> Actions() => PlayerbotLadderContent.Actions.Select(a => new RuleActionRow
+    {
+        RuleId = a.OwnerId, Seq = a.Seq, ActionType = a.ActionType, Param1 = a.Param1, Param2 = a.Param2, Param3 = a.Param3, Param4 = a.Param4,
+        Param5 = a.Param5, Param6 = a.Param6, TargetType = a.TargetType, TargetParam1 = a.TargetParam1, TargetParam2 = a.TargetParam2,
+        TargetParam3 = a.TargetParam3, DelayMs = a.DelayMs, Flags = a.Flags,
+    });
+}

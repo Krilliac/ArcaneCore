@@ -132,6 +132,21 @@ public sealed class WorldDbInitializer(IServiceProvider services, ILogger<WorldD
                     added = true;
                 }
 
+                // The shipped bot goal ladder (World.Rules.PlayerbotLadderSeed), each table into an empty one only; the brain also
+                // falls back to the same rows from code and warns when the tables hold none.
+                if (!await db.Set<World.Rules.PlayerbotGoalRow>().AnyAsync(ct).ConfigureAwait(false))
+                {
+                    db.Set<World.Rules.PlayerbotGoalRow>().AddRange(World.Rules.PlayerbotLadderSeed.Goals());
+                    added = true;
+                }
+
+                if (!await db.Set<World.Rules.RuleRow>().AnyAsync(ct).ConfigureAwait(false))
+                {
+                    db.Set<World.Rules.RuleRow>().AddRange(World.Rules.PlayerbotLadderSeed.Rules());
+                    db.Set<World.Rules.RuleActionRow>().AddRange(World.Rules.PlayerbotLadderSeed.Actions());
+                    added = true;
+                }
+
                 if (added)
                 {
                     await db.SaveChangesAsync(ct).ConfigureAwait(false);
