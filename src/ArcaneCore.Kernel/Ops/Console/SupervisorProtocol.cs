@@ -115,7 +115,7 @@ public static partial class SupervisorProtocol
     public static bool TryParseHeartbeat(string line, out SupervisorHeartbeatState state)
     {
         state = default;
-        if (line is null || !HeartbeatPattern().IsMatch(line))
+        if (line is null || HasControl(line) || !HeartbeatPattern().IsMatch(line))
         {
             return false;
         }
@@ -134,22 +134,29 @@ public static partial class SupervisorProtocol
         _ => SupervisorStopIntent.Failure,
     };
 
-    /// <summary>The line a child writes when its host starts stopping.</summary>
-    public static string FormatStopping(SupervisorStopIntent intent, int code)
-        => string.Create(CultureInfo.InvariantCulture, $"{Lifecycle} stopping intent={IntentText(intent)} code={code}");
+    /// <summary>
+    /// The line a child writes when its host starts stopping. It carries the supervisor's per-run token, like a lifecycle request: child output also
+    /// holds logged text a player or GM influences, so an unauthenticated stopping line could be forged to get a world killed or left down.
+    /// </summary>
+    public static string FormatStopping(string token, SupervisorStopIntent intent, int code)
+        => string.Create(CultureInfo.InvariantCulture, $"{Lifecycle} stopping token={Sanitize(token)} intent={IntentText(intent)} code={code}");
 
-    public static bool TryParseStopping(string line, out SupervisorStopIntent intent, out int code)
+    /// <summary>Parses a stopping line; the caller must still compare <paramref name="token"/> with the supervisor's. A line holding any control character (a lone CR included) is rejected.</summary>
+    public static bool TryParseStopping(string line, out string token, out SupervisorStopIntent intent, out int code)
     {
+        token = string.Empty;
         intent = default;
         code = 0;
-        string[]? parts = Split(line, 4);
+        string[]? parts = Split(line, 5);
         if (parts is null || parts[0] != Lifecycle || parts[1] != "stopping"
-            || Value(parts[2], "intent") is not { } intentText || !TryParseIntent(intentText, out intent)
-            || Value(parts[3], "code") is not { } codeText || !int.TryParse(codeText, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out code))
+            || Value(parts[2], "token") is not { Length: > 0 } tokenText
+            || Value(parts[3], "intent") is not { } intentText || !TryParseIntent(intentText, out intent)
+            || Value(parts[4], "code") is not { } codeText || !int.TryParse(codeText, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out code))
         {
             return false;
         }
 
+        token = tokenText;
         return true;
     }
 
@@ -241,13 +248,26 @@ public static partial class SupervisorProtocol
 
     private static string[]? Split(string line, int fields)
     {
-        if (string.IsNullOrEmpty(line))
+        if (string.IsNullOrEmpty(line) || HasControl(line))
         {
             return null;
         }
 
         string[] parts = line.Split(' ');
         return parts.Length == fields && Array.TrueForAll(parts, static p => p.Length > 0) ? parts : null;
+    }
+
+    private static bool HasControl(string line)
+    {
+        foreach (char c in line)
+        {
+            if (char.IsControl(c))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? Value(string field, string key)

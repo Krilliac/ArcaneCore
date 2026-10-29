@@ -41,6 +41,7 @@ public sealed class ServerLifecycleCrossWorldTests
 
         string reply = await CommandAsync(admin, ".server restart 60 2 3");
 
+        await TestWait.UntilAsync(() => Lines(stdout).Length == 1, "the request line to be written");
         Assert.Equal(["lifecycle request token=tok realm=3 action=restart delay=60 code=2 by=Admin"], Lines(stdout));
         Assert.Contains("realm 3", reply, StringComparison.Ordinal);
         Assert.Contains("supervisor", reply, StringComparison.OrdinalIgnoreCase);
@@ -57,6 +58,7 @@ public sealed class ServerLifecycleCrossWorldTests
 
         await CommandAsync(admin, ".server shutdown 0 0 2");
 
+        await TestWait.UntilAsync(() => Lines(stdout).Length == 1, "the request line to be written");
         Assert.Equal(["lifecycle request token=tok realm=2 action=shutdown delay=0 code=0 by=Admin"], Lines(stdout));
     }
 
@@ -113,6 +115,60 @@ public sealed class ServerLifecycleCrossWorldTests
         Assert.Contains("Syntax", reply, StringComparison.Ordinal);
         Assert.Empty(Lines(stdout));
         Assert.False(feature.IsDraining);
+    }
+
+    [Theory]
+    [InlineData(".server shutdown 30 2 3", "lifecycle request token=tok realm=3 action=shutdown delay=30 code=2 by=Admin")]
+    [InlineData(".server shutdown 30 5 3", "lifecycle request token=tok realm=3 action=shutdown delay=30 code=5 by=Admin")]
+    [InlineData(".server restart 30 0 3", "lifecycle request token=tok realm=3 action=restart delay=30 code=0 by=Admin")]
+    public async Task ServerLifecycle_WithOtherRealmId_ForwardsTheGivenExitCode(string command, string expected)
+    {
+        var stdout = new StringWriter();
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(new SupervisorProtocolChannel(TextWriter.Synchronized(stdout), "tok", ownRealmId: 1)));
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+
+        await CommandAsync(admin, command);
+
+        await TestWait.UntilAsync(() => Lines(stdout).Length == 1, "the request line to be written");
+        Assert.Equal([expected], Lines(stdout));
+    }
+
+    [Theory]
+    [InlineData(".server shutdown 30 abc 3")]
+    [InlineData(".server shutdown 30 126 3")]
+    public async Task ServerShutdown_WithOtherRealmId_AndBadExitCode_IsAUsageError_AndSendsNothing(string command)
+    {
+        var stdout = new StringWriter();
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(new SupervisorProtocolChannel(TextWriter.Synchronized(stdout), "tok", ownRealmId: 1)));
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+
+        string reply = await CommandAsync(admin, command);
+
+        Assert.Contains("Syntax", reply, StringComparison.Ordinal);
+        await Task.Delay(100);
+        Assert.Empty(Lines(stdout));
+    }
+
+    [Fact]
+    public async Task ServerRestart_WithThisWorldsOwnRealmId_UsesTheGivenExitCode()
+    {
+        await using var host = WorldTestHost.Start(configureServices: s => s.AddSingleton(new SupervisorProtocolChannel(TextWriter.Synchronized(new StringWriter()), "tok", ownRealmId: 1)));
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        ServerLifecycleFeature feature = host.WorldServices.GetRequiredService<ServerLifecycleFeature>();
+        try
+        {
+            await admin.SendChatAsync(ChatType.Say, Language.Common, ".server restart 0 7 1");
+            await TestWait.UntilAsync(() => ExitCodes.Current == 7, "the local restart to store the given exit code");
+        }
+        finally
+        {
+            ExitCodes.Current = ExitCodes.Success;
+            await host.World.InvokeAsync(() =>
+            {
+                feature.Cancel();
+                return 0;
+            });
+        }
     }
 
     [Fact]

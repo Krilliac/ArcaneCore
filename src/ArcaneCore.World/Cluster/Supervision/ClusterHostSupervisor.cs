@@ -313,10 +313,8 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         {
             try
             {
-                while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
-                {
-                    OutputLineReceived?.Invoke(line, isStdErr);
-                }
+                // LF-delimited (a lone CR does not end a line): the protocol lines are matched whole, so a CR inside logged text cannot start a second one.
+                await SupervisorLineReader.ReadLinesAsync(reader, line => OutputLineReceived?.Invoke(line, isStdErr)).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
             {
@@ -743,7 +741,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             foreach (ManagedEntry entry in OrderedEntriesUnderLock())
             {
                 SupervisedProcessConfig cfg = entry.Config;
-                bool alreadyActive = entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff;
+                bool alreadyActive = entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Hung;
                 bool isWorker = string.Equals(cfg.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase);
 
                 if (!alreadyActive)
@@ -1033,7 +1031,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 return;
             }
 
-            if (SupervisorProtocol.TryParseStopping(line, out SupervisorStopIntent intent, out _))
+            // The stop announcement is authenticated like a request: child output includes logged text a player or GM influences, so a token-less
+            // (or wrong-token) stopping line is ordinary output and never starts the stop grace or sets the announced intent.
+            if (SupervisorProtocol.TryParseStopping(line, out string stoppingToken, out SupervisorStopIntent intent, out _) && TokenMatches(stoppingToken))
             {
                 RecordStopping(entry, process, intent);
                 return;
@@ -1056,13 +1056,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             if (!ReferenceEquals(entry.Process, process))
                 return; // a line from an incarnation that has been replaced
 
+            // A heartbeat is liveness only, whatever state it names: the authenticated stopping line is what suspends the hang watch.
             entry.LastBeatTimestamp = _time.GetTimestamp();
-            if (beat == SupervisorHeartbeatState.Stopping)
-            {
-                entry.StopAnnouncedTimestamp ??= entry.LastBeatTimestamp;
-                entry.WakeWatcher();
-            }
-            else if (beat == SupervisorHeartbeatState.Alive && !entry.Armed)
+            if (beat == SupervisorHeartbeatState.Alive && !entry.Armed)
             {
                 entry.Armed = true; // the first world-tick beat arms the hang watch (ready is sent before the world ticks)
                 entry.WakeWatcher();
@@ -1152,6 +1148,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     private bool TokenMatches(string token)
     {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
         byte[] expected = System.Text.Encoding.UTF8.GetBytes(_protocolToken);
         byte[] given = System.Text.Encoding.UTF8.GetBytes(token);
         return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(expected, given);

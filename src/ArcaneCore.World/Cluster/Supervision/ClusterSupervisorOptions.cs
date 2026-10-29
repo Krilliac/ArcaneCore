@@ -230,8 +230,8 @@ public sealed class ClusterSupervisorOptions
     public long? MaxTotalAllocatedMemoryMb { get; set; }
 
     /// <summary>
-    /// How many times a child may be restarted within <see cref="CrashLoopWindowSeconds"/> before the supervisor gives up on it (default 5; 1 to 1000): the next
-    /// failure inside the window leaves it Faulted and is recorded in the fault and anomaly ledgers. A restart request (exit code 2) after a healthy run does not count.
+    /// How many times a child may be restarted within <see cref="CrashLoopWindowSeconds"/> before the supervisor gives up on it (default 5; 1 to 1000): that many
+    /// restarts are allowed, and the next failure inside the window (the one after the last allowed restart) leaves it Faulted and is recorded in the fault and anomaly ledgers. A restart request (exit code 2) after a healthy run does not count.
     /// </summary>
     public int CrashLoopMaxRestarts { get; set; } = 5;
 

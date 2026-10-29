@@ -23,6 +23,10 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
     private readonly ILogger _logger = loggerFactory.CreateLogger("ArcaneCore.SupervisedChild");
     private ConsoleLineReader? _reader;
     private CancellationTokenRegistration _stoppingRegistration;
+    private Task _announcement = Task.CompletedTask;
+
+    /// <summary>The longest <see cref="StopAsync"/> waits for the stopping announcement to be written.</summary>
+    public static readonly TimeSpan AnnouncementWait = TimeSpan.FromSeconds(2);
 
     /// <summary>The reader thread; null when no reader was started. Exposed for tests.</summary>
     public Thread? ReaderThread => _reader?.Thread;
@@ -75,18 +79,29 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
     }
 
     // The host began to stop: say why, from the exit code that will be returned (ServerLifecycleFeature stores it before it calls StopApplication).
+    // StopApplication can be called on the world thread, so the line is composed here but written on the thread pool (a full stdout pipe must not stall
+    // the world); StopAsync waits a bounded time for the write so the line still precedes the exit.
     private void AnnounceStopping()
     {
-        try
+        if (string.IsNullOrEmpty(source.SupervisorToken))
         {
-            int code = ExitCodes.Current;
-            source.Output.WriteLine(SupervisorProtocol.FormatStopping(SupervisorProtocol.IntentFor(code), code));
-            source.Output.Flush();
+            return; // no per-run token, nothing the supervisor could trust
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+
+        int code = ExitCodes.Current;
+        string line = SupervisorProtocol.FormatStopping(source.SupervisorToken, SupervisorProtocol.IntentFor(code), code);
+        _announcement = Task.Run(() =>
         {
-            _logger.LogDebug("the stopping announcement could not be written: {Reason}", ex.GetType().Name);
-        }
+            try
+            {
+                source.Output.WriteLine(line);
+                source.Output.Flush();
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+                _logger.LogDebug("the stopping announcement could not be written: {Reason}", ex.GetType().Name);
+            }
+        });
     }
 
     private void Stop(string reason)
@@ -95,10 +110,17 @@ public sealed class SupervisedChildDrain(ConsoleInputSource source, IHostApplica
         lifetime.StopApplication();
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         _stoppingRegistration.Dispose();
         _reader?.Stop();
-        return Task.CompletedTask;
+        try
+        {
+            await _announcement.WaitAsync(AnnouncementWait, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogDebug("the stopping announcement was still being written after {Seconds} s", AnnouncementWait.TotalSeconds);
+        }
     }
 }

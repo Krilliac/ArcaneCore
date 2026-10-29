@@ -57,27 +57,39 @@ public sealed class SupervisorProtocolTests
         => Assert.Equal(expected, SupervisorProtocol.IntentFor(code));
 
     [Theory]
-    [InlineData(SupervisorStopIntent.Restart, 2, "lifecycle stopping intent=restart code=2")]
-    [InlineData(SupervisorStopIntent.Shutdown, 0, "lifecycle stopping intent=shutdown code=0")]
-    [InlineData(SupervisorStopIntent.Failure, 9, "lifecycle stopping intent=failure code=9")]
+    [InlineData(SupervisorStopIntent.Restart, 2, "lifecycle stopping token=tok intent=restart code=2")]
+    [InlineData(SupervisorStopIntent.Shutdown, 0, "lifecycle stopping token=tok intent=shutdown code=0")]
+    [InlineData(SupervisorStopIntent.Failure, 9, "lifecycle stopping token=tok intent=failure code=9")]
     public void Stopping_RoundTrips(SupervisorStopIntent intent, int code, string expectedLine)
     {
-        string line = SupervisorProtocol.FormatStopping(intent, code);
+        string line = SupervisorProtocol.FormatStopping("tok", intent, code);
 
         Assert.Equal(expectedLine, line);
-        Assert.True(SupervisorProtocol.TryParseStopping(line, out SupervisorStopIntent parsedIntent, out int parsedCode));
+        Assert.True(SupervisorProtocol.TryParseStopping(line, out string parsedToken, out SupervisorStopIntent parsedIntent, out int parsedCode));
+        Assert.Equal("tok", parsedToken);
         Assert.Equal(intent, parsedIntent);
         Assert.Equal(code, parsedCode);
     }
 
     [Theory]
     [InlineData("lifecycle stopping")]
-    [InlineData("lifecycle stopping intent=sideways code=1")]
-    [InlineData("lifecycle stopping intent=restart code=x")]
-    [InlineData("lifecycle stopping intent=restart")]
-    [InlineData("lifecycle stopped intent=restart code=2")]
+    [InlineData("lifecycle stopping intent=restart code=2")] // no token: unauthenticated
+    [InlineData("lifecycle stopping token= intent=restart code=2")]
+    [InlineData("lifecycle stopping token=t intent=sideways code=1")]
+    [InlineData("lifecycle stopping token=t intent=restart code=x")]
+    [InlineData("lifecycle stopping token=t intent=restart")]
+    [InlineData("lifecycle stopped token=t intent=restart code=2")]
+    [InlineData("lifecycle stopping token=t intent=restart code=2\r")]
+    [InlineData("\rlifecycle stopping token=t intent=restart code=2")]
+    [InlineData("lifecycle stopping token=t\rintent=restart code=2")]
     public void Stopping_Malformed_IsRejected(string line)
-        => Assert.False(SupervisorProtocol.TryParseStopping(line, out _, out _));
+        => Assert.False(SupervisorProtocol.TryParseStopping(line, out _, out _, out _));
+
+    [Theory]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive\r")]
+    [InlineData("x\rheartbeat 2026-10-29T10:00:00.000Z pid=1 alive")]
+    public void Heartbeat_WithEmbeddedControlCharacters_IsRejected(string line)
+        => Assert.False(SupervisorProtocol.TryParseHeartbeat(line, out _));
 
     [Fact]
     public void LifecycleRequest_RoundTrips_WithTheToken()
@@ -132,7 +144,7 @@ public sealed class SupervisorProtocolTests
 
     [Theory]
     [InlineData("lifecycle request token=t realm=3 action=restart delay=60 code=2 by=Admin")]
-    [InlineData("lifecycle stopping intent=restart code=2")]
+    [InlineData("lifecycle stopping token=t intent=restart code=2")]
     [InlineData("lifecycle restart delay=x code=2 by=Admin")]
     [InlineData("lifecycle restart delay=1 code=200 by=Admin")]
     [InlineData("drain")]

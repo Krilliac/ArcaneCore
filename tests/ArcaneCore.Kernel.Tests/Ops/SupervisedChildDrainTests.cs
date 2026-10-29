@@ -57,8 +57,8 @@ public sealed class SupervisedChildDrainTests
         public void Result(SupervisorLifecycleResult result) => Results.Enqueue(result);
     }
 
-    private static ConsoleInputSource ProtocolSource(TextReader reader, TextWriter output, bool protocol = true)
-        => new(reader, output, IsInputRedirected: true, IsUserInteractive: true, IsSupervisedChild: true, SupervisorProtocol: protocol);
+    private static ConsoleInputSource ProtocolSource(TextReader reader, TextWriter output, bool protocol = true, string? token = "tok")
+        => new(reader, output, IsInputRedirected: true, IsUserInteractive: true, IsSupervisedChild: true, SupervisorProtocol: protocol, SupervisorToken: token);
 
     [Theory]
     [InlineData(2, "restart")]
@@ -76,9 +76,10 @@ public sealed class SupervisedChildDrainTests
             await drain.StartAsync(CancellationToken.None);
             ExitCodes.Current = code;
 
-            lifetime.StopApplication();
+            lifetime.StopApplication(); // returns before the line is written: the write is off the calling (world) thread
 
-            Assert.Equal($"lifecycle stopping intent={intent} code={code}{Environment.NewLine}", output.ToString());
+            await drain.StopAsync(CancellationToken.None); // waits (bounded) for the announcement
+            Assert.Equal($"lifecycle stopping token=tok intent={intent} code={code}{Environment.NewLine}", output.ToString());
         }
         finally
         {
@@ -99,9 +100,60 @@ public sealed class SupervisedChildDrainTests
         await drain.StartAsync(CancellationToken.None);
         lifetime.StopApplication();
 
-        Assert.Equal(string.Empty, output.ToString());
         reader.Post(null);
         await drain.StopAsync(CancellationToken.None);
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
+    [Fact]
+    public async Task SupervisedChildDrain_Stopping_WithoutAToken_AnnouncesNothing()
+    {
+        var reader = new BlockingReader();
+        var output = new StringWriter();
+        var lifetime = new FakeLifetime();
+        var drain = new SupervisedChildDrain(ProtocolSource(reader, output, token: null), lifetime, NullLoggerFactory.Instance);
+
+        await drain.StartAsync(CancellationToken.None);
+        lifetime.StopApplication();
+
+        reader.Post(null);
+        await drain.StopAsync(CancellationToken.None);
+        Assert.Equal(string.Empty, output.ToString());
+    }
+
+    private sealed class BlockedWriter : StringWriter
+    {
+        public ManualResetEventSlim Release { get; } = new(false);
+
+        public override void WriteLine(string? value)
+        {
+            Release.Wait();
+            base.WriteLine(value);
+        }
+    }
+
+    [Fact]
+    public async Task SupervisedChildDrain_Stopping_DoesNotBlockTheCallerOnAStalledPipe()
+    {
+        var reader = new BlockingReader();
+        var output = new BlockedWriter();
+        var lifetime = new FakeLifetime();
+        var drain = new SupervisedChildDrain(ProtocolSource(reader, output), lifetime, NullLoggerFactory.Instance);
+        try
+        {
+            await drain.StartAsync(CancellationToken.None);
+
+            lifetime.StopApplication(); // would hang here if the write ran on the calling thread
+
+            output.Release.Set();
+            await drain.StopAsync(CancellationToken.None);
+            Assert.Equal($"lifecycle stopping token=tok intent=shutdown code=0{Environment.NewLine}", output.ToString());
+        }
+        finally
+        {
+            output.Release.Set();
+            reader.Post(null);
+        }
     }
 
     [Fact]

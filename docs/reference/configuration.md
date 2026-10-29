@@ -318,7 +318,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `Cluster:Supervisor:CrashLoopMaxRestarts` | `int` | `5` | - | How many times a child may be restarted within `CrashLoopWindowSeconds` before the supervisor gives up on it (default 5; 1 to 1000): the next failure inside the window leaves it Faulted and is recorded in the fault and anomaly ledgers. A restart request (exit code 2) after a healthy run does not count. |
+| `Cluster:Supervisor:CrashLoopMaxRestarts` | `int` | `5` | - | How many times a child may be restarted within `CrashLoopWindowSeconds` before the supervisor gives up on it (default 5; 1 to 1000): that many restarts are allowed, and the next failure inside the window (the one after the last allowed restart) leaves it Faulted and is recorded in the fault and anomaly ledgers. A restart request (exit code 2) after a healthy run does not count. |
 | `Cluster:Supervisor:CrashLoopWindowSeconds` | `int` | `300` | - | The window the crash-loop count is taken over, in seconds (default 300; 10 to 86400). |
 | `Cluster:Supervisor:Enabled` | `bool` | `false` | - | Runs this World process as the host supervisor only (default: false): it launches and watches the configured `Processes` and starts no world, database, listener or feature. Off, a World start is unchanged. |
 | `Cluster:Supervisor:HangCaptureDirectory` | `string` | `"logs/supervisor-captures"` | - | Where hang captures (stack reports and dumps) are written (default `logs/supervisor-captures`); relative to the working directory. |

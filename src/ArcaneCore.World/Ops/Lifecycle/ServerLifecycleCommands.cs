@@ -49,7 +49,7 @@ public static class ServerLifecycleCommands
         }
 
         int exitCode = defaultExitCode;
-        if (parts.Length == 2 && !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out exitCode))
+        if (parts.Length >= 2 && !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out exitCode))
         {
             return false;
         }

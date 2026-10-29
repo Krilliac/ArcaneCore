@@ -6,7 +6,10 @@ namespace ArcaneCore.World.Ops.Lifecycle;
 /// This world's line to the cluster host supervisor that launched it: whether there is one, which realm id the supervisor's configuration gave this
 /// process, and the one place a protocol line is written (standard output, which the supervisor reads). Without a supervisor
 /// (<see cref="IsSupervised"/> false) nothing is ever written.
-/// <para>Thread affinity: <see cref="Send"/> may be called from the world thread; it writes one line to a synchronized writer and returns.</para>
+/// <para>
+/// Thread affinity: <see cref="Send"/> may be called from the world thread. It only queues the line; a single thread-pool drain writes and flushes the
+/// queued lines in order, one whole line per write, so a full stdout pipe never stalls the caller.
+/// </para>
 /// </summary>
 public sealed class SupervisorProtocolChannel
 {
@@ -14,6 +17,9 @@ public sealed class SupervisorProtocolChannel
         () => FromEnvironment(Environment.GetEnvironmentVariable, Console.Out), LazyThreadSafetyMode.ExecutionAndPublication);
 
     private readonly TextWriter _output;
+    private readonly Lock _gate = new();
+    private readonly Queue<string> _queue = new();
+    private bool _draining;
 
     /// <param name="output">Where protocol lines go (must be safe to write from several threads).</param>
     /// <param name="token">The supervisor's per-run secret; null or empty means no supervisor.</param>
@@ -51,22 +57,54 @@ public sealed class SupervisorProtocolChannel
         return new SupervisorProtocolChannel(output, environment(SupervisorProtocol.TokenEnvironmentVariable), realm);
     }
 
-    /// <summary>Writes one protocol line and flushes it. Not supervised: does nothing.</summary>
+    /// <summary>Queues one protocol line for writing (in order, flushed) and returns at once. Not supervised: does nothing.</summary>
     public void Send(string line)
     {
+        ArgumentNullException.ThrowIfNull(line);
         if (!IsSupervised)
         {
             return;
         }
 
-        try
+        lock (_gate)
         {
-            _output.WriteLine(line);
-            _output.Flush();
+            _queue.Enqueue(line);
+            if (_draining)
+            {
+                return;
+            }
+
+            _draining = true;
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+
+        ThreadPool.UnsafeQueueUserWorkItem(static channel => channel.Drain(), this, preferLocal: false);
+    }
+
+    private void Drain()
+    {
+        while (true)
         {
-            // The supervisor's pipe is gone: it is exiting, and so is this process.
+            string line;
+            lock (_gate)
+            {
+                if (!_queue.TryDequeue(out string? next))
+                {
+                    _draining = false;
+                    return;
+                }
+
+                line = next;
+            }
+
+            try
+            {
+                _output.WriteLine(line);
+                _output.Flush();
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+                // The supervisor's pipe is gone: it is exiting, and so is this process.
+            }
         }
     }
 }

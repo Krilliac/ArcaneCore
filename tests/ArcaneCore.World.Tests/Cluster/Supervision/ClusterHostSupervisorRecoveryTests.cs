@@ -208,7 +208,7 @@ public sealed class ClusterHostSupervisorRecoveryTests
         child.Beat("ready");
         child.Beat();
         child.Emit("ordinary log line");
-        child.Emit("lifecycle stopping intent=shutdown code=0");
+        child.Emit(SupervisorProtocol.FormatStopping(child.Token!, SupervisorStopIntent.Shutdown, ExitCodes.Success));
         rig.Clock.Advance(TimeSpan.FromSeconds(5));
 
         Assert.Contains("ordinary log line", rig.ConsoleText, StringComparison.Ordinal);
@@ -303,7 +303,7 @@ public sealed class ClusterHostSupervisorRecoveryTests
     }
 
     [Fact]
-    public async Task Hang_SuspendedWhileStopping_StopGraceKill_UsesAnnouncedIntent()
+    public async Task StoppingLine_WithToken_SuspendsHangWatch_AndStopGraceKillUsesAnnouncedIntent()
     {
         var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
         await using var rig = new SupervisorRig(SupervisorRig.OneProcess(configure: c => c.DrainTimeoutMs = 30_000), launcher, holdAllDelays: true);
@@ -311,7 +311,7 @@ public sealed class ClusterHostSupervisorRecoveryTests
         ScriptedProcess stopping = launcher.Last;
         stopping.Beat();
         rig.Clock.Advance(TimeSpan.FromSeconds(100));
-        stopping.Emit(SupervisorProtocol.FormatStopping(SupervisorStopIntent.Restart, ExitCodes.Restart));
+        stopping.Emit(SupervisorProtocol.FormatStopping(stopping.Token!, SupervisorStopIntent.Restart, ExitCodes.Restart));
 
         rig.Clock.Advance(TimeSpan.FromSeconds(25)); // 125 s since the last beat, but only 25 s into a stop: the hang watch is suspended
         await rig.Delays.PulseAsync();
