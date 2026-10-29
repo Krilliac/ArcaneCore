@@ -744,28 +744,35 @@ public static partial class ContentImporterCli
     /// The refresh's schema gate: a world already at this importer's schema passes; one behind it is refused (nothing written) unless
     /// <paramref name="migrate"/>, in which case it is upgraded first and the step is reported. Built together with a lane that raised the
     /// world schema, a silent upgrade here would migrate the live world before the server that needs it is deployed.
+    /// <para>
+    /// The writing verbs (<c>import</c>, <c>import-dbc</c>, <c>import-map-dbc</c>, <c>proc-events</c>, <c>spell-threat</c>) share this gate with
+    /// <paramref name="createMissing"/> set: they may still create a database that holds no schema (the normal way to build a new world), but
+    /// an existing one behind this importer's schema is refused unless <c>--migrate</c> (the <c>CreateOnly</c> start-up policy, not the
+    /// library default <c>Always</c>, which would upgrade a production world silently).
+    /// </para>
     /// </summary>
-    private static async Task EnsureRefreshSchemaAsync(WorldDbContext db, bool migrate, TextWriter o, CancellationToken ct)
+    private static async Task EnsureRefreshSchemaAsync(WorldDbContext db, bool migrate, TextWriter o, CancellationToken ct, string verb = "refresh", bool createMissing = false)
     {
         SchemaPlan before = await SchemaPlanner.PlanAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+        SchemaPolicy policy = migrate ? SchemaPolicy.Always : createMissing ? SchemaPolicy.CreateOnly : SchemaPolicy.Never;
         try
         {
             await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema,
-                new SchemaUpgradeOptions { Policy = migrate ? SchemaPolicy.Always : SchemaPolicy.Never }, cancellationToken: ct).ConfigureAwait(false);
+                new SchemaUpgradeOptions { Policy = policy }, cancellationToken: ct).ConfigureAwait(false);
         }
         catch (SchemaPolicyException ex)
         {
             string have = ex.DatabaseVersion is { } version ? $"schema version {version}" : $"no complete schema ({ex.State})";
             throw new CliException(ExitCodes.Schema,
-                $"the world database has {have}, this importer's world schema is {ex.CodeVersion}; refresh does not migrate on its own. Start the " +
-                "world server from the build this importer belongs to once (it migrates at start) or pass --migrate. Nothing was changed.", ex);
+                $"the world database has {have}, this importer's world schema is {ex.CodeVersion}; {verb} does not migrate on its own. Start the " +
+                "world server from the build this importer belongs to once (it migrates at start), run 'arcane-db upgrade', or pass --migrate. Nothing was changed.", ex);
         }
 
         if (before.DatabaseVersion is { } from && from != before.CodeVersion && migrate)
         {
             o.WriteLine($"world schema {from} -> {before.CodeVersion} (--migrate)");
         }
-        else
+        else if (!createMissing)
         {
             o.WriteLine($"world schema {before.DatabaseVersion?.ToString(CultureInfo.InvariantCulture) ?? "?"}");
         }

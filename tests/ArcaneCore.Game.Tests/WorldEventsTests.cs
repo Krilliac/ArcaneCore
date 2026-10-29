@@ -59,6 +59,33 @@ public sealed class WorldEventsTests
         Assert.Single(saves.Saved);
     }
 
+    /// <summary>
+    /// Shutdown invariant (wiring audit D5): <see cref="WorldRuntime.Stop"/>'s <see cref="WorldRuntime.SaveAll"/> saves only the core
+    /// state and raises no logout. Every session kind (socket, gateway-backed, managed bot) closes before the world stops by posting
+    /// <see cref="WorldRuntime.RemovePlayer"/>, and Stop drains those posts first, so each one runs the full logout (auras,
+    /// cooldowns, pets) and nothing is left for SaveAll.
+    /// </summary>
+    [Fact]
+    public async Task ARemovalPostedBeforeStop_RunsTheFullLogout_AndLeavesNoOneForSaveAll()
+    {
+        var saves = new RecordingSaveQueue();
+        using WorldRuntime world = TestWorld.CreateRuntime(saves);
+        world.Options.TickIntervalMs = 1000;
+        Player player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession(1));
+        world.AddPlayer(player);
+        int loggingOut = 0;
+        world.PlayerLoggingOut += _ => loggingOut++;
+        world.Start();
+        await world.InvokeAsync(() => 0); // the thread is up and idle in its tick wait
+
+        world.Post(() => world.RemovePlayer(player)); // as a session close does
+        world.Stop();
+
+        Assert.Equal(1, loggingOut);
+        Assert.False(world.IsOnline(player.Guid));
+        Assert.Single(saves.Saved); // the logout snapshot only: SaveAll found no one still online
+    }
+
     [Fact]
     public void NotifyLoggedIn_RaisesPlayerLoggedIn()
     {

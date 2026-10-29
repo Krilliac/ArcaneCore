@@ -124,11 +124,11 @@ and the core queue (`World/Handlers/CharacterHandlers.cs:198-212`). There is no
 
 | State | Class | Evidence | Note |
 |---|---|---|---|
-| Death state, death timer, pvp death, corpse reference | M. "Death state and corpses are not persisted yet" | `UnitCombat.cs:20,65,74,77`; `docs/integration/combat.md:33` | Death state is not restored and health is set to full at construction, so a relogged ghost is expected to come back alive (read from code, not run; a saved ghost aura could still be restored) |
+| Death state, death timer, pvp death, corpse reference | D, in the core character save. Health and power, experience, the recent-death window, the ghost flag and the released body are stored in `character_vitals` and `character_corpse` and restored at login | `Characters/Life/CharacterLifeDataModule.cs` (characters v15); `World/Characters/Life/CharacterLifeFeature.cs:54-76`; `Kernel/Characters/CharacterLife.cs:15-30` | A relogged ghost comes back as a ghost with its body. A handoff therefore needs the characters save flushed, not a separate death payload |
 | Victim, melee/attack timers, combat timer, mana-use timer | M | `UnitCombat.cs:13,23,26,46,60` | |
 | Threat lists | M, hold direct references to units | `UnitCombat.cs:14` | Cannot cross a process boundary |
 | PvP flag and timers | M | `UnitCombat.cs:82,85` | |
-| Corpse object | M. Lives in the source map; a far teleport keeps the body reclaimable, logout removes it | `Corpse.cs:10`; `MapCombat.cs:54-60,129-133` | Corpse ownership stays with the source map in the design (CLUSTERING_DESIGN.md:273) |
+| Corpse object | D (the stored body, `character_corpse`) and M (the live `Corpse` in the source map; a far teleport keeps the body reclaimable, logout removes the object) | `Corpse.cs:10`; `MapCombat.cs:54-60,129-133`; `Characters/Life/CharacterLifeDataModule.cs`; `Kernel/Characters/CharacterLife.cs:30` | Corpse ownership stays with the source map in the design (CLUSTERING_DESIGN.md:273); the target rebuilds the body from the stored row at login |
 
 ### Progression and reputation
 
@@ -145,7 +145,7 @@ and the core queue (`World/Handlers/CharacterHandlers.cs:198-212`). There is no
 |---|---|---|---|
 | Friend/ignore entries | D, per change via `SocialWriteQueue` (coalesced per row, bounded, retained on failure) | `SocialWriteQueue.cs:28-29,79-82`; `FriendsService.cs:49,82` | Loaded after login on a background task (`SocialFeature.cs:191-239`) |
 | Guild, ranks, members, MOTD | D via the same queue; all guilds loaded once at startup into one manager | `GuildManager.cs:31-34,98,627`; `SocialFeature.cs:315-330` | P: one process owns the guild cache and the guild id counter |
-| Group membership, leader, loot settings, invites, raid subgroups | M. "Group membership is kept in memory (not persisted)" | `GroupManager.cs:17-20,104`; `Group.cs:37-38`; `docs/integration/social.md` | P: group id counter starts at 1 every process start |
+| Group membership, leader, loot settings, raid subgroups | D, whole-group snapshots written within a second of a change (`character_group`, `character_group_member`) and restored at start. Invites are M | `Social/GroupDataModule.cs` (characters v36); `World/Social/SocialGroupPersistenceFeature.cs:54-65`; `GroupManager.cs:17-20,104` | P: one process restores and owns the groups and the group id counter |
 | Chat channels, members, bans | M, realm-wide structure | `ChannelManager.cs:14-15`; `Channel.cs:15-16` | P |
 | Online presence and name directory | P | `CharacterDirectory.cs:14`; `SocialFeature.cs:31-33` | |
 | Pending social commands and "ready" marker | M | `SocialFeature.cs:31-33,267-286` | |
@@ -155,7 +155,7 @@ and the core queue (`World/Handlers/CharacterHandlers.cs:198-212`). There is no
 | State | Class | Evidence | Note |
 |---|---|---|---|
 | Instance saves (id, map, reset time), character binds, last instance, raid reset times | D, via `InstanceWriteQueue` (drops after 3) | `InstanceSave.cs:65-78`; `InstanceWriteQueue.cs:28-47,99-102`; `docs/integration/instances.md:121-138` | |
-| Group binds | M, because groups are not persisted | `InstanceManager.cs:48`; `instances.md:144-146,245` | After a restart only character binds remain |
+| Group binds | D (`group_instance` rows, loaded by `InstanceManager.LoadStoredGroupBinds`) and M (live binds, restored when the group forms) | `InstanceManager.cs:50-56,233,329`; `Instances/EfInstanceStore.cs:41-49` | Groups are persisted, so a restart restores them with their binds |
 | Instance id counter | P, local; starts at 101, raised past stored ids at load | `InstanceManager.cs:34,53,114,689` | |
 | Per-player instance state (homebind timer, left-dungeon map) | M | `InstanceManager.cs:50,1296-1303` | |
 | Instance contents: creature deaths, respawn timers, boss state | M. "A re-created map respawns everything" | `instances.md:246-248` | Lane `ac-4` (durable loot) is working near this |
@@ -193,11 +193,11 @@ and the core queue (`World/Handlers/CharacterHandlers.cs:198-212`). There is no
 Everything marked **M** above that a player would notice losing, in rough order of
 player impact. This is a list for M15.3 planning, not a design.
 
-1. Current health/power, death state, ghost and corpse (also needed for a plain relog).
+1. Current health/power, death state, ghost and corpse are stored (`character_vitals`, `character_corpse`); the open work is flushing them before a handoff, as a plain relog already does.
 2. Auras, cooldowns and any cast, with a clock that is valid on the receiving process.
    Saving them only at logout (`SpellFeature.cs:319`) is a durability gap on its own.
 3. XP within the level and the rested pool (needs a schema column first).
-4. Group membership and group-bound instance locks (groups are not durable).
+4. The live group objects and invites (group data is durable: `character_group`, `character_group_member`).
 5. Combat/threat relations, which hold object references and must be detached and
    re-created, not copied.
 6. Open trade, loot window, gossip, taxi flight: cancel or refuse rather than carry.
@@ -211,7 +211,7 @@ One in-memory copy each at `c3dea16`:
 - Session registry (`SessionRegistry.cs:12`), online registry (`WorldRuntime.cs:22`),
   character name directory (`CharacterDirectory.cs:14`).
 - Spellbook cache of all characters (`SpellbookCache.cs:20`).
-- Guilds (`GuildManager.cs:31`), groups (`GroupManager.cs:17`), channels
+- Guilds (`GuildManager.cs:31`), the live group objects (`GroupManager.cs:17`; their data is stored), channels
   (`ChannelManager.cs:14`).
 - Auctions and mail/auction/text id seeds (`EconomyFeature.cs:89-101`).
 - Id counters: item GUIDs (`ItemTemplateStore.cs:49`), guild ids (`GuildManager.cs:34`),
