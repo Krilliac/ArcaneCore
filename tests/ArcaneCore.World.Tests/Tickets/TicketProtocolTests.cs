@@ -52,6 +52,7 @@ public sealed class TicketProtocolTests
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient client = await host.EnterWorldAsync("TICKET_BAD", "TicketBad");
+        client.IgnoreEnergyRegenUpdates = true; // vmangos regenerates energy for every player (Player.cpp:2283); only that hidden update may arrive
 
         await client.SendAsync(WorldOpcode.CmsgGmticketSystemstatus, [1]);
 

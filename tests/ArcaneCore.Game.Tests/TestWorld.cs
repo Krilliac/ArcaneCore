@@ -41,6 +41,11 @@ internal static class TestWorld
         var appearance = new PlayerAppearance(
             DisplayId: 49, FactionTemplate: 1, PowerType.Rage, BaseHealth: 60, BaseMana: 0,
             MaxHealth: 60, MaxPower: 1000, StartPower: 0, NextLevelXp: 400);
-        return new Player(character, appearance, session);
+        var player = new Player(character, appearance, session);
+        // vmangos regenerates energy for every player (Player.cpp:2283) and every player has 100 maximum energy (Unit.cpp:8260), so a fresh
+        // player sends hidden UNIT_FIELD_POWER4 updates until it is full. The fixture player is the one that has finished that burst, so
+        // the tests that count what a tick sends see only what they are about.
+        player.SetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Energy, player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Energy));
+        return player;
     }
 }

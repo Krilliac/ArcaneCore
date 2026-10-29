@@ -22,7 +22,6 @@ public sealed class EnergyTests
     private static Player AddEnergyPlayer(WorldRuntime world, uint start, uint max = 100)
     {
         Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
-        player.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Energy); // only a player whose power is energy regenerates it (MapCombat.UpdatePlayerRegen)
         player.SetUInt32(MaxEnergy, max);
         player.SetUInt32(Energy, start);
         return player;
@@ -49,19 +48,23 @@ public sealed class EnergyTests
     }
 
     [Fact]
-    public void AClassThatDoesNotUseEnergy_HasTheMaximumButDoesNotRegenerateIt()
+    public void AClassThatDoesNotUseEnergy_HasTheCreateMaximum_AndRegeneratesUpToIt()
     {
-        // Every player has 100 maximum energy (vmangos Unit::GetCreatePowers, Unit.cpp:8260); regenerating it for a warrior or a mage
-        // would send a hidden UNIT_FIELD_POWER4 update every 2 s after login, so only the energy power type regenerates.
+        // vmangos gives every player 100 maximum energy (Unit::GetCreatePowers, Unit.cpp:8260) and regenerates energy for every player
+        // (Player::RegenerateAll, Player.cpp:2283), whatever the power type, until it reaches the maximum.
         (WorldRuntime world, _, _, _) = CombatTestKit.CreateWorld();
         using WorldRuntime w = world;
-        Player player = AddEnergyPlayer(world, 10);
-        player.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Rage);
+        Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
+        Assert.Equal(100u, player.GetUInt32(MaxEnergy));
+        Assert.NotEqual(PowerType.Energy, player.PowerType);
+        player.SetUInt32(Energy, 70);
 
         world.RunTick(50);
+        Assert.Equal(90u, player.GetUInt32(Energy));
         world.RunTick(2000);
-
-        Assert.Equal(10u, player.GetUInt32(Energy));
+        Assert.Equal(100u, player.GetUInt32(Energy));
+        world.RunTick(2000);
+        Assert.Equal(100u, player.GetUInt32(Energy));
     }
 
     [Fact]
