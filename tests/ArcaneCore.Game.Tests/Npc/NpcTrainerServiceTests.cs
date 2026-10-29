@@ -183,6 +183,18 @@ public sealed class NpcTrainerServiceTests
         Assert.True(rig.Book.HasSpell(rig.Kit.Player, 100));
     }
 
+    [Fact] // NPCHandler.cpp:160-165: a trainer with no spells returns before the cancel
+    public void TrainerList_WithNoSpells_KeepsInteractingAuras()
+    {
+        using var kit = new NpcServiceTestKit(NpcFlags.Trainer | NpcFlags.Gossip, NpcContent.Empty);
+        int cancels = 0;
+        kit.Services.InteractingCancels = _ => cancels++;
+
+        kit.Services.TrainerList(kit.Player, kit.Npc.Guid);
+
+        Assert.Equal(0, cancels);
+        Assert.DoesNotContain(kit.Drain(), p => p.Opcode == WorldOpcode.SmsgTrainerList);
+    }
     private static void AssertFailed(NpcServiceTestKit kit, uint spell, uint reason)
     {
         byte[] failed = kit.Single(WorldOpcode.SmsgTrainerBuyFailed);

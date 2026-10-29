@@ -40,6 +40,7 @@ public sealed class PetStableFeature(IServiceProvider services, IServiceScopeFac
         {
             Store = stored ? new ScopedPetStableStore(scopes) : null,
             Post = world.Post,
+            InteractingCancels = player => services.GetService<QuestNpcFeature>()?.Services?.InteractingCancels?.Invoke(player),
             IsStableMaster = (player, npc) => services.GetService<QuestNpcFeature>()?.Services?.InteractableNpc(player, npc, NpcFlags.StableMaster) is not null,
         };
         controller.MoneyChanged += world.SavePlayer;

@@ -139,7 +139,6 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        npcs.Services.InteractingCancels?.Invoke(player);
         npcs.Services.PauseInteractionMovement(player, npc);
         if (!feature.Battlemasters.TryGetValue(npc.Entry, out BattlegroundType type))
         {
@@ -152,6 +151,8 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // vmangos BattleGroundHandler.cpp:66-67: only once the battleground is known and the level passes, just before the list goes out.
+        npcs.Services.InteractingCancels?.Invoke(player);
         feature.SendBattlefieldList(player, guid, type);
     }
 

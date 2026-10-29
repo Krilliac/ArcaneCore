@@ -253,6 +253,34 @@ public sealed class PetStableTests
         Assert.Equal(1_000_000u, hunter.Money);
     }
 
+    [Fact] // NPCHandler.cpp:821-822 (HandleBuyStableSlot), :517-518, :623-624, :708-709, :852-853: after CheckStableMaster passes
+    public async Task StableRequests_EndInteractingAuras_OnlyForAReachableStableMaster()
+    {
+        using PetTestKit kit = Kit();
+        (PetStableController stable, _, WorldPump pump) = Stable(kit);
+        (Player hunter, FakeSession session) = Hunter(kit);
+        int cancels = 0;
+        stable.InteractingCancels = _ => cancels++;
+        hunter.Money = 50_400;
+
+        stable.HandleBuySlot(hunter, ObjectGuid.WithEntry(HighGuid.Unit, 1, 1)); // not a stable master
+        Assert.Equal(0, cancels);
+
+        session.Clear();
+        stable.HandleBuySlot(hunter, StableMaster);
+        Assert.Equal(StableResult.SuccessBuySlot, await ResultAsync(pump, session));
+        Assert.Equal(1, cancels);
+
+        stable.HandleList(hunter, StableMaster);
+        Assert.Equal(2, cancels);
+        stable.HandleStable(hunter, StableMaster);
+        Assert.Equal(3, cancels);
+        stable.HandleUnstable(hunter, StableMaster, 99);
+        Assert.Equal(4, cancels);
+        stable.HandleSwap(hunter, StableMaster, 99);
+        Assert.Equal(5, cancels);
+    }
+
     [Fact]
     public async Task BuySlot_GivesTheMoneyBack_WhenTheSlotIsNotSaved()
     {

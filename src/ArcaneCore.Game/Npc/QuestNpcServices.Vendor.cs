@@ -238,6 +238,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player); // vmangos HandleRepairItemOpcode, NPCHandler.cpp:1012-1013
         if (Deps.Items is not { } items)
         {
             return;
