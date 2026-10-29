@@ -31,6 +31,11 @@ public sealed class DrainAuraTests
 
         public uint DealSpellDamage(Unit caster, Unit victim, SpellInfo spell, uint damage, bool periodic)
         {
+            if (damage == 0 && !periodic)
+            {
+                return 0; // the combat start of a hostile hit on a really attackable target, not a drain tick
+            }
+
             Damage.Add(damage);
             DamageSpells.Add(spell.Id);
             return damage;
@@ -70,7 +75,8 @@ public sealed class DrainAuraTests
     {
         CasterSpellModules.Register(kit.System);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, DrainLife, DrainLifeBig, DrainMana);
         var sink = new RecordingSink();
         kit.System.Damage = sink;
@@ -109,7 +115,8 @@ public sealed class DrainAuraTests
         using SpellTestKit kit = NewKit();
         CasterSpellModules.Register(kit.System);
         (Player caster, _) = kit.AddPlayer(1);
-        (Player target, _) = kit.AddPlayer(2, 10, 0);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, _) = kit.AddHostilePlayer(2, 10, 0);
         kit.Spellbook.Teach(caster, DrainLife);
         caster.Health = 10;
         target.Health = 4;
