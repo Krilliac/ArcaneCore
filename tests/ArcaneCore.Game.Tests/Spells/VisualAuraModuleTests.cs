@@ -81,6 +81,51 @@ public sealed class VisualAuraModuleTests
         Assert.Equal(1.0f, player.GetFloat(UpdateFields.ObjectFieldScaleX), 3);
     }
 
+    /// <summary>
+    /// Stoneform 7020 (+15) and Burning Spirit 14744 (+6) shapes: times then divided by the same float32 factor is 0.99999994, so every
+    /// scale buff that ended left the unit a hair smaller for good (spell sweep b.state-not-restored scale). With the last Mod Scale aura
+    /// gone and nothing else having written the fields, they are exactly what they were.
+    /// </summary>
+    [Theory]
+    [InlineData(15)]
+    [InlineData(6)]
+    [InlineData(-17)]
+    [InlineData(-100)]
+    public void ModScale_OnAndOff_LeavesTheExactScale(int percent)
+    {
+        SpellInfo spell = Spell(930320, Effect(SpellEffectName.ApplyAura, percent, aura: AuraType.ModScale)) with
+        {
+            Duration = new SpellDuration(-1, 0, -1),
+            SpellVisual = 1,
+        };
+        using var kit = new SpellTestKit(spell);
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetFloat(UpdateFields.ObjectFieldScaleX, 1.0f);
+        player.SetFloat(UpdateFields.UnitFieldBoundingradius, 0.389f);
+        player.SetFloat(UpdateFields.UnitFieldCombatreach, 1.5f);
+        for (int round = 0; round < 3; round++)
+        {
+            kit.System.CastSpell(player, spell.Id, SpellCastTargets.ForSelf(), triggered: true);
+            Assert.NotEqual(1.0f, player.GetFloat(UpdateFields.ObjectFieldScaleX));
+            kit.System.RemoveAuras(player, spell.Id);
+            Assert.Equal(1.0f, player.GetFloat(UpdateFields.ObjectFieldScaleX));
+            Assert.Equal(0.389f, player.GetFloat(UpdateFields.UnitFieldBoundingradius));
+            Assert.Equal(1.5f, player.GetFloat(UpdateFields.UnitFieldCombatreach));
+        }
+    }
+
+    [Fact]
+    public void ModScale_AFieldWrittenWhileScaled_IsKeptAndOnlyTheFactorComesOff()
+    {
+        using var kit = Kit();
+        (Player player, _) = kit.AddPlayer(1);
+        player.SetFloat(UpdateFields.ObjectFieldScaleX, 1.0f);
+        kit.System.CastSpell(player, Grow, SpellCastTargets.ForSelf(), triggered: true);
+        player.SetFloat(UpdateFields.ObjectFieldScaleX, 3.0f); // another writer (a transformation) while +50% is on
+        kit.System.RemoveAuras(player, Grow);
+        Assert.Equal(2.0f, player.GetFloat(UpdateFields.ObjectFieldScaleX), 4);
+    }
+
     [Fact]
     public void Tracking_SetsAndClearsTheMiscValueBitOfTheTrackField()
     {

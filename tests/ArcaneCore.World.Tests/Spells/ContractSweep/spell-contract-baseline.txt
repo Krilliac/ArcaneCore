@@ -1561,30 +1561,6 @@ a.unhandled-other	9744	dummy:Dummy
 a.unhandled-other	9795	dummy:Dummy
 a.unhandled-other	9810	no-consumer:Dummy
 a.unhandled-other	9879	dummy:Dummy
-b.duration-mismatch	10455	dbc=1..1 holder=300
-b.duration-mismatch	12844	dbc=1..1 holder=300
-b.duration-mismatch	13910	dbc=1..1 holder=300
-b.duration-mismatch	14890	dbc=1..1 holder=300
-b.duration-mismatch	18396	dbc=1..1 holder=300
-b.duration-mismatch	20508	dbc=1..1 holder=300
-b.duration-mismatch	20541	dbc=100..100 holder=300
-b.duration-mismatch	22440	dbc=1..1 holder=300
-b.duration-mismatch	22646	dbc=1..1 holder=300
-b.duration-mismatch	23273	dbc=100..100 holder=300
-b.duration-mismatch	23274	dbc=100..100 holder=300
-b.duration-mismatch	23276	dbc=100..100 holder=300
-b.duration-mismatch	23277	dbc=100..100 holder=300
-b.duration-mismatch	24776	dbc=1..1 holder=300
-b.duration-mismatch	25565	dbc=100..100 holder=300
-b.duration-mismatch	26650	dbc=100..100 holder=300
-b.duration-mismatch	26787	dbc=1..1 holder=300
-b.duration-mismatch	27852	dbc=100..100 holder=300
-b.duration-mismatch	28450	dbc=100..100 holder=300
-b.duration-mismatch	29607	dbc=1..1 holder=300
-b.duration-mismatch	31316	dbc=100..100 holder=300
-b.duration-mismatch	5579	dbc=100..100 holder=300
-b.duration-mismatch	6240	dbc=1..1 holder=300
-b.duration-mismatch	6528	dbc=1..1 holder=300
 b.never-expires	1010	still applied 1 s after 120000 ms
 b.never-expires	29851	still applied 1 s after 2000 ms
 b.removed-early	13711	gone before its duration
@@ -1594,67 +1570,9 @@ b.removed-early	18657	gone before its duration
 b.removed-early	3410	gone before its duration
 b.removed-early	6410	gone before its duration
 b.removed-early	9484	gone before its duration
-b.state-not-restored	10256	stat2
-b.state-not-restored	10257	stat2
-b.state-not-restored	12795	base-attack-time0
-b.state-not-restored	12967	base-attack-time0
-b.state-not-restored	12970	base-attack-time0
-b.state-not-restored	13533	base-attack-time0
-b.state-not-restored	14744	scale
-b.state-not-restored	14823	base-attack-time0
-b.state-not-restored	15061	base-attack-time0
-b.state-not-restored	15716	base-attack-time0
-b.state-not-restored	16048	scale
-b.state-not-restored	16277	base-attack-time0
-b.state-not-restored	16280	base-attack-time0
-b.state-not-restored	16601	base-attack-time0
-b.state-not-restored	16789	scale
-b.state-not-restored	16791	base-attack-time0
-b.state-not-restored	17052	scale
-b.state-not-restored	17687	base-attack-time0
-b.state-not-restored	18124	stat0
-b.state-not-restored	18140	stat4
-b.state-not-restored	18229	stat2
-b.state-not-restored	18230	stat1
-b.state-not-restored	18231	stat4
-b.state-not-restored	18234	stat2
-b.state-not-restored	18501	base-attack-time0
-b.state-not-restored	19615	base-attack-time0
-b.state-not-restored	21049	base-attack-time0
-b.state-not-restored	21149	stat2
-b.state-not-restored	22640	base-attack-time0
-b.state-not-restored	22731	stat3
-b.state-not-restored	23698	stat4
-b.state-not-restored	24087	scale
-b.state-not-restored	24318	scale
-b.state-not-restored	246	base-attack-time0
-b.state-not-restored	24800	stat0
-b.state-not-restored	25660	stat2
-b.state-not-restored	26030	stat2
-b.state-not-restored	28406	display
-b.state-not-restored	28701	base-attack-time0
-b.state-not-restored	28747	scale
-b.state-not-restored	3229	base-attack-time0
-b.state-not-restored	3671	scale
-b.state-not-restored	379	base-attack-time0
-b.state-not-restored	4514	base-attack-time0
 b.state-not-restored	4948	max-power1
-b.state-not-restored	5004	stat2
-b.state-not-restored	5005	stat2
-b.state-not-restored	5006	stat2
-b.state-not-restored	5007	stat2
-b.state-not-restored	5628	base-attack-time0
 b.state-not-restored	5759	max-power3
-b.state-not-restored	6434	base-attack-time0
-b.state-not-restored	6742	base-attack-time0
-b.state-not-restored	7020	scale
-b.state-not-restored	7102	base-attack-time0
 b.state-not-restored	7164	max-power1
-b.state-not-restored	7481	scale
-b.state-not-restored	8269	scale
-b.state-not-restored	839	base-attack-time0
-b.state-not-restored	8599	base-attack-time0
-b.state-not-restored	9177	stat3
 e.category-cooldown-missing	11427	category=85 recovery=6000
 e.category-cooldown-missing	13013	category=36 recovery=45000
 e.category-cooldown-missing	14112	category=85 recovery=6000

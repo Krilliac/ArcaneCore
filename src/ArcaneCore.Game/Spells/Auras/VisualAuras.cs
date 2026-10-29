@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 
 namespace ArcaneCore.Game.Spells;
@@ -47,11 +48,51 @@ public sealed class VisualAuras : ISpellHandlerModule
 
         float factor = apply ? (100.0f + percent) / 100.0f : 100.0f / (100.0f + percent);
         Unit target = holder.Target;
-        foreach (int field in new[] { UpdateFields.ObjectFieldScaleX, UpdateFields.UnitFieldBoundingradius, UpdateFields.UnitFieldCombatreach })
+        ScaleState state = s_scaleStates.GetOrCreateValue(target);
+        if (apply && state.Count == 0)
         {
-            target.SetFloat(field, target.GetFloat(field) * factor);
+            state.Base = Read(target);
         }
+
+        state.Count += apply ? 1 : -1;
+        if (!apply && state.Count <= 0 && state.Written is { } written && Read(target).SequenceEqual(written))
+        {
+            // The last Mod Scale aura is gone and nothing else wrote the fields since: back to the exact values from before the first
+            // one. Dividing again (vmangos Object.h:248) leaves float32 residue (1.15 times then divided by 1.15 is 0.99999994), so
+            // every scale buff that ended would leave the unit a hair smaller for good.
+            state.Count = 0;
+            for (int i = 0; i < ScaleFields.Length; i++)
+            {
+                target.SetFloat(ScaleFields[i], state.Base[i]);
+            }
+        }
+        else
+        {
+            state.Count = Math.Max(0, state.Count);
+            foreach (int field in ScaleFields)
+            {
+                target.SetFloat(field, target.GetFloat(field) * factor);
+            }
+        }
+
         if (system.DisplayModelResolver is not null) system.UpdateDisplayModel(target);
+        state.Written = state.Count > 0 ? Read(target) : null;
+    }
+
+    private static readonly int[] ScaleFields = [UpdateFields.ObjectFieldScaleX, UpdateFields.UnitFieldBoundingradius, UpdateFields.UnitFieldCombatreach];
+
+    private static readonly ConditionalWeakTable<Unit, ScaleState> s_scaleStates = new();
+
+    private static float[] Read(Unit unit) => [.. ScaleFields.Select(unit.GetFloat)];
+
+    /// <summary>The live Mod Scale auras of a unit, the fields before the first of them and the fields as this handler last left them.</summary>
+    private sealed class ScaleState
+    {
+        public int Count { get; set; }
+
+        public float[] Base { get; set; } = [];
+
+        public float[]? Written { get; set; }
     }
 
     internal static float ActiveScaleFactor(SpellSystem system, Unit target)
