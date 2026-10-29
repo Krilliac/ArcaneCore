@@ -175,11 +175,11 @@ internal static class BattlegroundBotTestContent
     /// <param name="neutralBanner">The shape of the stables' neutral banner (<see cref="NeutralBannerShape"/>).</param>
     /// <param name="wsgBuffs">Spawn the Warsong Gulch buffs (<see cref="RestorationBuffAt"/>, <see cref="BerserkBuffAt"/>); off by default.</param>
     public static void Register(IServiceCollection services, IReadOnlyCollection<BattlegroundType> offered, NeutralBannerShape neutralBanner = NeutralBannerShape.Button, bool wsgBuffs = false,
-        IReadOnlyList<CreatureSpawn>? extraSpawns = null, uint avMinPlayersPerTeam = 1, uint avMaxPlayersPerTeam = 40)
+        IReadOnlyList<CreatureSpawn>? extraSpawns = null, uint avMinPlayersPerTeam = 1, uint avMaxPlayersPerTeam = 40, uint abMinPlayersPerTeam = 1)
     {
         services.AddSingleton<IMapDataStore>(new Maps());
         services.AddSingleton<IGraveyardDataStore>(new Graveyards());
-        services.AddSingleton<IBattlegroundContentStore>(new Battlegrounds(avMinPlayersPerTeam, avMaxPlayersPerTeam));
+        services.AddSingleton<IBattlegroundContentStore>(new Battlegrounds(avMinPlayersPerTeam, avMaxPlayersPerTeam, abMinPlayersPerTeam));
         var store = new Content(offered, neutralBanner, wsgBuffs, extraSpawns ?? []);
         services.AddSingleton<ICreatureDataStore>(store);
         services.AddScoped<IGameObjectDataStore>(_ => store);
@@ -298,13 +298,13 @@ internal static class BattlegroundBotTestContent
             []));
     }
 
-    private sealed class Battlegrounds(uint avMinPlayersPerTeam, uint avMaxPlayersPerTeam) : IBattlegroundContentStore
+    private sealed class Battlegrounds(uint avMinPlayersPerTeam, uint avMaxPlayersPerTeam, uint abMinPlayersPerTeam) : IBattlegroundContentStore
     {
         public Task<BattlegroundContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new BattlegroundContent(
             [
                 new BattlegroundTemplateRecord(1, avMinPlayersPerTeam, avMaxPlayersPerTeam, 1, 60, 611, 610, 100, 0),
                 new BattlegroundTemplateRecord(2, 1, 10, 1, 60, 769, 770, 75, 0),
-                new BattlegroundTemplateRecord(3, 1, 15, 1, 60, 890, 889, 75, 0),
+                new BattlegroundTemplateRecord(3, abMinPlayersPerTeam, 15, 1, 60, 890, 889, 75, 0),
             ],
             [],
             [
@@ -456,12 +456,16 @@ internal static class BattlegroundBotTestWorld
     public static Task<ScenarioTestWorld> StartAlteracValleyAsync(Action<PlayerbotOptions>? configure, uint avMinPlayersPerTeam, uint avMaxPlayersPerTeam = 40)
         => StartCoreAsync(configure, NeutralBannerShape.Button, wsgBuffs: false, [], avMinPlayersPerTeam, [BattlegroundType.AlteracValley], avMaxPlayersPerTeam);
 
+    /// <summary>Arathi Basin only, with the template's MinPlayersPerTeam set to <paramref name="abMinPlayersPerTeam"/> (the z2815 row: 8; the other fixtures use 1).</summary>
+    public static Task<ScenarioTestWorld> StartArathiBasinAsync(Action<PlayerbotOptions>? configure, uint abMinPlayersPerTeam)
+        => StartCoreAsync(configure, NeutralBannerShape.Button, wsgBuffs: false, [], 1, [BattlegroundType.ArathiBasin], abMinPlayersPerTeam: abMinPlayersPerTeam);
+
     private static Task<ScenarioTestWorld> StartAsync(Action<PlayerbotOptions>? configure, NeutralBannerShape neutralBanner, bool wsgBuffs,
         IReadOnlyList<CreatureSpawn> extraSpawns, params BattlegroundType[] offered)
         => StartCoreAsync(configure, neutralBanner, wsgBuffs, extraSpawns, 1, offered);
 
     private static async Task<ScenarioTestWorld> StartCoreAsync(Action<PlayerbotOptions>? configure, NeutralBannerShape neutralBanner, bool wsgBuffs,
-        IReadOnlyList<CreatureSpawn> extraSpawns, uint avMinPlayersPerTeam, BattlegroundType[] offered, uint avMaxPlayersPerTeam = 40)
+        IReadOnlyList<CreatureSpawn> extraSpawns, uint avMinPlayersPerTeam, BattlegroundType[] offered, uint avMaxPlayersPerTeam = 40, uint abMinPlayersPerTeam = 1)
     {
         var options = new PlayerbotOptions
         {
@@ -471,7 +475,7 @@ internal static class BattlegroundBotTestWorld
         configure?.Invoke(options);
         ScenarioTestWorld world = await ScenarioTestWorld.StartAsync(services =>
         {
-            BattlegroundBotTestContent.Register(services, offered.Length == 0 ? [BattlegroundType.WarsongGulch] : offered, neutralBanner, wsgBuffs, extraSpawns, avMinPlayersPerTeam, avMaxPlayersPerTeam);
+            BattlegroundBotTestContent.Register(services, offered.Length == 0 ? [BattlegroundType.WarsongGulch] : offered, neutralBanner, wsgBuffs, extraSpawns, avMinPlayersPerTeam, avMaxPlayersPerTeam, abMinPlayersPerTeam);
             services.AddSingleton<IOptions<PlayerbotOptions>>(Options.Create(options));
         });
         await world.Host.OnWorldAsync(() =>

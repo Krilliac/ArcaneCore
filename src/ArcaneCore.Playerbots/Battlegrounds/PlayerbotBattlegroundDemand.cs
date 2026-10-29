@@ -12,7 +12,8 @@ namespace ArcaneCore.World.Playerbots.Battlegrounds;
 /// and one team never holds more than the template's <c>MaxPlayersPerTeam</c> nor more than half of the cap rounded up. A bot also
 /// declines an invitation into a match that holds the cap already (<see cref="MustDecline"/>). With <c>RaiseCapToFillTemplate</c> (on by
 /// default) a type whose two teams' minimum needs more than the cap, such as Alterac Valley's 20 per team, uses 2 x <c>MaxPlayersPerTeam</c>
-/// as its cap instead (<see cref="EffectiveCap"/>), so bots alone can start it and fill it to the template's maximum.
+/// as its cap instead (<see cref="EffectiveCap"/>), so bots alone can start it and fill it to the template's maximum; with it off every
+/// type keeps the configured cap.
 /// </para>
 /// <para>
 /// <b>Open slots.</b> The server invites queued players into a match of the (type, bracket) that is preparing or running and has free
@@ -72,7 +73,6 @@ internal sealed class PlayerbotBattlegroundDemand
     internal int OpenSlots(BattlegroundType type, int bracket, Team team) => _open.GetValueOrDefault((type, bracket, Slot(team)));
 
     internal int BotsPending(BattlegroundType type, int bracket, Team team) => _pending.GetValueOrDefault((type, bracket, Slot(team)));
-
 
     /// <summary>A running match of this (type, bracket) already holds the cap in bots and still has room: a new queuer would be put into it.</summary>
     internal void BlockBracket(BattlegroundType type, int bracket) => _blocked.Add((type, bracket));

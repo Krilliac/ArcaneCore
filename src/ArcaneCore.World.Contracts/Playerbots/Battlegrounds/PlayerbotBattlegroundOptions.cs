@@ -31,12 +31,14 @@ public sealed class PlayerbotBattlegroundOptions
     public bool PreferFillingRealPlayerQueues { get; set; } = true;
 
     /// <summary>
-    /// Raise the cap of a battleground type whose template minimum needs more bots than <see cref="MaxBotsPerBattleground"/> allows (on by
-    /// default) to 2 x <c>MaxPlayersPerTeam</c>, for example Alterac Valley (20 per team minimum, 40 maximum) against the default cap of 20
-    /// gets 80, so bots alone can start it and fill it to 40 per team. A type whose minimum the cap covers keeps the cap. Off: such a type
-    /// is refused for bots (<c>CapBelowMinimum</c>) instead of queues that can never pop. The retail template values are never changed.
-    /// A raise is logged as a warning naming each raised type and its new cap. Upgrade note: this replaces the former RaiseCapToMatchMinimum,
-    /// which raised the cap only to 2 x <c>MinPlayersPerTeam</c>; set it to false to keep a low cap.
+    /// Raise the cap of any battleground type whose 2 x <c>MinPlayersPerTeam</c> exceeds <see cref="MaxBotsPerBattleground"/> to
+    /// 2 x <c>MaxPlayersPerTeam</c> (on by default), so bots alone can start it, fill it to the template's maximum and backfill a leaver's
+    /// slot. At the default cap of 20 that is Alterac Valley (20 per team minimum, 40 maximum: 80 bots); Warsong Gulch and Arathi Basin
+    /// only when the cap is set below twice their minimum (10 and 16 in the z2815 rows). One warning names each raised type and its new
+    /// cap, once the coordinator scans (once bots are online), and again after a reload that changes the cap, this option or the
+    /// templates. Off: the configured cap is kept for every type, with no raise and no refusal, as before this option (a type whose
+    /// minimum the cap does not cover then does not start from bots alone, but its bots still help a real player's queue). The retail
+    /// template values are never changed.
     /// </summary>
     public bool RaiseCapToFillTemplate { get; set; } = true;
 

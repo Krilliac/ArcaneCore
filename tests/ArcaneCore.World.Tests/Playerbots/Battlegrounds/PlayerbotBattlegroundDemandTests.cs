@@ -478,20 +478,20 @@ public sealed class PlayerbotBattlegroundDemandTests
         Assert.Null(withReal.Pick(AvChoice, Team.Horde, AvTemplates, WithChance(0.05f, prefer: false), chanceHit: false, pick: 0));
     }
 
-    // The retail rows (vmangos battleground_template): Warsong Gulch 4..10 per team, Arathi Basin 6..15.
-    private static readonly BattlegroundTemplate RetailWsg = PlayerbotBattlegroundBracketTests.Template(BattlegroundType.WarsongGulch, 10, 60, minPerTeam: 4, maxPerTeam: 10);
-    private static readonly BattlegroundTemplate RetailAb = PlayerbotBattlegroundBracketTests.Template(BattlegroundType.ArathiBasin, 20, 60, minPerTeam: 6, maxPerTeam: 15);
+    // The z2815 rows the server falls back to (BattlegroundFeature.RegisterTemplates): Warsong Gulch 5..10 per team, Arathi Basin 8..15.
+    private static readonly BattlegroundTemplate Z2815Wsg = PlayerbotBattlegroundBracketTests.Template(BattlegroundType.WarsongGulch, 10, 60, minPerTeam: 5, maxPerTeam: 10);
+    private static readonly BattlegroundTemplate Z2815Ab = PlayerbotBattlegroundBracketTests.Template(BattlegroundType.ArathiBasin, 20, 60, minPerTeam: 8, maxPerTeam: 15);
 
     [Fact]
     public void WarsongGulchAndArathiBasin_AtTheDefaults_GetNoFillNeed_TheRollAloneQueuesForThem()
     {
         var defaults = new PlayerbotBattlegroundOptions();
-        Assert.False(PlayerbotBattlegroundDemand.IsRaised(RetailWsg, defaults.MaxBotsPerBattleground, defaults.RaiseCapToFillTemplate));
-        Assert.False(PlayerbotBattlegroundDemand.IsRaised(RetailAb, defaults.MaxBotsPerBattleground, defaults.RaiseCapToFillTemplate));
+        Assert.False(PlayerbotBattlegroundDemand.IsRaised(Z2815Wsg, defaults.MaxBotsPerBattleground, defaults.RaiseCapToFillTemplate));
+        Assert.False(PlayerbotBattlegroundDemand.IsRaised(Z2815Ab, defaults.MaxBotsPerBattleground, defaults.RaiseCapToFillTemplate));
         BattlegroundTemplate? templates(BattlegroundType type) => type switch
         {
-            BattlegroundType.WarsongGulch => RetailWsg,
-            BattlegroundType.ArathiBasin => RetailAb,
+            BattlegroundType.WarsongGulch => Z2815Wsg,
+            BattlegroundType.ArathiBasin => Z2815Ab,
             _ => null,
         };
 
@@ -512,6 +512,33 @@ public sealed class PlayerbotBattlegroundDemandTests
                 Assert.False(demand.AnyFillNeed(templates, defaults));
             }
         }
+    }
+
+    [Fact]
+    public void RaiseOff_CapTen_ArathiBasinKeepsTheConfiguredCap_FivePerTeam()
+    {
+        // The behaviour before RaiseCapToFillTemplate: cap 10 against Arathi Basin's minimum of 8 is neither raised nor refused.
+        PlayerbotBattlegroundOptions off = Options(10);
+        off.RaiseCapToFillTemplate = false;
+        Assert.Equal(10, PlayerbotBattlegroundDemand.EffectiveCap(Z2815Ab, 10, off.RaiseCapToFillTemplate));
+        Assert.False(PlayerbotBattlegroundDemand.IsRaised(Z2815Ab, 10, off.RaiseCapToFillTemplate));
+        PlayerbotBattlegroundChoice[] ab = [new(BattlegroundType.ArathiBasin, 2)];
+        var demand = new PlayerbotBattlegroundDemand();
+        int admitted = 0;
+        for (int i = 0; i < 40; i++)
+        {
+            Team team = i % 2 == 0 ? Team.Alliance : Team.Horde;
+            if (demand.Pick(ab, team, type => type == BattlegroundType.ArathiBasin ? Z2815Ab : null, off, chanceHit: true, pick: 0) is not { } choice) continue;
+            demand.AddBotCommitted(choice.Type, choice.Bracket, team);
+            admitted++;
+        }
+
+        Assert.Equal(10, admitted);
+        Assert.Equal(5, demand.BotsCommitted(BattlegroundType.ArathiBasin, 2, Team.Alliance));
+        Assert.Equal(5, demand.BotsCommitted(BattlegroundType.ArathiBasin, 2, Team.Horde));
+
+        // On (the default), the same cap is raised to 2 x 15.
+        Assert.Equal(30, PlayerbotBattlegroundDemand.EffectiveCap(Z2815Ab, 10, raiseToFill: true));
     }
 
     [Fact]

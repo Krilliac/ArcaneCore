@@ -392,8 +392,11 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         return raised is null ? string.Empty : string.Join(", ", raised);
     }
 
-    /// <summary>The configured cap and the raised types last warned about (<see cref="WarnRaisedCaps"/>); null before the first scan.</summary>
-    private (int Cap, string Raised)? _raiseWarned;
+    /// <summary>
+    /// What the last <see cref="WarnRaisedCaps"/> looked at (the cap, the option and the three templates, by reference: a content reload
+    /// replaces them); null before the first scan.
+    /// </summary>
+    private (int Cap, bool Raise, BattlegroundTemplate? Wsg, BattlegroundTemplate? Ab, BattlegroundTemplate? Av)? _raiseWarned;
 
     /// <summary>The warnings logged about a configured cap that <c>RaiseCapToFillTemplate</c> overrides (status and tests).</summary>
     internal int RaiseWarnings { get; private set; }
@@ -405,12 +408,15 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
     /// </summary>
     private void WarnRaisedCaps(BattlegroundManager manager, PlayerbotBattlegroundOptions o)
     {
+        var key = (o.MaxBotsPerBattleground, o.RaiseCapToFillTemplate, manager.TemplateOf(BattlegroundType.WarsongGulch),
+            manager.TemplateOf(BattlegroundType.ArathiBasin), manager.TemplateOf(BattlegroundType.AlteracValley));
+        if (_raiseWarned is { } last && last.Cap == key.Item1 && last.Raise == key.Item2 && ReferenceEquals(last.Wsg, key.Item3)
+            && ReferenceEquals(last.Ab, key.Item4) && ReferenceEquals(last.Av, key.Item5)) return;
+        _raiseWarned = key;
         string raised = RaisedList(manager, o);
-        if (_raiseWarned is { } last && last.Cap == o.MaxBotsPerBattleground && last.Raised == raised) return;
-        _raiseWarned = (o.MaxBotsPerBattleground, raised);
         if (raised.Length == 0) return;
         RaiseWarnings++;
-        logger.LogWarning("World:Playerbots:Battlegrounds:MaxBotsPerBattleground = {Cap} is below twice a template's MinPlayersPerTeam; RaiseCapToFillTemplate overrides it: {Raised} (2 x MaxPlayersPerTeam). Set RaiseCapToFillTemplate = false to keep the cap (such a type is then refused for bots).",
+        logger.LogWarning("World:Playerbots:Battlegrounds:MaxBotsPerBattleground = {Cap} is below twice a template's MinPlayersPerTeam; RaiseCapToFillTemplate overrides it: {Raised} (2 x MaxPlayersPerTeam). Set RaiseCapToFillTemplate = false to keep the configured cap.",
             o.MaxBotsPerBattleground, raised);
     }
 
@@ -788,10 +794,6 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
         bool anyRealWaiting = _demand.AnyRealWaiting || (options.PreferFillingRealPlayerQueues && options.QueueChancePerMinute > 0f && _demand.AnyBotWaiting)
             || _demand.AnyFillNeed(manager.TemplateOf, options);
         bool checkedRefusalsThisScan = false;
-        // The same test as PlayerbotBattlegroundDemand.IsRaised: the cap covers 2 x min(MinPlayersPerTeam, MaxPlayersPerTeam), in long.
-        Func<BattlegroundType, bool> capCoversMinimum = type => options.RaiseCapToFillTemplate || options.MaxBotsPerBattleground <= 0
-            || manager.TemplateOf(type) is not { } template
-            || options.MaxBotsPerBattleground >= 2L * Math.Min(template.MinPlayersPerTeam, template.MaxPlayersPerTeam);
         foreach (PlayerbotBattlegroundBot bot in _orderedBots)
         {
             if (_tracked.ContainsKey(bot.BotId) || !bot.Free || !bot.Session.IsManaged || bot.Session.Player is not { IsInWorld: true } player) continue;
@@ -803,7 +805,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
             checkedRefusalsThisScan = true;
             List<PlayerbotBattlegroundChoice> eligible = PlayerbotBattlegroundBrackets.Eligible(player.Level, manager.TemplateOf,
                 type => HasObjectiveContent(feature, type) && (type is not (BattlegroundType.ArathiBasin or BattlegroundType.AlteracValley) || KnowsBannerSpell(player)),
-                type => !IsSetAside(bot.BotId, type) && FindMaster(player, type) is not null, Refused, capCoversMinimum);
+                type => !IsSetAside(bot.BotId, type) && FindMaster(player, type) is not null, Refused);
             if (eligible.Count == 0 || (!roll && !anyRealWaiting)) continue;
             if (_demand.Pick(eligible, player.Team, manager.TemplateOf, options, roll, _random.NextDouble()) is not { } choice
                 || FindMaster(player, choice.Type) is not { } master) continue;

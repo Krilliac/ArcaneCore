@@ -19,7 +19,7 @@ server's own rules (below).
 | File (`src/ArcaneCore.Playerbots/Battlegrounds/`) | What it does |
 |---|---|
 | `PlayerbotBattlegroundOptions.cs` | `World:Playerbots:Battlegrounds` (every key live through `.reload config`). |
-| `PlayerbotBattlegroundBrackets.cs` | Which types and brackets a bot of a level may join; refuses a missing template, a cap below the template minimum (`CapBelowMinimum`, with the raise off), missing objective content and no battlemaster in reach. Unit tested. |
+| `PlayerbotBattlegroundBrackets.cs` | Which types and brackets a bot of a level may join; refuses a missing template, missing objective content and no battlemaster in reach. Unit tested. |
 | `PlayerbotBattlegroundDemand.cs` | The demand snapshot and the caps: per (type, bracket, team) real players waiting and bots committed; the pick. Unit tested. |
 | `PlayerbotBattlegroundQueueMachine.cs` | One bot's queue-to-leave life as a pure state machine (phases and the packet of each transition). Unit tested. |
 | `PlayerbotBattlegroundRoles.cs` | Who attacks, escorts and defends in a match. Unit tested. |
@@ -50,7 +50,6 @@ The types it may join (`PlayerbotBattlegroundBrackets.Eligible`), each refusal l
 | Warsong Gulch, Arathi Basin or Alterac Valley | `Unsupported` |
 | a `battleground_template` row for the type | `NoTemplate` |
 | the bot's level within the template's minimum and maximum; the bracket is the manager's (`BracketOfLevel`, vmangos `Player::GetBattleGroundBracketIdFromLevel`) | `LevelOutOfRange` (not logged) |
-| with `RaiseCapToFillTemplate` off: `MaxBotsPerBattleground` at least twice the template's `MinPlayersPerTeam` (bots alone could never start the match) | `CapBelowMinimum` |
 | the objective content, decided once per content load: Warsong Gulch both flag stands (179830, 179831) on map 489 and both flag room triggers (3646, 3647); Arathi Basin node banners on map 529 (objects with a `gameobject_battleground` node event and a lock) where every node's neutral banner is one the match routes to the node click (`MatchRuntime.RoutesBannerUse`, the server's own rule), Alterac Valley (map 30) a template for map 30 and, when its node banners exist, at least one the match routes to the node click; and the banner spell 21651 in the spell store, known by the bot for Arathi Basin and Alterac Valley (`playercreateinfo_spell` teaches every character "Opening" 21651) | `MissingContent` |
 | a battlemaster of the type (a creature spawn whose entry has a `battlemaster_entry` row) on the bot's map within `MaxTravelYards`, whose faction is not hostile to the bot, whose spawn no game event holds back (the Warsong Emissary of "Call to Arms" while it is off), in a walking region the bot's own joins (by the navigation mesh's region graph, no path search; an indoor end is let through; a master that stands still is preferred to one that walks waypoints), whose route was not refused from the bot's zone in the last hour, and the type not set aside for this bot | `NoBattlemaster` (not logged) |
 
@@ -63,13 +62,15 @@ that way only with `PreferFillingRealPlayerQueues`; a match of bots only while `
 Basin at the default cap fill their open slots by the chance roll alone, as before; otherwise the bot rolls its per-minute chance
 (`QueueChancePerMinute`, as `1 - (1 - p)^(scan seconds / 60)`) and takes a random one of the open choices. A choice is open while the
 bracket holds fewer than `MaxBotsPerBattleground` committed bots, the bot's team fewer than `min(MaxPlayersPerTeam, ceil(cap / 2))`, and
-no running match of the bracket with room already holds the cap in bots. With `RaiseCapToFillTemplate` (on) a type whose template
-minimum needs more than the cap (2 x `MinPlayersPerTeam`, Alterac Valley's 20 per team against the default cap of 20) uses 2 x
-`MaxPlayersPerTeam` as its cap (80 for Alterac Valley, 40 per team), so bots alone can start it and fill it to the template's maximum; a
-type whose minimum the cap covers (Warsong Gulch and Arathi Basin at the default 20) keeps the configured cap. With it off such a type is
-refused (`CapBelowMinimum`, logged once). The `.playerbot battlegrounds` status line names each loaded type whose cap is raised, and the
-coordinator logs one warning naming each raised type and its new cap at its first scan after the world starts and again whenever a
-`.reload config` changes the cap or which types are raised.
+no running match of the bracket with room already holds the cap in bots. With `RaiseCapToFillTemplate` (on by default) any type whose
+2 x `MinPlayersPerTeam` exceeds the cap uses 2 x `MaxPlayersPerTeam` as its cap, so bots alone can start it and fill it to the template's
+maximum: at the default cap of 20 that is Alterac Valley (80, 40 per team); Warsong Gulch and Arathi Basin are raised only when an
+operator sets the cap below twice their minimum (below 10 and 16 with the z2815 rows; Arathi Basin then gets 30). A type whose minimum
+the cap covers keeps the configured cap. The `.playerbot battlegrounds` status line names each loaded type whose cap is raised, and the
+coordinator logs one warning naming each raised type and its new cap. The warning comes from a coordinator scan, so it appears once bots
+are online, and again whenever a `.reload config` (or a template reload) changes the cap, the option or the templates. With the option
+off every type keeps the configured cap, with no raise and no refusal: the behaviour before the option, where a type whose minimum the
+cap does not cover (Alterac Valley at 20) does not start from bots alone, while its bots still help real players reach the minimum.
 
 The snapshot behind these numbers is rebuilt at every scan from the battleground manager itself: the real players (sessions that are
 not managed) waiting in each queue and not yet invited, the bots this coordinator committed (walking, joining, queued, invited,
@@ -193,7 +194,7 @@ s (and leaves that buff alone for 30 s) and forgets a buff that despawned or som
 | `World:Playerbots:Battlegrounds:QueueChancePerMinute` | `0.05` | 0..1. The chance per minute that a free, eligible bot starts to queue; each 2-second scan rolls `1 - (1 - p)^(seconds / 60)`. A real player's queue that needs bots is filled without a roll. |
 | `World:Playerbots:Battlegrounds:MaxBotsPerBattleground` | `20` | 0..80. Unless `RaiseCapToFillTemplate` raises it for a type whose template minimum needs more, bots committed to one (type, bracket) never exceed it, a team never more than `min(MaxPlayersPerTeam, ceil(cap / 2))`, a running match holding it blocks its bracket, and an invitation into a match holding it is declined. 0 queues no bot. |
 | `World:Playerbots:Battlegrounds:PreferFillingRealPlayerQueues` | `true` | A (type, bracket) a real player waits in gets bots at once, up to the template's minimum per team, before any random choice. |
-| `World:Playerbots:Battlegrounds:RaiseCapToFillTemplate` | `true` | A type whose template minimum needs more bots than `MaxBotsPerBattleground` (2 x `MinPlayersPerTeam`, e.g. Alterac Valley's 20 per team) gets 2 x `MaxPlayersPerTeam` as its cap (Alterac Valley: 80, 40 per team), so bots alone can start it and fill it, and backfill a leaver's slot. A type whose minimum the cap covers keeps the cap. Off: the type is refused for bots (`CapBelowMinimum`). Template values are never changed. Upgrade note: this replaces the former RaiseCapToMatchMinimum, which raised the cap only to 2 x `MinPlayersPerTeam`; a configured cap below a type's minimum is now overridden to 2 x `MaxPlayersPerTeam` (a warning is logged), so set this to `false` to keep a low cap. |
+| `World:Playerbots:Battlegrounds:RaiseCapToFillTemplate` | `true` | A type whose template minimum needs more bots than `MaxBotsPerBattleground` (2 x `MinPlayersPerTeam`, e.g. Alterac Valley's 20 per team) gets 2 x `MaxPlayersPerTeam` as its cap (Alterac Valley: 80, 40 per team), so bots alone can start it and fill it, and backfill a leaver's slot. A type whose minimum the cap covers keeps the cap. Template values are never changed. Upgrade note: before this option the configured cap applied to every type; now, by default, any type whose 2 x `MinPlayersPerTeam` exceeds the cap is raised to 2 x `MaxPlayersPerTeam` with one warning (Alterac Valley at the default cap; Warsong Gulch or Arathi Basin only with a cap set below twice their minimum). Set it to `false` to keep that earlier behaviour: the configured cap for every type, no raise, no refusal. |
 | `World:Playerbots:Battlegrounds:MaxTravelYards` | `1500` | 100..20000. The farthest (straight line, same map) a battlemaster may stand for a bot to choose it. |
 | `World:Playerbots:Battlegrounds:MaxQueueWaitMinutes` | `30` | 1..240. A bot leaves a queue after this long and does not queue for that type again for 10 minutes. |
 
@@ -224,8 +225,9 @@ where the group would be, the goal `Battleground` (or `Recover` on a corpse run)
   (`Ab_WithTheRealGooberNeutralBanner_AutonomousBotClaimsTheStables_ThroughTheTriggerSpell`: SMSG_SPELL_GO of 21651 and of 23932, the node
   contested by the Alliance); a goober banner whose spell is no banner trigger is refused and never queued
   (`Ab_WithANeutralGooberWhoseSpellIsNoBannerTrigger_IsRefused_NoBotQueues`); with a cap under twice Alterac Valley's minimum the cap is raised and bots alone start the match
-  (`Av_CapBelowTwiceTheTemplateMinimum_IsRaised_SoBotsAloneStartTheMatch_AndPlayTheObjective`), or with the raise off the type is refused
-  (`Av_RaiseCapOff_RefusesTheTypeWithCapBelowMinimum_AndNoBotQueues`).
+  (`Av_CapBelowTwiceTheTemplateMinimum_IsRaised_SoBotsAloneStartTheMatch_AndPlayTheObjective`), while with the raise off the configured
+  cap is kept with no refusal (`Av_RaiseCapOff_KeepsTheConfiguredCap_BotsQueueUpToIt_NoRefusal_AndNoMatchStarts`,
+  `RaiseOff_CapTen_ArathiBasinStaysEligible_AndBotsQueueAtMostFivePerTeam`).
   With the coordinator's group check, its banner routing rule and its real-player filter removed, the party, race, unrouted-goober and
   managed-bot tests go red.
 * Buffs (`PlayerbotBattlegroundBuffTests`): the classic-db templates are recognised; a hurt bot prefers restoration over a closer

@@ -16,9 +16,6 @@ internal enum PlayerbotBattlegroundRefusal : byte
 
     /// <summary>A type the bots do not play (<see cref="PlayerbotBattlegroundBrackets.Supported"/>; every vanilla type is played now).</summary>
     Unsupported,
-
-    /// <summary>The configured cap is below 2 x the template's <c>MinPlayersPerTeam</c> and <c>RaiseCapToFillTemplate</c> is off: bots alone could never start a match.</summary>
-    CapBelowMinimum,
 }
 
 /// <summary>
@@ -61,12 +58,10 @@ internal static class PlayerbotBattlegroundBrackets
     /// Every (type, bracket) a bot of <paramref name="level"/> is eligible for. <paramref name="templates"/> answers the manager's
     /// template, <paramref name="hasObjectiveContent"/> whether the type's flags, banners and triggers exist, <paramref name="hasBattlemaster"/>
     /// whether a friendly battlemaster of the type is within reach; <paramref name="refused"/> hears each skipped type and why.
-    /// <paramref name="capCoversMinimum"/> (null: always) answers whether the bot cap covers both teams' template minimum; a type it
-    /// rejects is <see cref="PlayerbotBattlegroundRefusal.CapBelowMinimum"/>, checked right after the template and level.
     /// </summary>
     internal static List<PlayerbotBattlegroundChoice> Eligible(uint level, Func<BattlegroundType, BattlegroundTemplate?> templates,
         Func<BattlegroundType, bool> hasObjectiveContent, Func<BattlegroundType, bool> hasBattlemaster,
-        Action<BattlegroundType, PlayerbotBattlegroundRefusal>? refused = null, Func<BattlegroundType, bool>? capCoversMinimum = null)
+        Action<BattlegroundType, PlayerbotBattlegroundRefusal>? refused = null)
     {
         ArgumentNullException.ThrowIfNull(templates);
         ArgumentNullException.ThrowIfNull(hasObjectiveContent);
@@ -75,7 +70,6 @@ internal static class PlayerbotBattlegroundBrackets
         foreach (BattlegroundType type in Types)
         {
             PlayerbotBattlegroundRefusal why = Check(type, level, templates(type), out int bracket);
-            if (why == PlayerbotBattlegroundRefusal.None && capCoversMinimum is not null && !capCoversMinimum(type)) why = PlayerbotBattlegroundRefusal.CapBelowMinimum;
             if (why == PlayerbotBattlegroundRefusal.None && !hasObjectiveContent(type)) why = PlayerbotBattlegroundRefusal.MissingContent;
             if (why == PlayerbotBattlegroundRefusal.None && !hasBattlemaster(type)) why = PlayerbotBattlegroundRefusal.NoBattlemaster;
             if (why == PlayerbotBattlegroundRefusal.None) choices.Add(new(type, bracket));

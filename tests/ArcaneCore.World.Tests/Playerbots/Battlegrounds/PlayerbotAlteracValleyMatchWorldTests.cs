@@ -71,7 +71,7 @@ public sealed class PlayerbotAlteracValleyMatchWorldTests
             await context.StepAsync("a bot takes an objective (a graveyard assault is scored)", () => WaitExplainedAsync(context, "a graveyard assaulted",
                 () => bots.Any(b => av.ScoreOf(b.Guid) is AvScore { GraveyardsAssaulted: > 0 }) || av.NodeState(AlteracValley.NodeIcebloodGrave) == AlteracValley.PointAssaulted,
                 TimeSpan.FromMinutes(5), bots));
-            ScenarioContext.Expect(!await context.ReadAsync(() => coordinator.Refusals.Contains((BattlegroundType.AlteracValley, PlayerbotBattlegroundRefusal.CapBelowMinimum))),
+            ScenarioContext.Expect(!await context.ReadAsync(() => coordinator.Refusals.Any(r => r.Type == BattlegroundType.AlteracValley)),
                 "AV was refused with the raise on");
         });
     }
@@ -312,27 +312,34 @@ public sealed class PlayerbotAlteracValleyMatchWorldTests
     }
 
     [Fact]
-    public async Task Av_RaiseCapOff_RefusesTheTypeWithCapBelowMinimum_AndNoBotQueues()
+    public async Task Av_RaiseCapOff_KeepsTheConfiguredCap_BotsQueueUpToIt_NoRefusal_AndNoMatchStarts()
     {
+        // The behaviour before RaiseCapToFillTemplate: cap 4 allows 2 bots a team, below the template minimum of 3, so bots queue but no
+        // match starts from bots alone (they would help a real player's queue).
         await using ScenarioTestWorld world = await BattlegroundBotTestWorld.StartAlteracValleyAsync(o =>
         {
             o.Battlegrounds.MaxBotsPerBattleground = 4;
             o.Battlegrounds.RaiseCapToFillTemplate = false;
         }, MinPerTeam);
-        await RunAsync(world, "bg-av-cap-below-minimum", async context =>
+        await RunAsync(world, "bg-av-raise-off", async context =>
         {
             ScenarioBot[] bots = await LoginTeamsAsync(context);
             PlayerbotBattlegroundCoordinator coordinator = Coordinator(context);
 
-            await context.StepAsync("the coordinator refuses AV once", () => WaitExplainedAsync(context, "CapBelowMinimum logged",
-                () => coordinator.Refusals.Contains((BattlegroundType.AlteracValley, PlayerbotBattlegroundRefusal.CapBelowMinimum)), TimeSpan.FromMinutes(2), bots));
+            await context.StepAsync("two bots a team queue for AV, the configured cap", () => WaitExplainedAsync(context, "four bots queued",
+                () => coordinator.Totals.Queued == 4, TimeSpan.FromMinutes(2), bots));
 
-            await context.StepAsync("for two more game minutes no bot queues and no match exists", async () =>
+            await context.StepAsync("for two more game minutes no fifth bot queues, nothing is refused and no match exists", async () =>
             {
                 await context.IdleAsync(TimeSpan.FromMinutes(2));
-                bool anyQueued = await context.ReadAsync(() => bots.Any(b => Manager(context).StateOf(b.Guid).InAnyQueue || Manager(context).StateOf(b.Guid).InBattleground));
-                ScenarioContext.Expect(!anyQueued, "a bot queued for or entered Alterac Valley although the cap is below the minimum");
-                ScenarioContext.ExpectEqual(0, await context.ReadAsync(() => coordinator.Totals.Queued), "bots queued");
+                ScenarioContext.ExpectEqual(4, await context.ReadAsync(() => coordinator.Totals.Queued), "bots queued");
+                (int alliance, int horde) = await context.ReadAsync(() => (
+                    bots.Count(b => b.RequirePlayer().Team == Team.Alliance && Manager(context).StateOf(b.Guid).InAnyQueue),
+                    bots.Count(b => b.RequirePlayer().Team == Team.Horde && Manager(context).StateOf(b.Guid).InAnyQueue)));
+                ScenarioContext.ExpectEqual((2, 2), (alliance, horde), "bots queued per team");
+                ScenarioContext.Expect(!await context.ReadAsync(() => coordinator.Refusals.Any(r => r.Type == BattlegroundType.AlteracValley)), "AV was refused");
+                ScenarioContext.ExpectEqual(0, await context.ReadAsync(() => Manager(context).RunningBattlegrounds.Count()), "matches");
+                ScenarioContext.ExpectEqual(0, await context.ReadAsync(() => coordinator.RaiseWarnings), "raise warnings with the raise off");
             });
         });
     }
