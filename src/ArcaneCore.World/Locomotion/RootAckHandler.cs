@@ -59,6 +59,7 @@ public sealed class RootAckHandler : IOpcodeHandlerGroup
         session.SessionTrace?.Ack(session, player, rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, ack.Movement.Time, knockback: false);
         MovementHandlers.ApplyObserved(session, player, rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, ack.Movement);
         antiCheat?.AfterMovement(player);
+        session.SessionTrace?.AfterMovement(player);
         MovementControl.ApplyReal(player, MovementChangeType.Root, rooted);
         MovementControl.RelayToObservers(player, MovementChangeType.Root, rooted);
     }

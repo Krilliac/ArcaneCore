@@ -24,9 +24,10 @@ namespace ArcaneCore.World.Net.SessionTrace;
 /// </para>
 /// <para>
 /// Known gaps: the feature's explicit grants (<c>.cheat</c> tools) are private to it, so a flag granted that way is judged here as ungranted; a
-/// transport claim is never scored (it is passed as unknown); a server-side move other than a teleport order the client was sent
-/// (<c>SMSG_NEW_WORLD</c>, <c>MSG_MOVE_TELEPORT_ACK</c>) is only noticed when the position differs from the one stored after the last block.
-/// World thread, except <see cref="NoteServerRelocation"/>, which any sending thread may call.
+/// transport claim is never scored (it is passed as unknown). A server-side move is noticed as the feature notices it: a teleport order the
+/// client was sent (<c>SMSG_NEW_WORLD</c>, <c>MSG_MOVE_TELEPORT_ACK</c>), or a position that differs from the one stored after the last block
+/// (recorded by <see cref="AfterMovement"/>, the counterpart of the feature's hook of the same name).
+/// Map thread of the player (the movement handlers), except <see cref="NoteServerRelocation"/>, which any sending thread may call.
 /// </para>
 /// </summary>
 internal sealed class SessionTraceShadow(SessionTrace trace)
@@ -86,12 +87,7 @@ internal sealed class SessionTraceShadow(SessionTrace trace)
             checks.NotifyServerRelocation();
         }
 
-        // The server holds the position the previous block left (the player has not been moved by this block yet).
-        if (checks.HasBaseline)
-        {
-            checks.NotifyStored(player.X, player.Y, player.Z);
-        }
-
+        // The position stored after the previous block was recorded by AfterMovement; when the player is somewhere else now, the server moved it.
         checks.CheckServerPosition(player.X, player.Y, player.Z);
         var sample = new MovementSample
         {
@@ -145,6 +141,9 @@ internal sealed class SessionTraceShadow(SessionTrace trace)
         checks.NotifyTimeSkip(skippedMs, session.CurrentPacketReceivedMs, _findings);
         Report(reason);
     }
+
+    /// <summary>After a block (movement or acknowledgement) was stored: the position the server now holds, as the feature's AfterMovement records it.</summary>
+    internal void AfterMovement(Player player) => _checks?.NotifyStored(player.X, player.Y, player.Z);
 
     private MovementAntiCheat ChecksFor(AntiCheatOptions options)
         => _checks is { } existing && ReferenceEquals(existing.Options, options) ? existing : (_checks = new MovementAntiCheat(options));

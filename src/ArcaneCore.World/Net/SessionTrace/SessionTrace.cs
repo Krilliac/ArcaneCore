@@ -4,6 +4,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Protocol;
@@ -18,9 +19,9 @@ namespace ArcaneCore.World.Net.SessionTrace;
 /// lines need. The line shape is <c>[{Endpoint}] trace {Character} guid={Guid.Low} {event}[ {detail}]</c> at Information in the category
 /// <see cref="SessionTraceFeature.LogCategory"/>; nothing else is ever written to that category.
 /// <para>
-/// Threads: the inbound reader thread (<see cref="Inbound"/>), any sending thread (<see cref="Outbound"/>) and the world thread write
+/// Threads: the inbound reader thread (<see cref="Inbound"/>), any sending thread (<see cref="Outbound"/>) and the world and map threads write
 /// lines at the same time. The bucket decision is made under <see cref="_gate"/>, the logger call is outside it, and every counter is
-/// read and written with <see cref="Interlocked"/>. Fields marked "world thread" are touched only there. The entry in the feature's registry
+/// read and written with <see cref="Interlocked"/>. Fields marked "world thread" are touched only by the world thread or, for the movement view and the shadow, by the map thread of the player in the parallel phase (never both in one phase). The entry in the feature's registry
 /// outlives the connection: <see cref="Endpoint"/> is "offline" while no session is attached.
 /// </para>
 /// </summary>
@@ -93,6 +94,9 @@ public sealed class SessionTrace
     /// <summary>The read-only anti-cheat shadow of this character (exempt players only).</summary>
     internal SessionTraceShadow Shadow { get; }
 
+    /// <summary>The account security of the character when the trace was turned on; decides who may see or stop an offline trace.</summary>
+    internal AccountSecurity Security { get; set; }
+
     internal void SetExpiry(DateTimeOffset expiresAt) => Interlocked.Exchange(ref _expiresUtcTicks, expiresAt.UtcTicks);
 
     // --- session attachment ------------------------------------------------------------------------------------------
@@ -114,6 +118,11 @@ public sealed class SessionTrace
         }
 
         session.AttachSessionTrace(this);
+        if (session.State == ArcaneCore.World.Handlers.SessionState.Closed)
+        {
+            Disconnected(session); // the connection closed before it was attached: Close() saw no trace, so do its part here
+        }
+
         _hasState = false;
         _hasOffset = false;
     }
@@ -131,6 +140,15 @@ public sealed class SessionTrace
         }
 
         session.DetachSessionTrace(this);
+    }
+
+    /// <summary>Whether <paramref name="session"/> is the connection this trace follows now.</summary>
+    internal bool IsAttachedTo(WorldSession session)
+    {
+        lock (_attachGate)
+        {
+            return ReferenceEquals(_session, session);
+        }
     }
 
     /// <summary>Stop following whatever connection is attached (the trace ended, or the character logged out).</summary>
@@ -276,7 +294,7 @@ public sealed class SessionTrace
     }
 
     /// <summary>
-    /// A client movement block, before it is stored (world thread, from the movement handler). The line shows the 1.12.1 time-sync view: the
+    /// A client movement block, before it is stored (map thread of the player, from the movement handler). The line shows the 1.12.1 time-sync view: the
     /// client's movement timestamp against the server's receive clock (the 1.12.1 opcode table has no time-sync request or response, so this
     /// offset and its change since the first sample of this trace is all there is). Also feeds the anti-cheat shadow.
     /// </summary>
@@ -310,7 +328,10 @@ public sealed class SessionTrace
         }
     }
 
-    /// <summary>An honoured movement acknowledgement (world thread). Also feeds the anti-cheat shadow.</summary>
+    /// <summary>After a movement block or acknowledgement was stored: lets the shadow record the position the server now holds.</summary>
+    internal void AfterMovement(Player player) => Shadow.AfterMovement(player);
+
+    /// <summary>An honoured movement acknowledgement (map thread of the player). Also feeds the anti-cheat shadow.</summary>
     internal void Ack(WorldSession session, Player player, WorldOpcode opcode, uint clientTime, bool knockback)
     {
         Write("ack", string.Create(CultureInfo.InvariantCulture, $"{WorldOpcodeNames.GetName(opcode)} clientTime={clientTime} knockback={(knockback ? "true" : "false")}"));
@@ -327,7 +348,7 @@ public sealed class SessionTrace
         }
     }
 
-    /// <summary>CMSG_MOVE_TIME_SKIPPED for the traced character's own unit (world thread). Also feeds the anti-cheat shadow.</summary>
+    /// <summary>CMSG_MOVE_TIME_SKIPPED for the traced character's own unit (map thread of the player). Also feeds the anti-cheat shadow.</summary>
     internal void TimeSkip(WorldSession session, Player player, uint skippedMs)
     {
         Write("timeskip", string.Create(CultureInfo.InvariantCulture, $"ms={skippedMs}"));

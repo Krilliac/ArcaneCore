@@ -111,6 +111,7 @@ public sealed class TurnRateAckHandler : IOpcodeHandlerGroup
         session.SessionTrace?.Ack(session, player, TurnRatePackets.Ack, ack.Movement.Time, knockback: false);
         MovementHandlers.ApplyObserved(session, player, TurnRatePackets.Ack, ack.Movement);
         antiCheat?.AfterMovement(player);
+        session.SessionTrace?.AfterMovement(player);
         player.Map?.BroadcastToObservers(player, TurnRatePackets.Observer, SpeedPackets.BuildObserver(player.Guid.Value, player.Movement, player.TurnRate));
     }
 }

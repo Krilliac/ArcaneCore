@@ -52,6 +52,7 @@ public sealed class KnockbackAckHandler : IOpcodeHandlerGroup
         session.SessionTrace?.Ack(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement.Time, knockback: true);
         MovementHandlers.ApplyObserved(session, player, WorldOpcode.CmsgMoveKnockBackAck, ack.Movement);
         antiCheat?.AfterMovement(player);
+        session.SessionTrace?.AfterMovement(player);
         player.Locomotion.ResetFall();
 
         // vmangos relays what the client acknowledged (the jump block of its own movement info).
