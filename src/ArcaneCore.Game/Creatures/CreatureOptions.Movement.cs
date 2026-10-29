@@ -84,6 +84,14 @@ public sealed class CreatureMovementOptions
     /// since a leader on the move shifts the follow point every update. Chase stays synchronous.
     /// </summary>
     public bool PathJobsFollow { get; set; }
+
+    /// <summary>
+    /// <c>Creatures:Movement:PathJobsWander</c>: with <see cref="PathJobs"/> on, a wander leg's random-point pick and its path search run
+    /// as one job on the path-job pool, and the creature idles until the answer is applied on the map's thread. The map's RNG gives one
+    /// draw per leg (the seed); the point is a pure function of that seed, the wander centre and radius, and the loaded navmesh. The
+    /// leg starts one update later than the synchronous route. Off keeps the synchronous point pick and today's RNG draws exactly.
+    /// </summary>
+    public bool PathJobsWander { get; set; } = true;
 }
 
 /// <summary>The default movement of a waypoint creature without a path (<see cref="CreatureMovementOptions.MissingWaypointPathFallback"/>).</summary>
