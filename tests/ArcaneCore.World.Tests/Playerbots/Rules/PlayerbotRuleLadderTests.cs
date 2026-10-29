@@ -42,7 +42,7 @@ public sealed class PlayerbotRuleLadderTests
         RuleCatalog first = host.Catalog();
         RuleCatalog second = host.Catalog();
         var bot = new PlayerbotLadderReplayTests.ReplayBot(5);
-        host.CreateLadder().Choose(bot, first, 0);
+        host.CreateLadder(5).Choose(bot, first, 0);
 
         Assert.Same(first, second);
         Assert.Equal(PlayerbotLadderReplayTests.TodaysOrder, bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
@@ -57,7 +57,7 @@ public sealed class PlayerbotRuleLadderTests
         PlayerbotRuleLadder host = PlayerbotRuleLadder.Create(sp, null);
         var bot = new PlayerbotLadderReplayTests.ReplayBot(5);
 
-        host.CreateLadder().Choose(bot, host.Catalog(), 0);
+        host.CreateLadder(5).Choose(bot, host.Catalog(), 0);
 
         Assert.Equal(PlayerbotLadderReplayTests.TodaysOrder, bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
     }
@@ -84,7 +84,7 @@ public sealed class PlayerbotRuleLadderTests
         PlayerbotRuleLadder host = PlayerbotRuleLadder.Create(sp, feature);
         var bot = new PlayerbotLadderReplayTests.ReplayBot(5);
 
-        host.CreateLadder().Choose(bot, host.Catalog(), 0);
+        host.CreateLadder(5).Choose(bot, host.Catalog(), 0);
 
         Assert.Equal(PlayerbotLadderReplayTests.TodaysOrder, bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
         Assert.Single(logs.Warnings);
@@ -103,7 +103,7 @@ public sealed class PlayerbotRuleLadderTests
         Parallel.For(0, 8, new ParallelOptions { MaxDegreeOfParallelism = 8 }, worker =>
         {
             // Each brain asks the shared host for its own ladder, as PlayerbotBrain does.
-            BotGoalLadder ladder = PlayerbotRuleLadder.For(sp).CreateLadder();
+            BotGoalLadder ladder = PlayerbotRuleLadder.For(sp).CreateLadder((ulong)worker + 1);
             var bot = new PlayerbotLadderReplayTests.ReplayBot((ulong)worker + 1);
             for (int i = 0; i < 3000; i++)
             {
@@ -117,19 +117,98 @@ public sealed class PlayerbotRuleLadderTests
         Assert.Equal(0, host.Counters.Reentrant);
     }
 
+    private static RuleContent WithChanceRule(byte chance, bool disableShipped = false) => PlayerbotLadderContent.Content with
+    {
+        Rules = [.. PlayerbotLadderContent.Rules.Select(r => disableShipped ? r with { Enabled = false } : r), new RuleRecord
+        {
+            Id = CustomRuleId, Host = (byte)RuleHostKind.Bot, EventType = BotRuleIds.GoalEvaluate, ChancePct = chance,
+            Flags = (int)RuleFlags.Repeatable, Comment = "chance rule",
+        }],
+        Actions = [.. PlayerbotLadderContent.Actions, new RuleActionRecord
+        {
+            OwnerId = CustomRuleId, Seq = 0, ActionType = BotRuleIds.ProposeGoal, Param1 = CustomGoalId, Param2 = 5000, TargetType = BotRuleIds.SelfTarget,
+        }],
+        Goals = [.. PlayerbotLadderContent.Goals, new PlayerbotGoalRecord
+        {
+            GoalId = CustomGoalId, Name = "custom: trainer first", BasePriority = 0, Driver = (short)PlayerbotLadderRung.Trainers,
+        }],
+    };
+
+    private static string RollSequence(PlayerbotRuleLadder host, ulong guid, int passes)
+    {
+        BotGoalLadder ladder = host.CreateLadder(guid);
+        var bot = new PlayerbotLadderReplayTests.ReplayBot(guid);
+        var sequence = new System.Text.StringBuilder();
+        for (int i = 0; i < passes; i++)
+        {
+            ladder.Choose(bot, host.Catalog(), i);
+            sequence.Append(bot.Candidates[0].Rung == PlayerbotLadderRung.Trainers ? '1' : '0');
+        }
+
+        return sequence.ToString();
+    }
+
+    [Fact]
+    public void EachBotRollsItsOwnChances_TheSameWayEveryRun_AndATenPercentRuleFiresForAboutTenPercentOfBots()
+    {
+        using ServiceProvider sp = Services();
+        PlayerbotRuleLadder fifty = PlayerbotRuleLadder.Create(sp, Feature(sp, WithChanceRule(50)));
+
+        string first = RollSequence(fifty, 1, 200);
+        Assert.NotEqual(first, RollSequence(fifty, 2, 200));
+        Assert.Equal(first, RollSequence(fifty, 1, 200));
+        Assert.InRange(first.Count(c => c == '1'), 60, 140);
+
+        PlayerbotRuleLadder ten = PlayerbotRuleLadder.Create(sp, Feature(sp, WithChanceRule(10)));
+        int firedOnFirstPass = 0;
+        const int Bots = 4000;
+        for (ulong guid = 1; guid <= Bots; guid++)
+        {
+            firedOnFirstPass += RollSequence(ten, guid, 1)[0] == '1' ? 1 : 0;
+        }
+
+        double share = 100.0 * firedOnFirstPass / Bots;
+        Assert.InRange(share, 7, 13);
+    }
+
+    [Fact]
+    public void DisabledShippedLadderRules_AreAChoice_NotAMissingRow()
+    {
+        var logs = new CapturingLoggerFactory();
+        using ServiceProvider sp = Services(logs);
+        PlayerbotRuleLadder host = PlayerbotRuleLadder.Create(sp, Feature(sp, WithChanceRule(100, disableShipped: true)));
+        var bot = new PlayerbotLadderReplayTests.ReplayBot(9);
+
+        host.CreateLadder(9).Choose(bot, host.Catalog(), 0);
+
+        Assert.Equal([PlayerbotLadderRung.Trainers], bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
+        Assert.Empty(logs.Warnings);
+    }
+
+    [Fact]
+    public void TheFallbackWarning_NamesWhatIsMissing()
+    {
+        var logs = new CapturingLoggerFactory();
+        using ServiceProvider sp = Services(logs);
+        PlayerbotRuleLadder host = PlayerbotRuleLadder.Create(sp, Feature(sp, new RuleContent { Goals = PlayerbotLadderContent.Goals }));
+
+        host.Catalog();
+
+        Assert.Contains("no ladder rules", Assert.Single(logs.Warnings), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void TheCatalogChoiceAndAPass_AllocateNothingOncePrimed()
     {
         using ServiceProvider sp = Services();
         PlayerbotRuleLadder host = PlayerbotRuleLadder.For(sp);
-        BotGoalLadder ladder = host.CreateLadder();
+        BotGoalLadder ladder = host.CreateLadder(3);
         var bot = new PlayerbotLadderReplayTests.ReplayBot(3);
         for (int i = 0; i < 50; i++) ladder.Choose(bot, host.Catalog(), i);
 
         long before = GC.GetAllocatedBytesForCurrentThread();
         for (int i = 0; i < 1000; i++)
         {
-
             ladder.Choose(bot, host.Catalog(), i);
         }
 
@@ -166,7 +245,7 @@ public sealed class PlayerbotRuleLadderTests
         for (ulong guid = 1; guid <= 2000; guid++)
         {
             var bot = new PlayerbotLadderReplayTests.ReplayBot(guid);
-            host.CreateLadder().Choose(bot, host.Catalog(), 0);
+            host.CreateLadder(guid).Choose(bot, host.Catalog(), 0);
             bool first = bot.Candidates[0].Rung == PlayerbotLadderRung.Trainers;
             if (bot.Facts.Class == 1)
             {

@@ -119,7 +119,7 @@ public sealed class RuleEvaluator(Random random)
 
     private void Fault(string suffix, Exception ex, short eventType)
     {
-        Counters.Faults++;
+        Interlocked.Increment(ref Counters.Faults);
         string site = FaultSite + suffix;
         if (Logger is { } logger)
         {
@@ -137,14 +137,14 @@ public sealed class RuleEvaluator(Random random)
         {
             if (ReferenceEquals(_activeStates[i], state) && _activeEvents[i] == eventType)
             {
-                Counters.Reentrant++;
+                Interlocked.Increment(ref Counters.Reentrant);
                 return false;
             }
         }
 
         if (_active == MaxFireNesting)
         {
-            Counters.Reentrant++;
+            Interlocked.Increment(ref Counters.Reentrant);
             return false;
         }
 
@@ -177,7 +177,7 @@ public sealed class RuleEvaluator(Random random)
             if (outcome == RuleOutcome.Ran)
             {
                 ran++;
-                Counters.Fired++;
+                Interlocked.Increment(ref Counters.Fired);
                 state.Fired[bound.Slot] = true;
                 if (rule.CooldownMaxMs > 0)
                 {
@@ -237,7 +237,7 @@ public sealed class RuleEvaluator(Random random)
                 invoker = run.InvokerGuid == subject.Guid ? subject : Subjects?.Resolve(run.InvokerGuid);
                 if (invoker is null)
                 {
-                    Counters.InvokerLost++;
+                    Interlocked.Increment(ref Counters.InvokerLost);
                 }
             }
 
@@ -257,7 +257,7 @@ public sealed class RuleEvaluator(Random random)
         ArgumentNullException.ThrowIfNull(list);
         if (context.Depth >= MaxListDepth)
         {
-            Counters.DepthLimited++;
+            Interlocked.Increment(ref Counters.DepthLimited);
             return false;
         }
 
@@ -375,12 +375,12 @@ public sealed class RuleEvaluator(Random random)
             if (result == RuleActionResult.Done)
             {
                 actionsRun++;
-                Counters.ActionsRun++;
+                Interlocked.Increment(ref Counters.ActionsRun);
             }
             else
             {
                 actionsFailed++;
-                Counters.ActionsFailed++;
+                Interlocked.Increment(ref Counters.ActionsFailed);
             }
         }
     }
@@ -397,6 +397,6 @@ public sealed class RuleEvaluator(Random random)
             }
         }
 
-        Counters.DroppedRuns++;
+        Interlocked.Increment(ref Counters.DroppedRuns);
     }
 }

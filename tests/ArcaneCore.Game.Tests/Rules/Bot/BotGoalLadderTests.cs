@@ -228,6 +228,24 @@ public sealed class BotGoalLadderTests
         Assert.Empty(Build(immediate).Rejected);
     }
 
+    [Fact]
+    public void ADelayThatIsOnlyReachableThroughANestedList_IsRejectedToo()
+    {
+        const int StartList = 2;
+        RuleActionRecord Start(int owner, int list) => new() { OwnerId = owner, ActionType = StartList, Param1 = list, TargetType = BotRuleIds.SelfTarget };
+        RuleContent content = WithCustom([CustomRule()], [Start(CustomRuleId, 9)]) with
+        {
+            Lists = [new RuleListRecord { Id = 9 }, new RuleListRecord { Id = 10 }],
+            ListActions = [Start(9, 10), Propose(10, CustomGoalId, 5000) with { DelayMs = 250 }],
+        };
+
+        RuleCatalog catalog = Build(content);
+
+        Assert.Null(catalog.FindRule(CustomRuleId));
+        Assert.Contains(catalog.Rejected, r => r.Table == RuleDataTables.List && r.Id == 10 && r.Reason.Contains("never resumes", StringComparison.Ordinal));
+        Assert.Contains(catalog.Rejected, r => r.Table == RuleDataTables.Action && r.Id == CustomRuleId);
+    }
+
     [Theory]
     [InlineData(65)]
     [InlineData(17)]

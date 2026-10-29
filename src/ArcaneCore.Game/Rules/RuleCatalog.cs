@@ -70,13 +70,14 @@ public sealed class RuleCatalog
     private readonly Dictionary<int, CompiledRuleList> _lists;
     private readonly ConcurrentDictionary<(RuleHostKind, RuleOwner, RuleOwner), RuleBinding> _bindings = new();
 
-    private RuleCatalog(RuleVocabulary vocabulary, Dictionary<int, CompiledRule> rules, int disabled, Dictionary<int, CompiledRuleList> lists,
+    private RuleCatalog(RuleVocabulary vocabulary, Dictionary<int, CompiledRule> rules, int disabled, HashSet<int> disabledIds, Dictionary<int, CompiledRuleList> lists,
         Dictionary<int, CompiledFilter> filters, Dictionary<int, RuleText> texts, Dictionary<short, PlayerbotGoalRecord> goals,
         HashSet<uint> conditions, List<RuleRejection> rejected)
     {
         Vocabulary = vocabulary;
         _rules = rules;
         DisabledCount = disabled;
+        DisabledRuleIds = disabledIds;
         _lists = lists;
         Filters = filters;
         Texts = texts;
@@ -99,6 +100,9 @@ public sealed class RuleCatalog
 
     /// <summary>Valid rules with <c>enabled = 0</c> (validated, not loaded).</summary>
     public int DisabledCount { get; }
+
+    /// <summary>The ids of those disabled rules (the rows exist; the server turned them off).</summary>
+    public IReadOnlySet<int> DisabledRuleIds { get; }
 
     /// <summary>Loaded rule lists (by list id; a list started by rules of two hosts counts once).</summary>
     public int ListCount => _lists.Count;
@@ -148,6 +152,7 @@ public sealed class RuleCatalog
         private readonly List<RuleRejection> _rejected = [];
         private readonly Dictionary<int, RuleText> _texts = [];
         private readonly Dictionary<int, CompiledFilter> _filters = [];
+        private readonly HashSet<int> _disabledIds = [];
         private readonly Dictionary<short, PlayerbotGoalRecord> _goals = [];
         private readonly Dictionary<int, RuleListRecord> _listRows = [];
         private readonly Dictionary<int, RuleActionRecord[]> _listActions = [];
@@ -215,7 +220,7 @@ public sealed class RuleCatalog
                 }
             }
 
-            return new RuleCatalog(vocabulary, enabled, disabled, lists, _filters, _texts, _goals, _conditions, _rejected);
+            return new RuleCatalog(vocabulary, enabled, disabled, _disabledIds, lists, _filters, _texts, _goals, _conditions, _rejected);
         }
 
         /// <summary>
@@ -423,6 +428,7 @@ public sealed class RuleCatalog
                 else
                 {
                     disabled++;
+                    _disabledIds.Add(rule.Id);
                 }
             }
 

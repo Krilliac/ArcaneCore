@@ -61,14 +61,15 @@ internal sealed class PlayerbotRuleSubject : BotRuleSubject
         return free;
     }
 }
+
 /// <summary>
 /// The bot host's shared, read-mostly state for a world: which catalog the ladder runs and the counters. One per <see cref="RuleFeature"/>,
 /// or one per service provider when a build has no rule feature (brain tests). It holds NO evaluator: a <see cref="RuleEvaluator"/> keeps
 /// per-firing state and a random sequence, so every brain gets its own through <see cref="CreateLadder"/> (a pass on one brain can never
-/// disturb another, whatever thread runs it).
+/// disturb another). World thread only; the shared counters are updated with <c>Interlocked</c>. The cached host assumes <see cref="RuleFeature"/> is a singleton of the provider (world features are registered as singletons by <c>WorldFeatures</c>).
 /// <para>
-/// The catalog is the loaded rule store's when it carries the shipped ladder (the rung rows of <c>playerbot_goal</c> AND at least one loaded
-/// ladder rule 10001-10016), else the shipped content (<see cref="PlayerbotLadderContent"/>, the rows the world schema step seeds), so a
+/// The catalog is the loaded rule store's when it carries the shipped ladder (the rung rows of <c>playerbot_goal</c> AND at least one ladder
+/// rule 10001-10016, enabled or deliberately disabled), else the shipped content (<see cref="PlayerbotLadderContent"/>, the rows the world schema step seeds), so a
 /// database whose rows are missing still runs today's ladder; a one-time warning says so.
 /// </para>
 /// </summary>
@@ -111,11 +112,15 @@ internal sealed class PlayerbotRuleLadder
         return PerProvider.TryGetValue(services, out PlayerbotRuleLadder? known) ? known : PerProvider.GetValue(services, s => Create(s, null));
     }
 
-    /// <summary>A new ladder with its own evaluator (its own random sequence and firing state) for one brain; world thread only.</summary>
-    public BotGoalLadder CreateLadder()
+    /// <summary>
+    /// A new ladder with its own evaluator for one brain; world thread only. The evaluator's random sequence (chance and cooldown rolls of
+    /// custom rules) is seeded from <paramref name="guid"/>, so bots roll differently from each other but a given bot rolls the same way
+    /// every run; the brain's own random stream is not touched.
+    /// </summary>
+    public BotGoalLadder CreateLadder(ulong guid)
     {
         ConditionFeature? conditions = _services.GetService<ConditionFeature>();
-        return new BotGoalLadder(new RuleEvaluator(new Random(0x0B07_1ADD))
+        return new BotGoalLadder(new RuleEvaluator(new Random(SeedOf(guid)))
         {
             Conditions = conditions is null ? null : new BotConditionGate((id, player) => conditions.IsSatisfied(id, player, null)),
             Tracer = _feature?.Tracer,
@@ -126,6 +131,16 @@ internal sealed class PlayerbotRuleLadder
         });
     }
 
+    /// <summary>The evaluator seed of a bot: the guid mixed with a constant through two SplitMix64 finalisations.</summary>
+    internal static int SeedOf(ulong guid)
+    {
+        ulong z = (guid + 0x9E3779B97F4A7C15UL) ^ 0x0B07_1ADD_5EED_0001UL;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+        z ^= z >> 31;
+        return (int)(z & 0x7FFF_FFFF);
+    }
+
     /// <summary>The catalog this pass runs against (see the class remarks); logs once when the shipped content stands in for the database's.</summary>
     public RuleCatalog Catalog()
     {
@@ -133,7 +148,7 @@ internal sealed class PlayerbotRuleLadder
         CatalogChoice? choice = _choice;
         if (choice is null || !ReferenceEquals(choice.Loaded, loaded))
         {
-            _choice = choice = new CatalogChoice(loaded, CarriesTheLadder(loaded));
+            _choice = choice = new CatalogChoice(loaded, HasGoalRows(loaded), HasLadderRules(loaded));
         }
 
         if (choice.UseLoaded)
@@ -143,7 +158,8 @@ internal sealed class PlayerbotRuleLadder
 
         if (Interlocked.Exchange(ref _warnedFallback, 1) == 0)
         {
-            _logger?.LogWarning("Playerbot goal ladder: the loaded rule tables hold no complete ladder (playerbot_goal {First}..{Last} and the bot.propose_goal rules {FirstRule}..{LastRule}); running the shipped ladder from the code. Apply the world schema step to seed the rows.",
+            _logger?.LogWarning("Playerbot goal ladder: the loaded rule tables are missing ladder rows ({Missing}); running the shipped ladder from the code. Apply the world schema step, or insert the rows (playerbot_goal {First}..{Last}, rules {FirstRule}..{LastRule}).",
+                choice.Describe(),
                 PlayerbotLadderContent.GoalIdOf(PlayerbotLadderRung.HelpErrand), PlayerbotLadderContent.GoalIdOf(PlayerbotLadderRung.QuestDestinations),
                 PlayerbotLadderContent.FirstRuleId, PlayerbotLadderContent.FirstRuleId + PlayerbotLadderContent.Rungs.Count - 1);
         }
@@ -151,16 +167,16 @@ internal sealed class PlayerbotRuleLadder
         return Shipped.Value;
     }
 
-    private static bool CarriesTheLadder(RuleCatalog catalog)
-    {
-        if (!catalog.Goals.ContainsKey(PlayerbotLadderContent.GoalIdOf(PlayerbotLadderRung.HelpErrand)))
-        {
-            return false;
-        }
+    private static bool HasGoalRows(RuleCatalog catalog)
+        => catalog.Goals.ContainsKey(PlayerbotLadderContent.GoalIdOf(PlayerbotLadderRung.HelpErrand));
 
+    /// <summary>Whether any shipped ladder rule row exists, loaded or disabled (a server that disabled them chose to; that is not a missing row).</summary>
+    private static bool HasLadderRules(RuleCatalog catalog)
+    {
         foreach (PlayerbotLadderRung rung in PlayerbotLadderContent.Rungs)
         {
-            if (catalog.FindRule(PlayerbotLadderContent.RuleIdOf(rung)) is not null)
+            int id = PlayerbotLadderContent.RuleIdOf(rung);
+            if (catalog.FindRule(id) is not null || catalog.DisabledRuleIds.Contains(id))
             {
                 return true;
             }
@@ -169,5 +185,10 @@ internal sealed class PlayerbotRuleLadder
         return false;
     }
 
-    private sealed record CatalogChoice(RuleCatalog Loaded, bool UseLoaded);
+    private sealed record CatalogChoice(RuleCatalog Loaded, bool GoalRows, bool LadderRules)
+    {
+        public bool UseLoaded => GoalRows && LadderRules;
+
+        public string Describe() => !GoalRows && !LadderRules ? "no playerbot_goal rung rows and no ladder rules" : !GoalRows ? "no playerbot_goal rung rows" : "no ladder rules";
+    }
 }

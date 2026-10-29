@@ -67,6 +67,9 @@ public static class SyntheticQuestContent
             {
                 // The tables WorldDbInitializer seeds on every world database, the Warden scans (world 49) included.
                 "player_create_info", "race_info", "class_info", ArcaneCore.Data.World.Warden.WardenDataModule.Table,
+                // The shipped bot goal ladder (PlayerbotLadderSeed): goals, rules and their actions.
+                ArcaneCore.Data.World.Rules.PlayerbotGoalDataModule.Table, ArcaneCore.Data.World.Rules.RuleDataModule.RuleTable,
+                ArcaneCore.Data.World.Rules.RuleDataModule.ActionTable,
                 WorldDbContext.Schema.VersionTable,
             };
             var tables = db.Model.GetEntityTypes()

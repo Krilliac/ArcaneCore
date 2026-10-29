@@ -78,7 +78,7 @@ internal sealed partial class PlayerbotBrain : IPlayerbotRungRunner
         try
         {
             PlayerbotRuleLadder host = _ruleHost ??= PlayerbotRuleLadder.For(_session.Services);
-            BotGoalLadder ladder = _goalLadder ??= host.CreateLadder();
+            BotGoalLadder ladder = _goalLadder ??= host.CreateLadder(player.Guid.Value);
             PlayerbotRuleSubject subject = _ruleSubject ??= new PlayerbotRuleSubject();
             subject.Bind(player);
             ladder.Choose(subject, host.Catalog(), _session.World.NowMs);
