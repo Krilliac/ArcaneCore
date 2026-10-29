@@ -276,6 +276,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player);
         PauseInteractionMovement(player, npc);
         var entries = new List<VendorListEntry>();
         float discount = PriceDiscount(player, npc);

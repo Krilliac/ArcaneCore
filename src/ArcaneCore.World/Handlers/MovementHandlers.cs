@@ -9,6 +9,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Packets;
+using ArcaneCore.World.Spells;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -105,10 +106,13 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             creature.ApplyMovement(movement, session.World.NowMs);
 
             // vmangos HandleMovementOpcodes (MovementHandler.cpp:1163): a creature mover runs HandleInterruptsOnMovement with MOVEFLAG_MASK_MOVING.
-            if ((creature.Movement.Flags & MovementFlags.MaskMoving) != 0)
+            bool creatureMoving = (creature.Movement.Flags & MovementFlags.MaskMoving) != 0;
+            if (creatureMoving)
             {
                 creature.ClearEmoteState();
             }
+
+            session.Services.GetService<SpellFeature>()?.System.RemoveAurasOnMovement(creature, creatureMoving);
         }
         else
         {
@@ -334,10 +338,13 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             creature.ApplyMovement(movement, session.World.NowMs);
 
             // vmangos HandleMovementOpcodes (MovementHandler.cpp:1163): a creature mover runs HandleInterruptsOnMovement with MOVEFLAG_MASK_MOVING.
-            if ((creature.Movement.Flags & MovementFlags.MaskMoving) != 0)
+            bool creatureMoving = (creature.Movement.Flags & MovementFlags.MaskMoving) != 0;
+            if (creatureMoving)
             {
                 creature.ClearEmoteState();
             }
+
+            session.Services.GetService<SpellFeature>()?.System.RemoveAurasOnMovement(creature, creatureMoving);
         }
 
         if (!relay)
@@ -387,13 +394,20 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
 
             // vmangos Player::SetPosition (Player.cpp:5949-5958) -> Unit::HandleInterruptsOnMovement (Unit.cpp:10131-10140), reached from
             // HandleMovementOpcodes -> HandleMoverRelocation (MovementHandler.cpp:1113): a changed position, or MOVEFLAG_MASK_XZ on the
-            // block (forward, backward, strafe; not pitch, jump or turning), ends a text-emote state (/dance). Players and managed bots
-            // both land here.
+            // block (forward, backward, strafe; not pitch, jump or turning), ends a text-emote state (/dance) and removes the auras whose
+            // AuraInterruptFlags carry MOVING or TURNING (Feign Death, Shadowmeld, ...). A changed orientation alone removes only the
+            // TURNING ones. Players and managed bots both land here.
             MovementInfo stored = player.Movement;
             bool positionChanged = stored.X != previous.X || stored.Y != previous.Y || stored.Z != previous.Z;
-            if (positionChanged || (stored.Flags & MovementFlags.MaskXz) != 0)
+            bool hasMovingFlags = (stored.Flags & MovementFlags.MaskXz) != 0;
+            if (positionChanged || hasMovingFlags)
             {
                 player.ClearEmoteState();
+            }
+
+            if (positionChanged || hasMovingFlags || stored.Orientation != previous.Orientation)
+            {
+                session.Services.GetService<SpellFeature>()?.System.RemoveAurasOnMovement(player, positionChanged || hasMovingFlags);
             }
 
             // vmangos@0e3ff01 HandleMoverRelocation (MovementHandler.cpp:1106-1110): a block with MOVEFLAG_MASK_MOVING closes a loot window that is not an

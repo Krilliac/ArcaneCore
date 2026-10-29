@@ -104,6 +104,14 @@ public sealed partial class QuestNpcServices
     public Func<IReadOnlyCollection<uint>>? ScriptCreditedQuests { get; set; }
 
     /// <summary>
+    /// Ends the player's channel and auras that carry INTERACTING_CANCELS (0x400; Feign Death among them) once an NPC passed the
+    /// interactable check. vmangos HandleGossipHelloOpcode (NPCHandler.cpp:354-355), HandleGossipSelectOptionOpcode (:376-377),
+    /// SendListInventory (ItemHandler.cpp:720-721) and HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:66-67) all do it, and the
+    /// interaction then proceeds. Unset: nothing is cancelled. Set by QuestNpcFeature when the spell system is available.
+    /// </summary>
+    public Action<Player>? InteractingCancels { get; set; }
+
+    /// <summary>
     /// CMSG_GOSSIP_HELLO and CMSG_QUESTGIVER_HELLO (vmangos HandleGossipHelloOpcode, NPCHandler.cpp:345-368; HandleQuestgiverHelloOpcode,
     /// QuestHandler.cpp:79-105): the creature pauses its movement (<see cref="PauseInteractionMovement"/>; NPCHandler.cpp:357-358,
     /// QuestHandler.cpp:93-95), a spirit guide sends its resurrection timer, SMSG_AREA_SPIRIT_HEALER_TIME (NPCHandler.cpp:360-361), then the
@@ -119,6 +127,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player);
         PauseInteractionMovement(player, npc);
         if ((npc.NpcFlags & NpcFlags.SpiritGuide) != 0)
         {
@@ -202,6 +211,7 @@ public sealed partial class QuestNpcServices
             return;
         }
 
+        InteractingCancels?.Invoke(player);
         PauseInteractionMovement(player, npc);
         OnGossipSelect(s, npc, listId);
         Flush(s);

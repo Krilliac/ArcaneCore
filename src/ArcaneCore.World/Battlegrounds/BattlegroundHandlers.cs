@@ -139,6 +139,7 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        npcs.Services.InteractingCancels?.Invoke(player);
         npcs.Services.PauseInteractionMovement(player, npc);
         if (!feature.Battlemasters.TryGetValue(npc.Entry, out BattlegroundType type))
         {
