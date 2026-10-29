@@ -478,7 +478,13 @@ public sealed class SpellAuraHolder
 
     internal void SetAura(SpellAura aura)
     {
-        _auras[aura.EffectIndex] = aura;
+        aura.Holder = this;
+        if (!ReferenceEquals(_auras[aura.EffectIndex], aura))
+        {
+            _auras[aura.EffectIndex] = aura;
+            NotifyChanged();
+        }
+
         _positive = null;
     }
 

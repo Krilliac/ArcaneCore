@@ -73,7 +73,10 @@ public sealed partial class SpellSystem
     /// <summary>States still active after the last tick.</summary>
     internal int LastStatesActive { get; private set; }
 
-    /// <summary>Put <paramref name="state"/> in the active set; called by <see cref="UnitSpellState.Wake"/> when the state is not active.</summary>
+    /// <summary>Put <paramref name="state"/> in the active set; called by <see cref="UnitSpellState.Wake"/> when the state is not active.
+    /// World thread only: nothing here is synchronised. The Map-setter wake (<c>MapChanged</c>) runs on whichever thread writes <c>Map</c>, so an ungated Grid stage (World:Parallel:Ungated=Grid) would make it race with the spell tick.
+    /// No cheap thread check exists here: <c>Map.EnsureWorldThread</c> needs the map's world, and a state may have no map.
+    /// </summary>
     internal void WakeState(UnitSpellState state, SpellWakeReason reason)
     {
         if (state.Detached || (reason & DisabledWakeReasons) != 0)
@@ -159,7 +162,7 @@ public sealed partial class SpellSystem
         }
 
         _allDetached++;
-        if (_allDetached > 64 && _allDetached * 2 > _all.Count)
+        if (_allDetached > 64 && _allDetached * 8 > _all.Count)
         {
             _all.RemoveAll(IsDetachedState);
             _allDetached = 0;
@@ -270,7 +273,7 @@ public sealed partial class SpellSystem
         return state.IsIdle ? DormancyBlocker.IdleRemovalPending : DormancyBlocker.None;
     }
 
-    /// <summary>The visit-every-state loop <see cref="Update"/> ran before the active set (kept as the <see cref="ActiveSetEnabled"/> = false path).</summary>
+    /// <summary>The visit-every-state loop <see cref="Update"/> ran before the active set (kept as the <see cref="ActiveSetEnabled"/> = false path); it visits in Dictionary enumeration order, which is creation order only until the first removal.</summary>
     private int UpdateAllStates(uint diffMs, uint now)
     {
         int visited = 0;
@@ -300,7 +303,7 @@ public sealed partial class SpellSystem
         return visited;
     }
 
-    /// <summary>Visit the active states in <see cref="UnitSpellState.Seq"/> order, then retire the ones that proved dormant.</summary>
+    /// <summary>Visit the active states in creation-sequence (<see cref="UnitSpellState.Seq"/>) order, then retire the ones that proved dormant.</summary>
     private int UpdateActiveStates(uint diffMs, uint now)
     {
         int visited = 0;

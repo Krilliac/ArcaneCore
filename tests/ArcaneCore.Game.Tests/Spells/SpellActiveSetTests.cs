@@ -36,6 +36,7 @@ public sealed class SpellActiveSetTests(ITestOutputHelper output)
     private const uint SelfDot = 963002;
     private const uint SlowSelf = 963003;
     private const uint ShortDot = 963004;
+    private const uint RemoteAura = 963005;
 
     private static SpellTestKit NewKit()
     {
@@ -63,6 +64,14 @@ public sealed class SpellActiveSetTests(ITestOutputHelper output)
             SpellTestKit.Spell(ShortDot, SpellTestKit.Effect(SpellEffectName.ApplyAura, 1, SpellImplicitTarget.UnitCaster, AuraType.PeriodicDamage, amplitude: 1000)) with
             {
                 Duration = new SpellDuration(3000, 0, 3000),
+                SpellVisual = 1,
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            },
+            SpellTestKit.Spell(RemoteAura, SpellTestKit.Effect(SpellEffectName.ApplyAura, 3, SpellImplicitTarget.Unit, AuraType.Dummy)) with
+            {
+                CastTime = new SpellCastTime(500, 0, 0),
+                Duration = new SpellDuration(2000, 0, 2000),
                 SpellVisual = 1,
                 StartRecoveryCategory = 0,
                 StartRecoveryTime = 0,
@@ -692,5 +701,92 @@ public sealed class SpellActiveSetTests(ITestOutputHelper output)
         SettleUntilIdle(kit);
         Assert.Equal(0, kit.System.LastStatesVisited);
         Assert.Equal(units, kit.System.LastStatesTracked);
+    }
+
+    // HolderChanged (Amplitude): an aura of a permanent holder on a dormant unit becomes periodic. SpellSystem.RefreshHolderInPlace writes
+    // Amplitude this way on an attached holder, but it also writes Duration, which wakes the state through the same HolderChanged reason,
+    // so the Amplitude write is isolated here with a direct write. Effect: the next visit sees a ticking holder (UpdateAuras takes the
+    // snapshot path), which a dormant state would never reach.
+    private static Scenario AuraAmplitude => new(
+        SpellWakeReason.HolderChanged,
+        rig =>
+        {
+            SpellAuraHolder holder = Assert.Single(rig.State.Auras);
+            Assert.False(rig.State.HasTickingHolders);
+            SpellAura aura = Assert.IsType<SpellAura>(holder.AuraSpan[0]);
+            Assert.Same(holder, aura.Holder);
+            aura.Amplitude = 1000;
+            Assert.True(aura.IsPeriodic);
+        },
+        rig => rig.Visits >= 1 && rig.State.HasTickingHolders,
+        300);
+
+    [Theory]
+    [MemberData(nameof(Modes))]
+    public void HolderChanged_AnAmplitudeWrittenOnAnAttachedAura_MakesItTick(WakeMode mode) => Verify(mode, AuraAmplitude);
+
+    [Fact]
+    public void AUnitObjectReplacedUnderTheSameGuid_DetachesTheOldState_AndTheNewStateWorks()
+    {
+        using SpellTestKit kit = NewKit();
+        Player oldUnit = MakeDormant(kit, 1);
+        UnitSpellState oldState = Assert.IsType<UnitSpellState>(kit.System.GetState(oldUnit.Guid));
+        Player newUnit = AddCheapUnit(Assert.IsType<Map>(oldUnit.Map), 1);
+        Assert.Equal(oldUnit.Guid, newUnit.Guid);
+
+        UnitSpellState newState = kit.System.StateOf(newUnit);
+
+        Assert.NotSame(oldState, newState);
+        Assert.True(oldState.Detached);
+        Assert.False(oldState.IsActive);
+        Assert.Null(oldUnit.SpellState);
+        Assert.Same(newState, newUnit.SpellState);
+        Assert.Same(newState, kit.System.GetState(newUnit.Guid));
+
+        // The detached state ignores wakes and is never visited: its cooldown would have expired on a visit.
+        oldState.SpellCooldowns[SpellTestKit.CooldownSpell] = kit.Now + 100;
+        kit.Advance(500);
+        Assert.False(oldState.IsActive);
+        Assert.Single(oldState.SpellCooldowns);
+
+        // The new state works: a timed aura on it expires, and the empty state is dropped afterwards.
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(newUnit, TimedSelf, SpellCastTargets.ForSelf(), triggered: true));
+        Assert.True(kit.System.HasAura(newUnit, TimedSelf));
+        kit.Advance(2500);
+        Assert.False(kit.System.HasAura(newUnit, TimedSelf));
+        Assert.Null(kit.System.GetState(newUnit.Guid));
+        Assert.True(newState.Detached);
+    }
+
+    [Fact]
+    public void AWakeDuringTheLoop_OfADormantStateBelowTheCursor_IsNotVisitedThisTick_AndIsVisitedNextTick()
+    {
+        using SpellTestKit kit = NewKit();
+        Player target = MakeDormant(kit, 1);
+        Player caster = kit.AddPlayer(2).Player;
+        PassiveOn(kit, caster);
+        SettleUntilIdle(kit);
+        UnitSpellState targetState = Assert.IsType<UnitSpellState>(kit.System.GetState(target.Guid));
+        UnitSpellState casterState = Assert.IsType<UnitSpellState>(kit.System.GetState(caster.Guid));
+        Assert.True(targetState.Seq < casterState.Seq, "the target must sit below the caster in the active list");
+        Assert.True(kit.System.IsDormant(targetState));
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, RemoteAura, SpellCastTargets.ForUnit(target.Guid), triggered: false));
+
+        // While the caster's cast runs only the caster is visited. In the tick the cast lands, the aura wakes the target during the loop.
+        for (int ticks = 0; !kit.System.HasAura(target, RemoteAura); ticks++)
+        {
+            Assert.True(ticks < 10, "the cast never landed");
+            kit.Advance(100);
+            Assert.Equal(1, kit.System.LastStatesVisited);
+        }
+
+        SpellAuraHolder holder = Assert.Single(kit.System.GetAuras(target), h => h.Spell.Id == RemoteAura);
+        int durationWhenWoken = holder.Duration;
+        Assert.True(targetState.IsActive);
+
+        kit.Advance(100);
+
+        Assert.Equal(1, kit.System.LastStatesVisited); // the target only: the caster went dormant again
+        Assert.True(holder.Duration < durationWhenWoken, $"duration {holder.Duration} was not processed after {durationWhenWoken}");
     }
 }

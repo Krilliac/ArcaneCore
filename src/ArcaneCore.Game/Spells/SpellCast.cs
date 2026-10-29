@@ -247,7 +247,7 @@ public sealed class UnitSpellState
         Auras = new WakingHolderList(this);
     }
 
-    /// <summary>Creation order (monotonic per <see cref="SpellSystem"/>); the active set is kept sorted by it so ticks run in the order the old visit-all loop used.</summary>
+    /// <summary>Creation order (monotonic per <see cref="SpellSystem"/>); the active set is kept sorted by it, so the active-set update visits in creation-sequence order. (The old visit-all loop enumerated a Dictionary, which reuses freed slots, so its order matched creation order only until the first removal.)</summary>
     internal long Seq { get; }
 
     /// <summary>Physically in the spell system's active list (it may still be waiting for compaction after going dormant).</summary>

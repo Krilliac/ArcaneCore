@@ -256,7 +256,8 @@ public sealed partial class SpellSystem
         uint now = NowMs;
         if (!ActiveSetEnabled)
         {
-            FlushPendingWakes(); // the all-states loop does not use the list; keep it from growing
+            FlushPendingWakes(); // the all-states loop does not read the list: merge pending wakes and drop detached states so it stays bounded
+            _active.RemoveAll(LeavesActiveList);
             int allVisited = UpdateAllStates(diffMs, now);
             int activeStates = 0;
             foreach (UnitSpellState s in _states.Values)
