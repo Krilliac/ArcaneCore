@@ -16359,6 +16359,203 @@ World.Playerbots.Population.TownWalkYards = 4500
 World.Playerbots.Population.TramMinLevel = 10
 
 #
+#    World.Playerbots.Population.ValueCapReach
+#        Description: The levels (0..20) below a bot of the maximum level that the highest level of
+#                     a zone may be for the zone to be offered to it (such a bot fits no zone by the
+#                     usual rule).
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueCapReach = 6
+
+#
+#    World.Playerbots.Population.ValueChecksPerPass
+#        Description: The most bots (0..200) the low-value check looks at in one pass of the
+#                     relocation sweep. 0 turns the check off.
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueChecksPerPass = 8
+
+#
+#    World.Playerbots.Population.ValueDistanceWeight
+#        Description: The weight (0..100) taken off the value of a zone for the distance from the
+#                     bot (a zone on another map costs the full weight).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueDistanceWeight = 1
+
+#
+#    World.Playerbots.Population.ValueEliteSoloPct
+#        Description: The percentage (0..100) of elite mobs among the mobs of the bot's level range
+#                     in a zone up to which a lone bot can still fight there; only the share above
+#                     it costs value.
+#        Type: int
+#        Default: 20
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueEliteSoloPct = 20
+
+#
+#    World.Playerbots.Population.ValueEliteWeight
+#        Description: The weight (0..100) taken off the value of a zone for the share of its mobs
+#                     that are elite beyond ValueEliteSoloPct.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueEliteWeight = 6
+
+#
+#    World.Playerbots.Population.ValueFarmWeight
+#        Description: The weight (0..100) of the mobs of the bot's level range (and skinnable
+#                     beasts) in a zone in its value. Mobs alone never make a zone worth going to.
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueFarmWeight = 1
+
+#
+#    World.Playerbots.Population.ValueGearWeight
+#        Description: The weight (0..100) of the gear a zone offers that is better than what the bot
+#                     wears (dungeon drops and reputation vendors) in its value.
+#        Type: int
+#        Default: 8
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueGearWeight = 8
+
+#
+#    World.Playerbots.Population.ValueQuestGrayMargin
+#        Description: The levels (0..20) below the bot a quest may be and still count: a quest more
+#                     than this far under the bot is grey and counts for nothing.
+#        Type: int
+#        Default: 6
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueQuestGrayMargin = 6
+
+#
+#    World.Playerbots.Population.ValueQuestWeight
+#        Description: The weight (0..100) of the quests a bot can still take in a zone in its value.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueQuestWeight = 10
+
+#
+#    World.Playerbots.Population.ValueRelocateBelowPct
+#        Description: The percentage (0..100) of the best zone's value under which a level-capped
+#                     bot's own zone is left for the best one. 0 turns the check off.
+#        Type: int
+#        Default: 50
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueRelocateBelowPct = 50
+
+#
+#    World.Playerbots.Population.ValueRelocateMinStayMinutes
+#        Description: The minutes (0..1440) a level-capped bot stays in a zone before the low-value
+#                     check may move it.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueRelocateMinStayMinutes = 30
+
+#
+#    World.Playerbots.Population.ValueReputationWeight
+#        Description: The weight (0..100) of the reputation a bot can still earn in a zone (quest
+#                     rewards and kills) in its value.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueReputationWeight = 5
+
+#
+#    World.Playerbots.Population.ValueRouting
+#        Description: Value routing (on by default): a level-capped bot (or one no zone fits) is
+#                     sent to a zone that still has something for it (quests it can take, reputation
+#                     it can earn, gear it can obtain, mobs worth killing) instead of the zone with
+#                     the fewest bots. The value of a zone is read from the loaded quest, creature,
+#                     loot, item and area content once at start and again after a content reload.
+#                     Off, or until that read is done: zones are picked as before.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueRouting = true
+
+#
+#    World.Playerbots.Population.ValueTopZones
+#        Description: How many of the best zones (1..20) a bot is picked among, by weighted random
+#                     draw, when it is sent to a valued zone.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueTopZones = 5
+
+#
+#    World.Playerbots.Population.ValueTroubleWeight
+#        Description: The weight (0..100) taken off the value of a zone for the recent stalls and
+#                     deaths of bots there.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueTroubleWeight = 5
+
+#
+#    World.Playerbots.Population.ValueZoneSoftCap
+#        Description: The bots a valued zone takes before it is not offered any more (0..1000; 0 =
+#                     no limit). Below the limit, the fuller a zone is, the less often it is drawn.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Population.ValueZoneSoftCap = 120
+
+#
 #    World.Playerbots.Population.WindowTicks
 #        Description: The ticks measured after every start, creation, park or relocation before the
 #                     next decision (20..4096). A pass that finds fewer fresh ticks holds, so a

@@ -313,6 +313,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         _located = null;
         _capacity = null;
         _capacityKey = string.Empty;
+        _zoneValue = null;
+        _zoneValueAreas = null;
         _coverageChecked = null;
         _pairs = null;
         _pairsKey = string.Empty;
@@ -334,7 +336,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         _capacityCts?.Cancel();
         _capacityCts?.Dispose();
         _capacityCts = null;
-        return Task.WhenAll(_locateTask, _capacityTask, _provisioner.CancelWarm());
+        CancelZoneValue();
+        return Task.WhenAll(_locateTask, _capacityTask, _zoneValueTask, _provisioner.CancelWarm());
     }
 
     public async Task StopAsync()
@@ -536,7 +539,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         bool TeleportAvailable,
         int RushCount = 0,
         bool ShedOnly = false,
-        PopulationPlacementFacts? Facts = null); // non-null whenever TerrainHold is null and the launch is not fresh: one snapshot for the whole pass
+        PopulationPlacementFacts? Facts = null, // non-null whenever TerrainHold is null and the launch is not fresh: one snapshot for the whole pass
+        PopulationZoneValue? ZoneValue = null); // non-null when ValueRouting is on and the zone content value is built
 
     private PassInput? Capture(int rushCount = 0, bool shedOnly = false)
     {
@@ -593,11 +597,15 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 (byte)player.Race, (byte)player.Class, player.MapId, player.X, player.Y));
         }
 
+        long nowUnix = NowUnix();
+        foreach (PopulationBotFacts trouble in running)
+            if (trouble.Stalled || trouble.Dead) _trouble.Record(trouble.ZoneId, trouble.BotId, nowUnix);
+        _trouble.Prune(nowUnix);
         IPopulationTickSource source = Source;
         int samples = source.Samples;
         bool boost = _provisioner.BoostAvailable(out string missing);
         return new PassInput(pop, pop.FreshLaunch ? FreshBands : pop.Bands, samples, source.TotalSamples, samples == 0 ? 0 : source.P95Ms(pop.WindowTicks), runningAll, running, states, atlas, boost, missing,
-            ClockMs, managed, terrainHold, teleports is not null, rushCount, shedOnly, facts);
+            ClockMs, managed, terrainHold, teleports is not null, rushCount, shedOnly, facts, pop.ValueRouting ? _zoneValue : null);
     }
 
     /// <summary>
@@ -640,6 +648,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         if (!sourcesChanged && (_located is null || _atlasLocated))
         {
             EnsureCapacity(world, areas, pop);
+            EnsureZoneValue(world, areas, pop);
             LogCoverage(pop);
             return _atlas;
         }
@@ -659,6 +668,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 : ": " + string.Join(", ", _atlas.Dropped.Select(d => string.Create(CultureInfo.InvariantCulture, $"{d.LocationId} (zone {d.ZoneId}, stands in {d.TerrainZoneId})"))));
         if (located is null && _locating is null) StartLocating(world, areas, pop);
         EnsureCapacity(world, areas, pop);
+        EnsureZoneValue(world, areas, pop);
         LogCoverage(pop);
         return _atlas;
     }
@@ -1470,7 +1480,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 PopulationPlacementFacts facts = ctx.Input.Facts!; // a non-fresh pass without a hold has it
                 plan = await world.InvokeAsync(() => PopulationBandPlanner.PlanSafe(pop, ctx.Desired, planned,
                     ctx.Alliance, ctx.Horde, cache, ctx.Input.Atlas, ctx.Assigned, ctx.Input.BoostAvailable, _random,
-                    (location, level, faction) => _provisioner.IsSafe(facts, location, level, faction)), ct).ConfigureAwait(false);
+                    (location, level, faction) => _provisioner.IsSafe(facts, location, level, faction),
+                    ctx.Input.ZoneValue, PopulationValueWeights.From(pop), zone => _trouble.Count(zone, NowUnix())), ct).ConfigureAwait(false);
                 if (plan is null)
                     return (created, quietWhenNothingFits ? null : "no safe zone, level and race-class placement is available (see the zone counts and boost line)", false);
                 (planTeam, planRace, planClass, planBand) = (plan.Team, plan.Race, plan.Class, plan.Band);
@@ -2270,11 +2281,39 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             .Select(x => (x.Bot, x.Zone, Stuck: x.Zone is null || StuckIn(x.Zone, x.Bot)))
             .OrderByDescending(x => x.Stuck).ThenByDescending(x => x.Zone is null ? 0 : Misfit(x.Zone, x.Bot, rule)).ThenBy(x => x.Bot.BotId)
             .ToArray(), ct).ConfigureAwait(false);
+        // With the zone value on: a level-capped bot that has stayed a while in a zone worth much less than the best zone for it moves
+        // there. After the stuck and misfit bots, a few bots per pass in turn (by BotId), so the check costs the same every pass.
+        PopulationZoneValue? value = ctx.Input.ZoneValue;
+        PopulationValueWeights weights = PopulationValueWeights.From(pop);
+        Func<uint, int> troubleOf = zone => _trouble.Count(zone, NowUnix());
+        var lowValue = new HashSet<Guid>();
+        if (value is not null && pop.ValueChecksPerPass > 0)
+        {
+            HashSet<Guid> listed = [.. candidates.Select(c => c.Bot.BotId)];
+            long stayedSince = NowUnix() - pop.ValueRelocateMinStayMinutes * 60L;
+            PopulationBotFacts[] eligible = [.. ctx.Input.Running
+                .Where(f => !listed.Contains(f.BotId) && f.Level >= PlayerbotPopulationOptions.MaxLevel && f.Autonomous && !f.Busy && !f.Dead && !f.Vetoed && !f.Stalled
+                    && ctx.Members.TryGetValue(f.BotId, out PlayerbotPopulationMember? m) && m.UpdatedUnix <= stayedSince
+                    && atlas.Find(f.ZoneId) is { } zone && PopulationZoneAtlas.Fits(zone, f.Level, f.Team, rule))
+                .OrderBy(f => f.BotId)];
+            int start = Array.FindIndex(eligible, f => f.BotId.CompareTo(_valueCursor) > 0);
+            PopulationBotFacts[] checks = [.. Enumerable.Range(0, Math.Min(pop.ValueChecksPerPass, eligible.Length))
+                .Select(i => eligible[((start < 0 ? 0 : start) + i) % eligible.Length])];
+            if (checks.Length > 0)
+            {
+                _valueCursor = checks[^1].BotId;
+                Guid[] low = await world.InvokeAsync(() => checks.Where(f => IsLowValue(f)).Select(f => f.BotId).ToArray(), ct).ConfigureAwait(false);
+                lowValue.UnionWith(low);
+                candidates = [.. candidates, .. checks.Where(f => lowValue.Contains(f.BotId)).Select(f => (Bot: f, Zone: atlas.Find(f.ZoneId), Stuck: false))];
+            }
+        }
+
         foreach ((PopulationBotFacts bot, PopulationZone? current, bool stuck) in candidates)
         {
             if (moved >= pop.MaxRelocationsPerInterval) break;
             PlayerbotPopulationMember member = ctx.Members[bot.BotId];
-            if (!stuck && current is not null && bot.Level <= current.MaxLevel + pop.OutlevelMargin
+            bool lowValueMove = lowValue.Contains(bot.BotId);
+            if (!stuck && !lowValueMove && current is not null && bot.Level <= current.MaxLevel + pop.OutlevelMargin
                 && !PopulationZoneAtlas.UnderLevelled(current, bot.Level, bot.Team, rule))
             {
                 // Fine where it stands (it may have travelled on by itself): only record the zone.
@@ -2292,13 +2331,20 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             {
                 Player? player = ctx.Input.Managed.FindSession(bot.BotId)?.Player;
                 if (player is null || PopulationProvisioner.IsInTransit(player)) return (null, true);
-                return (atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random,
-                    (location, level) => _provisioner.IsSafe(ctx.Input.Facts!, location, checked((byte)level), player.FactionTemplate),
-                    zone => _vetoes.IsVetoed(bot.BotId, zone, NowUnix())), false);
+                Func<WorldSafeLoc, int, bool> safe = (location, level) => _provisioner.IsSafe(ctx.Input.Facts!, location, checked((byte)level), player.FactionTemplate);
+                Func<uint, bool> vetoed = zone => _vetoes.IsVetoed(bot.BotId, zone, NowUnix());
+                PopulationSafeSelection? picked = null;
+                if (value is not null)
+                    picked = atlas.PickValued(ProfileOf(player), rule, value, weights, ctx.Assigned, _random, safe,
+                        lowValueMove ? zone => zone == bot.ZoneId || vetoed(zone) : vetoed, troubleOf);
+                // A bot that only wants a better zone stays put rather than going to a random fitting one.
+                if (picked is null && !lowValueMove) picked = atlas.PickSafe(bot.Level, bot.Level, bot.Team, rule, ctx.Assigned, _random, safe, vetoed);
+                return (picked, false);
             }, ct).ConfigureAwait(false);
             if (inTransit) continue;
             if (selected is null)
             {
+                if (lowValueMove) continue;
                 if (!loggedNoSafe) logger.LogInformation("Playerbot population: no safe zone for out-levelled bot {BotId} (level {Level}); it stays where it is", bot.BotId, bot.Level);
                 loggedNoSafe = true;
                 continue;
@@ -2316,6 +2362,19 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         }
 
         return moved;
+
+        // World thread: the bot's zone is worth less than ValueRelocateBelowPct percent of the best zone for it, and the best is another zone.
+        bool IsLowValue(PopulationBotFacts bot)
+        {
+            if (ctx.Input.Managed.FindSession(bot.BotId)?.Player is not { } player || PopulationProvisioner.IsInTransit(player)) return false;
+            if (atlas.Find(bot.ZoneId) is not { } zone) return false;
+            PopulationBotProfile profile = ProfileOf(player);
+            IReadOnlyList<ZoneScore> ranking = atlas.Rank(profile, rule, value!, weights, ctx.Assigned,
+                zoneId => _vetoes.IsVetoed(bot.BotId, zoneId, NowUnix()), troubleOf);
+            if (ranking.Count == 0 || ranking[0].ZoneId == bot.ZoneId) return false;
+            ZoneScore here = PopulationZoneScoring.Score(zone, value!.Find(zone.ZoneId), profile, weights, troubleOf(zone.ZoneId), ctx.Assigned.GetValueOrDefault(zone.ZoneId));
+            return here.Total < ranking[0].Total * pop.ValueRelocateBelowPct / 100.0;
+        }
 
         // A zone the operator excluded, on a map bots may be placed on (another map is left alone, like a capital).
         bool Excluded(PopulationBotFacts bot)

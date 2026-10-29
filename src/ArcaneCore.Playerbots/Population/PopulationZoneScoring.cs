@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Reputation;
+using ArcaneCore.Kernel.WorldData;
 
 namespace ArcaneCore.World.Playerbots.Population;
 
@@ -54,5 +55,87 @@ internal static class PopulationZoneScoring
 {
     public static ZoneScore Score(PopulationZone zone, ZoneContentFacts? facts, PopulationBotProfile bot, PopulationValueWeights w,
         int recentTrouble = 0, int assigned = 0)
-        => throw new NotImplementedException();
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+        ArgumentNullException.ThrowIfNull(bot);
+        ArgumentNullException.ThrowIfNull(w);
+        double trouble = w.Trouble * Saturate(Math.Max(0, recentTrouble), Math.Max(4, assigned));
+        double distance = w.Distance * DistanceFraction(zone, bot);
+        if (facts is null) return new ZoneScore(zone.ZoneId, 0, 0, 0, 0, 0, trouble, distance);
+
+        // Quests and the factions their rewards raise.
+        int available = 0;
+        HashSet<uint>? factions = null;
+        uint raceBit = bot.Race is >= 1 and <= 32 ? 1u << (bot.Race - 1) : 0;
+        uint classBit = bot.Class is >= 1 and <= 32 ? 1u << (bot.Class - 1) : 0;
+        foreach (ZoneQuestFact quest in facts.Quests)
+        {
+            if (quest.MinLevel > bot.Level || quest.QuestLevel < bot.Level - w.QuestGrayMargin) continue;
+            if (quest.RequiredRaces != 0 && raceBit != 0 && (quest.RequiredRaces & raceBit) == 0) continue;
+            if (quest.RequiredClasses != 0 && classBit != 0 && (quest.RequiredClasses & classBit) == 0) continue;
+            if (bot.QuestDone(quest.QuestId)) continue;
+            available++;
+            foreach (uint faction in quest.RepFactions)
+                if (bot.RankOf(faction) < ReputationRank.Exalted) (factions ??= []).Add(faction);
+        }
+
+        foreach (ZoneRepSource source in facts.RepSources)
+            if (bot.RankOf(source.FactionId) < source.MaxRank) (factions ??= []).Add(source.FactionId);
+
+        // Gear: the inventory types (one bit per type) the zone offers an upgrade for.
+        uint upgrades = 0;
+        foreach (ZoneGearFact gear in facts.Gear)
+        {
+            if (gear.InventoryType >= 32 || (upgrades & (1u << (int)gear.InventoryType)) != 0 || gear.RequiredLevel > bot.Level) continue;
+            if (gear.AllowableClass is not (0 or uint.MaxValue) && classBit != 0 && (gear.AllowableClass & classBit) == 0) continue;
+            if (gear.FromVendor && (bot.RankOf(gear.RequiredFaction) < gear.RequiredRank || gear.BuyPrice > bot.Money)) continue;
+            if (gear.ItemLevel > bot.EquippedItemLevel(gear.InventoryType)) upgrades |= 1u << (int)gear.InventoryType;
+        }
+
+        // Mobs the bot can fight, and how many of them are elite.
+        int lowFit = bot.Level - 5, highFit = bot.Level + 3;
+        int hostile = facts.HostileLevels.TryGetValue(bot.Team, out int[]? hostileLevels) ? CountInRange(hostileLevels, lowFit, highFit) : 0;
+        int elite = facts.EliteLevels.TryGetValue(bot.Team, out int[]? eliteLevels) ? CountInRange(eliteLevels, lowFit, highFit) : 0;
+        double solo = w.EliteSoloPct / 100.0;
+        double eliteTerm = hostile == 0 || solo >= 1.0 ? 0 : w.Elite * Math.Max(0, (double)elite / hostile - solo) / (1.0 - solo);
+
+        return new ZoneScore(zone.ZoneId,
+            w.Quest * Saturate(available, 8),
+            w.Reputation * Saturate(factions?.Count ?? 0, 2),
+            w.Gear * Saturate(System.Numerics.BitOperations.PopCount(upgrades), 3),
+            w.Farm * Saturate(hostile + facts.Skinnable / 4.0, 150),
+            eliteTerm, trouble, distance);
+    }
+
+    private static double Saturate(double n, double k) => n / (n + k);
+
+    private static double DistanceFraction(PopulationZone zone, PopulationBotProfile bot)
+    {
+        if (bot.MapId != zone.MapId) return 1.0;
+        IReadOnlyList<WorldSafeLoc> locations = zone.LocationsFor(bot.Team);
+        if (locations.Count == 0) return 1.0;
+        double nearest = double.MaxValue;
+        foreach (WorldSafeLoc location in locations)
+        {
+            double dx = location.X - bot.X, dy = location.Y - bot.Y;
+            nearest = Math.Min(nearest, Math.Sqrt(dx * dx + dy * dy));
+        }
+
+        return Math.Min(1.0, nearest / 8000.0);
+    }
+
+    // The count of values in [low, high] of an ascending array.
+    private static int CountInRange(int[] sorted, int low, int high) => LowerBound(sorted, high + 1) - LowerBound(sorted, low);
+
+    private static int LowerBound(int[] sorted, int value)
+    {
+        int lo = 0, hi = sorted.Length;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >>> 1;
+            if (sorted[mid] < value) lo = mid + 1; else hi = mid;
+        }
+
+        return lo;
+    }
 }
