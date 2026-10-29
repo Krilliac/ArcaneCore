@@ -404,8 +404,20 @@ public sealed class PlayerbotPartyTradeTests
         await scene.AcceptAsync(scene.Stranger);
         await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false } or { PlayerAccepted: true }, "the stranger's accept to reach the server");
 
-        options.ThinkIntervalMs = think; // release the intake: statuses 0, 2 and 4 are read in one drain, with window two open
-        await Task.Delay(1_000);
+        // Release the intake and run it once by hand, in one world-thread action: statuses 0, 2 and 4 are read in one drain with window two provably open, whatever the host's load.
+        // The hold held only if the bot is solo and not engaged (the idle-intake throttle, PlayerbotPartyAI.Intake), so the statuses are all still queued here.
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            ArcaneCore.World.Playerbots.Party.PlayerbotPartyAI party = PartyTestHost.Feature(scene.World.Host).FindPartyAI(scene.Bot)!;
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.False(party.IsEngaged, "the hold only works for a solo, unengaged bot");
+            Assert.True(scene.Economy.TradeOf(bot) is { Opened: true, Settling: false }, "window two must be open before the intake drains");
+            options.ThinkIntervalMs = 0; // no throttle for this one call
+            party.Intake(bot);
+            options.ThinkIntervalMs = think;
+            Assert.True(scene.Economy.TradeOf(bot) is { Opened: true, Settling: false }, "window two must still be open after the drain");
+            return true;
+        });
         Assert.True(await scene.World.SendAsync(BotName, WorldOpcode.CmsgAcceptTrade, Gold(1)));
         await HelpTestKit.UntilAsync(() => scene.StateAsync(StrangerName).Result is { Exists: false }, "the tip window to complete");
         await scene.WaitForBotToSeeCompletionAsync();

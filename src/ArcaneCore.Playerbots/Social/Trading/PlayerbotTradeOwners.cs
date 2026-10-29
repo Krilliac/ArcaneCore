@@ -31,7 +31,7 @@ internal readonly record struct PlayerbotTradeClaim(PlayerbotTradeOwner Owner, O
 /// The registry of who owns each bot's single trade slot. Ownership is recorded once, by the driver that sends CMSG_INITIATE_TRADE or CMSG_BEGIN_TRADE (it claims the
 /// slot BEFORE it sends), and a driver sets gold, accepts or cancels only on a trade it owns. A driver that wants the slot while another one owns it defers, bounded by
 /// its own timeout; it never cancels another driver's window or an unowned (stranger's) one. A claim heals itself: it binds to the <see cref="TradeSession"/> once seen;
-/// an unbound claim with no session clears after <see cref="PendingGraceMs"/>; a bound claim whose session has been gone <see cref="GoneGraceMs"/> without a terminal
+/// an unbound claim with no session clears after <see cref="PendingGraceMs"/>, and binds only to a live trade seen within that grace and with the same partner (a later window never adopts it); a bound claim whose session has been gone <see cref="GoneGraceMs"/> without a terminal
 /// status clears too. One per feature, keyed by the bot's character guid. World thread in practice; one lock so a test may read it from anywhere. A session without the
 /// playerbot feature has no registry (<see cref="Of(WorldSession)"/> is null): its drivers each behave as sole owner.
 /// </summary>

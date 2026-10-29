@@ -986,11 +986,11 @@ internal sealed class PlayerbotPartyAI
             case 0 or 3 or 5 or 6 or 9 or 10 or 11 or 12 or (>= 14 and <= 22):
                 // Every other terminal status ends the window without a completion: forget it, so a later window (the mage fee, a tip) is never credited to it.
                 // The status arrives after the economy closed the trade, so a trade that is open now is a newer one (the status is a late cancel of an earlier trade, e.g. the
-                // old tip's) and must not close it: no desk or claim change. The gift partner and its count are forgotten all the same (a bot-initiated window answered BUSY must
+                // old tip's) and must not close it: the desk is untouched and the registry changes only by its own healing on read. The gift partner and its count are forgotten all the same (a bot-initiated window answered BUSY must
                 // not hand its partner to a later one), except when the open trade is this very Gift claim's own bound window.
                 if (LiveTrade(player) is { } newer)
                 {
-                    BotSocial.PlayerbotTradeClaim own = Owners?.Of(player, newer) ?? default;
+                    BotSocial.PlayerbotTradeClaim own = Owners?.Of(player, newer) ?? default; // no registry (the playerbot feature is absent): default, so the partner is forgotten
                     if (!(own.Owner == BotSocial.PlayerbotTradeOwner.Gift && ReferenceEquals(own.Session, newer) && own.Partner == _tradePartner)) { _tradePartner = ObjectGuid.Empty; _tradeCounts = false; }
                     break;
                 }
