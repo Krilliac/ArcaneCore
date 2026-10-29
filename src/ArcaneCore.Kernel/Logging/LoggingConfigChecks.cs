@@ -28,6 +28,27 @@ public sealed class LoggingConfigChecks : IConfigCheck
         var issues = new List<ConfigIssue>();
         ArcaneLoggingOptions options = Parse(configuration, issues);
         Rules(options, issues);
+        if (!issues.Any(static i => i.Severity == ConfigSeverity.Error && i.Key == Root + ":Format"))
+        {
+            LogFileSinkPlan plan = LogFileSinkPlan.Resolve(options);
+            bool fileInForce = plan.Section == Root + ":File";
+            FileSinkOptions unusedFile = options.File;
+            JsonSinkOptions unusedJson = options.Json;
+            if (fileInForce)
+            {
+                Tuning(issues, Root + ":Json", unusedJson.RollSizeMb, unusedJson.Retain, unusedJson.QueueCapacity, inForce: false);
+            }
+            else
+            {
+                Tuning(issues, Root + ":File", unusedFile.RollSizeMb, unusedFile.Retain, unusedFile.QueueCapacity, inForce: false);
+            }
+
+            foreach (LogFileSinkWarning w in plan.Warnings)
+            {
+                issues.Add(ConfigChecks.Warn(w.Key, w.Message, w.Fix));
+            }
+        }
+
         return issues;
     }
 
@@ -37,16 +58,17 @@ public sealed class LoggingConfigChecks : IConfigCheck
         ArgumentNullException.ThrowIfNull(options);
         var issues = new List<ConfigIssue>();
         Rules(options, issues);
-        if (issues.Count > 0)
+        if (issues.Any(static i => i.Severity == ConfigSeverity.Error))
         {
-            throw new OptionsValidationException(Options.DefaultName, typeof(ArcaneLoggingOptions), issues.Select(static i => i.Key + " " + i.Problem).ToArray());
+            throw new OptionsValidationException(Options.DefaultName, typeof(ArcaneLoggingOptions), issues.Where(static i => i.Severity == ConfigSeverity.Error).Select(static i => i.Key + " " + i.Problem).ToArray());
         }
     }
 
     /// <summary>
-    /// The single rule set over typed values: enum members defined, queue capacities within 1..<see cref="MaxQueueCapacity"/>,
-    /// roll size and retention not negative, an enabled sink's path a usable file path, and the text and JSON sinks on different
-    /// files when both are enabled (both paths taken from the configuration or the sink's default).
+    /// The single rule set over typed values: enum members defined (including <c>Format</c> when set), and for the one log file the
+    /// options resolve to (<see cref="LogFileSinkPlan"/>) the keys actually in force: queue capacity within 1..<see cref="MaxQueueCapacity"/>,
+    /// roll size and retention not negative, and, when the file is enabled, a usable file path. Only one file exists, so there is no
+    /// rule about two sinks sharing a path.
     /// </summary>
     private static void Rules(ArcaneLoggingOptions options, List<ConfigIssue> issues)
     {
@@ -61,33 +83,46 @@ public sealed class LoggingConfigChecks : IConfigCheck
             issues.Add(ConfigChecks.Error(Root + ":Timestamps", $"must be Utc or Local; {(int)options.Timestamps} is not one of them.", "use Utc or Local"));
         }
 
-        FileSink(issues, Root + ":File", options.File.Enabled, options.File.Path, options.File.RollSizeMb, options.File.Retain, options.File.QueueCapacity);
-        FileSink(issues, Root + ":Json", options.Json.Enabled, options.Json.Path, options.Json.RollSizeMb, options.Json.Retain, options.Json.QueueCapacity);
-        if (options.File.Enabled && options.Json.Enabled && SamePath(options.File.Path, options.Json.Path))
+        if (options.Format is { } format && !Enum.IsDefined(format))
         {
-            issues.Add(ConfigChecks.Error(Root + ":Json:Path", $"must differ from {Root}:File:Path when both sinks are enabled; both are '{options.Json.Path}'.", "give the JSON-lines sink its own file, such as logs/arcanecore.jsonl"));
+            issues.Add(ConfigChecks.Error(Root + ":Format", $"must be Json or Text; {(int)format} is not one of them.", "use Json or Text"));
+            return;
         }
+
+        LogFileSinkPlan plan = LogFileSinkPlan.Resolve(options);
+        if (plan.Enabled && PathProblem(plan.Path) is { } problem)
+        {
+            issues.Add(ConfigChecks.Error(plan.PathKey, $"'{plan.Path}' {problem}.", "use a file path such as logs/arcanecore.jsonl (relative paths resolve against the working directory)"));
+        }
+
+        Tuning(issues, plan.Section, plan.RollSizeMb, plan.Retain, plan.QueueCapacity, inForce: true);
     }
 
-    private static void FileSink(List<ConfigIssue> issues, string section, bool enabled, string path, int rollSizeMb, int retain, int queueCapacity)
+    /// <summary>Roll size, retention and queue capacity of one file section; an error for the section in force, a warning for the one that is not.</summary>
+    private static void Tuning(List<ConfigIssue> issues, string section, int rollSizeMb, int retain, int queueCapacity, bool inForce)
     {
-        if (enabled && PathProblem(path) is { } problem)
-        {
-            issues.Add(ConfigChecks.Error(section + ":Path", $"'{path}' {problem}.", "use a file path such as logs/arcanecore.log (relative paths resolve against the working directory)"));
-        }
-
+        const string NotInForce = " This section is not in force, so the value is not used.";
         if (rollSizeMb < 0)
         {
-            issues.Add(ConfigChecks.Error(section + ":RollSizeMb", $"must be 0 (never roll by size) or a positive number of MiB; {rollSizeMb} is out of range.", "use 0 or a positive number of MiB"));
+            string problem = $"must be 0 (never roll by size) or a positive number of MiB; {rollSizeMb} is out of range.";
+            AddIssue(issues, inForce, section + ":RollSizeMb", problem, NotInForce, "use 0 or a positive number of MiB");
         }
 
         if (retain < 0)
         {
-            issues.Add(ConfigChecks.Error(section + ":Retain", $"must be 0 (keep all) or the number of rolled segments to keep; {retain} is out of range.", "use 0 or the number of segments to keep"));
+            string problem = $"must be 0 (keep all) or the number of rolled segments to keep; {retain} is out of range.";
+            AddIssue(issues, inForce, section + ":Retain", problem, NotInForce, "use 0 or the number of segments to keep");
         }
 
-        QueueCapacity(issues, section + ":QueueCapacity", queueCapacity);
+        if (queueCapacity is < 1 or > MaxQueueCapacity)
+        {
+            string problem = $"must be {QueueRange}; {queueCapacity} is out of range.";
+            AddIssue(issues, inForce, section + ":QueueCapacity", problem, NotInForce, "use " + QueueRange);
+        }
     }
+
+    private static void AddIssue(List<ConfigIssue> issues, bool inForce, string key, string problem, string notInForce, string fix)
+        => issues.Add(inForce ? ConfigChecks.Error(key, problem, fix) : ConfigChecks.Warn(key, problem + notInForce, fix));
 
     private static void QueueCapacity(List<ConfigIssue> issues, string key, int value)
     {
@@ -117,24 +152,13 @@ public sealed class LoggingConfigChecks : IConfigCheck
         return null;
     }
 
-    private static bool SamePath(string a, string b)
-    {
-        try
-        {
-            return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            // an unresolvable path is compared as text; the path itself is validated and reported by the other checks
-            return string.Equals(a, b, StringComparison.Ordinal);
-        }
-    }
-
     /// <summary>
     /// The raw section as typed values: a key that is absent keeps the option's default, one whose text is not a value of its type
     /// is reported here and keeps the default too (so the rules do not report it a second time). The options binder is not used
     /// because it stops at the first bad value, and <c>check-config</c> lists them all.
     /// </summary>
+    internal static ArcaneLoggingOptions Bind(IConfiguration configuration) => Parse(configuration, []);
+
     private static ArcaneLoggingOptions Parse(IConfiguration configuration, List<ConfigIssue> issues)
     {
         var options = new ArcaneLoggingOptions();
@@ -142,10 +166,11 @@ public sealed class LoggingConfigChecks : IConfigCheck
         options.Console.QueueCapacity = Int(issues, configuration, Root + ":Console:QueueCapacity", QueueRange, options.Console.QueueCapacity);
         options.Timestamps = EnumValue(issues, configuration, Root + ":Timestamps", "Utc or Local", options.Timestamps);
         options.IncludeScopes = Bool(issues, configuration, Root + ":IncludeScopes", options.IncludeScopes);
+        options.Format = configuration[Root + ":Format"] is null ? null : EnumValue(issues, configuration, Root + ":Format", "Json or Text", LogFileFormat.Json);
 
         string file = Root + ":File";
         options.File.Enabled = Bool(issues, configuration, file + ":Enabled", options.File.Enabled);
-        options.File.Path = configuration[file + ":Path"] ?? options.File.Path;
+        options.File.Path = configuration[file + ":Path"];
         options.File.RollSizeMb = Int(issues, configuration, file + ":RollSizeMb", "0 (never roll by size) or a positive number of MiB", options.File.RollSizeMb);
         options.File.RollDaily = Bool(issues, configuration, file + ":RollDaily", options.File.RollDaily);
         options.File.Retain = Int(issues, configuration, file + ":Retain", "0 (keep all) or the number of rolled segments to keep", options.File.Retain);
@@ -153,7 +178,7 @@ public sealed class LoggingConfigChecks : IConfigCheck
 
         string json = Root + ":Json";
         options.Json.Enabled = Bool(issues, configuration, json + ":Enabled", options.Json.Enabled);
-        options.Json.Path = configuration[json + ":Path"] ?? options.Json.Path;
+        options.Json.Path = configuration[json + ":Path"];
         options.Json.RollSizeMb = Int(issues, configuration, json + ":RollSizeMb", "0 (never roll by size) or a positive number of MiB", options.Json.RollSizeMb);
         options.Json.RollDaily = Bool(issues, configuration, json + ":RollDaily", options.Json.RollDaily);
         options.Json.Retain = Int(issues, configuration, json + ":Retain", "0 (keep all) or the number of rolled segments to keep", options.Json.Retain);

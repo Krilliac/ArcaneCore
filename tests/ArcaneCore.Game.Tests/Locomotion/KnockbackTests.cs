@@ -34,7 +34,8 @@ public sealed class KnockbackTests
     private static (Player Caster, Player Target, FakeSession TargetSession, FakeSession WatcherSession, Player Watcher) Setup(SpellTestKit kit, float targetX = 5, float targetY = 0)
     {
         (Player caster, _) = kit.AddPlayer(1, 0, 0);
-        (Player target, FakeSession targetSession) = kit.AddPlayer(2, targetX, targetY);
+        SpellTestKit.FlagForPvp(caster);
+        (Player target, FakeSession targetSession) = kit.AddHostilePlayer(2, targetX, targetY);
         (Player watcher, FakeSession watcherSession) = kit.AddPlayer(3, targetX + 1, targetY);
         kit.World.RunTick(50);
         targetSession.Clear();

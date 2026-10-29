@@ -26,6 +26,7 @@ public sealed class FeignDeathTests : IDisposable
     private const uint SlowBolt = 930002;
     private const uint HiddenBuff = 930003;
     private const uint Channel = 930004;
+    private const uint SlowHeal = 930005;
 
     private readonly WorldRuntime _world;
     private readonly Map _map;
@@ -53,6 +54,14 @@ public sealed class FeignDeathTests : IDisposable
                 StartRecoveryTime = 0,
             },
             Spell(SlowBolt, Effect(SpellEffectName.SchoolDamage, 5, SpellImplicitTarget.UnitEnemy)) with
+            {
+                CastTime = new SpellCastTime(2000, 0, 0),
+                RangeIndex = 4,
+                Range = new SpellRange(0, 40),
+                StartRecoveryCategory = 0,
+                StartRecoveryTime = 0,
+            },
+            Spell(SlowHeal, Effect(SpellEffectName.Heal, 5, SpellImplicitTarget.UnitFriend)) with
             {
                 CastTime = new SpellCastTime(2000, 0, 0),
                 RangeIndex = 4,
@@ -190,13 +199,13 @@ public sealed class FeignDeathTests : IDisposable
         _world.AddPlayer(friend);
         _relations.Hostile.Add(enemy.Guid);
         Assert.Equal(SpellCastResult.CastOk, _spells.CastSpell(enemy, SlowBolt, SpellCastTargets.ForUnit(_hunter.Guid), triggered: false));
-        Assert.Equal(SpellCastResult.CastOk, _spells.CastSpell(friend, SlowBolt, SpellCastTargets.ForUnit(_hunter.Guid), triggered: false));
+        Assert.Equal(SpellCastResult.CastOk, _spells.CastSpell(friend, SlowHeal, SpellCastTargets.ForUnit(_hunter.Guid), triggered: false));
         Assert.NotNull(_spells.GetState(enemy.Guid)!.CurrentCast);
 
         Assert.Equal(SpellCastResult.CastOk, CastFeign());
 
         Assert.Null(_spells.GetState(enemy.Guid)?.CurrentCast);
-        Assert.NotNull(_spells.GetState(friend.Guid)?.CurrentCast); // vmangos only interrupts non-friendly casters
+        Assert.NotNull(_spells.GetState(friend.Guid)?.CurrentCast); // vmangos only interrupts non-friendly casters (a friend can only be casting something helpful at the feigner)
     }
 
     [Fact]

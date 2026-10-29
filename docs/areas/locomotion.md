@@ -229,9 +229,27 @@ vmangos does ("this is actually called many times while falling"). A 1-health pl
 still sent to the graveyard. `RepopAtGraveyard` is the death lane's hook: it asks the graveyard feature's `IGraveyardRepop`
 (docs/areas/graveyards-resurrection.md) and does nothing without graveyard data.
 
-Not delivered: antiundermap1 (`UndermapRecall`, `:1105-1127`: more than 100 yards below the ground height while
-falling, return to the last safe position, Warsong Gulch below z = 250). It needs a safe-position record and the ground
-height under the player; both exist now (`Player.LastSafePosition`, saved by `MovementHandlers` as vmangos `SaveNoUndermapPosition`, and `map.Collision.GetHeight`), but the recall itself is not written.
+Antiundermap1 (`UndermapRecall`, `MovementHandler.cpp:1115-1128`, `Player.h:1789-1801`) is delivered by the same observer, only
+while the client reports `MovementFlags.FallingFar`: the player is more than 100 yards below a model-aware ground
+(`MapCollision.ClassifyUnderMapForRecovery`, depth over 100), or on Warsong Gulch (map 489) below z = 250. A recall needs a valid
+`Player.LastSafePosition` (saved by `MovementHandlers` as vmangos `SaveNoUndermapPosition`) on the same map and within 100 yards in
+the plane, and no teleport already under way. `MovementHandlers` arms the recall (`Player.UndermapRecallArmed`, vmangos
+`m_undermapPosValid`) every time it saves the position. The recall goes through `TeleportService.TeleportTo` as a near teleport with
+`TeleportOptions.NotLeaveCombat | NotUnsummonPet` (vmangos `TELE_TO_NOT_LEAVE_COMBAT | TELE_TO_NOT_UNSUMMON_PET`; MSG_MOVE_TELEPORT_ACK, so
+client and server agree on the position after the ack; `PetTeleportFollow` honours the second flag). A recall, a safe position more than
+100 yards away and one on another map each disarm the recall; `Player.LastSafePosition` itself is never cleared (the unstuck spell,
+vmangos `Spell::EffectStuck`, reads it), so a second far fall without a fresh free move does not recall again. The observer finds the
+service with `TeleportService.Of(world)`, which the constructor registers. Deviations from vmangos: the recall skips game masters,
+players on a transport, in taxi flight, flying or swimming, and below the void height (the observer's existing exclusions; vmangos
+antiundermap1 has none), and the saved position keeps the client's facing where vmangos stores o = 0.
+
+"Model-aware ground" here is the terrain height unless a static model or navigation-mesh floor lies within the 60-yard window below the
+player (`MapCollision.UnderMapFloorSearch`); it is not the unbounded `Map::GetHeight` of vmangos. `ClassifyUnderMapForRecovery` is a
+method of `MapCollision` only, not of `IUnderMapClassifier`. Recovery grade differs from report grade: with no model service, a map
+without a model tree, model heights switched off or an unloaded model tile, it answers Unknown, because terrain alone cannot tell an underground city or cave from a fall through the world. The server never
+rewrites a living player's Z to the terrain surface (an earlier version did, for a player more than 8 yards under the terrain, which
+moved players in underground cities on maps without vmaps and saved them there). The `move/under-map` anomaly report (terrain-based,
+deeper than 50 yards, once per episode, report mode by default) is unchanged and only reports.
 ## Slice 6: speed-rates-players (delivered)
 
 The speed auras change a player's speeds through the order/ack handshake (vmangos `Unit::UpdateSpeed`,

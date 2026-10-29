@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Tests.Spells;
 /// <summary>Players of other classes and power types than the warriors <see cref="TestWorld.CreatePlayer"/> makes.</summary>
 internal static class TestPlayers
 {
-    public static Player Add(SpellTestKit kit, uint guid, Class cls, PowerType power, float x = 0, float y = 0, uint maxPower = 100)
+    public static Player Add(SpellTestKit kit, uint guid, Class cls, PowerType power, float x = 0, float y = 0, uint maxPower = 100, Race race = Race.Human, bool pvpFlagged = false)
     {
         var session = new FakeSession((int)guid);
         var character = new CharacterRecord
@@ -14,7 +14,7 @@ internal static class TestPlayers
             Id = (int)guid,
             AccountId = session.AccountId,
             Name = $"P{guid}",
-            Race = (byte)Race.Human,
+            Race = (byte)race,
             Class = (byte)cls,
             Gender = (byte)Gender.Male,
             Level = 1,
@@ -28,6 +28,11 @@ internal static class TestPlayers
         var player = new Player(character, appearance, session);
         kit.World.AddPlayer(player);
         kit.World.RunTick(0);
+        if (pvpFlagged)
+        {
+            SpellTestKit.FlagForPvp(player);
+        }
+
         session.Clear();
         return player;
     }

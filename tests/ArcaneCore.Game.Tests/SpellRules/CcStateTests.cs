@@ -69,7 +69,8 @@ public sealed class CcStateTests
     private static (Player Caster, Player Victim) Pair(SpellTestKit kit)
     {
         (Player caster, _) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(caster);
+        (Player victim, _) = kit.AddHostilePlayer(2, 2);
         kit.Spellbook.Teach(victim, SilenceableCast, PlainCast);
         return (caster, victim);
     }

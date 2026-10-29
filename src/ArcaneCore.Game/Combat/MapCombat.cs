@@ -396,6 +396,30 @@ public sealed partial class MapCombat : IMapUpdater
     {
         bool healed = false;
         UnitCombat c = player.Combat;
+        bool alive = c.DeathState == DeathState.Alive;
+        bool ghostFlagSet = (player.Flags & PlayerFlags.Ghost) != 0;
+
+        // An Alive player keeps no ghost form (vmangos Player::ResurrectPlayer, Player.cpp:4643-4646: SetDeathState(ALIVE) +
+        // RemoveGhostForm). Its corpse may legitimately remain (a transport resurrection leaves it, Transport.cpp:172-173). Cheap
+        // checks first: the aura scan only runs for the ghost player flag or the UNIT_VIS_FLAGS_GHOST bit.
+        if (alive
+            && (ghostFlagSet || (player.GetByte(UpdateFields.UnitFieldBytes1, ArcaneCore.Game.Spells.GhostAuras.VisFlagByte) & ArcaneCore.Game.Spells.GhostAuras.VisFlagGhost) != 0)
+            && SpellMitigation is { } spells)
+        {
+            foreach (uint ghostAura in (ReadOnlySpan<uint>)[CombatConstants.GhostSpellId, CombatConstants.WispGhostSpellId])
+            {
+                if (spells.HasAura(player, ghostAura))
+                {
+                    _map.Logger.LogWarning(
+                        "life-state invariant healed for player {Player} (guid={Guid}) on map {MapId}: ghost aura {SpellId} was on an Alive player; removing it",
+                        player.Name, player.Guid.Low, _map.MapId, ghostAura);
+                    spells.RemoveAuras(player, ghostAura);
+                    ReportHealed(player, "ghost-aura", $"ghost aura {ghostAura} was on an Alive player; removed");
+                    healed = true;
+                }
+            }
+        }
+
         if (c.DeathState != DeathState.Dead && (player.Flags & PlayerFlags.Ghost) != 0)
         {
             _map.Logger.LogWarning(
@@ -425,6 +449,13 @@ public sealed partial class MapCombat : IMapUpdater
             player.Health = 1;
             ReportHealed(player, "dead-health", "DeathState.Dead had Health=0; restored ghost Health=1");
             healed = true;
+        }
+
+        if (alive && ghostFlagSet)
+        {
+            // the client still walks on water: order the land walk (no-op when one is already queued). Checked on the flag as it was on
+            // entry: removing the ghost aura above clears PLAYER_FLAGS_GHOST itself (GhostAuras.ApplyGhost).
+            SendGhostMovement(player, false);
         }
 
         if (c.DeathState == DeathState.Alive && player.Health > 0)

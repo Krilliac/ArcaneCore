@@ -118,7 +118,8 @@ public sealed class SpellEffectCombatTests
     {
         using var kit = Kit();
         (Player kicker, _) = kit.AddPlayer(1);
-        (Player victim, FakeSession victimSession) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(kicker);
+        (Player victim, FakeSession victimSession) = kit.AddHostilePlayer(2, 2);
         kit.Spellbook.Teach(victim, SilenceableBolt, MagicBolt);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(victim, SilenceableBolt, SpellCastTargets.ForUnit(kicker.Guid)));
         victimSession.Clear();
@@ -144,7 +145,8 @@ public sealed class SpellEffectCombatTests
     {
         using var kit = Kit();
         (Player kicker, _) = kit.AddPlayer(1);
-        (Player victim, _) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(kicker);
+        (Player victim, _) = kit.AddHostilePlayer(2, 2);
         kit.Spellbook.Teach(victim, MagicBolt);
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(victim, MagicBolt, SpellCastTargets.ForUnit(kicker.Guid)));
 
@@ -302,7 +304,8 @@ public sealed class SpellEffectCombatTests
     {
         using var kit = Kit();
         (Player attacker, _) = kit.AddPlayer(1);
-        (Player caster, FakeSession session) = kit.AddPlayer(2, 2);
+        SpellTestKit.FlagForPvp(attacker);
+        (Player caster, FakeSession session) = kit.AddHostilePlayer(2, 2);
         kit.Spellbook.Teach(caster, PushbackBolt);
         kit.System.HandleCastRequest(caster, PushbackBolt, SpellCastTargets.ForUnit(attacker.Guid));
         SpellCast cast = kit.System.GetState(caster.Guid)!.CurrentCast!;

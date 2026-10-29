@@ -26,6 +26,6 @@ public sealed class ShadowPortalScript : ISpellScript
         }
 
         uint portal = RoomPortals[context.System.Random.Next(RoomPortals.Length)]; // urand(0, 5)
-        context.System.CastSpell(context.Caster, portal, SpellCastTargets.ForUnit(context.Target.Guid), triggered: true);
+        context.System.CastSpell(context.Caster, portal, SpellCastTargets.ForUnit(context.Target.Guid, context.Cast), triggered: true);
     }
 }

@@ -44,6 +44,94 @@ public static class ChatSanitizer
     }
 
     /// <summary>
+    /// Cuts <paramref name="message"/> to at most <paramref name="maxLength"/> UTF-16 units without breaking what the client renders as one
+    /// piece: the cut never falls between the halves of a surrogate pair, and never inside a colour (<c>|c ... |r</c>) or hyperlink
+    /// (<c>|H ... |h text |h</c>) sequence or after a lone pipe; such a sequence is dropped whole, so the result can be shorter than
+    /// <paramref name="maxLength"/> (even empty). A message that already fits is returned unchanged. Mirrors the pipe grammar of
+    /// <see cref="IsValidChatMessage(string, int)"/> (<c>||</c> is an escaped pipe).
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maxLength"/> is negative.</exception>
+    public static string TruncateAtSafeBoundary(string message, int maxLength)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxLength);
+        if (message.Length <= maxLength)
+        {
+            return message;
+        }
+
+        int cut = maxLength;
+        if (cut > 0 && char.IsHighSurrogate(message[cut - 1]) && char.IsLowSurrogate(message[cut]))
+        {
+            cut--;
+        }
+
+        int open = -1; // start of the colour or hyperlink sequence still open at the cut
+        bool colour = false;
+        bool link = false;
+        int linkPipes = 0; // |h seen in the open hyperlink: the first ends the target, the second ends the text
+        int i = 0;
+        while (i < cut)
+        {
+            if (message[i] != '|')
+            {
+                i++;
+                continue;
+            }
+
+            if (i + 1 >= cut)
+            {
+                // A pipe is the last unit that stays: its command (or its escaped partner) would be cut off.
+                cut = open >= 0 ? open : i;
+                break;
+            }
+
+            char command = message[i + 1];
+            if ((command is 'c' or 'H') && open < 0)
+            {
+                open = i;
+            }
+
+            switch (command)
+            {
+                case 'c':
+                    colour = true;
+                    break;
+                case 'H':
+                    link = true;
+                    linkPipes = 0;
+                    break;
+                case 'h':
+                    if (link && ++linkPipes == 2)
+                    {
+                        link = false;
+                    }
+
+                    break;
+                case 'r':
+                    colour = false;
+                    break;
+                default:
+                    break; // '||' or something the link check rejects anyway
+            }
+
+            if (!colour && !link)
+            {
+                open = -1;
+            }
+
+            i += 2;
+        }
+
+        if (i >= cut && open >= 0)
+        {
+            cut = open;
+        }
+
+        return message[..cut];
+    }
+
+    /// <summary>
     /// vmangos <c>ChatHandler::isValidChatMessage</c> for severities 1 and 2 (Chat.cpp:2165-2208).
     /// Every '|' must be followed by one of <c>c H h r |</c>; at severity 2 the commands
     /// <c>c H h h r</c> must additionally occur in that cyclic order (an escaped <c>||</c> is
