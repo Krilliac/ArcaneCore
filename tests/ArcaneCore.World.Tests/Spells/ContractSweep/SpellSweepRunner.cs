@@ -315,16 +315,31 @@ internal sealed class SpellSweepRunner
 
     /// <summary>
     /// Tick until what is held for the batch boundary has resolved: the casts' goes, and with <paramref name="swings"/> the white swings too
-    /// (MapCombat.SwingBatch.cs). At most one window, in 50 ms steps. A no-op with batching off (nothing is ever held), so the sweep then runs
-    /// exactly as it did before batching existed. A cast waits for its own go only: waiting for a swing it provoked would let time pass
-    /// that the same check without batching does not see.
+    /// (MapCombat.SwingBatch.cs). Held work goes off at the first update in a later batch than the one it was held in, all of it
+    /// (SpellSystem.UpdateSpellBatch, MapCombat.UpdateHeldSwings), so the wait ends at the first tick past the next boundary, in 50 ms steps.
+    /// A go or swing held after that is new work of the new batch (a fast swing timer holds a swing in every batch), not one left behind.
+    /// A no-op with batching off (nothing is ever held), so the sweep then runs exactly as it did before batching existed. A cast waits for
+    /// its own go only: waiting for a swing it provoked would let time pass that the same check without batching does not see. A boundary
+    /// not reached within one window plus a tick is an invariant break (j.batch-not-settled).
     /// </summary>
     private void SettleBatch(bool swings = false)
     {
         uint window = _rig.System.SpellBatchWindowMs;
-        for (uint waited = 0; (_rig.System.PendingBatchedGoes > 0 || (swings && _rig.Map.Combat.PendingSwings > 0)) && waited <= window; waited += 50)
+        if (window == 0 || (_rig.System.PendingBatchedGoes == 0 && (!swings || _rig.Map.Combat.PendingSwings == 0)))
+        {
+            return;
+        }
+
+        uint heldIn = SpellSystem.BatchIndex(_rig.World.NowMs, window);
+        for (uint waited = 0; SpellSystem.BatchIndex(_rig.World.NowMs, window) == heldIn && waited <= window; waited += 50)
         {
             _rig.World.RunTick(50);
+        }
+
+        if (SpellSystem.BatchIndex(_rig.World.NowMs, window) == heldIn)
+        {
+            Violate(SweepCategory.BatchNotSettled, _current!.SpellId,
+                $"no batch boundary {window} ms after goes={_rig.System.PendingBatchedGoes} swings={(swings ? _rig.Map.Combat.PendingSwings : 0)} were held");
         }
     }
 
@@ -522,17 +537,25 @@ internal sealed class SpellSweepRunner
 
                 // With batching on, what the action set off resolves at the batch boundary, up to one window later: an action that is a cast
                 // (CastOther) goes off there, and so does the white swing a struck unit answers with in the tick after the action. A short aura
-                // (300 ms) can run out meanwhile, and an aura that expired was not removed by the action.
+                // (300 ms) can run out meanwhile, and its expiry is held to the same boundary (SpellSystem.HoldAuraExpiry).
                 _rig.World.RunTick(50);
                 SettleBatch(swings: true);
                 bool present = _probe.Holders(_rig.System, unit, spell.Id).Count > 0;
-                bool ranOut = held.Count > 0 && held.All(h => h.IsRemoved && h.RemoveMode == AuraRemoveMode.Expire);
+                if (!present && held.Count > 0 && held.All(h => h.IsRemoved && h.RemoveMode == AuraRemoveMode.Expire))
+                {
+                    // The aura ran out on its own before the action's effect could be seen: that proves nothing either way (a broken
+                    // mapping would look as if it worked, a flagless aura as if the action wrongly ended it), so the check did not run. Without
+                    // batching no production action lets time pass, so this only happens with batching on or an action that waits.
+                    state = "not-run:expired";
+                    return;
+                }
+
                 state = "ran";
                 if (expected && present)
                 {
                     Violate(SweepCategory.InterruptNotRemoved, spell.Id, $"{action.Name} flags=0x{flags:X}");
                 }
-                else if (!expected && !present && !ranOut && unit.IsAlive && !spell.IsChanneled && spell.ProcCharges == 0 && spell.ProcFlags == ProcFlags.None)
+                else if (!expected && !present && unit.IsAlive && !spell.IsChanneled && spell.ProcCharges == 0 && spell.ProcFlags == ProcFlags.None)
                 {
                     Violate(SweepCategory.InterruptRemovedWithoutFlag, spell.Id, $"{action.Name} flags=0x{flags:X}");
                 }
