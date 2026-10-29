@@ -1189,6 +1189,7 @@ public static partial class ContentImporterCli
                 ("pet_levelstats", await db.Set<PetLevelStatsRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("petcreateinfo_spell", await db.Set<PetCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                (SpellEffectModDataModule.Table, await db.Set<SpellEffectModRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)
             {

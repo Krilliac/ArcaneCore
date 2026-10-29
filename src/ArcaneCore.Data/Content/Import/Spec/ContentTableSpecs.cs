@@ -195,6 +195,14 @@ public static class ContentTableSpecs
                 "datalong2", "datalong3", "search_radius", "data_flags", "dataint2", "dataint3", "dataint4", "datafloat",
                 "z", "o", "speed", "condition_id",
             ], [])),
+        // World schema 63: vmangos spell_effect_mod (SpellEffectModDumpImporter; PRIMARY KEY (Id, EffectIndex) in vmangos mangos.sql).
+        new("spell_effect_mod",
+            [new KeyColumn("Id"), new KeyColumn("EffectIndex")],
+            [
+                "Effect", "EffectDieSides", "EffectBaseDice", "EffectDicePerLevel", "EffectRealPointsPerLevel", "EffectBasePoints", "EffectAmplitude",
+                "EffectPointsPerComboPoint", "EffectChainTarget", "EffectMultipleValue", "EffectMechanic", "EffectImplicitTargetA",
+                "EffectImplicitTargetB", "EffectRadiusIndex", "EffectApplyAuraName", "EffectItemType", "EffectMiscValue", "EffectTriggerSpell",
+            ], []),
         // World schema 62: vmangos spell_scripts, translated into dbscripts_on_spell (VmangosSpellScriptTranslator; no key in vmangos either).
         new("spell_scripts",
             [new KeyColumn("id"), new KeyColumn("delay"), new KeyColumn("priority"), new KeyColumn("command"), new KeyColumn("datalong"),

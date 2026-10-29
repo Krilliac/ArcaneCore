@@ -120,6 +120,7 @@ public sealed class EfSpellContentStore(WorldDbContext db) : ISpellContentStore
     {
         ScriptTargets = await db.Set<ArcaneCore.Data.World.Creatures.SpellScriptTargetRow>().AsNoTracking()
             .ToListAsync(cancellationToken).ConfigureAwait(false),
+        EffectMods = await db.Set<SpellEffectModRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false),
     };
 
     public async Task ReplaceDbcTablesAsync(SpellDbcContent content, CancellationToken cancellationToken = default)

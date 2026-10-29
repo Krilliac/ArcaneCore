@@ -108,6 +108,7 @@ public static partial class ContentImporterCli
         var relays = new CreatureDumpImporter();
         var instances = new InstanceTemplateDumpImporter();
         var dbScripts = new DbScriptDumpImporter();
+        var effectMods = new SpellEffectModDumpImporter();
         var gossip = new NpcDumpImporter();
         var spawnGroups = new SpawnGroupDumpImporter();
         var pools = new PoolDumpImporter();
@@ -189,6 +190,12 @@ public static partial class ContentImporterCli
         using (TextReader reader = ChainedTextReader.Create(inputs))
         {
             gossip.Read(reader);
+        }
+
+        // vmangos spell_effect_mod (world 63): only the reviewed spells' rows are written (SpellEffectModDumpImporter.ReviewedSpells).
+        using (TextReader reader = ChainedTextReader.Create(inputs))
+        {
+            effectMods.Read(reader);
         }
 
         IReadOnlyCollection<GossipMenuOption> scriptedOptions = gossip.ScriptedOptions;
@@ -340,6 +347,7 @@ public static partial class ContentImporterCli
         Count("quest_template (StartScript/CompleteScript)", dbScripts.QuestScripts.Count, dbScripts.QuestScripts.Count > 0);
         Count("gossip_menu (script_id)", dbScripts.MenuScripts.Count, dbScripts.MenuScripts.Count > 0);
         Count("gossip_menu_option (action_script_id)", scriptedOptions.Count, scriptedOptions.Count > 0);
+        Count(Spells.SpellEffectModDataModule.Table, effectMods.Rows.Count, effectMods.HasRows);
         Count(MapDataModule.AreaTriggerTemplateTable, triggers?.Count ?? 0, triggers is not null);
         Count(MapDataModule.MapTemplateTable, mapTables?.Maps.Count ?? 0, mapTables is not null);
         Count(MapDataModule.AreaTemplateTable, mapTables?.Areas.Count ?? 0, mapTables is not null);
@@ -470,6 +478,12 @@ public static partial class ContentImporterCli
                     warnings.AddRange(dbScripts.Warnings);
                     warnings.AddRange(dbScripts.VmangosSpellScriptRejections.OrderBy(pair => pair.Key)
                         .Select(pair => $"spell_scripts {pair.Key} not imported: {pair.Value}"));
+                    if (effectMods.HasRows)
+                    {
+                        await effectMods.ReplaceAsync(db, token).ConfigureAwait(false);
+                        warnings.Add(effectMods.Describe());
+                    }
+
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
                     await gossip.RefreshVendorTemplatesAsync(db, token).ConfigureAwait(false);
                     if (procs is not null)
