@@ -337,6 +337,59 @@ public sealed class PlayerbotPopulationOptions
     public int TownWalkYards { get; set; } = 4500;
 
     /// <summary>
+    /// Value routing (on by default): a level-capped bot (or one no zone fits) is sent to a zone that still has something for it (quests it
+    /// can take, reputation it can earn, gear it can obtain, mobs worth killing) instead of the zone with the fewest bots. The value of a
+    /// zone is read from the loaded quest, creature, loot, item and area content once at start and again after a content reload. Off, or
+    /// until that read is done: zones are picked as before.
+    /// </summary>
+    public bool ValueRouting { get; set; } = true;
+
+    /// <summary>The weight (0..100) of the quests a bot can still take in a zone in its value.</summary>
+    public int ValueQuestWeight { get; set; } = 10;
+
+    /// <summary>The weight (0..100) of the reputation a bot can still earn in a zone (quest rewards and kills) in its value.</summary>
+    public int ValueReputationWeight { get; set; } = 5;
+
+    /// <summary>The weight (0..100) of the gear a zone offers that is better than what the bot wears (dungeon drops and reputation vendors) in its value.</summary>
+    public int ValueGearWeight { get; set; } = 8;
+
+    /// <summary>The weight (0..100) of the mobs of the bot's level range (and skinnable beasts) in a zone in its value. Mobs alone never make a zone worth going to.</summary>
+    public int ValueFarmWeight { get; set; } = 1;
+
+    /// <summary>The weight (0..100) taken off the value of a zone for the share of its mobs that are elite beyond ValueEliteSoloPct.</summary>
+    public int ValueEliteWeight { get; set; } = 6;
+
+    /// <summary>The weight (0..100) taken off the value of a zone for the recent stalls and deaths of bots there.</summary>
+    public int ValueTroubleWeight { get; set; } = 5;
+
+    /// <summary>The weight (0..100) taken off the value of a zone for the distance from the bot (a zone on another map costs the full weight).</summary>
+    public int ValueDistanceWeight { get; set; } = 1;
+
+    /// <summary>The levels (0..20) below the bot a quest may be and still count: a quest more than this far under the bot is grey and counts for nothing.</summary>
+    public int ValueQuestGrayMargin { get; set; } = 6;
+
+    /// <summary>The percentage (0..100) of elite mobs among the mobs of the bot's level range in a zone up to which a lone bot can still fight there; only the share above it costs value.</summary>
+    public int ValueEliteSoloPct { get; set; } = 20;
+
+    /// <summary>How many of the best zones (1..20) a bot is picked among, by weighted random draw, when it is sent to a valued zone.</summary>
+    public int ValueTopZones { get; set; } = 5;
+
+    /// <summary>The bots a valued zone takes before it is not offered any more (0..1000; 0 = no limit). Below the limit, the fuller a zone is, the less often it is drawn.</summary>
+    public int ValueZoneSoftCap { get; set; } = 120;
+
+    /// <summary>The levels (0..20) below a bot of the maximum level that the highest level of a zone may be for the zone to be offered to it (such a bot fits no zone by the usual rule).</summary>
+    public int ValueCapReach { get; set; } = 6;
+
+    /// <summary>The minutes (0..1440) a level-capped bot stays in a zone before the low-value check may move it.</summary>
+    public int ValueRelocateMinStayMinutes { get; set; } = 30;
+
+    /// <summary>The percentage (0..100) of the best zone's value under which a level-capped bot's own zone is left for the best one. 0 turns the check off.</summary>
+    public int ValueRelocateBelowPct { get; set; } = 50;
+
+    /// <summary>The most bots (0..200) the low-value check looks at in one pass of the relocation sweep. 0 turns the check off.</summary>
+    public int ValueChecksPerPass { get; set; } = 8;
+
+    /// <summary>
     /// Migration: the sweep also takes over the homes an operator set (any place text that is not the population's) for bots of the
     /// population, replacing them with the home of the bot's level (a level 1 bot with a stale Sentinel Hill home gets its start area).
     /// Off by default: operator homes are never touched. <c>.playerbot population adopt</c> does the same once, until no operator home
@@ -477,6 +530,21 @@ public sealed class PlayerbotPopulationOptions
             : CheckRange(TownBandMargin, 0, 10) is { } tbm ? $"TownBandMargin {tbm}"
             : CheckCaps(TownCaps) is { } tcs ? $"TownCaps {tcs}"
             : CheckRange(TownWalkYards, 100, 20000) is { } twy ? $"TownWalkYards {twy}"
+            : CheckRange(ValueQuestWeight, 0, 100) is { } vqw ? $"ValueQuestWeight {vqw}"
+            : CheckRange(ValueReputationWeight, 0, 100) is { } vrw ? $"ValueReputationWeight {vrw}"
+            : CheckRange(ValueGearWeight, 0, 100) is { } vgw ? $"ValueGearWeight {vgw}"
+            : CheckRange(ValueFarmWeight, 0, 100) is { } vfw ? $"ValueFarmWeight {vfw}"
+            : CheckRange(ValueEliteWeight, 0, 100) is { } vew ? $"ValueEliteWeight {vew}"
+            : CheckRange(ValueTroubleWeight, 0, 100) is { } vtw ? $"ValueTroubleWeight {vtw}"
+            : CheckRange(ValueDistanceWeight, 0, 100) is { } vdw ? $"ValueDistanceWeight {vdw}"
+            : CheckRange(ValueQuestGrayMargin, 0, 20) is { } vgm ? $"ValueQuestGrayMargin {vgm}"
+            : CheckRange(ValueEliteSoloPct, 0, 100) is { } vesp ? $"ValueEliteSoloPct {vesp}"
+            : CheckRange(ValueTopZones, 1, 20) is { } vtz ? $"ValueTopZones {vtz}"
+            : CheckRange(ValueZoneSoftCap, 0, 1000) is { } vzc ? $"ValueZoneSoftCap {vzc}"
+            : CheckRange(ValueCapReach, 0, 20) is { } vcr ? $"ValueCapReach {vcr}"
+            : CheckRange(ValueRelocateMinStayMinutes, 0, 1440) is { } vms ? $"ValueRelocateMinStayMinutes {vms}"
+            : CheckRange(ValueRelocateBelowPct, 0, 100) is { } vbp ? $"ValueRelocateBelowPct {vbp}"
+            : CheckRange(ValueChecksPerPass, 0, 200) is { } vcp ? $"ValueChecksPerPass {vcp}"
             : null;
         if (problem is not null) throw new InvalidOperationException($"{SectionName}: {problem}.");
     }
