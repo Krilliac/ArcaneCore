@@ -266,6 +266,7 @@ public static class ContentTableSpecs
         new("npc_vendor", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor", c)),
         new("npc_vendor_template", [new KeyColumn("entry"), new KeyColumn("item")], [], [], c => NpcDumpImporter.ReadsColumn("npc_vendor_template", c)),
         new("npc_trainer", [new KeyColumn("entry"), new KeyColumn("spell")], [], [], c => NpcDumpImporter.ReadsColumn("npc_trainer", c)),
+        new("points_of_interest", [new KeyColumn("entry")], [], [], c => NpcDumpImporter.ReadsColumn("points_of_interest", c)),
         new("conditions", [new KeyColumn("condition_entry")], ["type", "value1", "value2", "value3", "value4", "flags"], []),
         new("areatrigger_teleport", [new KeyColumn("id")], [], s_portalSignatures, LocationDumpImporter.ReadsPortalColumn),
         // areatrigger_involvedrelation: id is the area trigger, quest the exploration quest it credits (LocationDumpImporter.ReadQuestTrigger).

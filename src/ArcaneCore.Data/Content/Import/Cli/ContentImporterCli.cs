@@ -661,6 +661,7 @@ public static partial class ContentImporterCli
         imported["npc_trainer"] = npcReport.Trainers;
         imported["reputation_spillover_template"] = reputationTemplatesReport.Spillovers;
         imported["reputation_reward_rate"] = reputationTemplatesReport.RewardRates;
+        imported["points_of_interest"] = npcReport.PointsOfInterest;
         imported["conditions"] = conditionsReport.Conditions;
         imported["battleground_template"] = battlegroundReport.Templates;
         imported["creature_battleground"] = battlegroundReport.CreatureEvents;
