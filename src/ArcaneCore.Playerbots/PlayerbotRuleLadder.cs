@@ -80,7 +80,8 @@ internal sealed class PlayerbotRuleLadder
 
     private static readonly Lazy<RuleCatalog> Shipped = new(() => RuleCatalog.Build(PlayerbotLadderContent.Content, RuleVocabulary.Default, new RuleBuildOptions()));
 
-    private readonly IServiceProvider _services;
+    // Resolved once at construction: the host outlives the provider it was built from (a bot's per-session provider is disposed when the bot stops), so it must not keep the provider.
+    private readonly ConditionFeature? _conditions;
     private readonly RuleFeature? _feature;
     private readonly ILogger? _logger;
     private volatile CatalogChoice? _choice;
@@ -88,7 +89,7 @@ internal sealed class PlayerbotRuleLadder
 
     private PlayerbotRuleLadder(IServiceProvider services, RuleFeature? feature)
     {
-        _services = services;
+        _conditions = services.GetService<ConditionFeature>();
         _feature = feature;
         _logger = services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotRuleLadder>();
         feature?.Counters.Register(RuleHostKind.Bot, "bot ladder", Counters);
@@ -119,7 +120,7 @@ internal sealed class PlayerbotRuleLadder
     /// </summary>
     public BotGoalLadder CreateLadder(ulong guid)
     {
-        ConditionFeature? conditions = _services.GetService<ConditionFeature>();
+        ConditionFeature? conditions = _conditions;
         return new BotGoalLadder(new RuleEvaluator(new Random(SeedOf(guid)))
         {
             Conditions = conditions is null ? null : new BotConditionGate((id, player) => conditions.IsSatisfied(id, player, null)),
