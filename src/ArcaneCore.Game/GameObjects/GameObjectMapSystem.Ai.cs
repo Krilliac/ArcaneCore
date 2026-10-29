@@ -204,6 +204,7 @@ public sealed partial class GameObjectMapSystem
         if (!go.IsSpawned && Tracks(go))
         {
             go.RespawnAtMs = _clockMs + (seconds * 1000L);
+            SaveRespawnOnDespawn(go);
         }
     }
 

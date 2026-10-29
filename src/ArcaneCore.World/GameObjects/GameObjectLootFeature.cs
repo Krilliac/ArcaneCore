@@ -254,7 +254,8 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
             CreatureOptions = CreatureFeature?.Options ?? new CreatureOptions(),
             Durable = _settlements,
         };
-        var system = new GameObjectMapSystem(map, Content, loot, Quests, logger)
+        var system = new GameObjectMapSystem(map, Content, loot, Quests, logger,
+            respawnPersistence: RespawnFeature?.Persistence, respawnClock: RespawnFeature?.Clock)
         {
             Options = ObjectOptions,
             ElevatorAnimations = ElevatorAnimations,
@@ -325,6 +326,12 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
     /// <summary>The game object system of this exact map instance (world thread).</summary>
     public GameObjectMapSystem? FindSystem(Map map) => _systems.GetValueOrDefault(map);
+
+    /// <summary>Every map's game object system (the respawn feature saves them at shutdown).</summary>
+    public IEnumerable<GameObjectMapSystem> Systems => _systems.Values;
+
+    // The durable respawn times (GameObjectRespawnFeature), when that feature is active; looked up when a system is made, which is after every feature attached.
+    private GameObjectRespawnFeature? RespawnFeature => services.GetService<GameObjectRespawnFeature>();
 
     /// <summary>The game object system of the shared copy, if it exists (world thread).</summary>
     public GameObjectMapSystem? FindSystem(uint mapId)
