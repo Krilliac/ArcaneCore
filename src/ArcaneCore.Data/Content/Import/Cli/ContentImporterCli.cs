@@ -107,7 +107,9 @@ public static partial class ContentImporterCli
                                 A table the inputs do not carry is left as it is, so running it again changes nothing.
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
                                 --dry-run writes nothing; --report <file>). A world whose schema is behind this
-                                importer's is refused unless --migrate is given (refresh never migrates on its own).
+                                importer's is refused unless --migrate is given (refresh never migrates on its own). import, import-dbc,
+                                import-map-dbc, proc-events and spell-threat take --migrate too: they create a missing
+                                schema but refuse to upgrade an existing one without it.
           refresh-portals <dump>...
                                 replace only areatrigger_teleport from the dump in one transaction;
                                 other location and world tables are untouched. Existing portal rows not
@@ -330,7 +332,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "proc-events", createMissing: true).ConfigureAwait(false);
             written = await SpellProcEventDumpImporter.ImportAsync(db, result.Content, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -382,7 +384,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "spell-threat", createMissing: true).ConfigureAwait(false);
             written = await SpellThreatDumpImporter.ImportAsync(db, result.Content, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -638,7 +640,7 @@ public static partial class ContentImporterCli
             try
             {
                 await using WorldDbContext db = OpenWorld(target);
-                await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+                await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "import", createMissing: true).ConfigureAwait(false);
                 await ImportTransaction.RunAsync(db, async token =>
                 {
                     creatureReport = await creatures.WriteAsync(db, replace, token).ConfigureAwait(false);
@@ -941,7 +943,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "import-dbc", createMissing: true).ConfigureAwait(false);
             await new EfSpellContentStore(db).ReplaceDbcTablesAsync(content, ct).ConfigureAwait(false);
             if (mapSnapshot is not null)
             {
@@ -1093,7 +1095,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
+            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), output, ct, "import-map-dbc", createMissing: true).ConfigureAwait(false);
             report = await MapAreaDbcImporter.ImportSnapshotAsync(db, snapshot, a.Flag("--replace"), ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
