@@ -2409,7 +2409,10 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         _thinkBudget.ObserveTickInterval(elapsedMs);
         Interlocked.Add(ref _clockMs, elapsedMs);
         (ActiveBot[] bots, int botsVersion) = RefreshOrdered();
+        // Two clocks, never subtracted from one another: `now` is the live one (think gaps, stalls, silence: wall time inside a tick), `gameNow` the tick-start
+        // game time that every stamp of the movement and the thinks carries (PlayerbotMotion.Pump, NoteThink).
         uint now = world.Clock.LiveNowMs;
+        uint gameNow = world.NowMs;
         double realTickMs = _thinkBudget.RealTickMs(world.Options.TickIntervalMs);
         if (_tickNowPrimed)
         {
@@ -2438,7 +2441,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 ReportSessionLostOnce(active, "tick");
                 continue;
             }
-            try { PlayerbotMotion.Pump(active.Session, mover, now); }
+            try { PlayerbotMotion.Pump(active.Session, mover, gameNow); }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "movement", ex); continue; }
             // Party intake, every tick for every autonomous bot (a scripted controller drains its own queue): invitations,
             // chat, loot rolls and resurrection offers are answered as they come, not when the bot's turn in the budget comes.
@@ -2767,7 +2770,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException) { Fault(active, "action", ex); }
-            if (measured is not null) PlayerbotMotion.NoteThink(measured, driver, world.Clock.LiveNowMs);
+            if (measured is not null) PlayerbotMotion.NoteThink(measured, driver, world.NowMs);
         }
         if (active.Session.Player is { } player) { active.Name = player.Name; active.MapId = player.Map?.MapId ?? player.MapId; }
         if (driver != "brain") active.Brain.CancelNavigationPlanning();

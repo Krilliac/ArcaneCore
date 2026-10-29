@@ -65,7 +65,8 @@ public sealed class WorldClock
 
     /// <summary>
     /// <see cref="NowMs"/> read live: on the real clock the stopwatch right now (it moves inside a tick, wrapping like <see cref="NowMs"/>), in the
-    /// deterministic modes the tick-start game time. For measuring wall time spent inside one tick (think gaps and stalls), never for game logic.
+    /// deterministic modes the tick-start game time. For measuring wall time spent inside one tick (think gaps and stalls) only: a value read here is never
+    /// compared with, or subtracted from, a stamp taken from <see cref="NowMs"/> (those are tick-start game time and lag it by the time already spent in the tick).
     /// </summary>
     public uint LiveNowMs => Mode == WorldClockMode.Realtime ? unchecked((uint)_stopwatch.ElapsedMilliseconds) : NowMs;
 

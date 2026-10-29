@@ -16,13 +16,13 @@ namespace ArcaneCore.World.Tests.Playerbots;
 /// <summary>The cadence work as the feature wires it: what a think gap is, and who may leave a walking bot behind.</summary>
 public sealed class PlayerbotCadenceWiringTests
 {
-    private static async Task<(WorldTestHost Host, ManagedPlayerbotFeature Feature, Guid Id, ManagedPlayerbotLifecycleTests.CapturingLogger Log)> StartAsync()
+    private static async Task<(WorldTestHost Host, ManagedPlayerbotFeature Feature, Guid Id, ManagedPlayerbotLifecycleTests.CapturingLogger Log)> StartAsync(bool manualClock = true)
     {
         var accounts = new InMemoryAccountStore();
         var characters = new InMemoryCharacterStore();
         var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
         var log = new ManagedPlayerbotLifecycleTests.CapturingLogger();
-        WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners, logger: log, manualClock: true);
+        WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners, logger: log, manualClock: manualClock);
         ManagedPlayerbotFeature feature = host.WorldServices.GetRequiredService<ManagedPlayerbotFeature>();
         await feature.StartupAsync(default);
         Guid id = Assert.IsType<Guid>((await feature.CreateAsync("Wiringone", 1, 1)).BotId);
@@ -185,6 +185,34 @@ public sealed class PlayerbotCadenceWiringTests
                 Assert.Same(route, PlayerbotMotion.RouteOf(bot));
                 return true;
             });
+            await feature.ShutdownBeforeWorldStopAsync();
+        }
+    }
+
+    /// <summary>
+    /// The motion pump runs on game time, the clock the route's stamps (anchor, lease renewal) are taken on. A command that stands the world thread still for
+    /// 1.5 s before the features of a tick must not make the walking bot cover the stall in one hop: the pump's age is one tick of game time, not the live clock's.
+    /// Fails with the pump given the live clock (the bot walks speed x 1.5 s at once).
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Timing")] // a real 1.5 s stall of the world thread
+    public async Task ThePump_UsesGameTime_ASlowTickDoesNotWalkTheBotTheStall()
+    {
+        (WorldTestHost host, ManagedPlayerbotFeature feature, Guid id, _) = await StartAsync(manualClock: false);
+        await using (host)
+        {
+            WorldSession session = feature.FindSession(id)!;
+            // The walk is anchored at this tick's start; the rest of the tick takes 1.5 s before the features (and the pump) run.
+            (float x0, float y0) = await host.World.InvokeAsync(() =>
+            {
+                Walk(host, session);
+                Thread.Sleep(1500);
+                return (session.Player!.X, session.Player.Y);
+            });
+            // The next command runs in a following tick, after the stalled tick's pump and any tick since (50 ms of game time, 0.35 yards at run speed, each).
+            (float x1, float y1) = await host.World.InvokeAsync(() => (session.Player!.X, session.Player.Y));
+            double walked = Math.Sqrt(Math.Pow(x1 - x0, 2) + Math.Pow(y1 - y0, 2));
+            Assert.True(walked < 2.0, $"the bot walked {walked:F1} yards in the tick that stalled 1.5 s before the pump");
             await feature.ShutdownBeforeWorldStopAsync();
         }
     }
