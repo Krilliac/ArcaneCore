@@ -54,6 +54,13 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
             return true;
         }
 
+        // Duel opponents (and their pets, totems and charmed units, through the affecting player) are hostile before any faction
+        // rule (vmangos Object.cpp:3650-3652); a pet copies its owner's template, so the template reaction would say friendly.
+        if (DuelRules.IsOpponentHostile(a, b))
+        {
+            return false;
+        }
+
         if (a is Player && b is Player)
         {
             return base.IsFriendly(a, b);
@@ -77,6 +84,11 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
         if (attacker is Player && victim is Player)
         {
             return true;
+        }
+
+        if (DuelRules.IsOpponentHostile(attacker, victim))
+        {
+            return true; // the duel reaction is hostile whatever the templates say (Object.cpp:3650-3652)
         }
 
         Reaction forward = ReactionTo(attacker, victim);

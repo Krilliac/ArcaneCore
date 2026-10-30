@@ -167,9 +167,10 @@ public sealed class MeleeSpellLoopTests
     }
 
     [Fact]
-    public void QueuedSpellThatCannotBePaid_IsDropped_AndTheWhiteHitIsLostToo()
+    public void QueuedSpellThatCannotBePaid_IsDropped_AndTheSwingFallsBackToAWhiteHit()
     {
-        // vmangos: the cast failed and left the slot, `!spell` returns before the white swing (Unit.cpp:2255-2257).
+        // Only a successful cast replaces the white swing (mangos-classic Unit.cpp:2633-2641 returns on SPELL_CAST_OK only; vmangos
+        // Unit.cpp:2250-2258 continues to CalculateMeleeDamage on a failed cast): a warrior who spent the rage still lands the white hit.
         using var rig = new Rig();
         rig.QueueHeroicStrike();
         SpellSystem.SetPower(rig.Caster, PowerType.Rage, 5);
@@ -179,8 +180,8 @@ public sealed class MeleeSpellLoopTests
         rig.Tick(50);
 
         Assert.Null(rig.Kit.System.GetState(rig.Caster.Guid)?.MeleeCast);
-        Assert.Equal(60u, rig.Target.Health);
-        Assert.Equal(0, rig.WhiteSwings);
+        Assert.True(rig.Target.Health < 60u);
+        Assert.Equal(1, rig.WhiteSwings);
         Assert.Equal((byte)SpellCastResult.NoPower, Packets(rig.CasterSession, WorldOpcode.SmsgCastResult).Single()[5]);
     }
 

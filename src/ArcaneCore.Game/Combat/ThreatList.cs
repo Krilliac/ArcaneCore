@@ -425,6 +425,14 @@ public sealed partial class ThreatList
         for (int attempt = 0; attempt < 2 && result is null; attempt++)
         {
             bool allowLowPriority = attempt == 1;
+            // The current victim is judged up front: a valid rival ranked ahead of it within 110% would otherwise end the walk
+            // ("nobody overtook it") before the loop reaches the victim's own entry, returning an invalid or second-choice victim.
+            // vmangos never holds such a ref in the walk (invalid refs are off its online list); its second-choice check is per entry.
+            if (current is not null && (!isValid(state, current.Target) || (!allowLowPriority && isLowPriority is not null && isLowPriority(current.Target))))
+            {
+                current = null;
+            }
+
             foreach (ThreatEntry entry in _entries)
             {
                 if (isOutOfArea is not null && isOutOfArea(state, entry.Target))

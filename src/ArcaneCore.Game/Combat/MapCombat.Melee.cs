@@ -352,9 +352,9 @@ public sealed partial class MapCombat
                     c.ResetAttackTimer(WeaponAttackType.BaseAttack);
                 }
 
-                if (player is not null)
+                if (PvpActor(attacker) is { } pvpActor)
                 {
-                    TogglePlayerPvpFlagOnAttackVictim(player, victim);
+                    TogglePlayerPvpFlagOnAttackVictim(pvpActor, victim);
                 }
 
                 if (!extraAttackPerformed && c.IsAttackReady(WeaponAttackType.BaseAttack))
@@ -1166,10 +1166,16 @@ public sealed partial class MapCombat
         }
     }
 
+    /// <summary>
+    /// The player whose PvP flag a unit's hostile act touches: the unit itself for a player, else the player behind a pet, guardian, totem or
+    /// charmed unit (vmangos Unit::GetAffectingPlayer, used by TogglePlayerPvPFlagOnAttackVictim and SetInCombatWithAggressor, Unit.cpp:5959-6053).
+    /// </summary>
+    private static Player? PvpActor(Unit unit) => unit as Player ?? DuelRules.ControllingPlayer(unit);
+
     /// <summary>vmangos Unit::SetOutOfCombatWithVictim: flag the attacker, do not enter combat (touchOnly).</summary>
     private static void SetOutOfCombatWithVictim(Unit attacker, Unit victim)
     {
-        if (attacker is Player player)
+        if (PvpActor(attacker) is { } player)
         {
             TogglePlayerPvpFlagOnAttackVictim(player, victim, touchOnly: true);
         }
@@ -1183,7 +1189,9 @@ public sealed partial class MapCombat
     private void SetInCombatWithAggressor(Unit victim, Unit aggressor, string caller)
     {
         // Duel opponents do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith).
-        if ((aggressor.UnitFlags & UnitFlags.Pvp) != 0 && victim is Player pv && aggressor is Player pa && !ReferenceEquals(pv, pa)
+        // Both sides resolve to the player behind them (vmangos Unit.cpp:5959-5975 reads GetAffectingPlayer), so a pet's or totem's hit
+        // pulses its owner's PvP combat too.
+        if (PvpActor(aggressor) is { } pa && (pa.UnitFlags & UnitFlags.Pvp) != 0 && PvpActor(victim) is { } pv && !ReferenceEquals(pv, pa)
             && !DuelRules.IsInDuelWith(pv, pa))
         {
             pv.Combat.InPvpCombat = true;
@@ -1203,7 +1211,7 @@ public sealed partial class MapCombat
     /// <summary>vmangos Unit::SetInCombatWithVictim (Unit.cpp:6070): PvP flag on attack, then combat (5.5 s when the victim uses the PvP combat timer).</summary>
     private void SetInCombatWithVictim(Unit attacker, Unit victim, string caller)
     {
-        if (attacker is Player player)
+        if (PvpActor(attacker) is { } player)
         {
             TogglePlayerPvpFlagOnAttackVictim(player, victim);
         }
