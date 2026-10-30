@@ -781,7 +781,9 @@ public sealed partial class SummonService
             {
                 creature.UnitFlags &= ~UnitFlags.PetRename;
             }
-            PetInitializer.InitStatsForLevel(creature, owner, snapshot.Level, Content);
+            // LoadPetFromDB ends with SynchronizeLevelWithOwner (Pet.cpp:413); a HUNTER_PET above its owner drops to the owner's level (Pet.cpp:2353-2356).
+            int loadLevel = owner.Class == Class.Hunter ? Math.Min((int)snapshot.Level, (int)owner.Level) : snapshot.Level;
+            PetInitializer.InitStatsForLevel(creature, owner, loadLevel, Content);
             creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, PetXpForLevel(creature.Level)); // ObjectMgr::GetXPForPetLevel
             creature.SetUInt32(UpdateFields.UnitFieldPetNameTimestamp, snapshot.NameTimestamp);
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, snapshot.Experience);

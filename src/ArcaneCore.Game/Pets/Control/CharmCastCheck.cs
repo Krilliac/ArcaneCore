@@ -43,7 +43,7 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
 
             // SPELL_EFFECT_SUMMON, SUMMON_PHANTASM, SUMMON_DEMON and SUMMON_PET (Spell.cpp:6124-6141): a caster that charms something
             // uncharms it first when the spell has SPELL_ATTR_EX_DISMISS_PET_FIRST, else ALREADY_HAVE_CHARM. (The old-pet half,
-            // ALREADY_HAVE_SUMMON, is SummonService's.)
+            // UnsummonOldPetBeforeNewSummon, is SummonService.UnsummonOldPetBeforeNewSummon, which refuses the summon.)
             if (effect.Effect is SpellEffectName.Summon or SpellEffectName.SummonPhantasm or SpellEffectName.SummonDemon or SpellEffectName.SummonPet
                 && !caster.CharmGuid.IsEmpty)
             {
