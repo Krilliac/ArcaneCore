@@ -21,14 +21,20 @@
       lease; docs/areas/gateway.md, "Node role and realm authority leases").
       The link secret (at least 16 characters) comes from -LinkSecret or the ARCANECORE_CLUSTER_LINK_SECRET environment variable, never a
       default. It goes only into the console's environment (Cluster__Worker__LinkSecret, Gateway__LinkSecret), never onto a command line, and
-      is never printed. Every child of the supervisor inherits that environment, the Realm included.
+      is never printed. Every child of the supervisor inherits that environment, the Realm included. The same environment also reaches the
+      hidden diagnostics sidecar and dotnet-counters (launch-daemon.ps1 starts them from the supervisor console) and is part of the
+      memory of the supervisor and every child, so it appears in a full crash dump or hang dump: keep the dumps private.
   The world child is also given --Cluster:Supervisor:Enabled=false on its command line: it inherits the supervisor's Cluster__Supervisor__
   variables and a World that finds them with ARCANECORE_SUPERVISED_CHILD set refuses to start (exit 78).
+  MinClusterProcesses equals the child count by default and the supervisor stops everything when fewer remain (StopWhenBelowMinimum is
+  on): if it gives up on a crash-looping gateway or realm, the whole cluster stops, not just that child.
+  In cluster mode the diagnostics sidecar (-Diagnostics Max) collects counters from the supervisor process, not from the world child.
   A second World (a standby worker, several map workers) is not started: all worlds of a realm share one characters database and one
   writer lock, so only a worker, the standby handoff target, can coexist, and that is not hosted by a launcher yet.
 
   What it waits for: the supervisor process stays alive, then each child (a child of the supervisor) listens on its port (Auth:Port, World:Port,
-  gateway port) and stays up a few seconds. A refusal (below MinClusterProcesses, capacity) shows as the supervisor exiting: the script stops
+  gateway port) and stays up a few seconds. A child that exits while it starts is relaunched by the supervisor, so the wait follows the
+  image's next process within -StartTimeoutSec instead of failing; the status and debugger windows still open. A refusal (below MinClusterProcesses, capacity) shows as the supervisor exiting: the script stops
   with a message and leaves the windows open.
 
   Hang evidence: the world child gets HangCapture = -HangCapture (default Dump): when the supervisor kills it for a missed heartbeat it first
@@ -36,27 +42,29 @@
   are <name>-<pid>-<UTC stamp>.dmp in <LiveHome>\dumps, the directory LiveDiagnostics retention already caps (*.dmp); Stacks writes
   <name>-<pid>-<stamp>.stacks.txt with dotnet-stack to <LiveHome>\logs\hangstacks instead (that retention filter does not match the
   name, so those are not trimmed). A full dump is gigabytes and holds secrets (session keys, hashes in flight): the supervisor needs about a
-  minute per 7 GB, so -HangCaptureTimeoutSeconds is 300 or more. The crash-dump variables (DOTNET_DbgEnableMiniDump, DOTNET_DbgMiniDumpName,
+  minute per 7 GB, so the default -HangCaptureTimeoutSeconds is 300 (the World accepts 1 to 3600; -Plan warns when Dump is chosen with a
+  value under 120, which cuts a large dump off). The crash-dump variables (DOTNET_DbgEnableMiniDump, DOTNET_DbgMiniDumpName,
   ...) of the supervisor console are inherited by every child, so a crashing child dumps too, but all children share the World pattern
   world-%p-%t.dmp (and one createdump log): the pid in the name tells the processes apart.
 
   Status window: server-status.ps1 WITHOUT -Supervise (the cluster supervisor owns restarts) with the cluster's World/Auth ports and the world
   child's heartbeat file (-HeartbeatPath, default <LiveHome>\logs\world.heartbeat, passed to the world as Ops:Watchdog:Heartbeat:Mode=File).
-  Debugger window: attach-debugger.ps1 -SupervisorPid: attaches to the supervisor and to every ArcaneCore.* child, and keeps attaching to the
-  children it relaunches (new PIDs), polling every 2 s; KillOnExit stays false, so closing it detaches. -NoDebugger skips it, -NoStatus skips
+  Debugger window: attach-debugger.ps1 -SupervisorPid: attaches to every ArcaneCore.* child of the supervisor but never to the supervisor
+  itself, and keeps attaching to the children it relaunches (new PIDs), polling every 2 s; KillOnExit stays false, so closing it detaches. -NoDebugger skips it, -NoStatus skips
   the status window. It attaches for Debug and Release builds alike. Every window title carries the build found in <LiveHome>\bin:
   "ArcaneCore.World supervisor (Debug, live)" (Debug, Release, Mixed or unknown; read from assembly metadata without loading it).
 
-  WARNING (debugger and the supervisor's hang kill): a Win32 debugger stops the whole target on every debug event until the debugger console
-  continues it (docs/ops/tooling.md). The supervisor drains and kills (and relaunches) a child that sends no `alive` heartbeat for
-  -HangTimeoutSeconds (default 120 s; the watch is armed by the first beat). A burst of CLR first-chance exceptions alone does not do that:
-  each event is a round trip that this debugger continues at once (it logs the first 10 and every 500th), so the child slows down: measured
-  with a throwaway pwsh process throwing and catching exceptions in a tight loop, about 60000 a second alone and about 4500 a second attached
-  (roughly 0.2 ms of whole-process stop per exception). A World would have to throw several thousand exceptions a second, sustained for the
-  whole timeout, to starve the heartbeat; ordinary rates (tens to hundreds a second) cost a few percent. What does cause a hang kill is the
-  debugger console itself stopping (text selected in it, the machine paging or out of memory): the target then stays stopped at its next
-  event and is killed 120 s later and relaunched. A relaunched child is attached again, but the kill is real. Raise -HangTimeoutSeconds
-  (or use 0 for no hang detection; allowed values 0 and 30 to 3600) or pass -NoDebugger when a debugging session must not cost a restart.
+  WARNING (debugger): a Win32 debugger stops the whole target on every debug event until it continues it (docs/ops/tooling.md). The
+  debugger window continues each event at once and logs through bounded queues drained by separate writer threads, so a stalled debugger
+  console (text selected in it, the machine paging) does not keep a child stopped: log lines are dropped and counted ("N lines dropped")
+  instead of blocking. It is never attached to the supervisor, because a stopped supervisor stops reading its Merged children's stdout,
+  which blocks every child and races the hang watch. What remains: (1) an exception-heavy child is slowed by one whole-process stop per
+  exception (measured with a throwaway pwsh process: about 60000 exceptions a second alone, about 4500 attached, roughly 0.2 ms each), and
+  a child would have to throw thousands a second for the whole -HangTimeoutSeconds (default 120 s; the watch is armed by the first beat) to
+  starve its heartbeat; (2) with -HangCapture Dump, when a child that this debugger has stopped is judged hung, the supervisor's dump
+  request goes through the child's diagnostics endpoint and can wait up to -HangCaptureTimeoutSeconds before the supervisor kills it
+  anyway. Raise -HangTimeoutSeconds (0 turns hang detection off; allowed values 0 and 30 to 3600) or pass -NoDebugger when a debugging
+  session must not cost a restart.
 
   Locations come from ARCANECORE_LIVE_HOME and ARCANECORE_LIVE_PROFILE (or -LiveHome / -Profile); see docs/ops/tooling.md.
 .PARAMETER Plan
@@ -85,7 +93,8 @@ param(
     [ValidateSet('Merged', 'Window', 'None')][string]$ChildConsole = 'Merged',
     # What the supervisor captures from the world child before it kills it as hung (see the help). Stacks needs dotnet-stack.
     [ValidateSet('None', 'Stacks', 'Dump')][string]$HangCapture = 'Dump',
-    [ValidateRange(300, 3600)][int]$HangCaptureTimeoutSeconds = 300,
+    # The World accepts 1 to 3600; a full dump of a large World takes minutes, so -Plan warns when Dump is chosen with less than 120.
+    [ValidateRange(1, 3600)][int]$HangCaptureTimeoutSeconds = 300,
     [switch]$Gateway,
     [ValidateRange(1, 65535)][int]$GatewayPort = 8086,
     [ValidateRange(1, 65535)][int]$WorkerPort = 8095,
@@ -254,11 +263,11 @@ function New-StatusStep {
 function New-DebuggerStep([string]$SupervisorPid) {
     $title = Get-LiveWindowTitle -Name 'ArcaneCore Win32 debugger' -Configuration $configuration
     [pscustomobject]@{
-        Name        = 'debugger: attach-debugger.ps1 -SupervisorPid (attaches to the supervisor and to each child, new PIDs after a restart included; KillOnExit off)'
+        Name        = 'debugger: attach-debugger.ps1 -SupervisorPid (attaches to each child, never the supervisor; new PIDs after a restart included; KillOnExit off)'
         Title       = $title
         Command     = Get-LiveWindowCommand -Script $debuggerScript -Arguments @('-SupervisorPid', $SupervisorPid, '-LiveHome', $LiveHome, '-WindowTitle', $title)
         Environment = $null; Wait = $null
-        Note        = "a debug event stops the target until this window continues it; a child silent for $(if ($HangTimeoutSeconds -eq 0) { '(hang detection is off)' } else { "$HangTimeoutSeconds s" }) is killed as hung: see the help"
+        Note        = "a debug event stops the target until this window continues it (at once; console output goes through a bounded queue, so a stalled console drops lines instead of stopping a child); an exception-heavy child is slowed per exception$(if ($HangCapture -eq 'Dump') { "; a dump request for a debugger-stopped child can wait up to $HangCaptureTimeoutSeconds s before the kill" }): see the help"
     }
 }
 
@@ -270,6 +279,10 @@ foreach ($child in $children.Values) {
 if (-not $NoStatus) { $steps += New-StatusStep }
 if (-not $NoDebugger) { $steps += New-DebuggerStep '<supervisor pid>' }
 
+$launchWarnings = @()
+if ($HangCapture -eq 'Dump' -and $HangCaptureTimeoutSeconds -lt 120) {
+    $launchWarnings += "WARNING: -HangCapture Dump with -HangCaptureTimeoutSeconds $HangCaptureTimeoutSeconds (under 120): a full dump of the World usually takes longer, so the supervisor kills the child before the dump is complete."
+}
 $crashDumpPattern = (New-SupervisorStep).Environment['DOTNET_DbgMiniDumpName']
 $secrets = if ($secret) { @($secret) } else { @() }
 if ($planOnly) {
@@ -285,7 +298,7 @@ if ($planOnly) {
         $(if ($crashDumpPattern) { "crash dumps: inherited by every child from the supervisor console (DOTNET_DbgEnableMiniDump=1), file pattern $crashDumpPattern shared by all children; the pid tells them apart" } else { 'crash dumps: not set by this launch (-Diagnostics Standard, or kept from the environment)' }),
         "diagnostics $Diagnostics, GC high-memory threshold $GCHighMemPercent%",
         $(if ($problems.Count -eq 0) { 'preflight:  ok (no live daemon running, ports free)' } else { 'preflight:  a real run would REFUSE: ' + ($problems -join ' ') })
-    )
+    ) + $launchWarnings
     Write-LivePlan -Heading 'start-cluster' -Header $header -Steps $steps -Secrets $secrets
     exit 0
 }
@@ -295,6 +308,7 @@ if (-not $IsWindows) { throw 'start-cluster.ps1 starts console windows and a Win
 $problems = @(Get-LiveLaunchProblems -Ports $portMap -ExtraImages $(if ($Gateway) { @('ArcaneCore.Gateway') } else { @() }))
 if ($problems.Count -gt 0) { throw "refusing to start: $($problems -join ' ')" }
 Write-Host "build $configuration ($($build.Detail))"
+foreach ($launchWarning in $launchWarnings) { Write-Warning $launchWarning }
 Write-Host 'starting the cluster supervisor ...'
 $supervisorStep = New-SupervisorStep
 # The console inherits these; the secret is in this process's environment only for the duration of the call.
@@ -304,7 +318,7 @@ Write-Host "supervisor is up: pid $($supervisor.Id)"
 $running = @($supervisor)
 foreach ($child in $children.Values) {
     $port = switch ($child.Key) { 'realm' { $authPortValue } 'world' { $worldPortValue } default { $GatewayPort } }
-    $process = Wait-LiveDaemonUp -Label "child '$($child.Key)'" -ParentPid $supervisor.Id -ImageName ([IO.Path]::GetFileName($child.Executable)) -Port $port -TimeoutSec $StartTimeoutSec -WatchPid $supervisor.Id
+    $process = Wait-LiveDaemonUp -Label "child '$($child.Key)'" -ParentPid $supervisor.Id -ImageName ([IO.Path]::GetFileName($child.Executable)) -Port $port -TimeoutSec $StartTimeoutSec -WatchPid $supervisor.Id -FollowRelaunch
     Write-Host "child '$($child.Key)' is up: pid $($process.Id), port $port"
     $running += $process
 }

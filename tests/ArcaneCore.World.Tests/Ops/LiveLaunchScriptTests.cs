@@ -2,7 +2,12 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
+using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Configuration.Conf;
+using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.Cluster.Supervision;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Ops;
@@ -111,14 +116,14 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("DOTNET_GCHighMemPercent=0x61", output, StringComparison.Ordinal);
         Assert.Contains("realm.debug.", output, StringComparison.Ordinal);
         Assert.Contains("world.debug.", output, StringComparison.Ordinal);
-        Assert.Contains("(read-only)", output, StringComparison.Ordinal);
+        Assert.Contains("(read-only; nothing restarts a daemon here: use start-cluster.ps1 for that)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("-Supervise", output, StringComparison.Ordinal);
         Assert.Contains("attach-debugger.ps1 -RealmPid", output, StringComparison.Ordinal);
         Assert.DoesNotContain(Directory.GetDirectories(_home), d => Path.GetFileName(d) != "bin"); // no logs, dumps or snapshots were created
     }
 
     [PwshFact]
-    public void StartSingle_Plan_Switches_DropWindows_AndPassSupervise()
+    public void StartSingle_Plan_Switches_DropWindows()
     {
         BuildBin(("ArcaneCore.Kernel.dll", 0x2, "Release"));
         (_, string noExtras, _) = RunLauncher("start-single.ps1", ["-Plan", "-NoStatus", "-NoDebugger"]);
@@ -126,14 +131,28 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.DoesNotContain("server-status.ps1", noExtras, StringComparison.Ordinal);
         Assert.DoesNotContain("attach-debugger.ps1", noExtras, StringComparison.Ordinal);
 
-        (_, string supervised, _) = RunLauncher("start-single.ps1", ["-WhatIf", "-NoDebugger", "-Supervise"]);
-        Assert.Contains("status: server-status.ps1 -Supervise", supervised, StringComparison.Ordinal);
-        Assert.Contains("server-status.ps1", supervised, StringComparison.Ordinal);
-        Assert.Contains(" -Supervise -HangKillSeconds 90", supervised, StringComparison.Ordinal);
+        (_, string statusOnly, _) = RunLauncher("start-single.ps1", ["-WhatIf", "-NoDebugger"]);
+        Assert.Contains("server-status.ps1", statusOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain(" -Supervise", statusOnly, StringComparison.Ordinal);
+        Assert.DoesNotContain("HangKillSeconds", statusOnly, StringComparison.Ordinal);
     }
 
     [PwshTheory]
-    [InlineData("-Supervise -NoStatus", "-Supervise needs the status window")]
+    [InlineData("-Plan -Supervise")]
+    [InlineData("-WhatIf -Supervise -NoDebugger")]
+    [InlineData("-Supervise -NoStatus")]
+    public void StartSingle_NoLongerOffersSupervise_ItIsRefusedWithAMessagePointingAtStartCluster(string arguments)
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, bool started) = RunLauncher("start-single.ps1", [.. arguments.Split(' ')]);
+        Assert.NotEqual(0, code);
+        Assert.Contains("-Supervise is not offered by start-single.ps1", output, StringComparison.Ordinal);
+        Assert.Contains("start-cluster.ps1", output, StringComparison.Ordinal);
+        Assert.False(started);
+        Assert.DoesNotContain("PLAN start-single", output, StringComparison.Ordinal);
+    }
+
+    [PwshTheory]
     [InlineData("-AuthPort 8090 -WorldPort 8090", "cannot share a port")]
     [InlineData("-AuthPort 70000", "70000")]
     [InlineData("-GCHighMemPercent 10", "10")]
@@ -292,7 +311,8 @@ public sealed class LiveLaunchScriptTests : IDisposable
     [InlineData("-Gateway -WorkerAddress not-an-ip", "not an IP address", Secret)]
     [InlineData("-MinClusterProcesses 3", "more than the 2 process", null)]
     [InlineData("-HangTimeoutSeconds 10", "HangTimeoutSeconds", null)]
-    [InlineData("-HangCaptureTimeoutSeconds 60", "HangCaptureTimeoutSeconds", null)]
+    [InlineData("-HangCaptureTimeoutSeconds 0", "HangCaptureTimeoutSeconds", null)]
+    [InlineData("-HangCaptureTimeoutSeconds 3601", "HangCaptureTimeoutSeconds", null)]
     [InlineData("-HangCapture Everything", "Everything", null)]
     [InlineData("-ChildConsole Loud", "Loud", null)]
     [InlineData("-RealmId 0", "RealmId", null)]
@@ -307,6 +327,152 @@ public sealed class LiveLaunchScriptTests : IDisposable
         {
             Assert.DoesNotContain(linkSecret, output, StringComparison.Ordinal);
         }
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_AcceptsTheWorldsMinimumHangCaptureTimeout_AndWarnsOnlyForDumpUnder120()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string one, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", "-HangCaptureTimeoutSeconds", "1"]);
+        Assert.Equal(0, code);
+        Assert.False(started);
+        Assert.Contains("      Cluster__Supervisor__HangCaptureTimeoutSeconds=1", one, StringComparison.Ordinal);
+        Assert.Contains("WARNING: -HangCapture Dump with -HangCaptureTimeoutSeconds 1 (under 120)", one, StringComparison.Ordinal);
+
+        (_, string edge, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-HangCaptureTimeoutSeconds", "119"]);
+        Assert.Contains("WARNING: -HangCapture Dump with -HangCaptureTimeoutSeconds 119", edge, StringComparison.Ordinal);
+        (_, string ok, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-HangCaptureTimeoutSeconds", "120"]);
+        Assert.DoesNotContain("WARNING", ok, StringComparison.Ordinal);
+        (_, string def, _) = RunLauncher("start-cluster.ps1", ["-Plan"]);
+        Assert.DoesNotContain("WARNING", def, StringComparison.Ordinal);
+        (_, string none, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-HangCapture", "None", "-HangCaptureTimeoutSeconds", "1"]);
+        Assert.DoesNotContain("WARNING", none, StringComparison.Ordinal);
+    }
+
+    // ---- the plan's Cluster__ environment and child arguments are what the World and the daemons accept -----------------------------------
+
+    [PwshTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StartCluster_PlanEnvironment_BindsLikeTheWorldDoes_Validates_AndTheChildArgumentsParse(bool gatewayMapWorker)
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        string[] arguments = gatewayMapWorker ? ["-Plan", "-Gateway", "-MapWorker"] : ["-Plan"];
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", arguments, gatewayMapWorker ? Secret : null);
+        Assert.Equal(0, code);
+        Assert.False(started);
+
+        // The supervisor console's environment, as the plan prints it. The environment-variable provider turns "__" into ":".
+        var settings = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (string line in output.Split('\n'))
+        {
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(line.TrimEnd('\r'), "^ {6}(Cluster__[A-Za-z0-9_]+)=(.*)$");
+            if (match.Success)
+            {
+                settings[match.Groups[1].Value.Replace("__", ":", StringComparison.Ordinal)] = match.Groups[2].Value;
+            }
+        }
+
+        Assert.Equal("true", settings["Cluster:Supervisor:Enabled"]);
+        IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var options = new ClusterSupervisorOptions();
+        configuration.GetSection(ClusterSupervisorOptions.SectionName).Bind(options);
+        Assert.True(options.Enabled);
+        Assert.Equal(gatewayMapWorker ? 3 : 2, options.Processes.Count);
+        Assert.Equal(options.Processes.Count, options.MinClusterProcesses);
+        Assert.Empty(options.Validate());
+        Assert.DoesNotContain(new ClusterSupervisorConfigChecks().Check(configuration), issue => issue.Severity == ConfigSeverity.Error);
+        Assert.All(options.Processes.Values, process => process.Validate());
+        Assert.Equal(gatewayMapWorker ? "worker" : "combined", options.Processes["world"].Role);
+        Assert.Equal(SupervisedConsoleMode.Merged, options.Processes["realm"].Console);
+        Assert.Equal(SupervisedHangCaptureMode.Dump, options.Processes["world"].HangCapture);
+
+        // Each child's command line goes through the daemon's own pre-host parser; the gateway has no such parser, so its tokens are only
+        // checked for the --Section:Key=value shape.
+        foreach ((string key, SupervisedProcessConfig process) in options.Processes)
+        {
+            string[] childArguments = SplitWindowsCommandLine(process.Arguments);
+            Assert.NotEmpty(childArguments);
+            if (key == "gateway")
+            {
+                Assert.All(childArguments, token => Assert.Matches("^--[A-Za-z][A-Za-z0-9:_.]*=.+$", token));
+                continue;
+            }
+
+            ConfigDaemon daemon = key == "realm" ? ConfigDaemon.Realm : ConfigDaemon.World;
+            DaemonCommand command = DaemonCommandLine.Parse(childArguments, daemon, ConfCatalog.Embedded);
+            Assert.True(command.Kind == DaemonCommandKind.Run, $"{key}: {command.Kind} {command.Message} (arguments: {process.Arguments})");
+            Assert.Equal(childArguments.Length, command.HostArgs.Count);
+        }
+
+        // The parser is not vacuous: a mistyped key is refused.
+        Assert.Equal(DaemonCommandKind.UsageError, DaemonCommandLine.Parse(["--Cluster:Supervisor:Enabeld=false"], ConfigDaemon.World, ConfCatalog.Embedded).Kind);
+    }
+
+    // ---- waiting for a supervised child that is relaunched during startup ---------------------------------------------------------------
+
+    [PwshFact]
+    public void WaitLiveDaemonUp_FollowRelaunch_WaitsForTheNextProcess_AndWithoutItAnEarlyExitThrows()
+    {
+        const string preamble = """
+            $quick = Start-Process pwsh -ArgumentList '-NoProfile','-Command','exit 3' -PassThru -WindowStyle Hidden
+            $quick.WaitForExit()
+            $long = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -PassThru -WindowStyle Hidden
+            $script:calls = 0
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) $script:calls++; if ($script:calls -eq 1) { return $quick } elseif ($script:calls -le 3) { return $null } else { return $long } }
+            function Get-LivePortOwner { param($Port) if ($script:calls -ge 4) { return $long.Id } else { return 0 } }
+            """;
+        string followed = RunPwsh(preamble + """
+
+            try {
+                $up = Wait-LiveDaemonUp -Label 'child w' -ParentPid $PID -ImageName 'x.exe' -Port 4242 -TimeoutSec 30 -SettleSeconds 0 -FollowRelaunch
+                "followed: $($up.Id -eq $long.Id) calls: $($script:calls)"
+            } finally { $long.Kill() }
+            """);
+        Assert.Contains("followed: True calls: 4", followed, StringComparison.Ordinal);
+        Assert.Contains("exited before it was up (exit code 3)", followed, StringComparison.Ordinal);
+        Assert.Contains("its supervisor relaunches it", followed, StringComparison.Ordinal);
+
+        string strict = RunPwsh(preamble + """
+
+            try {
+                Wait-LiveDaemonUp -Label 'daemon w' -ParentPid $PID -ImageName 'x.exe' -Port 4242 -TimeoutSec 30 -SettleSeconds 0
+                'returned'
+            } catch { "threw: $($_.Exception.Message)" } finally { $long.Kill() }
+            """);
+        Assert.Contains("threw: daemon w (pid", strict, StringComparison.Ordinal);
+        Assert.Contains("exited before it was up (exit code 3)", strict, StringComparison.Ordinal);
+        Assert.DoesNotContain("returned", strict, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void WaitLiveDaemonUp_FollowRelaunch_StillStopsWhenTheSupervisorIsGone()
+    {
+        string output = RunPwsh("""
+            $gone = Start-Process pwsh -ArgumentList '-NoProfile','-Command','exit 0' -PassThru -WindowStyle Hidden
+            $gone.WaitForExit()
+            function Find-LiveChildProcess { param($ParentPid, $ImageName) return $null }
+            try { Wait-LiveDaemonUp -Label 'child w' -ParentPid $PID -ImageName 'x.exe' -Port 4242 -TimeoutSec 30 -SettleSeconds 0 -WatchPid $gone.Id -FollowRelaunch; 'returned' }
+            catch { "threw: $($_.Exception.Message)" }
+            """);
+        Assert.Contains("threw: child w is not up and the process that launches it", output, StringComparison.Ordinal);
+    }
+
+    // ---- the debugger script ------------------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public void AttachDebugger_LogsThroughBoundedQueues_AndNeverAttachesToTheSupervisor()
+    {
+        string source = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1"));
+        Assert.DoesNotContain("LogLock", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("File.AppendAllText(logPath", source, StringComparison.Ordinal);
+        Assert.Contains("new BlockingCollection<string>(QueueCapacity)", source, StringComparison.Ordinal);
+        Assert.Contains("queue.TryAdd(line)", source, StringComparison.Ordinal); // never Add(): a full queue must not block a debug loop
+        Assert.DoesNotContain("queue.Add(", source, StringComparison.Ordinal);
+        Assert.Contains("lines dropped", source, StringComparison.Ordinal);
+        // The only AttachAsync calls are the two daemon PIDs and the supervisor's children.
+        Assert.DoesNotContain("AttachAsync($SupervisorPid", source, StringComparison.Ordinal);
+        Assert.Contains("if ($childPid -eq $SupervisorPid) { continue }", source, StringComparison.Ordinal);
     }
 
     [PwshFact]
@@ -400,6 +566,87 @@ public sealed class LiveLaunchScriptTests : IDisposable
 
         (int code, string output) = Execute(start);
         return (code, output, File.Exists(marker));
+    }
+
+    /// <summary>Dot-sources LiveLaunch.ps1, runs the script body in the same scope (so it can redefine its helper functions) and returns everything it wrote.</summary>
+    private string RunPwsh(string body)
+    {
+        string script = Path.Combine(_root, "run-" + Guid.NewGuid().ToString("N") + ".ps1");
+        File.WriteAllText(script, "$ErrorActionPreference = 'Stop'\n. '" + Q(Path.Combine(LiveDir, "LiveLaunch.ps1")) + "'\n" + body, new UTF8Encoding(false));
+        var start = NewPwsh();
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(script);
+        (int code, string output) = Execute(start);
+        Assert.True(code == 0, $"pwsh exited {code}: {output}");
+        return output;
+    }
+
+    /// <summary>Splits a Windows command line the way the C runtime does (quotes group, backslashes before a quote escape it).</summary>
+    private static string[] SplitWindowsCommandLine(string commandLine)
+    {
+        var result = new List<string>();
+        var current = new StringBuilder();
+        bool inQuotes = false;
+        bool started = false;
+        for (int i = 0; i < commandLine.Length; i++)
+        {
+            char c = commandLine[i];
+            if (c == '\\')
+            {
+                int slashes = 0;
+                while (i < commandLine.Length && commandLine[i] == '\\')
+                {
+                    slashes++;
+                    i++;
+                }
+
+                if (i < commandLine.Length && commandLine[i] == '"')
+                {
+                    current.Append('\\', slashes / 2);
+                    if (slashes % 2 == 1)
+                    {
+                        current.Append('"');
+                    }
+                    else
+                    {
+                        inQuotes = !inQuotes;
+                    }
+                }
+                else
+                {
+                    current.Append('\\', slashes);
+                    i--;
+                }
+
+                started = true;
+            }
+            else if (c == '"')
+            {
+                inQuotes = !inQuotes;
+                started = true;
+            }
+            else if (char.IsWhiteSpace(c) && !inQuotes)
+            {
+                if (started)
+                {
+                    result.Add(current.ToString());
+                    current.Clear();
+                    started = false;
+                }
+            }
+            else
+            {
+                current.Append(c);
+                started = true;
+            }
+        }
+
+        if (started)
+        {
+            result.Add(current.ToString());
+        }
+
+        return [.. result];
     }
 
     /// <summary>Dot-sources LiveLaunch.ps1, evaluates the expression and returns its string form.</summary>

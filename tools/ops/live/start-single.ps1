@@ -9,17 +9,20 @@
      After each one it waits until the process is alive and listening on its port (Auth:Port for the Realm, World:Port for the World, from
      the profile's appsettings.json unless -AuthPort/-WorldPort are given) and stays up for a few seconds; the Realm must be up before the
      World starts. A daemon that exits or is not up within -StartTimeoutSec stops the script with a message (nothing is stopped).
-  3. Opens the status window (tools/ops/diag/server-status.ps1: read-only; -Supervise passes through and lets that window restart a
-     crashed or hung daemon, single host only) and the debugger window (tools/ops/diag/attach-debugger.ps1 with both PIDs). -NoStatus and
-     -NoDebugger skip them.
+  3. Opens the status window (tools/ops/diag/server-status.ps1, always read-only here) and the debugger window
+     (tools/ops/diag/attach-debugger.ps1 with both PIDs). -NoStatus and -NoDebugger skip them.
+  Nothing restarts a daemon that exits or hangs. There is no -Supervise: server-status.ps1 -Supervise restarts only from
+  <Profile>\standard-processes.json (written by deploy-live.py, pointing at an older artifact directory), so on a stale heartbeat it would
+  kill the World this script started and then fail to relaunch it, or relaunch an old build. start-cluster.ps1 is the supervised option
+  (the cluster host supervisor restarts what it launched).
   Every window title carries the build found in <LiveHome>\bin: "ArcaneCore.World (Debug, live)" (Debug, Release, Mixed or unknown; read
   from the assemblies' DebuggableAttribute / AssemblyConfigurationAttribute without loading them). The debugger attaches for either build.
 
-  WARNING (debugger): while a Win32 debugger is attached, every debug event stops the whole daemon until the debugger console continues it
-  (docs/ops/tooling.md). The local tools/ops/diag/server-status.ps1 -Supervise kills a World whose heartbeat file is older than
-  -HangKillSeconds (90 s): a debugger console that stalls (text selected in it, the machine paging) stalls the World past that and the
-  status window then kills and restarts it. A burst of first-chance exceptions alone only slows the World; it takes a rate in the
-  thousands a second sustained for the whole window to look hung. Use -NoDebugger when the World must not be touched by one.
+  WARNING (debugger): while a Win32 debugger is attached, every debug event stops the whole daemon until the debugger continues it
+  (docs/ops/tooling.md). attach-debugger.ps1 continues each event at once and logs through a bounded queue drained by a separate writer
+  thread, so a stalled debugger console (text selected in it, the machine paging) does not hold a daemon stopped; lines are dropped
+  (and counted) instead. The remaining risk is an exception-heavy target: it is slowed by a whole-process stop per exception (about
+  0.2 ms each). Nothing here kills a slow World. Use -NoDebugger when the World must not be touched by a debugger at all.
 
   Locations come from ARCANECORE_LIVE_HOME and ARCANECORE_LIVE_PROFILE (or -LiveHome / -Profile); see docs/ops/tooling.md.
 .PARAMETER Plan
@@ -28,7 +31,7 @@
 .EXAMPLE
   pwsh -NoProfile -File tools/ops/live/start-single.ps1 -Plan
 .EXAMPLE
-  pwsh -NoProfile -File tools/ops/live/start-single.ps1 -Supervise -NoDebugger
+  pwsh -NoProfile -File tools/ops/live/start-single.ps1 -NoDebugger
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -43,9 +46,8 @@ param(
     [ValidateRange(10, 3600)][int]$StartTimeoutSec = 600,
     [switch]$NoStatus,
     [switch]$NoDebugger,
-    # Passed to server-status.ps1: that window restarts a crashed or hung daemon (single host only).
+    # Removed: refused with a message (see the help). Kept as a parameter only so the refusal can name start-cluster.ps1.
     [switch]$Supervise,
-    [ValidateRange(30, 3600)][int]$HangKillSeconds = 90,
     [switch]$Plan
 )
 $ErrorActionPreference = 'Stop'
@@ -55,6 +57,7 @@ $WhatIfPreference = $false
 . (Join-Path $PSScriptRoot 'LiveLaunch.ps1')
 
 # ---- validate everything before anything starts --------------------------------------------------------------------------------------
+if ($Supervise) { throw '-Supervise is not offered by start-single.ps1: the status window can restart only from the profile''s standard-processes.json (an older artifact directory), not the build this script starts. Use start-cluster.ps1, whose supervisor restarts what it launched.' }
 $LiveHome = Resolve-LiveHome $LiveHome
 $LiveProfile = Resolve-LiveProfile $LiveProfile
 $bin = Join-Path $LiveHome 'bin'
@@ -63,7 +66,6 @@ foreach ($role in 'Realm', 'World') {
     if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "$exe not found: deploy a build to the live home first (tools/ops/live/redeploy.ps1)." }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $LiveProfile 'appsettings.json') -PathType Leaf)) { throw "no appsettings.json in the profile directory $LiveProfile" }
-if ($Supervise -and $NoStatus) { throw '-Supervise needs the status window: it is the status window that supervises. Drop -NoStatus or -Supervise.' }
 $profilePorts = Get-LiveProfilePorts -LiveProfile $LiveProfile
 if (-not $PSBoundParameters.ContainsKey('AuthPort')) { $AuthPort = $profilePorts.Auth }
 if (-not $PSBoundParameters.ContainsKey('WorldPort')) { $WorldPort = $profilePorts.World }
@@ -90,9 +92,8 @@ function New-DaemonStep([string]$Role, [int]$Port) {
 function New-StatusStep {
     $statusArgs = @('-Profile', $LiveProfile, '-WorldPort', [string]$WorldPort, '-AuthPort', [string]$AuthPort,
         '-WindowTitle', (Get-LiveWindowTitle -Name 'ArcaneCore status' -Configuration $configuration))
-    if ($Supervise) { $statusArgs += @('-Supervise', '-HangKillSeconds', [string]$HangKillSeconds) }
     [pscustomobject]@{
-        Name        = 'status: server-status.ps1 ' + $(if ($Supervise) { '-Supervise (restarts a crashed or hung daemon, single host)' } else { '(read-only)' })
+        Name        = 'status: server-status.ps1 (read-only; nothing restarts a daemon here: use start-cluster.ps1 for that)'
         Title       = Get-LiveWindowTitle -Name 'ArcaneCore status' -Configuration $configuration
         Command     = Get-LiveWindowCommand -Script $statusScript -Arguments $statusArgs
         Environment = $null; Wait = $null; Note = $null
@@ -106,7 +107,7 @@ function New-DebuggerStep([string]$RealmPid, [string]$WorldPid) {
         Title       = $title
         Command     = Get-LiveWindowCommand -Script $debuggerScript -Arguments @('-RealmPid', $RealmPid, '-WorldPid', $WorldPid, '-LiveHome', $LiveHome, '-WindowTitle', $title)
         Environment = $null; Wait = $null
-        Note        = 'a debug event stops the target until this window continues it: see the help (hang kill)'
+        Note        = 'a debug event stops the target until this window continues it (at once; console output goes through a bounded queue); an exception-heavy target is slowed per exception: see the help'
     }
 }
 

@@ -5,14 +5,18 @@
 #        [-SupervisorPid <pid> [-PollSeconds <n>]] [-WindowTitle <text>]
 # The PIDs default to the one running ArcaneCore.Realm / ArcaneCore.World; the log to <LiveHome>\logs\win32-debugger.log
 # (ARCANECORE_LIVE_HOME). The debugger sees only the exception code: name the CLR types with tools/ops/diag/exception-probe.
-# Watch mode (-SupervisorPid, used by tools/ops/live/start-cluster.ps1): attaches to the cluster host supervisor itself and then follows
-# it. Every -PollSeconds it lists the ArcaneCore.* processes whose parent is the supervisor and attaches to each one it has not attached
-# to yet, so a child the supervisor relaunches after a crash, a hang kill or a restart request is picked up with its new PID. No default
-# PID lookup happens in this mode (Get-LiveDaemon would find the supervisor itself, which is a World executable). It ends when the
-# supervisor and every attached process are gone. -WindowTitle replaces the console title.
-# WARNING: while attached, a debug event stops the whole target until this script continues it (docs/ops/tooling.md). Under the cluster
-# supervisor a child that sends no heartbeat for Cluster:Supervisor:Processes:<name>:HangTimeoutSeconds (default 120 s) is drained and killed:
-# if this console stops continuing events (a selection in it, the machine paging) the child is killed as hung.
+# Watch mode (-SupervisorPid, used by tools/ops/live/start-cluster.ps1): follows the cluster host supervisor but NEVER attaches to it (a
+# stopped supervisor stops reading its Merged children's stdout, which blocks every child). Every -PollSeconds it lists the ArcaneCore.*
+# processes whose parent is the supervisor and attaches to each one it has not attached to yet, so a child the supervisor relaunches
+# after a crash, a hang kill or a restart request is picked up with its new PID. No default PID lookup happens in this mode
+# (Get-LiveDaemon would find the supervisor itself, which is a World executable). It ends when the supervisor and every attached process
+# are gone. -WindowTitle replaces the console title.
+# WARNING: while attached, a debug event stops the whole target until this script continues it (docs/ops/tooling.md). Each debug loop
+# continues its event at once and only enqueues its log line; the console and the log file are written by separate threads from bounded
+# queues, and lines are dropped (and counted: "N lines dropped") when a queue is full, so a stalled console (text selected in it, the
+# machine paging) does not hold any target stopped. The remaining risk: an exception-heavy target is slowed by one whole-process stop per
+# exception (about 0.2 ms each); under the cluster supervisor with HangCapture=Dump, a dump request for a child that is stopped by this
+# debugger can wait up to Cluster:Supervisor:HangCaptureTimeoutSeconds before the supervisor kills it.
 param(
     [int]$RealmPid,
     [int]$WorldPid,
@@ -33,7 +37,7 @@ if (-not $SupervisorPid) {
     throw "The supervisor (pid $SupervisorPid) is not running."
 }
 
-$target = if ($SupervisorPid) { "Supervisor PID $SupervisorPid and its children" } else { "World PID $WorldPid + Realm PID $RealmPid" }
+$target = if ($SupervisorPid) { "the children of supervisor PID $SupervisorPid (not the supervisor itself)" } else { "World PID $WorldPid + Realm PID $RealmPid" }
 try { $Host.UI.RawUI.WindowTitle = if ($WindowTitle) { $WindowTitle } else { "ArcaneCore Live Win32 Debugger [$target]" } } catch {}
 Write-Host "=== ArcaneCore Live Win32 Debugger (Attached to $target) ===" -ForegroundColor Cyan
 Write-Host "Log file: $LogPath" -ForegroundColor Gray
@@ -41,6 +45,7 @@ Write-Host "--------------------------------------------------------------------
 
 $code = @"
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -119,7 +124,24 @@ public static class LiveWin32Debugger
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
-    private static readonly object LogLock = new object();
+    // Logging never blocks a debug loop: Log only formats a line and TryAdd()s it to two bounded queues (console, file), each drained by its
+    // own writer thread, so a stalled console cannot stop the file log and neither can hold a target stopped. A full queue drops the line and
+    // counts it.
+    private const int QueueCapacity = 8192;
+    private static readonly object StartLock = new object();
+    private static bool _started;
+    private static string _logFile;
+    private static BlockingCollection<string> _consoleQueue;
+    private static BlockingCollection<string> _fileQueue;
+    private static Thread _consoleThread;
+    private static Thread _fileThread;
+    private static long _consolePendingDrops;
+    private static long _filePendingDrops;
+    private static long _consoleDropsTotal;
+    private static long _fileDropsTotal;
+
+    public static long ConsoleLinesDropped { get { return Interlocked.Read(ref _consoleDropsTotal); } }
+    public static long FileLinesDropped { get { return Interlocked.Read(ref _fileDropsTotal); } }
 
     public static void DisableQuickEdit()
     {
@@ -134,20 +156,136 @@ public static class LiveWin32Debugger
         catch { }
     }
 
-    private static void Log(string logPath, string label, string message)
+    public static void Start(string logPath)
     {
-        if (string.IsNullOrEmpty(logPath)) return;
-        string line = string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [{1}] {2}{3}", DateTime.UtcNow, label, message, Environment.NewLine);
-        lock (LogLock)
+        lock (StartLock)
         {
-            try { File.AppendAllText(logPath, line, Encoding.UTF8); } catch { }
-            try { Console.Write(line); } catch { }
+            if (_started) return;
+            _started = true;
+            _logFile = string.IsNullOrEmpty(logPath) ? null : logPath;
+            _consoleQueue = new BlockingCollection<string>(QueueCapacity);
+            _fileQueue = new BlockingCollection<string>(QueueCapacity);
+            _consoleThread = new Thread(ConsoleWriterLoop) { IsBackground = true, Name = "Win32Debugger-console" };
+            _fileThread = new Thread(FileWriterLoop) { IsBackground = true, Name = "Win32Debugger-file" };
+            _consoleThread.Start();
+            _fileThread.Start();
         }
+    }
+
+    // Waits up to timeoutMs for each writer to drain what is queued (a stalled console is abandoned, not waited on), then records the
+    // drop totals in the log file.
+    public static void Shutdown(int timeoutMs)
+    {
+        if (!_started) return;
+        try { _fileQueue.CompleteAdding(); } catch { }
+        try { _consoleQueue.CompleteAdding(); } catch { }
+        _fileThread.Join(timeoutMs);
+        _consoleThread.Join(timeoutMs);
+        if (_logFile != null && (ConsoleLinesDropped > 0 || FileLinesDropped > 0))
+        {
+            try
+            {
+                File.AppendAllText(_logFile, string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [debugger] {1} console lines and {2} file lines dropped in total{3}",
+                    DateTime.UtcNow, ConsoleLinesDropped, FileLinesDropped, Environment.NewLine), new UTF8Encoding(false));
+            }
+            catch { }
+        }
+    }
+
+    public static void Note(string label, string message)
+    {
+        Log(label, message);
+    }
+
+    private static void Enqueue(BlockingCollection<string> queue, string line, ref long pendingDrops, ref long dropsTotal)
+    {
+        try
+        {
+            if (queue.TryAdd(line)) return;
+        }
+        catch (InvalidOperationException)
+        {
+            return; // completed: shutting down
+        }
+        Interlocked.Increment(ref pendingDrops);
+        Interlocked.Increment(ref dropsTotal);
+    }
+
+    private static void Log(string label, string message)
+    {
+        if (!_started) return;
+        string line = string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [{1}] {2}{3}", DateTime.UtcNow, label, message, Environment.NewLine);
+        if (_logFile != null) Enqueue(_fileQueue, line, ref _filePendingDrops, ref _fileDropsTotal);
+        Enqueue(_consoleQueue, line, ref _consolePendingDrops, ref _consoleDropsTotal);
+    }
+
+    private static string DropNotice(long dropped, string what)
+    {
+        return string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [debugger] {1} lines dropped ({2}){3}", DateTime.UtcNow, dropped, what, Environment.NewLine);
+    }
+
+    private static void ConsoleWriterLoop()
+    {
+        foreach (string line in _consoleQueue.GetConsumingEnumerable())
+        {
+            try
+            {
+                long dropped = Interlocked.Exchange(ref _consolePendingDrops, 0);
+                if (dropped > 0) Console.Write(DropNotice(dropped, "the console was not keeping up"));
+                Console.Write(line);
+            }
+            catch { }
+        }
+    }
+
+    private static void FileWriterLoop()
+    {
+        StreamWriter writer = null;
+        if (_logFile != null)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(_logFile);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                writer = new StreamWriter(new FileStream(_logFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false));
+            }
+            catch { writer = null; }
+        }
+        long reportedConsoleDrops = 0;
+        long lastReportTicks = Environment.TickCount64;
+        while (!_fileQueue.IsCompleted)
+        {
+            string line;
+            if (!_fileQueue.TryTake(out line, 500))
+            {
+                try { if (writer != null) writer.Flush(); } catch { }
+                continue;
+            }
+            try
+            {
+                if (writer == null) continue;
+                long dropped = Interlocked.Exchange(ref _filePendingDrops, 0);
+                if (dropped > 0) writer.Write(DropNotice(dropped, "the log file was not keeping up"));
+                writer.Write(line);
+                // The console writer cannot report while it is blocked, so the file says how many console lines were lost so far.
+                long consoleDrops = ConsoleLinesDropped;
+                if (consoleDrops != reportedConsoleDrops && Environment.TickCount64 - lastReportTicks >= 1000)
+                {
+                    writer.Write(DropNotice(consoleDrops - reportedConsoleDrops, "the console is not draining; not shown there"));
+                    reportedConsoleDrops = consoleDrops;
+                    lastReportTicks = Environment.TickCount64;
+                }
+                if (_fileQueue.Count == 0) writer.Flush();
+            }
+            catch { }
+        }
+        try { if (writer != null) { writer.Flush(); writer.Dispose(); } } catch { }
     }
 
     public static Thread AttachAsync(int pid, string label, string logPath)
     {
-        var thread = new Thread(() => RunDebugLoop((uint)pid, label, logPath))
+        Start(logPath);
+        var thread = new Thread(() => RunDebugLoop((uint)pid, label))
         {
             IsBackground = true,
             Name = "Win32Debugger-" + label
@@ -156,16 +294,16 @@ public static class LiveWin32Debugger
         return thread;
     }
 
-    private static void RunDebugLoop(uint pid, string label, string logPath)
+    private static void RunDebugLoop(uint pid, string label)
     {
         if (!DebugActiveProcess(pid))
         {
             int err = Marshal.GetLastWin32Error();
-            Log(logPath, label, string.Format("Failed to attach to PID {0} (Win32 error {1})", pid, err));
+            Log(label, string.Format("Failed to attach to PID {0} (Win32 error {1})", pid, err));
             return;
         }
         DebugSetProcessKillOnExit(false);
-        Log(logPath, label, string.Format("Successfully attached Win32 debugger to PID {0} (KillOnExit=false)", pid));
+        Log(label, string.Format("Successfully attached Win32 debugger to PID {0} (KillOnExit=false)", pid));
 
         long clrFirstChanceCount = 0;
         while (true)
@@ -229,7 +367,7 @@ public static class LiveWin32Debugger
             ContinueDebugEvent(evt.dwProcessId, evt.dwThreadId, status);
             if (pendingMessage != null)
             {
-                Log(logPath, label, pendingMessage);
+                Log(label, pendingMessage);
             }
             if (exitProcess)
             {
@@ -250,7 +388,8 @@ if ($SupervisorPid) {
     # retried a few times, then left alone so a refusal does not spam the log every poll.
     $attached = @{}
     $attempts = @{}
-    $attached[$SupervisorPid] = [LiveWin32Debugger]::AttachAsync($SupervisorPid, "Supervisor:$SupervisorPid", $LogPath)
+    # The supervisor itself is never attached: a stopped supervisor stops reading its Merged children's stdout, which blocks them all.
+    [LiveWin32Debugger]::Start($LogPath)
     while ($true) {
         $supervisorUp = $null -ne (Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue)
         if ($supervisorUp) {
@@ -258,6 +397,7 @@ if ($SupervisorPid) {
                 Where-Object { $_.Name -like 'ArcaneCore.*' })
             foreach ($child in $children) {
                 $childPid = [int]$child.ProcessId
+                if ($childPid -eq $SupervisorPid) { continue }
                 $known = $attached.ContainsKey($childPid)
                 if ($known -and $attached[$childPid].IsAlive) { continue }
                 if ($known -and -not (Get-Process -Id $childPid -ErrorAction SilentlyContinue)) { $attached.Remove($childPid); $known = $false }
@@ -266,16 +406,20 @@ if ($SupervisorPid) {
                 $attempts[$childPid] = $tries + 1
                 $label = ($child.Name -replace '^ArcaneCore\.', '' -replace '\.exe$', '') + ":$childPid"
                 $attached[$childPid] = [LiveWin32Debugger]::AttachAsync($childPid, $label, $LogPath)
-                Write-Host "[watch] supervisor child $($child.Name) pid ${childPid}: attaching" -ForegroundColor Cyan
+                [LiveWin32Debugger]::Note('watch', "supervisor child $($child.Name) pid ${childPid}: attaching")
             }
         }
         $live = @($attached.Values | Where-Object IsAlive)
         if (-not $supervisorUp -and $live.Count -eq 0) { break }
         Start-Sleep -Seconds $PollSeconds
     }
-    Write-Host '[watch] the supervisor and every attached process are gone; detached.' -ForegroundColor Cyan
+    [LiveWin32Debugger]::Note('watch', 'the supervisor and every attached process are gone; detached.')
 } else {
     while (@($threads | Where-Object IsAlive).Count -gt 0) {
         Start-Sleep -Seconds 5
     }
+}
+[LiveWin32Debugger]::Shutdown(3000)
+if ([LiveWin32Debugger]::ConsoleLinesDropped -gt 0 -or [LiveWin32Debugger]::FileLinesDropped -gt 0) {
+    Write-Host "$([LiveWin32Debugger]::ConsoleLinesDropped) console lines and $([LiveWin32Debugger]::FileLinesDropped) log-file lines dropped in total (a queue was full)." -ForegroundColor Yellow
 }

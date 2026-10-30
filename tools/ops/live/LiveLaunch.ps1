@@ -301,6 +301,9 @@ function Wait-LiveDaemonUp {
       the listener's owner). The daemons' own startup lines ("Logon daemon listening", "World daemon listening") are printed at the
       moment the listener binds, so the port is the same signal without parsing a log whose name and format depend on the profile.
       -Port 0 waits only for the process to stay alive for the settle time (the cluster supervisor itself has no listener).
+      -FollowRelaunch is for a child of the cluster supervisor: one that exits while it starts is relaunched by the supervisor, so the wait
+      continues for the image's next process (a child of -ParentPid again) within -TimeoutSec instead of throwing; -WatchPid (the
+      supervisor) going away still stops it. Without the switch (a daemon this script started itself) an early exit throws.
     #>
     param(
         [Parameter(Mandatory)][string]$Label,
@@ -309,7 +312,8 @@ function Wait-LiveDaemonUp {
         [int]$Port = 0,
         [int]$TimeoutSec = 600,
         [int]$WatchPid = 0,
-        [int]$SettleSeconds = 3
+        [int]$SettleSeconds = 3,
+        [switch]$FollowRelaunch
     )
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSec)
     $seen = $null
@@ -322,8 +326,13 @@ function Wait-LiveDaemonUp {
                 Start-Sleep -Seconds $SettleSeconds
                 $child.Refresh()
                 if (-not $child.HasExited) { return $child }
-                throw "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); see its console window and log."
+                if (-not $FollowRelaunch) { throw "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); see its console window and log." }
+                Write-Host "$Label (pid $($child.Id)) exited within $SettleSeconds s of coming up (exit code $($child.ExitCode)); its supervisor relaunches it, waiting for the new process."
+                $seen = $null
             }
+        } elseif ($null -ne $seen -and $FollowRelaunch) {
+            Write-Host "$Label (pid $($seen.Id)) exited before it was up$(if ($seen.HasExited) { " (exit code $($seen.ExitCode))" }); its supervisor relaunches it, waiting for the new process."
+            $seen = $null
         } elseif ($null -ne $seen) {
             throw "$Label (pid $($seen.Id)) exited before it was up$(if ($seen.HasExited) { " (exit code $($seen.ExitCode))" }); see its console window and log."
         } elseif ($parent -and $parent.HasExited) {
