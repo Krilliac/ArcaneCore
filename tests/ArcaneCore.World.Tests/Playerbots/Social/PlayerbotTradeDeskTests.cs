@@ -127,6 +127,18 @@ public sealed class PlayerbotTradeDeskTests
         public Task GratitudePassAsync(long nowMs)
             => World.Host.OnWorldAsync(() => SocialTestKit.Feature(World.Host).Gratitude.Run(SocialTestKit.BotPass(World.Host, nowMs), SocialTestKit.Feature(World.Host).Help));
 
+        /// <summary>
+        /// The gratitude pass at <paramref name="nowMs"/>, but only while the sale with the customer is not yet recorded; true (and no pass) once it is. The check and the
+        /// pass are one world-thread step: the bot's intake of the closing status records the fair deal and releases the desk's slot in one step too, so a pass can never
+        /// land between that release and the check and start the waiting tip early. (A ledger read on the test thread followed by a separate pass could, under load.)
+        /// </summary>
+        public Task<bool> GratitudePassUnlessSettledAsync(long nowMs) => World.Host.OnWorldAsync(() =>
+        {
+            if (Ledger(CustomerGuid) is { FairDeals: > 0 }) return true;
+            SocialTestKit.Feature(World.Host).Gratitude.Run(SocialTestKit.BotPass(World.Host, nowMs), SocialTestKit.Feature(World.Host).Help);
+            return false;
+        });
+
         public PlayerbotGratitudeLane Gratitude => SocialTestKit.Feature(World.Host).Gratitude;
 
 
@@ -814,9 +826,9 @@ public sealed class PlayerbotTradeDeskTests
         Assert.True(accepted, "the bot never accepted the matching window");
         Assert.Equal(Price, (await scene.TradeAsync()).BotGold);
         await scene.AcceptAsync(scene.Customer);
-        for (int i = 0; i < 100 && scene.Ledger(scene.CustomerGuid) is not { FairDeals: > 0 }; i++)
+        for (int i = 0; i < 100; i++)
         {
-            await scene.GratitudePassAsync(now += 100);
+            if (await scene.GratitudePassUnlessSettledAsync(now += 100)) break;
             botGold.Add((await scene.TradeAsync()).BotGold);
             await Task.Delay(100);
         }
