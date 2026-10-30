@@ -348,12 +348,14 @@ internal static class PlayerbotCombatView
     internal static RotationUnit Describe(SpellSystem system, Player bot, Unit unit, GroupManager? groups)
     {
         var auras = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        bool periodicHeal = false;
+        bool periodicHeal = false, rooted = false, slowed = false;
         uint harmful = 0, helpful = 0;
         foreach (SpellAuraHolder holder in system.GetAuras(unit))
         {
             if (holder.IsRemoved) continue;
             auras.Add(holder.Spell.Name);
+            rooted |= holder.HasAura(AuraType.ModRoot) || holder.HasAura(AuraType.ModStun);
+            slowed |= holder.HasAura(AuraType.ModDecreaseSpeed);
             periodicHeal |= holder.HasAura(AuraType.PeriodicHeal);
             if (holder.Spell.Dispel is > 0 and < 32)
             {
@@ -383,6 +385,8 @@ internal static class PlayerbotCombatView
             InMeleeRange = !self && InMeleeRange(bot, unit),
             IsCasting = system.GetState(unit.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting },
             IsMoving = unit is Creature creature ? creature.IsMoving : unit.Movement.HasFlag(MovementFlags.MaskMoving),
+            IsRooted = rooted,
+            IsSlowed = slowed,
             TargetsBot = !self && ReferenceEquals(unit.Combat.Victim, bot),
             InCombat = unit.Combat.IsInCombat,
             CreatureType = unit is Creature c ? c.Template.CreatureType : 0,

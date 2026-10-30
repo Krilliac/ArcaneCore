@@ -48,6 +48,7 @@ internal sealed class InProcessChatEngine : IDisposable
     private int _warmTokens;
     private ChatServingSnapshot _snapshot = ChatServingSnapshot.Empty;
     private volatile bool _stopping;
+    private volatile bool _loopExited; // the engine thread has drained its inbox for the last time
     private int _disposed;
 
     private InProcessChatEngine(ChatModel model, int contextTokens, int threads, int slots, ChatServingOptions serving)
@@ -166,6 +167,14 @@ internal sealed class InProcessChatEngine : IDisposable
                 engine.Post(new Command(CommandKind.Cancel, r, null));
             }, (this, request));
         Post(new Command(CommandKind.Submit, request, null));
+        // The engine thread may have drained its inbox for the last time between the checks above and the post: nothing would ever
+        // dequeue this request, so fail it here (TrySet is idempotent when the drain got there first).
+        if (_loopExited || _stopping)
+        {
+            request.Registration.Dispose();
+            request.Done.TrySetResult(new ChatGenerationResult(ChatGenerationStatus.Failed, string.Empty, prompt.Count, 0, 0, 0, 0, "failed", []));
+        }
+
         return request.Done.Task;
     }
 
@@ -217,10 +226,12 @@ internal sealed class InProcessChatEngine : IDisposable
             AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat engine", $"{error.GetType().Name}: {error.Message}");
             _stopping = true;
             FailAll(error);
+            _loopExited = true;
             return;
         }
 
         FailAll(null);
+        _loopExited = true;
     }
 
     private void DrainInbox()

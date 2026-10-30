@@ -87,8 +87,8 @@ internal sealed class PlayerbotWarriorRotation : PlayerbotClassRotation
             ?? Do(s, ShieldSlam, v, shieldTank)
             ?? Do(s, ThunderClap, v, tank)
             ?? Do(s, SunderArmor, v, tank)
-            ?? Do(s, Hamstring, v, v.IsMoving && !v.HasAura(Hamstring))
-            ?? Do(s, Rend, v, v.CreatureType is not (4 or 6 or 11)) // elementals, undead and mechanicals do not bleed
+            ?? Do(s, Hamstring, v, v.IsMoving && !v.IsRooted && !v.IsSlowed && !v.HasAura(Hamstring))
+            ?? Do(s, Rend, v, v.CreatureType is not (4 or 6 or 9)) // elementals (4), undead (6) and mechanicals (9) do not bleed
             ?? Do(s, IntimidatingShout, v, s.Self.HealthPercent < 30f && close > 2)
             ?? Do(s, Retaliation, s.Self, close > 2)
             ?? Do(s, SweepingStrikes, s.Self, close > 2)
