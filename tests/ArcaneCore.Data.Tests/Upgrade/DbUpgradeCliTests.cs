@@ -474,6 +474,19 @@ public sealed class DbUpgradeCliTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BackupInfo_ForSqlite_NamesTheCommandsThatTakeBackupDir_NotANonexistentBackupCommand()
+    {
+        DatabaseConnectionOptions sqlite = await NewCurrentAsync(DatabaseProvider.Sqlite);
+        var options = new DatabaseOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = sqlite.ConnectionString };
+
+        (int code, string output, _) = await UpgradeTestSupport.RunCliAsync(options, "backup-info");
+
+        Assert.Equal(DbUpgradeExitCodes.Ok, code);
+        Assert.Contains("arcane-db upgrade (or migrate-codex) --backup-dir <directory>", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("arcane-db backup ", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AFailureInOneComponent_StopsTheLaterOnes_AndNamesIt()
     {
         DatabaseConnectionOptions sqlite = await NewCurrentAsync(DatabaseProvider.Sqlite);
