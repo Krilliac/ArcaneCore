@@ -15,12 +15,26 @@ public sealed class VisibilityTests
     private const float StartX = -8949.95f;
     private const float StartY = -132.493f;
 
+    /// <summary>
+    /// vmangos regenerates energy for every player (Player.cpp:2283), so these warrior test characters send a short burst of hidden
+    /// UNIT_FIELD_POWER4 updates after login. The tests are about visibility and movement relay: they skip exactly that packet and
+    /// still assert every other one.
+    /// </summary>
+    private static void IgnoreEnergyRegen(params WorldTestClient[] clients)
+    {
+        foreach (WorldTestClient client in clients)
+        {
+            client.IgnoreEnergyRegenUpdates = true;
+        }
+    }
+
     [Fact]
     public async Task TwoPlayers_SeeEachOtherEnterAndMove()
     {
         await using var host = WorldTestHost.Start();
         await using WorldTestClient a = await host.EnterWorldAsync("PLAYERA", "Aaa");
         await using WorldTestClient b = await host.EnterWorldAsync("PLAYERB", "Bbb");
+        IgnoreEnergyRegen(a, b);
 
         // B's arrival is pushed to A, and A is pushed to B (UPDATETYPE_CREATE_OBJECT).
         AssertCreate(await a.ReadUpdateAsync(), guid: 2);
@@ -46,6 +60,7 @@ public sealed class VisibilityTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient a = await host.EnterWorldAsync("PLAYERA", "Aaa");
         WorldTestClient b = await host.EnterWorldAsync("PLAYERB", "Bbb");
+        IgnoreEnergyRegen(a, b);
         await a.ReadUpdateAsync(); // B's create to A
         await b.ReadUpdateAsync(); // A's create to B
 
@@ -62,6 +77,7 @@ public sealed class VisibilityTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient a = await host.EnterWorldAsync("PLAYERA", "Aaa");
         await using WorldTestClient b = await host.EnterWorldAsync("PLAYERB", "Bbb");
+        IgnoreEnergyRegen(a, b);
         await a.ReadUpdateAsync();
         await b.ReadUpdateAsync();
 
@@ -116,11 +132,51 @@ public sealed class VisibilityTests
 
     private static void AssertCreate(byte[] body, byte guid)
     {
-        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(body));
+        // One block, or two when a hidden energy regen update (vmangos Player.cpp:2283) rides in the same flush after the create.
+        uint blocks = BinaryPrimitives.ReadUInt32LittleEndian(body);
+        Assert.InRange(blocks, 1u, 2u);
+        if (blocks == 2)
+        {
+            Assert.True(EndsWithEnergyRegenBlock(body), "the second block of the packet is not a UNIT_FIELD_POWER4-only values update");
+        }
+
         Assert.Equal((byte)ObjectUpdateType.CreateObject, body[5]);
         Assert.Equal([0x01, guid], body[6..8]);
         Assert.Equal(TypeId.Player, body[8]);
         Assert.Equal((byte)(ObjectUpdateFlags.All | ObjectUpdateFlags.Living | ObjectUpdateFlags.HasPosition), body[9]); // no SELF
+    }
+
+    /// <summary>The body ends with a values block of one packed guid whose only changed field is UNIT_FIELD_POWER1 + energy.</summary>
+    private static bool EndsWithEnergyRegenBlock(byte[] body)
+    {
+        int energy = UpdateFields.UnitFieldPower1 + (int)PowerType.Energy;
+        for (int start = body.Length - 8; start >= 10; start--)
+        {
+            if (body[start] != (byte)ObjectUpdateType.Values || body[start + 1] != 0x01 || body[start + 2] is not (1 or 2))
+            {
+                continue;
+            }
+
+            int maskBlocks = body[start + 3];
+            if (maskBlocks <= (energy >> 5) || start + 4 + (maskBlocks * 4) + 4 != body.Length)
+            {
+                continue;
+            }
+
+            bool onlyEnergy = true;
+            for (int i = 0; i < maskBlocks; i++)
+            {
+                uint mask = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(start + 4 + (i * 4)));
+                onlyEnergy &= mask == (i == (energy >> 5) ? 1u << (energy & 31) : 0u);
+            }
+
+            if (onlyEnergy)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void AssertOutOfRange(byte[] body, byte guid)

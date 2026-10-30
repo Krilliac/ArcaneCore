@@ -42,6 +42,10 @@ public sealed class PersistenceAndValuesTests
         await using var host = WorldTestHost.Start();
         await using WorldTestClient a = await host.EnterWorldAsync("OWNER", "Owner");
         await using WorldTestClient b = await host.EnterWorldAsync("WATCHER", "Watcher");
+        // vmangos regenerates energy for every player (Player.cpp:2283): the warrior test characters get hidden UNIT_FIELD_POWER4 updates
+        // after login. They are public and unrelated to what this test checks, so they are skipped and removed from the field maps below.
+        a.IgnoreEnergyRegenUpdates = true;
+        b.IgnoreEnergyRegenUpdates = true;
         await a.ReadUpdateAsync(); // B created for A
         await b.ReadUpdateAsync(); // A created for B
 
@@ -94,6 +98,7 @@ public sealed class PersistenceAndValuesTests
         }
 
         Assert.Equal(0, reader.Remaining);
+        fields.Remove(UpdateFields.UnitFieldPower1 + (int)PowerType.Energy); // a regen tick can land in the same block as the change under test
         return fields;
     }
 }

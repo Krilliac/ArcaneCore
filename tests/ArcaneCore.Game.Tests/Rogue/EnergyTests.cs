@@ -48,6 +48,26 @@ public sealed class EnergyTests
     }
 
     [Fact]
+    public void AClassThatDoesNotUseEnergy_HasTheCreateMaximum_AndRegeneratesUpToIt()
+    {
+        // vmangos gives every player 100 maximum energy (Unit::GetCreatePowers, Unit.cpp:8260) and regenerates energy for every player
+        // (Player::RegenerateAll, Player.cpp:2283), whatever the power type, until it reaches the maximum.
+        (WorldRuntime world, _, _, _) = CombatTestKit.CreateWorld();
+        using WorldRuntime w = world;
+        Player player = CombatTestKit.AddPlayer(world, 1, 0, 0, new FakeSession(1));
+        Assert.Equal(100u, player.GetUInt32(MaxEnergy));
+        Assert.NotEqual(PowerType.Energy, player.PowerType);
+        player.SetUInt32(Energy, 70);
+
+        world.RunTick(50);
+        Assert.Equal(90u, player.GetUInt32(Energy));
+        world.RunTick(2000);
+        Assert.Equal(100u, player.GetUInt32(Energy));
+        world.RunTick(2000);
+        Assert.Equal(100u, player.GetUInt32(Energy));
+    }
+
+    [Fact]
     public void Energy_CapsAtTheMaximum()
     {
         (WorldRuntime world, _, _, _) = CombatTestKit.CreateWorld();
