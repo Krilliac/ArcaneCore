@@ -55,7 +55,7 @@ internal sealed partial class PlayerbotBrain
         float reach = _engagedReason == PlayerbotEngageReason.Grudge
             ? _options.Social.WarMode.HuntRadiusYards + HuntChaseMarginYards
             : PvpPursuitYards;
-        if (PlayerbotHostility.MayEngage(player, target, _engagedReason, null, _options.Social.WarMode.Shared)
+        if (PlayerbotHostility.MayEngage(player, target, _engagedReason, null, _options.Social.WarMode.SharedSwitch())
             && _pvpFight?.IsSkipped(target) != true && Distance(player, target) <= reach)
             return target;
 
@@ -105,7 +105,7 @@ internal sealed partial class PlayerbotBrain
             float yards = Distance(player, other);
             if (yards > bestYards || (best is not null && yards >= bestYards)) continue;
             if (!recorder.Memory.TryGet(botId, other.Guid.Value, out PlayerbotRelation relation) || !recorder.Memory.IsRival(relation)) continue;
-            if (!PlayerbotHostility.MayEngage(player, other, PlayerbotEngageReason.Grudge, null, war.Shared)) continue;
+            if (!PlayerbotHostility.MayEngage(player, other, PlayerbotEngageReason.Grudge, null, war.SharedSwitch())) continue;
             best = other;
             bestYards = yards;
         }

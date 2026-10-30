@@ -830,6 +830,11 @@ public sealed partial class MapCombat
         }
     }
 
+    private WorldState.WorldStateHooks? _stateHooks;
+
+    /// <summary>The world's War Mode options (<c>World:WarMode</c>), live and shared by reference; the hooks are looked up once per map.</summary>
+    private WorldState.WarModeOptions WarMode => (_stateHooks ??= WorldState.WorldStateHooks.For(_world)).WarMode;
+
     /// <summary>vmangos Player::UpdatePvPFlagTimer: the linger counts down while not desired and not in PvP combat.</summary>
     private void UpdatePvpFlagTimer(Player player, uint diff)
     {
@@ -837,7 +842,7 @@ public sealed partial class MapCombat
 
         // War Mode (not retail; World:WarMode:Enabled): outside an exempt area the flag is forced on and its timer is held full, so it
         // does not lapse, and switching War Mode off leaves the normal 5-minute linger. Inside an exempt area the normal rules below apply.
-        if (WorldState.WorldStateHooks.For(_world).WarMode.Enabled && WorldState.Zones.PvpAreaState.IsWarModeKnown(player)
+        if (WarMode.Enabled && WorldState.Zones.PvpAreaState.IsWarModeKnown(player)
             && !WorldState.Zones.PvpAreaState.IsWarModeExempt(player))
         {
             if ((player.UnitFlags & UnitFlags.Pvp) == 0)

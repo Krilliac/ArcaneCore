@@ -21,7 +21,7 @@ public sealed partial class MapCombat
         double percent = 0.10;
         if (playerTap is not null)
         {
-            WorldState.WarModeOptions war = WorldState.WorldStateHooks.For(_world).WarMode;
+            WorldState.WarModeOptions war = WarMode;
             if (!war.Enabled || war.PvpDeathDurabilityLoss <= 0f)
             {
                 return;

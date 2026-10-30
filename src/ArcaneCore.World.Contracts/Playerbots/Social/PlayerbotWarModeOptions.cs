@@ -30,8 +30,8 @@ public sealed class PlayerbotWarModeOptions
         internal set => _shared.Enabled = value;
     }
 
-    /// <summary>The shared World:WarMode options this section reads its switch from (a private default, off, until <see cref="Link"/>).</summary>
-    internal WarModeOptions Shared => _shared;
+    /// <summary>The shared World:WarMode options this section reads its switch from (a private default, off, until <see cref="Link"/>). A method, not a property: it is no key.</summary>
+    public WarModeOptions SharedSwitch() => _shared;
 
     /// <summary>Read the War Mode switch from <paramref name="shared"/> from now on (the playerbot pack does this when it attaches to a world).</summary>
     public void Link(WarModeOptions shared) => _shared = shared ?? throw new ArgumentNullException(nameof(shared));
