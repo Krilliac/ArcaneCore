@@ -14,7 +14,9 @@ public interface IMeleeSpellHooks
 
     /// <summary>
     /// The swing fires the unit's queued next-swing spell at <paramref name="victim"/> (vmangos Unit::AttackerStateUpdate,
-    /// Unit.cpp:2249-2257). True when there was one: it is cast (or fails and is dropped) and the white swing is skipped.
+    /// Unit.cpp:2249-2257). True only when the queued spell was cast (CastOk), which replaces the white swing. Nothing queued, or a cast that fails at swing
+    /// time (no power left, out of range ...), is dropped and the swing falls back to a normal white hit (vmangos Unit.cpp:2250-2258 returns only
+    /// on a successful cast; mangos-classic Unit.cpp:2633-2641 only on SPELL_CAST_OK).
     /// </summary>
     bool TryCastQueuedSwingSpell(Unit attacker, Unit victim);
 
@@ -40,7 +42,7 @@ public sealed class SpellSystemMeleeHooks(SpellSystem spells) : IMeleeSpellHooks
     {
         ArgumentNullException.ThrowIfNull(attacker);
         ArgumentNullException.ThrowIfNull(victim);
-        return _spells.CastQueuedMeleeSpell(attacker, victim) != SpellCastResult.NotFound;
+        return _spells.CastQueuedMeleeSpell(attacker, victim) == SpellCastResult.CastOk;
     }
 
     public void OnMeleeAttackStopped(Unit attacker)
