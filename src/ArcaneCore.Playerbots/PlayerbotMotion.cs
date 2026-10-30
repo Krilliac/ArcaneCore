@@ -1011,6 +1011,12 @@ internal static partial class PlayerbotMotion
                         // Keeping the old height is only safe with a floor within reach under it (live: a dock edge over a seabed 20 yd down).
                         resolved = rawCandidate with { Z = from.Z };
                     }
+                    else if (hasMeshSurface && IsWalkableMeshRise(from, candidate))
+                    {
+                        // Stairs: the probe finds no floor under the steps (Deathknell crypt) and no sight line clears the climb, but the mesh's
+                        // own surface is the floor there, and the mesh excludes steep slopes. Only a rise a walker could climb over the step's run is trusted.
+                        resolved = candidate;
+                    }
                     else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards)
                     {
                         // No sight line clears the storey change: returning `resolved` would put the bot through a floor or slab.
@@ -1034,6 +1040,13 @@ internal static partial class PlayerbotMotion
         if (!PlayerbotMoveCheck.TryValidateStep(map, from, candidate, out Vector3 draped, out rejectReason))
             return null;
         return draped;
+    }
+
+    /// <summary>True when <paramref name="to"/> (a point on the mesh's surface) lies no higher or lower than it is far horizontally from <paramref name="from"/> (a 45 degree stair), so the step is a climb and not a storey change.</summary>
+    private static bool IsWalkableMeshRise(Vector3 from, Vector3 to)
+    {
+        float run = MathF.Sqrt(((to.X - from.X) * (to.X - from.X)) + ((to.Y - from.Y) * (to.Y - from.Y)));
+        return MathF.Abs(to.Z - from.Z) <= run;
     }
 
     /// <summary>True when walkable floor lies at or just under <paramref name="z"/> at x/y, within one step height (a client falls, it does not hover).</summary>

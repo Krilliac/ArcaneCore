@@ -476,6 +476,44 @@ public sealed class PlayerbotMotionTests
         finally { session.Kick(); await session.ManagedClosed; }
     }
 
+    [Fact]
+    public async Task Pump_WhenNavigatedStairStepHasNoProbeFloorAndNoSightLine_IsAcceptedOnTheMeshSurface()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
+            const float stairRise = 3f; // over the 2 yd step height, within one 3.5 yd step's run (the Deathknell crypt stairs: 2.3 over 4 yd)
+            float wallX = 0f;
+            // The crypt stairs: no floor is found under the steps, nothing sees across the blocker and the mesh cannot prove the start,
+            // but the mesh's surface under the step is the floor.
+            List<(float X, float Z)> steps = await WalkNavigatedRouteAsync(host, session, x0 =>
+            {
+                wallX = x0 + 5f;
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new NoFloorLineOfSight(wallX),
+                    pathfinder: new StoreyMeshPathfinder(wallX, Floor, Floor + stairRise));
+            }, endRise: stairRise, pumps: 4);
+
+            Assert.True(steps[^1].X > wallX, "bot did not climb past the stair");
+            Assert.InRange(steps[^1].Z, Floor + stairRise - 0.5f, Floor + stairRise + 0.5f);
+            Assert.Equal(0, capture.Count(Key(Code.RouteBlocked)));
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    /// <summary>A wall at <paramref name="wallX"/> that nothing sees across, and no model floor anywhere (the floor probe finds nothing).</summary>
+    private sealed class NoFloorLineOfSight(float wallX) : ILineOfSight
+    {
+        public bool Enabled => true;
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true)
+            => !((from.X < wallX && to.X > wallX) || (from.X > wallX && to.X < wallX));
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit) { hit = to; return false; }
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance) => null;
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info) { info = default; return false; }
+    }
+
     /// <summary>
     /// Starts a navigated route along +X from the bot (at <see cref="Floor"/>, rising by <paramref name="endRise"/> over 20 yd) after
     /// <paramref name="install"/> set the collision up for the bot's x, then pumps once per heartbeat and returns the bot's x and z after each.
