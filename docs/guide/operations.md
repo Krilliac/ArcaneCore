@@ -76,6 +76,20 @@ A world that sends no heartbeat tick for 120 seconds is drained, killed and rela
 fault. With `RealmId` set, `.server restart 60 2 <realmid>` on one world restarts another world on the same host (not across hosts). Details are in the
 [clustering design](../CLUSTERING_DESIGN.md).
 
+## Starting the local live server
+
+Two launchers in `tools/ops/live/` start the local live server for a developer machine. Both read `ARCANECORE_LIVE_HOME` and `ARCANECORE_LIVE_PROFILE` (or `-LiveHome` / `-Profile`), start nothing under `-Plan` (or `-WhatIf`; it prints every window title, command line, environment variable with secrets masked, and what it waits for), refuse when a Realm or World is already running or a port is taken, and put the build found in `<LiveHome>/bin` in every window title: `ArcaneCore.World (Debug, live)`. The build (Debug, Release, Mixed or unknown) is read from the assemblies' `DebuggableAttribute` and `AssemblyConfigurationAttribute` without loading them. Each opens a status window and a Win32 debugger window; `-NoStatus` and `-NoDebugger` skip them. Details and the full parameter list are in [operator tooling](../ops/tooling.md#local-live-server-toolsopslive).
+
+```
+pwsh -NoProfile -File tools/ops/live/start-single.ps1 [-Supervise] [-NoStatus] [-NoDebugger] [-Plan]
+pwsh -NoProfile -File tools/ops/live/start-cluster.ps1 [-Gateway [-MapWorker]] [-HangCapture None|Stacks|Dump] [-NoStatus] [-NoDebugger] [-Plan]
+```
+
+- **`start-single.ps1`** starts the Realm, waits until it is alive and listening, then the World, each in its own console through `launch-daemon.ps1` (the same diagnostics, log paths and environment as `redeploy.ps1`). The status window is `tools/ops/diag/server-status.ps1`, read-only unless `-Supervise` lets it restart a crashed or hung daemon.
+- **`start-cluster.ps1`** runs `ArcaneCore.World` as the host supervisor above in its own console and gives it the realm (start order 0) and one combined world (start order 1, realm id 1, `MinClusterProcesses` 2) as `Cluster__Supervisor__...` environment variables built from its parameters; no configuration file is edited. The children's output appears in the supervisor window as `[realm]` and `[world]` lines. The status window runs without `-Supervise` (the cluster supervisor owns restarts) and watches the world's heartbeat file; the debugger attaches to the supervisor and follows its children, attaching to a relaunched child's new PID. `-Gateway` adds `ArcaneCore.Gateway` and turns the world into a gateway worker (`-MapWorker` also sets `Cluster:Node:Role` to `MapWorker`); it needs a link secret of at least 16 characters in `ARCANECORE_CLUSTER_LINK_SECRET` (or `-LinkSecret`), which goes only into the environment of the supervisor console and is never printed. By default the supervisor takes a full dump of the world child before it kills it as hung (`-HangCapture Dump`, into `<LiveHome>/dumps`, under the existing dump caps); a dump is gigabytes and holds secrets.
+
+A Win32 debugger stops the whole target on every debug event until its console continues it. A burst of first-chance exceptions alone only slows the process (measured: about 60000 exceptions a second alone, about 4500 attached, roughly 0.2 ms each), but a debugger console that stalls (text selected in it, the machine paging) leaves the target stopped: under the cluster supervisor a child silent for `-HangTimeoutSeconds` (120 s by default) is then killed and relaunched, and under `start-single.ps1 -Supervise` the status window kills a World whose heartbeat is older than 90 s. Raise the timeout or pass `-NoDebugger` when a debugging session must not cost a restart.
+
 ## Bans
 
 Ban from in-game with `.ban account`, `.ban character` and `.ban ip`, and lift with `.unban`; `.baninfo` and `.banlist` read the history. Without a client use

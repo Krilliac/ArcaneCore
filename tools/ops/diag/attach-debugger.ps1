@@ -2,23 +2,40 @@
 # process exits with their exit code, and a count of CLR first-chance exceptions (0xE0434352; the first 10 and then every 500th are
 # logged). It never breaks into the daemons: every event is continued, and KillOnExit is off, so closing this console detaches.
 #   pwsh -NoExit -File tools/ops/diag/attach-debugger.ps1 [-RealmPid <pid>] [-WorldPid <pid>] [-LogPath <file>] [-LiveHome <dir>]
+#        [-SupervisorPid <pid> [-PollSeconds <n>]] [-WindowTitle <text>]
 # The PIDs default to the one running ArcaneCore.Realm / ArcaneCore.World; the log to <LiveHome>\logs\win32-debugger.log
 # (ARCANECORE_LIVE_HOME). The debugger sees only the exception code: name the CLR types with tools/ops/diag/exception-probe.
+# Watch mode (-SupervisorPid, used by tools/ops/live/start-cluster.ps1): attaches to the cluster host supervisor itself and then follows
+# it. Every -PollSeconds it lists the ArcaneCore.* processes whose parent is the supervisor and attaches to each one it has not attached
+# to yet, so a child the supervisor relaunches after a crash, a hang kill or a restart request is picked up with its new PID. No default
+# PID lookup happens in this mode (Get-LiveDaemon would find the supervisor itself, which is a World executable). It ends when the
+# supervisor and every attached process are gone. -WindowTitle replaces the console title.
+# WARNING: while attached, a debug event stops the whole target until this script continues it (docs/ops/tooling.md). Under the cluster
+# supervisor a child that sends no heartbeat for Cluster:Supervisor:Processes:<name>:HangTimeoutSeconds (default 120 s) is drained and killed:
+# if this console stops continuing events (a selection in it, the machine paging) the child is killed as hung.
 param(
     [int]$RealmPid,
     [int]$WorldPid,
     [string]$LogPath,
-    [string]$LiveHome
+    [string]$LiveHome,
+    [int]$SupervisorPid,
+    [ValidateRange(1, 60)][int]$PollSeconds = 2,
+    [string]$WindowTitle
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\live\LiveEnv.ps1')
 if (-not $LogPath) { $LogPath = Join-Path (Resolve-LiveHome $LiveHome) 'logs\win32-debugger.log' }
-if (-not $RealmPid) { $RealmPid = (Get-LiveDaemon Realm)?.Id ?? 0 }
-if (-not $WorldPid) { $WorldPid = (Get-LiveDaemon World)?.Id ?? 0 }
-if (-not $RealmPid -and -not $WorldPid) { throw 'Neither ArcaneCore.Realm nor ArcaneCore.World is running; pass -RealmPid/-WorldPid.' }
+if (-not $SupervisorPid) {
+    if (-not $RealmPid) { $RealmPid = (Get-LiveDaemon Realm)?.Id ?? 0 }
+    if (-not $WorldPid) { $WorldPid = (Get-LiveDaemon World)?.Id ?? 0 }
+    if (-not $RealmPid -and -not $WorldPid) { throw 'Neither ArcaneCore.Realm nor ArcaneCore.World is running; pass -RealmPid/-WorldPid.' }
+} elseif (-not (Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue)) {
+    throw "The supervisor (pid $SupervisorPid) is not running."
+}
 
-try { $Host.UI.RawUI.WindowTitle = "ArcaneCore Live Win32 Debugger [World PID $WorldPid + Realm PID $RealmPid]" } catch {}
-Write-Host "=== ArcaneCore Live Win32 Debugger (Attached to World PID $WorldPid & Realm PID $RealmPid) ===" -ForegroundColor Cyan
+$target = if ($SupervisorPid) { "Supervisor PID $SupervisorPid and its children" } else { "World PID $WorldPid + Realm PID $RealmPid" }
+try { $Host.UI.RawUI.WindowTitle = if ($WindowTitle) { $WindowTitle } else { "ArcaneCore Live Win32 Debugger [$target]" } } catch {}
+Write-Host "=== ArcaneCore Live Win32 Debugger (Attached to $target) ===" -ForegroundColor Cyan
 Write-Host "Log file: $LogPath" -ForegroundColor Gray
 Write-Host "--------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
@@ -228,6 +245,37 @@ Add-Type -TypeDefinition $code -Language CSharp
 $threads = @()
 if ($RealmPid) { $threads += [LiveWin32Debugger]::AttachAsync($RealmPid, "Realm:$RealmPid", $LogPath) }
 if ($WorldPid) { $threads += [LiveWin32Debugger]::AttachAsync($WorldPid, "World:$WorldPid", $LogPath) }
-while (@($threads | Where-Object IsAlive).Count -gt 0) {
-    Start-Sleep -Seconds 5
+if ($SupervisorPid) {
+    # Watch mode. $attached maps a pid to its debug thread; a thread that ended while its process still runs (the attach was refused) is
+    # retried a few times, then left alone so a refusal does not spam the log every poll.
+    $attached = @{}
+    $attempts = @{}
+    $attached[$SupervisorPid] = [LiveWin32Debugger]::AttachAsync($SupervisorPid, "Supervisor:$SupervisorPid", $LogPath)
+    while ($true) {
+        $supervisorUp = $null -ne (Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue)
+        if ($supervisorUp) {
+            $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$SupervisorPid" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like 'ArcaneCore.*' })
+            foreach ($child in $children) {
+                $childPid = [int]$child.ProcessId
+                $known = $attached.ContainsKey($childPid)
+                if ($known -and $attached[$childPid].IsAlive) { continue }
+                if ($known -and -not (Get-Process -Id $childPid -ErrorAction SilentlyContinue)) { $attached.Remove($childPid); $known = $false }
+                $tries = if ($attempts.ContainsKey($childPid)) { $attempts[$childPid] } else { 0 }
+                if ($known -and $tries -ge 3) { continue }
+                $attempts[$childPid] = $tries + 1
+                $label = ($child.Name -replace '^ArcaneCore\.', '' -replace '\.exe$', '') + ":$childPid"
+                $attached[$childPid] = [LiveWin32Debugger]::AttachAsync($childPid, $label, $LogPath)
+                Write-Host "[watch] supervisor child $($child.Name) pid ${childPid}: attaching" -ForegroundColor Cyan
+            }
+        }
+        $live = @($attached.Values | Where-Object IsAlive)
+        if (-not $supervisorUp -and $live.Count -eq 0) { break }
+        Start-Sleep -Seconds $PollSeconds
+    }
+    Write-Host '[watch] the supervisor and every attached process are gone; detached.' -ForegroundColor Cyan
+} else {
+    while (@($threads | Where-Object IsAlive).Count -gt 0) {
+        Start-Sleep -Seconds 5
+    }
 }
