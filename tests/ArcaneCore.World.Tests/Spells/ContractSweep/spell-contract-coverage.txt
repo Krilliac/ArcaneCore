@@ -9974,7 +9974,7 @@
 13119	CastOk	b c:melee-hit-taken,melee-swing g
 13120	CastOk	g
 13138	CastOk	b c:melee-hit-taken,melee-swing,mount g
-13139	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
+13139	CastOk
 13140	CastOk	d f g
 13141	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 13142	CastOk	g
@@ -20112,7 +20112,7 @@
 26231	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 26232	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 26233	CastOk
-26234	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up d
+26234	CastOk	d
 26235	CastOk
 26236	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up
 26237	CastOk

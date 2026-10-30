@@ -8,6 +8,9 @@
 #     dotnet test tests/ArcaneCore.World.Tests --filter "FullyQualifiedName~SpellContractSweepTests.Sweep_"
 # The same run rewrites spell-contract-coverage.txt (which checks ran per spell; a check that stops running also fails the sweep).
 # Then review both diffs: every removed line here should be a fix you expected, every added line a regression to explain.
+a.error-log	12479	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
+a.error-log	3360	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
+a.error-log	8213	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.error-log	8324	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.unhandled-effect	10344	EnchantItem
 a.unhandled-effect	10399	EnchantItemTemporary
@@ -390,17 +393,11 @@ a.unhandled-other	11013	no-consumer:Dummy
 a.unhandled-other	11048	no-consumer:Dummy
 a.unhandled-other	11067	no-consumer:Dummy
 a.unhandled-other	11365	dummy:Dummy
-a.unhandled-other	11403	no-consumer:Dummy
-a.unhandled-other	11826	no-consumer:Dummy
 a.unhandled-other	11893	dummy:Dummy
 a.unhandled-other	12198	dummy:Dummy
-a.unhandled-other	12479	no-consumer:Dummy
-a.unhandled-other	126	no-consumer:Dummy
 a.unhandled-other	12639	dummy:Dummy
-a.unhandled-other	12774	no-consumer:Dummy
 a.unhandled-other	12938	dummy:Dummy
 a.unhandled-other	12948	dummy:Dummy
-a.unhandled-other	13139	no-consumer:Dummy
 a.unhandled-other	13236	no-consumer:Dummy
 a.unhandled-other	13280	dummy:Dummy
 a.unhandled-other	13540	no-consumer:Dummy
@@ -424,7 +421,6 @@ a.unhandled-other	16372	no-consumer:Dummy
 a.unhandled-other	16378	dummy:Dummy
 a.unhandled-other	16404	no-consumer:Dummy
 a.unhandled-other	16468	no-consumer:Dummy
-a.unhandled-other	16589	dummy:Dummy
 a.unhandled-other	17131	no-consumer:Dummy
 a.unhandled-other	17163	dummy:Dummy
 a.unhandled-other	17327	no-consumer:Dummy
@@ -441,18 +437,6 @@ a.unhandled-other	19032	dummy:Dummy
 a.unhandled-other	19033	dummy:Dummy
 a.unhandled-other	19473	dummy:Dummy
 a.unhandled-other	19502	no-consumer:Dummy
-a.unhandled-other	19548	no-consumer:Dummy
-a.unhandled-other	19674	no-consumer:Dummy
-a.unhandled-other	19687	no-consumer:Dummy
-a.unhandled-other	19688	no-consumer:Dummy
-a.unhandled-other	19689	no-consumer:Dummy
-a.unhandled-other	19692	no-consumer:Dummy
-a.unhandled-other	19693	no-consumer:Dummy
-a.unhandled-other	19694	no-consumer:Dummy
-a.unhandled-other	19696	no-consumer:Dummy
-a.unhandled-other	19697	no-consumer:Dummy
-a.unhandled-other	19699	no-consumer:Dummy
-a.unhandled-other	19700	no-consumer:Dummy
 a.unhandled-other	20358	dummy:Dummy
 a.unhandled-other	20370	no-consumer:Dummy
 a.unhandled-other	20465	dummy:Dummy
@@ -470,11 +454,9 @@ a.unhandled-other	21917	dummy:Dummy
 a.unhandled-other	22393	dummy:Dummy
 a.unhandled-other	22518	no-consumer:Dummy
 a.unhandled-other	22581	no-consumer:Dummy
-a.unhandled-other	22646	no-consumer:Dummy
 a.unhandled-other	22805	no-consumer:Dummy
 a.unhandled-other	22913	dummy:Dummy
 a.unhandled-other	23173	dummy:Dummy
-a.unhandled-other	23183	no-consumer:Dummy
 a.unhandled-other	23195	dummy:Dummy
 a.unhandled-other	23343	dummy:Dummy
 a.unhandled-other	23356	dummy:Dummy
@@ -492,14 +474,10 @@ a.unhandled-other	24748	no-consumer:Dummy
 a.unhandled-other	24755	no-consumer:Dummy
 a.unhandled-other	24782	no-consumer:Dummy
 a.unhandled-other	24803	no-consumer:Dummy
-a.unhandled-other	24906	no-consumer:Dummy
 a.unhandled-other	24999	no-consumer:Dummy
-a.unhandled-other	25042	no-consumer:Dummy
 a.unhandled-other	25148	no-consumer:Dummy
 a.unhandled-other	25153	dummy:Dummy
 a.unhandled-other	25171	no-consumer:Dummy
-a.unhandled-other	25185	no-consumer:Dummy
-a.unhandled-other	25185	script:ScriptEffect
 a.unhandled-other	25471	no-consumer:Dummy
 a.unhandled-other	25711	script:ScriptEffect
 a.unhandled-other	25813	dummy:Dummy
@@ -512,12 +490,9 @@ a.unhandled-other	25885	script:ScriptEffect
 a.unhandled-other	25896	script:ScriptEffect
 a.unhandled-other	25926	no-consumer:Dummy
 a.unhandled-other	26005	dummy:Dummy
-a.unhandled-other	26077	no-consumer:Dummy
-a.unhandled-other	26077	script:ScriptEffect
 a.unhandled-other	26127	no-consumer:OverrideClassScripts
 a.unhandled-other	26205	script:ScriptEffect
 a.unhandled-other	26217	script:ScriptEffect
-a.unhandled-other	26234	no-consumer:Dummy
 a.unhandled-other	26235	no-consumer:Dummy
 a.unhandled-other	26237	script:ScriptEffect
 a.unhandled-other	26256	dummy:Dummy
@@ -568,14 +543,12 @@ a.unhandled-other	31247	script:ScriptEffect
 a.unhandled-other	31309	no-consumer:Dummy
 a.unhandled-other	31951	no-consumer:Dummy
 a.unhandled-other	31954	no-consumer:Dummy
-a.unhandled-other	3360	dummy:Dummy
 a.unhandled-other	3730	dummy:Dummy
 a.unhandled-other	4130	dummy:Dummy
 a.unhandled-other	4131	dummy:Dummy
 a.unhandled-other	4132	dummy:Dummy
 a.unhandled-other	5302	no-consumer:Dummy
 a.unhandled-other	5373	dummy:Dummy
-a.unhandled-other	6272	no-consumer:Dummy
 a.unhandled-other	6277	no-consumer:Dummy
 a.unhandled-other	6602	no-consumer:Dummy
 a.unhandled-other	6924	dummy:Dummy
@@ -587,8 +560,6 @@ a.unhandled-other	7143	dummy:Dummy
 a.unhandled-other	7939	no-consumer:Dummy
 a.unhandled-other	794	dummy:Dummy
 a.unhandled-other	799	script:ScriptEffect
-a.unhandled-other	8063	dummy:Dummy
-a.unhandled-other	8213	dummy:Dummy
 a.unhandled-other	8345	no-consumer:Dummy
 a.unhandled-other	84	dummy:Dummy
 a.unhandled-other	8603	dummy:Dummy
@@ -613,10 +584,17 @@ b.removed-early	21827	gone before its duration
 b.removed-early	21863	gone before its duration
 b.removed-early	3410	gone before its duration
 b.removed-early	6410	gone before its duration
+b.removed-early	8326	permanent aura gone after 1 s
 b.removed-early	9484	gone before its duration
 b.state-not-restored	4948	max-power1
 b.state-not-restored	5759	max-power3
 b.state-not-restored	7164	max-power1
+c.removed-without-flag	8326	cast flags=0x0
+c.removed-without-flag	8326	melee-hit-taken flags=0x0
+c.removed-without-flag	8326	mount flags=0x0
+c.removed-without-flag	8326	move flags=0x0
+c.removed-without-flag	8326	stand-up flags=0x0
+c.removed-without-flag	8326	turn flags=0x0
 i.not-dispelled	10831	type=1 helpful
 i.not-dispelled	12843	type=1 helpful
 i.not-dispelled	13235	type=1 harmful
