@@ -27,7 +27,9 @@ public sealed partial class SummonService
     public int GivePetXp(Creature pet, uint xp)
     {
         ArgumentNullException.ThrowIfNull(pet);
-        if (xp == 0 || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet, Charm: not null } || pet.GetOwner() is not Player owner)
+        // Pet::GivePetXP: only a hunter's pet gains experience (vmangos returns for any pet that is not a hunter pet); a warlock's demon is
+        // a SummonKind.Pet too but follows its owner's level, and PetLoyalty.GivePetLevel would move its training points.
+        if (xp == 0 || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet, Charm: not null } || pet.GetOwner() is not Player { Class: Class.Hunter } owner)
         {
             return 0;
         }
@@ -67,8 +69,54 @@ public sealed partial class SummonService
     /// </summary>
     public void GivePetLevel(Creature pet, Player owner, int level)
     {
-        PetLoyalty.GivePetLevel(pet, level, PetXpForLevel((uint)level));
-        PetInitializer.InitStatsForLevel(pet, owner, level, Content); // clears the unit flags and sets the level again, as vmangos
+        // Pet::GivePetLevel: nothing for level 0 or the level the pet has.
+        if (level <= 0 || level == pet.Level)
+        {
+            return;
+        }
+
+        // The experience fields and training points are a hunter pet's (vmangos also moves a demon's training points; they mean nothing
+        // for it and would drift, so a demon only takes the stats). Pet::InitStatsForLevel clears the flags of a SUMMON_PET only (Pet.cpp:1294):
+        // a hunter pet keeps the unused rename and the abandon button across a level-up.
+        bool hunterPet = owner.Class == Class.Hunter;
+        if (hunterPet)
+        {
+            PetLoyalty.GivePetLevel(pet, level, PetXpForLevel((uint)level));
+        }
+
+        PetInitializer.InitStatsForLevel(pet, owner, level, Content, keepFlags: hunterPet);
+    }
+
+    /// <summary>
+    /// vmangos Pet::SynchronizeLevelWithOwner (Pet.cpp:2340-2358), run when the owner's level changes (Player::GiveLevel): a summoned pet
+    /// (a warlock's demon) takes the owner's level; a hunter pet is only brought down when it is above the owner.
+    /// </summary>
+    public void SynchronizeLevelWithOwner(Player owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        if (owner.Map?.FindObject(owner.PetGuid) is not Creature { Summon: { Kind: SummonKind.Pet, Charm: not null } } pet
+            || pet.OwnerGuid != owner.Guid)
+        {
+            return;
+        }
+
+        byte before = pet.Level;
+        if (owner.Class == Class.Hunter)
+        {
+            if (pet.Level > owner.Level)
+            {
+                GivePetLevel(pet, owner, owner.Level);
+            }
+        }
+        else
+        {
+            GivePetLevel(pet, owner, owner.Level);
+        }
+
+        if (pet.Level != before && owner.Class == Class.Hunter)
+        {
+            QueueCurrentPetSave(owner);
+        }
     }
 
     /// <summary>
