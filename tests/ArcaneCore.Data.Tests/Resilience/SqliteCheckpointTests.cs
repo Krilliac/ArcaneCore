@@ -379,6 +379,33 @@ public sealed class SqliteCheckpointTests : IDisposable
         Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == "data.sqlite-checkpoint");
     }
 
+    private static readonly TimeSpan LockEpisodeBound = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Pins the operational checkpoint mode by behaviour: with a reader parked on an old snapshot and a commit after it, PASSIVE copies what it can and
+    /// reports not busy, while FULL, RESTART and TRUNCATE (busy timeout 0) cannot finish and report busy (and take the writer lock to try).
+    /// </summary>
+    [Fact]
+    public void PassiveCheckpoint_WithAReaderParkedOnAnOldSnapshot_ReportsNotBusy()
+    {
+        string path = NewWalDb("passive-pin.db");
+        var options = new SqliteCheckpointOptions();
+        SqliteConnection app = OpenApp(path, options);
+        Insert(app, 20);
+        using var reader = new SqliteConnection(Connection(path));
+        reader.Open();
+        using SqliteTransaction snapshot = reader.BeginTransaction(deferred: true);
+        Assert.Equal(20L, Scalar(reader, "SELECT count(*) FROM t", snapshot));
+        Insert(app, 20, start: 1000);
+
+        SqliteCheckpointResult result = new SqliteWalCheckpointer(Target(path), options, new ListLogger(), TimeProvider.System).RunOnce();
+
+        Assert.True(result.Ran);
+        Assert.False(result.Truncate);
+        Assert.False(result.Busy);
+        Assert.True(result.CheckpointedFrames < result.LogFrames, $"the parked reader did not hold the copy back ({result.CheckpointedFrames} of {result.LogFrames})");
+    }
+
     [Fact]
     public async Task AWriterCommittingInATightLoop_IsNeverHeldOffByTheCheckpointsRunningAlongsideIt()
     {
@@ -420,8 +447,9 @@ public sealed class SqliteCheckpointTests : IDisposable
                         Thread.Yield();
                         rc = SQLitePCL.raw.sqlite3_exec(writer.Handle, insert);
                     }
-                    while (rc is SQLitePCL.raw.SQLITE_BUSY or SQLitePCL.raw.SQLITE_LOCKED);
+                    while (rc is SQLitePCL.raw.SQLITE_BUSY or SQLitePCL.raw.SQLITE_LOCKED && System.Diagnostics.Stopwatch.GetElapsedTime(episodeStart) < LockEpisodeBound);
                     longestEpisodeMs = Math.Max(longestEpisodeMs, (long)System.Diagnostics.Stopwatch.GetElapsedTime(episodeStart).TotalMilliseconds);
+                    if (rc is SQLitePCL.raw.SQLITE_BUSY or SQLitePCL.raw.SQLITE_LOCKED) return; // still held off at the bound: give up so the assertion below reports it instead of the test hanging
                 }
 
                 if (rc != SQLitePCL.raw.SQLITE_OK) throw new InvalidOperationException($"insert {i} failed: {SQLitePCL.raw.sqlite3_errmsg(writer.Handle).utf8_to_string()}");
@@ -444,12 +472,12 @@ public sealed class SqliteCheckpointTests : IDisposable
         Volatile.Write(ref stop, 1);
         await writes;
 
-        // PASSIVE takes no writer lock and waits on no lock, so a writer is only ever turned away by the instant a fresh checkpoint connection
-        // holds WAL_WRITE_LOCK to re-read a torn header: at most a few such episodes per run (a connection reads the header for its pragma and
-        // for the checkpoint), each over almost at once. The old TRUNCATE escalation held the writer lock through the copy and the database
-        // fsync (a 5078 ms commit, the busy timeout expiring, was seen once), which is what the 2 s bound would catch. Disk speed is not judged.
-        Assert.True(lockEpisodes <= 4 * 30, $"the writer met a lock in {lockEpisodes} separate episodes during 30 checkpoint runs");
-        Assert.True(longestEpisodeMs < 2000, $"the writer was held off for {longestEpisodeMs} ms by a lock while the checkpoints ran");
+        // PASSIVE takes no writer lock and waits on no lock, so a writer is only turned away by the instant a fresh checkpoint connection holds
+        // WAL_WRITE_LOCK to re-read a torn header, which is over almost at once. A lock the checkpoint held through its copy and the database fsync
+        // (the old TRUNCATE escalation: a 5078 ms commit, the busy timeout expiring, was seen once) outlasts the bound. The number of episodes
+        // is not asserted: FULL/RESTART/TRUNCATE take the lock once per run, so a count cannot tell them from the torn-header race. That the
+        // checkpoint is PASSIVE is pinned by PassiveCheckpoint_WithAReaderParkedOnAnOldSnapshot_ReportsNotBusy.
+        Assert.True(longestEpisodeMs < LockEpisodeBound.TotalMilliseconds, $"the writer was held off for {longestEpisodeMs} ms by a lock while the checkpoints ran ({lockEpisodes} episodes)");
     }
 
     [Fact]
