@@ -127,10 +127,9 @@ until the orchestrator regenerates `docs/reference/configuration.md` (new key `L
   unchanged and still differ from retail (see `docs/integration/gameobjects-loot.md`).
 * Corpse loot and kill reputation follow the first-damage tap (`LootService.OnCreatureDamaged`, cleared on evade and
   respawn; docs/areas/loot-templates.md) and the corpse money splits among the looter's current group within
-  `IsWithinLootXPDist` of the looter. Experience and quest kill credit still go to the killer's group, and
-  `Progression/KillRewards.Recipients` (stats-combat-formulas lane's file) still uses the 3D `<=` rule, so XP/quest credit
-  and loot disagree at the edges until it adopts `GroupRewardRange.IsAtGroupRewardDistance` (one-line
-  change, handed to that lane).
+  `IsWithinLootXPDist` of the looter. Experience, quest kill credit and kill reputation go to the killer's group and measure
+  through `GroupRewardRange.IsAtGroupRewardDistance` too (2D, strict, bounding radii, raid maps unlimited, dead members by
+  corpse), so they pick the same recipients as the money split.
 * Unlike vmangos, SMSG_GROUP_LIST is only resent when the pointer value actually changes (vmangos also
   resends when it is already cleared).
 * Group state stays memory-only (docs/areas/social.md).
