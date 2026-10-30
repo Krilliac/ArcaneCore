@@ -21,7 +21,8 @@ public sealed class AuthConfigChecks : IConfigCheck
         var issues = new List<ConfigIssue>();
 
         string? bind = configuration[BindKey];
-        if (!string.IsNullOrWhiteSpace(bind) && !IPAddress.TryParse(bind, out _))
+        // Only a missing key falls back to the default; a present-but-empty value is bound as "" and IPAddress.Parse("") throws in the listener.
+        if (bind is not null && !IPAddress.TryParse(bind, out _))
         {
             issues.Add(new ConfigIssue(ConfigSeverity.Error, BindKey, $"'{bind}' is not an IP address.",
                 "use an IPv4/IPv6 address such as 0.0.0.0 or 127.0.0.1 (host names are not resolved)"));

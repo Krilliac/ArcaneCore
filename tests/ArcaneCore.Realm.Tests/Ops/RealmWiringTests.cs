@@ -21,6 +21,34 @@ public sealed class RealmWiringTests
         Assert.Contains(report.Issues, i => i.Key == "Auth:BindAddress" && i.Severity == ConfigSeverity.Error && i.Fix.Contains("0.0.0.0", StringComparison.Ordinal));
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void AuthBindAddressPresentButEmpty_IsAStartupError(string value)
+    {
+        ConfigReport report = ValidateWith(("Auth:BindAddress", value));
+        Assert.Contains(report.Issues, i => i.Key == "Auth:BindAddress" && i.Severity == ConfigSeverity.Error);
+    }
+
+    [Theory]
+    [InlineData("0.0.0.0")]
+    [InlineData("::")]
+    [InlineData("::1")]
+    public void AuthBindAddressIpLiterals_Pass(string value)
+        => Assert.DoesNotContain(ValidateWith(("Auth:BindAddress", value)).Issues, i => i.Key == "Auth:BindAddress");
+
+    [Fact]
+    public void AuthBindAddressMissing_FallsBackToTheDefault()
+        => Assert.DoesNotContain(ValidateWith().Issues, i => i.Key == "Auth:BindAddress");
+
+    [Theory]
+    [InlineData("0", true)]
+    [InlineData("65535", true)]
+    [InlineData("65536", false)]
+    [InlineData("-1", false)]
+    public void AuthPortBounds(string value, bool valid)
+        => Assert.Equal(!valid, ValidateWith(("Auth:Port", value)).Issues.Any(i => i.Key == "Auth:Port" && i.Severity == ConfigSeverity.Error));
+
     [Fact]
     public void AuthPortOutOfRange_IsAStartupError()
     {

@@ -76,6 +76,7 @@ public sealed class LogonReconnectTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ReconnectProof_DisarmsThePreAuthLifetime_SoTheAuthenticatedSessionOutlivesIt()
     {
         byte[] key = Enumerable.Range(1, 40).Select(i => (byte)i).ToArray();
@@ -83,7 +84,7 @@ public sealed class LogonReconnectTests : IAsyncLifetime
         await accounts.CreateAsync(new Account { Username = "RECONNECT", Salt = [1], Verifier = [2], SessionKey = key });
         var realms = new InMemoryRealmStore([new RealmEntry { Name = "ArcaneCore", Address = "127.0.0.1:8085" }]);
         var guard = new ArcaneCore.Kernel.Net.NetGuard(
-            new NetProtectionOptions { LogonUnauthenticatedLifetime = TimeSpan.FromMilliseconds(400) }, () => 0, () => 0, NullLogger.Instance);
+            new NetProtectionOptions { LogonUnauthenticatedLifetime = TimeSpan.FromSeconds(2) }, () => 0, () => 0, NullLogger.Instance);
         await using NetworkStream client = await StartAsync(accounts, realms, guard: guard);
 
         await client.WriteAsync(BuildChallenge("RECONNECT"));
@@ -94,7 +95,7 @@ public sealed class LogonReconnectTests : IAsyncLifetime
         await client.WriteAsync(new byte[] { (byte)AuthCommand.ReconnectProof }.Concat(r1).Concat(SHA1.HashData(proofInput)).Concat(new byte[21]).ToArray());
         Assert.Equal(new byte[] { (byte)AuthCommand.ReconnectProof, (byte)AuthResult.Success }, await ReadExactAsync(client, 2));
 
-        await Task.Delay(1200); // well past the 400 ms pre-auth lifetime
+        await Task.Delay(3000); // well past the 2 s pre-auth lifetime
         await client.WriteAsync(new byte[] { (byte)AuthCommand.RealmList, 0, 0, 0, 0 });
         byte[] realmHeader = await ReadExactAsync(client, 3);
         Assert.Equal((byte)AuthCommand.RealmList, realmHeader[0]);

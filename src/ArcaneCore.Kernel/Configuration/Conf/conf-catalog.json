@@ -1431,7 +1431,7 @@
       "daemons": "Realm",
       "reload": "start",
       "meaning": "Interface to bind the logon listener to.",
-      "allowed": "text",
+      "allowed": "an IPv4 or IPv6 address such as 0.0.0.0, 127.0.0.1 or ::1 (host names are not resolved)",
       "docs": "docs/reference/configuration.md#auth",
       "isCollection": false
     },

@@ -13,7 +13,7 @@ namespace ArcaneCore.Realm.Ops.Cli;
 /// </summary>
 public static class RealmOpsCli
 {
-    /// <summary>The assemblies whose <see cref="IConfigCheck"/> classes the realm runs: the Kernel's (logging, resilience, watchdog, metrics) and this one's.</summary>
+    /// <summary>The assemblies whose <see cref="IConfigCheck"/> classes the realm runs: the Kernel's (every check under ArcaneCore.Kernel.Configuration.Validation) and this one's.</summary>
     public static IReadOnlyList<System.Reflection.Assembly> CheckAssemblies { get; } = [typeof(IConfigCheck).Assembly, typeof(RealmOpsCli).Assembly];
 
     /// <summary>The .conf file check (it needs the catalog and the daemon, so it is supplied here) first, then every other <see cref="IConfigCheck"/> of <see cref="CheckAssemblies"/> found by reflection.</summary>
