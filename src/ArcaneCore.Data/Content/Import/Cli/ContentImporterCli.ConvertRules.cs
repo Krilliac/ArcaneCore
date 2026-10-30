@@ -40,7 +40,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "convert-rules").ConfigureAwait(false);
+            await EnsureImporterSchemaAsync(db, a.Flag("--migrate"), o, ct, "convert-rules").ConfigureAwait(false);
             CreatureAiContent source = await EventAiRuleImporter.LoadSourceAsync(db, ct).ConfigureAwait(false);
             if (source.EventCount == 0)
             {

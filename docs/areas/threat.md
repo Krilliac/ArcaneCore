@@ -158,6 +158,8 @@ layout of `sql/base/mangos.sql` is not read (the command then reports no rows). 
 own migrations are not replayed as a second source (follow-up: an optional migrations directory like `--player-stats-migrations-dir`, classic-db
 rows winning on conflict).
 
+Schema gate: `spell-threat` never upgrades an existing world silently. A world whose schema is behind the importer's is refused with exit code 3 (`ExitCodes.Schema`) and nothing is changed; pass `--migrate` to upgrade it first. A database that holds no schema is still created.
+
 Provider coverage. The schema and store tests are theories over `TestDatabases.AvailableProviders`; on this machine only SQLite ran. MariaDB DDL
 is not transactional and commits implicitly, so the step is only re-runnable (the upgrade test drops the table and runs the step twice);
 PostgreSQL folds unquoted identifiers to lower case, so EF quotes every identifier and the importer matches headers case-insensitively in
