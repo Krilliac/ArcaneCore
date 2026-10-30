@@ -458,6 +458,13 @@ public sealed partial class GuildManager(SocialContext context)
             return;
         }
 
+        if (member.CharacterId == oldSlot.CharacterId)
+        {
+            // Handing leadership to oneself would demote the leader to an officer (SetLeader then ChangeRank on the same member).
+            SendResult(player, GuildCommand.Invite, string.Empty, GuildCommandError.NameInvalid);
+            return;
+        }
+
         SetLeader(guild, member);
         ChangeRank(guild, oldSlot, Guild.OfficerRank);
         Save(guild);

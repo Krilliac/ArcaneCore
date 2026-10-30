@@ -248,6 +248,24 @@ public sealed class GuildManagerTests
     }
 
     [Fact]
+    public void SetLeader_ToOneself_IsRefused_AndTheLeaderKeepsGuildMasterRank()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        Guild guild = Found(f, a);
+        Join(f, a, b);
+        f.ClearAll();
+
+        f.Context.Guilds.SetLeader(a, "P1");
+
+        Assert.Equal(1u, guild.LeaderId);
+        Assert.Equal(Guild.GuildMasterRank, guild.Find(1)!.Rank);
+        Assert.Equal((3u, string.Empty, (uint)GuildCommandError.NameInvalid), ReadResult(f.Single(a, WorldOpcode.SmsgGuildCommandResult)));
+        Assert.Empty(f.Sent(b, WorldOpcode.SmsgGuildEvent));
+    }
+
+    [Fact]
     public void Remove_NeedsTheRightAndAHigherRank()
     {
         using var f = new SocialFixture();
