@@ -177,7 +177,7 @@ It also skips grey creatures (level at or below `ExperienceFormulas.GrayLevel`);
 
 ## Starting a PvP fight (`World:Playerbots:Pvp:Initiate`)
 
-Not retail, off by default. War Mode on (`World:WarMode:Enabled`) already means attack on sight with the same rule and limits, no `Initiate:Enabled` needed; `Initiate:Enabled` is the opt-in for on-sight engagement while War Mode is off. With both off a bot only fights back (`PlayerbotBrain.Pvp.cs`), and a same-faction helper joins against an enemy player or bot only when that enemy struck the victim first. With either on, an idle bot
+Not retail, off by default. War Mode on (`World:WarMode:Enabled`) already means attack on sight with the same rule and limits, no `World:Playerbots:Pvp:Initiate:Enabled` needed; that key is the opt-in for on-sight engagement while War Mode is off. With both off a bot only fights back (`PlayerbotBrain.Pvp.cs`), and a same-faction helper joins against an enemy player or bot only when that enemy struck the victim first. With either on, an idle bot
 (alive, out of combat and duels, on a free goal, no defend post, no resurrection sickness, not in a group with a real player, at least
 `MinHealthPct` of its health) looks every two seconds for the nearest visible player or bot of the other faction within `RadiusYards` that:
 

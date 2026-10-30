@@ -21179,7 +21179,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "Let idle bots start PvP fights (off by default: not retail behaviour).",
+      "meaning": "Let idle bots start PvP fights while War Mode is off (off by default: not retail behaviour; War Mode on already means attack on sight).",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#worldplayerbots",
       "isCollection": false

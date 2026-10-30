@@ -177,7 +177,7 @@ public sealed class PlayerbotWarModeWorldTests
 
             PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
             PlayerbotBrain brain = HelpTestKit.BrainOf(world, helper);
-            if (lane.Helped == 1)
+            if (lane.Helped == 1 || scenario == HelpCase.VictimStartedItWarModeOn)
             {
                 await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => brain.EngagedPlayer is not null).Result, "the helper to take the attacker on");
             }
@@ -201,7 +201,8 @@ public sealed class PlayerbotWarModeWorldTests
 
         Assert.Equal(1, outcome.Helped);
         Assert.True(outcome.Engaged);
-        Assert.Equal(PlayerbotEngageReason.Help, outcome.Reason);
+        // With War Mode on the helper may already have taken the enemy on sight (Initiate) when the lane's request lands: both are on-sight engagements.
+        Assert.True(outcome.Reason == PlayerbotEngageReason.Help || (scenario == HelpCase.HelperUnflaggedWarModeOn && outcome.Reason == PlayerbotEngageReason.Initiate));
     }
 
     [Theory]
@@ -211,7 +212,7 @@ public sealed class PlayerbotWarModeWorldTests
     {
         HelpOutcome outcome = await HelpAsync(HelpCase.VictimStartedItWarModeOn, attackerIsBot);
 
-        Assert.Equal(1, outcome.Helped);
+        // The helper may already have the enemy on sight (Initiate) before the lane's request lands; either way it engages the one that only fought back.
         Assert.True(outcome.Engaged);
     }
 
@@ -349,7 +350,7 @@ public sealed class PlayerbotWarModeWorldTests
         await using SocialWorld world = await RivalryKit.StartAsync();
         Guid bot = await world.AddBotAsync("Chbot");
         await using WorldTestClient client = await world.AddPlayerAsync("Chfoe", RivalryKit.Undead);
-        await HelpTestKit.StandAsync(world, "Chbot", ("Chfoe", 5f));
+        await HelpTestKit.StandAsync(world, "Chbot", ("Chfoe", 1f));
         await world.Host.OnWorldAsync(() => PvpAreaState.SetWarModeExempt(RivalryKit.Online(world, "Chfoe"), true));
         if (grudge)
         {

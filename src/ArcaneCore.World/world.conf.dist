@@ -17138,7 +17138,8 @@ World.Playerbots.Population.ZoneLevelSlackMaxFloor = 12
 
 #
 #    World.Playerbots.Pvp.Initiate.Enabled
-#        Description: Let idle bots start PvP fights (off by default: not retail behaviour).
+#        Description: Let idle bots start PvP fights while War Mode is off (off by default: not
+#                     retail behaviour; War Mode on already means attack on sight).
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
