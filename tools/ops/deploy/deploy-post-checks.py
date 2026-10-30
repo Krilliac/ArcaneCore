@@ -29,17 +29,21 @@ def require(condition: object, message: object) -> None:
         sys.exit(f"deploy-post-checks: {message}")
 
 
-def status_console_launch(console: str, profile: Path, world_port: int, auth_port: int) -> tuple[list[str], dict[str, str]]:
-    """The command line and environment for the status console, the same as deploy-live.py opens: -Supervise and ARCANECORE_LIVE_SERVER=1.
+def status_console_argv(console: str, profile: Path, world_port: int, auth_port: int) -> list[str]:
+    """The command line for the status console, the same as deploy-live.py opens: -Supervise.
 
     Without -Supervise the console is read-only, and server-status.ps1 closes every older console for the same World port, so a read-only
     one would silently replace a supervising console and the live servers would lose crash and hang recovery.
     """
+    return ["pwsh", "-NoProfile", "-NoExit", "-File", console, "-Profile", str(profile),
+            "-WorldPort", str(int(world_port)), "-AuthPort", str(int(auth_port)), "-Supervise"]
+
+
+def status_console_env() -> dict[str, str]:
+    """The environment for the status console: this process's, plus ARCANECORE_LIVE_SERVER=1 as deploy-live.py sets it."""
     env = dict(os.environ)
     env["ARCANECORE_LIVE_SERVER"] = "1"
-    argv = ["pwsh", "-NoProfile", "-NoExit", "-File", console, "-Profile", str(profile),
-            "-WorldPort", str(world_port), "-AuthPort", str(auth_port), "-Supervise"]
-    return argv, env
+    return env
 
 
 def console_running_script(world_port: int) -> str:
@@ -147,8 +151,9 @@ def main() -> int:
         if running and running != "0":
             print(f"deploy-post-checks: a status console is already running for World port {world_port}; left in place", file=sys.stderr)
         else:
-            argv, status_env = status_console_launch(args.status_console, profile, world_port, auth_port)
-            subprocess.Popen(argv, close_fds=True, env=status_env, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            status_env = status_console_env()
+            subprocess.Popen(status_console_argv(args.status_console, profile, world_port, auth_port),
+                             close_fds=True, env=status_env, creationflags=subprocess.CREATE_NEW_CONSOLE)
     print(json.dumps(dict(healthy=True, world=world_pid, realm=realm_pid, started_bots=started, enabled_bots=enabled, max_bots=max_bots,
                           missing_log_lines=missing, log_counts=report["world_log_counts"])))
     return 0

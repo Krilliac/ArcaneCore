@@ -46,7 +46,7 @@ public sealed partial class DeployScriptSafetyTests
         // server-status.ps1 closes older consoles for the same World port; without -Supervise the new one is read-only (no crash/hang recovery).
         (int code, string output) = Python(["-c",
             "import importlib.util,sys; s=importlib.util.spec_from_file_location('pc',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
-            + "a,e=m.status_console_launch('s.ps1','prof',8085,3724); print(a[-1]); print(e['ARCANECORE_LIVE_SERVER']); print(m.console_running_script(8085).count('8085'))",
+            + "a=m.status_console_argv('s.ps1','prof',8085,3724); e=m.status_console_env(); print(a[-1]); print(e['ARCANECORE_LIVE_SERVER']); print(m.console_running_script(8085).count('8085'))",
             PostChecks]);
         Assert.True(code == 0, output);
         Assert.Equal(["-Supervise", "1", "2"], output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
