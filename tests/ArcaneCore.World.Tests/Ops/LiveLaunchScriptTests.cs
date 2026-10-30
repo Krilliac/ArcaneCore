@@ -376,7 +376,9 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Equal("true", settings["Cluster:Supervisor:Enabled"]);
         IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
         var options = new ClusterSupervisorOptions();
-        configuration.GetSection(ClusterSupervisorOptions.SectionName).Bind(options);
+        // Every emitted key must be a property of the options: a misspelt key (WorkingDirectory, LogFilePath, StartOrder, HangTimeoutSeconds,
+        // HangCaptureDirectory, HangCaptureTimeoutSeconds, StackCaptureTool, ...) would otherwise bind to nothing and be ignored.
+        configuration.GetSection(ClusterSupervisorOptions.SectionName).Bind(options, binder => binder.ErrorOnUnknownConfiguration = true);
         Assert.True(options.Enabled);
         Assert.Equal(gatewayMapWorker ? 3 : 2, options.Processes.Count);
         Assert.Equal(options.Processes.Count, options.MinClusterProcesses);
@@ -404,6 +406,11 @@ public sealed class LiveLaunchScriptTests : IDisposable
             Assert.True(command.Kind == DaemonCommandKind.Run, $"{key}: {command.Kind} {command.Message} (arguments: {process.Arguments})");
             Assert.Equal(childArguments.Length, command.HostArgs.Count);
         }
+
+        // The strict bind is not vacuous: one mistyped key is an error.
+        var typo = new Dictionary<string, string?>(settings) { ["Cluster:Supervisor:Processes:world:HangTimeoutSecond"] = "120" };
+        IConfigurationRoot typoConfiguration = new ConfigurationBuilder().AddInMemoryCollection(typo).Build();
+        Assert.Throws<InvalidOperationException>(() => typoConfiguration.GetSection(ClusterSupervisorOptions.SectionName).Bind(new ClusterSupervisorOptions(), binder => binder.ErrorOnUnknownConfiguration = true));
 
         // The parser is not vacuous: a mistyped key is refused.
         Assert.Equal(DaemonCommandKind.UsageError, DaemonCommandLine.Parse(["--Cluster:Supervisor:Enabeld=false"], ConfigDaemon.World, ConfCatalog.Embedded).Kind);
@@ -460,6 +467,69 @@ public sealed class LiveLaunchScriptTests : IDisposable
 
     // ---- the debugger script ------------------------------------------------------------------------------------------------------------
 
+    [PwshFact]
+    public void AttachDebugger_RunTwiceInOneSession_EachRunLogsToItsOwnFile()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // a Win32 debugger
+        }
+
+        // The Add-Type'd type outlives the script in a 'pwsh -NoExit' window: a second run must not inherit the first run's shut-down queues
+        // or its log path. Targets are throwaway pwsh sleepers started here.
+        string script = Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1");
+        string shared = Path.Combine(_root, "shared.log");
+        string other = Path.Combine(_root, "other.log");
+        string driver = Path.Combine(_root, "twice.ps1");
+        File.WriteAllText(driver, $$"""
+            $ErrorActionPreference = 'Stop'
+            foreach ($log in '{{Q(shared)}}', '{{Q(shared)}}', '{{Q(other)}}') {
+                $t = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep 3' -PassThru -WindowStyle Hidden
+                try { & '{{Q(script)}}' -WorldPid $t.Id -LogPath $log -LiveHome '{{Q(_home)}}' } finally { if (-not $t.HasExited) { $t.Kill() } }
+            }
+            """, new UTF8Encoding(false));
+        var start = NewPwsh();
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(driver);
+        (int code, string output) = Execute(start);
+        Assert.True(code == 0, $"pwsh exited {code}: {output}");
+
+        string sharedText = File.ReadAllText(shared);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(sharedText, "Successfully attached").Count);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(sharedText, "EXIT_PROCESS_DEBUG_EVENT").Count);
+        string otherText = File.ReadAllText(other);
+        Assert.Contains("Successfully attached", otherText, StringComparison.Ordinal);
+        Assert.Contains("EXIT_PROCESS_DEBUG_EVENT", otherText, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void AttachDebugger_AnUnopenableLogFile_IsReportedOnTheConsole_AndItsLinesAreCountedAsDropped()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string script = Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1");
+        string directoryAsLog = Path.Combine(_root, "a-directory");
+        Directory.CreateDirectory(directoryAsLog);
+        string driver = Path.Combine(_root, "unopenable.ps1");
+        File.WriteAllText(driver, $$"""
+            $ErrorActionPreference = 'Stop'
+            $t = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep 3' -PassThru -WindowStyle Hidden
+            try { & '{{Q(script)}}' -WorldPid $t.Id -LogPath '{{Q(directoryAsLog)}}' -LiveHome '{{Q(_home)}}' } finally { if (-not $t.HasExited) { $t.Kill() } }
+            """, new UTF8Encoding(false));
+        var start = NewPwsh();
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(driver);
+        (int code, string output) = Execute(start);
+        Assert.True(code == 0, $"pwsh exited {code}: {output}");
+        Assert.Contains("cannot open the log file", output, StringComparison.Ordinal);
+        System.Text.RegularExpressions.Match dropped = System.Text.RegularExpressions.Regex.Match(output, @"(\d+) console lines and (\d+) log-file lines dropped");
+        Assert.True(dropped.Success, output);
+        Assert.True(int.Parse(dropped.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture) >= 3, output);
+    }
+
     [Fact]
     public void AttachDebugger_LogsThroughBoundedQueues_AndNeverAttachesToTheSupervisor()
     {
@@ -472,6 +542,8 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("lines dropped", source, StringComparison.Ordinal);
         // The only AttachAsync calls are the two daemon PIDs and the supervisor's children.
         Assert.DoesNotContain("AttachAsync($SupervisorPid", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("public static class", source, StringComparison.Ordinal); // per-run instance state, not statics that outlive the script
+        Assert.Contains("$supervisorProcess.StartTime -eq $supervisorStart", source, StringComparison.Ordinal);
         Assert.Contains("if ($childPid -eq $SupervisorPid) { continue }", source, StringComparison.Ordinal);
     }
 
