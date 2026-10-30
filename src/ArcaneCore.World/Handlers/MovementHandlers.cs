@@ -442,7 +442,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             }
             else
             {
-                session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite world coordinates or orientation", session.RemoteEndpoint);
+                WarnRejected(session, "movement-nonfinite-position", "non-finite world coordinates or orientation");
                 ReportNonFiniteMovement(session, $"Non-finite world coordinates or orientation in movement packet: pos=({movement.X}, {movement.Y}, {movement.Z}, o={movement.Orientation}).");
             }
             return false;
@@ -458,7 +458,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             }
             else
             {
-                session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite transport coordinates or orientation", session.RemoteEndpoint);
+                WarnRejected(session, "movement-nonfinite-transport", "non-finite transport coordinates or orientation");
                 ReportNonFiniteMovement(session, $"Non-finite transport coordinates or orientation in movement packet: transport=0x{movement.TransportGuid:X} offset=({movement.TransportX}, {movement.TransportY}, {movement.TransportZ}, o={movement.TransportOrientation}).");
             }
             return false;
@@ -475,13 +475,22 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
             }
             else
             {
-                session.Logger.LogWarning("[{Endpoint}] movement packet rejected: non-finite pitch/jump/spline field under strict finiteness", session.RemoteEndpoint);
+                WarnRejected(session, "movement-nonfinite-fields", "non-finite pitch/jump/spline field under strict finiteness");
                 ReportNonFiniteMovement(session, $"Non-finite pitch/jump/spline field in movement packet: pitch={movement.Pitch}, jumpZ={movement.JumpZSpeed}, jumpCos={movement.JumpCosAngle}, jumpSin={movement.JumpSinAngle}, jumpXY={movement.JumpXySpeed}, splineElev={movement.SplineElevation}.");
             }
             return false;
         }
 
         return MovementValidator.IsValid(movement, session.StrictMovementFiniteness);
+    }
+
+    /// <summary>A client can send these at its packet budget, so the line is gated: one per interval and session, with the suppressed count (<see cref="ClientWarningGates"/>).</summary>
+    private static void WarnRejected(WorldSession session, string kind, string reason)
+    {
+        if (ClientWarningGates.TryEnter(session, kind, out int suppressed))
+        {
+            session.Logger.LogWarning("[{Endpoint}] movement packet rejected: {Reason} ({Suppressed} more since the last line)", session.RemoteEndpoint, reason, suppressed);
+        }
     }
 
     private static void ReportNonFiniteMovement(WorldSession session, string detail)
