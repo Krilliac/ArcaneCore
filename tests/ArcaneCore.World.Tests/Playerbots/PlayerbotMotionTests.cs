@@ -585,7 +585,7 @@ public sealed class PlayerbotMotionTests
             using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
             float wallX = 0f;
             // Past the wall the mesh walk fails and there is no floor query answer: no mesh surface, so the step keeps the route's own
-            // straight-line height, which climbs 2.1 yd per step (12 yd over the 20 yd route), over the step height. Nothing sees across.
+            // height interpolated from where the bot stands toward the route end, about 2.55 yd over a 3.5 yd step (12 yd over the remaining 16.5 yd), over the step height. Nothing sees across.
             List<(float X, float Z)> steps = await WalkNavigatedRouteAsync(host, session, x0 =>
             {
                 wallX = x0 + 5f;
