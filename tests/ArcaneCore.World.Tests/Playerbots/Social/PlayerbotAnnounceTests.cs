@@ -169,6 +169,49 @@ public sealed class PlayerbotAnnounceTests
         Assert.Equal(1, drop.Chat.Status().Safety.OutputFlagged);
     }
 
+    /// <summary>
+    /// Output screening that runs out of time has not judged the line: the announcement path fails closed like the answer path
+    /// (PlayerbotChat.cs answer screening, guild MOTD), so the model's line is never said and nothing is flagged for a
+    /// personal-data guess made by a timeout.
+    /// </summary>
+    // A pattern timeout other than the default gives the rig a filter of its own: the test hook never reaches the shared default one.
+    private static void OwnFilter(PlayerbotChatOptions chat) => chat.Safety.PatternTimeout = TimeSpan.FromMilliseconds(250);
+
+    [Fact]
+    public async Task AModelLine_ThatTheOutputScreeningCouldNotJudge_IsNotSaid_AndLeavesNoFlag()
+    {
+        await using var rig = new Rig(OwnFilter);
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex slow = filter.AllPatterns.First();
+        filter.TimeoutForTest = (pattern, text) => ReferenceEquals(pattern, slow) && text.Contains("fake", StringComparison.Ordinal);
+
+        BotChatReply reply = (await rig.AnswerAsync(Announcement()))!;
+        Assert.Equal("Builtin", reply.Provider);
+        Assert.DoesNotContain("fake", reply.Text, StringComparison.Ordinal);
+        Assert.True(rig.Chat.Status().Safety.TimedOut >= 1);
+
+        // A personal-data pattern that timed out is no finding: no flag record with the model's text as its excerpt.
+        await using var email = new Rig(OwnFilter);
+        PlayerbotChatSafetyFilter emailFilter = email.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex pattern = emailFilter.AllPatterns.Last(p => p.ToString().Contains('@', StringComparison.Ordinal));
+        emailFilter.TimeoutForTest = (p, text) => ReferenceEquals(p, pattern) && text.Contains("fake", StringComparison.Ordinal);
+        BotChatReply other = (await email.AnswerAsync(Announcement()))!;
+        Assert.Equal("Builtin", other.Provider);
+        Assert.Empty(email.Chat.Safety.Flags());
+    }
+
+    [Fact]
+    public async Task ABuiltinLine_ThatTheOutputScreeningCouldNotJudge_IsNotSaid()
+    {
+        await using var rig = new Rig(OwnFilter, model: false);
+        PlayerbotChatSafetyFilter filter = rig.Chat.Safety.Filter();
+        System.Text.RegularExpressions.Regex slow = filter.AllPatterns.First();
+        filter.TimeoutForTest = (pattern, text) => ReferenceEquals(pattern, slow) && text.Contains("zed", StringComparison.Ordinal); // the screened forms are lower case
+
+        Assert.Null(await rig.AnswerAsync(Announcement(who: "Zed", sentence: "A new member joined the guild.")));
+        Assert.Empty(rig.Chat.Safety.Flags());
+    }
+
     // --- models and RequireOptIn --------------------------------------------------------------------------------------
 
     [Fact]
