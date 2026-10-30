@@ -5,6 +5,9 @@ using ArcaneCore.Data.Schema.Upgrade.Copy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Data.Sqlite;
+using MySqlConnector;
+using Npgsql;
 
 namespace ArcaneCore.Data.Schema.Upgrade.Cli;
 
@@ -108,13 +111,30 @@ public static partial class DbUpgradeCli
                 }
 
                 await _out.WriteLineAsync($"arcane-db copy (ArcaneCore.Data {typeof(DbUpgradeCli).Assembly.GetName().Version})").ConfigureAwait(false);
+                var committed = new List<string>();
                 foreach (CopyJob job in jobs)
                 {
-                    int code = await RunCopyJobAsync(job, replace, allowSessions, lockTimeout, ct).ConfigureAwait(false);
+                    int code;
+                    try
+                    {
+                        code = await RunCopyJobAsync(job, replace, allowSessions, lockTimeout, ct).ConfigureAwait(false);
+                    }
+                    catch (ComponentFailure failure) when (committed.Count > 0)
+                    {
+                        throw new ComponentFailure(failure.ExitCode, failure.Message + System.Environment.NewLine + CommittedNote(committed));
+                    }
+
                     if (code != DbUpgradeExitCodes.Ok)
                     {
+                        if (committed.Count > 0)
+                        {
+                            await _err.WriteLineAsync(CommittedNote(committed)).ConfigureAwait(false);
+                        }
+
                         return code;
                     }
+
+                    committed.Add(job.Spec.Name);
                 }
 
                 // The proof the target is a database the daemons accept.
@@ -144,10 +164,43 @@ public static partial class DbUpgradeCli
             }
         }
 
+        /// <summary>Components commit one by one: after a later one fails the earlier ones stay in the target, and a re-run needs <c>--replace</c>.</summary>
+        private static string CommittedNote(IReadOnlyList<string> committed)
+            => $"error: already committed before this failure: {string.Join(", ", committed)}. Their rows stay in the target, so the target is no longer empty; run the copy again with --replace.";
+
+        /// <summary>Refuses an inline password in a connection string given on the command line (it shows in the process list and shell history).</summary>
+        private static void RefuseInlinePassword(string role, string componentName, string connectionString, DatabaseProvider provider)
+        {
+            string? password;
+            try
+            {
+                password = provider switch
+                {
+                    DatabaseProvider.Sqlite => new SqliteConnectionStringBuilder(connectionString).Password,
+                    DatabaseProvider.MariaDb or DatabaseProvider.MySql => new MySqlConnectionStringBuilder(connectionString).Password,
+                    DatabaseProvider.PostgreSql => new NpgsqlConnectionStringBuilder(connectionString).Password,
+                    _ => null,
+                };
+            }
+            catch (ArgumentException)
+            {
+                return; // not parseable: Prepare reports it, without echoing the string
+            }
+
+            if (!string.IsNullOrEmpty(password))
+            {
+                string where = role == "target"
+                    ? $"set ARCANE_DB_TARGET_{componentName.ToUpperInvariant()}_CONNECTION (or ARCANE_DB_TARGET_CONNECTION) in the environment"
+                    : $"leave out --source-connection and put the connection string in the configured Database section ({componentName} component), which the daemons read too";
+                throw new UsageException($"--{role}-connection contains a password; a command-line argument shows in the process list and shell history. Instead {where}.");
+            }
+        }
+
         private CopyEnd ResolveCopyEnd(Spec spec, DbUpgradeArguments a, bool isSource)
         {
             string role = isSource ? "source" : "target";
             string? connectionString = a.Value($"--{role}-connection");
+            bool fromArgument = connectionString is not null;
             string? providerText = a.Value($"--{role}-provider");
             if (!isSource)
             {
@@ -180,7 +233,13 @@ public static partial class DbUpgradeCli
                     throw new UsageException($"no {role} provider: pass --{role}-provider sqlite, mariadb, mysql or postgresql" + (isSource ? string.Empty : " (or set ARCANE_DB_TARGET_PROVIDER)"));
                 }
 
-                resolved = new DatabaseConnectionOptions { Provider = ParseProvider(providerText), ConnectionString = connectionString };
+                DatabaseProvider provider = ParseProvider(providerText);
+                if (fromArgument)
+                {
+                    RefuseInlinePassword(role, spec.Name, connectionString, provider);
+                }
+
+                resolved = new DatabaseConnectionOptions { Provider = provider, ConnectionString = connectionString };
                 _secrets = [.. _secrets, connectionString];
             }
 
@@ -356,6 +415,25 @@ public static partial class DbUpgradeCli
                     return DbUpgradeExitCodes.Refused;
                 }
 
+                // The sessions were counted at preflight; the schema step above took time, so count again right before the first write.
+                if (Hooks?.BeforeCopy is { } before)
+                {
+                    await before(job.Spec.Name, ct).ConfigureAwait(false);
+                }
+
+                if (!allowSessions)
+                {
+                    foreach ((DbContext db, CopyEnd end, string role) in new[] { (sdb, job.Source, "source"), (tdb, job.Target, "target") })
+                    {
+                        if (end.Target.Connection.Provider != DatabaseProvider.Sqlite
+                            && await ServerProbe.CountOtherSessionsAsync(db, ct).ConfigureAwait(false) is int sessions and > 0)
+                        {
+                            await _err.WriteLineAsync($"error: {name}: refused: {sessions} other session(s) connected to the {role} database ({end.Target.Description}) since the preflight; stop every ArcaneCore daemon first (or pass --allow-active-sessions). No {name} rows were copied.").ConfigureAwait(false);
+                            return DbUpgradeExitCodes.Refused;
+                        }
+                    }
+                }
+
                 CopyOutcome outcome;
                 try
                 {
@@ -381,7 +459,7 @@ public static partial class DbUpgradeCli
 
                 if (!outcome.Committed)
                 {
-                    await _err.WriteLineAsync($"error: {name}: verification failed for {results.Count(r => !r.IsOk)} table(s); the copy was rolled back and the target is as it was. " +
+                    await _err.WriteLineAsync($"error: {name}: verification failed for {results.Count(r => !r.IsOk)} table(s); the copy was rolled back and the target is as it was (PostgreSQL key counters are only moved after every table verified, immediately before the commit, so they are unchanged too). " +
                         "Fix the cause and run the copy again.").ConfigureAwait(false);
                     return DbUpgradeExitCodes.CopyVerifyFailed;
                 }

@@ -293,6 +293,23 @@ internal static partial class DbCopyTestSupport
         return connection;
     }
 
+    /// <summary>
+    /// <c>copy</c> refuses an inline password in <c>--target-connection</c>, so a test hands the target connection string over the way an operator must:
+    /// in <c>ARCANE_DB_TARGET_CONNECTION</c>. Returns the arguments without the flag and the environment lookup to pass to the CLI.
+    /// </summary>
+    public static (string[] Args, Func<string, string?> Environment) MoveTargetConnectionToEnvironment(string[] args)
+    {
+        int at = Array.IndexOf(args, "--target-connection");
+        if (at < 0 || at + 1 >= args.Length)
+        {
+            return (args, System.Environment.GetEnvironmentVariable);
+        }
+
+        string value = args[at + 1];
+        string[] rest = [.. args[..at], .. args[(at + 2)..]];
+        return (rest, name => name == "ARCANE_DB_TARGET_CONNECTION" ? value : null);
+    }
+
     /// <summary>The password of a server connection string (null when it has none).</summary>
     public static string? PasswordOf(DatabaseConnectionOptions options)
     {

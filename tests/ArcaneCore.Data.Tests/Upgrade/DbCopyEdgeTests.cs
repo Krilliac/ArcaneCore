@@ -4,6 +4,7 @@ using ArcaneCore.Data.Schema.Upgrade.Cli;
 using ArcaneCore.Data.Schema.Upgrade.Copy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Npgsql;
 using Xunit;
 
 namespace ArcaneCore.Data.Tests.Upgrade;
@@ -38,8 +39,9 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
     {
         var output = new StringWriter();
         var error = new StringWriter();
+        (string[] cleaned, Func<string, string?> environment) = DbCopyTestSupport.MoveTargetConnectionToEnvironment(args);
         int code = await DbUpgradeCli.RunAsync(
-            args, new DatabaseOptions { Provider = source.Provider, ConnectionString = source.ConnectionString }, output, error, null, null, hooks, CancellationToken.None);
+            cleaned, new DatabaseOptions { Provider = source.Provider, ConnectionString = source.ConnectionString }, output, error, null, environment, hooks, CancellationToken.None);
         return (code, output.ToString(), error.ToString());
     }
 
@@ -283,13 +285,197 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
         string[] args =
         [
             "copy", "--component", "auth",
-            "--source-provider", "postgresql", "--source-connection", "Host=localhost;Port=5432;Database=realm;Username=a;Password=p;",
-            "--target-provider", "postgresql", "--target-connection", "Host=127.0.0.1;Database=realm;Username=a;Password=p;",
+            "--source-provider", "postgresql", "--source-connection", "Host=localhost;Port=5432;Database=realm;Username=a;",
+            "--target-provider", "postgresql", "--target-connection", "Host=127.0.0.1;Database=realm;Username=a;",
         ];
 
         (int code, _, string error) = await RunAsync(source, args);
 
         Assert.Equal(DbUpgradeExitCodes.Usage, code);
         Assert.Contains("same database", error, StringComparison.Ordinal);
+    }
+
+    private static DbCopyHooks TamperRealmlist() => new()
+    {
+        AfterInsert = async (db, ct) =>
+        {
+            await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
+            command.Transaction = db.Database.CurrentTransaction!.GetDbTransaction();
+            command.CommandText = "UPDATE \"realmlist\" SET \"Name\" = 'tampered'";
+            await command.ExecuteNonQueryAsync(ct);
+        },
+    };
+
+    private static async Task<object?> PostgresScalarAsync(DatabaseConnectionOptions target, string sql)
+    {
+        await using var connection = new NpgsqlConnection(target.ConnectionString + ";Pooling=false");
+        await connection.OpenAsync();
+        await using NpgsqlCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        return await command.ExecuteScalarAsync();
+    }
+
+    [PostgresFact]
+    public async Task APostgresReplaceThatIsRolledBack_LeavesTheSequenceWhereItWas_AndTheNextInsertSucceeds()
+    {
+        DatabaseConnectionOptions source = await SeededAsync("auth");
+        DatabaseConnectionOptions target = await _databases.CreateAsync(DatabaseProvider.PostgreSql);
+        (int first, string firstOut, string firstErr) = await RunAsync(source, Args("auth", target));
+        Assert.True(first == DbUpgradeExitCodes.Ok, $"exit {first}\n{firstOut}\n{firstErr}");
+
+        // The target's counter is ahead of its rows (a committed state): a copy would move it back to the copied maximum.
+        string sequence = (string)(await PostgresScalarAsync(target, "SELECT pg_get_serial_sequence('\"realmlist\"', 'Id')"))!;
+        long ahead = Convert.ToInt64(await PostgresScalarAsync(target, "SELECT COALESCE(MAX(\"Id\"), 0) + 100 FROM \"realmlist\""), CultureInfo.InvariantCulture);
+        await PostgresScalarAsync(target, $"SELECT setval('{sequence}'::regclass, {ahead.ToString(CultureInfo.InvariantCulture)})");
+
+        (int code, _, string error) = await RunAsync(source, Args("auth", target, "--replace"), TamperRealmlist());
+
+        Assert.True(code == DbUpgradeExitCodes.CopyVerifyFailed, $"exit {code}\n{error}");
+        Assert.Equal(ahead, Convert.ToInt64(await PostgresScalarAsync(target, $"SELECT last_value FROM {sequence}"), CultureInfo.InvariantCulture));
+        string columns = (string)(await PostgresScalarAsync(target,
+            "SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'realmlist' AND column_name <> 'Id'"))!;
+        await PostgresScalarAsync(target, $"INSERT INTO \"realmlist\" ({columns}) SELECT {columns} FROM \"realmlist\" WHERE \"Id\" = (SELECT MAX(\"Id\") FROM \"realmlist\")");
+        Assert.Equal(ahead + 1, Convert.ToInt64(await PostgresScalarAsync(target, "SELECT MAX(\"Id\") FROM \"realmlist\""), CultureInfo.InvariantCulture));
+        DbCopyTestSupport.ClearPool(target);
+    }
+
+    private async Task<(DatabaseConnectionOptions Source, Dictionary<string, string> Environment, Dictionary<string, DatabaseConnectionOptions> Targets)> SeededAllAsync()
+    {
+        DatabaseConnectionOptions source = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        var targets = new Dictionary<string, DatabaseConnectionOptions>();
+        var environment = new Dictionary<string, string> { ["ARCANE_DB_TARGET_PROVIDER"] = "sqlite" };
+        foreach (string component in new[] { "auth", "characters", "world" })
+        {
+            await DbCopyTestSupport.SeedAsync(component, source, 5);
+            targets[component] = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+            environment[$"ARCANE_DB_TARGET_{component.ToUpperInvariant()}_CONNECTION"] = targets[component].ConnectionString;
+        }
+
+        return (source, environment, targets);
+    }
+
+    private static async Task<(int Code, string Out, string Err)> RunAllAsync(
+        DatabaseConnectionOptions source, Dictionary<string, string> environment, string[] args, DbCopyHooks? hooks)
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        int code = await DbUpgradeCli.RunAsync(
+            args, new DatabaseOptions { Provider = source.Provider, ConnectionString = source.ConnectionString }, output, error, null, environment.GetValueOrDefault, hooks, CancellationToken.None);
+        return (code, output.ToString(), error.ToString());
+    }
+
+    [Fact]
+    public async Task CopyAll_AVerificationMismatchInALaterComponent_NamesTheCommittedComponents_AndSaysReplaceIsNeeded()
+    {
+        (DatabaseConnectionOptions source, Dictionary<string, string> environment, Dictionary<string, DatabaseConnectionOptions> targets) = await SeededAllAsync();
+        int calls = 0;
+        var tamper = new DbCopyHooks
+        {
+            AfterInsert = async (db, ct) =>
+            {
+                if (++calls < 2)
+                {
+                    return;
+                }
+
+                await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
+                command.Transaction = db.Database.CurrentTransaction!.GetDbTransaction();
+                command.CommandText = "UPDATE \"characters\" SET \"Name\" = \"Name\" || 'x'";
+                await command.ExecuteNonQueryAsync(ct);
+            },
+        };
+
+        (int code, _, string error) = await RunAllAsync(source, environment, ["copy", "--component", "all"], tamper);
+
+        Assert.True(code == DbUpgradeExitCodes.CopyVerifyFailed, $"exit {code}\n{error}");
+        Assert.Contains("already committed", error, StringComparison.Ordinal);
+        Assert.Contains("auth", error[error.IndexOf("already committed", StringComparison.Ordinal)..], StringComparison.Ordinal);
+        Assert.Contains("--replace", error, StringComparison.Ordinal);
+        Assert.Equal(await DbCopyTestSupport.CountsAsync("auth", source), await DbCopyTestSupport.CountsAsync("auth", targets["auth"]));
+    }
+
+    [Fact]
+    public async Task CopyAll_AnErrorInALaterComponent_NamesTheCommittedComponents_AndSaysReplaceIsNeeded()
+    {
+        (DatabaseConnectionOptions source, Dictionary<string, string> environment, _) = await SeededAllAsync();
+        int calls = 0;
+        var fail = new DbCopyHooks { AfterInsert = (_, _) => ++calls < 3 ? Task.CompletedTask : throw new InvalidOperationException("forced failure") };
+
+        (int code, _, string error) = await RunAllAsync(source, environment, ["copy", "--component", "all"], fail);
+
+        Assert.Equal(DbUpgradeExitCodes.Failure, code);
+        Assert.Contains("forced failure", error, StringComparison.Ordinal);
+        string tail = error[error.IndexOf("already committed", StringComparison.Ordinal)..];
+        Assert.Contains("auth", tail, StringComparison.Ordinal);
+        Assert.Contains("characters", tail, StringComparison.Ordinal);
+        Assert.Contains("--replace", tail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CopyOneComponent_Failing_MentionsNoCommittedComponents()
+    {
+        DatabaseConnectionOptions source = await SeededAsync("auth");
+        DatabaseConnectionOptions target = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+
+        (int code, _, string error) = await RunAsync(source, Args("auth", target), TamperRealmlist());
+
+        Assert.Equal(DbUpgradeExitCodes.CopyVerifyFailed, code);
+        Assert.DoesNotContain("already committed", error, StringComparison.Ordinal);
+    }
+
+    [ServerProviderTheory]
+    [MemberData(nameof(ServerTargets))]
+    public async Task ASessionThatConnectsAfterThePreflight_IsRefused_BeforeTheFirstWrite(DatabaseProvider targetProvider)
+    {
+        DatabaseConnectionOptions source = await SeededAsync("auth");
+        DatabaseConnectionOptions target = await _databases.CreateAsync(targetProvider);
+        (int created, _, string createdError) = await RunAsync(source, Args("auth", target));
+        Assert.True(created == DbUpgradeExitCodes.Ok, createdError);
+        DbCopyTestSupport.ClearPool(target);
+        DbConnection? intruder = null;
+        var hooks = new DbCopyHooks { BeforeCopy = async (_, _) => intruder = await DbCopyTestSupport.HoldSessionAsync(target) };
+        try
+        {
+            (int code, _, string error) = await RunAsync(source, Args("auth", target, "--replace"), hooks);
+
+            Assert.True(code == DbUpgradeExitCodes.Refused, $"exit {code}\n{error}");
+            Assert.Contains("other session", error, StringComparison.Ordinal);
+            Assert.Contains("since the preflight", error, StringComparison.Ordinal);
+            Assert.Equal(await DbCopyTestSupport.CountsAsync("auth", source), await DbCopyTestSupport.CountsAsync("auth", target)); // the first copy's rows are still there
+        }
+        finally
+        {
+            if (intruder is not null)
+            {
+                await intruder.DisposeAsync();
+            }
+
+            DbCopyTestSupport.ClearPool(target);
+        }
+    }
+
+    [Theory]
+    [InlineData("target", "Host=db;Database=a;Username=u;Password=hunter2-inline;", "postgresql")]
+    [InlineData("target", "Server=db;Database=a;User ID=u;Pwd=hunter2-inline;", "mariadb")]
+    [InlineData("source", "Host=db;Database=a;Username=u;Password=hunter2-inline;", "postgresql")]
+    public async Task AnInlinePassword_InAConnectionFlag_IsRefused_WithoutEchoingIt(string role, string connectionString, string provider)
+    {
+        DatabaseConnectionOptions configured = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        string[] args = role == "target"
+            ? ["copy", "--component", "auth", "--target-provider", provider, "--target-connection", connectionString]
+            : ["copy", "--component", "auth", "--source-provider", provider, "--source-connection", connectionString, "--target-provider", "sqlite", "--target-connection", "Data Source=x.db"];
+        var output = new StringWriter();
+        var error = new StringWriter();
+
+        int code = await DbUpgradeCli.RunAsync(
+            args, new DatabaseOptions { Provider = configured.Provider, ConnectionString = configured.ConnectionString }, output, error, null, _ => null, null, CancellationToken.None);
+
+        Assert.Equal(DbUpgradeExitCodes.Usage, code);
+        Assert.Contains($"--{role}-connection contains a password", error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2-inline", output.ToString() + error.ToString(), StringComparison.Ordinal);
+        if (role == "target")
+        {
+            Assert.Contains("ARCANE_DB_TARGET_AUTH_CONNECTION", error.ToString(), StringComparison.Ordinal);
+        }
     }
 }

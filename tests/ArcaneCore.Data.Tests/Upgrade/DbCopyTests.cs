@@ -47,7 +47,14 @@ public sealed class DbCopyTests : IAsyncLifetime
 
     private static async Task<(int Code, string Out, string Err)> RunCopyAsync(
         DatabaseConnectionOptions source, string component, DatabaseConnectionOptions target, params string[] more)
-        => await UpgradeTestSupport.RunCliAsync(source, CopyArgs(component, target, more));
+    {
+        var output = new StringWriter();
+        var error = new StringWriter();
+        (string[] args, Func<string, string?> environment) = DbCopyTestSupport.MoveTargetConnectionToEnvironment(CopyArgs(component, target, more));
+        int code = await DbUpgradeCli.RunAsync(
+            args, new DatabaseOptions { Provider = source.Provider, ConnectionString = source.ConnectionString }, output, error, dbcDirectory: null, environment, CancellationToken.None);
+        return (code, output.ToString(), error.ToString());
+    }
 
     private async Task AssertEqualDatabasesAsync(string component, DatabaseConnectionOptions source, DatabaseConnectionOptions target)
     {

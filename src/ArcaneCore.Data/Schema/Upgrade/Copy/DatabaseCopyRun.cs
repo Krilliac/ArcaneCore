@@ -16,6 +16,9 @@ internal sealed class DbCopyHooks
     /// <summary>Runs inside the target transaction after every row was inserted and before verification (a test corrupts a row here to force exit 9).</summary>
     public Func<DbContext, CancellationToken, Task>? AfterInsert { get; init; }
 
+    /// <summary>Runs per component after the schema step and before the session re-check that precedes the first write; receives the component name (a test connects a session here).</summary>
+    public Func<string, CancellationToken, Task>? BeforeCopy { get; init; }
+
     /// <summary>Overrides <see cref="DatabaseCopy.MaxBatchRows"/>.</summary>
     public int? MaxBatchRows { get; init; }
 
@@ -26,7 +29,7 @@ internal sealed class DbCopyHooks
 /// <summary>What a copy of one component did.</summary>
 /// <param name="Results">Per table, source and target rows and whether the model-typed content agreed (read inside the transaction, before the commit).</param>
 /// <param name="Committed">False when verification found a difference: the target transaction was rolled back and the target is as it was.</param>
-/// <param name="CountersSet">How many auto-generated key counters were moved past the copied keys.</param>
+/// <param name="CountersSet">How many auto-generated key counters were moved past the copied keys (PostgreSQL: after verification, just before the commit).</param>
 /// <param name="PostCommitProblem">Set when everything was committed and verified but resetting the MariaDB/MySQL AUTO_INCREMENT counters failed afterwards (that DDL cannot run inside the transaction).</param>
 internal sealed record CopyOutcome(IReadOnlyList<CopyTableResult> Results, bool Committed, int CountersSet, string? PostCommitProblem);
 
@@ -35,9 +38,9 @@ internal static partial class DatabaseCopy
     /// <summary>
     /// Copy every table of <paramref name="ordered"/> (parents first) from <paramref name="source"/> to <paramref name="target"/>. The source is read in
     /// ONE read transaction (a consistent snapshot, also for the verification). The target is changed in ONE transaction: the component's tables are
-    /// emptied in reverse order, filled in order, the key counters are reset (PostgreSQL; MariaDB's DDL cannot run in a transaction and follows the
-    /// commit), and every table is verified by reading both sides back through the model's CLR types. Only an all-equal result commits; a difference
-    /// rolls everything back, and so does any exception.
+    /// emptied in reverse order, filled in order, and every table is verified by reading both sides back through the model's CLR types. Only an all-equal
+    /// result commits; a difference rolls everything back, and so does any exception. The key counters are reset last: PostgreSQL's <c>setval</c> is not
+    /// transactional, so it runs only after every table verified equal, immediately before the commit (MariaDB's DDL cannot run in a transaction and follows the commit).
     /// </summary>
     public static async Task<CopyOutcome> CopyAsync(
         DbContext source, DbContext target, IReadOnlyList<CopyTable> ordered, DbCopyHooks? hooks, CancellationToken ct)
@@ -94,11 +97,6 @@ internal static partial class DatabaseCopy
                 await after(target, ct).ConfigureAwait(false);
             }
 
-            if (postgres)
-            {
-                counters = await ResetPostgresSequencesAsync(targetConnection, targetTransaction, targetSql, ordered, ct).ConfigureAwait(false);
-            }
-
             foreach (CopyTable table in ordered)
             {
                 (long sourceRows, TableDigest sourceDigest) = await ModelDigestAsync(sourceConnection, sourceTransaction, sourceSql, table, "source", truncate, ct).ConfigureAwait(false);
@@ -109,6 +107,12 @@ internal static partial class DatabaseCopy
             committed = results.All(r => r.IsOk);
             if (committed)
             {
+                if (postgres)
+                {
+                    // setval is not transactional (a rollback does not undo it), so it runs only once every table verified equal, immediately before the commit.
+                    counters = await ResetPostgresSequencesAsync(targetConnection, targetTransaction, targetSql, ordered, ct).ConfigureAwait(false);
+                }
+
                 await targetTx.CommitAsync(ct).ConfigureAwait(false);
             }
             else
@@ -139,7 +143,28 @@ internal static partial class DatabaseCopy
         return new CopyOutcome(results, committed, counters, postCommit);
     }
 
-    private static string RowKey(DbDataReader reader, CopyTable table)
+    /// <summary>Column index of each primary-key column in <see cref="CopyTable.Columns"/> (-1 when absent), computed once per table.</summary>
+    private static int[] KeyIndexes(CopyTable table)
+    {
+        var indexes = new int[table.PrimaryKey.Count];
+        for (int k = 0; k < indexes.Length; k++)
+        {
+            string key = table.PrimaryKey[k];
+            indexes[k] = -1;
+            for (int c = 0; c < table.Columns.Count; c++)
+            {
+                if (string.Equals(table.Columns[c], key, StringComparison.OrdinalIgnoreCase))
+                {
+                    indexes[k] = c;
+                    break;
+                }
+            }
+        }
+
+        return indexes;
+    }
+
+    private static string RowKey(DbDataReader reader, CopyTable table, int[] keyIndexes)
     {
         if (table.PrimaryKey.Count == 0)
         {
@@ -147,9 +172,10 @@ internal static partial class DatabaseCopy
         }
 
         var parts = new List<string>();
-        foreach (string key in table.PrimaryKey)
+        for (int k = 0; k < table.PrimaryKey.Count; k++)
         {
-            int at = table.Columns.ToList().FindIndex(c => string.Equals(c, key, StringComparison.OrdinalIgnoreCase));
+            string key = table.PrimaryKey[k];
+            int at = keyIndexes[k];
             string text;
             try
             {
@@ -180,6 +206,7 @@ internal static partial class DatabaseCopy
         int perBatch = Math.Max(1, Math.Min(maxRows, MaxBatchParameters / Math.Max(1, table.Columns.Count)));
         var batch = new List<object[]>(perBatch);
         var keys = new List<string>(perBatch);
+        int[] keyIndexes = KeyIndexes(table);
         long bytes = 0;
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
@@ -193,20 +220,20 @@ internal static partial class DatabaseCopy
                 }
                 catch (Exception ex) when (ex is FormatException or InvalidCastException or OverflowException)
                 {
-                    throw new CopyDataException($"table '{table.Name}', column '{table.Columns[i]}', row [{RowKey(reader, table)}]: {ex.Message}", ex);
+                    throw new CopyDataException($"table '{table.Name}', column '{table.Columns[i]}', row [{RowKey(reader, table, keyIndexes)}]: {ex.Message}", ex);
                 }
 
                 if (postgres && row[i] is string text && text.Contains('\0', StringComparison.Ordinal))
                 {
                     throw new CopyDataException(
-                        $"table '{table.Name}', column '{table.Columns[i]}', row [{RowKey(reader, table)}]: the text contains a NUL character, which PostgreSQL cannot store", null);
+                        $"table '{table.Name}', column '{table.Columns[i]}', row [{RowKey(reader, table, keyIndexes)}]: the text contains a NUL character, which PostgreSQL cannot store", null);
                 }
 
                 bytes += row[i] switch { string s => s.Length * 2L, byte[] b => b.Length, _ => 8 };
             }
 
             batch.Add(row);
-            keys.Add(RowKey(reader, table));
+            keys.Add(RowKey(reader, table, keyIndexes));
             if (batch.Count >= perBatch || bytes >= maxBytes)
             {
                 await InsertBatchAsync(targetConnection, targetTransaction, targetSql, table, columnList, batch, keys, postgres, ct).ConfigureAwait(false);
@@ -326,6 +353,7 @@ internal static partial class DatabaseCopy
         command.CommandText = $"SELECT {string.Join(", ", table.Columns.Select(sql.DelimitIdentifier))} FROM {sql.DelimitIdentifier(table.Name)}";
         await using DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
         var canonical = new StringBuilder();
+        int[] keyIndexes = KeyIndexes(table);
         while (await reader.ReadAsync(ct).ConfigureAwait(false))
         {
             canonical.Clear();
@@ -338,7 +366,7 @@ internal static partial class DatabaseCopy
                 catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException or NotSupportedException)
                 {
                     throw new CopyDataException(
-                        $"table '{table.Name}', column '{table.Columns[i]}', row [{RowKey(reader, table)}]: the {side} value cannot be read as {table.ColumnTypes?[i].Name ?? "its type"}: {ex.Message}", ex);
+                        $"table '{table.Name}', column '{table.Columns[i]}', row [{RowKey(reader, table, keyIndexes)}]: the {side} value cannot be read as {table.ColumnTypes?[i].Name ?? "its type"}: {ex.Message}", ex);
                 }
             }
 
@@ -410,6 +438,8 @@ internal static partial class DatabaseCopy
             case bool b: text.Append(b ? "b1" : "b0"); break;
             case float f: text.Append('f').Append(f.ToString("R", CultureInfo.InvariantCulture)); break;
             case double d: text.Append('F').Append(d.ToString("R", CultureInfo.InvariantCulture)); break;
+            // A decimal keeps the scale it was stored with (1.5 vs 1.50), and the engines differ in how they pad it. Dividing by a 28-decimal 1 forces the quotient to the
+            // same scale for equal values, so only a difference in value, not in stored scale, is reported as a content difference.
             case decimal m: text.Append('d').Append((m / 1.0000000000000000000000000000m).ToString(CultureInfo.InvariantCulture)); break;
             case DateTime t: text.Append('t').Append((truncateMicroseconds ? t.Ticks / 10 : t.Ticks).ToString(CultureInfo.InvariantCulture)); break;
             case DateTimeOffset o: text.Append('t').Append((truncateMicroseconds ? o.UtcTicks / 10 : o.UtcTicks).ToString(CultureInfo.InvariantCulture)); break;
