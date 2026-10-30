@@ -16,8 +16,9 @@ namespace ArcaneCore.Game.Tests.Creatures;
 
 /// <summary>
 /// Creature searches on the path-job pool (<c>Creatures:Movement:PathJobs</c>, multithreading plan W5): eligible moves search on a
-/// worker and start on a later update with the worker's path; a request that changed meanwhile drops the old answer; chase/follow and
-/// every move with the setting off stay on the map's thread.
+/// worker and start on a later update with the worker's path; a request that changed meanwhile drops the old answer, except that a
+/// follow or chase answer that only lags its moving target is still walked when its path ends closer; follow (without PathJobsFollow)
+/// and every move with the setting off stay on the map's thread.
 /// </summary>
 public sealed class CreaturePathJobTests
 {
@@ -29,6 +30,9 @@ public sealed class CreaturePathJobTests
         public ConcurrentBag<int> SharedThreads { get; } = [];
 
         public ManualResetEventSlim Gate { get; } = new(true);
+
+        /// <summary>When set, the worker's answer (start, destination) instead of the three-point path.</summary>
+        public Func<Vector3, Vector3, PathResult>? SharedAnswer { get; set; }
 
         public int SyncCalls => Volatile.Read(ref _syncCalls);
 
@@ -48,7 +52,7 @@ public sealed class CreaturePathJobTests
             Gate.Wait(TimeSpan.FromSeconds(10));
             SharedThreads.Add(Environment.CurrentManagedThreadId);
             PathSearchCounters.RecordSearch(1, 1, capped: false);
-            return Answer(start, end);
+            return SharedAnswer?.Invoke(start, end) ?? Answer(start, end);
         }
 
         private static PathResult Answer(Vector3 start, Vector3 end) => new(PathType.Normal, [start, (start + end) * 0.5f, end]);
@@ -215,6 +219,108 @@ public sealed class CreaturePathJobTests
         Assert.NotEmpty(s.Paths.SharedThreads);
         Assert.DoesNotContain(worldThread, s.Paths.SharedThreads);
         Assert.True(s.Wolf.IsMoving, "the follower did not set off on the pool's path");
+    }
+
+    [Fact]
+    public void WithPathJobsFollow_AFollowerWhoseAnswersLagTheRunningOwner_StillSetsOffAndCatchesUp()
+    {
+        // A loaded pool answers every follow search two updates late. The owner runs 0.7 yd per 100 ms update (7 yd/s), so each answer
+        // is aimed 1.4 yd behind the owner's latest follow point, past PathJobFollowTolerance. Before the fix every such answer was
+        // dropped as stale and asked again, so the follower stood still for as long as the owner kept running (the WSG ramp flake:
+        // 57 of 58 follow jobs stale, the pet never moved).
+        using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true;
+        s.Paths.Gate.Reset();
+        s.Wolf.Motion.MoveFollow(s.Player, 2, 0);
+        float startX = s.Wolf.X;
+        float startY = s.Wolf.Y;
+
+        float y = 0f;
+        for (int i = 0; i < 40; i++)
+        {
+            y += 0.7f;
+            s.Player.Relocate(0, y, s.Player.Z, MathF.PI / 2f, 0);
+            s.World.RunTick(100);
+            if (i % 2 == 1)
+            {
+                // The answer lands between this update and the next one.
+                s.Paths.Gate.Set();
+                Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+                s.Paths.Gate.Reset();
+            }
+        }
+
+        float covered = Distance2D(s.Wolf, startX, startY);
+        Assert.True(s.System.PathJobsApplied >= 1, $"no lagging follow answer was applied (submitted {s.System.PathJobsSubmitted}, stale {s.System.PathJobsStale})");
+        Assert.True(covered >= 10f, $"the follower covered only {covered:F1} yd while its owner ran {y:F1} yd");
+
+        // The owner stops: the follower closes up on the follow point.
+        s.Paths.Gate.Set();
+        for (int i = 0; i < 60; i++)
+        {
+            s.World.RunTick(100);
+            Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        }
+
+        Assert.True(Distance2D(s.Wolf, s.Player) <= 4f, $"the follower ended {Distance2D(s.Wolf, s.Player):F1} yd from its owner");
+    }
+
+    /// <summary>
+    /// Lets the creature's one queued job finish while the target moves <paramref name="drift"/> yd on, then runs one update: the job's
+    /// answer is now a lagging one (its point is more than PathJobFollowTolerance from the re-asked one).
+    /// </summary>
+    private static void AnswerAfterTheTargetMoved(Scene s, float drift)
+    {
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+        s.Player.Relocate(s.Player.X, s.Player.Y + drift, s.Player.Z, s.Player.Orientation, 0);
+        s.Paths.Gate.Set();
+        Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        s.Paths.Gate.Reset(); // the re-asked job waits
+        s.World.RunTick(100);
+    }
+
+    [Fact]
+    public void WithPathJobsFollow_ALaggingPartialAnswerThatEndsFartherFromTheOwner_IsDroppedAndAskedAgain()
+    {
+        // What counts is where the found path ends, not the point it was asked for: a partial path that stops farther from the owner's
+        // new follow point than the follower already stands would walk it away from its owner.
+        using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true;
+        s.Player.Relocate(0, -10, s.Player.Z, MathF.PI / 2f, 0);
+        s.Paths.SharedAnswer = (start, end) => new PathResult(PathType.Incomplete, [start, start + (Vector3.Normalize(start - end) * 5f)]);
+        s.Paths.Gate.Reset();
+        s.Wolf.Motion.MoveFollow(s.Player, 2, 0);
+        float startX = s.Wolf.X;
+        float startY = s.Wolf.Y;
+
+        AnswerAfterTheTargetMoved(s, drift: 2f);
+
+        Assert.Equal(0, s.System.PathJobsApplied);
+        Assert.Equal(1, s.System.PathJobsStale);
+        Assert.Equal(2, s.System.PathJobsSubmitted);
+        Assert.False(s.Wolf.IsMoving, "the follower set off on a partial path that leads away from its owner");
+        Assert.True(Distance2D(s.Wolf, startX, startY) < 0.01f);
+        s.Paths.Gate.Set();
+    }
+
+    [Fact]
+    public void ALaggingNoPathAnswer_DoesNotMarkTheChaseTargetUnreachable_AndIsAskedAgain()
+    {
+        // A no-path answer for a point the target has already left says nothing about the target: applying it would set IsReachable false
+        // and feed the unreachable-target evade (CreatureMapSystem.Combat) for a stale point.
+        using Scene s = Start(movementType: 0);
+        s.Player.Relocate(25, 0, s.Player.Z, 0, 0);
+        s.Paths.SharedAnswer = (_, _) => new PathResult(PathType.NoPath, []);
+        s.Paths.Gate.Reset();
+        s.Wolf.Motion.MoveChase(s.Player);
+
+        AnswerAfterTheTargetMoved(s, drift: 2f);
+
+        Assert.True(s.Wolf.Motion.IsReachable, "a lagging no-path answer marked the chase target unreachable");
+        Assert.Equal(0, s.System.PathJobsApplied);
+        Assert.Equal(1, s.System.PathJobsStale);
+        Assert.Equal(2, s.System.PathJobsSubmitted);
+        s.Paths.Gate.Set();
     }
 
     [Fact]
