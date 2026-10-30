@@ -63,10 +63,14 @@ public sealed class RuleEngineAllocationTests
         }
 
         Run(5_000);
-        void Window() => Run(20_000);
+        int windows = 0;
+        long firedBefore = evaluator.Counters.Fired, actionsBefore = evaluator.Counters.ActionsRun;
+        void Window() { windows++; Run(20_000); }
         ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "20000 rule evaluator iterations");
 
-        Assert.True(evaluator.Counters.Fired > 20_000, $"only {evaluator.Counters.Fired} rules ran: the measurement would not cover the path");
-        Assert.True(evaluator.Counters.ActionsRun > 40_000, $"only {evaluator.Counters.ActionsRun} actions ran");
+        // Per window: the probe ran Run(20_000) `windows` times, so scale the original one-window thresholds by that count.
+        long fired = evaluator.Counters.Fired - firedBefore, actions = evaluator.Counters.ActionsRun - actionsBefore;
+        Assert.True(fired > 20_000L * windows, $"only {fired} rules ran in {windows} windows: the measurement would not cover the path");
+        Assert.True(actions > 40_000L * windows, $"only {actions} actions ran in {windows} windows");
     }
 }

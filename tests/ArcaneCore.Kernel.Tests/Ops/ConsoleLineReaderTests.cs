@@ -115,6 +115,7 @@ public sealed class ConsoleLineReaderTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task Reader_Stop_ReturnsAtOnce_AndTheBlockedReadIsNotJoined()
     {
         var input = new BlockingReader();
@@ -125,11 +126,11 @@ public sealed class ConsoleLineReaderTests
         await WaitAsync(() => received.Count == 1);
 
         Assert.True(reader.Thread!.IsBackground, "a background thread cannot keep the process alive");
-        // The read is blocked until "after" is posted below, so a Stop that joined it would never return; the bound only turns a hang
-        // into a failure.
+        // The read is blocked until "after" is posted below. A Stop that joined it would hang; one that did a bounded Join would take
+        // that bound, so the 5 s limit (Timing-tagged) catches both.
         try
         {
-            await Task.Run(reader.Stop).WaitAsync(TimeSpan.FromSeconds(30));
+            await Task.Run(reader.Stop).WaitAsync(TimeSpan.FromSeconds(5));
         }
         catch (TimeoutException)
         {

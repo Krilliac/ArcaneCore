@@ -230,13 +230,14 @@ public sealed class WorldHostCharacterFencingTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task UnfencedWorld_UsesTheConfiguredIntervalWhenNoSeamIsSet()
     {
         await using TestKit kit = TestKit.Create(enabled: false, claimWatchSeconds: 1);
         await kit.Host.StartAsync(CancellationToken.None);
 
         // Startup check = 1, the watch's first read = 2, the next one a second later = 3. Autosave is off here, so an autosave-derived interval would never get there.
-        await WaitUntil(() => kit.Ownership.IsOwnedCalls >= 3, seconds: 30); // only a lower bound matters (the 1 s interval is used); a generous deadline keeps host load from failing it
+        await WaitUntil(() => kit.Ownership.IsOwnedCalls >= 3, seconds: 6); // an upper bound IS the proof: with the 10 s default (DefaultClaimWatchIntervalSeconds) the third read lands at ~10 s, so the deadline must stay well under 10 s; Timing-tagged for that reason
     }
 
     [Fact]

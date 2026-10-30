@@ -467,7 +467,7 @@ public sealed class SqliteCheckpointTests : IDisposable
         {
             Volatile.Write(ref stop, 1);
             await writes.WaitAsync(TimeSpan.FromSeconds(30)); // rethrows the writer's exception
-            Assert.True(started.IsSet, "the writer ended before its fourth commit without failing");
+            Assert.True(started.IsSet, $"the writer ended before its fourth commit without failing (longest lock episode {longestEpisodeMs} ms, {lockEpisodes} episodes)");
         }
         var checkpointer = new SqliteWalCheckpointer(Target(path), options, new ListLogger(), TimeProvider.System);
         for (int run = 0; run < 30; run++)

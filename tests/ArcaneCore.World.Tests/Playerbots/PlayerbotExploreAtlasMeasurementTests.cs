@@ -16,7 +16,7 @@ internal sealed class ExploreMeasureFactAttribute : FactAttribute
 
     public ExploreMeasureFactAttribute()
     {
-        if (Environment.GetEnvironmentVariable(Variable) is not { Length: > 0 } path || string.IsNullOrWhiteSpace(path))
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(Variable)))
         {
             Skip = $"{Variable} (an imported SQLite world.db) is not set; the atlas measurement did NOT run.";
         }
