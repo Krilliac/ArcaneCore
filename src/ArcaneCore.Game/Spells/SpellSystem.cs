@@ -803,6 +803,7 @@ public sealed partial class SpellSystem
             }
             entry.Miss = objectOnly ? SpellMissInfo.None
                 : entry.EffectMask == 0 ? SpellMissInfo.Immune2
+                : !ReferenceEquals(target, caster) && !ReferenceEquals(target, cast.MagnetTarget) && !CheckTargetCreatureType(spell, target) ? SpellMissInfo.Immune // Spell.cpp:1003; the magnet already passed the check, and its 8179 holder is consumed by the redirect
                 : ReferenceEquals(target, caster)
                     ? (Rules.Immunity.ImmunityRules.IsImmuneToSpell(this, target, spell, castOnSelf: true) ? SpellMissInfo.Immune : SpellMissInfo.None)
                     : CombatRules.RollHit(this, caster, target, spell);
