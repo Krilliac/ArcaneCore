@@ -4,6 +4,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Rules.Immunity;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots.Qa;
 
@@ -1074,6 +1075,15 @@ internal sealed class SpellSweepRunner
             state = "ran:" + dispelSpell;
             if (_probe.Holders(_rig.System, unit, spell.Id).Count > 0)
             {
+                // A dispel that was turned away (the holder's unit is immune to it, or reflects it) never reached the aura: the check could not run.
+                if (_rig.System.Store.Get(dispelSpell) is { } dispelInfo
+                    && (ImmunityRules.IsImmuneToSpell(_rig.System, unit, dispelInfo, castOnSelf: false)
+                        || (SpellSystem.IsReflectableSpell(dispelInfo) && _rig.System.ReflectChance(unit, dispelInfo) > 0)))
+                {
+                    state = "not-run:immune";
+                    return;
+                }
+
                 Violate(SweepCategory.NotDispelled, spell.Id, $"type={spell.Dispel} {(positive ? "helpful" : "harmful")}");
             }
         });
