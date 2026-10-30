@@ -13,7 +13,7 @@
 # - ARCANECORE_TEST_CLIENT_DIR / ARCANECORE_TEST_CLIENT_FILES_DIR are passed through when set; otherwise filled from the optional gitignored
 #   slot-env.local.json ({"clientDir": "...", "clientFilesDir": "..."}) in WorkDir or LanesRoot; if still unset one line says client-data tests skip.
 # - Always releases the slot (finally). A slot file whose holder pwsh is dead (or older than $StaleMin minutes) is abandoned and removed.
-# - Exit code = the command's exit code (124 on timeout). Prints the log path and the log's last 60 lines.
+# - Exit code: 124 on timeout; else the last native command's code if non-zero; else 1 if the command threw or its last statement failed; else 0. Prints the log path and the log's last 60 lines.
 param(
     [Parameter(Mandatory)] [string]$Lane,
     [Parameter(Mandatory)] [string]$WorkDir,
@@ -92,7 +92,13 @@ try {
     $widthNote
     $Command = $widthCommand
     $setup += "Write-Output $(ConvertTo-PsSingleQuoted $widthNote)`n"
-    $script = "$setup$Command`nexit `$LASTEXITCODE"
+    # Honest exit code. $LASTEXITCODE only tracks native commands, so `exit $LASTEXITCODE` alone reported 0 for a thrown error, a failed
+    # cmdlet, or a command that ran no native program (and an earlier native success masked a later PowerShell failure).
+    # Child exit: the last native code if non-zero (so `cmd /c exit 3; Write-Output ok` is 3: a native failure is not forgiven by a later
+    # success); else 1 on a terminating error (caught, written to stderr) or when the command's last statement failed ($? false); else 0.
+    # $ErrorActionPreference is deliberately NOT 'Stop' here: that would turn benign non-terminating errors (a probe Get-Item, a native
+    # program's stderr) into fatal ones and change what existing dotnet/bash commands do. Terminating errors are still caught.
+    $script = "$setup`$global:LASTEXITCODE = 0`n`$__slotOk = `$true`ntry {`n$Command`n`$__slotOk = `$?`n} catch {`n[Console]::Error.WriteLine((`$_ | Out-String))`nexit 1`n}`nif (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nif (-not `$__slotOk) { exit 1 }`nexit 0"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     $p = Start-Process pwsh -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $enc -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
     try { $p.PriorityClass = 'BelowNormal' } catch { }
