@@ -132,7 +132,7 @@ internal sealed class PlayerbotRuleLadder
         });
     }
 
-    /// <summary>The evaluator seed of a bot: the guid mixed with a constant through two SplitMix64 finalisations.</summary>
+    /// <summary>The evaluator seed of a bot: the guid mixed with a constant through one SplitMix64 finalisation.</summary>
     internal static int SeedOf(ulong guid)
     {
         ulong z = (guid + 0x9E3779B97F4A7C15UL) ^ 0x0B07_1ADD_5EED_0001UL;
@@ -171,13 +171,18 @@ internal sealed class PlayerbotRuleLadder
     private static bool HasGoalRows(RuleCatalog catalog)
         => catalog.Goals.ContainsKey(PlayerbotLadderContent.GoalIdOf(PlayerbotLadderRung.HelpErrand));
 
-    /// <summary>Whether any shipped ladder rule row exists, loaded or disabled (a server that disabled them chose to; that is not a missing row).</summary>
+    /// <summary>
+    /// Whether any shipped ladder rule row exists, loaded or disabled (a server that disabled them chose to; that is not a missing row).
+    /// A loaded row counts only when it is a bot-host rule: a rule of another host that happens to hold one of the ladder ids does not stand
+    /// in for the ladder. The catalog records a disabled row by id alone (no host), so a disabled id counts as it always did. A row that
+    /// failed validation, enabled or disabled, is only listed as rejected and is in neither set, so it counts as missing (the shipped fallback runs).
+    /// </summary>
     private static bool HasLadderRules(RuleCatalog catalog)
     {
         foreach (PlayerbotLadderRung rung in PlayerbotLadderContent.Rungs)
         {
             int id = PlayerbotLadderContent.RuleIdOf(rung);
-            if (catalog.FindRule(id) is not null || catalog.DisabledRuleIds.Contains(id))
+            if (catalog.FindRule(id) is { } rule ? rule.Host == RuleHostKind.Bot : catalog.DisabledRuleIds.Contains(id))
             {
                 return true;
             }

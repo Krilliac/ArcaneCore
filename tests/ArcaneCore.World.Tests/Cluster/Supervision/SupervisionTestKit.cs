@@ -69,21 +69,25 @@ internal sealed class ManualDelays
     public Task Delay(TimeSpan duration, CancellationToken ct)
     {
         Requested.Enqueue(duration);
-        Interlocked.Increment(ref _requests);
         if (ct.IsCancellationRequested)
         {
+            Interlocked.Increment(ref _requests);
             return Task.FromCanceled(ct);
         }
 
         if (AutoComplete(duration))
         {
+            Interlocked.Increment(ref _requests);
             return Task.CompletedTask;
         }
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_gate)
         {
+            // Register and count under one lock: a request that RequestCount shows is always already pending, so a snapshot taken under
+            // this lock (PulseAsync) either releases it or does not count it.
             _pending.Add((duration, tcs));
+            Interlocked.Increment(ref _requests);
         }
 
         ct.Register(() =>
@@ -116,11 +120,25 @@ internal sealed class ManualDelays
     }
 
     /// <summary>Releases every pending delay and waits until something requests a new one: the loop that was waiting has run once more.</summary>
-    public async Task PulseAsync()
+    public async Task PulseAsync(int timeoutMs = 15_000)
     {
-        int before = RequestCount;
-        ReleaseAll();
-        await TestWait.UntilAsync(() => RequestCount > before, "the supervisor to request another delay");
+        // Snapshot the request count and take the pending delays in one critical section. Counting before registering (or reading the count
+        // outside the lock) lets a delay be counted as "already requested" yet missed by the release, and then nothing ever wakes it.
+        int before;
+        List<TaskCompletionSource> toRelease;
+        lock (_gate)
+        {
+            before = RequestCount;
+            toRelease = [.. _pending.Select(p => p.Tcs)];
+            _pending.Clear();
+        }
+
+        foreach (TaskCompletionSource tcs in toRelease)
+        {
+            tcs.TrySetResult();
+        }
+
+        await TestWait.UntilAsync(() => RequestCount > before, "the supervisor to request another delay", timeoutMs);
     }
 
     public Task WaitForPendingAsync(Func<TimeSpan, bool> match, string what)
@@ -175,6 +193,9 @@ internal sealed class ScriptedProcess : ISupervisedProcess
 
     public TimeSpan? LastDrainTimeout { get; private set; }
 
+    /// <summary>When set, a drain request returns this task instead of the <see cref="Drain"/> behaviour (a drain the test finishes later).</summary>
+    public Func<TimeSpan, Task<bool>>? DrainOverride { get; set; }
+
     public int Drains => Volatile.Read(ref _drains);
 
     public int Kills => Volatile.Read(ref _kills);
@@ -202,6 +223,11 @@ internal sealed class ScriptedProcess : ISupervisedProcess
         Interlocked.Increment(ref _drains);
         LastDrainTimeout = timeout;
         _journal.Enqueue("drain:" + Name);
+        if (DrainOverride is { } over)
+        {
+            return over(timeout);
+        }
+
         if (Drain == DrainBehaviour.ExitsOnDrain)
         {
             ExitWith(DrainExitCode);
@@ -259,7 +285,15 @@ internal sealed class ScriptedLauncher : ISupervisedProcessLauncher
 
     public ScriptedProcess Last => Processes[^1];
 
-    public ISupervisedProcess Launch(SupervisedProcessConfig config)
+    /// <summary>Runs on the new child inside <c>Launch</c>, after any handler passed to <c>Launch</c> is subscribed and before the launch returns (a child that writes at once).</summary>
+    public Action<ScriptedProcess>? DuringLaunch { get; set; }
+
+    public ISupervisedProcess Launch(SupervisedProcessConfig config) => LaunchCore(config, null);
+
+    /// <summary>Subscribes <paramref name="onOutputLine"/> before <see cref="DuringLaunch"/> runs, as a launcher whose output pumps start inside the launch must.</summary>
+    public ISupervisedProcess Launch(SupervisedProcessConfig config, Action<ISupervisedProcess, string, bool> onOutputLine) => LaunchCore(config, onOutputLine);
+
+    private ScriptedProcess LaunchCore(SupervisedProcessConfig config, Action<ISupervisedProcess, string, bool>? onOutputLine)
     {
         int index = Interlocked.Increment(ref _launches) - 1;
         if (FailLaunch?.Invoke(index) is { } failure)
@@ -269,10 +303,17 @@ internal sealed class ScriptedLauncher : ISupervisedProcessLauncher
 
         var process = new ScriptedProcess(30_000 + index, config.Name, config.ProtocolToken, Journal);
         Configure?.Invoke(index, process);
+        if (onOutputLine is not null)
+        {
+            process.OutputLineReceived += (line, isStdErr) => onOutputLine(process, line, isStdErr);
+        }
+
         lock (_processes)
         {
             _processes.Add(process);
         }
+
+        DuringLaunch?.Invoke(process);
 
         return process;
     }

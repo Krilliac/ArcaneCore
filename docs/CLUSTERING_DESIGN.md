@@ -174,6 +174,8 @@ Status of the roles in the executable: a World process hosts `Combined` and `Map
 characters-database leases (`realm_authority_lease`); the dedicated social and economy authorities above are not built, and a World process configured as
 one refuses to start. Storage writes are not yet checked against the fencing token at commit.
 
+Clock skew: a lease expires on the UTC clock of the node that judges it, not on database time, so every node must be NTP-synced. Skew between nodes above half the renew interval (`LeaseRenew / 2`) can make a healthy holder see its lease as about to lapse, or another node see it as expired, and cause a false loss (a fail-stop of the worker). Judging expiry on database time is not part of this design.
+
 ### Subsystem separation and alternatives
 
 Every subsystem keeps a clean module boundary. The chosen executable boundary

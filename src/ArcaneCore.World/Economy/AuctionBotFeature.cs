@@ -29,7 +29,7 @@ namespace ArcaneCore.World.Economy;
 /// If the ledger's audit ever finds a broken invariant the bot stops itself.
 /// </summary>
 public sealed class AuctionBotFeature(IServiceProvider services, ILogger<AuctionBotFeature> logger, TimeProvider? clock = null)
-    : IWorldFeature, IAsyncDisposable
+    : IWorldFeature, IAsyncDisposable, Cluster.Social.IRealmSingletonHalt
 {
     /// <summary>Terminal custody rows are kept this long (MaNGOS Zero custody TTL sweep).</summary>
     public const long TerminalRetentionSeconds = 2 * AuctionBotCustodyLedger.SecondsPerDay;
@@ -61,7 +61,19 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     public AuctionBotCustodyLedger Ledger { get; private set; } = new(new AuctionBotOptions());
 
     /// <summary>Set when the ledger audit failed: the bot does nothing more until restart.</summary>
-    public bool Halted { get; private set; }
+    public bool Halted => _halted;
+
+    private volatile bool _halted;
+
+    /// <summary>Stop the bot for good (a lost realm authority lease): every later tick is a no-op. Safe from any thread.</summary>
+    public void Halt()
+    {
+        if (!_halted)
+        {
+            _halted = true;
+            logger.LogWarning("AHBot halted: the node no longer holds the economy realm authority lease");
+        }
+    }
 
     /// <summary>The current planner (null until the item content is loaded).</summary>
     public AuctionBotPlanner? Planner => _planner;
@@ -756,7 +768,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             return;
         }
 
-        Halted = true;
+        _halted = true;
         foreach (string problem in problems)
         {
             logger.LogError("AHBot custody audit failed: {Problem}; the bot is stopped", problem);

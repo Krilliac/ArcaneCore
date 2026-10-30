@@ -268,11 +268,85 @@ public sealed class RealmLivenessTests
         Assert.Equal(lastBeat, rig.Row.HeartbeatUtc);
         Assert.Contains(rig.Log.Lines, l => l.Level >= LogLevel.Warning && l.Text.Contains("heartbeat", StringComparison.Ordinal) && l.Text.Contains("failed", StringComparison.Ordinal));
 
+        // A failed write is retried on the next wake (one second), not after a full interval.
+        rig.Clock.Advance(TimeSpan.FromSeconds(1));
+        await rig.WakeAsync();
+        Assert.Equal(rig.Clock.UtcNow, rig.Row.HeartbeatUtc);
+
         // The world kept ticking; the next interval's write goes through.
         rig.Ticks++;
         rig.Clock.Advance(TimeSpan.FromSeconds(10));
         await rig.WakeAsync();
         Assert.Equal(rig.Clock.UtcNow, rig.Row.HeartbeatUtc);
+    }
+
+    [Fact]
+    public async Task FailedStartingWrite_RetriesOnTheNextWake_ThenGoesOnline()
+    {
+        var rig = new Rig(row => row.Flags = RealmFlags.Offline);
+        try
+        {
+            rig.Store.FailNext["starting"] = 1;
+            await rig.Service.StartAsync(CancellationToken.None);
+            await rig.Service.StartWrite; // the queued first pass fails and does not throw
+            Assert.Equal(RealmRuntimeState.Unknown, rig.Row.State);
+            Assert.Contains(rig.Log.Lines, l => l.Level >= LogLevel.Warning && l.Text.Contains("starting", StringComparison.Ordinal) && l.Text.Contains("failed", StringComparison.Ordinal));
+
+            // Listener and first tick are already there, but Online is not written before Starting has landed.
+            rig.Ticks = 1;
+            rig.Lifetime.Started.Cancel();
+            await rig.WakeAsync();
+            Assert.Equal(RealmRuntimeState.Starting, rig.Row.State);
+            Assert.True(rig.Row.Flags.HasFlag(RealmFlags.Offline));
+
+            await rig.WakeAsync();
+            Assert.Equal(RealmRuntimeState.Online, rig.Row.State);
+            Assert.False(rig.Row.Flags.HasFlag(RealmFlags.Offline));
+            Assert.Equal(["starting", "starting", "online"], rig.Store.Calls);
+        }
+        finally
+        {
+            await rig.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Stop_WhileTheStartingWriteIsInFlight_WaitsForItAndLeavesTheStoppedRow()
+    {
+        var store = new RealmRowStore(new RealmEntry { Id = 1, Name = "R", Address = "a", Flags = RealmFlags.NewPlayers });
+        using var entered = new ManualResetEventSlim(false);
+        using var release = new ManualResetEventSlim(false);
+        store.OnCall = call =>
+        {
+            if (call == "starting")
+            {
+                entered.Set();
+                release.Wait(TimeSpan.FromSeconds(30));
+            }
+        };
+
+        using ServiceProvider services = new ServiceCollection().AddSingleton<IRealmStatusStore>(store).BuildServiceProvider();
+        var service = new RealmLivenessService(services, NullLogger<RealmLivenessService>.Instance, new RealmStatusOptions { Id = 1 }, new HandClock(), () => 1)
+        {
+            StartLoop = false,
+        };
+
+        await service.StartAsync(CancellationToken.None);
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(10)), "the Starting write reached the store");
+
+        Task stop = service.StopAsync(CancellationToken.None);
+        await Task.Delay(100);
+        Assert.False(stop.IsCompleted, "stop does not finish while the Starting write is still in the store");
+
+        release.Set();
+        await stop.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // The Starting write landed first, then the stopped write: the row is not left at Starting or Online.
+        Assert.True(service.StartWrite.IsCompleted, "no write task outlives StopAsync");
+        Assert.Equal(["starting", "stopped"], store.Calls);
+        Assert.Equal(RealmRuntimeState.Stopped, store.Row.State);
+        Assert.True(store.Row.Flags.HasFlag(RealmFlags.Offline));
+        service.Dispose();
     }
 
     [Fact]

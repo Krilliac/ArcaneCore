@@ -325,7 +325,11 @@ public sealed class PlayerbotInitiativeTests
         await HelpTestKit.StandAsync(world, "Initrare", ("Initlisten", 5f));
         ObjectGuid botGuid = await world.Host.PlayerStateAsync("Initrare", p => p.Guid);
         uint zone = await world.Host.PlayerStateAsync("Initrare", p => p.ZoneId);
-        await world.Host.OnWorldAsync(() => HelpTestKit.SpawnRare(HelpTestKit.Online(world, "Initrare"), 10f));
+        ObjectGuid rareGuid = await world.Host.OnWorldAsync(() => HelpTestKit.SpawnRare(HelpTestKit.Online(world, "Initrare"), 10f).Guid);
+        // The spawn reaches the bot's view on a later map update; a pass before that finds nothing to remark on.
+        await world.Host.WaitForWorldAsync(() => HelpTestKit.Online(world, "Initrare").VisibleObjects.Contains(rareGuid), "the rare creature to be in sight");
+        // The roll below is made with mood 0; a real mood (a level, an item) would shift the chance the pass uses, so the test has none.
+        await world.Host.OnWorldAsync(() => world.Options.Social.Mood.Enabled = false);
         PlayerbotTraits traits = PlayerbotTraits.For(botGuid.Value);
         long Roll(long after) => HelpTestKit.NowWhere(t => t > after && PlayerbotInitiativeRules.Rolls(botGuid.Value, zone, t, PlayerbotInitiativeRules.CommentSalt, PlayerbotInitiativeRules.CommentChance(traits.Chattiness, 0f)));
 

@@ -66,7 +66,8 @@ down sooner. `StalledWriterTests`, `WriterTeardownBoundTests`.
 * `Auth:StrictUsernameCharset = true` (opt-in, default false = retail): names outside printable
   ASCII get `UnknownAccount`.
 * Client text goes through `LogSafe.Escape` before logging (CR/LF/ESC and format characters
-  escaped, 64-character cap) to stop log forging.
+  escaped, 64-character cap) to stop log forging. The log sinks also escape control and format characters themselves
+  (`LogLineFormatter.AppendEscaped`); `LogSafe` still does the truncation.
 * `Realm/appsettings.json` ships `AutocreateAccounts: false` (was `true`). **Deviation from the
   WCell convenience, not from retail** (vmangos has no autocreate). README.md and
   docs/M1_ACCEPTANCE.md describe enabling it as an opt-in dev convenience; accounts are normally

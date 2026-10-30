@@ -38,6 +38,26 @@ internal sealed class WorldTestClient : IAsyncDisposable
         _stream = client.GetStream();
     }
 
+    /// <summary>This client's own endpoint, which is the session's remote endpoint on the server side; null once the socket is disposed.</summary>
+    internal string? LocalEndpoint
+    {
+        get
+        {
+            try
+            {
+                return EndpointKey(_client.Client?.LocalEndPoint);
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>An endpoint as one string whichever way the socket reports it: a dual-mode client shows a loopback peer as <c>[::ffff:127.0.0.1]:port</c>, the server as <c>127.0.0.1:port</c>.</summary>
+    internal static string? EndpointKey(System.Net.EndPoint? endpoint)
+        => endpoint is System.Net.IPEndPoint ip ? $"{ip.Address.MapToIPv4()}:{ip.Port}" : endpoint?.ToString();
+
     /// <summary>Bytes received but not yet read.</summary>
     public int Available => _client.Available;
 

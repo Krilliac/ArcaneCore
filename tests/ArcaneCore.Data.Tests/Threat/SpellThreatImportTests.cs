@@ -103,6 +103,42 @@ public sealed class SpellThreatImportTests
         Assert.Contains(expected, error.Message, StringComparison.Ordinal);
     }
 
+    // vmangos stores threat as a FLOAT column (spell 592 is 20.5) and reads it with Field::GetUInt16(): static_cast<uint16>(atol(text)), so the fraction is truncated.
+    [Theory]
+    [InlineData("20.5", 20)]
+    [InlineData("20.99", 20)]
+    [InlineData("0.5", 0)]
+    [InlineData("-0.5", 0)]
+    [InlineData("65535.9", 65535)]
+    [InlineData("20", 20)]
+    [InlineData("2.05e1", 20)]
+    public void AFractionalThreat_TruncatesLikeVMangos_InsteadOfFailingTheImport(string text, int expected)
+    {
+        string dump = $"INSERT INTO `spell_threat` (`entry`,`threat`,`multiplier`) VALUES (592,{text},1);";
+
+        SpellThreatRecord row = SpellThreatDumpImporter.Parse(new StringReader(dump)).Content.Find(592)!;
+
+        Assert.Equal(expected, row.Threat);
+    }
+
+    [Theory]
+    [InlineData("1.2.3", "spell 592: threat '1.2.3' is not a number")]
+    [InlineData("-", "spell 592: threat '-' is not a number")]
+    [InlineData("1e", "spell 592: threat '1e' is not a number")]
+    [InlineData("1e999", "spell 592: threat '1e999' is not a number")] // overflows to infinity
+    [InlineData("'abc'", "not a number")] // the tuple scanner already refuses text
+    [InlineData("65536", "spell 592: threat 65536 is outside 0..65535")]
+    [InlineData("65536.5", "outside 0..65535")]
+    [InlineData("-1.5", "spell 592: threat -1.5 is outside 0..65535")]
+    public void ANonNumericOrOutOfRangeThreat_IsRefusedNamingTheSpell(string text, string expected)
+    {
+        string dump = $"INSERT INTO `spell_threat` (`entry`,`threat`) VALUES (592,{text});";
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() => SpellThreatDumpImporter.Parse(new StringReader(dump)));
+
+        Assert.Contains(expected, error.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ADumpWithoutThePrimaryTable_YieldsNothing()
     {

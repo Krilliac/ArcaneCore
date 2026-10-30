@@ -7,7 +7,7 @@
 #   in a finally block, so Ctrl+C and failures clean up. A burner also exits by itself when this script's process is gone.
 # - -Parallel runs up to -Concurrency dotnet test processes at once (the tests themselves load the machine). Tests that bind fixed ports
 #   or share files will collide; use it for tests that are isolated.
-# - -Slot wraps each run in the fleet's run-in-slot.ps1 (the fleet's build-slot cap) when that file exists; else runs directly.
+# - -Slot wraps each run in this repo's run-in-slot.ps1 (the build-slot cap, needs a lanes root); else runs directly.
 # - Each run gets ARCANECORE_REPEAT_RUN_INDEX=<n> (1-based) in its environment, so a test can vary its seed per run.
 # - Writes <OutDir>\summary.json plus per-run run-NNNN\ (TRX, stdout.txt, stderr.txt). Last line: `runs=N ok=A failed=B error=C`.
 # Exit code: 0 = every run executed tests and none failed; 1 = a test failed (and no run was ERROR); 2 = any run was ERROR or the build failed.
@@ -72,7 +72,7 @@ function Start-DotnetProcess {
         $assign = ($EnvVars.GetEnumerator() | ForEach-Object { "`$env:$($_.Key)=$(ConvertTo-PwshLiteral ([string]$_.Value)); " }) -join ''
         $cmd = $assign + '& ' + (ConvertTo-PwshLiteral $dotnet) + ' ' + (($DotnetArgs | ForEach-Object { ConvertTo-PwshLiteral $_ }) -join ' ')
         $psi.FileName = $pwshPath
-        foreach ($a in @('-NoProfile', '-File', $slotScript, '-Lane', "repeat-$Tag", '-WorkDir', $repoRoot, '-Command', $cmd, '-TimeoutMin', "$TimeoutMin")) { $psi.ArgumentList.Add($a) }
+        foreach ($a in @('-NoProfile', '-File', $slotScript, '-Lane', "repeat-$Tag", '-WorkDir', $repoRoot, '-Command', $cmd, '-TimeoutMin', "$TimeoutMin", '-LanesRoot', $LanesRoot)) { $psi.ArgumentList.Add($a) }
     } else {
         $psi.FileName = $dotnet
         foreach ($a in $DotnetArgs) { $psi.ArgumentList.Add($a) }

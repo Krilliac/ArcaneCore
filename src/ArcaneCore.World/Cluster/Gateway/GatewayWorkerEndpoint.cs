@@ -79,7 +79,7 @@ public sealed class GatewayWorkerEndpoint(
                 await stopHost().ConfigureAwait(false);
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             hostFailure = ex;
         }
@@ -91,7 +91,7 @@ public sealed class GatewayWorkerEndpoint(
                 await stopAcceptor().ConfigureAwait(false);
             }
         }
-        catch (Exception ex) when (hostFailure is not null)
+        catch (Exception ex) when (ex is not OutOfMemoryException && hostFailure is not null)
         {
             throw new AggregateException("the link host and the acceptor both failed to stop", hostFailure, ex);
         }

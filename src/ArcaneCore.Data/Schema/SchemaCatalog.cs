@@ -191,11 +191,7 @@ public static class SchemaCatalog
         public static async Task<ConnectionLease> OpenAsync(DbContext db, CancellationToken cancellationToken)
         {
             DbConnection connection = db.Database.GetDbConnection();
-            bool opened = connection.State != ConnectionState.Open;
-            if (opened)
-            {
-                await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-            }
+            bool opened = await DbConnectionOpen.EnsureOpenAsync(connection, cancellationToken).ConfigureAwait(false);
 
             return new ConnectionLease(connection, db.Database.CurrentTransaction?.GetDbTransaction(), opened);
         }

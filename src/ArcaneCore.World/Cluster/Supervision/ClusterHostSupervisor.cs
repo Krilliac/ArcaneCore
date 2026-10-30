@@ -100,6 +100,18 @@ public interface ISupervisedProcess : IDisposable
 public interface ISupervisedProcessLauncher
 {
     ISupervisedProcess Launch(SupervisedProcessConfig config);
+
+    /// <summary>
+    /// Launches the child with <paramref name="onOutputLine"/> already subscribed, so a line the child writes straight after it starts is never missed.
+    /// The handler receives the launched process, the line and whether it came from stderr. The default subscribes after <see cref="Launch(SupervisedProcessConfig)"/>
+    /// returns (fine for launchers whose output cannot race the launch); launchers that start output pumps override it to subscribe before the pumps run.
+    /// </summary>
+    ISupervisedProcess Launch(SupervisedProcessConfig config, Action<ISupervisedProcess, string, bool> onOutputLine)
+    {
+        ISupervisedProcess process = Launch(config);
+        process.OutputLineReceived += (line, isStdErr) => onOutputLine(process, line, isStdErr);
+        return process;
+    }
 }
 
 /// <summary>
@@ -182,7 +194,9 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         return startInfo;
     }
 
-    public ISupervisedProcess Launch(SupervisedProcessConfig config)
+    public ISupervisedProcess Launch(SupervisedProcessConfig config) => Launch(config, null);
+
+    public ISupervisedProcess Launch(SupervisedProcessConfig config, Action<ISupervisedProcess, string, bool>? onOutputLine)
     {
         ProcessStartInfo startInfo = BuildStartInfo(config);
         var process = new Process
@@ -199,7 +213,7 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
 
         int pid = process.Id;
         _ownedPids[pid] = 1;
-        return new OwnedSystemSupervisedProcess(process, pid, _ownedPids, KillOverride, KillConfirmTimeout);
+        return new OwnedSystemSupervisedProcess(process, pid, _ownedPids, KillOverride, KillConfirmTimeout, onOutputLine);
     }
 
     private sealed class OwnedSystemSupervisedProcess : ISupervisedProcess
@@ -219,13 +233,15 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         private bool _disposed;    // after this no Process member is called; HasExited/ExitCode answer from the cache
         private int _disposeStarted;
 
-        public OwnedSystemSupervisedProcess(Process process, int pid, ConcurrentDictionary<int, byte> ownedPids, Action<Process>? killOverride, TimeSpan killConfirmTimeout)
+        public OwnedSystemSupervisedProcess(Process process, int pid, ConcurrentDictionary<int, byte> ownedPids, Action<Process>? killOverride, TimeSpan killConfirmTimeout, Action<ISupervisedProcess, string, bool>? onOutputLine)
         {
             _killProcess = killOverride ?? (p => p.Kill(entireProcessTree: true));
             _killConfirmTimeout = killConfirmTimeout;
             _process = process;
             _pid = pid;
             _ownedPids = ownedPids;
+            if (onOutputLine is not null)
+                OutputLineReceived += (line, isStdErr) => onOutputLine(this, line, isStdErr); // subscribed before the pumps start: no early line is lost
 
             // Launch set EnableRaisingEvents before Start, so the wait thread exists; Exited is the one observer that removes the pid.
             _process.Exited += (_, _) => OnExited();
@@ -370,10 +386,9 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             if (HasExited)
                 return true;
 
-            SendDrainAndCloseStdin();
-
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            cts.CancelAfter(timeout);
+            cts.CancelAfter(timeout); // armed before the write: a full child stdin pipe must not delay the timeout
+            _ = Task.Run(SendDrainAndCloseStdinObserved, CancellationToken.None); // off-thread; a blocked write ends when the kill breaks the pipe
             try
             {
                 await _process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
@@ -391,8 +406,24 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         }
 
         /// <summary>
-        /// Writes the drain line and closes stdin so the child also sees EOF. Synchronous and token-free on purpose: six bytes into a fresh
-        /// pipe never block (4 KiB on Windows, 64 KiB on Linux), and the close must happen whatever the write did.
+        /// Writes the drain line and closes stdin so the child also sees EOF. Runs on a thread-pool thread (see <see cref="RequestDrainAsync"/>), because the
+        /// write blocks when the child has stopped reading and its stdin pipe is full; the drain timeout is already armed, and the close happens in a
+        /// finally whatever the write did. A write left blocked at the timeout ends when the caller kills the child and the pipe breaks.
+        /// </summary>
+        private void SendDrainAndCloseStdinObserved()
+        {
+            try
+            {
+                SendDrainAndCloseStdin();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("cluster.supervisor.drain-write", ex); // observed here: nothing awaits this task
+            }
+        }
+
+        /// <summary>
+        /// The drain write itself; see <see cref="SendDrainAndCloseStdinObserved"/>.
         /// </summary>
         private void SendDrainAndCloseStdin()
         {
@@ -1013,10 +1044,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     {
         entry.Config.ProtocolToken = _protocolToken;
         DateTimeOffset launchedUtc = _time.GetUtcNow(); // before the launch: a crash report the child writes is never older than this
-        ISupervisedProcess process = _launcher.Launch(entry.Config);
+        ISupervisedProcess process = _launcher.Launch(entry.Config, (p, line, isStdErr) => OnChildLine(entry, p, line, isStdErr)); // subscribed inside Launch: an early line is not lost
         entry.LaunchUtc = launchedUtc;
         entry.BeginIncarnation(_time.GetTimestamp());
-        process.OutputLineReceived += (line, isStdErr) => OnChildLine(entry, process, line, isStdErr);
         entry.Process = process;
         entry.Incarnation++;
         entry.State = SupervisedProcessState.Running;
@@ -1359,7 +1389,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         {
             lock (_gate)
             {
-                entry.HangKillIssued = true; // before the kill: the monitor only sees the exit after it, so it can tell a kill from a self-exit
+                if (ReferenceEquals(entry.Process, process)) // a restart may have replaced this incarnation while the drain ran
+                    entry.HangKillIssued = true; // before the kill: the monitor only sees the exit after it, so it can tell a kill from a self-exit
             }
 
             await Task.Run(process.KillOwnedProcess).ConfigureAwait(false);
