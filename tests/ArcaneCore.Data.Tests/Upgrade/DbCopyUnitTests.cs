@@ -74,6 +74,25 @@ public sealed class DbCopyUnitTests
     public void KindOfServerType_MapsTheCatalogType(string dataType, string? columnType, string expected)
         => Assert.Equal(Enum.Parse<CopyKind>(expected), CopyValues.KindOfServerType(dataType, columnType));
 
+    [Fact]
+    public void Unsigned64_IsLiftedFromEachEnginesStorage_AndWrittenToSqliteAsTheSameBits()
+    {
+        ulong guid = 0xF130000000000001UL;
+        long asSqlite = unchecked((long)guid);
+
+        Assert.True(asSqlite < 0);
+        Assert.Equal(guid, CopyValues.Lift(asSqlite, typeof(ulong)));
+        Assert.Equal(guid, CopyValues.Lift((decimal)guid, typeof(ulong)));
+        Assert.Equal(guid, CopyValues.Lift(guid, typeof(ulong)));
+        Assert.Equal(ulong.MaxValue, CopyValues.Lift(-1L, typeof(ulong)));
+        Assert.Equal(5UL, CopyValues.Lift(5L, typeof(ulong)));
+        Assert.Equal((decimal)guid, CopyValues.Convert(CopyValues.Lift(asSqlite, typeof(ulong)), CopyKind.Decimal));
+        Assert.Equal(asSqlite, CopyValues.Convert(guid, CopyKind.Native));
+        Assert.Equal(-1L, CopyValues.Convert(ulong.MaxValue, CopyKind.Native));
+        Assert.Equal(-5L, CopyValues.Lift(-5L, typeof(long)));
+        Assert.Equal(DBNull.Value, CopyValues.Lift(null, typeof(ulong)));
+    }
+
     private static CopyTable T(string name, params string[] parents) => new(name, ["id"], ["id"], parents);
 
     [Fact]

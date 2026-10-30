@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade.Copy;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -53,7 +54,7 @@ internal static partial class DbCopyTestSupport
                     IProperty property = column.PropertyMappings[0].Property;
                     Type clr = property.GetValueConverter()?.ProviderClrType ?? property.ClrType;
                     bool nullIt = column.IsNullable && i % 2 == 1 && !keys.Contains(column.Name);
-                    command.Parameters.AddWithValue("$p" + names.Count, nullIt ? DBNull.Value : Generate(clr, column.Name, i, property.GetMaxLength()));
+                    command.Parameters.AddWithValue("$p" + names.Count, nullIt ? DBNull.Value : Generate(clr, column.Name, i, property.GetMaxLength(), keys.Contains(column.Name)));
                     placeholders.Add("$p" + names.Count);
                     names.Add("\"" + column.Name + "\"");
                 }
@@ -73,7 +74,12 @@ internal static partial class DbCopyTestSupport
         await transaction.CommitAsync();
     }
 
-    private static object Generate(Type type, string column, int i, int? maxLength)
+    /// <summary>
+    /// A value of CLR type <paramref name="type"/> for row <paramref name="i"/>. Key columns stay moderate (an identity counter must be able to move
+    /// on); every other numeric column carries the extremes of its type, every unsigned 64-bit column a value of 2^63 or more (a retail GUID such as
+    /// 0xF130000000000001, which SQLite stores negative), strings include the empty string and non-BMP text, timestamps have sub-microsecond ticks.
+    /// </summary>
+    private static object Generate(Type type, string column, int i, int? maxLength, bool isKey)
     {
         Type t = Nullable.GetUnderlyingType(type) ?? type;
         if (t.IsEnum)
@@ -81,27 +87,33 @@ internal static partial class DbCopyTestSupport
             t = Enum.GetUnderlyingType(t);
         }
 
-        if (t == typeof(bool)) return i % 2 == 0;
+        bool even = i % 2 == 0;
+        if (t == typeof(bool)) return even;
         if (t == typeof(byte)) return (byte)(100 + (i % 100));
-        if (t == typeof(sbyte)) return (sbyte)(i % 100);
-        if (t == typeof(short)) return (short)(2000 + i);
-        if (t == typeof(ushort)) return (ushort)(20000 + i);
-        if (t == typeof(int)) return 500000 + i;
-        if (t == typeof(uint)) return (uint)(500000 + i);
-        if (t == typeof(long)) return 5_000_000_000L + i;
-        if (t == typeof(ulong)) return (ulong)(5_000_000_000L + i);
-        if (t == typeof(float)) return (1.5f * i) + 0.25f;
-        if (t == typeof(double)) return (2.5 * i) + 0.125;
+        if (t == typeof(sbyte)) return even ? (sbyte)(sbyte.MinValue + (i % 100)) : (sbyte)(sbyte.MaxValue - (i % 100));
+        if (t == typeof(short)) return isKey ? (short)(2000 + i) : even ? (short)(short.MinValue + i) : (short)(short.MaxValue - i);
+        if (t == typeof(ushort)) return isKey ? (ushort)(20000 + i) : (ushort)(ushort.MaxValue - i);
+        if (t == typeof(int)) return isKey ? 500000 + i : even ? int.MinValue + i : int.MaxValue - i;
+        if (t == typeof(uint)) return isKey ? (uint)(500000 + i) : uint.MaxValue - (uint)i;
+        if (t == typeof(long)) return isKey ? 5_000_000_000L + i : even ? long.MinValue + i : long.MaxValue - i;
+        if (t == typeof(ulong)) return 0xF130000000000001UL + (ulong)i;
+        if (t == typeof(float)) return i == 0 && !isKey ? 0.1f : (1.5f * i) + 0.25f;
+        if (t == typeof(double)) return i == 0 && !isKey ? 0.1 : (2.5 * i) + 0.125;
         if (t == typeof(decimal)) return (3.25m * i) + 0.5m;
-        if (t == typeof(DateTime)) return new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(i).AddTicks(1234560);
-        if (t == typeof(DateTimeOffset)) return new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).AddSeconds(i);
+        if (t == typeof(DateTime)) return new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(i).AddTicks(1234567);
+        if (t == typeof(DateTimeOffset)) return new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).AddSeconds(i).AddTicks(1234567);
         if (t == typeof(TimeSpan)) return TimeSpan.FromSeconds(i + 1);
         if (t == typeof(Guid)) return new Guid(i + 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
         if (t == typeof(byte[])) return new byte[] { (byte)i, 1, 2, 3, (byte)(i >> 8) };
         if (t == typeof(char)) return (char)('a' + (i % 26));
         if (t == typeof(string))
         {
-            string s = $"{column}-{i}";
+            if (!isKey && i == 0 && !column.Contains("Name", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            string s = !isKey && i == 2 && (maxLength is null || maxLength >= 12) ? $"{column}-\U0001F600\U0001D4D0\u00E9-{i}" : $"{column}-{i}";
             return maxLength is { } max && s.Length > max ? s[^max..] : s;
         }
 
@@ -132,6 +144,7 @@ internal static partial class DbCopyTestSupport
         var result = new Dictionary<string, string[]>(StringComparer.Ordinal);
         await db.Database.OpenConnectionAsync();
         DbConnection raw = db.Database.GetDbConnection();
+        Dictionary<string, Dictionary<string, Type>> clrTypes = DatabaseCopy.TablesOf(db, SchemaProbe.SchemaOf(component)).ToDictionary(t => t.Name, t => t.Columns.Select((c, i) => (c, Type: t.ColumnTypes![i])).ToDictionary(x => x.c, x => x.Type, StringComparer.Ordinal), StringComparer.Ordinal);
         foreach ((string table, string[] columns) in ModelTables(db, SchemaProbe.SchemaOf(component)))
         {
             await using DbCommand command = raw.CreateCommand();
@@ -143,7 +156,7 @@ internal static partial class DbCopyTestSupport
                 var line = new StringBuilder();
                 for (int i = 0; i < columns.Length; i++)
                 {
-                    line.Append(Normalize(reader.IsDBNull(i) ? null : reader.GetValue(i))).Append('|');
+                    line.Append(Normalize(reader.IsDBNull(i) ? null : reader.GetValue(i), clrTypes[table][columns[i]])).Append('|');
                 }
 
                 rows.Add(line.ToString());
@@ -156,8 +169,24 @@ internal static partial class DbCopyTestSupport
         return result;
     }
 
-    private static string Normalize(object? value)
+    private static string Normalize(object? value, Type clr)
     {
+        if (value is not null && clr == typeof(ulong))
+        {
+            // SQLite keeps the 64 bits in a signed integer, PostgreSQL in numeric(20,0): both read back as the same unsigned number.
+            return value switch
+            {
+                long l => unchecked((ulong)l).ToString(CultureInfo.InvariantCulture),
+                decimal m => ((ulong)m).ToString(CultureInfo.InvariantCulture),
+                _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty,
+            };
+        }
+
+        if (value is not null && clr == typeof(float) && value is double or float or decimal)
+        {
+            return Convert.ToSingle(value, CultureInfo.InvariantCulture).ToString("R", CultureInfo.InvariantCulture);
+        }
+
         switch (value)
         {
             case null: return "<null>";
@@ -248,6 +277,89 @@ internal sealed class ServerProviderTheoryAttribute : Xunit.TheoryAttribute
         if (!TestDatabases.AvailableProviders().Any(p => (DatabaseProvider)p[0] != DatabaseProvider.Sqlite))
         {
             Skip = $"Set {TestDatabases.MariaDbVariable} or {TestDatabases.PostgresVariable} to run the server-provider copy tests.";
+        }
+    }
+}
+
+internal static partial class DbCopyTestSupport
+{
+    /// <summary>An open, unpooled connection to the database: another session, as a running daemon would be.</summary>
+    public static async Task<DbConnection> HoldSessionAsync(DatabaseConnectionOptions options)
+    {
+        DbConnection connection = options.Provider == DatabaseProvider.PostgreSql
+            ? new NpgsqlConnection(options.ConnectionString + ";Pooling=false")
+            : new MySqlConnection(options.ConnectionString + ";Pooling=false");
+        await connection.OpenAsync();
+        return connection;
+    }
+
+    /// <summary>The password of a server connection string (null when it has none).</summary>
+    public static string? PasswordOf(DatabaseConnectionOptions options)
+    {
+        var builder = new DbConnectionStringBuilder { ConnectionString = options.ConnectionString };
+        foreach (string key in new[] { "Password", "pwd", "Pwd" })
+        {
+            if (builder.TryGetValue(key, out object? value) && value is string { Length: > 0 } text)
+            {
+                return text;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Every value of one column as the driver returns it, written invariantly (a ulong is a negative long on SQLite, a decimal on PostgreSQL, a ulong on MariaDB).</summary>
+    public static async Task<string[]> RawColumnAsync(string component, DatabaseConnectionOptions connection, string table, string column)
+    {
+        await using DbContext db = SchemaProbe.CreateContext(component, connection);
+        await db.Database.OpenConnectionAsync();
+        await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
+        command.CommandText = $"SELECT {UpgradeTestSupport.Quote(db, column)} FROM {UpgradeTestSupport.Quote(db, table)} WHERE {UpgradeTestSupport.Quote(db, column)} IS NOT NULL";
+        await using DbDataReader reader = await command.ExecuteReaderAsync();
+        var values = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            values.Add(Convert.ToString(reader.GetValue(0), CultureInfo.InvariantCulture)!);
+        }
+
+        values.Sort(StringComparer.Ordinal);
+        return [.. values];
+    }
+
+    /// <summary>The (table, column) pairs of the component whose model type is <paramref name="clr"/>.</summary>
+    public static (string Table, string Column)[] ColumnsOfType(string component, Type clr)
+    {
+        using DbContext db = SchemaProbe.CreateContext(component, new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = "Data Source=:memory:" });
+        return [.. DatabaseCopy.TablesOf(db, SchemaProbe.SchemaOf(component))
+            .SelectMany(t => t.Columns.Select((c, i) => (t.Name, c, Type: t.ColumnTypes![i])).Where(x => x.Type == clr).Select(x => (x.Name, x.c)))];
+    }
+
+    /// <summary>The row counts a blank bootstrapped database of the component has (what a rolled-back copy must leave).</summary>
+    public static async Task<Dictionary<string, long>> FreshCountsAsync(TestDatabases databases, string component)
+    {
+        DatabaseConnectionOptions blank = await databases.CreateAsync(DatabaseProvider.Sqlite);
+        await SchemaProbe.EnsureCurrentAsync(component, blank);
+        return await CountsAsync(component, blank);
+    }
+
+    public static async Task ExecuteSqliteAsync(DatabaseConnectionOptions sqlite, string sql)
+    {
+        await using var connection = new SqliteConnection(sqlite.ConnectionString + ";Pooling=False");
+        await connection.OpenAsync();
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
+}
+
+/// <summary>A theory for PostgreSQL only: skipped (with the reason) when ARCANECORE_TEST_POSTGRES is not set.</summary>
+internal sealed class PostgresFactAttribute : Xunit.FactAttribute
+{
+    public PostgresFactAttribute()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(TestDatabases.PostgresVariable)))
+        {
+            Skip = $"Set {TestDatabases.PostgresVariable} to run the PostgreSQL copy tests.";
         }
     }
 }
