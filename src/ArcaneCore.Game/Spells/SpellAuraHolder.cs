@@ -423,9 +423,10 @@ public sealed class SpellAuraHolder
     /// </summary>
     internal void NotifyChanged() => Target.SpellState?.Wake(SpellWakeReason.HolderChanged);
 
-    /// <summary>Whether this holder is a caster's own party area aura that spreads to its group.</summary>
+    /// <summary>Whether this holder is a caster's own party, friend, enemy or pet area aura that spreads to its group, the units around it or its owner.</summary>
     public bool IsAreaSource => AreaParent is null && CasterGuid == Target.Guid
-        && (Spell.HasEffect(SpellEffectName.ApplyAreaAuraParty) || Spell.HasEffect(SpellEffectName.ApplyAreaAuraFriend) || Spell.HasEffect(SpellEffectName.ApplyAreaAuraEnemy));
+        && (Spell.HasEffect(SpellEffectName.ApplyAreaAuraParty) || Spell.HasEffect(SpellEffectName.ApplyAreaAuraFriend) || Spell.HasEffect(SpellEffectName.ApplyAreaAuraEnemy)
+            || Spell.HasEffect(SpellEffectName.ApplyAreaAuraPet));
 
     /// <summary>Members currently holding a child of this area aura source.</summary>
     internal Dictionary<ObjectGuid, SpellAuraHolder> AreaChildren { get; } = [];

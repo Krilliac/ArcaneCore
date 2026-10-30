@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Spells.Casters.Drain;
 /// The drain auras: PERIODIC_LEECH (Drain Life, Siphon Life, Devouring Plague) and PERIODIC_MANA_LEECH (Drain Mana).
 /// vmangos Aura::PeriodicTick, SpellAuras.cpp:5927-6000 (leech) and :6116-6175 (mana leech).
 /// <para>
-/// Not modelled (documented limits): damage absorption of the leech (the absorb framework is another lane), spell
+/// Not modelled (documented limits): spell
 /// immunities, the PERIODIC_HEALTH_FUNNEL aura that shares vmangos' leech block (Health Funnel targets the caster's pet:
 /// pets lane), threat of drained mana, spell mods of the multiplier, and Mark of Kazzak. Health-leech threat uses
 /// the explicit periodic-leech sink origin; direct health-leech threat is suppressed at its producer.
@@ -29,7 +29,7 @@ public static class DrainAuras
     }
 
     /// <summary>
-    /// Health leech tick: the aura's (snapshotted) amount, target side modifiers, the signed periodic resist, capped at the
+    /// Health leech tick: the aura's (snapshotted) amount, target side modifiers, the signed periodic resist, the target's absorb shields, capped at the
     /// target's health; the caster heals the damage dealt times EffectMultipleValue (1 when unset). Nothing happens
     /// while either side is dead; a target that dies ends the caster's channel of this spell.
     /// </summary>
@@ -49,8 +49,13 @@ public static class DrainAuras
         // vulnerability (negative resist) is extra damage (:5975-5978). The log shows the damage before the resist comes off.
         uint rolled = damage;
         uint resisted = spells.ApplyResist(caster, target, spell, ref damage, periodic: true);
+
+        // Shields soak the leech damage and so cut the heal (vmangos CalculateDamageAbsorbAndResist, malus = absorb + resist; the heal is
+        // based on the DealDamage result, SpellAuras.cpp:5981-6010). Mana leech does no absorb.
+        uint absorbed = spells.AbsorbDamage(caster, target, spell.SchoolMask(), damage, spell, periodic: true);
         SpellSystem.SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
-            SpellPackets.BuildSpellNonMeleeDamageLog(target.Guid, caster.Guid, spell.Id, resisted > 0 ? rolled : damage, spell.School, absorbed: 0, resisted, periodic: true), includeSelf: true);
+            SpellPackets.BuildSpellNonMeleeDamageLog(target.Guid, caster.Guid, spell.Id, resisted > 0 ? rolled : damage, spell.School, absorbed, resisted, periodic: true), includeSelf: true);
+        damage -= absorbed;
 
         damage = Math.Min(damage, target.Health);
 
@@ -59,7 +64,7 @@ public static class DrainAuras
         spells.FirePeriodicDamageProcs(caster, target, spell, damage, rolled);
         uint dealt = spells.Damage.DealSpellDamage(caster, target, spell, damage, periodic: true, startsCombat: spell.IsChanneled, critical: false, durabilityLoss: false, // DOT: combat only for a channel (Unit.cpp:696-714)
             reflected: holder.IsReflected && ReferenceEquals(caster, target));
-        spells.OnDamageTaken(target, caster, dealt, periodic: true);
+        spells.OnDamageTaken(target, caster, dealt, periodic: true, absorbed, spell.Id);
 
         if (!target.IsAlive
             && spells.GetState(caster.Guid)?.CurrentCast is { State: SpellCastState.Casting } cast && cast.Spell.Id == spell.Id)
