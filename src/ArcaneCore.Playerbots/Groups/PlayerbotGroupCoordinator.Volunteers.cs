@@ -69,7 +69,7 @@ public sealed partial class PlayerbotGroupCoordinator
             return new(PlayerbotVolunteerOutcome.NotWaiting);
         if (player.Team != wanting.Team) return new(PlayerbotVolunteerOutcome.Team);
         if (player.Level < waiting.Goal.MinLevel) return new(PlayerbotVolunteerOutcome.Level);
-        if (GroupManagerOrNull() is { } groups && (groups.GetGroup(player.Guid) is not null || groups.GetInvite(player.Guid) is not null) || IsAwaitedMember(player.Guid))
+        if ((GroupManagerOrNull() is { } groups && (groups.GetGroup(player.Guid) is not null || groups.GetInvite(player.Guid) is not null)) || IsAwaitedMember(player.Guid))
             return new(PlayerbotVolunteerOutcome.Grouped);
         if (_declinedPlayers.ContainsKey(player.Guid)) return new(PlayerbotVolunteerOutcome.Declined);
 

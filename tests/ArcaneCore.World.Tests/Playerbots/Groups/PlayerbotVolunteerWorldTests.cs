@@ -434,4 +434,125 @@ public sealed class PlayerbotVolunteerWorldTests
         Assert.Single(world.Coordinator.Groups);
         Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == horde.Id);
     }
+
+    // --- an instance goal: a volunteer plan must hold a waiting anchor ----------------------------------------------------------------
+    //
+    // Deadmines (map 36, fallback band 15-28), a group of three that needs one tank (MinTank = 1). The bots are all mages, so the (human
+    // warrior) player is the only tank and is always placed; the bots then make the group up oldest first. Level 60 bots wait only on a
+    // derived reason while a level 20 bot, in band, anchors the goal: a plan of derived-only bots (and the player) must not be promised.
+
+    private static void DungeonQuiet(PlayerbotOptions options)
+    {
+        Quiet(options, minTank: 1);
+        options.Social.Lists.Enabled = false; // no companion reason: the level 60 bots wait on the anchor alone
+        options.Groups.LevelRange = 50;
+    }
+
+    private static async Task<(Guid Id, string Name)> WaitingAtTheEntranceAsync(GroupTestWorld world, string name, byte level)
+    {
+        var bot = await world.AddBotAsync(name, Human, Mage, level, [Fireball], EntranceArea);
+        Assert.True(await world.RunUntilAsync(120_000, () => world.HasQuest(bot.Id, DungeonQuest) && world.Coordinator.WaitingBots.Any(w => w.BotId == bot.Id)), await world.TraceAsync());
+        return bot;
+    }
+
+    private static Task PlaceAtTheEntranceAsync(GroupTestWorld world, string name, byte? level = null)
+        => world.OnWorldAsync(() =>
+        {
+            Player player = Online(world, name);
+            if (level is { } set) player.Level = set;
+            player.Relocate(EntranceArea.X, EntranceArea.Y, EntranceArea.Z, 0, world.World.Host.World.NowMs);
+            return true;
+        });
+
+    private static async Task<uint> SinceAsync(GroupTestWorld world, Guid bot)
+        => await world.OnWorldAsync(() => world.Coordinator.WaitingBots.Single(w => w.BotId == bot).SinceMs);
+
+    private static async Task StopSeedAsync(GroupTestWorld world, (Guid Id, string Name) seed)
+    {
+        var stopped = await world.Bots.StopAsync(seed.Name);
+        Assert.True(stopped.Success, stopped.Code);
+        await world.RunAsync(2 * PlayerbotGroupCoordinator.SeedRecheckMs);
+    }
+
+    /// <summary>
+    /// The volunteer's bot is the youngest waiter and holds no anchor of its own. The size-1 list (that bot, then the longest waiting) is two
+    /// derived-only bots, and with the tanking player it makes a plan Match accepts but that holds no waiting anchor; the full list is the
+    /// one whose oldest two bots include the in-band anchor. The unanchored plan is passed over and the full list forms the group.
+    /// </summary>
+    [Fact]
+    public async Task ForAnInstanceGoal_APlanWithNoWaitingAnchor_IsPassedOver_AndTheNextListFormsTheGroupWithTheAnchor()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], DungeonQuiet, dungeon: true);
+        await world.World.PrepareCharacterAsync("VOLANC", "Volanc", AccountSecurity.Player);
+        var seed = await WaitingAtTheEntranceAsync(world, "Volseed", 20);
+        var oldest = await WaitingAtTheEntranceAsync(world, "Voldoldest", 60);
+        var anchor = await WaitingAtTheEntranceAsync(world, "Volanchor", 20);
+        var youngest = await WaitingAtTheEntranceAsync(world, "Voldyoungest", 60);
+        await StopSeedAsync(world, seed); // the first anchor leaves: the anchor is now the 2nd oldest of the three that wait
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLANC", "Volanc", AccountSecurity.Player);
+        await PlaceAtTheEntranceAsync(world, "Volanc", level: 20); // in band, so a plan with the player passes Match's qualifying rule
+
+        // Preconditions: three bots wait, in the order oldest derived, anchor, youngest derived; nothing formed (no bot can tank).
+        foreach (var bot in new[] { oldest, anchor, youngest })
+            Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == bot.Id);
+        uint oldestSince = await SinceAsync(world, oldest.Id), anchorSince = await SinceAsync(world, anchor.Id), youngestSince = await SinceAsync(world, youngest.Id);
+        Assert.True(unchecked((int)(anchorSince - oldestSince)) > 0 && unchecked((int)(youngestSince - anchorSince)) > 0, "the waiters are not in the expected order");
+        Assert.Empty(world.Coordinator.Groups);
+
+        PlayerbotVolunteerResult result = await VolunteerAsync(world, youngest.Id, "Volanc");
+
+        Assert.Equal(PlayerbotVolunteerOutcome.Ready, result.Outcome);
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Members.Any(m => m.Real));
+        Assert.Equal(3, group.Members.Count);
+        Assert.Contains(group.Members, m => m.BotId == anchor.Id); // the plan holds a waiting anchor
+        Assert.Contains(group.Members, m => m.BotId == oldest.Id);
+        Assert.DoesNotContain(group.Members, m => m.BotId == youngest.Id);
+    }
+
+    /// <summary>
+    /// No list makes a plan with a waiting anchor (the anchor is the youngest waiter, left out of both lists): the volunteer is not promised
+    /// anything, no group forms, and the volunteer stays kept across the Match ticks (a rejected plan loses nobody).
+    /// </summary>
+    [Fact]
+    public async Task ForAnInstanceGoal_WhenNoPlanHoldsAWaitingAnchor_TheVolunteerIsKept_AndNoGroupForms()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], DungeonQuiet, dungeon: true);
+        await world.World.PrepareCharacterAsync("VOLKEEP", "Volkeep", AccountSecurity.Player);
+        var seed = await WaitingAtTheEntranceAsync(world, "Volkseed", 20);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLKEEP", "Volkeep", AccountSecurity.Player);
+        await PlaceAtTheEntranceAsync(world, "Volkeep", level: 20);
+        // One bot waits: the group lacks one (a true count), so the volunteer is kept.
+        PlayerbotVolunteerResult noted = await VolunteerAsync(world, seed.Id, "Volkeep");
+        Assert.Equal(PlayerbotVolunteerOutcome.Noted, noted.Outcome);
+        Assert.Equal(1, noted.Missing);
+        var key = await world.OnWorldAsync(() => world.Coordinator.WaitingBots.Single(w => w.BotId == seed.Id).Goal.Key);
+        ObjectGuid volunteer = Online(world, "Volkeep").Guid;
+        Assert.True(world.Coordinator.IsVolunteer(volunteer, key));
+
+        // The player steps out of reach while the others arrive, so the group does not form on the way: two derived-only bots, then the
+        // anchor (the youngest), then the first anchor leaves. No plan of the three that wait can then hold the anchor.
+        await world.OnWorldAsync(() =>
+        {
+            Player real = Online(world, "Volkeep");
+            real.Relocate(real.X + 3000f, real.Y, real.Z, 0, world.World.Host.World.NowMs);
+            return true;
+        });
+        var first = await WaitingAtTheEntranceAsync(world, "Volkfirst", 60);
+        var second = await WaitingAtTheEntranceAsync(world, "Volksecond", 60);
+        var anchor = await WaitingAtTheEntranceAsync(world, "Volkanchor", 20);
+        await StopSeedAsync(world, seed);
+        foreach (var bot in new[] { first, second, anchor })
+            Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == bot.Id);
+        Assert.True(world.Coordinator.IsVolunteer(volunteer, key), "the volunteer expired before the check");
+        Assert.Empty(world.Coordinator.Groups);
+
+        await PlaceAtTheEntranceAsync(world, "Volkeep"); // back in reach: every Match tick now plans with the volunteer
+
+        Assert.False(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Count > 0 || PlayerInvited(world)), "a group formed without a waiting anchor" + Environment.NewLine + await world.TraceAsync());
+        Assert.True(world.Coordinator.IsVolunteer(volunteer, key), "the volunteer was dropped when its plan was rejected");
+        Assert.Equal(0, world.Coordinator.Totals.Formed);
+        Assert.Null(await world.OnWorldAsync(() => world.GroupManager.GetInvite(volunteer)));
+        foreach (var bot in new[] { first, second, anchor })
+            Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == bot.Id);
+    }
 }
