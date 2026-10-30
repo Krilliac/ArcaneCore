@@ -252,11 +252,22 @@ public sealed class ServerRates
         return RateSetResult.Ok;
     }
 
-    /// <summary>Puts <paramref name="rate"/> back to its configured value. False when it was not overridden (or its feature is gone).</summary>
+    /// <summary>
+    /// Puts <paramref name="rate"/> back to its configured value. False when it was not overridden, its feature is gone, or the restore would
+    /// cross a paired rate (Rate.XP.Personal.Min above Max): reset the other side first (<see cref="TryReset"/> says which).
+    /// </summary>
     public bool Reset(RateScope scope, RateDefinition rate, string actor, RateChangeKind kind = RateChangeKind.Reset)
+        => TryReset(scope, rate, actor, kind, out _);
+
+    /// <summary>As <see cref="Reset"/>; <paramref name="error"/> is set when the restore was refused because it would cross a paired rate.</summary>
+    public bool TryReset(RateScope scope, RateDefinition rate, string actor, RateChangeKind kind, out string? error)
+        => ResetCore(scope, rate, actor, kind, enforceCrossCheck: true, out error);
+
+    private bool ResetCore(RateScope scope, RateDefinition rate, string actor, RateChangeKind kind, bool enforceCrossCheck, out string? error)
     {
         ArgumentNullException.ThrowIfNull(rate);
         ArgumentNullException.ThrowIfNull(actor);
+        error = null;
         if (!_baselines.TryGetValue(rate, out Override? saved))
         {
             return false;
@@ -266,6 +277,13 @@ public sealed class ServerRates
         IReadOnlyList<RateTarget> targets = rate.Resolve(scope);
         if (targets.Count == 0)
         {
+            return false;
+        }
+
+        // The configured value was valid against the configured partner, not necessarily against the partner's current override.
+        if (enforceCrossCheck && rate.CrossCheck?.Invoke(scope, saved.Display) is { } crossed)
+        {
+            error = $"{crossed}; reset the paired rate first";
             return false;
         }
 
@@ -281,13 +299,30 @@ public sealed class ServerRates
         return true;
     }
 
-    /// <summary>Resets every overridden rate; returns how many were reset.</summary>
+    /// <summary>
+    /// Resets every overridden rate; returns how many were reset. A restore that would cross a paired rate waits until the pair has been
+    /// reset; a rate still blocked when no other reset can unblock it (an invalid configured pair) is restored regardless.
+    /// </summary>
     public int ResetAll(RateScope scope, string actor, RateChangeKind kind = RateChangeKind.Reset)
     {
         int count = 0;
+        bool progressed = true;
+        while (progressed)
+        {
+            progressed = false;
+            foreach (RateDefinition rate in _baselines.Keys.ToArray())
+            {
+                if (ResetCore(scope, rate, actor, kind, enforceCrossCheck: true, out _))
+                {
+                    count++;
+                    progressed = true;
+                }
+            }
+        }
+
         foreach (RateDefinition rate in _baselines.Keys.ToArray())
         {
-            if (Reset(scope, rate, actor, kind))
+            if (ResetCore(scope, rate, actor, kind, enforceCrossCheck: false, out _))
             {
                 count++;
             }
