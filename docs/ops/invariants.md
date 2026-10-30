@@ -93,7 +93,7 @@ unattended process must never wait on a dialog. Source: `src/ArcaneCore.Kernel/D
 
 **When it opens.** `Diagnostics:CrashDialog` covers the crashes that end the process: an unhandled exception, an unobserved task
 exception under `OnUnobservedTask` `Exit` or `FailFast` (not under the default `Log`, where the process goes on), and a world tick
-hang that the watchdog ends with exit 70. The order on the crashing thread is unchanged except for one added step: the crash report
+hang that the watchdog ends with a `FailFast` (exit 70). The order on the crashing thread is unchanged except for one added step: the crash report
 (standard error and the log), then the fault-ledger record, then the dialog, then the `OnUnhandled` / `OnUnobservedTask` policy once
 the box is closed. Exit 70 stays exit 70 and `FailFast` still aborts.
 
@@ -136,7 +136,7 @@ key from the crash dialog.
 **Under the cluster supervisor.** A supervised child's standard streams are always redirected, so the child can never open its own box.
 With `Diagnostics:CrashDialog` on in the child (setting `Diagnostics__CrashDialog=true` in the supervisor console reaches the children
 through the inherited environment), a child that has `ARCANECORE_SUPERVISED_CHILD` set still writes the same
-`crash-report.<daemon>.<yyyyMMdd-HHmmss>Z.txt` next to its executable on an unhandled exception, without any box. The supervisor
+`crash-report.<daemon>.<yyyyMMdd-HHmmss>Z.txt` next to its executable on an unhandled exception, an unobserved-task termination or a watchdog `FailFast`, without any box. The supervisor
 (`Cluster:Supervisor:Enabled`) reads `Diagnostics:CrashDialog` from its own configuration and, in an interactive console session as
 above, opens the box itself when a child exits unexpectedly with a nonzero code: not a drain or stop it asked for, not exit code 0, not
 the restart request (exit code 2), not a kill after a stop it announced. A crash during a requested drain, and a relaunch that fails,

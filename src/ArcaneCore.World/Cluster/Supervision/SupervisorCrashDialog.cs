@@ -208,8 +208,21 @@ public sealed class SupervisorCrashDialog
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogFault(FaultSite, ex, "the supervisor crash dialog for {Process} could not start", exit.Name);
+            SafeLogFault(ex, "the supervisor crash dialog for {Process} could not start", exit.Name);
             return false;
+        }
+    }
+
+    /// <summary>Logs a fault without letting a throwing logger provider escape: the callers sit in catch blocks and a second exception would end the child's monitor loop.</summary>
+    private void SafeLogFault(Exception ex, string message, string process)
+    {
+        try
+        {
+            _logger.LogFault(FaultSite, ex, message, process);
+        }
+        catch (Exception logEx) when (logEx is not OutOfMemoryException)
+        {
+            // The logger itself failed; there is nowhere left to report it.
         }
     }
 
@@ -230,7 +243,7 @@ public sealed class SupervisorCrashDialog
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _logger.LogFault(FaultSite, ex, "the supervisor crash dialog for {Process} failed", exit.Name);
+            SafeLogFault(ex, "the supervisor crash dialog for {Process} failed", exit.Name);
         }
         finally
         {
@@ -301,7 +314,7 @@ public sealed class SupervisorCrashDialog
         {
             sb.Append("Full report: none").Append(directory is null ? " (its report directory could not be determined)" : " in " + directory).Append('\n');
             sb.Append(exit.HangSilence is null
-                ? "No crash report from this run was found: the child writes one for an unhandled exception when its Diagnostics:CrashDialog is on, so this may be a native crash, a stack overflow, Environment.FailFast, or that option being off in the child.\n"
+                ? "No crash report from this run was found: the child writes one for an unhandled exception, an unobserved-task termination or a watchdog FailFast when its Diagnostics:CrashDialog is on, so this may be a native crash, a stack overflow, Environment.FailFast, or that option being off in the child.\n"
                 : "A hang is not an exception, so a crash report is not expected.\n");
             sb.Append("See the supervisor log and the child's own log for its last output.");
             if (!string.IsNullOrEmpty(_dumpNote))
