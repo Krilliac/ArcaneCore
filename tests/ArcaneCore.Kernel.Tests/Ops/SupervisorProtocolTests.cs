@@ -12,6 +12,7 @@ public sealed class SupervisorProtocolTests
     [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=4242 ready", SupervisorHeartbeatState.Ready)]
     [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=4242 alive", SupervisorHeartbeatState.Alive)]
     [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 stopping", SupervisorHeartbeatState.Stopping)]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping", SupervisorHeartbeatState.Dumping)]
     public void Heartbeat_WellFormed_IsParsed(string line, SupervisorHeartbeatState expected)
     {
         Assert.True(SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState state));

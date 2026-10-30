@@ -696,10 +696,16 @@ Diagnostics.CrashDump.Mode = Full
 
 #
 #    Diagnostics.CrashDump.TimeoutSeconds
-#        Description: The most seconds one dump attempt may take before the daemon gives up on it
-#                     and ends the process anyway; a dump that times out is not retried with a
-#                     smaller type, because a runtime that cannot answer once will not answer again.
-#                     A Full dump of a 7 GB process takes about a minute. Default 120.
+#        Description: How long the daemon waits for its own diagnostics server to start a dump
+#                     before it gives up and ends the process anyway; it bounds an unresponsive
+#                     server, not the length of a dump. The runtime suspends the waiting thread too,
+#                     so a slow dump can outlast it: a file that is still growing is waited for, up
+#                     to three times this value in total (a Full dump of a 7 GB process takes about
+#                     a minute). A timeout, or an unreachable diagnostics endpoint
+#                     (DOTNET_EnableDiagnostics=0), is not retried with a smaller type; a type the
+#                     runtime refuses is. While it dumps the daemon publishes the heartbeat state
+#                     dumping, which supervisors honour for a grace of this long plus a margin.
+#                     Default 120.
 #        Type: int
 #        Default: 120
 #        Allowed: a whole number, -2147483648 to 2147483647

@@ -93,7 +93,7 @@ public sealed class CrashDumpServiceTests : IDisposable
         Assert.Null(outcome.Path);
         Assert.Single(writer.Attempts);
         Assert.InRange(clock.Elapsed.TotalSeconds, 0.8, 20);
-        Assert.Contains(_log, l => l.Contains("giving up after the timeout", StringComparison.Ordinal));
+        Assert.Contains(_log, l => l.Contains("giving up without trying a smaller type", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -142,6 +142,90 @@ public sealed class CrashDumpServiceTests : IDisposable
         Assert.Equal(2, Directory.GetFiles(_directory).Length);
     }
 
+    [Fact]
+    public void Run_WhenTheDiagnosticsEndpointIsUnavailable_StopsAfterOneAttempt()
+    {
+        var writer = new FakeWriter { Throw = new TimeoutException("no answer") };
+
+        CrashDumpOutcome? outcome = Run(new CrashDumpService(writer, static _ => null), new CrashDumpOptions { Mode = CrashDumpMode.Full });
+
+        Assert.Equal([CrashDumpMode.Full], writer.Attempts);
+        Assert.Null(outcome!.Path);
+    }
+
+    [Fact]
+    public void IsEndpointFailure_IsTrueForTimeoutAndServerNotAvailable_NotForARefusedType()
+    {
+        Assert.True(CrashDumpService.IsEndpointFailure(new TimeoutException()));
+        Assert.True(CrashDumpService.IsEndpointFailure(new Microsoft.Diagnostics.NETCore.Client.ServerNotAvailableException("x")));
+        Assert.False(CrashDumpService.IsEndpointFailure(new InvalidOperationException("E_INVALIDARG")));
+    }
+
+    [Fact]
+    public void Run_ADumpThatOutlastsTheTimeoutButKeepsGrowing_IsAccepted_AndPruned()
+    {
+        // The runtime suspends the waiting thread too: a long dump finishes after the answer timeout. It is a success, not a partial file.
+        var writer = new FakeWriter { GrowFor = TimeSpan.FromSeconds(2.5) };
+        var announced = new List<int>();
+        Directory.CreateDirectory(_directory);
+        string old = Path.Combine(_directory, "ArcaneCore.Kernel.Tests-1-20200101-000000.dmp");
+        File.WriteAllText(old, "old");
+        File.SetLastWriteTimeUtc(old, DateTime.UtcNow.AddDays(-5));
+
+        CrashDumpOutcome? outcome = new CrashDumpService(writer, static _ => null).Run(
+            new CrashDumpOptions { Mode = CrashDumpMode.Mini, TimeoutSeconds = 1, MaxFiles = 1 }, failFast: false, "ArcaneCore.Kernel.Tests", _directory, DateTime.UtcNow, Record, announced.Add);
+
+        Assert.NotNull(outcome!.Path);
+        Assert.True(File.Exists(outcome.Path));
+        Assert.False(File.Exists(old), "pruning must run after a slow dump too");
+        Assert.Equal([3], announced); // 3 x TimeoutSeconds, the grace the supervisors are told about
+    }
+
+    [Fact]
+    public void Run_ANameThatAlreadyExists_GetsASuffix()
+    {
+        Directory.CreateDirectory(_directory);
+        DateTime now = DateTime.UtcNow;
+        string taken = Path.Combine(_directory, CrashDumpService.FileNameFor("ArcaneCore.Kernel.Tests", Environment.ProcessId, now));
+        File.WriteAllText(taken, "earlier");
+
+        CrashDumpOutcome? outcome = new CrashDumpService(new FakeWriter(), static _ => null).Run(
+            new CrashDumpOptions { Mode = CrashDumpMode.Mini }, failFast: false, "ArcaneCore.Kernel.Tests", _directory, now, Record);
+
+        Assert.NotEqual(taken, outcome!.Path);
+        Assert.EndsWith("-1.dmp", outcome.Path, StringComparison.Ordinal);
+        Assert.Equal("earlier", File.ReadAllText(taken));
+    }
+
+    [Fact]
+    public void Run_OnWindows_CreatesTheDirectoryWithAProtectedOwnerOnlyAcl()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Run(new CrashDumpService(new FakeWriter(), static _ => null), new CrashDumpOptions { Mode = CrashDumpMode.Mini });
+
+        var security = new DirectoryInfo(_directory).GetAccessControl();
+        Assert.True(security.AreAccessRulesProtected);
+        var everyone = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.WorldSid, null);
+        var users = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.BuiltinUsersSid, null);
+        foreach (System.Security.AccessControl.FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier)))
+        {
+            Assert.NotEqual(everyone, rule.IdentityReference);
+            Assert.NotEqual(users, rule.IdentityReference);
+        }
+    }
+
+    [Fact]
+    public void DescribePlan_OnWindows_MentionsWerLocalDumps()
+    {
+        string plan = CrashDumpService.DescribePlan(new CrashDumpOptions { Mode = CrashDumpMode.Full }, failFast: false);
+
+        Assert.Equal(OperatingSystem.IsWindows(), plan.Contains("LocalDumps", StringComparison.Ordinal));
+    }
+
     private CrashDumpOutcome? Run(CrashDumpService service, CrashDumpOptions options)
         => service.Run(options, failFast: false, "ArcaneCore.Kernel.Tests", _directory, DateTime.UtcNow, Record);
 
@@ -159,6 +243,10 @@ public sealed class CrashDumpServiceTests : IDisposable
         private readonly List<CrashDumpMode> _attempts = [];
 
         public ManualResetEventSlim? Block { get; init; }
+
+        public Exception? Throw { get; init; }
+
+        public TimeSpan GrowFor { get; init; }
 
         public List<CrashDumpMode> Attempts
         {
@@ -179,6 +267,25 @@ public sealed class CrashDumpServiceTests : IDisposable
             }
 
             Block?.Wait(TimeSpan.FromSeconds(30));
+            if (Throw is not null)
+            {
+                throw Throw;
+            }
+
+            if (GrowFor > TimeSpan.Zero)
+            {
+                using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
+                DateTime until = DateTime.UtcNow + GrowFor;
+                while (DateTime.UtcNow < until)
+                {
+                    stream.Write(new byte[4096]);
+                    stream.Flush();
+                    Thread.Sleep(200);
+                }
+
+                return;
+            }
+
             if (failing.Contains(mode))
             {
                 File.WriteAllText(path, "partial");

@@ -15,6 +15,9 @@ public enum SupervisorHeartbeatState
 
     /// <summary>The process is stopping.</summary>
     Stopping,
+
+    /// <summary>The process is writing its own crash dump and will end; the hang watch waits for it (a grace) instead of draining and killing.</summary>
+    Dumping,
 }
 
 /// <summary>What a child says it is stopping for, from the exit code it will return (<see cref="SupervisorProtocol.IntentFor"/>).</summary>
@@ -98,7 +101,7 @@ public static partial class SupervisorProtocol
 
     private const string Lifecycle = "lifecycle";
 
-    [GeneratedRegex(@"^heartbeat \S+ pid=\d+ (ready|alive|stopping)\z", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"^heartbeat \S+ pid=\d+ (ready|alive|stopping|dumping)\z", RegexOptions.CultureInvariant)]
     private static partial Regex HeartbeatPattern();
 
     /// <summary>Whether <paramref name="environment"/> turns the protocol on (<see cref="EnvironmentVariable"/> is exactly <c>1</c>).</summary>
@@ -112,7 +115,7 @@ public static partial class SupervisorProtocol
     public static bool IsEnabled() => IsEnabled(Environment.GetEnvironmentVariable);
 
     /// <summary>
-    /// Parses <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; ready|alive|stopping</c> (no leading or trailing text; any control character rejects the line).
+    /// Parses <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; ready|alive|stopping|dumping</c> (no leading or trailing text; any control character rejects the line).
     /// <para>
     /// Known limit: a heartbeat carries no per-run token, unlike the <c>lifecycle</c> lines. Child output also holds logged text a player or GM can
     /// influence, so a logged text that ends up on a line of its own and matches this shape (a bare LF in the text starts a new line) is accepted. The
@@ -130,6 +133,7 @@ public static partial class SupervisorProtocol
 
         state = line.EndsWith(" ready", StringComparison.Ordinal) ? SupervisorHeartbeatState.Ready
             : line.EndsWith(" alive", StringComparison.Ordinal) ? SupervisorHeartbeatState.Alive
+            : line.EndsWith(" dumping", StringComparison.Ordinal) ? SupervisorHeartbeatState.Dumping
             : SupervisorHeartbeatState.Stopping;
         return true;
     }

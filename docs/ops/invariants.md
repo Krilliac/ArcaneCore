@@ -99,19 +99,27 @@ ends. The dump is requested from the process's own diagnostics endpoint, the mec
 | `Diagnostics:CrashDump:Directory` | empty | empty: `dumps` beside the log file (`logs/dumps`), the directory `.debug dump` uses; without file logging, `dumps` in the daemon's directory |
 | `Diagnostics:CrashDump:MaxFiles` | `5` | the newest N files of the pattern are kept; 0 keeps all. Other files in the directory are never touched |
 | `Diagnostics:CrashDump:FullMinFreeGB` | `16` | below this much free space on the volume Full starts at Heap (the launcher's threshold) |
-| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | one attempt is abandoned after this long and the process ends anyway; a timeout is not retried with a smaller type |
+| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | how long the daemon waits for its diagnostics server to start the dump. It bounds an unresponsive server, not the dump: the runtime suspends the waiting thread too, so a dump that outlasts it is still accepted while its file keeps growing, up to three times this value. A timeout or an unreachable endpoint is not retried with a smaller type; a type the runtime refuses is |
 
 The file is `<daemon>-<pid>-<utc yyyyMMdd-HHmmss>.dmp`. The crash report names the path that writes the dump in a `[crash dump]` section
 ("written in-process by ArcaneCore", "written by the runtime", or "none"), and the log carries one line per attempt, failure and prune. When
 `DOTNET_DbgEnableMiniDump=1` is set and the process ends by FailFast, the runtime's `createdump` writes the dump, so the in-process one is skipped
 (no double dump); under `Exit` the runtime writes none, so ours is written. A Full dump suspends the process for about a minute at 7 GB.
 
+While the dump is written the daemon publishes the heartbeat state `dumping` and stops beating (file, stdout and systemd sinks; systemd also gets
+`WATCHDOG_USEC` raised), so a supervisor that kills a process for a stale heartbeat does not truncate the dump. `tools/ops/diag/server-status.ps1
+-Supervise` and the cluster host supervisor (`Cluster:Supervisor:DumpGraceSeconds`, default 420) treat `dumping` like `stopping`: a grace of 420 s
+(three times the default `TimeoutSeconds` plus a minute) instead of the stale-heartbeat kill, and no hang capture of their own meanwhile. Raise the
+grace if you raise `TimeoutSeconds`. The tick watchdog's fatal path and the invariant `FailFast` write the dump the same way. See
+[watchdog.md](watchdog.md#4-heartbeat-opswatchdogheartbeat).
+
 Security: a dump holds everything in memory, session keys and passwords included. It stays on the local disk; on Linux and macOS the directory is
 created readable by the daemon's account only and the file is mode 0600, on Windows it inherits the directory's ACL. Keep the directory private,
 never attach a dump to an issue, and delete files after the analysis.
 
 Limits: native or fatal runtime errors and a stack overflow bypass every managed handler, so only `DOTNET_DbgEnableMiniDump=1` covers them;
-keep it in the launcher. The invariant `FailFast` policy (`Diagnostics:OnInvariant`) aborts without this dump.
+keep it in the launcher. When Windows Error Reporting LocalDumps is configured for the executable it can write a second dump of its own. One
+dump is written per process: a second crashing thread waits for the first thread's dump instead of racing on to the abort.
 
 ## The crash dialog
 

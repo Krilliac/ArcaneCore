@@ -30,7 +30,7 @@ public sealed class CrashHandler : IDisposable
     private static bool _reporting;
 
     [ThreadStatic]
-    private static bool _dumping;
+    private static bool t_dumping;
 
     private readonly UnhandledExceptionEventHandler _onUnhandled;
     private readonly EventHandler<UnobservedTaskExceptionEventArgs> _onUnobserved;
@@ -40,6 +40,10 @@ public sealed class CrashHandler : IDisposable
     private volatile IReadOnlyList<ICrashContextProvider> _providers;
     private volatile bool _firstChanceHooked;
     private volatile CrashDumpService _dumpService = new();
+    private readonly object _dumpGate = new();
+    private string? _dumpDoneNote;
+    private bool _dumpDone;
+    private volatile Action<int>? _dumpAnnouncer;
     private bool _disposed;
 
     private CrashHandler(DiagnosticsOptions options, ICrashSink sink, IReadOnlyList<ICrashContextProvider> providers)
@@ -75,6 +79,16 @@ public sealed class CrashHandler : IDisposable
     {
         get => _dumpService;
         set => _dumpService = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    /// <summary>
+    /// Told, with the most seconds the dump may take, just before the in-process dump starts. The heartbeat writer sets it to publish the
+    /// <c>dumping</c> state, so a supervisor that kills a process for a stale heartbeat waits for the dump instead of truncating it.
+    /// </summary>
+    public Action<int>? DumpAnnouncer
+    {
+        get => _dumpAnnouncer;
+        set => _dumpAnnouncer = value;
     }
 
     /// <summary>Whether the first-chance hook is attached (Debug Kernel build with the option on).</summary>
@@ -210,20 +224,36 @@ public sealed class CrashHandler : IDisposable
     /// </summary>
     public string? WriteCrashDump(bool failFast)
     {
-        if (_dumping)
+        if (t_dumping)
         {
-            return null;
+            return null; // this thread is already dumping (a hook that threw inside the dump)
         }
 
-        _dumping = true;
+        t_dumping = true;
         try
         {
-            DiagnosticsOptions options = _options;
-            ICrashSink sink = _sink;
-            string daemon = CrashJournalPaths.ProcessName();
-            string directory = CrashDumpService.ResolveDirectory(options.CrashDump, CrashDialog.LogFilePath);
-            CrashDumpOutcome? outcome = _dumpService.Run(options.CrashDump, failFast, daemon, directory, DateTime.UtcNow, (level, text) => SayDump(sink, level, text));
-            return outcome?.Note;
+            // One dump per process: a second crashing thread waits here for the first to finish (and shares its note) instead of racing on
+            // to FailFast, which would end the process in the middle of the first thread's dump.
+            lock (_dumpGate)
+            {
+                if (_dumpDone)
+                {
+                    return _dumpDoneNote;
+                }
+
+                DiagnosticsOptions options = _options;
+                ICrashSink sink = _sink;
+                string daemon = CrashJournalPaths.ProcessName();
+                string directory = CrashDumpService.ResolveDirectory(options.CrashDump, CrashDialog.LogFilePath);
+                CrashDumpOutcome? outcome = _dumpService.Run(options.CrashDump, failFast, daemon, directory, DateTime.UtcNow, (level, text) => SayDump(sink, level, text), _dumpAnnouncer);
+                if (outcome is not null)
+                {
+                    _dumpDone = true;
+                    _dumpDoneNote = outcome.Note;
+                }
+
+                return outcome?.Note;
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -232,7 +262,7 @@ public sealed class CrashHandler : IDisposable
         }
         finally
         {
-            _dumping = false;
+            t_dumping = false;
         }
     }
 

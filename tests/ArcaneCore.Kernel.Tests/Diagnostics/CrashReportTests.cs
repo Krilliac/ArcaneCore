@@ -87,7 +87,7 @@ public sealed class CrashReportTests
     public void Install_IsIdempotent_ReconfigureSwapsSinkAndProviders_DisposeDetaches()
     {
         Assert.Null(CrashHandler.Current);
-        var first = new DiagnosticsOptions { OnUnhandled = UnhandledExceptionPolicy.Exit };
+        DiagnosticsOptions first = DumpFree.Options(o => o.OnUnhandled = UnhandledExceptionPolicy.Exit);
         CrashHandler handler = CrashHandler.Install(first, StandardErrorCrashSink.Instance);
         try
         {
@@ -96,7 +96,7 @@ public sealed class CrashReportTests
             Assert.Same(StandardErrorCrashSink.Instance, handler.Sink);
 
             var log = new CapturingLogger();
-            var second = new DiagnosticsOptions { OnUnhandled = UnhandledExceptionPolicy.FailFast };
+            DiagnosticsOptions second = DumpFree.Options(o => o.OnUnhandled = UnhandledExceptionPolicy.FailFast);
             CrashHandler again = CrashHandler.Install(second, new LoggerCrashSink(log), [new FixedProvider()]);
             Assert.Same(handler, again);
             Assert.Same(second, handler.Options);
@@ -129,7 +129,7 @@ public sealed class CrashReportTests
     [Fact]
     public void FirstChanceHook_FollowsTheKernelBuild()
     {
-        CrashHandler handler = CrashHandler.Install(new DiagnosticsOptions { FirstChanceExceptions = true }, StandardErrorCrashSink.Instance);
+        CrashHandler handler = CrashHandler.Install(DumpFree.Options(o => o.FirstChanceExceptions = true), StandardErrorCrashSink.Instance);
         try
         {
             Assert.Equal(CrashReport.BuildConfiguration == "Debug", handler.FirstChanceHooked);

@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.Kernel.Ops.Watchdog.Counters;
 using Microsoft.Extensions.Hosting;
@@ -107,6 +108,9 @@ public sealed class HeartbeatWriter : IWatchdogMonitor
     private LogRateLimiter _withheldLimiter;
     private LogRateLimiter _failureLimiter;
     private long _nextBeatMicros = long.MinValue;
+    private readonly object _sinkGate = new();
+    private volatile bool _dumping;
+    private Action<int>? _announcer;
 
     public HeartbeatWriter(WatchdogOptions options, IEnumerable<ILivenessSource> sources, CounterRegistry counters, ILogger<HeartbeatWriter> logger, IHostEnvironment? environment = null)
         : this(options.Heartbeat, sources, counters, logger, () => HeartbeatPlan.Resolve(options.Heartbeat, Environment.GetEnvironmentVariable, Environment.ProcessId, environment?.ContentRootPath ?? AppContext.BaseDirectory, Console.Out))
@@ -151,6 +155,12 @@ public sealed class HeartbeatWriter : IWatchdogMonitor
 
         _logger.LogInformation(WatchdogEvents.HeartbeatSink, "heartbeat: {Sink} every {Interval} s, gated by {Sources} liveness source(s)",
             _plan.Sink.Description, _plan.IntervalSeconds, _sources.Length);
+        if (CrashHandler.Current is { } handler)
+        {
+            _announcer = AnnounceDumping;
+            handler.DumpAnnouncer = _announcer;
+        }
+
         if (!_plan.Sink.Ready("ArcaneCore started"))
         {
             _failed.Increment();
@@ -160,9 +170,9 @@ public sealed class HeartbeatWriter : IWatchdogMonitor
 
     public void Check(long nowMicros)
     {
-        if (_plan is null || _plan.IntervalSeconds <= 0 || _plan.Sink is NullHeartbeatSink)
+        if (_dumping || _plan is null || _plan.IntervalSeconds <= 0 || _plan.Sink is NullHeartbeatSink)
         {
-            return;
+            return; // a process writing its crash dump beats no more: its last line says "dumping"
         }
 
         long interval = Micros.FromSeconds(_plan.IntervalSeconds);
@@ -190,7 +200,13 @@ public sealed class HeartbeatWriter : IWatchdogMonitor
         }
 
         _nextBeatMicros = nowMicros + interval;
-        if (_plan.Sink.Beat())
+        bool delivered;
+        lock (_sinkGate)
+        {
+            delivered = !_dumping && _plan.Sink.Beat();
+        }
+
+        if (delivered)
         {
             _sent.Increment();
         }
@@ -204,8 +220,35 @@ public sealed class HeartbeatWriter : IWatchdogMonitor
         }
     }
 
+    /// <summary>
+    /// Publish the <c>dumping</c> state (called on the crashing thread by <see cref="CrashHandler"/> just before its in-process crash dump) and stop
+    /// beating, so the line stays. A supervisor waits for the dump (docs/ops/watchdog.md) instead of killing the process for a stale heartbeat.
+    /// </summary>
+    public void AnnounceDumping(int maxSeconds)
+    {
+        IHeartbeatSink? sink = _plan?.Sink;
+        if (sink is null or NullHeartbeatSink)
+        {
+            return;
+        }
+
+        lock (_sinkGate)
+        {
+            _dumping = true;
+            if (!sink.Dumping("ArcaneCore writing a crash dump", maxSeconds))
+            {
+                _logger.LogWarning(WatchdogEvents.HeartbeatSink, "heartbeat state dumping could not be delivered to {Sink}: {Error}", sink.Description, sink.LastError);
+            }
+        }
+    }
+
     public void Stop()
     {
+        if (_announcer is not null && CrashHandler.Current is { } handler && ReferenceEquals(handler.DumpAnnouncer, _announcer))
+        {
+            handler.DumpAnnouncer = null;
+        }
+
         if (_plan is null)
         {
             return;

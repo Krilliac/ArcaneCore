@@ -1169,6 +1169,18 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             // A heartbeat is liveness only, whatever state it names: the authenticated stopping line is what suspends the hang watch.
             entry.LastBeatTimestamp = _time.GetTimestamp();
+            if (beat == SupervisorHeartbeatState.Dumping)
+            {
+                // The child is writing its own crash dump and is about to end: give it the dump grace instead of draining and killing it
+                // for the silence that follows, which would truncate the dump (and a second capture of ours would only compete with it).
+                entry.DumpingTimestamp ??= entry.LastBeatTimestamp;
+                entry.WakeWatcher();
+            }
+            else if (beat == SupervisorHeartbeatState.Alive)
+            {
+                entry.DumpingTimestamp = null;
+            }
+
             if (beat == SupervisorHeartbeatState.Alive && !entry.Armed)
             {
                 entry.Armed = true; // the first world-tick beat arms the hang watch (ready is sent before the world ticks)
@@ -1349,7 +1361,15 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                     {
                         silence = _time.GetElapsedTime(entry.LastBeatTimestamp ?? entry.LaunchTimestamp, now);
                         TimeSpan left = TimeSpan.FromSeconds(config.HangTimeoutSeconds) - silence;
-                        if (left <= TimeSpan.Zero)
+                        TimeSpan graceLeft = entry.DumpingTimestamp is { } dumpingSince
+                            ? TimeSpan.FromSeconds(_options.DumpGraceSeconds) - _time.GetElapsedTime(dumpingSince, now)
+                            : TimeSpan.Zero;
+                        if (graceLeft > TimeSpan.Zero)
+                        {
+                            // Dump grace: the silence of a child that announced its crash dump is not a hang until the grace has run out.
+                            wait = graceLeft;
+                        }
+                        else if (left <= TimeSpan.Zero)
                         {
                             action = WatchAction.Hang;
                             entry.KillKind = SupervisorKillKind.Hang;
@@ -1439,7 +1459,13 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             isStdErr: true);
         AnomalyLedger.Shared.Report("cluster", "supervisor-hang", config.Name, $"pid={process.ProcessId} silent={silence.TotalSeconds:0}s", AnomalySeverity.Error);
 
-        if (config.HangCapture != SupervisedHangCaptureMode.None && _hangCapture is not null)
+        bool dumpingItself;
+        lock (_gate)
+        {
+            dumpingItself = entry.DumpingTimestamp is not null;
+        }
+
+        if (config.HangCapture != SupervisedHangCaptureMode.None && _hangCapture is not null && !dumpingItself)
         {
             await CaptureHangAsync(entry, process, ct).ConfigureAwait(false);
         }
@@ -1915,6 +1941,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public int ConsecutiveFailures { get; set; }
         public SupervisedExitDisposition? LastDisposition { get; set; }
         public long? LastBeatTimestamp { get; set; }
+        public long? DumpingTimestamp { get; set; }
         public CancellationTokenSource? StopCts { get; set; }
         public Task? MonitorTask { get; set; }
 
@@ -1944,6 +1971,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             EndIncarnation();
             LaunchTimestamp = now;
             LastBeatTimestamp = null;
+            DumpingTimestamp = null;
             Armed = false;
             GraceWarned = false;
             StopAnnouncedTimestamp = null;

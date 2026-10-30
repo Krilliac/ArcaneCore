@@ -173,9 +173,12 @@ public sealed class CrashDumpOptions
     public int FullMinFreeGB { get; set; } = 16;
 
     /// <summary>
-    /// The most seconds one dump attempt may take before the daemon gives up on it and ends the process anyway; a dump that times out is not
-    /// retried with a smaller type, because a runtime that cannot answer once will not answer again. A Full dump of a 7 GB process takes about a
-    /// minute. Default 120.
+    /// How long the daemon waits for its own diagnostics server to start a dump before it gives up and ends the process anyway; it bounds an
+    /// unresponsive server, not the length of a dump. The runtime suspends the waiting thread too, so a slow dump can outlast it: a file that is
+    /// still growing is waited for, up to three times this value in total (a Full dump of a 7 GB process takes about a minute). A timeout, or an
+    /// unreachable diagnostics endpoint (<c>DOTNET_EnableDiagnostics=0</c>), is not retried with a smaller type; a type the runtime refuses is.
+    /// While it dumps the daemon publishes the heartbeat state <c>dumping</c>, which supervisors honour for a grace of this long plus a margin.
+    /// Default 120.
     /// </summary>
     public int TimeoutSeconds { get; set; } = 120;
 }

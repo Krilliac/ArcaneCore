@@ -36,6 +36,8 @@ public sealed class FileHeartbeatSink : IHeartbeatSink
 
     public bool Stopping(string status) => Write("stopping");
 
+    public bool Dumping(string status, int maxSeconds) => Write("dumping");
+
     public void Dispose()
     {
     }
@@ -86,6 +88,8 @@ public sealed class TextWriterHeartbeatSink : IHeartbeatSink
     public bool Beat() => Write("alive");
 
     public bool Stopping(string status) => Write("stopping");
+
+    public bool Dumping(string status, int maxSeconds) => Write("dumping");
 
     public void Dispose()
     {

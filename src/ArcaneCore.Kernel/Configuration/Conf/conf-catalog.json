@@ -2396,6 +2396,22 @@
       "isCollection": false
     },
     {
+      "path": "Cluster:Supervisor:DumpGraceSeconds",
+      "section": "Cluster:Supervisor",
+      "type": "int",
+      "kind": "scalar",
+      "elementType": "int",
+      "enumValues": null,
+      "default": "420",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "How long a child that announced `dumping` (its own crash dump, `Diagnostics:CrashDump`) is exempt from the hang timeout and from a hang capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600). Keep it above three times the child's `Diagnostics:CrashDump:TimeoutSeconds`.",
+      "allowed": "a whole number, -2147483648 to 2147483647",
+      "docs": "docs/reference/configuration.md#clustersupervisor",
+      "isCollection": false
+    },
+    {
       "path": "Cluster:Supervisor:Enabled",
       "section": "Cluster:Supervisor",
       "type": "bool",
@@ -4760,7 +4776,7 @@
       "defaultEntries": [],
       "daemons": "Both",
       "reload": "start",
-      "meaning": "The most seconds one dump attempt may take before the daemon gives up on it and ends the process anyway; a dump that times out is not retried with a smaller type, because a runtime that cannot answer once will not answer again. A Full dump of a 7 GB process takes about a minute. Default 120.",
+      "meaning": "How long the daemon waits for its own diagnostics server to start a dump before it gives up and ends the process anyway; it bounds an unresponsive server, not the length of a dump. The runtime suspends the waiting thread too, so a slow dump can outlast it: a file that is still growing is waited for, up to three times this value in total (a Full dump of a 7 GB process takes about a minute). A timeout, or an unreachable diagnostics endpoint (`DOTNET_EnableDiagnostics=0`), is not retried with a smaller type; a type the runtime refuses is. While it dumps the daemon publishes the heartbeat state `dumping`, which supervisors honour for a grace of this long plus a margin. Default 120.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#diagnostics",
       "isCollection": false

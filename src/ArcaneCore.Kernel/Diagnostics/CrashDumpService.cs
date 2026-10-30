@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text.RegularExpressions;
 using ArcaneCore.Kernel.Configuration;
 using Microsoft.Diagnostics.NETCore.Client;
@@ -14,8 +17,8 @@ public interface ICrashDumpWriter
     void Write(CrashDumpMode mode, string path);
 }
 
-/// <summary>The real writer: <see cref="DiagnosticsClient.WriteDump(DumpType, string, bool)"/> against this process's own diagnostics endpoint (what <c>.debug dump</c> uses).</summary>
-internal sealed class DiagnosticsClientCrashDumpWriter : ICrashDumpWriter
+/// <summary>The real writer: <see cref="DiagnosticsClient.WriteDump(DumpType, string, bool)"/> against this process's own diagnostics endpoint. Shared by the crash dump and by <c>.debug dump</c>.</summary>
+public sealed class DiagnosticsClientCrashDumpWriter : ICrashDumpWriter
 {
     public void Write(CrashDumpMode mode, string path)
     {
@@ -73,7 +76,8 @@ public sealed class CrashDumpService
 
         return options.Mode == CrashDumpMode.Off
             ? "none (Diagnostics:CrashDump:Mode = Off" + (failFast ? "; DOTNET_DbgEnableMiniDump is not 1" : "; an exit writes no runtime dump") + ")"
-            : "written in-process by ArcaneCore (Diagnostics:CrashDump:Mode = " + options.Mode + ") before the process ends";
+            : "written in-process by ArcaneCore (Diagnostics:CrashDump:Mode = " + options.Mode + ") before the process ends"
+                + (OperatingSystem.IsWindows() ? "; if Windows Error Reporting LocalDumps is configured for this executable it can write a second dump" : string.Empty);
     }
 
     /// <summary>The directory dumps go to: the configured one, else <c>dumps</c> beside the log file, else <c>dumps</c> in the daemon's directory.</summary>
@@ -100,7 +104,7 @@ public sealed class CrashDumpService
     /// Write the crash dump for a process that is about to end. <paramref name="failFast"/> says how it ends. Returns null when this service writes
     /// nothing (Mode Off, or the runtime writes the FailFast dump); otherwise the outcome, success or not.
     /// </summary>
-    public CrashDumpOutcome? Run(CrashDumpOptions options, bool failFast, string daemon, string directory, DateTime utcNow, Action<LogLevel, string> log)
+    public CrashDumpOutcome? Run(CrashDumpOptions options, bool failFast, string daemon, string directory, DateTime utcNow, Action<LogLevel, string> log, Action<int>? announceDumping = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(log);
@@ -119,7 +123,7 @@ public sealed class CrashDumpService
 
         try
         {
-            return WriteChain(options, daemon, directory, utcNow, log);
+            return WriteChain(options, daemon, directory, utcNow, log, announceDumping);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -128,10 +132,10 @@ public sealed class CrashDumpService
         }
     }
 
-    private CrashDumpOutcome WriteChain(CrashDumpOptions options, string daemon, string directory, DateTime utcNow, Action<LogLevel, string> log)
+    private CrashDumpOutcome WriteChain(CrashDumpOptions options, string daemon, string directory, DateTime utcNow, Action<LogLevel, string> log, Action<int>? announceDumping)
     {
-        EnsureDirectory(directory);
-        string path = Path.Combine(directory, FileNameFor(daemon, Environment.ProcessId, utcNow));
+        EnsureDirectory(directory, log);
+        string path = UniquePath(directory, FileNameFor(daemon, Environment.ProcessId, utcNow));
         TimeSpan timeout = TimeSpan.FromSeconds(Math.Max(1, options.TimeoutSeconds));
         CrashDumpMode requested = options.Mode;
         CrashDumpMode attempt = requested;
@@ -148,11 +152,13 @@ public sealed class CrashDumpService
         }
 
         string lastError = "no attempt was made";
+        announceDumping?.Invoke(MaxWaitSeconds(options));
         for (; attempt >= CrashDumpMode.Mini; attempt--)
         {
-            log(LogLevel.Critical, "crash dump: writing a " + attempt + " dump to " + path + " (the process is suspended while it is written, up to " + (int)timeout.TotalSeconds + " s)");
+            log(LogLevel.Critical, string.Create(CultureInfo.InvariantCulture,
+                $"crash dump: writing a {attempt} dump to {path}. The process is suspended while it is written (a Full dump takes about a minute at 7 GB); waiting up to {(int)timeout.TotalSeconds} s for the runtime to answer, and for as long as the file keeps growing up to {MaxWaitSeconds(options)} s."));
             long start = Stopwatch.GetTimestamp();
-            AttemptResult result = Attempt(attempt, path, timeout);
+            AttemptResult result = Attempt(attempt, path, timeout, MaxWaitSeconds(options));
             TimeSpan took = Stopwatch.GetElapsedTime(start);
             if (result.Error is null)
             {
@@ -166,9 +172,11 @@ public sealed class CrashDumpService
 
             lastError = result.Error;
             log(LogLevel.Error, string.Create(CultureInfo.InvariantCulture, $"crash dump: the {attempt} dump failed after {took.TotalSeconds:F1} s: {result.Error}"));
-            if (result.TimedOut)
+            if (result.StopChain)
             {
-                log(LogLevel.Error, "crash dump: giving up after the timeout (Diagnostics:CrashDump:TimeoutSeconds); a partial file may remain at " + path);
+                // A timeout or an unreachable diagnostics endpoint will not be different for a smaller type (and each try can cost 30 s).
+                RestrictToOwner(path, log);
+                log(LogLevel.Error, "crash dump: giving up without trying a smaller type; a partial file may remain at " + path + " (it holds process memory)");
                 break;
             }
 
@@ -178,9 +186,12 @@ public sealed class CrashDumpService
         return new CrashDumpOutcome(null, CrashDumpMode.Off, "the in-process dump failed (" + lastError + "); see the log");
     }
 
-    private readonly record struct AttemptResult(string? Error, bool TimedOut);
+    /// <summary>The most seconds the crash path waits for a dump in total: the answer timeout, then as long as the file grows, capped at three times the timeout. The heartbeat grace of the supervisors is sized from this.</summary>
+    public static int MaxWaitSeconds(CrashDumpOptions options) => checked(3 * Math.Max(1, options.TimeoutSeconds));
 
-    private AttemptResult Attempt(CrashDumpMode mode, string path, TimeSpan timeout)
+    private readonly record struct AttemptResult(string? Error, bool StopChain);
+
+    private AttemptResult Attempt(CrashDumpMode mode, string path, TimeSpan timeout, int maxWaitSeconds)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
@@ -202,23 +213,84 @@ public sealed class CrashDumpService
         thread.Start();
         if (!thread.Join(timeout))
         {
-            return new AttemptResult("no answer within " + (int)timeout.TotalSeconds + " s", TimedOut: true);
+            // The runtime suspends the waiting thread too, so a long dump can outlast the timeout and still be completing. Only a file that
+            // is missing, empty or no longer growing is a failure; one that grows is waited for, up to the cap.
+            DateTime capAt = DateTime.UtcNow + TimeSpan.FromSeconds(maxWaitSeconds) - timeout;
+            long last = SizeOf(path);
+            while (true)
+            {
+                if (last <= 0)
+                {
+                    return new AttemptResult("no answer within " + (int)timeout.TotalSeconds + " s and no file was started", StopChain: true);
+                }
+
+                if (thread.Join(TimeSpan.FromSeconds(3)))
+                {
+                    break;
+                }
+
+                long now = SizeOf(path);
+                if (now <= last)
+                {
+                    return new AttemptResult("no answer within " + (int)timeout.TotalSeconds + " s and the file stopped growing at " + now + " bytes", StopChain: true);
+                }
+
+                if (DateTime.UtcNow >= capAt)
+                {
+                    return new AttemptResult("still writing after " + maxWaitSeconds + " s (" + now + " bytes); not waiting any longer", StopChain: true);
+                }
+
+                last = now;
+            }
         }
 
         Exception? caught = Volatile.Read(ref failure);
-        return caught is null ? new AttemptResult(null, false) : new AttemptResult(caught.GetType().Name + ": " + caught.Message, false);
+        return caught is null ? new AttemptResult(null, false) : new AttemptResult(caught.GetType().Name + ": " + caught.Message, IsEndpointFailure(caught));
     }
 
-    private static void EnsureDirectory(string directory)
+    /// <summary>Whether <paramref name="ex"/> says the diagnostics endpoint cannot be reached or did not answer, which a smaller dump type cannot fix (E_INVALIDARG and the like can).</summary>
+    public static bool IsEndpointFailure(Exception ex) => ex is ServerNotAvailableException or TimeoutException;
+
+    private static long SizeOf(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? new FileInfo(path).Length : 0;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+    }
+
+    private static string UniquePath(string directory, string fileName)
+    {
+        string path = Path.Combine(directory, fileName);
+        for (int n = 1; File.Exists(path) && n < 1000; n++)
+        {
+            path = Path.Combine(directory, Path.GetFileNameWithoutExtension(fileName) + "-" + n.ToString(CultureInfo.InvariantCulture) + ".dmp");
+        }
+
+        return path;
+    }
+
+    private static void EnsureDirectory(string directory, Action<LogLevel, string> log)
     {
         if (Directory.Exists(directory))
         {
+            WarnIfReadableByOthers(directory, log);
             return;
+        }
+
+        string? parent = Path.GetDirectoryName(directory);
+        if (!string.IsNullOrEmpty(parent))
+        {
+            Directory.CreateDirectory(parent);
         }
 
         if (OperatingSystem.IsWindows())
         {
-            Directory.CreateDirectory(directory);
+            CreateOwnerOnlyDirectory(directory);
         }
         else
         {
@@ -226,11 +298,50 @@ public sealed class CrashDumpService
         }
     }
 
-    private static void RestrictToOwner(string path, Action<LogLevel, string> log)
+    /// <summary>Create the directory with a protected DACL: the current user, SYSTEM and Administrators, full control, nothing inherited from the parent.</summary>
+    [SupportedOSPlatform("windows")]
+    private static void CreateOwnerOnlyDirectory(string directory)
+    {
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        const InheritanceFlags both = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+        SecurityIdentifier? user = WindowsIdentity.GetCurrent().User;
+        if (user is not null)
+        {
+            security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl, both, PropagationFlags.None, AccessControlType.Allow));
+        }
+
+        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, both, PropagationFlags.None, AccessControlType.Allow));
+        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl, both, PropagationFlags.None, AccessControlType.Allow));
+        new DirectoryInfo(directory).Create(security);
+    }
+
+    private static void WarnIfReadableByOthers(string directory, Action<LogLevel, string> log)
     {
         if (OperatingSystem.IsWindows())
         {
-            return; // the file inherits the directory's ACL
+            return;
+        }
+
+        try
+        {
+            UnixFileMode mode = File.GetUnixFileMode(directory);
+            if ((mode & (UnixFileMode.GroupRead | UnixFileMode.OtherRead | UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+            {
+                log(LogLevel.Warning, "crash dump: " + directory + " is readable or writable by its group or by others (" + mode + "); a dump holds session keys, so restrict it (chmod 700)");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            log(LogLevel.Warning, "crash dump: could not read the mode of " + directory + ": " + ex.Message);
+        }
+    }
+
+    private static void RestrictToOwner(string path, Action<LogLevel, string> log)
+    {
+        if (OperatingSystem.IsWindows() || !File.Exists(path))
+        {
+            return; // on Windows the file inherits the directory's ACL
         }
 
         try
@@ -268,7 +379,7 @@ public sealed class CrashDumpService
             return 0;
         }
 
-        var pattern = new Regex("^" + Regex.Escape(CrashJournalPaths.SafeName(daemon)) + @"-\d+-\d{8}-\d{6}\.dmp$", RegexOptions.CultureInvariant);
+        var pattern = new Regex("^" + Regex.Escape(CrashJournalPaths.SafeName(daemon)) + @"-\d+-\d{8}-\d{6}(?:-\d+)?\.dmp$", RegexOptions.CultureInvariant);
         int deleted = 0;
         try
         {

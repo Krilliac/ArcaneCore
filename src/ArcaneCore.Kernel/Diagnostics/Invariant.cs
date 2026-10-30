@@ -325,6 +325,8 @@ public static class Invariant
 
         if (_policy == InvariantPolicy.FailFast)
         {
+            // The in-process crash dump (Diagnostics:CrashDump) first; it is skipped when the runtime's own FailFast dump is enabled.
+            CrashHandler.Current?.WriteCrashDump(failFast: true);
             Environment.FailFast($"Invariant violated at {member} ({fileName}:{line}): {message}");
         }
 
