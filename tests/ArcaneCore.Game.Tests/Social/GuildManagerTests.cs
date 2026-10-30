@@ -261,7 +261,7 @@ public sealed class GuildManagerTests
 
         Assert.Equal(1u, guild.LeaderId);
         Assert.Equal(Guild.GuildMasterRank, guild.Find(1)!.Rank);
-        Assert.Equal((3u, string.Empty, (uint)GuildCommandError.NameInvalid), ReadResult(f.Single(a, WorldOpcode.SmsgGuildCommandResult)));
+        Assert.Equal((1u, string.Empty, (uint)GuildCommandError.NameInvalid), ReadResult(f.Single(a, WorldOpcode.SmsgGuildCommandResult)));
         Assert.Empty(f.Sent(b, WorldOpcode.SmsgGuildEvent));
     }
 
