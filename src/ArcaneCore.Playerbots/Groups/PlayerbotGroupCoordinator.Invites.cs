@@ -87,7 +87,7 @@ public sealed partial class PlayerbotGroupCoordinator
         foreach (ObjectGuid guid in anchor.VisibleObjects)
         {
             if (map.FindObject(guid) is not Player { IsAlive: true } real || real.Session is not WorldSession { IsManaged: false }) continue;
-            if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null) continue;
+            if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null || IsAwaitedMember(real.Guid)) continue;
             if (_declinedPlayers.ContainsKey(real.Guid) || _invitedPlayers.ContainsKey(real.Guid) || real.Level < goal.MinLevel) continue;
             float distanceSq = Vector3.DistanceSquared(new Vector3(real.X, real.Y, real.Z), new Vector3(anchor.X, anchor.Y, anchor.Z));
             if (distanceSq > InvitePlayerYards * InvitePlayerYards || !SharesGoal(goal, real, anchor)) continue;

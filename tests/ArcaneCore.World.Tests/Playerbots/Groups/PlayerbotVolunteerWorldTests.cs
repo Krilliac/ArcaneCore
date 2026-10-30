@@ -22,8 +22,8 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 /// </summary>
 public sealed class PlayerbotVolunteerWorldTests
 {
-    private const byte Human = 1, Warrior = 1, Mage = 8;
-    private const uint Fireball = 133;
+    private const byte Human = 1, Orc = 2, Warrior = 1, Priest = 5, Mage = 8;
+    private const uint Fireball = 133, LesserHeal = 2050;
 
     private static void Quiet(PlayerbotOptions options, int maxGroups = 16, int minTank = 0)
     {
@@ -360,5 +360,78 @@ public sealed class PlayerbotVolunteerWorldTests
         var queued = await world.OnWorldAsync(() => world.Coordinator.TakeExpiredVolunteers());
         if (engaged == Engaged.Ungrouped) Assert.Equal(bot.Id, Assert.Single(queued).BotId);
         else Assert.Empty(queued);
+    }
+
+    // --- review cycle 2 ---------------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// A volunteer placed by Form is not invited until the forming ticks, so the group manager does not know them yet: whispering a second
+    /// waiting bot in that window must not book them into a second group.
+    /// </summary>
+    [Fact]
+    public async Task AVolunteerAlreadyPlacedInAFormingGroup_IsNotBookedIntoASecondOne()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => Quiet(options, maxGroups: 1));
+        await world.World.PrepareCharacterAsync("VOLDB", "Voldb", AccountSecurity.Player);
+        await FillTheCapAsync(world, "Voldbfill", 2, Warrior, []);
+        var a = await WaitingBotAsync(world, "Voldba", Warrior, 1, []);
+        var b = await WaitingBotAsync(world, "Voldbb", Warrior, 1, []);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLDB", "Voldb", AccountSecurity.Player);
+
+        (PlayerbotVolunteerResult first, PlayerbotVolunteerResult second) = await world.OnWorldAsync(() =>
+        {
+            Player real = Online(world, "Voldb");
+            return (world.Coordinator.Volunteer(a.Id, real), world.Coordinator.Volunteer(b.Id, real)); // back to back: no tick between
+        });
+
+        Assert.Equal(PlayerbotVolunteerOutcome.Ready, first.Outcome);
+        Assert.Equal(PlayerbotVolunteerOutcome.Grouped, second.Outcome);
+        Assert.Equal(2, world.Coordinator.Groups.Count); // the cap group and the one with the player
+        Assert.Single(world.Coordinator.Groups, g => g.Members.Any(m => m.Real));
+        Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == b.Id);
+    }
+
+    /// <summary>The player is a tank class and no bot tanks: a bot leads, and a healer bot is preferred to a damage one.</summary>
+    [Fact]
+    public async Task WhenThePlayerTanks_AHealerBotLeads_NotADamageBot()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Quiet(options, minTank: 1);
+            options.Groups.MinHealer = 1;
+        });
+        await world.World.PrepareCharacterAsync("VOLHEAL", "Volheal", AccountSecurity.Player);
+        var mage = await WaitingBotAsync(world, "Volhealmage", Mage, 1, [Fireball]); // waits longest
+        var priest = await WaitingBotAsync(world, "Volhealprie", Priest, 1, [LesserHeal]);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLHEAL", "Volheal", AccountSecurity.Player);
+
+        PlayerbotVolunteerResult result = await VolunteerAsync(world, mage.Id, "Volheal");
+
+        Assert.Equal(PlayerbotVolunteerOutcome.Ready, result.Outcome);
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Members.Any(m => m.Real));
+        Assert.Equal(PlayerbotGroupRole.Tank, group.Members.Single(m => m.Real).Role);
+        Assert.Equal(PlayerbotGroupRole.Healer, group.Members.Single(m => m.BotId == priest.Id).Role);
+        Assert.Equal(priest.Id, group.LeaderBotId);
+    }
+
+    /// <summary>A full cap lets only a goal with a live volunteer through: another team's waiting goal is passed over without building candidates.</summary>
+    [Fact]
+    public async Task WhenTheCapIsFull_AGoalWithoutALiveVolunteer_StaysUnformedAndUnbuilt()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options => Quiet(options, maxGroups: 1));
+        await world.World.PrepareCharacterAsync("VOLCS", "Volcs", AccountSecurity.Player);
+        await FillTheCapAsync(world, "Volcsfill", 3, Mage, [Fireball]);
+        var first = await WaitingBotAsync(world, "Volcsone", Mage, 1, [Fireball]);
+        var horde = await world.AddBotAsync("Volcshorde", Orc, Warrior, 1, []);
+        Assert.True(await world.RunUntilAsync(120_000, () => world.Coordinator.WaitingBots.Any(w => w.BotId == horde.Id)), await world.TraceAsync());
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLCS", "Volcs", AccountSecurity.Player);
+        Assert.Equal(PlayerbotVolunteerOutcome.Noted, (await VolunteerAsync(world, first.Id, "Volcs")).Outcome);
+        long before = await world.OnWorldAsync(() => world.Coordinator.CapSkippedGoals);
+
+        await world.RunAsync(10_000);
+
+        Assert.True(await world.OnWorldAsync(() => world.Coordinator.CapSkippedGoals) > before, "the other team's goal was not passed over");
+        Assert.Single(world.Coordinator.Groups);
+        Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == horde.Id);
     }
 }

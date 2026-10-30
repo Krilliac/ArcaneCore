@@ -12171,6 +12171,27 @@ World.Instances.ResetTimeHour = 4
 World.Instances.UnloadDelayMs = 1800000
 
 #----------------------------------------------------------------------------
+# World:MeetingStone
+#----------------------------------------------------------------------------
+
+#
+#    World.MeetingStone.LeaveSoloQueueOnPartyJoin
+#        Description: ArcaneCore deviation, off by default (retail): a player queued alone at a
+#                     meeting stone who joins a party by an ordinary invitation leaves the solo
+#                     queue (the client is told SETQUEUE LEAVE_QUEUE). vmangos keeps the stale entry
+#                     (Group.cpp AddMember only updates the LFG state of a party that is itself in
+#                     the queue), so that player keeps blocking the roles of everyone queued after
+#                     them until they log out, and is lost from a pair the queue forms. This also
+#                     applies to the inviter of a new party who had queued alone.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldmeetingstone
+#
+World.MeetingStone.LeaveSoloQueueOnPartyJoin = false
+
+#----------------------------------------------------------------------------
 # World:PacketHeuristics
 #----------------------------------------------------------------------------
 

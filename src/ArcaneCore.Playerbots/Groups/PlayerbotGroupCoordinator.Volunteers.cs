@@ -69,7 +69,7 @@ public sealed partial class PlayerbotGroupCoordinator
             return new(PlayerbotVolunteerOutcome.NotWaiting);
         if (player.Team != wanting.Team) return new(PlayerbotVolunteerOutcome.Team);
         if (player.Level < waiting.Goal.MinLevel) return new(PlayerbotVolunteerOutcome.Level);
-        if (GroupManagerOrNull() is { } groups && (groups.GetGroup(player.Guid) is not null || groups.GetInvite(player.Guid) is not null))
+        if (GroupManagerOrNull() is { } groups && (groups.GetGroup(player.Guid) is not null || groups.GetInvite(player.Guid) is not null) || IsAwaitedMember(player.Guid))
             return new(PlayerbotVolunteerOutcome.Grouped);
         if (_declinedPlayers.ContainsKey(player.Guid)) return new(PlayerbotVolunteerOutcome.Declined);
 
@@ -141,7 +141,7 @@ public sealed partial class PlayerbotGroupCoordinator
         lists.Add(candidates);
         foreach (PlayerbotGroupCandidate asked in new[] { damageOnly, self })
             foreach (List<PlayerbotGroupCandidate> bots in lists)
-                if (VolunteerPlan(bots, asked, self, size, goal) is { } plan) return plan;
+                if (VolunteerPlan(bots, asked, self, size, goal) is { } plan && (!goal.InInstance || PlanAnchored(plan))) return plan; // an instance plan needs a waiting anchor: try the next list
         return null;
     }
 
@@ -155,28 +155,41 @@ public sealed partial class PlayerbotGroupCoordinator
         // The plan names the player by the candidate that was asked (a damage dealer first); the member is the player. A real player never
         // leads a bot group: when the player's own class took the only tank slot the longest-waiting bot leads, the player keeps the role.
         var members = new List<(PlayerbotGroupCandidate Bot, PlayerbotGroupRole Role, byte SubGroup)>(plan.Members.Count);
-        var botMembers = new List<PlayerbotGroupCandidate>(plan.Members.Count);
         foreach ((PlayerbotGroupCandidate member, PlayerbotGroupRole role, byte subGroup) in plan.Members)
-        {
-            bool real = member.BotId == Guid.Empty;
-            members.Add((real ? self : member, role, subGroup));
-            if (!real) botMembers.Add(member);
-        }
+            members.Add((member.BotId == Guid.Empty ? self : member, role, subGroup));
+        return WithBotLeader(new PlayerbotGroupPlan(plan.Leader, members));
+    }
 
-        return botMembers.Count == 0 ? null : new PlayerbotGroupPlan(plan.Leader.BotId != Guid.Empty ? plan.Leader : Oldest(botMembers), members);
+    /// <summary>
+    /// Whether <paramref name="guid"/> is a real player a bot group has already taken whose invitation has not been answered (the group formed,
+    /// the leader invites on the forming ticks): they are as engaged as one with an invitation pending, though the group manager does not know yet.
+    /// </summary>
+    private bool IsAwaitedMember(ObjectGuid guid)
+    {
+        foreach (BotGroup group in _groups)
+            foreach (Member member in group.Members)
+                if (member.Real && !member.Joined && member.Guid == guid) return true;
+        return false;
     }
 
     /// <summary>
     /// <paramref name="plan"/> with a bot as its leader: the plan itself when a bot leads, else the longest-waiting bot member leads (the
-    /// real player, dealt the only tank slot, keeps the role); null when no bot is in the plan. A real player never leads a bot group.
+    /// real player, dealt the only tank slot, keeps the role); a healer bot is preferred over the others, since it stays behind the tank and
+    /// has the least to do with the pull. Null when no bot is in the plan. A real player never leads a bot group.
     /// </summary>
     private static PlayerbotGroupPlan? WithBotLeader(PlayerbotGroupPlan plan)
     {
         if (plan.Leader.BotId != Guid.Empty) return plan;
         var bots = new List<PlayerbotGroupCandidate>(plan.Members.Count);
-        foreach ((PlayerbotGroupCandidate member, _, _) in plan.Members)
-            if (member.BotId != Guid.Empty) bots.Add(member);
-        return bots.Count == 0 ? null : new PlayerbotGroupPlan(Oldest(bots), plan.Members);
+        var healers = new List<PlayerbotGroupCandidate>(plan.Members.Count);
+        foreach ((PlayerbotGroupCandidate member, PlayerbotGroupRole role, _) in plan.Members)
+        {
+            if (member.BotId == Guid.Empty) continue;
+            bots.Add(member);
+            if (role == PlayerbotGroupRole.Healer) healers.Add(member);
+        }
+
+        return bots.Count == 0 ? null : new PlayerbotGroupPlan(Oldest(healers.Count > 0 ? healers : bots), plan.Members);
     }
 
     private readonly List<(Guid BotId, ObjectGuid Player)> _expiredVolunteers = [];
@@ -226,7 +239,7 @@ public sealed partial class PlayerbotGroupCoordinator
             if (unchecked((int)(until - now)) <= 0) continue; // PruneVolunteers drops it at the next pass
 
             if (key != goal.Key || world.FindOnlinePlayer(guid) is not { IsAlive: true } real || real.Session is not WorldSession { IsManaged: false }) continue;
-            if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null) continue;
+            if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null || IsAwaitedMember(real.Guid)) continue;
             if (_declinedPlayers.ContainsKey(real.Guid)) continue;
             if (PlanForVolunteer(real, candidates, size, goal, volunteerBot) is { } plan)
             {
@@ -238,12 +251,13 @@ public sealed partial class PlayerbotGroupCoordinator
         return null;
     }
 
-    /// <summary>Whether a volunteer for the goal <paramref name="key"/> is kept and not yet expired.</summary>
-    private bool HasLiveVolunteer((PlayerbotGroupGoalKind, uint) key)
+    /// <summary>Whether a volunteer for the goal <paramref name="key"/> is kept and not yet expired, asked of a bot of <paramref name="team"/>.</summary>
+    private bool HasLiveVolunteer((PlayerbotGroupGoalKind, uint) key, Team team)
     {
         uint now = Now;
         foreach (var entry in _volunteers.Values)
-            if (entry.Key == key && unchecked((int)(entry.Until - now)) > 0) return true;
+            if (entry.Key == key && unchecked((int)(entry.Until - now)) > 0
+                && _bots.TryGetValue(entry.Bot, out PlayerbotGroupBot bot) && bot.Session.Player is { } asked && asked.Team == team) return true;
         return false;
     }
 }

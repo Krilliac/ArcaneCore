@@ -7,6 +7,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Social;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -58,6 +59,9 @@ public sealed class MeetingStoneFeature(IServiceProvider services, ILogger<Meeti
         }
 
         var queue = new LfgQueue(new SocialLfgGroups(groups, world, services.GetService<CharacterDirectory>()));
+        var options = new MeetingStoneOptions();
+        services.GetService<IConfiguration>()?.GetSection(MeetingStoneOptions.SectionName).Bind(options);
+        queue.LeaveSoloQueueOnPartyJoin = options.LeaveSoloQueueOnPartyJoin;
         Queue = queue;
         world.Updated += queue.Update;
         world.PlayerLoggingOut += queue.OnLoggingOut;

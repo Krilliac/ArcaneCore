@@ -1019,6 +1019,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
     }
 
+    /// <summary>How many times a full cap let <see cref="Match"/> pass over a waiting goal that has no live volunteer (tests: no candidates are built for it).</summary>
+    internal long CapSkippedGoals { get; private set; }
+
     private bool QuestGroupSlotFree() => OwnGroupCount < _options.Groups.MaxGroups && _groups.Count(g => g.Run is null && g.Handoff is null && g.Siege is null) < QuestGroupLimit;
 
     /// <summary>The groups the bots formed themselves: a handed-over group (a player's own, <see cref="BotGroup.Handoff"/>) takes no slot of <c>MaxGroups</c>.</summary>
@@ -1048,7 +1051,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 if (_volunteers.Count == 0) return;
             }
 
-            if (!slotFree && !HasLiveVolunteer(wanting.Key.Key)) continue; // a full cap lets only a goal with a volunteer through
+            if (!slotFree && !HasLiveVolunteer(wanting.Key.Key, wanting.Key.Team))
+            {
+                CapSkippedGoals++; // a full cap lets only a goal with a volunteer through: nothing is built for the others
+                continue;
+            }
+
             PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
             if (goal.InInstance)
             {
