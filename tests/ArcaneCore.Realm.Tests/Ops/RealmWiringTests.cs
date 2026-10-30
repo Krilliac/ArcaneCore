@@ -10,6 +10,32 @@ namespace ArcaneCore.Realm.Tests.Ops;
 /// <summary>CI guards: every concrete config check of the Kernel and Realm assemblies is run by the realm, and its production services build with validation on.</summary>
 public sealed class RealmWiringTests
 {
+    private static ConfigReport ValidateWith(params (string Key, string Value)[] pairs)
+        => RealmOpsCli.Validate(new ConfigurationBuilder().AddInMemoryCollection(pairs.ToDictionary(p => p.Key, p => (string?)p.Value)).Build());
+
+    [Fact]
+    public void AuthBindAddressThatIsNotAnIpAddress_IsAStartupError_NotACrashLaterInTheListener()
+    {
+        ConfigReport report = ValidateWith(("Auth:BindAddress", "localhost"));
+        Assert.True(report.IsInvalid, "Auth:BindAddress=localhost passed realm validation; IPAddress.Parse would throw in LogonServer.StartAsync");
+        Assert.Contains(report.Issues, i => i.Key == "Auth:BindAddress" && i.Severity == ConfigSeverity.Error && i.Fix.Contains("0.0.0.0", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AuthPortOutOfRange_IsAStartupError()
+    {
+        Assert.Contains(ValidateWith(("Auth:Port", "70000")).Issues, i => i.Key == "Auth:Port" && i.Severity == ConfigSeverity.Error);
+        Assert.DoesNotContain(ValidateWith(("Auth:Port", "3724"), ("Auth:BindAddress", "127.0.0.1")).Issues, i => i.Key.StartsWith("Auth:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void NegativeAuthFailureBudget_IsAStartupError_NotSilentlyClampedToOff()
+    {
+        ConfigReport report = ValidateWith(("Net:Protection:AuthFailureBurstPerIp", "-1"));
+        Assert.True(report.IsInvalid, "a negative AuthFailureBurstPerIp passed realm validation; NetGuard clamps it to 0, which disables the guard");
+        Assert.Contains(report.Issues, i => i.Key == "Net:Protection:AuthFailureBurstPerIp" && i.Severity == ConfigSeverity.Error);
+    }
+
     [Fact]
     public void EveryConcreteConfigCheck_IsRunByTheRealmsValidation()
     {

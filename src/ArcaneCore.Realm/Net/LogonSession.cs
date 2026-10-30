@@ -938,6 +938,7 @@ public sealed class LogonSession(
         _accountId = _reconnectAccountId;
         _accountSecurity = _reconnectSecurity;
         _authenticated = true;
+        _unauthenticatedLifetime?.CancelAfter(Timeout.InfiniteTimeSpan); // proven: the pre-proof lifetime no longer applies
         var writer = new PacketWriter(2);
         writer.WriteByte((byte)AuthCommand.ReconnectProof);
         writer.WriteByte((byte)AuthResult.Success);
