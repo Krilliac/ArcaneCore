@@ -148,7 +148,9 @@ public static class GatewayWorkerServiceCollectionExtensions
     {
         services.PostConfigure<Data.DatabaseOptions>(database => database.Upgrade.ValidateOnly = true);
         services.RemoveAll<WorldWriterGuard>();
-        services.AddSingleton(new WorldWriterGuard()); // no database options: Acquire takes nothing
+        // Keeps the database options but defers the lock: Acquire (WorldStartup, WorldHost.StartAsync) takes nothing while the active world holds it; WorldHost.PromoteAsync takes it.
+        services.AddSingleton(sp => new WorldWriterGuard(sp.GetService<Microsoft.Extensions.Options.IOptions<Data.DatabaseOptions>>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<WorldWriterGuard>>(), deferUntilPromotion: true));
         ServiceDescriptor? listener = services.LastOrDefault(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(WorldServer));
         if (listener is not null)
         {

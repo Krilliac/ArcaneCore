@@ -2117,7 +2117,8 @@ Cluster.Worker.RealmId = 1
 #    Cluster.Worker.Standby
 #        Description: Standby (Tier 3b handoff target; needs Enabled): start the process, build its
 #                     services and link to the gateway, but admit no session, claim no characters
-#                     ownership, run no schema DDL, take no writer lock, open no World:Port
+#                     ownership, run no schema DDL, take no writer lock until promoted (promotion
+#                     takes it and is refused while the old world holds it), open no World:Port
 #                     listener, and attach no feature nor start the simulation until promoted by a
 #                     handoff (features read the characters database, which the active world still
 #                     owns). false, the default, is an active worker.
@@ -3378,6 +3379,22 @@ Database.Auth.Provider = MariaDb
 # Database.Auth.SqliteSynchronous =
 
 #
+#    Database.Auth.WriterLockDatabase
+#        Description: PostgreSQL only: the existing maintenance database the single-writer advisory
+#                     lock is taken in (overrides Database:WriterLockDatabase; unset inherits it,
+#                     default postgres). PostgreSQL scopes advisory locks to the database a session
+#                     is connected to, so every world must take the lock in the same database, and
+#                     it must exist before the characters database does. The login needs CONNECT on
+#                     it. MariaDB, MySQL and SQLite ignore it.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Auth.WriterLockDatabase =
+
+#
 #    Database.Characters.ConnectionString
 #        Description: The connection string of this component's database. The shipped files carry
 #                     the development placeholder user arcane; change it for any real deployment.
@@ -3430,6 +3447,22 @@ Database.Characters.Provider = MariaDb
 #        Docs: docs/reference/configuration.md#database
 #
 # Database.Characters.SqliteSynchronous =
+
+#
+#    Database.Characters.WriterLockDatabase
+#        Description: PostgreSQL only: the existing maintenance database the single-writer advisory
+#                     lock is taken in (overrides Database:WriterLockDatabase; unset inherits it,
+#                     default postgres). PostgreSQL scopes advisory locks to the database a session
+#                     is connected to, so every world must take the lock in the same database, and
+#                     it must exist before the characters database does. The login needs CONNECT on
+#                     it. MariaDB, MySQL and SQLite ignore it.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Characters.WriterLockDatabase =
 
 #
 #    Database.ConnectionString
@@ -3713,6 +3746,39 @@ Database.World.Provider = MariaDb
 #        Docs: docs/reference/configuration.md#database
 #
 # Database.World.SqliteSynchronous =
+
+#
+#    Database.World.WriterLockDatabase
+#        Description: PostgreSQL only: the existing maintenance database the single-writer advisory
+#                     lock is taken in (overrides Database:WriterLockDatabase; unset inherits it,
+#                     default postgres). PostgreSQL scopes advisory locks to the database a session
+#                     is connected to, so every world must take the lock in the same database, and
+#                     it must exist before the characters database does. The login needs CONNECT on
+#                     it. MariaDB, MySQL and SQLite ignore it.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.World.WriterLockDatabase =
+
+#
+#    Database.WriterLockDatabase
+#        Description: PostgreSQL only: the existing maintenance database (default postgres) in which
+#                     the world takes its single-writer advisory lock. PostgreSQL scopes advisory
+#                     locks to the database the session is connected to, so all worlds of one
+#                     characters database must lock in the same database, one that exists before the
+#                     characters database is created. The login needs CONNECT on it. Each component
+#                     may override it with a Database:Characters WriterLockDatabase key. MariaDB,
+#                     MySQL and SQLite ignore it (docs/guide/operations.md).
+#        Type: string
+#        Default: "postgres"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.WriterLockDatabase = "postgres"
 
 ###############################################################################
 # DIAGNOSTICS
