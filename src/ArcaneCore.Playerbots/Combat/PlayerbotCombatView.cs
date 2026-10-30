@@ -184,7 +184,9 @@ internal static class PlayerbotCombatView
                 && SpellSystem.IsExplicitUnitTarget(spell.Effects[0].TargetA)
                 && unit.Guid != combo.GetComboTarget(player))
                 return false;
-            if (spell.IsPositive && ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(system, unit, spell, ReferenceEquals(unit, player))) return false;
+            // Hostile spells too (vmangos CanTryToCastSpell -> IsImmuneToSpell): a totem takes no negative aura and a creature's
+            // mechanic or school immunity would waste the cast.
+            if (ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(system, unit, spell, ReferenceEquals(unit, player))) return false;
             // A crowd-control spell on a target at the immune diminishing level lands with no aura (vmangos Spell::DoSpellHitOnUnit): do not waste the cast.
             if (!spell.IsPositive && !ReferenceEquals(unit, player) && system.IsFullyDiminished is { } diminished && diminished(player, unit, spell)) return false;
             if (spell.Effects.Any(e => !e.IsEmpty && e.TargetA == SpellImplicitTarget.UnitCasterPet) && petStatus != RotationPetStatus.Alive) return false;

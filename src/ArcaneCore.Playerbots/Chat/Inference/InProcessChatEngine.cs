@@ -188,6 +188,7 @@ internal sealed class InProcessChatEngine : IDisposable
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         var warm = new WarmWork([.. prefix]);
         Post(new Command(CommandKind.Warm, null, warm));
+        if (_loopExited || _stopping) warm.Done.TrySetResult(0); // posted after the last drain: nothing would dequeue it
         return warm.Done.Task;
     }
 

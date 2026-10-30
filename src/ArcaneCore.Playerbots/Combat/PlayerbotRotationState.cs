@@ -44,7 +44,7 @@ internal sealed record RotationUnit
 
     public bool IsMoving { get; init; }
 
-    /// <summary>Held by a root or stun aura (vmangos HasUnitState(UNIT_STATE_ROOT)).</summary>
+    /// <summary>Held by a root or stun aura (SpellSystem.IsRooted; vmangos HasUnitState(UNIT_STATE_ROOT)).</summary>
     public bool IsRooted { get; init; }
 
     /// <summary>Carries a movement-slowing aura (vmangos HasAuraType(SPELL_AURA_MOD_DECREASE_SPEED)).</summary>
