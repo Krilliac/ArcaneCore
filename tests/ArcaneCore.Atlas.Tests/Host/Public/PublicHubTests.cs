@@ -402,6 +402,38 @@ public sealed class PublicHubTests
     }
 
     [Fact]
+    public async Task ThePerAddressCap_HoldsWhileManyThreadsReserveAndReleaseTheSameAddress()
+    {
+        await using PublicRig rig = await PublicRig.StartAsync(o => { o.MaxConnectionsPerIp = 1; o.MaxConnections = 1000; });
+        PublicHub hub = rig.Server.Hub;
+        int inside = 0;
+        int overshoot = 0;
+
+        // With a cap of one, at most one thread may hold the address at a time. A Release that removed the shared entry right after another
+        // thread incremented it would erase that thread's count, and a second one would fit.
+        Task[] churn = [.. Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            for (int i = 0; i < 50_000; i++)
+            {
+                if (hub.TryReserve("10.9.9.9"))
+                {
+                    if (Interlocked.Increment(ref inside) > 1)
+                    {
+                        Interlocked.Increment(ref overshoot);
+                    }
+
+                    Interlocked.Decrement(ref inside);
+                    hub.ReleaseReservation("10.9.9.9");
+                }
+            }
+        }))];
+        await Task.WhenAll(churn);
+
+        Assert.Equal(0, Volatile.Read(ref overshoot));
+        Assert.Equal(0, hub.Count);
+    }
+
+    [Fact]
     public async Task ASocketTheServerClosesButThePeerNeverAnswers_IsAbortedAfterTheGrace_AndFreesItsSlot()
     {
         await using PublicRig rig = await PublicRig.StartAsync();

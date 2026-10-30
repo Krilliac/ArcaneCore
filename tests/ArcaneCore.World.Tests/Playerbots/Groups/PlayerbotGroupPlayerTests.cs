@@ -110,6 +110,26 @@ public sealed class PlayerbotGroupPlayerTests
         Assert.Empty(world.Coordinator.Groups);
     }
 
+    /// <summary>
+    /// A tank-class player (the test character is a warrior) is dealt the only tank slot when no bot tanks, and would lead: the group still
+    /// forms with them, a bot leading, instead of the plan being dropped.
+    /// </summary>
+    [Fact]
+    public async Task WithInvitePlayers_ATankClassPlayer_JoinsABotGroupWithoutATank_AndABotLeads()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => options.Groups.InvitePlayers = true);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("GROUPTANK", "Grouptank", AccountSecurity.Player);
+        var bot = await world.AddBotAsync("Askermage", Human, Mage, 1, [Fireball]);
+        await GivePlayerQuestAsync(world, "Grouptank", DuoQuest);
+        await RememberPlayerAsync(world, bot, "Grouptank", 30);
+
+        Assert.True(await world.RunUntilAsync(60_000, () => PlayerInvited(world)), await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        Assert.Equal(bot.Id, group.LeaderBotId);
+        byte[] invite = await player.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+        Assert.Equal(bot.Name, new PacketReader(invite).ReadCString());
+    }
+
     /// <summary>One bot and one real player are a group: the player counts toward the two members, so the coordinator keeps it and goes on to work the objective.</summary>
     [Fact]
     public async Task OneBotAndOneRealPlayer_AreAGroup_TheCoordinatorKeeps_AndWorksTheObjectiveWith()

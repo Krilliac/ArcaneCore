@@ -3,9 +3,12 @@ using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
+using ArcaneCore.Kernel.Net;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Cluster.Auxiliary;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -78,6 +81,15 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     private readonly TcpListener _listener;
     private readonly CancellationTokenSource _stop = new();
     private readonly ConcurrentDictionary<int, Link> _links = new();
+    private readonly GatewayWardenManifestVerifier? _wardenVerifier;
+    private readonly Lock _sourceGate = new();
+    private readonly Dictionary<ClusterWardenVerdictSource, int> _openLinksBySource = [];
+    // Newest incarnation admitted per node id. A gateway process keeps one incarnation for life and reconnects with it, so
+    // an incarnation is only superseded (and retirable) once a different incarnation of its node id has been admitted.
+    private readonly Dictionary<string, Guid> _newestIncarnationByNode = [];
+    // Incarnations that lost newest status. Incarnation ids are unordered GUIDs, so supersession is recorded explicitly and is
+    // monotonic: a superseded incarnation that reconnects never becomes newest again and never supersedes the live one.
+    private readonly HashSet<ClusterWardenVerdictSource> _supersededSources = [];
     private readonly LogGate _dropGate = new(TimeSpan.FromSeconds(10));
     private Task? _acceptTask;
     private int _nextLinkId;
@@ -89,7 +101,8 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         Func<long> ownerEpoch,
         string linkSecret,
         IPEndPoint bindEndPoint,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        GatewayWardenManifestVerifier? wardenVerifier = null)
     {
         ArgumentNullException.ThrowIfNull(workerManifest);
         ArgumentNullException.ThrowIfNull(acceptor);
@@ -104,6 +117,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         _linkSecret = linkSecret;
         _logger = logger ?? NullLogger.Instance;
         _listener = new TcpListener(bindEndPoint);
+        _wardenVerifier = wardenVerifier;
     }
 
     public IPEndPoint BoundEndPoint => (IPEndPoint)_listener.LocalEndpoint;
@@ -131,38 +145,37 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     /// <summary>Admitted gateway links.</summary>
     public int AdmittedLinkCount => _links.Values.Count(link => link.Admitted);
 
+    /// <summary>Test seam: awaited before every accept; an exception it throws behaves like a failed accept.</summary>
+    internal Func<CancellationToken, ValueTask>? BeforeAcceptForTests { get; set; }
+
     public void Start()
     {
         _listener.Start();
         _acceptTask = Task.Run(() => AcceptLoopAsync(_stop.Token));
     }
 
-    private async Task AcceptLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            TcpClient client;
-            try
+    // The shared accept loop: a transient accept failure (connection reset, fd exhaustion) is logged (throttled), backed off
+    // and retried; only cancellation (DisposeAsync) ends it, so a gateway can always reconnect.
+    private Task AcceptLoopAsync(CancellationToken ct) =>
+        AcceptLoop.RunAsync(
+            async token =>
             {
-                client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException
-                || (ex is SocketException && ct.IsCancellationRequested))
-            {
-                break;
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("cluster.transport", ex);
-                break;
-            }
+                if (BeforeAcceptForTests is { } before)
+                {
+                    await before(token).ConfigureAwait(false);
+                }
 
-            int id = Interlocked.Increment(ref _nextLinkId);
-            var link = new Link(id, new GatewayLinkChannel(client), client.Client.RemoteEndPoint?.ToString() ?? "unknown");
-            _links[id] = link;
-            link.Receive = Task.Run(() => RunLinkAsync(link, ct), CancellationToken.None);
-        }
-    }
+                return await _listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+            },
+            client =>
+            {
+                int id = Interlocked.Increment(ref _nextLinkId);
+                var link = new Link(id, new GatewayLinkChannel(client), client.Client.RemoteEndPoint?.ToString() ?? "unknown");
+                _links[id] = link;
+                link.Receive = Task.Run(() => RunLinkAsync(link, ct), CancellationToken.None);
+            },
+            _logger,
+            ct);
 
     private async Task RunLinkAsync(Link link, CancellationToken ct)
     {
@@ -226,6 +239,29 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                                 return;
                             }
 
+                            var source = new ClusterWardenVerdictSource(peer.NodeId, peer.NodeIncarnation);
+                            lock (_sourceGate)
+                            {
+                                _openLinksBySource[source] = _openLinksBySource.GetValueOrDefault(source) + 1;
+                                link.Source = source;
+                                if (!_supersededSources.Contains(source))
+                                {
+                                    if (_newestIncarnationByNode.TryGetValue(source.NodeId, out Guid previous) && previous != source.NodeIncarnation)
+                                    {
+                                        // The previous newest is now superseded for good: retire it at once if it has no open
+                                        // link, else ReleaseSource retires it when its last link goes.
+                                        var superseded = new ClusterWardenVerdictSource(source.NodeId, previous);
+                                        _supersededSources.Add(superseded);
+                                        if (!_openLinksBySource.ContainsKey(superseded))
+                                        {
+                                            _wardenVerifier?.RetireSource(superseded);
+                                        }
+                                    }
+
+                                    _newestIncarnationByNode[source.NodeId] = source.NodeIncarnation;
+                                }
+                            }
+
                             link.Admitted = true;
                             _logger.LogInformation("Gateway link from {Remote} admitted (node {Node}, incarnation {Incarnation})",
                                 link.Remote, peer.NodeId, peer.NodeIncarnation);
@@ -273,6 +309,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         {
             link.Channel.Close();
             _links.TryRemove(link.Id, out _);
+            ReleaseSource(link);
             foreach (LinkSession session in link.Sessions.Values)
             {
                 session.CloseFromLink(ClusterSessionDetachReason.LinkLost);
@@ -285,6 +322,78 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             }
 
             await link.Channel.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Open admitted links of one (node, incarnation); 0 when none. For tests and diagnostics.</summary>
+    internal int OpenLinkCount(ClusterWardenVerdictSource source)
+    {
+        lock (_sourceGate)
+        {
+            return _openLinksBySource.GetValueOrDefault(source);
+        }
+    }
+
+    /// <summary>Ids of the currently admitted links, for routing a verdict to <see cref="TryAcceptWardenVerdict"/>.</summary>
+    internal int[] AdmittedLinkIds() => [.. _links.Values.Where(link => link.Admitted).Select(link => link.Id)];
+
+    /// <summary>
+    /// Routes a Warden verdict that arrived on an admitted link through the verifier, keyed by the link's own peer identity
+    /// (node id and incarnation from the admitted manifest, never from the verdict body). A link that is unknown, closed or
+    /// not admitted, or a host built without a verifier, refuses the verdict. Thread-safe; callable from any thread.
+    /// </summary>
+    internal bool TryAcceptWardenVerdict(int linkId, ClusterWardenVerdict? verdict, long activeSessionGeneration, long activeOwnerEpoch, out string? discardReason)
+    {
+        if (_wardenVerifier is null)
+        {
+            discardReason = "no Warden verdict verifier is attached to this link host";
+            return false;
+        }
+
+        ClusterWardenVerdictSource source;
+        lock (_sourceGate)
+        {
+            if (!_links.TryGetValue(linkId, out Link? link) || link.Source is not { } linkSource)
+            {
+                discardReason = "Warden verdict from a link that is not an open admitted gateway link";
+                return false;
+            }
+
+            source = linkSource;
+        }
+
+        return _wardenVerifier.TryAcceptVerdict(verdict, source, activeSessionGeneration, activeOwnerEpoch, out discardReason);
+    }
+
+    /// <summary>
+    /// Drops this link's hold on its (node, incarnation). The verifier retires the source only when the last open link of that
+    /// exact incarnation is gone AND a different incarnation of the same node id has been admitted (see admission), so a live
+    /// gateway that drops its only link and reconnects with the same incarnation keeps its verdicts, and a newer incarnation
+    /// never retires an older one that still has links.
+    /// Runs once per link from the receive loop's finally block (every close path: clean, protocol fault, cancellation, dispose).
+    /// </summary>
+    private void ReleaseSource(Link link)
+    {
+        lock (_sourceGate)
+        {
+            if (link.Source is not { } source)
+            {
+                return;
+            }
+
+            link.Source = null;
+            int remaining = _openLinksBySource.GetValueOrDefault(source) - 1;
+            if (remaining > 0)
+            {
+                _openLinksBySource[source] = remaining;
+                return;
+            }
+
+            _openLinksBySource.Remove(source);
+            if (_supersededSources.Contains(source))
+            {
+                _wardenVerifier?.RetireSource(source);
+            }
         }
     }
 
@@ -396,6 +505,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         public string Remote { get; } = remote;
         public ConcurrentDictionary<long, LinkSession> Sessions { get; } = new();
         public volatile bool Admitted;
+
+        /// <summary>Set under the host's source gate at admission, cleared by ReleaseSource; null before admission.</summary>
+        public ClusterWardenVerdictSource? Source;
         public long HighestGeneration;
         public Task? Receive;
     }

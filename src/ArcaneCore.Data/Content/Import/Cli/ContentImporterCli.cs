@@ -113,13 +113,14 @@ public static partial class ContentImporterCli
                                 (--cooldown-unit auto|ms|seconds, default auto: the classic-db db_version decides;
                                 --dry-run writes nothing; --report <file>). A world whose schema is behind this
                                 importer's is refused unless --migrate is given (refresh never migrates on its own). import, import-dbc,
-                                import-map-dbc, proc-events and spell-threat take --migrate too: they create a missing
-                                schema but refuse to upgrade an existing one without it.
+                                import-map-dbc, proc-events, spell-threat, convert-rules and refresh-portals take --migrate too: the
+                                writers that build worlds create a missing schema; all of them refuse to upgrade an existing
+                                one without it (exit 3, nothing changed).
           refresh-portals <dump>...
                                 replace only areatrigger_teleport from the dump in one transaction;
                                 other location and world tables are untouched. Existing portal rows not
-                                in the dump are removed. Requires an existing current-schema world;
-                                --dry-run parses and counts without writing.
+                                in the dump are removed. Requires an existing world at the importer's schema (behind it: exit 3
+                                unless --migrate); --dry-run parses and counts without writing.
 
         a <dump> is a .sql or .sql.gz file (the gzip magic number decides, not the name); several
         dumps are read in order as one, later rows replacing earlier ones with the same key.
@@ -338,7 +339,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "proc-events", createMissing: true).ConfigureAwait(false);
+            await EnsureImporterSchemaAsync(db, a.Flag("--migrate"), o, ct, "proc-events", createMissing: true).ConfigureAwait(false);
             written = await SpellProcEventDumpImporter.ImportAsync(db, result.Content, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -390,7 +391,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "spell-threat", createMissing: true).ConfigureAwait(false);
+            await EnsureImporterSchemaAsync(db, a.Flag("--migrate"), o, ct, "spell-threat", createMissing: true).ConfigureAwait(false);
             written = await SpellThreatDumpImporter.ImportAsync(db, result.Content, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))
@@ -606,7 +607,9 @@ public static partial class ContentImporterCli
             {
                 try
                 {
-                    graveyards.ReadSafeLocs(WorldSafeLocsDbcReader.Load(safeLocsPath));
+                    // A dump row wins (cmangos `o` is the facing the DBC lacks, and classic-db corrects coordinates and names);
+                    // the DBC only fills ids the dump never had, as vmangos, which has no world_safe_locs table, needs.
+                    graveyards.AddMissingSafeLocs(WorldSafeLocsDbcReader.Load(safeLocsPath));
                 }
                 catch (InvalidDataException ex)
                 {
@@ -646,7 +649,7 @@ public static partial class ContentImporterCli
             try
             {
                 await using WorldDbContext db = OpenWorld(target);
-                await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "import", createMissing: true).ConfigureAwait(false);
+                await EnsureImporterSchemaAsync(db, a.Flag("--migrate"), o, ct, "import", createMissing: true).ConfigureAwait(false);
                 await ImportTransaction.RunAsync(db, async token =>
                 {
                     creatureReport = await creatures.WriteAsync(db, replace, token).ConfigureAwait(false);
@@ -950,7 +953,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), o, ct, "import-dbc", createMissing: true).ConfigureAwait(false);
+            await EnsureImporterSchemaAsync(db, a.Flag("--migrate"), o, ct, "import-dbc", createMissing: true).ConfigureAwait(false);
             await new EfSpellContentStore(db).ReplaceDbcTablesAsync(content, ct).ConfigureAwait(false);
             if (mapSnapshot is not null)
             {
@@ -1102,7 +1105,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await EnsureRefreshSchemaAsync(db, a.Flag("--migrate"), output, ct, "import-map-dbc", createMissing: true).ConfigureAwait(false);
+            await EnsureImporterSchemaAsync(db, a.Flag("--migrate"), output, ct, "import-map-dbc", createMissing: true).ConfigureAwait(false);
             report = await MapAreaDbcImporter.ImportSnapshotAsync(db, snapshot, a.Flag("--replace"), ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException))

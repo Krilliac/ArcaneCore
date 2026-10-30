@@ -468,7 +468,9 @@ public sealed class IsillienAI(Creature creature) : EscortAI(creature)
 
     protected override void UpdateEscortAI(uint diffMs)
     {
-        if (!_tirionSpawned && ((_summonTirionMs != 0 && _summonTirionMs <= diffMs) || (ulong)Me.Health * 100 < (ulong)Me.MaxHealth * 20))
+        // cmangos npc_isillienAI only holds Taelan once AI_EVENT_CUSTOM_A has struck him down, so Tirion cannot be called before it: the
+        // port knows Taelan from the start, hence the explicit _taelanDead gate on the health branch.
+        if (!_tirionSpawned && ((_summonTirionMs != 0 && _summonTirionMs <= diffMs) || (_taelanDead && (ulong)Me.Health * 100 < (ulong)Me.MaxHealth * 20)))
         {
             _taelan?.SummonTirion();
             _tirionSpawned = true;

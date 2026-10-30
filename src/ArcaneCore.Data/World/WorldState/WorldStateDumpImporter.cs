@@ -69,11 +69,52 @@ public static class WorldStateDumpImporter
                 {
                     rows[table].AddRange(ParseTuples(table, line[$"INSERT INTO `{table}` VALUES ".Length..]));
                 }
+                else if (IsOtherInsertForm(line, table))
+                {
+                    // A column list, INSERT IGNORE or REPLACE: not read here, and silently dropping the rows would make a
+                    // refresh treat the table as absent. Refuse the dump instead.
+                    throw new InvalidDataException($"{table}: an INSERT form this importer does not read (only the one-line plain VALUES form is supported): {Shorten(line)}");
+                }
             }
         }
 
         return Build(columns, rows);
     }
+
+    private static bool IsOtherInsertForm(string line, string table)
+    {
+        string head = line.TrimStart();
+        string rest;
+        if (head.StartsWith("INSERT ", StringComparison.OrdinalIgnoreCase))
+        {
+            rest = head[7..].TrimStart();
+        }
+        else if (head.StartsWith("REPLACE ", StringComparison.OrdinalIgnoreCase))
+        {
+            rest = head[8..].TrimStart();
+        }
+        else
+        {
+            return false;
+        }
+
+        foreach (string modifier in new[] { "LOW_PRIORITY ", "DELAYED ", "HIGH_PRIORITY ", "IGNORE " })
+        {
+            if (rest.StartsWith(modifier, StringComparison.OrdinalIgnoreCase))
+            {
+                rest = rest[modifier.Length..].TrimStart();
+            }
+        }
+
+        if (rest.StartsWith("INTO ", StringComparison.OrdinalIgnoreCase))
+        {
+            rest = rest[5..].TrimStart();
+        }
+
+        return rest.StartsWith($"`{table}`", StringComparison.Ordinal);
+    }
+
+    private static string Shorten(string line) => line.Length <= 80 ? line : line[..80] + "...";
 
     private static WorldStateContent Build(Dictionary<string, List<string>> columns, Dictionary<string, List<long[]>> rows)
     {
@@ -204,10 +245,11 @@ public static class WorldStateDumpImporter
 
     /// <summary>
     /// The content-importer CLI's write (same contract as the other <c>WriteAsync</c> importers, see <c>ImportTransaction</c>): with
-    /// <paramref name="replace"/> both tables are emptied first, without it an existing key fails the write and nothing changes.
+    /// <paramref name="replace"/> both tables are emptied first, without it an existing key fails the write and nothing changes. With
+    /// <paramref name="onlyCarried"/> a table is emptied only when <paramref name="content"/> has rows for it (the refresh command).
     /// Joins the caller's transaction through a savepoint. Returns the row counts written.
     /// </summary>
-    public static async Task<(int Weather, int BaseXp)> WriteAsync(WorldDbContext db, WorldStateContent content, bool replace, CancellationToken cancellationToken = default)
+    public static async Task<(int Weather, int BaseXp)> WriteAsync(WorldDbContext db, WorldStateContent content, bool replace, CancellationToken cancellationToken = default, bool onlyCarried = false)
     {
         ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(content);
@@ -221,8 +263,15 @@ public static class WorldStateDumpImporter
             {
                 if (replace)
                 {
-                    await db.Set<GameWeatherRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
-                    await db.Set<ExplorationBaseXpRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    if (!onlyCarried || weather.Length > 0)
+                    {
+                        await db.Set<GameWeatherRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    }
+
+                    if (!onlyCarried || baseXp.Length > 0)
+                    {
+                        await db.Set<ExplorationBaseXpRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    }
                 }
 
                 await ImportBatch.InsertAsync(db, weather, token).ConfigureAwait(false);

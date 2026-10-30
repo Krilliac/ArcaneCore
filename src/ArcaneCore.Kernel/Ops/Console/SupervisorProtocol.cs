@@ -111,7 +111,15 @@ public static partial class SupervisorProtocol
     /// <summary>Whether this process was started with the protocol on.</summary>
     public static bool IsEnabled() => IsEnabled(Environment.GetEnvironmentVariable);
 
-    /// <summary>Parses <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; ready|alive|stopping</c> (no leading or trailing text).</summary>
+    /// <summary>
+    /// Parses <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; ready|alive|stopping</c> (no leading or trailing text; any control character rejects the line).
+    /// <para>
+    /// Known limit: a heartbeat carries no per-run token, unlike the <c>lifecycle</c> lines. Child output also holds logged text a player or GM can
+    /// influence, so a logged text that ends up on a line of its own and matches this shape (a bare LF in the text starts a new line) is accepted. The
+    /// effect is bounded: it can only make a hung child look alive and so delay hang detection. It cannot drain, stop or restart anything, because
+    /// those paths need the token. The control-character check keeps a forged line from carrying a second one (CR, LF, escapes) inside it.
+    /// </para>
+    /// </summary>
     public static bool TryParseHeartbeat(string line, out SupervisorHeartbeatState state)
     {
         state = default;

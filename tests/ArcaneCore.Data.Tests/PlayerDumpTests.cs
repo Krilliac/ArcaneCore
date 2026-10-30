@@ -168,6 +168,23 @@ public sealed class PlayerDumpTests : IAsyncLifetime
 
     [Theory]
     [MemberData(nameof(Providers))]
+    public async Task Load_FallsBackToANewId_WhenTheRequestedIdStillHasAPendingDeletion(DatabaseProvider provider)
+    {
+        (DatabaseConnectionOptions cs, int alice) = await SeedAsync(provider);
+        await using CharacterDbContext db = TestContexts.Create<CharacterDbContext>(cs);
+        string dump = (await new PlayerDumpWriter(db).GetDumpAsync(alice))!;
+        db.Add(new CharacterDeletionRow { OperationId = Guid.NewGuid().ToString("D"), CharacterId = 500, AccountId = 3, Name = "Gone", CommittedAt = 1 });
+        await db.SaveChangesAsync();
+
+        PlayerDumpLoad load = await new PlayerDumpReader(db).LoadDumpAsync(dump, 3, "Clone", 500, await StoredPlayerDumpIds.CreateAsync(db));
+
+        Assert.Equal(DumpReturn.Success, load.Result);
+        Assert.NotEqual(500, load.CharacterId);
+        Assert.False(await db.Characters.AnyAsync(c => c.Id == 500));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
     public async Task Load_KeepsAnEscrowedMailItemOwnerless_SoTheLetterKeepsItAcrossAnInventorySave(DatabaseProvider provider)
     {
         (DatabaseConnectionOptions cs, int alice) = await SeedAsync(provider);

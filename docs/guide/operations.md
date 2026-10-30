@@ -29,13 +29,35 @@ holds the file open with `FileShare.None`, so it cannot be deleted). On Windows 
 refuses to start, and starting it again fixes that.
 Before it restores any playerbot the world also checks that `World:Port` can be bound; that is check-then-bind, which narrows the window and does not close it, and a port that is still
 taken fails the start before a single bot is logged in.
-MariaDB, MySQL and PostgreSQL databases have no file to lock: they rely on the `Cluster:Fencing` claim, which an unfenced world checks at start and then every
-`Cluster:Fencing:ClaimWatchIntervalSeconds`, and that fence (`CharacterWriteFenceInterceptor`) is also the only thing that bounds character autosaves and session-close saves of a
+MariaDB, MySQL and PostgreSQL databases have no file, so the world takes the same process-lifetime exclusive lock as a session-level advisory lock held on one dedicated, unpooled
+connection (MariaDB/MySQL `GET_LOCK(name, 0)`, PostgreSQL `pg_try_advisory_lock(key)`), in the same place and order as the SQLite lock: before the schema initializers, whether or not
+`Cluster:Fencing:Enabled` is on, released last with the container. The lock is keyed on the name of the characters database from `Database:Characters`: the MariaDB/MySQL lock name is
+`arcanecore.world.writer:<lower-cased database name>` (lower-cased because the server folds database-name case on case-insensitive file systems, `lower_case_table_names`; replaced by the prefix and 32 hex
+characters of the name's SHA-256 when longer than MariaDB's 64-character limit) and the PostgreSQL key is the first 8 bytes of the SHA-256 of `arcanecore.world.writer:<database name>`, so different realms'
+databases do not collide and two worlds configured with the same database name on the same server do. PostgreSQL scopes advisory locks to the database a session is connected to, so every world takes
+the lock in one fixed maintenance database, `postgres` unless `Database:WriterLockDatabase` (or `Database:Characters:WriterLockDatabase`) names another; it must exist and the login needs CONNECT on it. MariaDB
+and MySQL need no database for `GET_LOCK`, so the lock works before the characters database has been created. A second world gets the exit code `Refused` at once, with the same message shape as for SQLite
+naming the advisory lock instead of a file, having read and written nothing; a server that cannot be reached is retried and reported like the schema step (`Resilience:Database:Bootstrap`, exit code for an
+unreachable database). The server releases the lock when the connection ends, so a process crash leaves nothing to clean up. Limits: the lock lives in a server session. A periodic check (every 30 s, on the lock
+connection) logs at Critical when the lock is lost (server restart, dropped connection, killed session); after that this world no longer excludes a second one, and the fencing claim below is the remaining guard.
+The opposite failure also exists: a host that died or a network partition can leave the server holding the dead session, so a new world is refused until the server notices (TCP timeouts, `wait_timeout`); clear it
+with `SELECT pg_terminate_backend(pid)` (PostgreSQL, the pid is in `pg_locks` for `locktype = 'advisory'`) or `KILL <id>` (MariaDB/MySQL, the id is `SELECT IS_USED_LOCK('<lock name>')`). The MariaDB/MySQL
+session's `wait_timeout` is raised to about 24 days so an idle server does not end it. A standby worker takes the lock (SQLite or server) when it is promoted,
+see [the gateway](../areas/gateway.md#standby-worker-tier-3b-groundwork).
+The `Cluster:Fencing` claim, which an unfenced world checks at start and then every
+`Cluster:Fencing:ClaimWatchIntervalSeconds`, and that fence (`CharacterWriteFenceInterceptor`) remain the guard against a lost lock and the thing that bounds character autosaves and session-close saves of a
 second writer. If two worlds still end up writing the same playerbot rows, the world that already owned them (the older one, whose checkpoints are refused) logs `Split brain` at Critical,
 stops every bot and stops writing playerbot rows (checkpoints, creates, starts, stops, deletes, homes and the fleet reset), and reports it in `.playerbot status`, `.playerbot splitbrain` and the gauge
 `arcanecore.playerbots.split_brain` ([playerbots](../areas/playbots.md#another-world-on-the-same-database)). Character rows are still saved by the character autosave and when a session closes; split brain does not stop those.
 The older world stands down and the intruder keeps running on purpose: neither world can stop the other, and the one that already lost its rows backing off is the only move that guarantees a single writer
 (the operator then stops the intruder and clears the latch).
+
+A clustered realm must keep its characters on a server database. A SQLite characters database allows one writer process, and the world processes of a cluster write it concurrently, so the config check
+(`--check-config`; start-up as well, whatever `Startup:Strict` says) is an error, exit code 78, when the characters provider is SQLite and any of these is set: `Cluster:Worker:Enabled` (a gateway worker, a standby
+included), `Cluster:Node:Role` = MapWorker, or `Cluster:Supervisor:Enabled` with a gateway-worker child (role `worker`) or more than one world-type child (role `combined` or `worker`) under `Cluster:Supervisor:Processes`. `tools/ops/live/start-cluster.ps1 -Gateway` makes the world a gateway worker, so it needs a server database for `Database:Characters`. The message names the setting and
+the provider and says to use PostgreSQL or MariaDB for `Database:Characters` (moving a SQLite realm: [database upgrade](../ops/database-upgrade.md)). The supervisor refuses before it launches any child. A supervisor with exactly one combined world child is
+still allowed on SQLite (one writer), with a warning that the realm cannot grow beyond one world on SQLite. The provider checked is the one the process's own configuration resolves for `Database:Characters`
+(for a supervisor, its own; its children are expected to share it).
 
 Both daemons accept typed commands at their console window (`World:Console:Enabled`, `Realm:Console:Enabled`, both on by default). The world console runs the GM commands with Administrator authority and no character; the realm console has `help`, `info`, `realmlist`, `online`, `account create|set-password|set-gmlevel` and `quit`. Nothing is read when standard input is redirected (a service, a pipe, a deploy script). Commands that need a character or a selection answer that they need a player. See [the server console](../areas/server-console.md). The world daemon also takes the same commands from local tools: over the control pipe, a Windows named pipe (`World:Control:Pipe:Enabled`, off by default; `tools/ops/live/redeploy.ps1` uses it), and over [remote administration](../ops/remote-admin.md) (RA, `World:RemoteAdmin`), a TCP listener that is on by default on 127.0.0.1:3443 and runs each command with the security level of the account that logged in. RA is clear text, passwords included: keep `World:RemoteAdmin:BindAddress` on a loopback address, or set `World:RemoteAdmin:Enabled` to `false`. For account, password and ban work without a running daemon use the `arcane-account` tool.
 

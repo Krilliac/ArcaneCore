@@ -330,7 +330,9 @@ public sealed partial record SpellInfo
 
     /// <summary>
     /// vmangos Unit::GetSpellRank: the caster level, capped at maxLevel * 5 when maxLevel is set
-    /// (the formulas below divide it by 5 again — kept verbatim).
+    /// (the formulas below divide it by 5 again — kept verbatim). Level based, as Unit::GetSpellRank (Unit.cpp:5163) is for every unit; vmangos's
+    /// Player::GetSpellRank (Player.cpp:20524) instead reads the player's skill value of the spell's skill line (0 without one), a divergence kept
+    /// here because the cost and cast-time formulas that call it use the Unit form.
     /// </summary>
     public int GetSpellRank(byte casterLevel)
         => MaxLevel > 0 && casterLevel >= MaxLevel * 5 ? (int)(MaxLevel * 5) : casterLevel;
@@ -399,6 +401,7 @@ public sealed partial record SpellInfo
             return (int)(PowerType == SpellMath.PowerHealth ? currentHealth : currentPower);
         }
 
+        // Rank is the level-based Unit::GetSpellRank; Player::GetSpellRank (skill value, Player.cpp:20524) is not modelled, see GetSpellRank.
         int cost = (int)ManaCost + ((int)ManaCostPerLevel * ((GetSpellRank(casterLevel) / 5) - (int)BaseLevel));
         if (ManaCostPercentage > 0)
         {

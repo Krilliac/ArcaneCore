@@ -161,6 +161,13 @@ public sealed class ScriptCatalog(CreatureAiFactory factory, CreatureContent con
             return (ScriptKind.Default, "CritterAI");
         }
 
+        // CreatureAiFactory.Create gives a spirit healer or guide without an AIName a NullCreatureAI before the civilian check. Only the
+        // template's npcflags are known here; a spawn-level flag override is invisible to a template-only catalog.
+        if ((template.NpcFlags & CreatureAiFactory.SpiritHealerNpcFlags) != 0)
+        {
+            return (ScriptKind.Default, nameof(NullCreatureAI));
+        }
+
         return (ScriptKind.Default, template.Civilian ? "ReactorAI" : "AggressorAI");
     }
 

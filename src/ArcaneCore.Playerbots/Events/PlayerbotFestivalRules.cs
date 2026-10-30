@@ -65,8 +65,6 @@ internal static class PlayerbotFestivalRules
     internal const float SpotZToleranceYards = 5f;
 
     private const ulong DaySalt = 0xFE57_1DA7_0000_0001UL;
-    private const ulong AngleSalt = 0xFE57_0A91_0000_0002UL;
-    private const ulong RadiusSalt = 0xFE57_0AD1_0000_0003UL;
     private const double Unit = 1.0 / 9007199254740992.0;
     private const double SecondsPerDay = 86_400.0;
 
@@ -92,12 +90,7 @@ internal static class PlayerbotFestivalRules
     /// and a crowd spreads around the NPC instead of queueing in one direction.
     /// </summary>
     internal static Vector3 RingPoint(ulong botGuid, ulong anchorGuid, Vector3 anchor)
-    {
-        ulong mixed = PlayerbotContention.Mix(botGuid, anchorGuid);
-        double angle = (PlayerbotContention.Mix(mixed, AngleSalt) >> 11) * Unit * (2.0 * Math.PI);
-        double radius = RingMinYards + ((PlayerbotContention.Mix(mixed, RadiusSalt) >> 11) * Unit * (RingMaxYards - RingMinYards));
-        return new Vector3(anchor.X + (float)(Math.Cos(angle) * radius), anchor.Y + (float)(Math.Sin(angle) * radius), anchor.Z);
-    }
+        => PlayerbotStandSpots.RingPoint(botGuid, anchorGuid, anchor, RingMinYards, RingMaxYards);
 
     /// <summary>
     /// The chance (0..1) that a bot of <paramref name="sociability"/> (0..1) celebrates a festival: <c>1 - (1 - c)^(0.5 + sociability)</c> with

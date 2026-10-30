@@ -51,3 +51,6 @@ TestResults/
 
 # Python bytecode from tools/ops scripts run by tests
 __pycache__/
+
+timing-logs/
+gate-logs/

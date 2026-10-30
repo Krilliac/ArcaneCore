@@ -415,6 +415,8 @@ internal sealed class WorldTestHost : IAsyncDisposable
                 return;
             }
 
+            ThrowIfAClientsSessionIsGone();
+
             if (wall.Elapsed > guard)
             {
                 throw new WorldHangException($"clients sent {sent} packets but sessions dispatched only {dispatched} within {guard.TotalSeconds:F0} s of wall time", null);
@@ -424,6 +426,46 @@ internal sealed class WorldTestHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Fail at once, naming the client, when a client still has undispatched packets and its session has ended (kicked or closed):
+    /// nothing will ever dispatch them, so waiting out the guard only hides which client it was.
+    /// </summary>
+    private void ThrowIfAClientsSessionIsGone()
+    {
+        WorldTestClient[] clients;
+        lock (_clients)
+        {
+            clients = [.. _clients];
+        }
+
+        foreach (WorldTestClient client in clients)
+        {
+            string? local = client.LocalEndpoint;
+            if (local is null)
+            {
+                continue;
+            }
+
+            SessionEntry? entry;
+            lock (_sessions)
+            {
+                entry = _sessions.FirstOrDefault(e => e.Endpoint == local);
+            }
+
+            if (entry is null || !entry.Task.IsCompleted)
+            {
+                continue;
+            }
+
+            long sent = client.SentPackets;
+            long dispatched = entry.Session?.InboundDispatched ?? 0;
+            if (dispatched < sent)
+            {
+                throw new WorldHangException(
+                    $"client {local} (account '{entry.Session?.AccountName ?? "?"}') sent {sent} packets but its session ended after dispatching only {dispatched}; the rest can never be delivered", null);
+            }
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -509,6 +551,9 @@ internal sealed class WorldTestHost : IAsyncDisposable
         public Task Task { get; set; } = Task.CompletedTask;
 
         public volatile WorldSession? Session;
+
+        /// <summary>The client's endpoint as the server saw it (the client's <see cref="WorldTestClient.LocalEndpoint"/>).</summary>
+        public string? Endpoint { get; init; }
     }
 
     private async Task AcceptLoopAsync()
@@ -517,7 +562,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         {
             if (Interlocked.Exchange(ref _acceptGate, null) is { } gate) await gate();
             TcpClient client = await _listener.AcceptTcpClientAsync(_stop.Token);
-            var entry = new SessionEntry();
+            var entry = new SessionEntry { Endpoint = WorldTestClient.EndpointKey(client.Client.RemoteEndPoint) };
             Task session = Task.Run(async () =>
             {
                 using (client)

@@ -60,6 +60,6 @@ public sealed partial class SpellSystem
     {
         ArgumentNullException.ThrowIfNull(unit);
         return !(_states.TryGetValue(unit.Guid, out UnitSpellState? state) && ReferenceEquals(state.Unit, unit)
-            && state.GlobalCooldowns.TryGetValue(category, out uint until) && until > NowMs);
+            && state.GlobalCooldowns.TryGetValue(category, out uint until) && IsStillRunning(until, NowMs));
     }
 }

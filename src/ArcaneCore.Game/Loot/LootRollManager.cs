@@ -178,7 +178,10 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             Player? lone = null;
             foreach (GroupMemberSlot member in group.Members)
             {
-                if (bag.Recipients.Contains(member.Guid) && map.FindPlayer(member.Guid) is { } player
+                // vmangos Group::StartLootRoll (Group.cpp:1011-1014): LootItem::AllowedForPlayer also has to hold, so a member
+                // who failed the item's loot condition (AllowedLooters) is not offered the roll.
+                if (bag.Recipients.Contains(member.Guid) && (item.AllowedLooters.Count == 0 || item.AllowedLooters.Contains(member.Guid))
+                    && map.FindPlayer(member.Guid) is { } player
                     && GroupRewardRange.IsAtGroupRewardDistance(player, source, service.Options.RewardRange)
                     && (!needBeforeGreed || CanUse(player, item)))
                 {

@@ -812,7 +812,13 @@ public sealed class SpellActiveSetTests(ITestOutputHelper output)
             kit.System.RemoveAuras(unit, SpellTestKit.Passive);
         }
 
-        int ticksToHeal = 0;
+        // The first tick detaches the churn units; the 65th detach compacts _all and must shift the cursor down by the 65 detached entries below it.
+        // The audit then runs on from the remapped place and examines `budget` entries.
+        int cursorBefore = kit.System.AuditPositionForTests;
+        kit.Advance(100);
+        Assert.Equal(cursorBefore - 65 + budget, kit.System.AuditPositionForTests);
+
+        int ticksToHeal = 1;
         while (kit.System.ActiveSetStaleHeals == 0 && ticksToHeal < 3)
         {
             kit.Advance(100);

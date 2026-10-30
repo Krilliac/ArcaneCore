@@ -191,6 +191,7 @@ internal sealed class MapUpdateDiagnostics
     internal const string NameFlush = "flush";
     internal const string NameGrid = "grid lifecycle";
     internal const string NameDeferred = "deferred work";
+    internal const string NameActiveCells = "active cells";
 
     /// <summary>One named share of a map update.</summary>
     internal readonly record struct Contributor(string Name, long Micros);
@@ -199,7 +200,7 @@ internal sealed class MapUpdateDiagnostics
     /// The <paramref name="count"/> largest sub-phases of the update, longest first (slow path only: it allocates). Names say which
     /// subsystem the time belongs to: session packets (bots send theirs through the same queue), player heartbeats, creature AI and
     /// unit heartbeats (AI timers, auras and regeneration run in a unit's heartbeat), each map updater by its subsystem, visibility
-    /// and relocation, values, flush, grid lifecycle and deferred work.
+    /// and relocation, values, flush, active cells, grid lifecycle and deferred work.
     /// </summary>
     internal Contributor[] TopContributors(int count)
     {
@@ -213,6 +214,7 @@ internal sealed class MapUpdateDiagnostics
             new(NameFlush, FlushMicros),
             new(NameGrid, GridMicros),
             new(NameDeferred, DeferredMicros),
+            new(NameActiveCells, ActiveCellsMicros),
         };
         foreach ((IMapUpdater updater, long micros) in Updaters)
         {

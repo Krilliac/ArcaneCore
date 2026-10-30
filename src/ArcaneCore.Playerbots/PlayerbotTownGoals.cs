@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.Quests;
 using ArcaneCore.Game.Spells;
@@ -17,6 +18,8 @@ using ArcaneCore.World.WorldState;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Creatures;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Numerics;
 using ArcaneCore.World.Bots.Progression;
 
@@ -75,7 +78,29 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     // Requests the server refused: the bot must not repeat them for ever. A vendor refuses to buy a damaged item when no repair
     // price is known for it (PlayerInventory.SellItem, TryAdjustSellPrice): on the live server Ironwander stood at Adlin
     // Pridedrift for hours re-sending CMSG_SELL_ITEM for its damaged gray Frayed Pants, answered SELL_ERR_CANT_SELL_ITEM each time.
-    private readonly HashSet<ObjectGuid> _unsellable = [];
+    private readonly Dictionary<ObjectGuid, uint> _unsellable = [];
+
+    /// <summary>How long an item a vendor refused to buy is not offered again.</summary>
+    internal const uint UnsellableMs = 600_000;
+
+    /// <summary>How long a service NPC that had nothing to do for the bot (every service found nothing to ask for) is left out of the search.</summary>
+    internal const uint NothingToDoMs = 60_000;
+
+    /// <summary>How long a service NPC is left out when a request could not be sent (the action budget was spent): a short backoff, not a verdict.</summary>
+    internal const uint RequestBackoffMs = 5_000;
+
+    private readonly Dictionary<ObjectGuid, uint> _nothingToDo = [];
+    private bool _requestNotSent;
+    private ILogger? _logger;
+
+    private ILogger Logger => _logger ??= session.Services.GetService<ILoggerFactory>()?.CreateLogger<PlayerbotTownGoals>()
+        ?? (ILogger)NullLogger<PlayerbotTownGoals>.Instance;
+
+    /// <summary>The bot does not offer <paramref name="item"/> to a vendor (one refused it) for <paramref name="forMs"/>.</summary>
+    internal void NoteUnsellable(ObjectGuid item, uint forMs = UnsellableMs) => Refuse(_unsellable, item, forMs);
+
+    /// <summary>Whether a vendor refused <paramref name="item"/> and the refusal still holds.</summary>
+    internal bool IsUnsellable(ObjectGuid item) => Refused(_unsellable, item);
     private readonly Dictionary<(uint Vendor, uint Item), uint> _refusedPurchases = [];
     private readonly Dictionary<ObjectGuid, uint> _refusedTrainers = [];
 
@@ -151,7 +176,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                     Goal = PlayerbotGoalKind.Train;
                     int known = KnownSpellCount(player);
                     uint money = player.Money;
-                    if (!session.TryManagedAction(WorldOpcode.CmsgTrainerBuySpell, TrainerPayload(trainer.Guid, spell))) return true;
+                    if (!ManagedRequest(WorldOpcode.CmsgTrainerBuySpell, TrainerPayload(trainer.Guid, spell))) return true;
                     // The handler runs inside the action: nothing learned and nothing paid is a refusal.
                     if (KnownSpellCount(player) == known && player.Money == money) Refuse(_refusedTrainers, trainer.Guid, RefusedTrainerMs);
                     else Budget?.Invalidate();
@@ -179,7 +204,33 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         Goal = (npc.NpcFlags & NpcFlags.Trainer) != 0
             ? PlayerbotGoalKind.Train : PlayerbotGoalKind.Vendor;
 
-        if (services.InteractableNpc(player, npc.Guid, NpcFlags.None) is null)
+        bool inReach = services.InteractableNpc(player, npc.Guid, NpcFlags.None) is not null;
+        // A bot already in reach that is walking to its own spot (PlayerbotStandSpots) walks on until it is there.
+        bool toSpot = inReach && _route is { Complete: false } && _routeTarget == npc.Guid && _visitOnSpot
+            && Vector3.Distance(new(player.X, player.Y, player.Z), _visitSpot) > VisitSpotArrivedYards;
+        // A bot that comes into reach with another bot standing on its place also takes its own spot (once per NPC and minute): bots that
+        // arrive the same way stop at the same point of the reach's edge, and the first thing to do then is to step apart.
+        if (inReach && !toSpot && (_crowdSpotNpc != npc.Guid || unchecked((int)(_crowdSpotUntil - session.World.NowMs)) <= 0)
+            && AnotherBotWithin(player, CrowdedYards))
+        {
+            _crowdSpotNpc = npc.Guid;
+            _crowdSpotUntil = unchecked(session.World.NowMs + CrowdSpotMs);
+            PlanOutcome crowded = PlanVisit(player, npc, out _route);
+            if (crowded == PlanOutcome.Route && _visitOnSpot && _route is not null)
+            {
+                _routeTarget = npc.Guid;
+                _visitAnchor = new(player.X, player.Y, player.Z);
+                _visitStuckMs = 0;
+                toSpot = true;
+            }
+            else
+            {
+                _route = null; // no spot to step to: the NPC is used from here
+                _visitSpotAttempt = 0;
+            }
+        }
+
+        if (!inReach || toSpot)
         {
             if (player.Map is not { }) return false;
             if (_route is null || _routeTarget != npc.Guid)
@@ -187,8 +238,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                 // A plan to this NPC was refused a moment ago (after its fallbacks, 30 to 40 queries): not asked again every think.
                 if (_visitRefused == npc.Guid && unchecked((int)(_visitRefusedUntil - session.World.NowMs)) > 0)
                     return TravelToRepair(player, services, elapsedMs);
-                PlanOutcome visit = PlayerbotNavigation.PlanExact(player, new(npc.X, npc.Y, npc.Z), options, ref _tileWait,
-                    session.World.NowMs, out _route);
+                PlanOutcome visit = PlanVisit(player, npc, out _route);
                 if (visit == PlanOutcome.Pending) return true; // a tile of the way is being read: keep the visit, plan again next think
                 if (visit == PlanOutcome.Refused)
                 {
@@ -200,22 +250,38 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                 _visitAnchor = new(player.X, player.Y, player.Z);
                 _visitStuckMs = 0;
             }
+            bool walking = true;
             // A route that was planned but is not walked (the bot never leaves its place) is given up like a refused plan; before, only the
             // stall watch ended it, 120 s later (GitHub #1476).
             if (VisitStuck(player, elapsedMs))
             {
-                uint now = session.World.NowMs;
-                _visitRefused = npc.Guid;
-                _visitRefusedUntil = unchecked(now + VisitRefusedMs);
-                Suspensions?.SuspendEntryEscalating(npc.Entry, now);
                 _route = null;
                 _routeTarget = default;
                 _visitStuckMs = 0;
-                PlayerbotMovementControl.Stop(session, player);
-                return TravelToRepair(player, services, elapsedMs);
+                if (inReach)
+                {
+                    // In reach but unable to get to its own spot: the NPC is used from here.
+                    walking = false;
+                }
+                else
+                {
+                    uint now = session.World.NowMs;
+                    _visitRefused = npc.Guid;
+                    _visitRefusedUntil = unchecked(now + VisitRefusedMs);
+                    Suspensions?.SuspendEntryEscalating(npc.Entry, now);
+                    PlayerbotMovementControl.Stop(session, player);
+                    return TravelToRepair(player, services, elapsedMs);
+                }
             }
-            ClearRepairTrip();
-            return PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs);
+            if (walking)
+            {
+                ClearRepairTrip();
+                if (PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs)) return true;
+                // A walk that does not go on (it ended at the spot, or a stale route, a stop or a hazard holds it) is no reason to hold a
+                // bot that is in reach: it is dropped and the NPC is used from here, so no lower rung moves the bot away. Out of reach
+                // it is as it was.
+                if (!inReach) return false;
+            }
         }
 
         ClearRepairTrip();
@@ -227,6 +293,58 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         // Throttle service requests, not travel. Motion must keep progressing
         // at the advertised speed until ordinary interaction distance is reached.
         _cooldownMs = ThinkCooldownMs;
+        _requestNotSent = false;
+        if (ServicesForTests?.Invoke(npc) ?? TryServices(player, services, npc)) return true;
+        // Useful, yet nothing was asked for: the same answer would come at every think, and the bot lingered at the vendor for minutes.
+        // The NPC is left out of the search a while; a request that could not be sent (budget) only backs off briefly.
+        // The service a trip was set out for is never left out: that would end the visit and send the bot on to a farther NPC.
+        if (wantedTrip == NpcFlags.None || (npc.NpcFlags & wantedTrip) == 0)
+        {
+            Refuse(_nothingToDo, npc.Guid, _requestNotSent ? RequestBackoffMs : NothingToDoMs);
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                var needs = new ServiceNeeds();
+                _usefulReason = null;
+                bool useful = HasUsefulService(player, services, npc, ref needs);
+                Logger.LogDebug("Playerbot {Bot} found nothing to do at NPC {Npc} and leaves it out for {Ms} ms (useful: {Useful}, reason: {Reason}, budget spent: {Budget})",
+                    player.Name, npc.Entry, _requestNotSent ? RequestBackoffMs : NothingToDoMs, useful, _usefulReason ?? "none", _requestNotSent);
+            }
+        }
+
+        return false;
+    }
+
+    private string? _usefulReason;
+
+    /// <summary>Test seam: replaces the services chain of a visit (null: the real one), so a test can make a useful NPC be one the bot does nothing at.</summary>
+    internal Func<NpcInfo, bool>? ServicesForTests { get; set; }
+
+    /// <summary>A bot this close to the one that comes into reach counts as standing on its place (yards).</summary>
+    internal const float CrowdedYards = 1f;
+
+    /// <summary>How long a bot that stepped to its own spot at an NPC (or found none) is not moved to another one by the crowd rule.</summary>
+    internal const uint CrowdSpotMs = 60_000;
+
+    private ObjectGuid _crowdSpotNpc;
+    private uint _crowdSpotUntil;
+
+    /// <summary>Whether another player stands within <paramref name="yards"/> of the bot on the ground plane (a player in sight).</summary>
+    private static bool AnotherBotWithin(Player player, float yards)
+    {
+        if (player.Map is not { } map) return false;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (!guid.IsPlayer || guid == player.Guid || map.FindObject(guid) is not Player other) continue;
+            float dx = other.X - player.X, dy = other.Y - player.Y;
+            if ((dx * dx) + (dy * dy) <= yards * yards) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>The services of one NPC in order; true when one sent a request.</summary>
+    private bool TryServices(Player player, QuestNpcServices services, NpcInfo npc)
+    {
         if ((npc.NpcFlags & NpcFlags.Repair) != 0 && TryRepair(player, services, npc))
             return true;
         // Full bags first make room (a purchase would only fail for space).
@@ -266,8 +384,13 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     private bool Buy(Player player, NpcInfo npc, uint item)
     {
         uint before = player.Inventory.GetItemCount(item);
-        if (!session.TryManagedAction(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, item))) return false;
-        if (player.Inventory.GetItemCount(item) <= before) Refuse(_refusedPurchases, (npc.Entry, item), RefusedPurchaseMs);
+        uint moneyBefore = player.Money;
+        if (!ManagedRequest(WorldOpcode.CmsgBuyItem, BuyPayload(npc.Guid, item))) return false;
+        uint after = player.Inventory.GetItemCount(item);
+        if (after <= before) Refuse(_refusedPurchases, (npc.Entry, item), RefusedPurchaseMs);
+        else if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("Playerbot {Bot} bought item {Item} x{Count} from NPC {Npc} for {Money} copper", player.Name, item, after - before, npc.Entry,
+                unchecked(moneyBefore - player.Money));
         return true;
     }
 
@@ -277,10 +400,14 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     private bool Sell(NpcInfo npc, Item item)
     {
         uint count = item.Count;
-        if (!session.TryManagedAction(WorldOpcode.CmsgSellItem, SellPayload(npc.Guid, item.Guid))) return false;
-        if (item.Inventory is not null && ReferenceEquals(item.Inventory.GetItemByGuid(item.Guid), item) && item.Count == count
-            && _unsellable.Count < MaxRefusals)
-            _unsellable.Add(item.Guid);
+        uint entry = item.Template.Entry;
+        uint moneyBefore = session.Player?.Money ?? 0;
+        if (!ManagedRequest(WorldOpcode.CmsgSellItem, SellPayload(npc.Guid, item.Guid))) return false;
+        if (item.Inventory is not null && ReferenceEquals(item.Inventory.GetItemByGuid(item.Guid), item) && item.Count == count)
+            NoteUnsellable(item.Guid);
+        else if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("Playerbot {Bot} sold item {Item} x{Count} to NPC {Npc} for {Money} copper", session.Player?.Name, entry, count, npc.Entry,
+                session.Player is { } seller ? unchecked(seller.Money - moneyBefore) : 0u);
         return true;
     }
 
@@ -299,6 +426,14 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             refusals.Remove(expired);
         if (refusals.Count >= MaxRefusals) refusals.Remove(refusals.OrderBy(entry => entry.Value).First().Key);
         refusals[key] = unchecked(now + forMs);
+    }
+
+    /// <summary>A managed action of a service visit; a refusal (the action budget is spent) is noted, so the visit backs off briefly instead of reading it as having nothing to do.</summary>
+    private bool ManagedRequest(WorldOpcode opcode, byte[] payload)
+    {
+        if (session.TryManagedAction(opcode, payload)) return true;
+        _requestNotSent = true;
+        return false;
     }
 
     private int KnownSpellCount(Player player)
@@ -321,10 +456,13 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         ObjectGuid targetItem = TotalWornRepair(player, services) is { } total && total > player.Money
             && CheapestBrokenWornItem(player, services) is { } broken && broken.Cost <= player.Money
             ? broken.Guid : default;
-        if (!session.TryManagedAction(WorldOpcode.CmsgRepairItem, RepairPayload(npc.Guid, targetItem)))
+        uint moneyBefore = player.Money;
+        if (!ManagedRequest(WorldOpcode.CmsgRepairItem, RepairPayload(npc.Guid, targetItem)))
             return false;
         if (EquippedDurability(player) <= before)
             _repairBackoffUntil = unchecked(session.World.NowMs + RepairBackoffMs);
+        else if (Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("Playerbot {Bot} repaired at NPC {Npc} for {Money} copper", player.Name, npc.Entry, unchecked(moneyBefore - player.Money));
         return true;
     }
 
@@ -409,6 +547,80 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
 
     private Vector3 _visitAnchor;
     private uint _visitStuckMs;
+
+    /// <summary>A visiting bot at its own spot (<see cref="PlayerbotStandSpots"/>) is this close to it (yards).</summary>
+    internal const float VisitSpotArrivedYards = 1f;
+
+    private Vector3 _visitSpot;
+    private bool _visitOnSpot;
+    private int _visitSpotAttempt;
+
+    /// <summary>
+    /// The walk of a visit to <paramref name="npc"/>: to the bot's own spot on a ring around it (<see cref="PlayerbotStandSpots.ServiceSpot"/>,
+    /// at most <see cref="PlayerbotStandSpots.ServiceMaxYards"/> from it, so inside the server's reach, <see cref="QuestNpcServices.InteractionDistance"/>
+    /// plus the bounding radii), so a crowd at one NPC spreads. A spot on another floor (the map's height there differs from the NPC's by
+    /// more than 2.5 yards), outside the reach or that cannot be planned is passed over for the ring's next angle; with none left the walk
+    /// is to the NPC's own position, as it was. When the first ring spot is refused the NPC's own position is planned at once: an NPC that
+    /// cannot be reached at all costs one more plan, not the whole ring. A game object is walked to directly. No random draw: the spots
+    /// are a hash.
+    /// </summary>
+    private PlanOutcome PlanVisit(Player player, NpcInfo npc, out PlayerbotRoute? route)
+    {
+        _visitOnSpot = false;
+        var at = new Vector3(npc.X, npc.Y, npc.Z);
+        PlayerbotRoute? direct = null;
+        if (!npc.IsGameObject && player.Map is { } map && at.IsFinite())
+        {
+            for (; _visitSpotAttempt < PlayerbotStandSpots.ServiceAttempts; _visitSpotAttempt++)
+            {
+                Vector3 spot = PlayerbotStandSpots.ServiceSpot(player.Guid.Value, npc.Guid.Value, at, _visitSpotAttempt);
+                float height = map.Collision.GetHeight(spot.X, spot.Y, at.Z + 2f);
+                if (!PlayerbotNavigation.InvalidHeight(height))
+                {
+                    if (MathF.Abs(height - at.Z) > 2.5f) continue; // another floor
+                    spot = spot with { Z = height };
+                }
+
+                if (!PlayerbotQuestGoals.WithinReachAt(spot, player.BoundingRadius, npc)) continue;
+                PlanOutcome ring = PlayerbotNavigation.PlanExact(player, spot, options, ref _tileWait, session.World.NowMs, out PlayerbotRoute? ringRoute, trial: true);
+                if (ring == PlanOutcome.Pending)
+                {
+                    route = null;
+                    return ring; // the same spot again next think
+                }
+
+                if (ring == PlanOutcome.Route && ringRoute is { Points.Count: > 0 }
+                    && PlayerbotQuestGoals.WithinReachAt(ringRoute.Points[^1], player.BoundingRadius, npc))
+                {
+                    route = ringRoute;
+                    _visitSpot = spot;
+                    _visitOnSpot = true;
+                    _visitSpotAttempt = 0;
+                    return ring;
+                }
+
+                if (direct is null)
+                {
+                    PlanOutcome toNpc = PlayerbotNavigation.PlanExact(player, at, options, ref _tileWait, session.World.NowMs, out direct);
+                    if (toNpc != PlanOutcome.Route)
+                    {
+                        if (toNpc == PlanOutcome.Refused) _visitSpotAttempt = 0;
+                        route = null;
+                        return toNpc;
+                    }
+                }
+            }
+        }
+
+        _visitSpotAttempt = 0;
+        if (direct is not null)
+        {
+            route = direct;
+            return PlanOutcome.Route;
+        }
+
+        return PlayerbotNavigation.PlanExact(player, at, options, ref _tileWait, session.World.NowMs, out route);
+    }
 
     /// <summary>Ticks the visit leg's stuck clock once per think (never while a mount step holds the bot); true once <see cref="VisitStuckMs"/> passed without the bot moving <see cref="VisitProgressYards"/>.</summary>
     private bool VisitStuck(Player player, uint elapsedMs)
@@ -1017,7 +1229,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             .Where(candidate => candidate.BagSlot != InventorySlots.Bag0
                 || (candidate.Slot >= InventorySlots.ItemStart && candidate.Slot < InventorySlots.ItemEnd))
             .Where(candidate => (candidate.Template.Quality <= 1 || (full && candidate.Template.Quality == 2)) && candidate.Template.SellPrice > 0
-                && !_unsellable.Contains(candidate.Guid)
+                && !Refused(_unsellable, candidate.Guid)
                 && !IsProtected(player, candidate, services, allowUnboundBindOnEquip: full) && IsJunk(player, candidate, weights))
             .OrderBy(candidate => (ulong)candidate.Template.SellPrice * candidate.Count).ThenBy(candidate => candidate.Guid.Value)
             .FirstOrDefault();
@@ -1069,7 +1281,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         => player.Inventory.AllItems
             .Where(candidate => candidate.BagSlot != InventorySlots.Bag0 || candidate.Slot >= InventorySlots.ItemStart)
             .Where(candidate => candidate.Template.Quality == 0 && candidate.Template.SellPrice > 0
-                && !_unsellable.Contains(candidate.Guid))
+                && !Refused(_unsellable, candidate.Guid))
             .Where(candidate => !IsProtected(player, candidate, services))
             .OrderBy(candidate => candidate.Guid.Value);
 
@@ -1082,7 +1294,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         if (npc.TrainerType == TrainerType.TradeSkills && TradeSkillQuote(player, services, npc, 0) is null)
             return false;
         _trainerTarget = npc.Guid;
-        _trainerListPending = session.TryManagedAction(WorldOpcode.CmsgTrainerList, TrainerListPayload(npc.Guid));
+        _trainerListPending = ManagedRequest(WorldOpcode.CmsgTrainerList, TrainerListPayload(npc.Guid));
         return _trainerListPending;
     }
 
@@ -1127,7 +1339,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         {
             if (lookup.Find(player, guid, required) is not { IsAlive: true, IsHostile: false, IsInCombat: false } info
                 || (info.NpcFlags & required) == 0 || info.IsNotSelectable
-                || Suspensions?.IsEntrySuspended(info.Entry, now) == true)
+                || Suspensions?.IsEntrySuspended(info.Entry, now) == true || Refused(_nothingToDo, info.Guid))
                 continue;
             _serviceNpcs.Add((Distance(player, info), _serviceNpcs.Count, info));
         }
@@ -1432,31 +1644,37 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         return false;
     }
 
+    private bool Useful(string reason)
+    {
+        _usefulReason = reason;
+        return true;
+    }
+
     private bool HasUsefulVendorService(Player player, QuestNpcServices services, NpcInfo npc, ref ServiceNeeds needs)
     {
-        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && needs.Repair(this, player, services)) return true;
+        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && needs.Repair(this, player, services)) return Useful("repair");
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(npc.Entry).Count > 0)
         {
             if (session.Services.GetService<SpellFeature>()?.System is { } spells
                 && needs.Consumables(player, spells, out bool food, out bool drink)
-                && FindConsumableVendorRow(player, services, npc, spells, food, drink) is not null) return true;
-            if (needs.Ammo(player) && FindAmmoRowOf(player, services, npc) is not null) return true;
-            if (FindMountRow(player, services, npc) is not null) return true;
-            if (FindEquipmentUpgradeRow(player, services, npc) is not null) return true;
+                && FindConsumableVendorRow(player, services, npc, spells, food, drink) is not null) return Useful("food or drink");
+            if (needs.Ammo(player) && FindAmmoRowOf(player, services, npc) is not null) return Useful("ammunition");
+            if (FindMountRow(player, services, npc) is not null) return Useful("mount");
+            if (FindEquipmentUpgradeRow(player, services, npc) is not null) return Useful("equipment upgrade");
             if (player.Money != 0 && FreeBagSlots(player) > 0
-                && FindCraftingSupplyRow(player, services, npc, needs.Supply(this, player)) is not null) return true;
-            if (needs.Grays(this, player, services)) return true;
-            if (needs.Junk(this, player, services)) return true;
+                && FindCraftingSupplyRow(player, services, npc, needs.Supply(this, player)) is not null) return Useful("crafting supplies");
+            if (services.Deps.Items is not null && needs.Grays(this, player, services)) return Useful("grays");
+            if (needs.Junk(this, player, services)) return Useful("junk");
         }
         return false;
     }
 
-    /// <summary>Whether the bot lacks usable food, and usable drink (a mana user only): bot facts, the same for every vendor.</summary>
+    /// <summary>Whether the bot lacks usable food, and usable drink (a mana user only), carried food counting in a shapeshift form too: bot facts, the same for every vendor.</summary>
     private static (bool Food, bool Drink) ConsumableNeeds(Player player, SpellSystem spells)
-        => (!PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Food),
+        => (!PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Food, regardlessOfForm: true),
             player.PowerType == PowerType.Mana
             && player.GetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Mana) > 0
-            && !PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Drink));
+            && !PlayerbotConsumables.HasUsable(player, spells, PlayerbotConsumableKind.Drink, regardlessOfForm: true));
 
     private VendorItem? FindConsumableVendorRow(Player player, QuestNpcServices services, NpcInfo npc, SpellSystem spells)
     {

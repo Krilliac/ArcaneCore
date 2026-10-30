@@ -28,6 +28,17 @@ public interface IWorldHandoffSource
 
     /// <summary>After the point of no return: A never runs or admits again (its late writes are fenced anyway). Idempotent.</summary>
     Task RetireAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// After the epoch takeover and before B is promoted: give up the characters database's process-lifetime writer lock (SQLite sidecar file or server advisory lock), which B's promotion
+    /// takes and refuses to promote without. A is fenced out of the database by then, so it writes nothing more. Idempotent. A source that holds no such lock (the default) does nothing.
+    /// <para>
+    /// The window between this release and B's promotion taking the lock is guarded by the ownership row, not by the lock: the takeover has already made B's incarnation the owner, so a third
+    /// world that starts in the window cannot claim the characters (fencing is mandatory in worker mode and the claim is refused), and A's own late writes are refused by the fence. A failed
+    /// promotion leaves the lock free; it is not re-taken for A.
+    /// </para>
+    /// </summary>
+    Task ReleaseWriterLockAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
 /// <summary>The warmed standby world B of a whole-World handoff.</summary>
@@ -180,6 +191,8 @@ public sealed class WorldHandoffCoordinator(
             ?? throw new InvalidOperationException($"committed world handoff {record.HandoffId} has no target ownership token");
         if (record.Stage < WorldHandoffStage.Rerouted)
         {
+            // The takeover has fenced A out of the database: it gives up the writer lock so B's promotion can take it (a source still alive elsewhere would keep it and B would be refused).
+            await source.ReleaseWriterLockAsync(cancellationToken).ConfigureAwait(false);
             await target.PromoteAsync(takenOver, cancellationToken).ConfigureAwait(false);
             await router.RerouteAsync(cancellationToken).ConfigureAwait(false);
             record = await store.MarkReroutedAsync(record.HandoffId, cancellationToken).ConfigureAwait(false);

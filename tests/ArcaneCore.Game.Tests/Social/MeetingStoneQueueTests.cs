@@ -21,7 +21,7 @@ public sealed class MeetingStoneQueueTests : IDisposable
     {
         GroupManager groups = _f.Context.Groups;
         _queue = new LfgQueue(new Groups(groups, _f));
-        groups.MemberAdded += (group, _) => _queue.OnMemberJoined(group);
+        groups.MemberAdded += _queue.OnMemberJoined;
         groups.MemberLeft += _queue.OnMemberRemoved;
         groups.Disbanding += (group, _) => _queue.OnDisbanding(group);
     }
@@ -329,6 +329,67 @@ public sealed class MeetingStoneQueueTests : IDisposable
         Assert.True(_queue.IsPlayerQueued(invited.Guid));
         Assert.False(_queue.IsGroupQueued(party));
         Assert.Equal(free.Guid.Value, BitConverter.ToUInt64(Assert.Single(_f.Sent(warrior, WorldOpcode.SmsgMeetingstoneMemberAdded))));
+    }
+
+    /// <summary>With <see cref="LfgQueue.LeaveSoloQueueOnPartyJoin"/> on, a player queued alone who joins a party by an ordinary invitation is no longer a solo candidate.</summary>
+    [Fact]
+    public void WithTheOption_SoloPlayersWhoJoinAPartyByInvitation_LeaveTheSoloQueue()
+    {
+        _queue.LeaveSoloQueueOnPartyJoin = true;
+        Player inviter = Add(1, Class.Priest);
+        Player joiner = Add(2, Class.Priest);
+        _queue.Join(inviter, Area);
+        _queue.Join(joiner, Area);
+        _f.ClearAll();
+
+        Party(inviter, joiner);
+
+        Assert.False(_queue.IsPlayerQueued(inviter.Guid));
+        Assert.False(_queue.IsPlayerQueued(joiner.Guid));
+        Assert.Equal(0u, _queue.PlayerAreaOf(joiner.Guid));
+        Assert.Equal([(0u, MeetingStoneStatus.LeaveQueue)], SetQueues(joiner)); // the client stops showing the queue
+    }
+
+    /// <summary>Retail (the default): vmangos keeps the stale entry and tells the client nothing.</summary>
+    [Fact]
+    public void ByDefault_SoloPlayersWhoJoinAPartyByInvitation_StayInTheSoloQueue_AsInRetail()
+    {
+        Assert.False(_queue.LeaveSoloQueueOnPartyJoin);
+        Player inviter = Add(1, Class.Priest);
+        Player joiner = Add(2, Class.Priest);
+        _queue.Join(inviter, Area);
+        _queue.Join(joiner, Area);
+        _f.ClearAll();
+
+        Party(inviter, joiner);
+
+        Assert.True(_queue.IsPlayerQueued(inviter.Guid));
+        Assert.True(_queue.IsPlayerQueued(joiner.Guid));
+        Assert.Equal(Area, _queue.PlayerAreaOf(joiner.Guid));
+        Assert.Empty(SetQueues(joiner));
+    }
+
+    /// <summary>The option never touches a player the queue itself places into a party: the queue's own silent removal stands (no LEAVE_QUEUE, the area is kept).</summary>
+    [Fact]
+    public void WithTheOption_APlayerTheQueuePlacesIntoAParty_HearsNoLeaveQueue()
+    {
+        _queue.LeaveSoloQueueOnPartyJoin = true;
+        Player warrior = Add(1, Class.Warrior);
+        Player mage = Add(2, Class.Mage);
+        Player rogue = Add(3, Class.Rogue);
+        Player hunter = Add(4, Class.Hunter);
+        Group party = Party(warrior, mage, rogue, hunter); // only the healer is open
+        _queue.Join(warrior, Area);
+        Player priest = Add(5, Class.Priest);
+        _queue.Join(priest, Area);
+        _f.ClearAll();
+
+        Pass();
+
+        Assert.True(party.IsMember(priest.Guid));
+        Assert.False(_queue.IsPlayerQueued(priest.Guid));
+        Assert.DoesNotContain((0u, MeetingStoneStatus.LeaveQueue), SetQueues(priest));
+        Assert.Equal(Area, _queue.PlayerAreaOf(priest.Guid));
     }
 
     [Fact]

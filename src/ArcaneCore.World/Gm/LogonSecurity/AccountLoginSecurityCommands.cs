@@ -102,6 +102,7 @@ public sealed class AccountLoginSecurityCommands : ICommandGroup
     {
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
         ILogger logger = context.Session.Logger;
+        IDisposable hold = context.Defer(); // RA and the control pipe report done only after the secret (or the failure) was replied
         _ = Task.Run(async () =>
         {
             try
@@ -112,7 +113,12 @@ public sealed class AccountLoginSecurityCommands : ICommandGroup
             catch (Exception ex)
             {
                 logger.LogError(ex, "Account login security command failed");
+                context.Fail("failed");
                 context.Reply("Account security update failed; see the server log.");
+            }
+            finally
+            {
+                hold.Dispose();
             }
         });
     }
