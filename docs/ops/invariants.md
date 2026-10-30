@@ -259,8 +259,8 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
   `Microsoft.Extensions.Options.ConfigurationExtensions` 9.0.0 (already pulled in by `Microsoft.Extensions.Hosting` in both
   daemons) to bind the section. `ArcaneCore.Cryptography` and `ArcaneCore.Protocol` gained a project reference to the Kernel (which
   references no project) for `Invariant`; their csproj comments say so.
-- Pure C#: `Debugger.Break`, `Environment.FailFast`, `GC`, `Process` and `RuntimeInformation` are cross-platform. The one
-  P/Invoke is the opt-in crash dialog's `TaskDialogIndirect` (comctl32, with `MessageBoxW` from user32.dll as fallback) and the clipboard and activation-context calls it needs, reached only behind `OperatingSystem.IsWindows()`.
+- Pure C#: `Debugger.Break`, `Environment.FailFast`, `GC`, `Process` and `RuntimeInformation` are cross-platform. The only
+  P/Invokes besides console colour are the opt-in crash dialog's `TaskDialogIndirect` (comctl32, with `MessageBoxW` from user32.dll as fallback) and the clipboard and activation-context calls it needs, reached only behind `OperatingSystem.IsWindows()`.
 
 ## Limits
 

@@ -90,6 +90,50 @@ internal static class CrashDialogTaskDialog
     [SupportedOSPlatform("windows")]
     internal static bool TryShow(string title, string text, out string? failure)
     {
+        // DirectUI's UI Automation provider needs a single-threaded apartment, and the fatal path runs on whatever thread crashed and the fault
+        // path on a plain background thread (both MTA). So the box runs on its own STA thread that this call joins. The activation context
+        // is per thread, so it is created, activated and released on that same thread, inside ShowCore.
+        if (Thread.CurrentThread.GetApartmentState() == ApartmentState.STA)
+        {
+            return ShowCore(title, text, out failure);
+        }
+
+        bool shown = false;
+        string? threadFailure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                shown = ShowCore(title, text, out threadFailure);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                threadFailure = ex.GetType().Name + ": " + ex.Message;
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "ArcaneCore.CrashDialog.Sta",
+        };
+        try
+        {
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            failure = "could not start the STA dialog thread: " + ex.GetType().Name + ": " + ex.Message;
+            return false;
+        }
+
+        thread.Join();
+        failure = threadFailure;
+        return shown;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static bool ShowCore(string title, string text, out string? failure)
+    {
         failure = null;
         string manifestPath = Path.Combine(Path.GetTempPath(), "arcanecore-comctl6-" + Guid.NewGuid().ToString("N") + ".manifest");
         IntPtr titlePtr = IntPtr.Zero;
@@ -289,7 +333,17 @@ internal static class CrashDialogTaskDialog
                 }
                 else if (message == TdnButtonClicked && (int)wParam.ToUInt32() == CopyButtonId)
                 {
-                    if (!TryCopyToClipboard(hwnd, _clipboardText))
+                    bool copied;
+                    try
+                    {
+                        copied = TryCopyToClipboard(hwnd, _clipboardText);
+                    }
+                    catch (Exception ex) when (ex is not OutOfMemoryException)
+                    {
+                        copied = false; // a failed copy beeps; the box stays open either way
+                    }
+
+                    if (!copied)
                     {
                         MessageBeep(MbIconError);
                     }
