@@ -6,7 +6,8 @@ namespace ArcaneCore.Game.Spells;
 /// The G7 "unknowns" entries: spells no reference core handles, researched one by one on 2026-10-29 (Spell.dbc 5875 text, visual and trigger
 /// chains; vmangos and cmangos source trees and full git history; the vmangos world DB and classic-db with its Updates). Each one is never cast,
 /// a test spell, or cast only for a marker, a visual or an AI-side reaction. The SETTLED spells of the same research are implemented in
-/// <c>Spells/Generic/Researched</c>; the UNSETTLED ones (26127, 30176, 31247, 25153, 20492, 16372, 17816) need a retail capture and are not listed.
+/// <c>Spells/Generic/Researched</c>; the UNSETTLED ones needed a retail capture: 26127, 30176, 31247 and 25153 are implemented as inferred behaviour (<c>Spells/Mage/EnigmaBlizzardBonus.cs</c>,
+/// <c>Spells/Generic/Researched/InferredSpellScripts.cs</c>; docs/areas/spells.md lists them), and 16372, 17816 and 20492 are listed below as inert because no source documents them.
 /// </summary>
 public static partial class DeliberatelyInertSpells
 {
@@ -317,7 +318,7 @@ public static partial class DeliberatelyInertSpells
         new(30758, R.TestSpell, WhyTest, NoCaster),
         new(31564, R.TestSpell, WhyTest, NoCaster),
         new(16872, R.TestSpell, "Test item.", "item 12789 \"Horn of Uber Buffing (test)\" has no loot/vendor/quest source in vmangos"),
-        // Marker (10)
+        // Marker (12)
         new(7155, R.Marker, "Cooldown/animation token; no effect.", "vmangos SharedDefines.h:1178 and Objects/Player.cpp:10349 (cooldown token for old clients); cmangos boss_buru.cpp:41 (\"unk purpose\")"),
         new(11817, R.Marker, "Arming marker; the mine EventAI carries the behaviour.", "classic-db EventAI 803501/752701/1536801 cast 11816 on land-mine spawn; no core consumes the triggered dummy"),
         new(22764, R.Marker, "Hostile area hit that engages nearby enemies through the normal hit path; the dummy itself does nothing.", "cmangos Spells/Scripts/Scripting/ClassScripts/Warlock.cpp:47 casts it on the Inferno summon (\"aggro spell\") with no effect handler"),
@@ -328,6 +329,8 @@ public static partial class DeliberatelyInertSpells
         new(21425, R.Marker, "Channel marker aura of a far-sight spell; the far-sight effect and the channel end restore the view.", "mangos history 969abaf73 (2010) removed the dummy-aura view reset for \"6196, 6197, 21171, 21425\" as not needed; vmangos Spells/SpellEffects.cpp:2663 (EffectAddFarsight) does the work"),
         new(23357, R.Marker, "Reward icon only; 5300 Beast Training teaches the hunter skills.", "vmangos Server/Packets/Quest.cpp:663 (RewSpell is display-only when RewSpellCast is set) and Objects/Player.cpp:13196; quests 6081/6086/6089/6103 have RewSpellCast 5300"),
         new(26651, R.Marker, "Applied for a moment after every Execute; nothing reads the aura, so applying it is all it does.", "Spell.dbc: TRIGGER_SPELL effect 1 of every Execute rank (5308, 20658, 20660, 20661, 20662); description \"Designer Note: This marks the warrior as having just used Execute\"; a 1 s DUMMY aura; no vmangos or cmangos source, history or DB reference reads it"),
+        new(16372, R.Marker, "Passive hidden aura of the Seal of Ascension key ring entry; no source documents what it does, so it stays inert.", "vmangos item_template 12344 Seal of Ascension spellid_2 (passive hidden dummy aura); no core reads it; no public description found; the research left it unsettled and it is kept inert on purpose"),
+        new(17816, R.Marker, "Use spell of the Tuxedo Jacket (\"Impress others with your fashion sense.\"); no source documents an effect on nearby units, so it stays inert.", "item 10036 Tuxedo Jacket (made by Tailoring 12093) use spell; Spell.dbc Dummy with no SpellVisual; no core handles it; no public source describes an effect; kept inert on purpose"),
         // Visual (25)
         new(10857, R.Visual, "Visual aura beside the knockback and feather fall.", "vmangos creature_ai_scripts 766405 and classic-db EventAI 766405 (Razelikh casts 10854); dummy aura with SpellVisual 290, no consumer"),
         new(16562, R.Visual, "Spell-go visual only.", "vmangos boss_urok.cpp:92 and boss_victor_nefarius.cpp:493 only SendSpellGo these ids"),
@@ -354,7 +357,7 @@ public static partial class DeliberatelyInertSpells
         new(25822, R.Visual, "Firework visual the client plays from the spell-go.", "fireworks cast from items/GOs (vmangos item_template 9313/9317/9315/19026/20905/20908/21747, GO 142146/177924); dummy with SpellVisual only"),
         new(27571, R.Visual, "Holiday item visual.", "cast from items (Moonglow Alcohol, Tasty Summer Treat, Breath of Fire, Bouquet of Red Roses / Handful of Rose Petals); dummy with SpellVisual only, no consumer in any core"),
         new(28288, R.Visual, "Reward visual; the Icebane crafting is unlocked by the quest chain.", "quest 9233 RewSpellCast; follow-ups 9234/9235/9236 have PrevQuestId 9233 (vmangos quest_template); https://warcraft.wiki.gg/wiki/Omarion%27s_Handbook_(quest)"),
-        // ScriptCarrier (15)
+        // ScriptCarrier (16)
         new(17372, R.ScriptCarrier, "Periodic tick of Egan's Blaster; the citizen AI reacts to the parent aura spell, the triggered dummy does nothing.", "vmangos scripts/eastern_kingdoms/eastern_plaguelands/stratholme/stratholme.cpp:97,125,198 (the Ghostly Citizen AI reacts to the parent 17368 in SpellHit); item 13289 Egan's Blaster (quest 5282)"),
         new(26075, R.ScriptCarrier, "Ouro health hand-over is done by AI in every core.", "cmangos boss_ouro.cpp:57-58 (\"unused - done through AI\"); vmangos boss_ouro.cpp:56-57"),
         new(26076, R.ScriptCarrier, "Ouro health hand-over is done by AI in every core.", "cmangos boss_ouro.cpp:57-58 (\"unused - done through AI\"); vmangos boss_ouro.cpp:56-57"),
@@ -370,5 +373,6 @@ public static partial class DeliberatelyInertSpells
         new(24967, R.ScriptCarrier, "The GO script summons Arlokk; the dummy does nothing.", "vmangos gameobject_template 180526 script go_gong_of_bethekk (boss_arlokk.cpp:28)"),
         new(25186, R.ScriptCarrier, "The GO script applies the weakness; the script effect does nothing.", "vmangos gameobject_template 180619 script ossirian_crystal"),
         new(29785, R.ScriptCarrier, "The turn-in is handled by the area trigger, not by the flag-stand trap.", "vmangos OutdoorPvP/OutdoorPvPSI.cpp:247 (turn-in handled by the area trigger; the flag-capture test cast is commented out); ArcaneCore OutdoorPvP/Silithus.cs"),
+        new(20492, R.ScriptCarrier, "Dummy cast by the Resonite Crystal trap game object; no source documents what the trap does, so it stays inert.", "vmangos gameobject_template 178124 \"Resonite Crystal (Trap\" (40 spawns in Stonetalon, quest 6421) casts a dummy on an enemy target; no core handles it and no public source describes the effect; kept inert on purpose"),
     ];
 }

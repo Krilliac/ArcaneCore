@@ -15,6 +15,8 @@ internal static partial class QaSpellConsumers
             "Razorgore's reset Fireball: the Orb of Domination AI reacts on SpellHit; the DUMMY effects do nothing (cmangos blackwing_lair.h:73)"),
         new(28367, K.SpellHitHandler, "ArcaneCore.World/WorldState/ScourgeInvasionScripts.cs", "28367",
             "Scourge Invasion communique bolt: the receiving AI reacts on SpellHit (vmangos scourge_invasion.cpp:374,490,607,616)"),
+        new(26127, K.AuraReader, "ArcaneCore.Game/Spells/Mage/EnigmaBlizzardBonus.cs", "ScriptMiscValue",
+            "Enigma Vestments 3-piece: the channel start of a Blizzard rank reads the OVERRIDE_CLASS_SCRIPTS aura (misc 4235) and rolls the 30% uninterruptible chance; inferred, not verified against a retail capture (tooltip, Spell.dbc class mask 0x80)"),
         new(28449, K.SpellHitHandler, "ArcaneCore.World/WorldState/ScourgeInvasionScripts.cs", "28449",
             "Scourge Invasion camp communique: the Necrotic Shard AI reacts on SpellHit (vmangos scourge_invasion.cpp:754-757)"),
     ];

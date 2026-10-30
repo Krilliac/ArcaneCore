@@ -61,14 +61,23 @@ public sealed class ReputationSpellHandlers : ISpellHandlerModule
             return;
         }
 
-        uint faction = (uint)context.Effect.MiscValue;
+        GrantSpellReputation(service, player, (uint)context.Effect.MiscValue, context.Value);
+    }
+
+    /// <summary>
+    /// The body of SPELL_EFFECT_REPUTATION: <paramref name="baseValue"/> through CalculateReputationGain(REPUTATION_SOURCE_SPELL, ..., faction), so the
+    /// Diplomacy aura and the spell rate apply, then ReputationMgr::ModifyReputation. An unknown faction does nothing. Also used by spell scripts that
+    /// grant reputation without the effect (Silithyst Cap Reward 31247).
+    /// </summary>
+    internal static void GrantSpellReputation(ReputationService service, Player player, uint faction, int baseValue)
+    {
         if (service.Factions.Find(faction) is null)
         {
             return;
         }
 
         // CalculateReputationGain(REPUTATION_SOURCE_SPELL, base points, faction): the Diplomacy aura and the faction rate apply.
-        int gain = service.Gain(ReputationSource.Spell, player, context.Value, faction, player.Level);
+        int gain = service.Gain(ReputationSource.Spell, player, baseValue, faction, player.Level);
         service.ModifyReputation(player, faction, gain);
     }
 
