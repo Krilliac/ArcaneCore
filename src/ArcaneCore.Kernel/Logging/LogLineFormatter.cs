@@ -75,6 +75,18 @@ public static class LogLineFormatter
         {
             WriteException(ref buffer, evt.Exception);
         }
+
+        // A line cut at LogBuffer.MaxLength drops the appends above, including the newline; end it so it cannot merge with the next
+        // event (and close the colour run in colour mode).
+        if (buffer.Truncated)
+        {
+            if (color)
+            {
+                buffer.AppendTerminator(Reset);
+            }
+
+            buffer.AppendTerminator("\n");
+        }
     }
 
     /// <summary>Writes <paramref name="exception"/> as it prints itself, each line indented, ending with a newline.</summary>
