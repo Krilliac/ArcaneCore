@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Cluster.Supervision;
 using Xunit;
 
@@ -131,29 +132,36 @@ public sealed class SupervisorCrashDialogTests
 
         presenter.Shown.TryPeek(out (string Title, string Text) box);
         Assert.DoesNotContain("STALE", box.Text, StringComparison.Ordinal);
-        Assert.Contains("left no crash report", box.Text, StringComparison.Ordinal);
+        Assert.Contains("Full report: none", box.Text, StringComparison.Ordinal);
         Assert.Contains("FailFast", box.Text, StringComparison.Ordinal);
         Assert.Contains("dump note", box.Text, StringComparison.Ordinal);
         Assert.Contains(ChildDirectory, box.Text, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task LongReport_IsCutAtTheLimit_WithThePathOfTheFullReport()
+    public async Task LongReport_IsCutToTheBoxSize_KeepingTheHeaderAndThePathOfTheFullReport()
     {
         var presenter = new FakePresenter();
         var files = new FakeFiles();
         await using SupervisorRig rig = NewRig(NewDialog(presenter, files));
         await rig.Supervisor.StartProcessAsync("world");
         string path = Path.Combine(ChildDirectory, "crash-report.ArcaneCore.World.big.txt");
-        files.Reports.Add((new SupervisorCrashReportFile(path, rig.Clock.GetUtcNow().UtcDateTime + TimeSpan.FromSeconds(1)), new string('x', SupervisorCrashDialog.MaxReportChars + 500)));
+        string report = string.Join('\n', Enumerable.Range(1, 300).Select(i => "report line " + i + " " + new string('x', 80)));
+        files.Reports.Add((new SupervisorCrashReportFile(path, rig.Clock.GetUtcNow().UtcDateTime + TimeSpan.FromSeconds(1)), report));
 
         await CrashAndWaitForRestartAsync(rig, code: 1, launchesAfter: 2);
         await TestWait.UntilAsync(() => !presenter.Shown.IsEmpty, "the crash dialog");
 
         presenter.Shown.TryPeek(out (string Title, string Text) box);
-        Assert.Contains(new string('x', SupervisorCrashDialog.MaxReportChars), box.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain(new string('x', SupervisorCrashDialog.MaxReportChars + 1), box.Text, StringComparison.Ordinal);
-        Assert.EndsWith("... full report: " + path, box.Text, StringComparison.Ordinal);
+        string[] lines = box.Text.Split('\n');
+        Assert.True(lines.Length <= CrashDialog.MaxBoxLines + 1, "lines: " + lines.Length);
+        Assert.All(lines, l => Assert.True(l.Length <= CrashDialog.MaxBoxLineLength + 3 + path.Length + 40, "line length " + l.Length));
+        Assert.StartsWith("The supervised combined process 'world'", box.Text, StringComparison.Ordinal);
+        Assert.Contains("Supervisor: restarting it in 1 s", box.Text, StringComparison.Ordinal);
+        Assert.Contains("Full report: " + path, lines[..8]);
+        Assert.Contains("report line 1 ", box.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("report line 200 ", box.Text, StringComparison.Ordinal);
+        Assert.EndsWith(" more line(s) in " + path, box.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -286,11 +294,17 @@ public sealed class SupervisorCrashDialogTests
     }
 
     [Fact]
-    public async Task HangKill_ShowsNoBox()
+    public async Task HangKill_ShowsABoxWithTheHangFacts_AndTheCaptureNote()
     {
         var presenter = new FakePresenter();
         var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
-        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true, crashDialog: NewDialog(presenter, new FakeFiles()));
+        var capture = new RecordingHangCapture(launcher.Journal);
+        var options = SupervisorRig.OneProcess(configure: c =>
+        {
+            c.ExecutablePath = Path.Combine(ChildDirectory, "ArcaneCore.World.exe");
+            c.HangCapture = SupervisedHangCaptureMode.Stacks;
+        }, options: o => o.HangCaptureDirectory = Path.Combine(ChildDirectory, "hangstacks"));
+        await using var rig = new SupervisorRig(options, launcher, holdAllDelays: true, capture: capture, crashDialog: NewDialog(presenter, new FakeFiles()));
         await rig.Supervisor.StartProcessAsync("world");
         ScriptedProcess hung = launcher.Last;
         hung.Beat();
@@ -298,8 +312,33 @@ public sealed class SupervisorCrashDialogTests
         rig.Clock.Advance(TimeSpan.FromSeconds(121));
         await rig.Delays.ReleaseUntilAsync(() => hung.Kills == 1, "the hung child to be killed");
         await rig.Delays.ReleaseUntilAsync(() => launcher.Launches >= 2, "the relaunch after the backoff");
+        await TestWait.UntilAsync(() => !presenter.Shown.IsEmpty, "the hang box");
+
+        presenter.Shown.TryPeek(out (string Title, string Text) box);
+        Assert.Contains("hung", box.Title, StringComparison.Ordinal);
+        Assert.Contains("pid " + hung.ProcessId, box.Text, StringComparison.Ordinal);
+        Assert.Contains("killed by the supervisor after a hang of 121 s", box.Text, StringComparison.Ordinal);
+        Assert.Contains("Hang capture: Stacks capture written to " + Path.Combine(ChildDirectory, "hangstacks"), box.Text, StringComparison.Ordinal);
+        Assert.Contains("restarting it in 1 s (restart #1)", box.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StopGraceKill_ShowsNoBox()
+    {
+        var presenter = new FakePresenter();
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(configure: c => c.DrainTimeoutMs = 30_000), launcher, holdAllDelays: true, crashDialog: NewDialog(presenter, new FakeFiles()));
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess stopping = launcher.Last;
+        stopping.Beat();
+        stopping.Emit(SupervisorProtocol.FormatStopping(stopping.Token!, SupervisorStopIntent.Shutdown, 0));
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(35));
+        await rig.Delays.ReleaseUntilAsync(() => stopping.Kills == 1, "the stuck stop to be killed");
+        await TestWait.UntilAsync(() => rig.Supervisor.GetSnapshot("world").State == SupervisedProcessState.Stopped, "the shutdown to leave the child down");
 
         Assert.True(presenter.Shown.IsEmpty);
+        Assert.False(rig.Supervisor.GetSnapshot("world").LastExitCode is 0);
     }
 
     [Theory]

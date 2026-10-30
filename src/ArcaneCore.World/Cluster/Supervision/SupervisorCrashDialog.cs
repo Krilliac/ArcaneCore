@@ -69,6 +69,8 @@ public sealed class SystemSupervisorCrashFiles : ISupervisorCrashFiles
 /// <param name="ExecutablePath">The child's executable, as configured.</param>
 /// <param name="Arguments">The child's command line arguments, as configured.</param>
 /// <param name="WorkingDirectory">The child's configured working directory, or null.</param>
+/// <param name="HangSilence">Set when the supervisor killed the child after a hang: how long it had sent no world tick heartbeat.</param>
+/// <param name="HangCaptureNote">What the hang capture produced and where, or why it did not; null when none was taken.</param>
 public sealed record SupervisorChildExit(
     string Name,
     string Role,
@@ -78,7 +80,9 @@ public sealed record SupervisorChildExit(
     string Decision,
     string ExecutablePath,
     string Arguments,
-    string? WorkingDirectory);
+    string? WorkingDirectory,
+    TimeSpan? HangSilence = null,
+    string? HangCaptureNote = null);
 
 /// <summary>
 /// The crash dialog of the cluster supervisor. A supervised child's standard streams are always redirected, so its own crash dialog
@@ -158,7 +162,7 @@ public sealed class SupervisorCrashDialog
     public bool OnChildExited(SupervisorChildExit exit)
     {
         ArgumentNullException.ThrowIfNull(exit);
-        if (exit.ExitCode == 0)
+        if (exit.ExitCode == 0 && exit.HangSilence is null)
         {
             return false;
         }
@@ -234,20 +238,17 @@ public sealed class SupervisorCrashDialog
     public static string Title(SupervisorChildExit exit)
     {
         ArgumentNullException.ThrowIfNull(exit);
-        return exit.Name + " crashed (exit code " + exit.ExitCode.ToString(CultureInfo.InvariantCulture) + ")";
+        return exit.Name + (exit.HangSilence is null ? " crashed" : " hung and was killed") + " (exit code " + exit.ExitCode.ToString(CultureInfo.InvariantCulture) + ")";
     }
 
-    /// <summary>The box text: the facts, what the supervisor does next, and the child's newest crash report written since it started (or why there is none).</summary>
+    /// <summary>
+    /// The box text, cut to the size the child dialogs use (<see cref="CrashDialog.Fit"/>). The header comes first so truncation never drops it: the facts,
+    /// what the supervisor does next, what a hang capture produced, and the path of the child's newest crash report written since it started (or that
+    /// there is none). The report text follows.
+    /// </summary>
     public string Compose(SupervisorChildExit exit)
     {
         ArgumentNullException.ThrowIfNull(exit);
-        var sb = new StringBuilder(1024);
-        sb.Append("The supervised ").Append(exit.Role).Append(" process '").Append(exit.Name).Append("' (pid ")
-            .Append(exit.ProcessId.ToString(CultureInfo.InvariantCulture)).Append(") exited unexpectedly with exit code ")
-            .Append(exit.ExitCode.ToString(CultureInfo.InvariantCulture)).Append(" (0x").Append(exit.ExitCode.ToString("X8", CultureInfo.InvariantCulture)).Append(").\n");
-        sb.Append("Supervisor: ").Append(exit.Decision).Append(". This box does not delay it.\n");
-        sb.Append("Started: ").Append(exit.StartedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).Append(" UTC\n\n");
-
         string? directory = ReportDirectoryOf(exit);
         string processName = ProcessNameOf(exit);
         SupervisorCrashReportFile? newest = null;
@@ -262,27 +263,57 @@ public sealed class SupervisorCrashDialog
             }
         }
 
-        if (newest is { } report && _files.ReadText(report.Path, MaxReportChars) is { } read)
+        (string Text, bool Truncated)? read = newest is { } found ? _files.ReadText(found.Path, MaxReportChars) : null;
+        string? reportPath = read is null ? null : newest!.Value.Path;
+        string code = exit.ExitCode.ToString(CultureInfo.InvariantCulture);
+        string hex = exit.ExitCode.ToString("X8", CultureInfo.InvariantCulture);
+
+        var sb = new StringBuilder(1024);
+        sb.Append("The supervised ").Append(exit.Role).Append(" process '").Append(exit.Name).Append("' (pid ")
+            .Append(exit.ProcessId.ToString(CultureInfo.InvariantCulture)).Append(") ");
+        if (exit.HangSilence is { } silence)
         {
-            sb.Append("Crash report ").Append(report.Path).Append(":\n\n").Append(read.Text.Replace("\r\n", "\n", StringComparison.Ordinal));
-            if (read.Truncated)
+            sb.Append("was killed by the supervisor after a hang of ").Append(silence.TotalSeconds.ToString("0", CultureInfo.InvariantCulture))
+                .Append(" s (no world tick heartbeat); exit code ").Append(code).Append(" (0x").Append(hex).Append(").\n");
+        }
+        else
+        {
+            sb.Append("exited unexpectedly with exit code ").Append(code).Append(" (0x").Append(hex).Append(").\n");
+        }
+
+        sb.Append("Supervisor: ").Append(exit.Decision).Append(". This box does not delay it.\n");
+        sb.Append("Started: ").Append(exit.StartedUtc.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)).Append(" UTC\n");
+        if (exit.HangSilence is not null)
+        {
+            sb.Append("Hang capture: ").Append(string.IsNullOrEmpty(exit.HangCaptureNote) ? "none was taken (HangCapture is None or no capture tool is available)" : exit.HangCaptureNote).Append('\n');
+        }
+
+        if (reportPath is not null)
+        {
+            sb.Append("Full report: ").Append(reportPath).Append('\n');
+        }
+        else
+        {
+            sb.Append("Full report: none").Append(directory is null ? " (its report directory could not be determined)" : " in " + directory).Append('\n');
+            sb.Append(exit.HangSilence is null
+                ? "A native crash, a stack overflow or Environment.FailFast ends the process before a report is written.\n"
+                : "A hung process is killed from outside, so it writes no crash report.\n");
+            sb.Append("See the supervisor log and the child's own log for its last output.");
+            if (!string.IsNullOrEmpty(_dumpNote))
             {
-                sb.Append("\n... full report: ").Append(report.Path);
+                sb.Append('\n').Append(_dumpNote);
             }
 
-            return sb.ToString();
+            return CrashDialog.Fit(sb.ToString(), null);
         }
 
-        sb.Append("The child left no crash report for this run");
-        sb.Append(directory is null ? " (its report directory could not be determined)" : " in " + directory);
-        sb.Append(". A native crash, a stack overflow or Environment.FailFast ends the process before a report is written.\n");
-        sb.Append("See the supervisor log and the child's own log for its last output.");
-        if (!string.IsNullOrEmpty(_dumpNote))
+        sb.Append('\n').Append(read!.Value.Text.Replace("\r\n", "\n", StringComparison.Ordinal));
+        if (read.Value.Truncated)
         {
-            sb.Append('\n').Append(_dumpNote);
+            sb.Append("\n... cut at ").Append(MaxReportChars.ToString(CultureInfo.InvariantCulture)).Append(" characters; full report: ").Append(reportPath);
         }
 
-        return sb.ToString();
+        return CrashDialog.Fit(sb.ToString(), reportPath);
     }
 
     /// <summary>

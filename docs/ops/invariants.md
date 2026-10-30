@@ -133,10 +133,10 @@ key from the crash dialog.
 **Under the cluster supervisor.** A supervised child's standard streams are always redirected, so the child's own crash dialog never
 opens. The supervisor (`Cluster:Supervisor:Enabled`) reads `Diagnostics:CrashDialog` from its own configuration and, in an interactive
 console session as above, opens the box itself when a child exits unexpectedly with a nonzero code: not a drain or stop it asked for,
-not exit code 0, not the restart request (exit code 2), not a hang kill. The box names the child, its pid, exit code and the
+not exit code 0, not the restart request (exit code 2), not a kill after a stop it announced. A kill after a hang does open one ("killed by the supervisor after a hang of N s", with what the hang capture wrote and where). The box names the child, its pid, exit code and the
 supervisor's decision (restarting in N s, or giving up), then the newest `crash-report.<daemon>.<yyyyMMdd-HHmmss>Z.txt` in the
-child's `AppContext.BaseDirectory` (next to its executable, or its assembly under `dotnet`) written since that child started, cut
-at 12000 characters with the path of the full file. A child that crashed natively, overflowed its stack or aborted before the
+child's `AppContext.BaseDirectory` (next to its executable, or its assembly under `dotnet`) written since that child started. The box is cut to the same 40 lines of 400 characters as the other dialogs, header first and the report path in the header, and the report is read up to
+12000 characters. A child that crashed natively, overflowed its stack or aborted before the
 report left none; the box says so. The box is shown on its own thread, one at a time across all children; a crash while it is open
 is only logged, a presenter failure is recorded under `cluster.supervisor.crash-dialog`, and the restart never waits for it. Source:
 `src/ArcaneCore.World/Cluster/Supervision/SupervisorCrashDialog.cs`.

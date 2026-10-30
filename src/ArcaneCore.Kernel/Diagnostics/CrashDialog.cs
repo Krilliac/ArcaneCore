@@ -493,7 +493,8 @@ public static class CrashDialog
         return "the runtime writes one when the process aborts: " + (string.IsNullOrEmpty(name) ? "the runtime's default location (the temp directory)" : name);
     }
 
-    private static string Fit(string text, string? fullTextPath)
+    /// <summary>Cuts <paramref name="text"/> to <see cref="MaxBoxLines"/> lines of <see cref="MaxBoxLineLength"/> characters, naming <paramref name="fullTextPath"/> when lines were dropped.</summary>
+    public static string Fit(string text, string? fullTextPath)
     {
         string[] lines = text.Split('\n');
         var sb = new StringBuilder(Math.Min(text.Length, MaxBoxLines * (MaxBoxLineLength + 2)));
