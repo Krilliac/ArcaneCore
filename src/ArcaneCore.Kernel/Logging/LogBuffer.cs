@@ -14,6 +14,9 @@ public ref struct LogBuffer
     /// <summary>Longest line kept, in characters.</summary>
     public const int MaxLength = 256 * 1024;
 
+    /// <summary>Longest terminator <see cref="AppendTerminator"/> accepts.</summary>
+    public const int MaxTerminatorLength = 8;
+
     private const string TruncationMarker = " ...[truncated]";
 
     private char[]? _rented;
@@ -31,7 +34,7 @@ public ref struct LogBuffer
     /// <summary>Characters written so far.</summary>
     public int Length => _pos;
 
-    /// <summary>True once an append was cut at <see cref="MaxLength"/>; later appends are ignored.</summary>
+    /// <summary>True once an append was cut at <see cref="MaxLength"/>; later appends are ignored (except <see cref="AppendTerminator"/>).</summary>
     public bool Truncated { get; private set; }
 
     /// <summary>The line written so far.</summary>
@@ -112,6 +115,35 @@ public ref struct LogBuffer
         Append(digits[..width]);
     }
 
+    /// <summary>
+    /// Appends a line terminator even after the line was cut at <see cref="MaxLength"/> (at most <see cref="MaxTerminatorLength"/>
+    /// characters), so a truncated event still ends its line and cannot merge with the next one.
+    /// </summary>
+    public void AppendTerminator(scoped ReadOnlySpan<char> terminator)
+    {
+        Debug.Assert(terminator.Length <= MaxTerminatorLength, "terminators are short");
+        if (!Truncated)
+        {
+            Append(terminator);
+            return;
+        }
+
+        if (terminator.Length > _chars.Length - _pos)
+        {
+            Grow(terminator.Length);
+        }
+
+        terminator.CopyTo(_chars[_pos..]);
+        _pos += terminator.Length;
+    }
+
+    /// <summary>Empties the line and clears <see cref="Truncated"/>, keeping the storage (a formatter restarting with a shorter form).</summary>
+    public void Reset()
+    {
+        _pos = 0;
+        Truncated = false;
+    }
+
     /// <summary>Returns the pooled array, if any. The buffer is empty afterwards.</summary>
     public void Dispose()
     {
@@ -141,7 +173,7 @@ public ref struct LogBuffer
     {
         int needed = _pos + additional;
         int size = Math.Max(Math.Max(_chars.Length * 2, needed), 256);
-        size = Math.Min(Math.Max(size, needed), MaxLength + TruncationMarker.Length);
+        size = Math.Min(Math.Max(size, needed), MaxLength + TruncationMarker.Length + MaxTerminatorLength);
         char[] array = ArrayPool<char>.Shared.Rent(size);
         _chars[.._pos].CopyTo(array);
         char[]? old = _rented;

@@ -108,6 +108,8 @@ public sealed class PetsFeature : IWorldFeature, ISpellSummonSink
         // Hunter pet experience from kills (vmangos Pet::GivePetXP).
         if (_services.GetService<global::ArcaneCore.World.Progression.ProgressionFeature>() is { } progression)
         {
+            // Player::GiveLevel -> Pet::SynchronizeLevelWithOwner: a warlock's demon follows the owner's level.
+            progression.Progression.LevelChanged += Service.SynchronizeLevelWithOwner;
             progression.KillExperienceAwarded += (recipients, _, victim, nonRaidDungeon) =>
             {
                 var options = progression.Progression.Options;

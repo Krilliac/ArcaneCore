@@ -434,6 +434,238 @@ public sealed class PlayerbotPathShapingTests
         });
     }
 
+    // A long L: the horizontal leg is 8 yd wide and 60 long, the vertical leg 8 wide and 60 long. The inner wall corner (52, 8) stops the
+    // corner-cutting spline (so the smoothed route differs from the raw one only by the lane offset and subdivision), and the shaper then
+    // moves the corner off that wall: three different routes for the same walk.
+    private static readonly Rect[] LongL = [new(0f, 0f, 60f, 8f), new(52f, 0f, 60f, 60f)];
+    private static readonly Vector2[] LongLWaypoints = [new(1f, 7.5f), new(52f, 8f), new(53f, 59f)];
+
+    private static float DistanceToPolyline(Vector3 point, IReadOnlyList<Vector3> line)
+    {
+        float best = float.MaxValue;
+        for (int i = 1; i < line.Count; i++)
+        {
+            Vector2 a = line[i - 1].XY(), b = line[i].XY(), p = point.XY();
+            Vector2 ab = b - a;
+            float t = ab.LengthSquared() < 1e-9f ? 0f : Math.Clamp(Vector2.Dot(p - a, ab) / ab.LengthSquared(), 0f, 1f);
+            best = MathF.Min(best, Vector2.Distance(p, a + (ab * t)));
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// Plans the long L three ways on the world thread: raw (the pathfinder's own waypoints), smoothed only (shaping off) and shaped, each
+    /// with no risk; then calls <paramref name="check"/> with a function that plans it again under a risk holding the given hazards
+    /// (centre in world coordinates, radius).
+    /// </summary>
+    private async Task WithLongLPlansAsync(Action<Vector3[], PlayerbotRoute, PlayerbotRoute, Func<(Vector3 At, float Radius)[], PlayerbotRoute>> check)
+    {
+        await RunAsync(LongL, (world, map, at) => true, planner: async (world, host, session, at) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Vector3[] raw = [.. LongLWaypoints.Select(at)];
+                world.SetWaypoints(raw);
+
+                PlayerbotRoute Plan(PlayerbotOptions options)
+                {
+                    player.Relocate(raw[0].X, raw[0].Y, raw[0].Z, 0f, host.World.NowMs);
+                    Assert.True(PlayerbotNavigation.TryPlan(player, raw[^1], options, out PlayerbotRoute? route));
+                    return route!;
+                }
+
+                PlayerbotRoute smoothed = Plan(new PlayerbotOptions { Enabled = true, PathShaping = false });
+                PlayerbotRoute shaped = Plan(new PlayerbotOptions { Enabled = true });
+                try
+                {
+                    check(raw, smoothed, shaped, hazards =>
+                    {
+                        var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = true } };
+                        var risk = new PlayerbotRisk(session, options, new PlayerbotCombatSpells(session));
+                        foreach ((Vector3 centre, float radius) in hazards)
+                            risk.Hazards.Add(player.MapId, centre, radius, host.World.NowMs, 300, "death");
+                        PlayerbotNavigation.Guard(player, risk);
+                        return Plan(options);
+                    });
+                }
+                finally
+                {
+                    PlayerbotNavigation.Guard(player, null);
+                }
+
+                return true;
+            });
+        });
+    }
+
+    [Fact]
+    public async Task ARiskThatBlocksOnlyTheShapedRoute_YieldsTheSmoothedRoute()
+    {
+        await WithLongLPlansAsync((raw, smoothed, shaped, planWithHazards) =>
+        {
+            // Three distinct routes, or the test proves nothing.
+            Assert.False(smoothed.Points.SequenceEqual(raw), "smoothing left the raw route alone");
+            Assert.False(shaped.Points.SequenceEqual(smoothed.Points), "shaping left the smoothed route alone");
+
+            // The shaped vertex farthest from the smoothed and the raw route: a hazard round it touches only the shaped route.
+            Vector3 centre = shaped.Points.MaxBy(p => MathF.Min(DistanceToPolyline(p, smoothed.Points), DistanceToPolyline(p, raw)));
+            float clear = MathF.Min(DistanceToPolyline(centre, smoothed.Points), DistanceToPolyline(centre, raw));
+            Assert.True(clear > 1f, $"the shaped route is only {clear:F2} yd from the other routes");
+            float radius = clear * 0.5f;
+
+            PlayerbotRoute chosen = planWithHazards([(centre, radius)]);
+
+            Assert.Equal(smoothed.Points, chosen.Points);
+            Assert.False(chosen.Points.SequenceEqual(shaped.Points));
+            Assert.False(chosen.Points.SequenceEqual(raw));
+            Assert.True(chosen.Navigated);
+        });
+    }
+
+    [Fact]
+    public async Task ARiskThatBlocksBothTheShapedAndTheSmoothedRoute_KeepsTheRawRoute()
+    {
+        await WithLongLPlansAsync((raw, smoothed, shaped, planWithHazards) =>
+        {
+            // A smoothed vertex that the shaper keeps (so both routes carry it) and that is off the raw route.
+            Vector3 centre = smoothed.Points.Skip(1).SkipLast(1).Where(shaped.Points.Contains).MaxBy(p => DistanceToPolyline(p, raw));
+            float offRaw = DistanceToPolyline(centre, raw);
+            Assert.True(offRaw > 0.3f, $"the smoothed route is only {offRaw:F2} yd from the raw route at its farthest shared vertex");
+            float radius = offRaw * 0.5f;
+
+            PlayerbotRoute chosen = planWithHazards([(centre, radius)]);
+
+            Assert.Equal(raw, chosen.Points);
+            Assert.False(chosen.Points.SequenceEqual(smoothed.Points));
+            Assert.False(chosen.Points.SequenceEqual(shaped.Points));
+            Assert.True(chosen.Navigated);
+        });
+    }
+
+    [Fact]
+    public async Task WithNoRisk_TheShapedRouteIsChosen_AndAHazardOffEveryRouteChangesNothing()
+    {
+        await WithLongLPlansAsync((raw, smoothed, shaped, planWithHazards) =>
+        {
+            Assert.Equal(shaped.Points, planWithHazards([]).Points);
+            Vector3 far = raw[0] + new Vector3(-30f, 40f, 0f);
+            Assert.Equal(shaped.Points, planWithHazards([(far, 2f)]).Points);
+        });
+    }
+
+    [Fact]
+    public async Task WhenShapingLeavesTheSmoothedRouteAlone_ARiskOnIt_KeepsTheRawRoute()
+    {
+        // Open ground: the corner-cutting spline smooths the 90 degree corner and the shaper has nothing to add, so shaped and smoothed are
+        // the same route and a risk on it must not be checked a second time or end on the smoothed route: the raw route is kept.
+        Rect[] open = [new(0f, 0f, 200f, 200f)];
+        await RunAsync(open, (world, map, at) => true, planner: async (world, host, session, at) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Vector3[] raw = [at(new(10f, 10f)), at(new(50f, 10f)), at(new(50f, 50f))];
+                world.SetWaypoints(raw);
+
+                PlayerbotRoute Plan(PlayerbotOptions options)
+                {
+                    player.Relocate(raw[0].X, raw[0].Y, raw[0].Z, 0f, host.World.NowMs);
+                    Assert.True(PlayerbotNavigation.TryPlan(player, raw[^1], options, out PlayerbotRoute? route));
+                    return route!;
+                }
+
+                PlayerbotRoute smoothed = Plan(new PlayerbotOptions { Enabled = true, PathShaping = false });
+                PlayerbotRoute shaped = Plan(new PlayerbotOptions { Enabled = true });
+                Assert.Equal(smoothed.Points, shaped.Points);
+                Assert.False(smoothed.Points.SequenceEqual(raw), "the corner was not smoothed");
+
+                Vector3 centre = smoothed.Points.Skip(1).SkipLast(1).MaxBy(p => DistanceToPolyline(p, raw));
+                float offRaw = DistanceToPolyline(centre, raw);
+                Assert.True(offRaw > 0.5f, $"the smoothed corner is only {offRaw:F2} yd from the raw corner");
+
+                var options = new PlayerbotOptions { Enabled = true, Risk = { Enabled = true } };
+                var risk = new PlayerbotRisk(session, options, new PlayerbotCombatSpells(session));
+                risk.Hazards.Add(player.MapId, centre, offRaw * 0.5f, host.World.NowMs, 300, "death");
+                PlayerbotNavigation.Guard(player, risk);
+                try
+                {
+                    Assert.Equal(raw, Plan(options).Points);
+                }
+                finally
+                {
+                    PlayerbotNavigation.Guard(player, null);
+                }
+
+                return true;
+            });
+        });
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(20000f)]
+    [InlineData(-20000f)]
+    public async Task ARightAngleFarFromTheOrigin_IsRoundedByTheSameFiniteArc_AsNearTheOrigin(float offset)
+    {
+        Rect[] open = [new(0f, 0f, 100f, 100f)];
+        await RunAsync(open, (world, map, at) =>
+        {
+            Vector3[] input = [at(new(10f, 10f)), at(new(40f, 10f)), at(new(40f, 40f))];
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> shaped = PlayerbotPathShaping.ShapePoints(map, input, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref stats);
+
+            Assert.Equal(1, stats.CornersRounded);
+            Assert.True(shaped.Count >= 5, $"expected the tangent points and at least one arc point, got {shaped.Count} points");
+            Assert.All(shaped, p => Assert.True(float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z), $"non-finite point {p}"));
+            // The 0.1 yd floor: no two consecutive points closer than the shortest arc radius (this arc has radius 2.5 yd).
+            for (int i = 1; i < shaped.Count; i++)
+                Assert.True(Vector2.Distance(shaped[i - 1].XY(), shaped[i].XY()) >= PlayerbotPathShaping.MinArcRadiusYards,
+                    $"points {i - 1} and {i} are {Vector2.Distance(shaped[i - 1].XY(), shaped[i].XY()):F4} yd apart");
+            Assert.InRange(Vector2.Distance(shaped[1].XY(), at(new(40f, 10f)).XY()), 2.5f - Tolerance, 2.5f + Tolerance);
+            Assert.InRange(Vector2.Distance(shaped[^2].XY(), at(new(40f, 10f)).XY()), 2.5f - Tolerance, 2.5f + Tolerance);
+            Assert.True(MaxTurn(shaped) <= PlayerbotPathShaping.MaxHeadingStepRadians + HeadingTolerance, $"max heading change {MaxTurn(shaped):F4} rad");
+            AssertSegmentsSafe(map, shaped);
+            return true;
+        }, worldOffset: new Vector2(offset, offset));
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(20000f)]
+    [InlineData(-20000f)]
+    public async Task AHairpinAtTheArcRadiusFloor_IsRoundedJustInsideIt_AndKeptSharpJustOutside_AtAnyDistanceFromTheOrigin(float offset)
+    {
+        // The arc radius is lead / tan(theta / 2) with the default 2.5 yd lead; the floor MinArcRadiusYards (0.1) is reached at
+        // theta = 2 * atan(2.5 / 0.1) = 3.0616 rad. Out leg (0, 1): theta 3.0419 (radius 0.126, rounded); out leg (0, 0.5): theta 3.0916
+        // (radius 0.082, below the floor, kept sharp). The decision must not depend on where on the map the corner is.
+        Rect[] open = [new(-20f, -20f, 40f, 40f)];
+        await RunAsync(open, (world, map, at) =>
+        {
+            Vector3[] inside = [at(new(0f, 0f)), at(new(10f, 0f)), at(new(0f, 1f))];
+            Vector3[] outside = [at(new(0f, 0f)), at(new(10f, 0f)), at(new(0f, 0.5f))];
+            float thetaInside = MathF.Atan2(1f, -10f), thetaOutside = MathF.Atan2(0.5f, -10f);
+            Assert.True(2.5f / MathF.Tan(thetaInside * 0.5f) >= PlayerbotPathShaping.MinArcRadiusYards);
+            Assert.True(2.5f / MathF.Tan(thetaOutside * 0.5f) < PlayerbotPathShaping.MinArcRadiusYards);
+
+            ShapeStats stats = default;
+            IReadOnlyList<Vector3> rounded = PlayerbotPathShaping.ShapePoints(map, inside, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref stats);
+            Assert.Equal(1, stats.CornersRounded);
+            Assert.True(rounded.Count > inside.Length);
+            Assert.All(rounded, p => Assert.True(float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z), $"non-finite point {p}"));
+            Assert.True(MaxTurn(rounded) <= PlayerbotPathShaping.MaxHeadingStepRadians + HeadingTolerance, $"max heading change {MaxTurn(rounded):F4} rad");
+
+            ShapeStats sharpStats = default;
+            IReadOnlyList<Vector3> sharp = PlayerbotPathShaping.ShapePoints(map, outside, PlayerbotPathShaping.Settings.From(new PlayerbotOptions()), ref sharpStats);
+            Assert.Equal(0, sharpStats.CornersRounded);
+            Assert.All(sharp, p => Assert.True(float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z), $"non-finite point {p}"));
+            Assert.Equal(outside[0], sharp[0]);
+            Assert.Equal(outside[^1], sharp[^1]);
+            return true;
+        }, worldOffset: new Vector2(offset, offset));
+    }
+
     [Fact]
     public async Task AZigzagWithManyCorners_StaysWithinTheShapedCornerCap_AndTheMeasuredQueryBudget()
     {
@@ -1259,7 +1491,7 @@ public sealed class PlayerbotPathShapingTests
     /// </summary>
     private static async Task RunAsync(Rect[] rects, Func<RegionWorld, Map, Func<Vector2, Vector3>, bool> body,
         Func<RegionWorld, WorldTestHost, WorldSession, Func<Vector2, Vector3>, Task>? planner = null,
-        Func<float, float, float>? floorAt = null)
+        Func<float, float, float>? floorAt = null, Vector2? worldOffset = null)
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<IWorldFeature, ManualClock>());
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
@@ -1272,7 +1504,7 @@ public sealed class PlayerbotPathShapingTests
             {
                 Player player = session.Player!;
                 map = player.Map!;
-                var offset = new Vector2(player.X, player.Y);
+                var offset = worldOffset ?? new Vector2(player.X, player.Y);
                 // floorAt takes the region's local x/y; the default is the flat floor.
                 Func<float, float, float> local = floorAt ?? ((_, _) => Floor);
                 world = new RegionWorld(rects, offset, (x, y) => local(x - offset.X, y - offset.Y));

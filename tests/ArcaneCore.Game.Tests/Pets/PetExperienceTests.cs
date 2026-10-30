@@ -12,6 +12,7 @@ public sealed class PetExperienceTests
 {
     private const uint BeastEntry = 5231;
     private const uint VictimEntry = 5232;
+    private const uint NoXpVictimEntry = 5233;
 
     private static CreatureTemplate Beast(uint entry, byte level) => CreatureTestKit.Template(entry, b =>
     {
@@ -22,7 +23,7 @@ public sealed class PetExperienceTests
         b.Faction = 14;
     }) with { CreatureType = SummonService.CreatureTypeBeast, TypeFlags = SummonService.TypeFlagTameable, Family = 1 };
 
-    private static PetTestKit Kit() => new(extraTemplates: [Beast(BeastEntry, 20), Beast(VictimEntry, 22)]);
+    private static PetTestKit Kit() => new(extraTemplates: [Beast(BeastEntry, 20), Beast(VictimEntry, 22), Beast(NoXpVictimEntry, 22) with { StaticFlags1 = 0x2 }]);
 
     private static (Player Hunter, Creature Pet) Tame(PetTestKit kit, uint guid = 1, byte ownerLevel = 30)
     {
@@ -85,6 +86,19 @@ public sealed class PetExperienceTests
         IReadOnlyList<KillShare> shares = KillExperience.Distribute([new KillCandidate(24, true, false), new KillCandidate(24, true, false)], 22, false, false);
         kit.Service.AwardKillExperience([hunter, other], victim, false, 1f, 1f);
         Assert.Equal(solo + (shares[0].Experience / 2), pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
+    }
+
+    [Fact]
+    public void AwardKillExperience_NoXpStaticFlagVictim_GivesThePetNothing()
+    {
+        // vmangos MaNGOS::XP::Gain returns 0 for CREATURE_STATIC_FLAG_NO_XP (0x2; Formulas.h:112), so the pet share is 0 as well.
+        using PetTestKit kit = Kit();
+        (Player hunter, Creature pet) = Tame(kit, ownerLevel: 24);
+        Creature victim = kit.Creatures.SpawnTemporary(kit.Content.FindTemplate(NoXpVictimEntry)!, 5, 0, 0, 0);
+
+        kit.Service.AwardKillExperience([hunter], victim, false, 1f, 1f);
+
+        Assert.Equal(0u, pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
     }
 
     [Fact]

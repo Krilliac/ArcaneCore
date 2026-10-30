@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Rules.Immunity;
 
@@ -345,7 +346,8 @@ public class VanillaSpellCombatRules : ISpellCombatRules, ISpellCritAmounts, ISp
         ArgumentNullException.ThrowIfNull(system);
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(spell);
-        if ((caster is Creatures.Creature && !Options.CreatureSpellCrit) || !SpellCritRules.CanCrit(spell))
+        // vmangos Unit.cpp:5216-5218: mobs cannot crit with spells, but totems and pets (creatures owned by a player) can.
+        if ((caster is Creatures.Creature && !Options.CreatureSpellCrit && !caster.OwnerGuid.IsPlayer) || !SpellCritRules.CanCrit(spell))
         {
             return 0f;
         }

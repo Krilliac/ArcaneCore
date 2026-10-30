@@ -82,7 +82,7 @@ public sealed partial class SpellSystem
         var cooldowns = new List<PersistedCooldown>();
         foreach ((uint spellId, uint until) in state.SpellCooldowns.OrderBy(c => c.Key))
         {
-            if (until > now)
+            if (IsStillRunning(until, now))
             {
                 ItemCooldownOwner owner = state.CooldownOwners.GetValueOrDefault(spellId);
                 cooldowns.Add(new PersistedCooldown(SpellCooldownKind.Spell, spellId, nowUnixMs + (until - now), owner.ItemId, owner.Category, owner.SpellId));
@@ -91,7 +91,7 @@ public sealed partial class SpellSystem
 
         foreach ((uint category, uint until) in state.CategoryCooldowns.OrderBy(c => c.Key))
         {
-            if (until > now)
+            if (IsStillRunning(until, now))
             {
                 ItemCooldownOwner[] owners = state.CooldownOwners.Values.Where(o => o.Category == category).ToArray();
                 if (owners.Length == 0)
@@ -177,9 +177,9 @@ public sealed partial class SpellSystem
             }
 
             state ??= GetOrCreateState(unit);
-            uint until = (uint)Math.Min(uint.MaxValue, now + remaining);
+            uint until = unchecked(now + (uint)remaining); // remaining <= MaxReasonableCooldownMs: compared wrap-safely, never clamped
             WakingTimerMap<uint> table = cooldown.Kind == SpellCooldownKind.Spell ? state.SpellCooldowns : state.CategoryCooldowns;
-            table[cooldown.Id] = Math.Max(until, table.GetValueOrDefault(cooldown.Id));
+            table[cooldown.Id] = table.TryGetValue(cooldown.Id, out uint existing) && IsStillRunning(existing, until) ? existing : until;
             if (cooldown.ItemId != 0 || cooldown.Category != 0 || cooldown.SpellId != 0)
             {
                 uint ownerSpell = cooldown.Kind == SpellCooldownKind.Spell ? cooldown.Id : cooldown.SpellId;

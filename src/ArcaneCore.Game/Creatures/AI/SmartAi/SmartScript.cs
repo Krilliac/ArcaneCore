@@ -418,7 +418,7 @@ public sealed class SmartScript
 
             e.RunOnce = true;
             SmartScriptRow r = e.Row;
-            if (r.EventChance is > 0 and < 100 && r.EventChance <= Rand(1, 100)) return;
+            if (r.EventChance is > 0 and < 100 && Rand(1, 100) > r.EventChance) return; // AzerothCore roll_chance_i: fires on a roll of 1..chance, one draw
             if (invoker is not null) LastInvoker = invoker;
             List<WorldObject> targets = GetTargets(r, invoker ?? LastInvoker);
             CreatureMapSystem? system = System;

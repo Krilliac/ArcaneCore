@@ -674,6 +674,10 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
             {
                 waiter.Done.TrySetException(new InvalidOperationException($"character {slot.Id} is quarantined"));
             }
+            else if (error is OperationCanceledException && waiter.Settlement && waiter.Token.IsCancellationRequested)
+            {
+                waiter.Done.TrySetCanceled(waiter.Token); // its own budget ended the write: Canceled, not Faulted
+            }
             else if (error is not null)
             {
                 waiter.Done.TrySetException(error);
@@ -851,6 +855,17 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 }
 
                 await Task.Delay(200 * attempt, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The settlement's own budget fired mid-write: cancellation is not a save failure (no fault, anomaly or announcement).
+                // The snapshot may be half written, so it stays retained for the next snapshot, barrier or retry pick, never dropped.
+                lock (_gate)
+                {
+                    _failed[state.Id] = new FailedSave(state, new OperationCanceledException(cancellationToken));
+                }
+
+                throw;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {

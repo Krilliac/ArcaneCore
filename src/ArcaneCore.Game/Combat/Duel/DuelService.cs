@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 
@@ -110,14 +111,23 @@ public sealed partial class DuelService
 
     // --- completion --------------------------------------------------------------------------
 
+    private static void ClearComboAimedAt(ComboPointService combos, Player holder, Player other)
+    {
+        ObjectGuid target = combos.GetComboTarget(holder);
+        if (!target.IsEmpty && (target == other.Guid || target == other.PetGuid))
+        {
+            combos.ClearComboPoints(holder);
+        }
+    }
+
     /// <summary>
     /// vmangos <c>Player::DuelComplete</c> (Player.cpp:6726-6822), called on the player that lost or left: both clients get
     /// SMSG_DUEL_COMPLETE (started = type is not Interrupted); a decided duel announces SMSG_DUEL_WINNER (fled = type is not Won, winner = the
     /// opponent, loser = this player) to this player's set; the flag object goes; the negative auras each side cast on the other since the start
-    /// are removed; combo points aimed at the other player are cleared; arbiter and team are reset; both halves are marked finished (each owner
+    /// are removed; combo points aimed at the other player (or their pet) are cleared; arbiter and team are reset; both halves are marked finished (each owner
     /// drops its object on its next map update, so the rest of this tick still sees the duel, vmangos Player.cpp:1132-1137). Idempotent.
     /// A reflected holder goes too, whoever cast it (Player.cpp:6762-6768, 6781-6787, &gt; 1.6.1: "You are no longer able to kill players in
-    /// duels with reflected DoT spells"). Limits: pets are not looked at (no pets).
+    /// duels with reflected DoT spells"). Combo points aimed at either player's pet go too. Limits: pets are otherwise not looked at (no combat-stop over controlled units).
     /// </summary>
     public void Complete(Player player, DuelCompleteType type)
     {
@@ -146,15 +156,9 @@ public sealed partial class DuelService
 
         if ((Combos ?? CombosProvider?.Invoke()) is { } combos)
         {
-            if (combos.GetComboTarget(player) == opponent.Guid)
-            {
-                combos.ClearComboPoints(player);
-            }
-
-            if (combos.GetComboTarget(opponent) == player.Guid)
-            {
-                combos.ClearComboPoints(opponent);
-            }
+            // vmangos Player.cpp:6796-6804: points aimed at the other player or at the other player's pet, for both sides.
+            ClearComboAimedAt(combos, player, opponent);
+            ClearComboAimedAt(combos, opponent, player);
         }
 
         if (type != DuelCompleteType.Interrupted)

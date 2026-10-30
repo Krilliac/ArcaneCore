@@ -161,7 +161,9 @@ public sealed partial class CreatureMapSystem
             // SetDeathState(JUST_DIED) strips the auras with their handlers (vmangos Creature::ForcedDespawn, Creature.cpp:2427-2428); the
             // corpse removal below would only forget the holders and leave a taunt caster on the threat list for the next life.
             (_ai.Spells as ICreatureAuraReset)?.RemoveAurasOnDeath(creature);
-            uint respawnDelay = creature.TakeRespawnDelaySeconds();
+            // The same scheduling as a death (OnCreatureDied): vmangos ForcedDespawn runs SetDeathState(JUST_DIED), so the opt-in respawn scaling applies.
+            bool scriptedDelay = creature.RespawnDelayOverrideSeconds is not null || creature.RespawnDelayOnceSeconds is not null;
+            uint respawnDelay = ScheduledRespawnDelay(creature, creature.TakeRespawnDelaySeconds(), scriptedDelay);
             creature.RespawnAtMs = respawnDelay == Creature.RespawnNeverSeconds ? long.MaxValue : _clockMs + (respawnDelay * 1000L);
             SaveRespawnOnDeath(creature);
         }

@@ -117,7 +117,14 @@ public sealed partial class PlayerProgression : IQuestExperience
         while (next > 0 && newXp >= next && player.Level < Options.MaxPlayerLevel)
         {
             newXp -= next;
-            leveled |= ApplyLevel(player, (byte)(player.Level + 1));
+            byte oldLevel = player.Level;
+            if (ApplyLevel(player, (byte)(oldLevel + 1)))
+            {
+                leveled = true;
+                // vmangos Player::GiveXP levels through GiveLevel for each level gained, so the level hook fires per level.
+                player.Map?.World.Scripts.Player.OnLevelChanged(player, oldLevel);
+            }
+
             next = player.GetUInt32(UpdateFields.PlayerNextLevelXp);
         }
 

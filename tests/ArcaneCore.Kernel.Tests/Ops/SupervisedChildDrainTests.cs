@@ -22,7 +22,12 @@ public sealed class SupervisedChildDrainTests
         // The CI runners have two cores and the Kernel suite runs many classes at once, some of which block pool threads: with the default minimum the
         // host start/stop continuations here can wait seconds for a worker (the Linux failures were a 10 s stall, then an empty or missing result).
         ThreadPool.GetMinThreads(out int workers, out int io);
-        ThreadPool.SetMinThreads(Math.Max(workers, 32), Math.Max(io, 32));
+        // TODO: the Linux failures point at thread-pool starvation whose root cause is not found (see the thread-pool starvation section of
+        // docs/ops/watchdog.md); this raised minimum is a short-term mitigation, not the fix.
+        if (!ThreadPool.SetMinThreads(Math.Max(workers, 32), Math.Max(io, 32)))
+        {
+            throw new InvalidOperationException($"ThreadPool.SetMinThreads({Math.Max(workers, 32)}, {Math.Max(io, 32)}) was refused (current minimum {workers}/{io}); this suite relies on the raised minimum to keep host start/stop continuations from starving.");
+        }
     }
 
     private sealed class BlockingReader : TextReader
@@ -33,7 +38,15 @@ public sealed class SupervisedChildDrainTests
 
         public int Pending => _lines.Count;
 
-        public override string? ReadLine() => _lines.Take();
+        /// <summary>Called with each line the reader thread took (null = end of input); lets a test timestamp the moment the line was read.</summary>
+        public Action<string?>? OnTaken { get; set; }
+
+        public override string? ReadLine()
+        {
+            string? line = _lines.Take();
+            OnTaken?.Invoke(line);
+            return line;
+        }
     }
 
     private sealed class FakeLifetime : IHostApplicationLifetime
@@ -294,19 +307,30 @@ public sealed class SupervisedChildDrainTests
     public async Task SupervisedHost_ExitsGracefully_WhenItReadsDrain()
     {
         var reader = new BlockingReader();
+        var phases = new ConcurrentQueue<string>();
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        void Mark(string phase) => phases.Enqueue($"{System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds:0}ms {phase}");
         HostApplicationBuilder builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
         builder.Services.AddSingleton(Source(reader, supervised: true));
         builder.Services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         builder.Services.AddHostedService<SupervisedChildDrain>();
         using IHost host = builder.Build();
 
+        IHostApplicationLifetime hostLifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+        hostLifetime.ApplicationStarted.Register(() => Mark("host started"));
+        hostLifetime.ApplicationStopping.Register(() => Mark("StopApplication observed (ApplicationStopping)"));
+        hostLifetime.ApplicationStopped.Register(() => Mark("host stopped (StopAsync of all services done)"));
+        reader.OnTaken = line => Mark($"reader took {(line is null ? "EOF" : $"'{line}'")}");
+        Mark("RunAsync called");
         Task run = host.RunAsync();
         await Task.Delay(100);
+        Mark("drain line posted");
         reader.Post("drain");
 
         try
         {
             await run.WaitAsync(Bound); // the host stopped inside the drain window
+            Mark("RunAsync returned");
         }
         catch (TimeoutException)
         {
@@ -315,7 +339,7 @@ public sealed class SupervisedChildDrainTests
             throw new TimeoutException(
                 $"the host did not stop within {Bound.TotalSeconds:0} s of the drain line (pool threads={ThreadPool.ThreadCount}, queued={ThreadPool.PendingWorkItemCount}): started={lifetime.ApplicationStarted.IsCancellationRequested}, "
                 + $"stopping={lifetime.ApplicationStopping.IsCancellationRequested}, readerAttached={drain?.ReaderThread is not null}, "
-                + $"readerAlive={drain?.ReaderThread?.IsAlive}, linesStillQueued={reader.Pending}, runStatus={run.Status}");
+                + $"readerAlive={drain?.ReaderThread?.IsAlive}, linesStillQueued={reader.Pending}, runStatus={run.Status}, phases=[{string.Join("; ", phases)}] (at {System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds:0}ms)");
         }
     }
 }

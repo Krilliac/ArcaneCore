@@ -32,7 +32,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
 
         foreach (string warning in options.Warnings())
         {
-            issues.Add(new ConfigIssue(ConfigSeverity.Warning, $"{ClusterSupervisorOptions.SectionName}:Processes", warning, "lower the DrainTimeoutMs values or split the children across supervisors"));
+            issues.Add(new ConfigIssue(ConfigSeverity.Warning, $"{ClusterSupervisorOptions.SectionName}:Processes", warning, "keep a world child's DrainTimeoutMs above its stop time (the default is 180000), and keep the total within the host shutdown cap by splitting the children across supervisors"));
         }
 
         if (options.Enabled && configuration.GetSection(GatewayWorkerOptions.SectionName).GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)))

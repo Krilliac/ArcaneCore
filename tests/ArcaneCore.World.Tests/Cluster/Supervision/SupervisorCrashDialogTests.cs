@@ -3,6 +3,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Cluster.Supervision;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Supervision;
@@ -424,6 +425,7 @@ public sealed class SupervisorCrashDialogTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
     [Theory]
     [InlineData("ArcaneCore.World.exe", "", "ArcaneCore.World")]
     [InlineData("ArcaneCore.World", "", "ArcaneCore.World")]
@@ -451,6 +453,59 @@ public sealed class SupervisorCrashDialogTests
 
         Assert.StartsWith(SupervisorCrashDialog.ReportFilePrefix("ArcaneCore.World"), name, StringComparison.Ordinal);
         Assert.Equal("crash-report.ArcaneCore.World.", SupervisorCrashDialog.ReportFilePrefix("ArcaneCore.World"));
+    }
+
+    /// <summary>A logger provider that fails on every write, as a broken sink would.</summary>
+    private sealed class ThrowingLogger : ILogger
+    {
+        private int _writes;
+
+        public int Writes => Volatile.Read(ref _writes);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Interlocked.Increment(ref _writes);
+            throw new InvalidOperationException("the log sink failed");
+        }
+    }
+
+    // Each test throws its own exception type: the fault ledger throttles a repeated signature, and a throttled fault never reaches the logger.
+    private sealed class ProbeFailure : Exception;
+
+    private sealed class PresenterFailure : Exception;
+
+    [Fact]
+    public void OnChildExited_WhenStartingFailsAndTheLoggerThrows_ReturnsFalseWithoutThrowing()
+    {
+        var logger = new ThrowingLogger();
+        var dialog = new SupervisorCrashDialog(true, logger, presenter: new FakePresenter(), environmentProbe: () => throw new ProbeFailure(), files: new FakeFiles());
+        var exit = new SupervisorChildExit("w", "Combined", 1, 70, DateTimeOffset.UnixEpoch, "x", Path.Combine(ChildDirectory, "ArcaneCore.World.exe"), "", null);
+
+        bool started = dialog.OnChildExited(exit);
+
+        Assert.False(started);
+        Assert.True(logger.Writes > 0, "the fault must have reached the throwing logger, or this test proves nothing");
+        Assert.False(dialog.IsOpen);
+    }
+
+    [Fact]
+    public async Task OnChildExited_WhenThePresenterFailsAndTheLoggerThrows_ClosesTheBoxSoTheNextExitCanOpenOne()
+    {
+        var presenter = new FakePresenter { Throw = new PresenterFailure() };
+        var logger = new ThrowingLogger();
+        var dialog = new SupervisorCrashDialog(true, logger, presenter, () => Interactive, new FakeFiles());
+        var exit = new SupervisorChildExit("w", "Combined", 1, 70, DateTimeOffset.UnixEpoch, "x", Path.Combine(ChildDirectory, "ArcaneCore.World.exe"), "", null);
+
+        Assert.True(dialog.OnChildExited(exit));
+        await TestWait.UntilAsync(() => !presenter.Shown.IsEmpty && !dialog.IsOpen, "the failed box to close");
+
+        Assert.True(logger.Writes > 0, "the fault must have reached the throwing logger, or this test proves nothing");
+        Assert.True(dialog.OnChildExited(exit)); // the dialog thread survived the logger failure and released the gate
+        await TestWait.UntilAsync(() => presenter.Shown.Count == 2 && !dialog.IsOpen, "the second box to close");
     }
 
     private static async Task<SupervisedProcessState> WaitForStateAsync(SupervisorRig rig, SupervisedProcessState state)

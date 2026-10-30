@@ -43,7 +43,7 @@ public sealed class ClusterSupervisorProcessTests : IDisposable
         "--Cluster:Supervisor:Enabled=true",
         "--Cluster:Supervisor:MinClusterProcesses=1",
         "--Cluster:Supervisor:MinFreeMemoryReserveMb=999999999",
-        "--Cluster:Supervisor:Processes:probe:Role=worker",
+        "--Cluster:Supervisor:Processes:probe:Role=combined", // one combined world on SQLite is allowed (a worker child on SQLite is refused by ClusterSqliteConfigChecks)
         "--Cluster:Supervisor:Processes:probe:ExecutablePath=dotnet",
         "--Cluster:Supervisor:Processes:probe:Arguments=--version",
         .. extra,

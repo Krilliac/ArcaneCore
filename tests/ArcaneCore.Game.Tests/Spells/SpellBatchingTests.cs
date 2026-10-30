@@ -2,6 +2,7 @@ using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
@@ -270,6 +271,30 @@ public sealed class SpellBatchingTests
         return creature;
     }
 
+    private sealed class BatchProbeFault(string message) : Exception(message);
+
+    [Fact]
+    public void AThrowingBatchedCast_RaisesTheSpellBatchFaultCountByExactlyOne()
+    {
+        using var kit = Kit(Window);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player target, _) = kit.AddHostilePlayer(2, 10);
+        kit.Spellbook.Teach(caster, Zap);
+        kit.System.RegisterEffect(SpellEffectName.SchoolDamage, c => throw new BatchProbeFault("spell-batch-probe-1"));
+        string type = typeof(BatchProbeFault).FullName!;
+        // The batch catch used to record under "spell.batch" and again, through LogFault, under "spell-batch": count both spellings.
+        long Count(string site) => FaultLedger.Shared.Snapshot().Where(s => s.ExceptionType == type && (s.Site == site || (site == "spell.batch" && s.Site == "spell-batch"))).Sum(s => s.Count);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Zap, SpellCastTargets.ForUnit(target.Guid)));
+        Assert.Equal(1, kit.System.PendingBatchedGoes);
+        Assert.Equal(0, Count("spell.batch"));
+
+        kit.Advance(Window);
+
+        Assert.Equal(1, Count("spell.batch"));
+        Assert.Equal(60u, target.Health);
+        Assert.Equal(0, kit.System.PendingBatchedGoes);
+    }
     private static SpellTestKit Kit(uint window = 0)
     {
         static SpellInfo Ranged(SpellInfo spell) => spell with { RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0 };

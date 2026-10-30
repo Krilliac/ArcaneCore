@@ -50,6 +50,9 @@ public sealed partial class PlayerInventory
             DestroyItem(bag, slot);
             Item worn = EquipItem(equipAt, item);
             AutoUnequipWeaponsIfNeeded();
+            // vmangos Spell::EffectSummonChangeItem follows EquipItem with Player::AutoUnequipOffhandIfNeed: a two-hander
+            // that replaced the worn main hand sends the off hand to the bags.
+            AutoUnequipOffhandIfNeeded();
             return worn;
         }
 

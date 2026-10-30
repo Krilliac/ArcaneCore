@@ -8,7 +8,7 @@ namespace ArcaneCore.Game.Pets;
 /// Hunters learning abilities from their pets (vmangos Pet::InitPetCreateSpells AddTeachSpell and Pet::CheckLearning). A tamed beast's
 /// create spells the owner does not know yet become teach spells: pet ability → the owner's "learn" spell. Each time the pet uses
 /// the ability (vmangos Spell::cast with a pet caster; here once per hit) there is a 10% chance (urand(0, 100) &lt; 10) that the owner
-/// learns the teaching spell, after which the entry is gone. Teach spells are kept in memory only, as in vmangos.
+/// learns the teaching spell, after which the entry is gone. Teach spells are not stored in the pet snapshot; they are derived again from the create spells whenever a cached pet is spawned (vmangos stores them as teachSpellData).
 /// </summary>
 public sealed partial class SummonService
 {

@@ -300,7 +300,7 @@ public sealed class CreatureDespawnGuardiansAction : CreatureAction
 }
 
 [RulePrimitive(RuleHostKind.Creature, CreatureRuleIds.ActionSetRangedMode, "creature.set_ranged_mode",
-    Description = "Enter or leave ranged (caster) mode: type 0 off, 3 no-melee; the chase distance applies.")]
+    Description = "Enter or leave ranged (caster) mode: type 0 off, 2/4 switch by melee reach (proximity/distancer), 3 no-melee, 1 full caster refused as unsupported; the chase distance applies.")]
 [RuleParam(1, "mode_type", RuleParamKind.Int)]
 [RuleParam(2, "chase_distance", RuleParamKind.Int)]
 public sealed class CreatureSetRangedModeAction : CreatureAction

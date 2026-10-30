@@ -324,6 +324,13 @@ public sealed class DurableIdBlockAllocator
                 }
                 else
                 {
+                    // Fail closed, but keep trying: without a retry the allocator could never recover after the
+                    // final prefetch failed (nothing else reserves at runtime). The caller still gets the exception.
+                    if (_reserveBlockAsync is not null && (_prefetchTask is null || _prefetchTask.IsCompleted))
+                    {
+                        _prefetchTask = Task.Run(PrefetchNextBlockAsync);
+                    }
+
                     Exception? prefetchErr = _lastPrefetchError;
                     throw new IdRangeExhaustedException(
                         Scope,

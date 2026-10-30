@@ -61,6 +61,43 @@ public sealed class KillRewardsTests
     }
 
     [Fact]
+    public void NoXpStaticFlag_VictimGrantsNoExperience()
+    {
+        // vmangos MaNGOS::XP::Gain returns 0 for CREATURE_STATIC_FLAG_NO_XP (0x2; Formulas.h:112).
+        using var kit = new Kit(creatureLevel: 10, staticFlags1: 0x2);
+        Player killer = kit.AddPlayer(1, 5, 0, level: 10);
+        var progression = new PlayerProgression(new ProgressionOptions());
+        progression.InitializeLoadedPlayer(killer);
+
+        Assert.Equal([0u], KillRewards.AwardExperience(progression, [killer], kit.Victim, nonRaidDungeon: false));
+        Assert.Equal(0u, PlayerProgression.CurrentXp(killer));
+    }
+
+    [Fact]
+    public void GiveXp_LevelUp_RaisesTheOnLevelChangedScriptHook()
+    {
+        // vmangos Player::GiveXP levels through GiveLevel for each level gained, so the level hook fires for XP level-ups.
+        using var kit = new Kit(creatureLevel: 10);
+        Player player = kit.AddPlayer(1, 5, 0, level: 1);
+        var hook = new LevelProbe();
+        kit.World.Scripts.Register(hook);
+        var progression = new PlayerProgression(new ProgressionOptions());
+        progression.InitializeLoadedPlayer(player);
+
+        progression.GiveXp(player, player.GetUInt32(UpdateFields.PlayerNextLevelXp), ObjectGuid.Empty);
+
+        Assert.Equal(2, player.Level);
+        Assert.Equal([(byte)1], hook.OldLevels);
+    }
+
+    private sealed class LevelProbe : ArcaneCore.Game.Scripting.IPlayerHooks
+    {
+        public List<byte> OldLevels { get; } = [];
+
+        public void OnLevelChanged(Player player, byte oldLevel) => OldLevels.Add(oldLevel);
+    }
+
+    [Fact]
     public void EliteVictims_DoubleTheGain_AndTripleAndAHalfInDungeons()
     {
         using var kit = new Kit(creatureLevel: 10, rank: 1);
@@ -99,9 +136,9 @@ public sealed class KillRewardsTests
     {
         private readonly Dictionary<uint, FakeSession> _sessions = [];
 
-        public Kit(byte creatureLevel = 10, uint rank = 0)
+        public Kit(byte creatureLevel = 10, uint rank = 0, uint staticFlags1 = 0)
         {
-            var template = new CreatureTemplate { Entry = 90, Name = "Victim", Faction = 2, MinLevel = creatureLevel, MaxLevel = creatureLevel, Rank = rank };
+            var template = new CreatureTemplate { Entry = 90, Name = "Victim", Faction = 2, MinLevel = creatureLevel, MaxLevel = creatureLevel, Rank = rank, StaticFlags1 = staticFlags1 };
             Victim = new Creature(900100, template, new CreatureSpawn { Guid = 900100, Entry = 90, MapId = 0, X = 0, Y = 0, Z = 83.5f },
                 CreatureContent.Empty, new Random(1));
             Victim.Level = creatureLevel;

@@ -242,7 +242,7 @@ public sealed partial class Creature
             return 0;
         }
 
-        _stuckElapsedMs += diffMs;
+        _stuckElapsedMs += Math.Min(diffMs, CreatureAnomalies.MaxChargedFrameMs);
         return _stuckElapsedMs;
     }
 
@@ -259,7 +259,7 @@ public sealed partial class Creature
 
     internal uint AdvanceStuckInCombat(uint diffMs)
     {
-        _stuckInCombatElapsedMs += diffMs;
+        _stuckInCombatElapsedMs += Math.Min(diffMs, CreatureAnomalies.MaxChargedFrameMs);
         return _stuckInCombatElapsedMs;
     }
 

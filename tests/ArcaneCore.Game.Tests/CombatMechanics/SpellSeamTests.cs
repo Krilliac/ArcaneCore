@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
@@ -428,6 +429,32 @@ public sealed class SpellSeamTests
         Assert.Equal(60u, target.Health);
         Assert.Equal(5u, SpellSystem.GetPower(caster, PowerType.Rage));
         Assert.Equal((byte)SpellCastResult.NoPower, Packets(session, WorldOpcode.SmsgCastResult).Single()[5]);
+    }
+
+    [Fact]
+    public void SwingHook_WhenTheQueuedSpellFailsAtSwingTime_FallsBackToTheWhiteSwing()
+    {
+        // vmangos Unit.cpp:2250-2258 / mangos-classic Unit.cpp:2633-2641: only a successful cast replaces the white swing.
+        using var kit = Kit();
+        (Player caster, _, Player target) = Duel(kit);
+        kit.System.HandleCastRequest(caster, NextSwing, SpellCastTargets.ForUnit(target.Guid));
+        SpellSystem.SetPower(caster, PowerType.Rage, 5);
+        var hooks = new SpellSystemMeleeHooks(kit.System);
+
+        Assert.False(hooks.TryCastQueuedSwingSpell(caster, target));
+        Assert.Null(kit.System.GetState(caster.Guid)?.MeleeCast);
+    }
+
+    [Fact]
+    public void SwingHook_WhenTheQueuedSpellCasts_SkipsTheWhiteSwing()
+    {
+        using var kit = Kit();
+        (Player caster, _, Player target) = Duel(kit);
+        kit.System.HandleCastRequest(caster, NextSwing, SpellCastTargets.ForUnit(target.Guid));
+        var hooks = new SpellSystemMeleeHooks(kit.System);
+
+        Assert.True(hooks.TryCastQueuedSwingSpell(caster, target));
+        Assert.False(hooks.TryCastQueuedSwingSpell(caster, target)); // nothing queued any more
     }
 
     [Fact]

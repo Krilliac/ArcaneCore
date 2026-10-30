@@ -144,7 +144,9 @@ internal sealed class FormationMovementGenerator(FormationState formation, Forma
                     mover.StopMoving(creature);
                 }
 
-                if (MathF.Abs(Creature.NormalizeOrientation(creature.Orientation - heading)) > 0.05f && !force)
+                // The shortest angular distance: NormalizeOrientation maps into [0, 2pi), so a small negative difference would read as ~2pi.
+                float turn = Creature.NormalizeOrientation(creature.Orientation - heading);
+                if (MathF.Min(turn, (MathF.PI * 2f) - turn) > 0.05f && !force)
                 {
                     mover.SetFacingTo(creature, heading);
                 }

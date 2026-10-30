@@ -25,7 +25,19 @@ public sealed partial class Map
         }
 
         WorldRuntime.SerialScope scope = _world.EnterSerial();
-        FlushOutbox();
+        try
+        {
+            FlushOutbox();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The caller never receives the scope, so nothing else would release the gate: the map threads would block on it for good.
+            scope.Dispose();
+            _outbox.Clear(); // a packet that throws would otherwise fail every later flush too
+            _logger.LogFault("map.gate-flush", ex, "map {MapId} instance {InstanceId} outbox flush failed; the serial gate was released", MapId, InstanceId);
+            throw;
+        }
+
         return scope;
     }
 

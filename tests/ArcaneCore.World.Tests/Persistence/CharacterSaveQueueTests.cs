@@ -1488,6 +1488,37 @@ public sealed class CharacterSaveQueueTests
     }
 
     [Fact]
+    public async Task ASettlementWhoseBudgetFiresMidWrite_EndsCanceled_NotLoggedAsAFailure_AndItsSnapshotIsStillWritten()
+    {
+        var logger = new CaptureLogger();
+        await using var kit = new Kit(logger: logger);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        bool first = true;
+        kit.Store.OnSave = async (state, token) =>
+        {
+            if (state.Id != 1 || !Interlocked.Exchange(ref first, false))
+            {
+                return;
+            }
+
+            entered.TrySetResult();
+            await Task.Delay(Timeout.Infinite, token); // a slow database that honours the token: throws when the budget fires
+        };
+        using var cancel = new CancellationTokenSource();
+        Task settlement = kit.Queue.SaveForSettlementAsync(State(1, 11), cancel.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancel.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => settlement.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(settlement.IsCanceled, $"the settlement ended {settlement.Status}, not Canceled");
+        Assert.DoesNotContain(logger.Entries, entry => entry.Level >= LogLevel.Warning);
+
+        await kit.Queue.FlushCharacterAsync(1).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(11u, Assert.Single(kit.Store.Saved, s => s.Id == 1).Money);
+        await kit.Queue.StopAsync();
+    }
+
+    [Fact]
     public async Task ANewerSnapshotSupersedesTheRetainedLockedOne_AndTheOlderIsNeverWrittenAfterIt()
     {
         await using var kit = new Kit();

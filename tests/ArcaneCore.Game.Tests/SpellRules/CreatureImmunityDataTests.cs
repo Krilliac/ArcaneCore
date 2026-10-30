@@ -30,6 +30,7 @@ public sealed class CreatureImmunityDataTests
     private const uint MagicDebuff = 931_105;
     private const uint PoisonDebuff = 931_106;
     private const uint FrostBolt = 931_107;
+    private const uint PlainDebuff = 931_108;
 
     private static SpellInfo Hostile(uint id, SpellSchool school, params SpellEffectInfo[] effects) =>
         Spell(id, effects) with
@@ -55,7 +56,8 @@ public sealed class CreatureImmunityDataTests
         Hostile(StunSpell, SpellSchool.Nature, Aura(AuraType.ModStun)) with { Mechanic = (uint)SpellMechanic.Stun },
         Hostile(RootSpell, SpellSchool.Nature, Aura(AuraType.ModRoot)) with { Mechanic = (uint)SpellMechanic.Root },
         Hostile(MagicDebuff, SpellSchool.Arcane, Aura(AuraType.Dummy)) with { Dispel = (uint)DispelType.Magic },
-        Hostile(PoisonDebuff, SpellSchool.Nature, Aura(AuraType.Dummy)) with { Dispel = (uint)DispelType.Poison });
+        Hostile(PoisonDebuff, SpellSchool.Nature, Aura(AuraType.Dummy)) with { Dispel = (uint)DispelType.Poison },
+        Hostile(PlainDebuff, SpellSchool.Arcane, Aura(AuraType.Dummy)));
 
     private static CreatureImmunity Row(uint set, CreatureImmunityType type, uint value) => new(Boss, set, type, value);
 
@@ -336,5 +338,43 @@ public sealed class CreatureImmunityDataTests
         Assert.True(ImmunityRules.IsImmuneToDamage(kit.System, lor, SpellSchoolMasks.Of(SpellSchool.Normal), kit.Store.Get(931_202)));
         Assert.False(ImmunityRules.IsImmuneToDamage(kit.System, lor, SpellSchoolMasks.Of(SpellSchool.Frost), kit.Store.Get(931_201)));
         Assert.True(ImmunityRules.IsImmuneToSpell(kit.System, lor, kit.Store.Get(StunSpell)!, castOnSelf: false));
+    }
+
+    // Unit::IsImmuneToSpell matches the row's dispel type against spell.Dispel literally (so a 0 row would match DISPEL_NONE); a 0 row is dropped on purpose,
+    // because it would make the creature immune to every spell that has no dispel type.
+    [Fact]
+    public void ADispelNoneRow_DoesNotMakeTheCreatureImmuneToUndispellableSpells()
+    {
+        using SpellTestKit kit = Kit();
+        Creature boss = Make(null, 0, 0, Row(0, CreatureImmunityType.Dispel, 0));
+
+        Assert.Equal(0u, kit.Store.Get(PlainDebuff)!.Dispel);
+        Assert.False(ImmunityRules.IsImmuneToSpell(kit.System, boss, kit.Store.Get(PlainDebuff)!, castOnSelf: false));
+        Assert.False(ImmunityRules.IsImmuneToSpell(kit.System, boss, kit.Store.Get(MagicDebuff)!, castOnSelf: false));
+        Assert.Equal(0u, boss.ImmunitySetId);
+    }
+
+    [Fact]
+    public void ADispelNoneRowBesideAMagicRow_KeepsTheMagicImmunity_AndStillSparesUndispellableSpells()
+    {
+        using SpellTestKit kit = Kit();
+        Creature boss = Make(null, 0, 0,
+            Row(0, CreatureImmunityType.Dispel, 0),
+            Row(0, CreatureImmunityType.Dispel, (uint)DispelType.Magic));
+
+        Assert.True(ImmunityRules.IsImmuneToSpell(kit.System, boss, kit.Store.Get(MagicDebuff)!, castOnSelf: false));
+        Assert.False(ImmunityRules.IsImmuneToSpell(kit.System, boss, kit.Store.Get(PlainDebuff)!, castOnSelf: false));
+        Assert.False(ImmunityRules.IsImmuneToSpell(kit.System, boss, kit.Store.Get(PoisonDebuff)!, castOnSelf: false));
+    }
+
+    [Fact]
+    public void TheFoldedImmunitySet_LeavesBitZeroOutOfTheDispelMask()
+    {
+        CreatureTemplate template = Template(Boss, null);
+        var content = new CreatureContent([template], [Spawn(1, Boss, 0, 0)], [], [], [],
+            immunities: [Row(0, CreatureImmunityType.Dispel, 0), Row(0, CreatureImmunityType.Dispel, (uint)DispelType.Magic), Row(1, CreatureImmunityType.Dispel, 0)]);
+
+        Assert.Equal(1u << (int)DispelType.Magic, content.FindImmunitySet(Boss, 0)!.DispelMask);
+        Assert.Equal(0u, content.FindImmunitySet(Boss, 1)?.DispelMask ?? 0u);
     }
 }

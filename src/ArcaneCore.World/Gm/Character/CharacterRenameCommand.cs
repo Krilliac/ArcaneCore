@@ -122,6 +122,7 @@ public sealed class CharacterRenameExtension : ICommandExtension
     {
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
         ILogger logger = context.Session.Logger;
+        IDisposable hold = context.Defer(); // the command is done when the store work and its replies are
         _ = Task.Run(async () =>
         {
             try
@@ -132,7 +133,12 @@ public sealed class CharacterRenameExtension : ICommandExtension
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 logger.LogError(ex, "the .character rename command failed");
+                context.Fail("failed");
                 context.Reply(DatabaseError);
+            }
+            finally
+            {
+                hold.Dispose();
             }
         });
     }

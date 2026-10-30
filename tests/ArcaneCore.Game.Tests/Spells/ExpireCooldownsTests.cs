@@ -15,6 +15,9 @@ public sealed class ExpireCooldownsTests
 {
     private const uint Now = 50_000;
 
+    /// <summary>An end far ahead of <see cref="Now"/>; the clock wraps, so ends are compared as a signed difference and must lie under 2^31 ms ahead.</summary>
+    private const uint FarFuture = Now + 600_000_000;
+
     /// <summary>A player whose spell state exists (a triggered cast creates it); every cooldown collection is then emptied for the test to fill.</summary>
     private static (Player Player, UnitSpellState State) StateWithEmptyCooldowns(SpellTestKit kit)
     {
@@ -41,14 +44,14 @@ public sealed class ExpireCooldownsTests
             dictionary[2] = Now;         // expires exactly now: gone (until <= now)
             dictionary[3] = Now + 1;     // one ms left: kept
             dictionary[4] = 0;           // long past: gone
-            dictionary[5] = uint.MaxValue;
+            dictionary[5] = FarFuture;
         }
 
         state.SchoolLockouts[SpellSchool.Holy] = Now - 1;
         state.SchoolLockouts[SpellSchool.Fire] = Now;
         state.SchoolLockouts[SpellSchool.Nature] = Now + 1;
         state.SchoolLockouts[SpellSchool.Frost] = 0;
-        state.SchoolLockouts[SpellSchool.Shadow] = uint.MaxValue;
+        state.SchoolLockouts[SpellSchool.Shadow] = FarFuture;
 
         kit.System.ExpireCooldownsOf(player, Now);
 
@@ -56,7 +59,7 @@ public sealed class ExpireCooldownsTests
         {
             Assert.Equal([3u, 5u], dictionary.Keys.OrderBy(k => k));
             Assert.Equal(Now + 1, dictionary[3]);
-            Assert.Equal(uint.MaxValue, dictionary[5]);
+            Assert.Equal(FarFuture, dictionary[5]);
         }
 
         Assert.Equal([SpellSchool.Nature, SpellSchool.Shadow], state.SchoolLockouts.Keys.OrderBy(k => k));
@@ -175,7 +178,7 @@ public sealed class ExpireCooldownsTests
     {
         using var kit = new SpellTestKit();
         (Player player, UnitSpellState state) = StateWithEmptyCooldowns(kit);
-        const uint far = 4_000_000_000; // never expires at Now
+        const uint far = Now + 600_000_000; // never expires at Now (ends are compared wrap-safely: under 2^31 ms ahead)
         for (uint i = 1; i <= 8; i++)
         {
             state.SpellCooldowns[i] = far + i;

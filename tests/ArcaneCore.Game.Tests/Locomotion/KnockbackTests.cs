@@ -64,8 +64,8 @@ public sealed class KnockbackTests
 
         byte[] order = Assert.Single(Of(targetSession, WorldOpcode.SmsgMoveKnockBack));
         // The caster stands at the origin and the target 5 yards east: the direction is angle 0, so cos 1 and sin 0.
-        // misc 75 / 10 = 7.5 horizontal; value 57 / 10 = 5 vertical (integer division, as vmangos), sent as -5.
-        Assert.Equal(KnockbackPackets.BuildOrder(target.Guid.Value, 0, new KnockbackInfo(1f, 0f, 7.5f, -5f)), order);
+        // misc 75 / 10 = 7.5 horizontal; value 57 / 10 = 5.7 vertical (Spell::damage is a float in vmangos, so the division keeps the fraction), sent as -5.7.
+        Assert.Equal(KnockbackPackets.BuildOrder(target.Guid.Value, 0, new KnockbackInfo(1f, 0f, 7.5f, -5.7f)), order);
         Assert.True(target.Locomotion.Pending.HasPendingOfType(MovementChangeType.KnockBack));
         Assert.Empty(Of(watcherSession, WorldOpcode.MsgMoveKnockBack)); // observers hear of it after the ack
         Assert.Equal(5f, target.X);                                      // the unit is not moved by the server
@@ -95,7 +95,7 @@ public sealed class KnockbackTests
 
         kit.System.CastSpell(caster, ZeroPush, SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
-        Assert.Equal(KnockbackPackets.BuildOrder(target.Guid.Value, 0, new KnockbackInfo(1f, 0f, 0f, -5f)), Assert.Single(Of(targetSession, WorldOpcode.SmsgMoveKnockBack)));
+        Assert.Equal(KnockbackPackets.BuildOrder(target.Guid.Value, 0, new KnockbackInfo(1f, 0f, 0f, -5.7f)), Assert.Single(Of(targetSession, WorldOpcode.SmsgMoveKnockBack)));
     }
 
     [Fact]
@@ -254,17 +254,17 @@ public sealed class KnockbackTests
             Flags = MovementFlags.Jumping, JumpCosAngle = cos, JumpSinAngle = sin, JumpXySpeed = xy, JumpZSpeed = z,
         };
 
-        Assert.Null(KnockbackService.Acknowledge(target, 5, Block(1, 0, 7.5f, -5)));      // counter
-        Assert.Null(KnockbackService.Acknowledge(target, 0, Block(1, 0, 7.52f, -5)));     // 0.02 off
-        Assert.Null(KnockbackService.Acknowledge(target, 0, Block(1, 0.02f, 7.5f, -5)));
-        Assert.Null(KnockbackService.Acknowledge(target, 0, Block(1, 0, 7.5f, 5)));       // sign of the vertical speed
+        Assert.Null(KnockbackService.Acknowledge(target, 5, Block(1, 0, 7.5f, -5.7f)));      // counter
+        Assert.Null(KnockbackService.Acknowledge(target, 0, Block(1, 0, 7.52f, -5.7f)));     // 0.02 off
+        Assert.Null(KnockbackService.Acknowledge(target, 0, Block(1, 0.02f, 7.5f, -5.7f)));
+        Assert.Null(KnockbackService.Acknowledge(target, 0, Block(1, 0, 7.5f, 5.7f)));       // sign of the vertical speed
         Assert.Equal(4, target.Locomotion.WrongAckCount);
         Assert.True(target.Locomotion.Pending.HasPending);
 
-        KnockbackInfo? matched = KnockbackService.Acknowledge(target, 0, Block(1, 0.005f, 7.505f, -5.005f));
-        Assert.Equal(new KnockbackInfo(1f, 0f, 7.5f, -5f), matched);
+        KnockbackInfo? matched = KnockbackService.Acknowledge(target, 0, Block(1, 0.005f, 7.505f, -5.705f));
+        Assert.Equal(new KnockbackInfo(1f, 0f, 7.5f, -5.7f), matched);
         Assert.False(target.Locomotion.Pending.HasPending);
-        Assert.Null(KnockbackService.Acknowledge(target, 0, Block(1, 0, 7.5f, -5)));      // a replay
+        Assert.Null(KnockbackService.Acknowledge(target, 0, Block(1, 0, 7.5f, -5.7f)));      // a replay
     }
 
     [Fact]

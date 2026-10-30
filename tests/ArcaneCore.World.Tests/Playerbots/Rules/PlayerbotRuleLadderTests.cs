@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Rules;
 using ArcaneCore.Game.Rules.Bot;
 using ArcaneCore.Kernel.Rules;
+using ArcaneCore.Kernel.Rules.Creatures;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Rules;
 using Microsoft.Extensions.DependencyInjection;
@@ -260,6 +261,82 @@ public sealed class PlayerbotRuleLadderTests
 
         double share = 100.0 * warriorsFirst / warriors;
         Assert.InRange(share, 22, 38);
+    }
+
+    [Fact]
+    public void ACreatureHostRuleAtALadderId_DoesNotStandInForTheLadder_TheShippedFallbackRuns()
+    {
+        var logs = new CapturingLoggerFactory();
+        using ServiceProvider sp = Services(logs);
+        // The goal rows are there; the only rule at a ladder id (10001) belongs to the creature host.
+        RuleFeature feature = Feature(sp, new RuleContent
+        {
+            Goals = PlayerbotLadderContent.Goals,
+            Rules = [new RuleRecord
+            {
+                Id = PlayerbotLadderContent.FirstRuleId, Host = (byte)RuleHostKind.Creature,
+                EventType = CreatureRuleIds.EventAggro, Comment = "not a bot rule",
+            }],
+            Actions = [new RuleActionRecord
+            {
+                OwnerId = PlayerbotLadderContent.FirstRuleId, Seq = 0, ActionType = CreatureRuleIds.ActionPlaySound, Param1 = 1,
+                TargetType = CreatureRuleIds.TargetSelf,
+            }],
+        });
+        Assert.Empty(feature.Catalog.Rejected);
+        CompiledRule found = Assert.IsType<CompiledRule>(feature.Catalog.FindRule(PlayerbotLadderContent.FirstRuleId));
+        Assert.Equal(RuleHostKind.Creature, found.Host);
+        PlayerbotRuleLadder host = PlayerbotRuleLadder.Create(sp, feature);
+        var bot = new PlayerbotLadderReplayTests.ReplayBot(5);
+
+        RuleCatalog chosen = host.Catalog();
+        host.CreateLadder(5).Choose(bot, chosen, 0);
+
+        Assert.NotSame(feature.Catalog, chosen);
+        Assert.Equal(PlayerbotLadderReplayTests.TodaysOrder, bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
+        Assert.Contains("no ladder rules", Assert.Single(logs.Warnings), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ABotRuleAtALadderId_StillCountsAsALadderRule_TheLoadedCatalogRuns()
+    {
+        var logs = new CapturingLoggerFactory();
+        using ServiceProvider sp = Services(logs);
+        RuleFeature feature = Feature(sp, PlayerbotLadderContent.Content with
+        {
+            Rules = [.. PlayerbotLadderContent.Rules.Where(r => r.Id == PlayerbotLadderContent.FirstRuleId)],
+        });
+        PlayerbotRuleLadder host = PlayerbotRuleLadder.Create(sp, feature);
+
+        Assert.Same(feature.Catalog, host.Catalog());
+        Assert.Empty(logs.Warnings);
+    }
+
+    [Fact]
+    public void ARuleFeatureProviderThatIsDisposed_DoesNotBreakTheHostOfALaterProvider()
+    {
+        var logsA = new CapturingLoggerFactory();
+        ServiceProvider inner = Services();
+        RuleFeature featureA = Feature(inner, PlayerbotLadderContent.Content);
+        ServiceProvider a = new ServiceCollection().AddSingleton(featureA).AddSingleton<ILoggerFactory>(logsA).BuildServiceProvider();
+        PlayerbotRuleLadder hostA = PlayerbotRuleLadder.For(a);
+        Assert.Same(hostA, PlayerbotRuleLadder.For(a));
+        a.Dispose();
+
+        // The host of A outlives A's provider and still makes a ladder.
+        BotGoalLadder ladderA = hostA.CreateLadder(1);
+        Assert.NotNull(ladderA);
+
+        using ServiceProvider innerB = Services();
+        RuleFeature featureB = Feature(innerB, PlayerbotLadderContent.Content);
+        using ServiceProvider b = new ServiceCollection().AddSingleton(featureB).BuildServiceProvider();
+        PlayerbotRuleLadder hostB = PlayerbotRuleLadder.For(b);
+        Assert.NotSame(hostA, hostB);
+        BotGoalLadder ladderB = hostB.CreateLadder(1);
+        var bot = new PlayerbotLadderReplayTests.ReplayBot(1);
+        ladderB.Choose(bot, hostB.Catalog(), 0);
+        Assert.Equal(PlayerbotLadderReplayTests.TodaysOrder, bot.Candidates.ToArray().Select(c => c.Rung).ToArray());
+        inner.Dispose();
     }
 
     private sealed class CapturingLoggerFactory : ILoggerFactory

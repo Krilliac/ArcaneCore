@@ -172,7 +172,11 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
             if (chat.Options.StrictLinkSeverity > 0 && !ChatSanitizer.IsValidChatMessage(message, chat.Options.StrictLinkSeverity))
             {
-                session.Logger.LogWarning("[{Endpoint}] {Player} sent a chat message with an invalid link", session.RemoteEndpoint, player.Name);
+                if (ClientWarningGates.TryEnter(session, "chat-invalid-link", out int suppressed))
+                {
+                    session.Logger.LogWarning("[{Endpoint}] {Player} sent a chat message with an invalid link ({Suppressed} more since the last line)", session.RemoteEndpoint, player.Name, suppressed);
+                }
+
                 if (chat.Options.StrictLinkKick)
                 {
                     session.Kick();

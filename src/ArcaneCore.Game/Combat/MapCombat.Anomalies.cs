@@ -63,7 +63,9 @@ public sealed partial class MapCombat
             return;
         }
 
-        uint elapsed = _anomalySweepMs;
+        // A hung world frame is one observation, not that much time in the same state: charge at most one sweep interval plus the frame cap
+        // (Creatures.CreatureAnomalies.MaxChargedFrameMs), so no budget below 3 s is crossed by a single hang.
+        uint elapsed = Math.Min(_anomalySweepMs, AnomalySweepIntervalMs + Creatures.CreatureAnomalies.MaxChargedFrameMs);
         _anomalySweepMs = 0;
 
         Player[] players = _map.RentPlayerSnapshot(out int playerCount);

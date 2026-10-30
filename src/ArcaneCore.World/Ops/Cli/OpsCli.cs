@@ -63,7 +63,7 @@ public static class OpsCli
     }
 
     /// <summary>
-    /// The assemblies whose <see cref="IConfigCheck"/> classes the world daemon runs: the Kernel's (logging, resilience, watchdog, metrics),
+    /// The assemblies whose <see cref="IConfigCheck"/> classes the world daemon runs: the Kernel's (every check under ArcaneCore.Kernel.Configuration.Validation),
     /// then the world's startup code set (this assembly, then the built-in packs such as Playerbots, <see cref="Features.WorldCodeAssemblies.Ordered"/>).
     /// </summary>
     public static IReadOnlyList<System.Reflection.Assembly> CheckAssemblies { get; } = [typeof(IConfigCheck).Assembly, .. Features.WorldCodeAssemblies.Ordered];

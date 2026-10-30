@@ -176,6 +176,7 @@ public sealed partial class SpellSystem
         [SpellEffectName.InterruptCast] = EffectInterruptCast,
         [SpellEffectName.Summon] = EffectSummon,
         [SpellEffectName.ApplyAreaAuraParty] = EffectApplyAreaAuraParty,
+        [SpellEffectName.ApplyAreaAuraFriend] = EffectApplyAreaAuraFriend,
         [SpellEffectName.ApplyAreaAuraEnemy] = EffectApplyAreaAuraEnemy,
         [SpellEffectName.Parry] = static context => (context.Target as Player)?.StatState.SetCanParry(true),
         [SpellEffectName.Block] = static context => (context.Target as Player)?.StatState.SetCanBlock(true),

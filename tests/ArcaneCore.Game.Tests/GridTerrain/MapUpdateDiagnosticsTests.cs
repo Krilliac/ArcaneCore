@@ -25,4 +25,16 @@ public sealed class MapUpdateDiagnosticsTests
         diagnostics.Reset();
         Assert.Equal(0, diagnostics.HeartbeatPlayersMicros);
     }
+
+    [Fact]
+    public void TopContributors_NamesActiveCells_WhenItIsTheLargestPhase()
+    {
+        var diagnostics = new MapUpdateDiagnostics();
+        diagnostics.Begin();
+        Thread.Sleep(30);
+        diagnostics.EndActiveCells();
+
+        Assert.True(diagnostics.ActiveCellsMicros >= 20_000);
+        Assert.Equal("active cells", diagnostics.TopContributors(1)[0].Name);
+    }
 }

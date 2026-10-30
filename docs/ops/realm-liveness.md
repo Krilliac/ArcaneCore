@@ -70,7 +70,8 @@ start-up, Master.cpp:215, and a client has no "starting" state, so a starting re
   offline once the last beat is older than the stale threshold. A slow world (one tick every few seconds) or a stall
   shorter than the threshold never flips the realm. When ticks resume, beats resume and the realm returns by itself.
 * Online needs two facts: the listener is bound (`ApplicationStarted`) and the loop has ticked. Offline is then cleared
-  and the population set to 0.
+  and the population set to 0; a population hint written before that moment is written again right after it, so the row does not stay at 0.
+  The population hint counts every session in the session registry, bot sessions included.
 * Countdown changes arrive on the world thread, which only records the new kind; the timer writes the state within a
   second. A state write carries the last beat, not "now", because changing a state is not proof the loop is ticking.
 * A failed write is logged (fault site `realm.liveness-write`, throttled) and the next pass tries again.

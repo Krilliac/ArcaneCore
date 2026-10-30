@@ -149,6 +149,29 @@ public sealed class MovementFlagControlTests
     }
 
     [Fact]
+    public void ALateSpeedAck_AfterTheTimeout_IsIgnored_AndNotCountedAsWrong_LikeTheTurnRateAck()
+    {
+        (Player player, _, _) = InWorld();
+        UnitSpeed.SetTurnRate(player, 2.0f); // counter 0 (any order moves the counter; the ledger is then emptied)
+        UnitSpeed.SetTurnRate(player, 3.0f); // counter 1
+        player.Locomotion.Pending.Age(4001);
+        while (player.Locomotion.Pending.HasPending)
+        {
+            player.Locomotion.Pending.CheckTimeout(4000, teleporting: false, out _);
+        }
+
+        // vmangos counts a wrong speed ack only for counter 0 or above the current counter (MovementHandler.cpp:463-483).
+        Assert.False(MovementControl.AcknowledgeSpeed(player, MoveType.Run, 1, 9.8f));
+        Assert.Equal(0, player.Locomotion.WrongAckCount);
+        Assert.False(MovementControl.AcknowledgeSpeed(player, MoveType.Run, 2, 9.8f));
+        Assert.Equal(0, player.Locomotion.WrongAckCount);
+        Assert.False(MovementControl.AcknowledgeSpeed(player, MoveType.Run, 3, 9.8f));
+        Assert.Equal(1, player.Locomotion.WrongAckCount);
+        Assert.False(MovementControl.AcknowledgeSpeed(player, MoveType.Run, 0, 9.8f));
+        Assert.Equal(2, player.Locomotion.WrongAckCount);
+    }
+
+    [Fact]
     public void ATimedOutTurnRateOrder_SendsNothing_WhenTheCallerDoesNotSendToClient()
     {
         (Player player, FakeSession session, _) = InWorld();

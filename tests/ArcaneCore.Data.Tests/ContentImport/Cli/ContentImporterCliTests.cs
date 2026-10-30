@@ -8,6 +8,7 @@ using ArcaneCore.Data.Content.Import;
 using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.Data.Graveyards;
 using ArcaneCore.Data.Quests;
 using ArcaneCore.Data.Reputation;
 using ArcaneCore.Data.Schema;
@@ -360,6 +361,38 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Equal(ExitCodes.Ok, code);
         await using WorldDbContext db = Open(database);
         Assert.Equal(57u, (await db.Set<LockTemplateRow>().AsNoTracking().SingleAsync()).Id);
+    }
+
+    [Fact]
+    public async Task Import_WithWorldSafeLocsDbc_KeepsTheDumpRowWithItsFacing_AndOnlyFillsMissingIds()
+    {
+        string database = Db("world.db");
+        string dbc = Path.Combine(_directory, "DBFilesClient-safelocs");
+        Directory.CreateDirectory(dbc);
+        File.WriteAllBytes(Path.Combine(dbc, "Lock.dbc"), Dbc(GameObjectLootDumpImporter.LockFieldCount, [], "\0"));
+
+        // WorldSafeLocs.dbc: id 7 again (the dump's row carries the facing the DBC lacks) and id 8, which the dump lacks.
+        uint[] same = new uint[14];
+        same[0] = 7;
+        same[2] = BitConverter.SingleToUInt32Bits(1f);
+        same[5] = 1;
+        uint[] extra = new uint[14];
+        extra[0] = 8;
+        extra[2] = BitConverter.SingleToUInt32Bits(9f);
+        extra[5] = 1;
+        File.WriteAllBytes(Path.Combine(dbc, "WorldSafeLocs.dbc"), Dbc(14, [same, extra], "\0FromDbc\0"));
+
+        string dump = WriteDump("safelocs.sql", """
+            INSERT INTO `world_safe_locs` (`id`,`map`,`x`,`y`,`z`,`o`,`name`) VALUES (7,0,-9100.5,400.25,93.5,2.5,'From the dump');
+            """);
+
+        (int code, _, string error) = await RunAsync("import", dump, "--database", database, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error);
+        await using WorldDbContext db = Open(database);
+        WorldSafeLocRow kept = await db.Set<WorldSafeLocRow>().AsNoTracking().SingleAsync(r => r.Id == 7);
+        Assert.Equal((-9100.5f, 2.5f, "From the dump"), (kept.X, kept.Orientation, kept.Name));
+        Assert.Equal("FromDbc", (await db.Set<WorldSafeLocRow>().AsNoTracking().SingleAsync(r => r.Id == 8)).Name);
     }
 
     [Fact]

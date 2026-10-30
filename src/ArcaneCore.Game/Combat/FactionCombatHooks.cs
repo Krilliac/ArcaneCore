@@ -54,6 +54,13 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
             return true;
         }
 
+        // Duel opponents (and their pets, totems and charmed units, through the affecting player) are hostile before any faction
+        // rule (vmangos Object.cpp:3650-3652); a pet copies its owner's template, so the template reaction would say friendly.
+        if (DuelRules.IsOpponentHostile(a, b))
+        {
+            return false;
+        }
+
         if (a is Player && b is Player)
         {
             return base.IsFriendly(a, b);
@@ -79,6 +86,11 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
             return true;
         }
 
+        if (DuelRules.IsOpponentHostile(attacker, victim))
+        {
+            return true; // the duel reaction is hostile whatever the templates say (Object.cpp:3650-3652)
+        }
+
         Reaction forward = ReactionTo(attacker, victim);
         Reaction backward = ReactionTo(victim, attacker);
         if (((attacker.UnitFlags | victim.UnitFlags) & UnitFlags.PlayerControlled) == 0)
@@ -93,10 +105,11 @@ public sealed class FactionCombatHooks(FactionTemplateCatalog factions) : Combat
 
     /// <summary>
     /// vmangos Unit::IsHostileTo (Unit.cpp:4429-4432): the template reaction of <paramref name="a"/> towards
-    /// <paramref name="b"/> is hostile. Neutral units are not hostile. The reputation and PvP parts of
+    /// <paramref name="b"/> is hostile (a started duel makes the opponent's units hostile first). Neutral units are not hostile. The reputation and PvP parts of
     /// GetReactionTo are not modelled (see the class remarks).
     /// </summary>
-    public override bool IsHostileTo(Unit a, Unit b) => ReactionTo(a, b) == Reaction.Hostile;
+    public override bool IsHostileTo(Unit a, Unit b)
+        => DuelRules.IsOpponentHostile(a, b) || ReactionTo(a, b) == Reaction.Hostile; // GetReactionTo duel clause first (Object.cpp:3650-3652)
 
     // WorldObject::GetFactionReactionTo, template part only (Object.cpp:3701-3741).
     private Reaction ReactionTo(Unit from, Unit to)

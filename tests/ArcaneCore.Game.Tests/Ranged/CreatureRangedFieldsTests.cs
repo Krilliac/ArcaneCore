@@ -63,4 +63,15 @@ public sealed class CreatureRangedFieldsTests
         float roll = kit.System.WeaponDamageRoll(creature, WeaponAttackType.RangedAttack, normalized: false);
         Assert.InRange(roll, 0f, CombatConstants.FallbackMaxDamage);
     }
+
+    [Fact]
+    public void ANormalizedMeleeRoll_OfACreature_IgnoresItsAttackPower()
+    {
+        // vmangos Unit::CalculateDamage normalizes only for a player (Unit.cpp:2295): a creature's min/max damage already include its attack power.
+        using var kit = new SpellTestKit();
+        Creature creature = Spawn(Template(WolfEntry) with { MinMeleeDamage = 10f, MaxMeleeDamage = 10f, MeleeAttackPower = 1400, MeleeBaseAttackTime = 1000 });
+        Assert.Equal(1400, creature.GetInt32(UpdateFields.UnitFieldAttackPower));
+
+        Assert.Equal(10f, kit.System.WeaponDamageRoll(creature, WeaponAttackType.BaseAttack, normalized: true));
+    }
 }

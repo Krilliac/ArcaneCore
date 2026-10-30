@@ -167,23 +167,18 @@ public sealed class NetGuardTests
         Assert.Null(guard.TryAdmit(Peer)); // the one admitted log line
         IpKey? key = IpKey.From(Peer);
 
-        // Warm up once (tiered JIT and first-call framework caches), then measure the steady state.
-        for (int round = 0; round < 2; round++)
+        // The probe makes one unmeasured call first, then asserts every GC-free window (cross-thread GC noise under parallel xunit).
+        Action window = () =>
         {
-            long before = GC.GetAllocatedBytesForCurrentThread();
             for (int i = 0; i < 10_000; i++)
             {
                 guard.TryAdmit(Peer);
                 guard.AllowsAuthAttempt(key);
                 guard.RecordAuthFailure(key);
             }
+        };
 
-            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (round == 1)
-            {
-                Assert.Equal(0, allocated);
-            }
-        }
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "NetGuard refusal path x10000");
     }
 
     [Fact]

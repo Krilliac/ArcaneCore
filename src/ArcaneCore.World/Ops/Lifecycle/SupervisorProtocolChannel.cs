@@ -7,8 +7,8 @@ namespace ArcaneCore.World.Ops.Lifecycle;
 /// process, and the one place a protocol line is written (standard output, which the supervisor reads). Without a supervisor
 /// (<see cref="IsSupervised"/> false) nothing is ever written.
 /// <para>
-/// Thread affinity: <see cref="Send"/> may be called from the world thread. It only queues the line; a single thread-pool drain writes and flushes the
-/// queued lines in order, one whole line per write, so a full stdout pipe never stalls the caller.
+/// Thread affinity: <see cref="Send"/> may be called from the world thread. It only queues the line; a single dedicated long-running thread (started per
+/// burst, not a pool thread) writes and flushes the queued lines in order, one whole line per write, so a full stdout pipe never stalls the caller.
 /// </para>
 /// </summary>
 public sealed class SupervisorProtocolChannel

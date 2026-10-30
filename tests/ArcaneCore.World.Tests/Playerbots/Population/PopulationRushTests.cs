@@ -8,7 +8,8 @@ using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Population;
 
-/// <summary><c>.playerbot population rush</c>: the pacing, the brake, the caps and the commands.</summary>
+/// <summary><c>.playerbot population rush</c>: the pacing, the brake, the caps and the commands. Real-time pacing and Stopwatch bounds, so Timing (serial, one isolated rerun).</summary>
+[Trait("Category", "Timing")]
 public sealed class PopulationRushTests
 {
     [Fact]

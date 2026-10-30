@@ -8,11 +8,18 @@ using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Cluster.Social;
 
+/// <summary>A realm singleton that can be switched off for good when the node loses its lease (called once, from a thread-pool thread, so it must be thread-safe and must not block).</summary>
+public interface IRealmSingletonHalt
+{
+    /// <summary>Stop the singleton's work until the process restarts.</summary>
+    void Halt();
+}
+
 /// <summary>
 /// Holds this node's realm-singleton leases (the social and economy scopes) for a <see cref="ClusterNodeRole.MapWorker"/>: takes them once at start,
 /// renews them on a timer, and gives them back at stop. The realm singletons (AutoBroadcast, the auction house bot) cannot be detached from a running
 /// world, so losing a lease is fail-stop: the keeper logs it, records a fault, and asks the host to stop with exit code
-/// <see cref="ExitCodes.Failure"/>. The owner id is <c>Cluster:Worker:NodeId</c>. Open gap: storage writes are not checked against the fencing
+/// <see cref="ExitCodes.Failure"/>. The owner id is <c>Cluster:Worker:NodeId</c>. On loss every registered <see cref="IRealmSingletonHalt"/> is halted first (each guarded), so the singletons stop ticking while the host winds down. Open gap: storage writes are not checked against the fencing
 /// token at commit, so a partitioned former holder is bounded by this stop, not by the database.
 /// <para>Renewal starts as soon as the first lease is granted (inside <see cref="AcquireAtStartAsync"/>), so a slow start cannot outlast a lease.
 /// Every timer tick also judges the deadline on its own, so a renewal call that hangs in the store cannot hide an expiring lease: the node stops
@@ -38,6 +45,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
     private readonly IHostApplicationLifetime? _lifetime;
     private readonly TimeProvider _time;
     private readonly Action<int> _setExitCode;
+    private readonly IRealmSingletonHalt[] _halts;
     private readonly Lock _gate = new();
     private readonly Dictionary<string, Held> _held = new(StringComparer.Ordinal);
     private Guid _incarnation;
@@ -53,8 +61,10 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
         ILogger<RealmAuthorityLeaseKeeper> logger,
         IHostApplicationLifetime? lifetime = null,
         TimeProvider? time = null,
-        Action<int>? setExitCode = null)
+        Action<int>? setExitCode = null,
+        IEnumerable<IRealmSingletonHalt>? halts = null)
     {
+        _halts = halts is null ? [] : [.. halts];
         _store = store;
         _node = nodeOptions.Value;
         _nodeId = workerOptions.Value.NodeId;
@@ -243,8 +253,9 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
     {
         lock (_gate)
         {
-            if (_lost)
+            if (_lost || _released)
             {
+                // Released: an orderly stop is already underway, so a refusal now (the lease we just gave back) is not a loss.
                 return;
             }
 
@@ -255,6 +266,18 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
         _logger.LogCritical("{Message}", message);
         FaultLedger.Shared.Record("cluster.lease", new InvalidOperationException(message));
         _setExitCode(ExitCodes.Failure);
+        foreach (IRealmSingletonHalt halt in _halts)
+        {
+            try
+            {
+                halt.Halt();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogError(ex, "Halting {Singleton} after the {Scope} lease loss failed", halt.GetType().Name, scope);
+            }
+        }
+
         _lifetime?.StopApplication();
     }
 

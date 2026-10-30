@@ -67,7 +67,7 @@ public sealed class CreatureInvokerTarget : CreatureTarget
     protected override int SelectorType => 6;
 }
 
-[RulePrimitive(RuleHostKind.Creature, CreatureRuleIds.TargetInvokerOwner, "creature.invoker_owner", Description = "The beneficiary of the event's invoker (the invoker itself while there are no owners).")]
+[RulePrimitive(RuleHostKind.Creature, CreatureRuleIds.TargetInvokerOwner, "creature.invoker_owner", Description = "The beneficiary of the event's invoker: its charmer or owner, else the invoker itself.")]
 [RuleParam(1, "optional", RuleParamKind.Bool, Description = "1: an unresolved target becomes no unit and the action still runs.")]
 public sealed class CreatureInvokerOwnerTarget : CreatureTarget
 {

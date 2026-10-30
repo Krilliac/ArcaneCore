@@ -170,6 +170,9 @@ public interface ICreatureSpellCaster
 /// </summary>
 public sealed class CreatureAiFactory
 {
+    /// <summary>The npcflags that make an AI-less, non-summoned creature a <see cref="NullCreatureAI"/> (spirit healer, spirit guide and the two classic spirit bits).</summary>
+    internal const uint SpiritHealerNpcFlags = (uint)(NpcFlags.SpiritHealer | NpcFlags.SpiritGuide) | 16384u | 32768u;
+
     public const string EventAIName = "EventAI";
 
     public const string GuardAIName = "GuardAI";
@@ -638,9 +641,8 @@ public sealed class CreatureAiFactory
             return new CritterAI(creature); // vmangos selects CritterAI for type 8 before the permit contest (AI/CreatureAISelector.cpp:78-79)
         }
 
-        const uint SpiritHealerFlags = (uint)(NpcFlags.SpiritHealer | NpcFlags.SpiritGuide) | 16384u | 32768u;
         if (string.IsNullOrEmpty(name) && creature.Summon is null
-            && ((creature.NpcFlags | creature.Template.NpcFlags) & SpiritHealerFlags) != 0)
+            && ((creature.NpcFlags | creature.Template.NpcFlags) & SpiritHealerNpcFlags) != 0)
         {
             return new NullCreatureAI(creature);
         }

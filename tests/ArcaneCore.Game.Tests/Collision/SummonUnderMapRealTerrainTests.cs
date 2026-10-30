@@ -327,6 +327,14 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
                 owner.Relocate(ownerX, WsgTunnelY, TunnelFloor(collision, ownerX, WsgTunnelY) + 0.05f, direction > 0 ? 0f : MathF.PI, 0);
             }
 
+            // The path-job workers run on wall-clock time while this loop runs simulated time (400 updates take ~70 ms): without this
+            // wait, a worker starved on a loaded box left the pet's last follow search unanswered when the loop ended and the pet stood
+            // where it spawned (ended 77.5 / 87.0 yd away). Each update now finds its earlier searches answered, as a live map would.
+            if (jobs is not null)
+            {
+                Assert.True(SpinWait.SpinUntil(() => system.PathJobsFinished == system.PathJobsInFlight, TimeSpan.FromSeconds(10)), "a path job did not publish its answer");
+            }
+
             world.RunTick(tickMs);
             float floor = TunnelFloor(collision, pet.X, pet.Y);
             if (float.IsFinite(floor))
@@ -337,6 +345,7 @@ public sealed class SummonUnderMapRealTerrainTests(ITestOutputHelper output)
         }
 
         output.WriteLine($"owner {fromX}->{toX} step {ownerStep} tick {tickMs} pathJobs {pathJobs}: pet ended ({pet.X:F1}, {pet.Y:F1}, {pet.Z:F2}), worst |z - tunnel floor| {worst:F2}");
+        output.WriteLine($"path jobs: submitted {system.PathJobsSubmitted}, applied {system.PathJobsApplied}, stale {system.PathJobsStale}, waits {system.PathJobWaits}, in flight {system.PathJobsInFlight}");
         Assert.True(samples > 0, "the pet was sampled over the tunnel floor at least once");
         float toOwner = MathF.Sqrt(((pet.X - owner.X) * (pet.X - owner.X)) + ((pet.Y - owner.Y) * (pet.Y - owner.Y)));
         Assert.True(toOwner <= 6f, $"the pet followed its owner to the end of the ramp (ended {toOwner:F1} yd away)");

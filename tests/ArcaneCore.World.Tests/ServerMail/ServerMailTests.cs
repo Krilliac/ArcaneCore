@@ -137,6 +137,18 @@ public sealed class ServerMailTests
     }
 
     [Fact]
+    public void Auto_broadcast_halt_stops_every_later_tick()
+    {
+        AutoBroadcastFeature feature = Broadcast(("AutoBroadcast:Enabled", "true"), ("AutoBroadcast:IntervalMs", "1000"),
+            ("AutoBroadcast:Messages:0", "Tip one"));
+        Assert.Equal("Tip one", feature.Update(1000));
+        ((ArcaneCore.World.Cluster.Social.IRealmSingletonHalt)feature).Halt();
+        Assert.True(feature.Halted);
+        Assert.Null(feature.Update(1000));
+        Assert.Null(feature.Update(10_000_000));
+    }
+
+    [Fact]
     public void Server_mail_is_on_by_default_and_can_be_switched_off()
     {
         Assert.True(ServerMailFeature.Bind(null).Enabled);

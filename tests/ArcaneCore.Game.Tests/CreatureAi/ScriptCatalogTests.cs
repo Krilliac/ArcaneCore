@@ -57,6 +57,15 @@ public sealed class ScriptCatalogTests
     }
 
     [Fact]
+    public void Default_ASpiritHealerWithoutAnAiName_ResolvesToNullCreatureAi()
+    {
+        CreatureTemplate healer = T(6491) with { NpcFlags = (uint)ArcaneCore.Game.Npc.NpcFlags.SpiritHealer };
+        ScriptResolution r = Resolve(healer, 0);
+        Assert.Equal(ScriptKind.Default, r.Kind);
+        Assert.Equal(nameof(NullCreatureAI), r.Implementation);
+    }
+
+    [Fact]
     public void Default_DistinguishesCivilianFromAggressor()
     {
         Assert.Equal("ReactorAI", Resolve(T(7, civilian: true), 0).Implementation);

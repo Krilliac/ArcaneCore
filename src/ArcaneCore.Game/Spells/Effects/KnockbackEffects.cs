@@ -8,9 +8,8 @@ namespace ArcaneCore.Game.Spells;
 /// dungeons and raids), 7 the second.
 /// <list type="bullet">
 /// <item>Knock back: a target that is taxi flying is skipped; the Dream Fog sleep (24778) is removed so the target can be launched; the
-/// horizontal speed is <c>misc value / 10</c> and the vertical speed is <c>value / 10</c> with vmangos'' integer division of the effect
-/// value (mangos-classic divides as a float: 57 gives 5 in vmangos and 5.7 there; vmangos is followed and the difference is an
-/// open question).</item>
+/// horizontal speed is <c>misc value / 10</c> and the vertical speed is <c>value / 10</c> as a float division (vmangos Spell::damage is a
+/// <c>float</c>, Spell.h:437, so the fraction is kept: 57 gives 5.7).</item>
 /// <item>Player pull: toward the caster, by the target''s 2D distance to it capped at the effect value, as the negative horizontal speed, with
 /// <c>misc value / 10</c> as the vertical speed. The distance is vmangos <c>GetDistance2d</c> (<c>SizeFactor::BoundingRadius</c>): the center
 /// distance minus both bounding radii, never negative. A negative gap would negate into a knock away. vmangos itself notes the implementation
@@ -38,7 +37,7 @@ public sealed class KnockbackEffects : ISpellHandlerModule
         }
 
         context.System.RemoveAuras(context.Target, DreamFogSleep);
-        KnockbackService.KnockBackFrom(context.System, context.Target, context.Caster, context.Effect.MiscValue / 10.0f, context.Value / 10);
+        KnockbackService.KnockBackFrom(context.System, context.Target, context.Caster, context.Effect.MiscValue / 10.0f, context.Value / 10.0f);
     }
 
     private static void EffectPlayerPull(SpellEffectContext context)

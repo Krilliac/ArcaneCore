@@ -66,6 +66,12 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     internal const int MaxExtensions = 8;
     internal const float ExtendYards = 30f;
 
+    /// <summary>
+    /// The wall time (ms) a think may spend planning a way out before the remaining directions wait for the next think; a plan that has
+    /// started is never cut short, so a think runs at most this and one plan.
+    /// </summary>
+    internal const double PlanBudgetMs = 30;
+
     /// <summary>Thinks in a row with no way out at all (<see cref="PlanAway"/>) before the retreat gives up cornered.</summary>
     internal const int MaxFailedReplans = 8;
 
@@ -92,6 +98,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     private uint _startedMs;
     private int _extensions;
     private int _failedReplans;
+    private int _fanResume;
     private bool _attackStopped;
 
     internal bool Active { get; private set; }
@@ -134,6 +141,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         _route = null;
         _extensions = 0;
         _failedReplans = 0;
+        _fanResume = 0;
         _attackStopped = false;
         _startedMs = session.World.NowMs;
         _zones.AddRange(BuildZones(player, enemies, anchors));
@@ -265,8 +273,9 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         if (_route is null || _route.Complete)
         {
             if (_extensions >= MaxExtensions) { Stop("cornered"); return false; }
-            _route = PlanAway(player, out Vector3 goal);
+            _route = PlanAway(player, out Vector3 goal, out bool deferred);
             Goal = goal;
+            if (_route is null && deferred) return true; // the think's time went on the plans so far: the rest of the fan is the next think's
             if (_route is null)
             {
                 Trace += $"; no way out at {player.X:F1},{player.Y:F1}";
@@ -376,8 +385,10 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     /// one refusal toward the boxed-in escape (PlayerbotRisk.Refused), up to five a think.
     /// </para>
     /// </summary>
-    private PlayerbotRoute? PlanAway(Player player, out Vector3 goal)
+    private PlayerbotRoute? PlanAway(Player player, out Vector3 goal, out bool deferred)
     {
+        deferred = false;
+        long started = PlayerbotThinkProbe.Timestamp();
         Vector3 here = new(player.X, player.Y, player.Z);
         Vector3 away = Away(player);
         float straight = MathF.Atan2(away.Y, away.X);
@@ -386,8 +397,20 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         goal = OnGround(floors, here + (away * ExtendYards));
         PlayerbotRoute? fallbackRoute = null;
         Vector3 fallbackGoal = goal;
-        foreach (float degrees in FanDegrees)
+        ReadOnlySpan<float> fan = FanDegrees;
+        for (int index = _fanResume; index < fan.Length; index++)
         {
+            // Each plan is a synchronous search on the world thread outside the think's own node bound (PlayerbotThinkProbe.NodeBudget
+            // counts only fallbacks): past the budget the rest of the fan waits for the next think, which resumes where this stopped.
+            if (index > _fanResume && PlayerbotThinkProbe.MsSince(started) >= PlanBudgetMs)
+            {
+                if (fallbackRoute is not null) break; // a way through a hazard is in hand: take it rather than search on
+                _fanResume = index;
+                deferred = true;
+                return null;
+            }
+
+            float degrees = fan[index];
             float angle = straight + (degrees * MathF.PI / 180f);
             Vector3 candidate = degrees == 0f ? goal
                 : OnGround(floors, here + (new Vector3(MathF.Cos(angle), MathF.Sin(angle), 0f) * ExtendYards));
@@ -396,6 +419,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
                 if (!CrossesNewHazard(player, route))
                 {
                     goal = candidate;
+                    _fanResume = 0;
                     return route;
                 }
 
@@ -410,9 +434,19 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         if (fallbackRoute is not null)
         {
             goal = fallbackGoal;
+            _fanResume = 0;
             return fallbackRoute;
         }
 
+        if (PlayerbotThinkProbe.MsSince(started) >= PlanBudgetMs && _fanResume < fan.Length)
+        {
+            // The fan's last plans spent the budget: the nearest-point search is the next think's (the fan itself is done).
+            _fanResume = fan.Length;
+            deferred = true;
+            return null;
+        }
+
+        _fanResume = 0;
         return PlayerbotNavigation.TryPlanToward(player, goal, options, out PlayerbotRoute? toward) ? toward : null;
     }
 

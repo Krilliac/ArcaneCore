@@ -215,6 +215,11 @@ public sealed partial class WorldSession
     /// </summary>
     public bool WantsUpdateObjects => !IsLeanBot || HasPacketObserver;
 
+    private long _leanRingPacketsSkipped;
+
+    /// <summary>Packets this session's lean intake dropped (the per-session share of <see cref="BotLeanStats.RingPackets"/>, which is process-wide). Any thread.</summary>
+    internal long LeanRingPacketsSkipped => Volatile.Read(ref _leanRingPacketsSkipped);
+
     private void CaptureManagedPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
         if (_state == SessionState.Closed) { NoteSendAfterClose(opcode); return; }
@@ -222,6 +227,7 @@ public sealed partial class WorldSession
         if (IsLeanBot && BotPolicy is { } policy && !policy.KeepsPacket(opcode) && !HasPacketObserver)
         {
             BotLeanStats.SkippedRingPacket(payload.Length);
+            Interlocked.Increment(ref _leanRingPacketsSkipped);
             return;
         }
 

@@ -107,6 +107,34 @@ public sealed class TalentPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Dispose_ReconcilesACharacterWhoseWriteFailed_SoShutdownDoesNotLoseTheChange()
+    {
+        _store.FailWrites = true;
+        _persistence.SaveRespec(6, new RespecState(2, 20));
+        _persistence.SetDisabled(6, 11, true);
+        await _persistence.FlushAsync();
+        Assert.Contains(6, _persistence.FailedCharacters);
+        _store.FailWrites = false;
+
+        await _persistence.DisposeAsync();
+
+        Assert.Empty(_persistence.FailedCharacters);
+        Assert.Equal(new CharacterTalentState(2, 20), _store.RespecOf(6));
+        Assert.Equal<uint>([11], _store.DisabledOf(6));
+    }
+
+    [Fact]
+    public async Task Dispose_WhoseReconciliationStillFails_ThrowsInsteadOfDroppingTheChangeSilently()
+    {
+        _store.FailWrites = true;
+        _persistence.SaveRespec(7, new RespecState(2, 20));
+        await _persistence.FlushAsync();
+
+        await Assert.ThrowsAnyAsync<Exception>(() => _persistence.DisposeAsync().AsTask());
+        await _persistence.DisposeAsync();   // a second dispose (test teardown) is a no-op
+    }
+
+    [Fact]
     public async Task Reconciliation_AlsoRemovesRowsThatShouldNoLongerExist()
     {
         await _store.AddDisabledAsync(5, [1, 2]);

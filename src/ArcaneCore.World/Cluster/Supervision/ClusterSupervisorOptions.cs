@@ -1,3 +1,5 @@
+using ArcaneCore.World.Persistence;
+
 namespace ArcaneCore.World.Cluster.Supervision;
 
 /// <summary>
@@ -48,6 +50,37 @@ public static class SupervisedRoles
             || string.Equals(role, Social, StringComparison.OrdinalIgnoreCase)
             || string.Equals(role, Coordinator, StringComparison.OrdinalIgnoreCase)
             || string.Equals(role, Supervisor, StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>
+/// How long a world child needs to stop (<c>WorldHost.StopCoreAsync</c>), so the supervisor's drain timeout can be sized above it. A supervisor that kills
+/// the world before the sequence ends loses the saves still queued and leaves the durable ownership held.
+/// </summary>
+public static class WorldStopBudget
+{
+    /// <summary>The playerbot shutdown's wait for the war layer wipe (<c>ManagedPlayerbotFeature.ShutdownBeforeWorldStopAsync</c>).</summary>
+    public static readonly TimeSpan BotWarWipeWait = TimeSpan.FromSeconds(10);
+
+    /// <summary>The wait for the packet traces still open at the end of the stop (<c>PacketCapture.DrainAll</c> in <c>WorldHost.StopCoreAsync</c>).</summary>
+    public static readonly TimeSpan PacketCaptureDrain = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// The stages of the stop that have a fixed bound: the war wipe wait, the feature write-queue lane, the character save lane (<see cref="ShutdownDrain.SavesStallBudget"/>)
+    /// and the packet capture drain. The playerbot stop itself (each bot's world-thread removal and flush) has no bound of its own and comes on top.
+    /// </summary>
+    public static readonly TimeSpan Bounded = BotWarWipeWait + StopDrainBudget.DefaultStallBudget + ShutdownDrain.SavesStallBudget + PacketCaptureDrain;
+
+    /// <summary>Time allowed for stopping the managed bots (about 1000 bots took most of 30 s on the live host in 2026-10); the least a world's drain timeout should offer on top of <see cref="Bounded"/>.</summary>
+    public static readonly TimeSpan BotStopAllowance = TimeSpan.FromSeconds(30);
+
+    /// <summary>The drain timeout below which <see cref="ClusterSupervisorOptions.Warnings"/> warns for a child that runs a world.</summary>
+    public static readonly TimeSpan Recommended = Bounded + BotStopAllowance;
+
+    /// <summary>True for the roles whose child hosts a world and so runs this stop sequence (everything but the realm, the gateway and a nested supervisor).</summary>
+    public static bool RunsWorld(string? role) =>
+        !string.Equals(role, SupervisedRoles.Realm, StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(role, SupervisedRoles.Gateway, StringComparison.OrdinalIgnoreCase)
+        && !string.Equals(role, SupervisedRoles.Supervisor, StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -104,9 +137,13 @@ public sealed class SupervisedProcessConfig
     public int RestartBackoffMaxMs { get; set; } = 60_000;
 
     /// <summary>
-    /// Graceful drain timeout in milliseconds before the supervisor forcibly terminates an owned child process (1 to 600000; default 30000).
+    /// Graceful drain timeout in milliseconds before the supervisor forcibly terminates an owned child process (1 to 600000; default 180000).
+    /// A world child needs more than <see cref="WorldStopBudget.Recommended"/>: a lower value is warned about at start-up.
     /// </summary>
-    public int DrainTimeoutMs { get; set; } = 30_000;
+    public int DrainTimeoutMs { get; set; } = DefaultDrainTimeoutMs;
+
+    /// <summary>The default <see cref="DrainTimeoutMs"/> (3 minutes): the world's bounded stop stages (<see cref="WorldStopBudget.Bounded"/>) plus the unbounded bot stop and a margin.</summary>
+    public const int DefaultDrainTimeoutMs = 180_000;
 
     /// <summary>
     /// Memory budget in MiB required to admit and launch this process on the host.
@@ -283,6 +320,17 @@ public sealed class ClusterSupervisorOptions
         if (Enabled && TotalDrainBudget + ShutdownMargin > MaxShutdown)
         {
             yield return $"{SectionName}:Processes drain timeouts add up to {TotalDrainBudget.TotalMinutes:0.#} min, but the host's shutdown timeout is capped at {MaxShutdown.TotalMinutes:0} min; the children last in the drain order can be killed before their DrainTimeoutMs elapses.";
+        }
+
+        if (Enabled)
+        {
+            foreach ((string key, SupervisedProcessConfig process) in Processes)
+            {
+                if (WorldStopBudget.RunsWorld(process.Role) && TimeSpan.FromMilliseconds(process.DrainTimeoutMs) < WorldStopBudget.Recommended)
+                {
+                    yield return $"{SectionName}:Processes:{key}:DrainTimeoutMs is {process.DrainTimeoutMs} ms, below the {WorldStopBudget.Recommended.TotalSeconds:0} s a world needs to stop (bot shutdown, then the write-queue and save-queue drains, up to {WorldStopBudget.Bounded.TotalSeconds:0} s of them bounded); the supervisor would kill it mid-shutdown and lose its pending saves.";
+                }
+            }
         }
 
         if (Enabled && Processes.Values.Any(p => p.HangCapture == SupervisedHangCaptureMode.Dump))

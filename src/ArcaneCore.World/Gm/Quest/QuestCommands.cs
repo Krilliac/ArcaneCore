@@ -247,8 +247,10 @@ public sealed class QuestCommands : ICommandGroup
         }
 
         // If the quest requires reputation to complete (QuestCommands.cpp:248-259): the reputation owner is a World feature.
+        // Only for a quest the target holds: QuestCommands.cpp:178-183 refuses a quest with no status before this block runs, and a refusal
+        // here must not leave a permanent standing change behind.
         uint repFaction = quest!.Template.RepObjectiveFaction;
-        if (repFaction != 0 && context.Session.Services.GetService<ReputationFeature>()?.Service is { } reputation
+        if (repFaction != 0 && services.GmCompleteRefusal(target, quest) is null && context.Session.Services.GetService<ReputationFeature>()?.Service is { } reputation
             && reputation.GetReputation(target, repFaction) < quest.Template.RepObjectiveValue)
         {
             reputation.SetReputation(target, repFaction, quest.Template.RepObjectiveValue);

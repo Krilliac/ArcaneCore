@@ -211,8 +211,9 @@ public sealed class KindalMoonweaverAI(Creature creature) : FollowerAI(creature)
         {
             if (InShootingRange(victim) && DoCast(victim, SpellMultiShot) == CreatureCastResult.Ok)
             {
-                // The source re-arms the Shoot timer here (m_shootTimer = urand(8, 11)), so Multi-Shot stays ready; kept as it is.
-                _shootMs = (uint)(System?.RandomInt(8, 11) ?? 8) * 1000;
+                // mangos-classic npc_kindal_moonweaver assigns urand(8, 11) to m_shootTimer here, a typo for m_multiShotTimer that leaves
+                // Multi-Shot ready on every tick and starves Shoot. The Multi-Shot timer is re-armed (one draw, as in the source).
+                _multiShotMs = (uint)(System?.RandomInt(8, 11) ?? 8) * 1000;
             }
         }
         else

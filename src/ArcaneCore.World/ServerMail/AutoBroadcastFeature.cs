@@ -27,9 +27,22 @@ public sealed class AutoBroadcastOptions
 /// vmangos AutoBroadCastMgr (src/game/AutoBroadCastMgr.cpp): every interval, one message picked at random is sent to every player as a
 /// system message (World::SendWorldText). Nothing happens with no messages.
 /// </summary>
-public sealed class AutoBroadcastFeature(IServiceProvider services, ILogger<AutoBroadcastFeature>? logger = null) : IWorldFeature
+public sealed class AutoBroadcastFeature(IServiceProvider services, ILogger<AutoBroadcastFeature>? logger = null)
+    : IWorldFeature, Cluster.Social.IRealmSingletonHalt
 {
     private uint _current;
+    private volatile bool _halted;
+
+    /// <summary>Whether <see cref="Halt"/> was called: every later tick sends nothing.</summary>
+    public bool Halted => _halted;
+
+    /// <summary>Stop broadcasting for good (a lost social realm authority lease). Safe from any thread.</summary>
+    public void Halt()
+    {
+        if (_halted) return;
+        _halted = true;
+        logger?.LogWarning("AutoBroadcast halted: the node no longer holds the social realm authority lease");
+    }
 
     public AutoBroadcastOptions Options { get; } = Bind(services.GetService<IConfiguration>());
 
@@ -50,6 +63,7 @@ public sealed class AutoBroadcastFeature(IServiceProvider services, ILogger<Auto
         logger?.LogInformation("Loaded {Count} AutoBroadCast messages", Options.Messages.Count);
         world.WorldTick += diff =>
         {
+            if (_halted) return;
             if (Update(diff) is { } message)
                 world.BroadcastToAll(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(message));
         };
@@ -58,7 +72,7 @@ public sealed class AutoBroadcastFeature(IServiceProvider services, ILogger<Auto
     /// <summary>AutoBroadCastMgr::Update: the message due after <paramref name="diffMs"/>, or null.</summary>
     internal string? Update(uint diffMs)
     {
-        if (Options.Messages.Count == 0) return null;
+        if (_halted || Options.Messages.Count == 0) return null;
         _current += diffMs;
         if (_current < Options.IntervalMs) return null;
         _current = 0;

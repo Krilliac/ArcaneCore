@@ -219,10 +219,10 @@ public sealed class AuraAndProcCompletenessTests
     {
         SpellInfo bloodFury = SpellTestKit.Spell(
             BloodFuryScript.BloodFury,
-            SpellTestKit.Effect(SpellEffectName.Dummy, 0));
+            SpellTestKit.Effect(SpellEffectName.Dummy, 25)); // 1.12.1 data (vmangos spell_template build 5086): dummy, 25
         SpellInfo bloodFuryBuff = SpellTestKit.Spell(
             BloodFuryScript.BloodFuryBuff,
-            SpellTestKit.Effect(SpellEffectName.ApplyAura, 25, aura: AuraType.ModAttackPowerPct)) with
+            SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.ModAttackPower)) with // 1.12.1 data: flat attack power aura, own value 0
         {
             Duration = new SpellDuration(15_000, 0, 15_000),
         };
@@ -246,13 +246,16 @@ public sealed class AuraAndProcCompletenessTests
         SpellScriptDispatcher.Install(kit.System, SpellScriptRegistry.Discover(typeof(BloodFuryScript).Assembly));
         (Player player, _) = kit.AddPlayer(1, race: Race.Orc);
 
+        player.SetInt32(UpdateFields.UnitFieldAttackPower, 400);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, BloodFuryScript.BloodFury, SpellCastTargets.ForSelf(), triggered: true));
+        // vmangos SpellEffects.cpp:971-985: the healing debuff lands at cast time and the buff is 25% of attack power.
         Assert.True(kit.System.HasAura(player, BloodFuryScript.BloodFuryBuff));
-        Assert.False(kit.System.HasAura(player, BloodFuryScript.BloodFuryDebuff));
+        Assert.True(kit.System.HasAura(player, BloodFuryScript.BloodFuryDebuff));
+        Assert.Equal(100, kit.System.GetTotalAuraModifier(player, AuraType.ModAttackPower));
 
         kit.System.RemoveAuras(player, BloodFuryScript.BloodFuryBuff);
         Assert.False(kit.System.HasAura(player, BloodFuryScript.BloodFuryBuff));
-        Assert.True(kit.System.HasAura(player, BloodFuryScript.BloodFuryDebuff));
+        Assert.True(kit.System.HasAura(player, BloodFuryScript.BloodFuryDebuff)); // still there for its own 25 s
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, CannibalizeScript.Cannibalize, SpellCastTargets.ForSelf(), triggered: true));
         Assert.True(kit.System.HasAura(player, CannibalizeScript.CannibalizeHeal));

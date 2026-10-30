@@ -210,7 +210,17 @@ public sealed partial class WorldRuntime : IDisposable
         _worldThreadId = -1;
 
         // Commands posted before shutdown (e.g. a disconnect's save) still run.
-        RunCommands(drainAll: true);
+        // A command that posts another command is followed for a bounded number of passes; a self-reposting one cannot hang shutdown.
+        const int MaxShutdownDrainPasses = 16;
+        for (int pass = 0; pass < MaxShutdownDrainPasses && !_commands.IsEmpty; pass++)
+        {
+            RunCommands(drainAll: true);
+        }
+
+        if (!_commands.IsEmpty)
+        {
+            _logger.LogWarning("world stop: {Pending} commands were still queued after {Passes} drain passes and are discarded", _commands.Count, MaxShutdownDrainPasses);
+        }
 
         // Nothing drains the queue any more: an InvokeAsync still waiting (or posted from now on) is cancelled instead of left hanging.
         _stopped = true;
@@ -688,7 +698,9 @@ public sealed partial class WorldRuntime : IDisposable
         long budgetTicks = Options.CommandTimeBudgetMs > 0
             ? Options.CommandTimeBudgetMs * Stopwatch.Frequency / 1000L
             : 0;
-        while (_commands.TryDequeue(out Action? command))
+        // Draining (manual clock / shutdown) runs what was queued at entry; commands they post run next tick, so a self-reposting command cannot spin forever.
+        int snapshot = drainAll ? _commands.Count : int.MaxValue;
+        while (run < snapshot && _commands.TryDequeue(out Action? command))
         {
             run++;
             SetPosition(TickPhase.Commands, command, Stopwatch.GetTimestamp());

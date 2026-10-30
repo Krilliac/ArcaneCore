@@ -25,9 +25,14 @@ internal static class PetInitializer
     /// and are not configurable here. The owner's player-controlled and PvP flags are copied last.
     /// Health and mana end full.
     /// </summary>
-    public static void InitStatsForLevel(Creature pet, Unit owner, int level, PetContent content)
+    public static void InitStatsForLevel(Creature pet, Unit owner, int level, PetContent content, bool keepFlags = false)
     {
-        pet.UnitFlags = UnitFlags.None;
+        // vmangos clears UNIT_FIELD_FLAGS for a SUMMON_PET only (Pet.cpp:1294); a hunter pet levelling up keeps its flags, so the caller says so.
+        if (!keepFlags)
+        {
+            pet.UnitFlags = UnitFlags.None;
+        }
+
         pet.Level = (byte)Math.Clamp(level, 1, byte.MaxValue);
 
         if (content.FindLevelStats(pet.Template.Entry, level) is { } row)

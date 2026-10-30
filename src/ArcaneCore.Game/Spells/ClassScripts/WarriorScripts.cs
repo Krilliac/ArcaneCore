@@ -206,9 +206,10 @@ public sealed class ShieldSlamDamage : ISpellValueModifier
 }
 
 /// <summary>
-/// Orc racial Blood Fury (20572; buff 23234, debuff 23230; vmangos SpellEffects.cpp / SpellAuras.cpp):
-/// casting 20572 triggers the attack power buff 23234 on the caster, and when the buff fades or is removed,
-/// triggers the healing reduction debuff 23230 on the target.
+/// Orc racial Blood Fury (20572; buff 23234, debuff 23230), the 1.12 design (vmangos SpellEffects.cpp:971-985, build above 1.8.4;
+/// the spell data of build 5086 gives 20572 a dummy effect of 25 and 23230 a -50% healing aura of 25 seconds): casting 20572 applies
+/// the healing reduction 23230 to the caster at once, and the attack power buff 23234 (a flat attack power aura whose own value is 0)
+/// is cast with <c>dither(25 * attack power / 100)</c> as its value. Nothing happens when the buff fades.
 /// </summary>
 [SpellScript(BloodFury)]
 public sealed class BloodFuryScript : ISpellScript
@@ -221,29 +222,33 @@ public sealed class BloodFuryScript : ISpellScript
     {
         if (context.EffectIndex == 0 && context.Effect.Effect == SpellEffectName.Dummy)
         {
-            TriggerBuff(context.System, context.Caster);
+            Trigger(context.System, context.Caster, context.Value);
         }
     }
 
-    internal static void TriggerBuff(SpellSystem system, Unit caster)
+    internal static void Trigger(SpellSystem system, Unit caster, int percent)
     {
-        if (system.Store.Get(BloodFuryBuff) is not null && !system.HasAura(caster, BloodFuryBuff))
-        {
-            system.CastSpell(caster, BloodFuryBuff, SpellCastTargets.ForUnit(caster.Guid), triggered: true);
-        }
-    }
-
-    internal static void OnHolderRemoved(SpellSystem system, SpellAuraHolder holder)
-    {
-        if (holder.RemoveMode == AuraRemoveMode.Stack || !holder.Target.IsAlive || system.Store.Get(BloodFuryDebuff) is null)
+        // Both the dummy effect and the cast observer call this for one cast; the debuff marks the cast as handled.
+        if (caster is not Player || system.HasAura(caster, BloodFuryDebuff))
         {
             return;
         }
 
-        if (holder.Spell.Id == BloodFuryBuff
-            || (holder.Spell.Id == BloodFury && system.Store.Get(BloodFuryBuff) is null))
+        if (system.Store.Get(BloodFuryDebuff) is not null)
         {
-            system.CastSpell(holder.Target, BloodFuryDebuff, SpellCastTargets.ForUnit(holder.Target.Guid), triggered: true);
+            system.CastSpell(caster, BloodFuryDebuff, SpellCastTargets.ForUnit(caster.Guid), triggered: true);
+        }
+
+        if (system.Store.Get(BloodFuryBuff) is null)
+        {
+            return;
+        }
+
+        int attackPower = caster.GetInt32(UpdateFields.UnitFieldAttackPower);
+        int value = SpellRounding.DitherFloor(percent * attackPower / 100f, system.Random);
+        if (value > 0)
+        {
+            system.CastCustomSpell(caster, BloodFuryBuff, SpellCastTargets.ForUnit(caster.Guid), value);
         }
     }
 }
@@ -282,7 +287,6 @@ public sealed class WarriorScriptsModule : ISpellHandlerModule
         system.RegisterValueModifier(new BloodthirstDamage(system));
         system.RegisterValueModifier(new ShieldSlamDamage());
         system.RegisterSpellTargetFilter(IntimidatingShout, FilterIntimidatingShout);
-        system.HolderRemoved += holder => BloodFuryScript.OnHolderRemoved(system, holder);
         system.RegisterObserver(new RacialCastObserver(system));
     }
 
@@ -299,7 +303,7 @@ public sealed class WarriorScriptsModule : ISpellHandlerModule
         {
             if (cast.Spell.Id == BloodFuryScript.BloodFury)
             {
-                BloodFuryScript.TriggerBuff(system, cast.Caster);
+                BloodFuryScript.Trigger(system, cast.Caster, cast.Spell.SimpleValue(0));
             }
             else if (cast.Spell.Id == CannibalizeScript.Cannibalize
                 && cast.Spell.HasEffect(SpellEffectName.Dummy)

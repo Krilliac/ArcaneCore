@@ -88,9 +88,14 @@ internal static class PlayerbotConsumables
             && SpellSystem.GetPower(player, PowerType.Mana) < maxMana;
     }
 
-    internal static bool HasUsable(Player player, SpellSystem spells, PlayerbotConsumableKind wanted)
+    /// <summary>
+    /// Whether the bot carries an item of <paramref name="wanted"/> it could use. Using food is barred in a shapeshift form, so the answer
+    /// is false in one, unless <paramref name="regardlessOfForm"/> asks only whether it is carried (a need to buy: a druid in Cat Form
+    /// or a stealthed rogue that has food in its bags does not need more).
+    /// </summary>
+    internal static bool HasUsable(Player player, SpellSystem spells, PlayerbotConsumableKind wanted, bool regardlessOfForm = false)
     {
-        if (ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
+        if (!regardlessOfForm && ArcaneCore.Game.Items.ItemUse.ItemUseService.IsShapeShifted(player))
             return false;
 
         foreach (Item item in player.Inventory.AllItems.Take(MaxItemsScanned))

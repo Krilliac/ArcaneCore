@@ -272,6 +272,39 @@ public sealed class LogFormatTests
     }
 
     [Fact]
+    public void TextLine_CutAtTheCap_StillEndsItsLine()
+    {
+        var evt = new LogEvent(Stamp, LogLevel.Information, "Cat", default, new string('a', LogBuffer.MaxLength * 2), null);
+        var buffer = new LogBuffer(stackalloc char[64]);
+        LogLineFormatter.Write(ref buffer, in evt, null, color: false);
+        string line = buffer.Written.ToString();
+        bool truncated = buffer.Truncated;
+        buffer.Dispose();
+        Assert.True(truncated);
+        Assert.EndsWith(" ...[truncated]\n", line, StringComparison.Ordinal);
+        Assert.Equal(1, line.Count(c => c == '\n'));
+    }
+
+    [Theory]
+    [InlineData("plain")]
+    [InlineData("escapes")]
+    public void JsonLine_CutAtTheCap_IsOneValidTerminatedRecord(string kind)
+    {
+        // "escapes": each control character becomes a six-character \uXXXX, so the cut can land inside an escape sequence.
+        string message = kind == "plain" ? new string('a', LogBuffer.MaxLength * 2) : new string('\u0001', LogBuffer.MaxLength);
+        var evt = new LogEvent(Stamp, LogLevel.Information, "Cat", default, message, null);
+        var buffer = new LogBuffer(stackalloc char[64]);
+        JsonLineFormatter.Write<object?>(ref buffer, in evt, null, null);
+        string line = buffer.Written.ToString();
+        buffer.Dispose();
+        Assert.EndsWith("}\n", line, StringComparison.Ordinal);
+        Assert.Equal(1, line.Count(c => c == '\n'));
+        using JsonDocument doc = JsonDocument.Parse(line);
+        Assert.Equal("Cat", doc.RootElement.GetProperty("category").GetString());
+        Assert.EndsWith(" ...[truncated]", doc.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FailingSink_IsCountedAndSkipped_NeverThrowsToTheCaller()
     {
         var output = new StringWriter();

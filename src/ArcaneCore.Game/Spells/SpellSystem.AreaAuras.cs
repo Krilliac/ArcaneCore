@@ -23,6 +23,21 @@ public sealed partial class SpellSystem
     }
 
     /// <summary>
+    /// SPELL_EFFECT_APPLY_AREA_AURA_FRIEND (vmangos Spell::EffectApplyAreaAura, AreaAura constructor SpellAuras.cpp:438-440): the caster holds the
+    /// source with its real aura (unlike the enemy form), and <see cref="UpdateAreaAuras"/> puts the aura on every living unit within the effect radius
+    /// that is friendly to the caster and takes it away from those that leave the radius, die or stop being friendly.
+    /// </summary>
+    private void EffectApplyAreaAuraFriend(SpellEffectContext context)
+    {
+        if (!ReferenceEquals(context.Target, context.Caster))
+        {
+            return;
+        }
+
+        EffectApplyAura(context);
+    }
+
+    /// <summary>
     /// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (vmangos Spell::EffectApplyAreaAura, AreaAura constructor SpellAuras.cpp:441-445): like the party effect, the
     /// caster alone holds the source, and its aura does nothing on itself (type NONE, which is why it also takes no period). <see cref="UpdateAreaAuras"/>
     /// puts the real aura on every enemy within the effect radius and takes it away from those that leave it.
@@ -128,7 +143,7 @@ public sealed partial class SpellSystem
         IReadOnlyList<SpellEffectInfo> effects = source.Spell.Effects;
         for (int i = 0; i < effects.Count; i++)
         {
-            if (effects[i].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraEnemy && (!anyRadius || effects[i].Radius > radius || float.IsNaN(radius)))
+            if (effects[i].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy && (!anyRadius || effects[i].Radius > radius || float.IsNaN(radius)))
             {
                 radius = effects[i].Radius;
                 anyRadius = true;
@@ -137,6 +152,7 @@ public sealed partial class SpellSystem
 
         // vmangos AreaAura::AreaAura (SpellAuras.cpp:420-422): SPELLMOD_RADIUS of the caster on the area radius.
         bool enemyArea = source.Spell.HasEffect(SpellEffectName.ApplyAreaAuraEnemy);
+        bool friendArea = !enemyArea && source.Spell.HasEffect(SpellEffectName.ApplyAreaAuraFriend);
         radius = radius > 0 ? ModFloat(state.Unit, source.Spell, SpellModOp.Radius, radius) : radius;
         bool inRangeOwned = !_areaInRangeScratchInUse;
         HashSet<ObjectGuid> inRange = inRangeOwned ? _areaInRangeScratch : [];
@@ -156,6 +172,17 @@ public sealed partial class SpellSystem
                         foreach (Unit unit in UnitsInRadius(map, state.Unit.X, state.Unit.Y, state.Unit.Z, radius))
                         {
                             if (!ReferenceEquals(unit, state.Unit) && IsEnemy(state.Unit, unit))
+                            {
+                                members.Add(unit.Guid);
+                            }
+                        }
+                    }
+                    else if (friendArea)
+                    {
+                        // vmangos AreaAura::Update, AREA_AURA_FRIEND (SpellAuras.cpp:682-687): every living unit around the caster that is friendly to it.
+                        foreach (Unit unit in UnitsInRadius(map, state.Unit.X, state.Unit.Y, state.Unit.Z, radius))
+                        {
+                            if (!ReferenceEquals(unit, state.Unit) && unit.IsAlive && Relations.IsFriendly(state.Unit, unit))
                             {
                                 members.Add(unit.Guid);
                             }
@@ -221,7 +248,7 @@ public sealed partial class SpellSystem
                         };
                         foreach (SpellAura? aura in source.AuraSpan)
                         {
-                            if (aura is not null && source.Spell.Effects[aura.EffectIndex].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraEnemy)
+                            if (aura is not null && source.Spell.Effects[aura.EffectIndex].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy)
                             {
                                 if (enemyArea)
                                 {

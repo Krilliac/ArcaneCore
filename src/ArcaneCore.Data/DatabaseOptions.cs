@@ -55,6 +55,13 @@ public sealed class DatabaseConnectionOptions
     /// database stays on Full and an error is logged. Other engines ignore it.
     /// </summary>
     public SqliteSynchronousMode? SqliteSynchronous { get; set; }
+
+    /// <summary>
+    /// PostgreSQL only: the existing maintenance database the single-writer advisory lock is taken in (overrides <c>Database:WriterLockDatabase</c>; unset inherits it, default <c>postgres</c>).
+    /// PostgreSQL scopes advisory locks to the database a session is connected to, so every world must take the lock in the same database, and it must exist before the characters database does.
+    /// The login needs CONNECT on it. MariaDB, MySQL and SQLite ignore it.
+    /// </summary>
+    public string? WriterLockDatabase { get; set; }
 }
 
 /// <summary>
@@ -99,6 +106,13 @@ public sealed class DatabaseOptions
     /// by their queues. 0 keeps the connection string's Default Timeout. MariaDB, MySQL and PostgreSQL ignore it (docs/areas/persistence.md).
     /// </summary>
     public int SqliteWriteTimeoutMs { get; set; } = ArcaneCore.Data.Resilience.SqliteConnectionPragmaInterceptor.DefaultWriteTimeoutMs;
+
+    /// <summary>
+    /// PostgreSQL only: the existing maintenance database (default <c>postgres</c>) in which the world takes its single-writer advisory lock. PostgreSQL scopes advisory locks to the database
+    /// the session is connected to, so all worlds of one characters database must lock in the same database, one that exists before the characters database is created. The login needs
+    /// CONNECT on it. Each component may override it with a Database:Characters WriterLockDatabase key. MariaDB, MySQL and SQLite ignore it (docs/guide/operations.md).
+    /// </summary>
+    public string WriterLockDatabase { get; set; } = ArcaneCore.Data.Characters.Ownership.CharacterDatabaseWriterLock.DefaultPostgresLockDatabase;
 
     /// <summary>
     /// How long (milliseconds, default 2000; 0 disables) a database transaction may stay open before it is logged at WARN with the DbContext and the
@@ -148,12 +162,14 @@ public sealed class DatabaseOptions
                     Provider = specific.Provider, ConnectionString = specific.ConnectionString,
                     SqliteBusyTimeoutMs = specific.SqliteBusyTimeoutMs ?? SqliteBusyTimeoutMs,
                     SqliteSynchronous = specific.SqliteSynchronous ?? SqliteSynchronous,
+                    WriterLockDatabase = specific.WriterLockDatabase ?? WriterLockDatabase,
                 };
         }
 
         return new DatabaseConnectionOptions
         {
             Provider = Provider, ConnectionString = ConnectionString, SqliteBusyTimeoutMs = SqliteBusyTimeoutMs, SqliteSynchronous = SqliteSynchronous,
+            WriterLockDatabase = WriterLockDatabase,
         };
     }
 }

@@ -226,4 +226,148 @@ public sealed class ManualTickBarrierTests
             world.Stop();
         }
     }
+
+    [Fact]
+    public async Task ASelfRepostingCommand_LetsEveryTickComplete_AndRunsOncePerTick()
+    {
+        using WorldRuntime world = StartManual();
+        try
+        {
+            await world.InvokeAsync(() => 0);
+            const int PerTickGuard = 1000; // a draining tick that kept following reposts would run up to this many and stop (so the failure is an assertion, not a hang)
+            bool keepGoing = true;
+            int thisTick = 0;
+            var perTick = new List<int>();
+            Action? again = null;
+            again = () =>
+            {
+                thisTick++;
+                if (keepGoing && thisTick < PerTickGuard)
+                {
+                    world.Post(again!);
+                }
+            };
+            world.Updated += _ =>
+            {
+                perTick.Add(thisTick);
+                thisTick = 0;
+            };
+
+            world.Post(again);
+            await world.InvokeAsync(() => 0); // at least one tick has run the command
+            await world.AdvanceTicksAsync(5).WaitAsync(TimeSpan.FromSeconds(30));
+            keepGoing = false;
+            await world.InvokeAsync(() => 0);
+            await world.InvokeAsync(() => 0);
+
+            Assert.True(perTick.Count(n => n == 1) >= 5, $"ticks that ran the command once: {perTick.Count(n => n == 1)} of {perTick.Count}");
+            Assert.All(perTick, n => Assert.True(n <= 1, $"a tick ran the self-reposting command {n} times"));
+        }
+        finally
+        {
+            world.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task Stop_FollowsRepostsForABoundedNumberOfPasses_ThenReturns()
+    {
+        WorldRuntime world = StartManual();
+        var release = new ManualResetEventSlim();
+        var atGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int stopThreadId = -1;
+        int drainRuns = 0;
+        int totalRuns = 0;
+        Action? again = null;
+        again = () =>
+        {
+            // The shutdown drain runs on the thread that called Stop (the world thread is gone by then).
+            if (Environment.CurrentManagedThreadId == Volatile.Read(ref stopThreadId))
+            {
+                drainRuns++;
+            }
+
+            if (Interlocked.Increment(ref totalRuns) >= 100_000)
+            {
+                return; // a drain that never stops following reposts ends here (so the failure is the assertion below, not a hang)
+            }
+
+            world.Post(again!);
+        };
+        try
+        {
+            await world.InvokeAsync(() => 0);
+            world.Post(() =>
+            {
+                atGate.SetResult();
+                release.Wait(TimeSpan.FromSeconds(30)); // hold the world thread so the self-reposting command is still queued when Stop drains
+            });
+            await atGate.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            world.Post(again);
+
+            Task stopping = Task.Run(() =>
+            {
+                Volatile.Write(ref stopThreadId, Environment.CurrentManagedThreadId);
+                world.Stop();
+            });
+            release.Set();
+            await stopping.WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.True(drainRuns > 1, $"Stop followed the repost {drainRuns} times");
+            Assert.True(drainRuns <= 64, $"Stop followed the repost {drainRuns} times");
+        }
+        finally
+        {
+            release.Set();
+            world.Stop();
+            world.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Stop_StillRunsEveryCommandQueuedBeforeIt_IncludingOnesTheyPost()
+    {
+        WorldRuntime world = StartManual();
+        var release = new ManualResetEventSlim();
+        var atGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ran = new List<string>();
+        try
+        {
+            await world.InvokeAsync(() => 0);
+            world.Post(() =>
+            {
+                atGate.SetResult();
+                release.Wait(TimeSpan.FromSeconds(30));
+            });
+            await atGate.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            lock (ran)
+            {
+                world.Post(() =>
+                {
+                    lock (ran) { ran.Add("a"); }
+                    world.Post(() =>
+                    {
+                        lock (ran) { ran.Add("b"); }
+                        world.Post(() => { lock (ran) { ran.Add("c"); } });
+                    });
+                });
+                world.Post(() => { lock (ran) { ran.Add("d"); } });
+            }
+
+            Task stopping = Task.Run(world.Stop);
+            release.Set();
+            await stopping.WaitAsync(TimeSpan.FromSeconds(30));
+
+            lock (ran)
+            {
+                Assert.Equal(["a", "b", "c", "d"], ran.Order().ToArray());
+            }
+        }
+        finally
+        {
+            release.Set();
+            world.Stop();
+            world.Dispose();
+        }
+    }
 }

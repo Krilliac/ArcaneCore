@@ -106,4 +106,23 @@ public sealed class PlayerPetPvpFlagTests
 
         Assert.True(hooks.CanAttack(a, wolf));
     }
+
+    [Fact]
+    public void PetHittingAFlaggedEnemyPlayer_PvpFlagsAndContestsItsOwner()
+    {
+        // vmangos TogglePlayerPvPFlagOnAttackVictim / SetInCombatWithAggressor act on GetAffectingPlayer (Unit.cpp:5959-6053).
+        var (world, map, _, a, h, _, _) = DuelTestKit.TwoPlayers(Race.Human, Race.Orc);
+        using WorldRuntime w = world;
+        Hooks(map, "default");
+        var pet = new OwnedUnit { Owner = a };
+        pet.Spawn(map, 11, 10);
+        h.UnitFlags |= UnitFlags.Pvp;
+        Assert.Equal(0u, (uint)(a.UnitFlags & UnitFlags.Pvp));
+
+        map.Combat.DealDamage(pet, h, 5);
+
+        Assert.NotEqual(0u, (uint)(a.UnitFlags & UnitFlags.Pvp));
+        Assert.True(a.Combat.InPvpCombat);
+        Assert.NotEqual(0u, (uint)(a.Flags & PlayerFlags.ContestedPvp));
+    }
 }

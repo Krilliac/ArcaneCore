@@ -31,6 +31,17 @@ public sealed class MirrorTimerTests
     }
 
     [Fact]
+    public void SetDuration_BelowTheElapsedTime_LeavesNothingRemaining_NotAWrappedValue()
+    {
+        MirrorTimer timer = Running(interval: 60000);
+        Assert.True(timer.Update(50000));
+
+        timer.SetDuration(30000); // a water-breathing aura ended while 50 s had been used up
+
+        Assert.Equal(0u, timer.Remaining);
+    }
+
+    [Fact]
     public void RunningOut_PulsesOnExpiry_ThenEveryTwoSeconds()
     {
         MirrorTimer timer = Running();

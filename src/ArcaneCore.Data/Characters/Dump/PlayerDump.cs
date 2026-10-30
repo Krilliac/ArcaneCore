@@ -367,6 +367,14 @@ public sealed class PlayerDumpReader(CharacterDbContext db)
             .Select(r => Convert.ToInt64(PlayerDumpTables.Get(db, r.Table, r.Row, "ItemGuid"))).Where(g => g != 0)];
 
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        // An id whose earlier deletion is still pending finalization is not free: a late finalizer would reach the new character and
+        // the pending row would block its own deletion (EfCharacterStore.CreateAsync fences the same way). Fall back to a new id.
+        if (character.Id != 0
+            && await db.Set<CharacterDeletionRow>().AnyAsync(r => r.CharacterId == character.Id, cancellationToken).ConfigureAwait(false))
+        {
+            character.Id = 0;
+        }
+
         db.Characters.Add(character);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         int newId = character.Id;

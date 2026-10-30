@@ -138,6 +138,7 @@ public sealed class PetGmCommands : ICommandGroup
 
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
         ILogger log = context.Session.Logger;
+        IDisposable hold = context.Defer(); // open until the world-thread reply ran
         _ = Task.Run(async () =>
         {
             List<string> lines;
@@ -154,9 +155,16 @@ public sealed class PetGmCommands : ICommandGroup
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"Found {lines.Count(l => l.StartsWith('#'))} pets for character {identity.Name} (#{identity.Id})."));
             context.World.Post(() =>
             {
-                foreach (string line in lines)
+                try
                 {
-                    context.Reply(line);
+                    foreach (string line in lines)
+                    {
+                        context.Reply(line);
+                    }
+                }
+                finally
+                {
+                    hold.Dispose();
                 }
             });
         });
@@ -260,6 +268,7 @@ public sealed class PetGmCommands : ICommandGroup
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
         SummonService? summons = context.Session.Services.GetService<PetsFeature>()?.Service;
         ILogger log = context.Session.Logger;
+        IDisposable hold = context.Defer(); // open until the world-thread reply ran
         _ = Task.Run(async () =>
         {
             string reply;
@@ -301,7 +310,17 @@ public sealed class PetGmCommands : ICommandGroup
                 reply = PetStoreFailed;
             }
 
-            context.World.Post(() => context.Reply(reply));
+            context.World.Post(() =>
+            {
+                try
+                {
+                    context.Reply(reply);
+                }
+                finally
+                {
+                    hold.Dispose();
+                }
+            });
         });
     }
 

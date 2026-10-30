@@ -424,6 +424,30 @@ public sealed class ZoneScriptBatch7Tests
     }
 
     [Fact]
+    public void Kindal_MultiShotIsRearmedAfterACast_SoItFiresOncePerEightToElevenSeconds()
+    {
+        // mangos-classic feralas.cpp npc_kindal_moonweaver re-arms m_shootTimer where m_multiShotTimer is meant (a typo); retail intends one Multi-Shot per urand(8,11) s.
+        using var rig = new Rig(KindalMoonweaverAI.Entry, "Kindal Moonweaver", KindalTexts,
+            extraTemplates: [Template(KalimdorWorldMapData.NpcGrimtotemRaider, Tpl("Grimtotem Raider", 14))],
+            extraSpawns: [Spawn(2, KalimdorWorldMapData.NpcGrimtotemRaider, 14f, 0f)], faction: 231);
+        rig.Npc.MaxHealth = HugeHealth;
+        rig.Npc.Health = HugeHealth;
+        Creature raider = rig.One(KalimdorWorldMapData.NpcGrimtotemRaider);
+        raider.MaxHealth = HugeHealth;
+        raider.Health = HugeHealth;
+        rig.System.AttackStart(rig.Npc, raider);
+
+        for (int elapsed = 0; elapsed < 30_000; elapsed += 100)
+        {
+            rig.Npc.Relocate(0f, 0f, Z, 0, 0); // hold her at range: the cast gate is the distance to the victim
+            rig.World.RunTick(100);
+        }
+
+        int multiShots = rig.Caster.Casts.Count(c => c.Spell == KindalMoonweaverAI.SpellMultiShot);
+        Assert.InRange(multiShots, 1, 4); // 30 s of 8-11 s timers; the unarmed timer cast on every tick
+    }
+
+    [Fact]
     public void Kindal_DoneWithoutTheQuestIncomplete_ThanksWithoutCredit()
     {
         using var rig = new Rig(KindalMoonweaverAI.Entry, "Kindal Moonweaver", KindalTexts);

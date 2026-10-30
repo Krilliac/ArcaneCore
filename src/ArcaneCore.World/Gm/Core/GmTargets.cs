@@ -85,6 +85,7 @@ public static class GmTargets
 
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
         ILogger logger = context.Session.Logger;
+        IDisposable hold = context.Defer(); // open until the posted action (or refusal) ran; released on the world thread below
         _ = Task.Run(async () =>
         {
             var owners = new List<AccountSecurity?>(others.Length);
@@ -99,24 +100,42 @@ public static class GmTargets
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 logger.LogError(ex, "reading the security of accounts {AccountIds} for a GM command failed", string.Join(",", others));
-                context.World.Post(() => context.Reply(AccountLookupFailed));
+                context.Fail("failed");
+                context.World.Post(() =>
+                {
+                    try
+                    {
+                        context.Reply(AccountLookupFailed);
+                    }
+                    finally
+                    {
+                        hold.Dispose();
+                    }
+                });
                 return;
             }
 
             context.World.Post(() =>
             {
-                if (unknownAccountIsNotFound && owners.Contains(null))
+                try
                 {
-                    context.Reply(GmStrings.PlayerNotFound);
+                    if (unknownAccountIsNotFound && owners.Contains(null))
+                    {
+                        context.Reply(GmStrings.PlayerNotFound);
+                    }
+                    else if (owners.Any(owner => owner is { } security
+                        && GmSecurity.HasLowerSecurity(context.Security, security, strong: false, context.Commands.Gm)))
+                    {
+                        context.Reply(GmStrings.SecurityTooLow);
+                    }
+                    else
+                    {
+                        act();
+                    }
                 }
-                else if (owners.Any(owner => owner is { } security
-                    && GmSecurity.HasLowerSecurity(context.Security, security, strong: false, context.Commands.Gm)))
+                finally
                 {
-                    context.Reply(GmStrings.SecurityTooLow);
-                }
-                else
-                {
-                    act();
+                    hold.Dispose();
                 }
             });
         });

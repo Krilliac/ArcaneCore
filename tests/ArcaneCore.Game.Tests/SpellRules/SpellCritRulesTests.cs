@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Tests.CombatCore;
@@ -53,6 +54,23 @@ public sealed class SpellCritRulesTests
         Assert.Equal(5f, allowed.CritChance(kit.System, caster, bolt));
         kit.System.Random = new ScriptedRandom(0);
         Assert.False(new VanillaSpellCombatRules().RollCrit(kit.System, caster, target, bolt));
+    }
+
+    [Fact]
+    public void PlayerOwnedCreatures_CritWithSpells_ByDefault()
+    {
+        // vmangos Unit.cpp:5216-5218: "Mobs cannot land critical strikes with spells, but totems and pets can."
+        using SpellTestKit kit = Kit();
+        (Player owner, _) = kit.AddPlayer(1);
+        Creature pet = FoundationTests.MakeCreature(0, 20);
+        pet.SetOwnerGuid(owner.Guid);
+        Creature npcOwned = FoundationTests.MakeCreature(0, 20);
+        npcOwned.SetOwnerGuid(ObjectGuid.WithEntry(HighGuid.Unit, 1, 1));
+        SpellInfo bolt = kit.Store.Get(Bolt)!;
+        var rules = new VanillaSpellCombatRules();
+
+        Assert.Equal(5f, rules.CritChance(kit.System, pet, bolt));
+        Assert.Equal(0f, rules.CritChance(kit.System, npcOwned, bolt));
     }
 
     [Fact]

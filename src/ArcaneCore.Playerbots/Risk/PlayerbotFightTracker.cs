@@ -80,14 +80,16 @@ internal sealed class PlayerbotFightTracker
     internal PlayerbotFightFacts Observe(Player player, IReadOnlyList<Creature> enemies, Creature target, uint nowMs, float priorIn, float priorOut)
     {
         var health = new Dictionary<ObjectGuid, uint>(enemies.Count);
+        var seen = new Dictionary<ObjectGuid, Creature>(enemies.Count);
         foreach (Creature enemy in enemies.Take(MaxEnemies))
         {
             health[enemy.Guid] = enemy.Health;
+            seen[enemy.Guid] = enemy;
             _anchors.TryAdd(enemy.Guid, new Vector3(enemy.X, enemy.Y, enemy.Z));
         }
 
         LastEnemies = [.. enemies];
-        _samples.Enqueue(new Sample(nowMs, player.Health, health));
+        _samples.Enqueue(new Sample(nowMs, player.Health, health, seen));
         while (_samples.Count > 2 && unchecked(nowMs - _samples.Peek().AtMs) > WindowMs) _samples.Dequeue();
         Rate(out float dpsIn, out float dpsOut, out bool measured);
         if (!measured)
@@ -119,13 +121,14 @@ internal sealed class PlayerbotFightTracker
         float dealt = 0;
         foreach ((ObjectGuid guid, uint now) in last.Enemies)
             if (first.Enemies.TryGetValue(guid, out uint before) && before > now) dealt += before - now;
-        // An enemy that died inside the window took its remaining health with it.
+        // An enemy that died inside the window took its remaining health with it. One that merely left the sample alive (it
+        // evaded, changed map, or fell off the 16-enemy cap) took none: its health was not the bot's damage.
         foreach ((ObjectGuid guid, uint before) in first.Enemies)
-            if (!last.Enemies.ContainsKey(guid)) dealt += before;
+            if (!last.Enemies.ContainsKey(guid) && first.Creatures.TryGetValue(guid, out Creature? gone) && !gone.IsAlive) dealt += before;
         dpsOut = dealt / seconds;
         measured = span >= MinimumSpanMs;
         return true;
     }
 
-    private sealed record Sample(uint AtMs, uint BotHealth, Dictionary<ObjectGuid, uint> Enemies);
+    private sealed record Sample(uint AtMs, uint BotHealth, Dictionary<ObjectGuid, uint> Enemies, Dictionary<ObjectGuid, Creature> Creatures);
 }

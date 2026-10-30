@@ -61,6 +61,23 @@ public sealed class GatewayWorkerEndpointStopTests
     }
 
     [Fact]
+    public async Task StopInOrder_WhenHostDisposeRunsOutOfMemory_PropagatesItUnwrapped_WithoutStoppingTheAcceptor()
+    {
+        bool acceptorStopped = false;
+
+        await Assert.ThrowsAsync<OutOfMemoryException>(() =>
+            GatewayWorkerEndpoint.StopInOrderAsync(
+                () => throw new OutOfMemoryException(),
+                () =>
+                {
+                    acceptorStopped = true;
+                    return Task.CompletedTask;
+                }));
+
+        Assert.False(acceptorStopped);
+    }
+
+    [Fact]
     public async Task StopInOrder_WithNothingToStop_Completes()
     {
         await GatewayWorkerEndpoint.StopInOrderAsync(null, null);

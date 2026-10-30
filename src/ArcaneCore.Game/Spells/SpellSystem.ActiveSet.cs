@@ -64,6 +64,9 @@ public sealed partial class SpellSystem
     /// <summary>Stale dormant states the audit found and woke (each one is a missed wake site).</summary>
     internal long ActiveSetStaleHeals { get; private set; }
 
+    /// <summary>Test seam: where the stale-state audit resumes in the all-states list (kept across a compaction of that list).</summary>
+    internal int AuditPositionForTests => _auditPosition;
+
     /// <summary>States <see cref="Update"/> visited on the last tick.</summary>
     internal int LastStatesVisited { get; private set; }
 

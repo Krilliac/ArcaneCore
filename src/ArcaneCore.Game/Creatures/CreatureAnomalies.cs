@@ -65,6 +65,12 @@ public static class CreatureAnomalies
     /// <summary>Duration (ms) of active movement intent with less than <see cref="StuckMinProgressYards"/> progress before reporting stuck.</summary>
     public const uint StuckThresholdMs = 6_000;
 
+    /// <summary>
+    /// The most one frame can add to a stuck episode (ms). A world-tick hang of 6 to 12 s is one frame, not that much time spent stuck, and
+    /// without the cap a single hung frame crosses <see cref="StuckThresholdMs"/> or <see cref="StuckInCombatEmptyMs"/> by itself.
+    /// </summary>
+    public const uint MaxChargedFrameMs = 1_000;
+
     /// <summary>Minimum 3D distance (yards) a moving creature must cover within <see cref="StuckThresholdMs"/> to count as making progress.</summary>
     public const float StuckMinProgressYards = 0.5f;
 

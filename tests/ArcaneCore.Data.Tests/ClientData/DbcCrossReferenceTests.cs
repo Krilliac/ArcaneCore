@@ -82,6 +82,18 @@ public sealed class DbcCrossReferenceTests
         Assert.Equal(DbcReferenceStatus.Dangling, unexpected.Status);
     }
 
+    [Theory]
+    [InlineData("\"", "\"", "WHERE \"Id\" > 0 AND \"IsServerSide\" = 0 GROUP BY \"Id\"")]
+    [InlineData("`", "`", "WHERE `Id` > 0 AND `IsServerSide` = 0 GROUP BY `Id`")]
+    public void SpellTemplateQuery_QuotesTheWhereColumn_SoPostgreSqlKeepsItsCase(string open, string close, string tail)
+    {
+        DbcReference spell = DbcCrossReferences.All.Single(r => r.Table == "spell_template");
+
+        string sql = DbcCrossReferences.BuildCountSql(spell, open, close);
+
+        Assert.EndsWith(tail, sql, StringComparison.Ordinal);
+    }
+
     private static string NewWorld(string directory, params string[] statements)
     {
         string path = Path.Combine(directory, "world.db");

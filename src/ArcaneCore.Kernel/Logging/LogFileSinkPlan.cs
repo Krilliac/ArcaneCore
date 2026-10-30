@@ -34,7 +34,8 @@ public sealed record LogFileSinkWarning(string Key, string Message, string Fix);
 /// warning, they fail startup only under <c>Startup:Strict=true</c>) and the provider logs them at startup.
 /// Key <c>Logging:ArcaneCore:Format</c>: Format unset with File and Json both enabled. Key <c>Logging:ArcaneCore:Json:Enabled</c>:
 /// Format unset with Json enabled alone (deprecated alias), or Format set with <c>Json:Enabled</c> set. Key
-/// <c>Logging:ArcaneCore:Json:Path</c>: Format set with <c>Json:Path</c> set and different from <c>File:Path</c>.
+/// <c>Logging:ArcaneCore:Json:Path</c>: Format set with <c>Json:Path</c> set and different from <c>File:Path</c>, with the file sink enabled
+/// (with logging off the deprecated path has no effect and warns nothing).
 /// </para>
 /// </summary>
 /// <param name="Enabled">Whether the file sink runs.</param>
@@ -127,7 +128,11 @@ public sealed record LogFileSinkPlan(
 
             var warnings = new List<LogFileSinkWarning>(1);
             bool jsonPathSet = !string.IsNullOrEmpty(json.Path);
-            if (json.Enabled || (jsonPathSet && !SamePath(json.Path!, file.Path)))
+            bool enabled = file.Enabled || json.Enabled;
+
+            // A deprecated Json:Path alone only matters when a file is written: with logging off it has no effect, so it warns nothing
+            // (a warning here would fail startup under Startup:Strict for a configuration that does nothing).
+            if (json.Enabled || (enabled && jsonPathSet && !SamePath(json.Path!, file.Path)))
             {
                 string keys = json.Enabled && jsonPathSet ? "Json:Enabled and Json:Path" : json.Enabled ? "Json:Enabled" : "Json:Path";
                 warnings.Add(new LogFileSinkWarning(
@@ -137,7 +142,7 @@ public sealed record LogFileSinkPlan(
                     "move Enabled and Path to Logging:ArcaneCore:File and remove the Logging:ArcaneCore:Json section"));
             }
 
-            return new LogFileSinkPlan(file.Enabled || json.Enabled, format, path, file.RollSizeMb, file.RollDaily, file.Retain, file.QueueCapacity, FileSection, pathKey, warnings);
+            return new LogFileSinkPlan(enabled, format, path, file.RollSizeMb, file.RollDaily, file.Retain, file.QueueCapacity, FileSection, pathKey, warnings);
         }
 
         string textPath = string.IsNullOrEmpty(file.Path) ? DefaultTextPath : file.Path;

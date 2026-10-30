@@ -973,19 +973,29 @@ internal static class PlayerbotNavigation
             if (!trial && !chase && route.Navigated && player.Map is { } smoothMap && smoothMap.Collision.MeshPoints is not null)
             {
                 // Prefer the shaped route; when the risk check rejects it, fall back to the smoothed route, then to the raw route.
+                // Thread: Plan, VaryAndSmooth and Shape run on the owner (world) thread, also when the paths come from an async plan: the
+                // PlayerbotNavigationExecutor worker only runs IPathfinder.FindPath for a request, and the plan replays its answers here.
+                // So Guards and the mesh access need no lock, and the lateral variation has no Random (it derives from the bot guid).
                 PlayerbotRoute smoothedOnly = PlayerbotRouteSmoothing.VaryAndSmooth(
                     player, smoothMap, route, varyLateral: !PlayerbotMotion.IsActive(player));
                 PlayerbotRoute shaped = PlayerbotPathShaping.Shape(smoothMap, smoothedOnly, options);
-                foreach (PlayerbotRoute candidate in (PlayerbotRoute[])[shaped, smoothedOnly])
+                PlayerbotRoute? chosen = null;
+                if (!ReferenceEquals(shaped, route)
+                    && risk?.Blocking(player, shaped.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is null)
                 {
-                    if (ReferenceEquals(candidate, route))
-                        continue;
-                    if (risk?.Blocking(player, candidate.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is not null)
-                        continue;
-                    candidate.MeshEndedShort = route.MeshEndedShort;
-                    candidate.MeshPoints ??= route.MeshPoints ?? candidate.Points;
-                    route = candidate;
-                    break;
+                    chosen = shaped;
+                }
+                else if (!ReferenceEquals(smoothedOnly, route) && !ReferenceEquals(shaped, smoothedOnly)
+                    && risk?.Blocking(player, smoothedOnly.Points, completedReturn: completedQuestReturn, crossBesidePlaceMarks: crossBeside, chase: chase) is null)
+                {
+                    chosen = smoothedOnly;
+                }
+
+                if (chosen is not null)
+                {
+                    chosen.MeshEndedShort = route.MeshEndedShort;
+                    chosen.MeshPoints ??= route.MeshPoints ?? chosen.Points;
+                    route = chosen;
                 }
             }
 

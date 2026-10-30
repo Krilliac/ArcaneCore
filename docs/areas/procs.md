@@ -145,6 +145,8 @@ the dump's build-5875 rows in one transaction; `--cooldown-unit seconds` for cla
 store loads only rows whose `build_min..build_max` holds 5875 (vmangos `WHERE 5875 BETWEEN build_min AND build_max`), so rows copied into the
 table straight from a vmangos dump are filtered too.
 
+Schema gate: like `refresh`, the command never upgrades an existing world silently. A world whose schema is behind the importer's is refused with exit code 3 (`ExitCodes.Schema`) and nothing is changed; pass `--migrate` to upgrade it first (the step is reported as `world schema N -> M (--migrate)`). A database that holds no schema is still created. The same gate applies to `import`, `import-dbc`, `import-map-dbc`, `spell-threat`, `convert-rules` and `refresh-portals` (named in the error).
+
 The lane was given world 41 by the wave-2 plan and held 38-40 open with empty placeholder steps; the 2026-10-07 integration deleted every
 placeholder and renumbered the wave-2 world steps down to 38-41, so this step is 39 (docs/integration/wave2-20261007.md).
 

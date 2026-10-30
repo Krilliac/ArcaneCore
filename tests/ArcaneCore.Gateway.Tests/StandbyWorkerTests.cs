@@ -41,7 +41,7 @@ public sealed class StandbyWorkerTests
 
         Assert.Equal(standby, !services.Any(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(WorldServer)));
         ServiceDescriptor guard = Assert.Single(services, d => d.ServiceType == typeof(WorldWriterGuard));
-        Assert.Equal(standby, guard.ImplementationInstance is not null); // the standby's guard has no database options: Acquire takes nothing
+        Assert.Equal(standby, guard.ImplementationFactory is not null); // the standby's guard keeps the database options but defers the lock to promotion: Acquire takes nothing
         using ServiceProvider provider = services.BuildServiceProvider();
         WorkerAdmission admission = provider.GetRequiredService<WorkerAdmission>();
         Assert.Equal(!standby, admission.IsOpen);
@@ -143,6 +143,7 @@ public sealed class StandbyWorkerTests
             standbyHost.PromoteAsync(handed with { Epoch = handed.Epoch + 1 }, cts.Token));
         Assert.True(standbyHost.IsStandby);
 
+        ReleaseWriterLock(active);
         await standbyHost.PromoteAsync(handed, cts.Token);
         Assert.False(standbyHost.IsStandby);
         Assert.Equal(handed, standby.World.CharacterOwnership);
@@ -182,6 +183,37 @@ public sealed class StandbyWorkerTests
         }
     }
 
+    internal static void ReleaseWriterLock(SyntheticArcaneServer server) => server.Services.GetRequiredService<WorldWriterGuard>().Dispose();
+
+    [Fact]
+    public async Task APromotion_IsRefusedWhileTheOldWorldHoldsTheWriterLock_AndSucceedsAfterItIsReleased()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer active = await StartActiveAsync(cts.Token);
+        await using SyntheticArcaneServer standby = await StartStandbyAsync(active, cts.Token);
+        WorldHost standbyHost = Host(standby);
+        WorldWriterGuard activeGuard = active.Services.GetRequiredService<WorldWriterGuard>();
+        WorldWriterGuard standbyGuard = standby.Services.GetRequiredService<WorldWriterGuard>();
+        Assert.NotNull(activeGuard.LockPath); // the active world holds the sidecar lock (the premise of this test: a file-backed SQLite database)
+        Assert.Null(standbyGuard.LockPath);   // a standby holds none until it is promoted
+
+        CharacterOwnershipToken handed = await TakeOverAsync(standby, active.World.CharacterOwnership!, cts.Token);
+
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => standbyHost.PromoteAsync(handed, cts.Token));
+        Assert.Contains("writer lock", refused.Message);
+        Assert.Contains("stays a standby", refused.Message);
+        Assert.True(standbyHost.IsStandby);
+        Assert.Null(standbyGuard.LockPath);
+        Assert.Null(standby.World.CharacterOwnership);
+        Assert.False(standby.Services.GetRequiredService<WorkerAdmission>().IsOpen);
+
+        ReleaseWriterLock(active);
+        await standbyHost.PromoteAsync(handed, cts.Token); // the refused promotion did not use up the one promotion
+        Assert.False(standbyHost.IsStandby);
+        Assert.NotNull(standbyGuard.LockPath);
+        Assert.Equal(handed, standby.World.CharacterOwnership);
+    }
+
     internal static async Task<CharacterOwnershipToken> TakeOverAsync(SyntheticArcaneServer standby, CharacterOwnershipToken old, CancellationToken token)
     {
         WorldHost host = Host(standby);
@@ -201,6 +233,7 @@ public sealed class StandbyWorkerTests
 
         CharacterOwnershipToken handed = await TakeOverAsync(standby, old, cts.Token);
 
+        ReleaseWriterLock(active); // the old world gives up its writer lock (a handoff does this after the takeover)
         await standbyHost.PromoteAsync(handed, cts.Token);
         Assert.False(standbyHost.IsStandby);
         Assert.Equal(handed, standby.World.CharacterOwnership);

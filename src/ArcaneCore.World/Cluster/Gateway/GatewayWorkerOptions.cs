@@ -15,7 +15,7 @@ public sealed class GatewayWorkerOptions
     /// <summary>`true` opens the gateway listener (worker mode) and makes character fencing mandatory: Cluster:Fencing:Enabled must be true, and the characters write fence is attached either way. `false`, the default, is Combined mode: no listener, no change.</summary>
     public bool Enabled { get; set; }
 
-    /// <summary>Standby (Tier 3b handoff target; needs Enabled): start the process, build its services and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock, open no World:Port listener, and attach no feature nor start the simulation until promoted by a handoff (features read the characters database, which the active world still owns). `false`, the default, is an active worker.</summary>
+    /// <summary>Standby (Tier 3b handoff target; needs Enabled): start the process, build its services and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock until promoted (promotion takes it and is refused while the old world holds it), open no World:Port listener, and attach no feature nor start the simulation until promoted by a handoff (features read the characters database, which the active world still owns). `false`, the default, is an active worker.</summary>
     public bool Standby { get; set; }
 
     /// <summary>Address of the gateway listener. Keep it on loopback or a private network: the link is not encrypted.</summary>

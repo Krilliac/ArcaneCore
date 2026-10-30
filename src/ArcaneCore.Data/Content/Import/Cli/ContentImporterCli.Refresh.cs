@@ -313,15 +313,15 @@ public static partial class ContentImporterCli
             }
         }
 
-        Count(GraveyardDataModule.SafeLocsTable, graveyardReport.SafeLocs, graveyards.HasRows);
-        Count(GraveyardDataModule.GraveyardZoneTable, graveyardReport.Links, graveyards.HasRows);
+        Count(GraveyardDataModule.SafeLocsTable, graveyardReport.SafeLocs, graveyards.HasSafeLocs);
+        Count(GraveyardDataModule.GraveyardZoneTable, graveyardReport.Links, graveyards.HasLinks);
         bool anyBattleground = battlegroundReport.Templates + battlegroundReport.CreatureEvents + battlegroundReport.GameObjectEvents + battlegroundReport.Battlemasters > 0;
         Count(BattlegroundWorldDataModule.TemplateTable, battlegroundReport.Templates, anyBattleground);
         Count(BattlegroundWorldDataModule.CreatureEventTable, battlegroundReport.CreatureEvents, anyBattleground);
         Count(BattlegroundWorldDataModule.GameObjectEventTable, battlegroundReport.GameObjectEvents, anyBattleground);
         Count(BattlegroundWorldDataModule.BattlemasterTable, battlegroundReport.Battlemasters, anyBattleground);
         Count("exploration_basexp", worldState.BaseXp.Count, worldState.BaseXp.Count > 0);
-        Count("game_weather", worldState.Weather.Count, worldState.BaseXp.Count > 0 || worldState.Weather.Count > 0);
+        Count("game_weather", worldState.Weather.Count, worldState.Weather.Count > 0);
         Count(AreaTriggerTavernDataModule.Table, taverns.Ids.Count, taverns.SawTable);
         Count("areatrigger_teleport (requirements)", portalRequirements.Count, portalRequirements.Count > 0);
         Count(InstanceEncounterDataModule.Table, encounters.Rows.Count, encounters.SawTable);
@@ -424,12 +424,12 @@ public static partial class ContentImporterCli
             try
             {
                 await using WorldDbContext db = OpenWorld(target);
-                await EnsureRefreshSchemaAsync(db, migrate, o, ct).ConfigureAwait(false);
+                await EnsureImporterSchemaAsync(db, migrate, o, ct).ConfigureAwait(false);
                 await ImportTransaction.RunAsync(db, async token =>
                 {
                     if (graveyards.HasRows)
                     {
-                        await graveyards.WriteAsync(db, replace: true, token).ConfigureAwait(false);
+                        await graveyards.WriteAsync(db, replace: true, token, onlyCarried: true).ConfigureAwait(false);
                     }
 
                     if (anyBattleground)
@@ -439,7 +439,7 @@ public static partial class ContentImporterCli
 
                     if (worldState.BaseXp.Count > 0 || worldState.Weather.Count > 0)
                     {
-                        await WorldStateDumpImporter.WriteAsync(db, worldState, replace: true, token).ConfigureAwait(false);
+                        await WorldStateDumpImporter.WriteAsync(db, worldState, replace: true, token, onlyCarried: true).ConfigureAwait(false);
                     }
 
                     await taverns.ReplaceAsync(db, token).ConfigureAwait(false);
@@ -768,7 +768,7 @@ public static partial class ContentImporterCli
     /// library default <c>Always</c>, which would upgrade a production world silently).
     /// </para>
     /// </summary>
-    private static async Task EnsureRefreshSchemaAsync(WorldDbContext db, bool migrate, TextWriter o, CancellationToken ct, string verb = "refresh", bool createMissing = false)
+    private static async Task EnsureImporterSchemaAsync(WorldDbContext db, bool migrate, TextWriter o, CancellationToken ct, string verb = "refresh", bool createMissing = false)
     {
         SchemaPlan before = await SchemaPlanner.PlanAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
         SchemaPolicy policy = migrate ? SchemaPolicy.Always : createMissing ? SchemaPolicy.CreateOnly : SchemaPolicy.Never;

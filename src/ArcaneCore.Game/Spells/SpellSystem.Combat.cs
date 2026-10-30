@@ -384,7 +384,9 @@ public sealed partial class SpellSystem
         }
 
         float roll = min + (float)(Random.NextDouble() * (max - min));
-        if (!normalized)
+        // vmangos Unit::CalculateDamage normalizes only for a player (Unit.cpp:2295); a creature's min/max damage already include its attack
+        // power (Creature::UpdateAttackPowerAndDamage), so its normalized roll is the plain roll.
+        if (!normalized || unit is not Player)
         {
             return roll;
         }

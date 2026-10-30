@@ -212,22 +212,37 @@ public sealed class ArcaneLoggerProvider : ILoggerProvider, ISupportExternalScop
         }
 
         ReportFixed("Console:QueueCapacity", previous.Console.QueueCapacity, next.Console.QueueCapacity);
-        ReportFixed("Format", FormatText(previous.Format), FormatText(next.Format));
-        ReportFixed("File:Enabled", previous.File.Enabled, next.File.Enabled);
-        ReportFixed("File:Path", PathText(previous.File.Path), PathText(next.File.Path));
-        ReportFixed("File:RollSizeMb", previous.File.RollSizeMb, next.File.RollSizeMb);
-        ReportFixed("File:RollDaily", previous.File.RollDaily, next.File.RollDaily);
-        ReportFixed("File:Retain", previous.File.Retain, next.File.Retain);
-        ReportFixed("File:QueueCapacity", previous.File.QueueCapacity, next.File.QueueCapacity);
-        ReportFixed("Json:Enabled", previous.Json.Enabled, next.Json.Enabled);
-        ReportFixed("Json:Path", PathText(previous.Json.Path), PathText(next.Json.Path));
-        ReportFixed("Json:RollSizeMb", previous.Json.RollSizeMb, next.Json.RollSizeMb);
-        ReportFixed("Json:RollDaily", previous.Json.RollDaily, next.Json.RollDaily);
-        ReportFixed("Json:Retain", previous.Json.Retain, next.Json.Retain);
-        ReportFixed("Json:QueueCapacity", previous.Json.QueueCapacity, next.Json.QueueCapacity);
+        ReportFixedFileSink(previous, next);
     }
 
-    private static string FormatText(LogFileFormat? format) => format?.ToString() ?? "(unset)";
+    /// <summary>
+    /// The file sink is restart-only. What the daemon would write is the resolved <see cref="LogFileSinkPlan"/>, not the raw keys, so the
+    /// previous and next options are compared as plans: moving a path between <c>Json:Path</c> and <c>File:Path</c>, or changing a key the
+    /// resolution ignores, resolves to the same plan and logs nothing. Each difference is reported under the key the plan reads it from.
+    /// </summary>
+    private void ReportFixedFileSink(ArcaneLoggingOptions previous, ArcaneLoggingOptions next)
+    {
+        LogFileSinkPlan was = LogFileSinkPlan.Resolve(previous);
+        LogFileSinkPlan wanted = LogFileSinkPlan.Resolve(next);
+        ReportFixed("File:Enabled", was.Enabled, wanted.Enabled);
+        if (!was.Enabled && !wanted.Enabled)
+        {
+            return;
+        }
+
+        if (was.Enabled && wanted.Enabled)
+        {
+            ReportFixed("Format", was.Format.ToString(), wanted.Format.ToString());
+        }
+
+        const string Prefix = ArcaneLoggingOptions.SectionName + ":";
+        ReportFixed(wanted.PathKey[Prefix.Length..], PathText(was.Path), PathText(wanted.Path));
+        string section = wanted.Section[Prefix.Length..];
+        ReportFixed(section + ":RollSizeMb", was.RollSizeMb, wanted.RollSizeMb);
+        ReportFixed(section + ":RollDaily", was.RollDaily, wanted.RollDaily);
+        ReportFixed(section + ":Retain", was.Retain, wanted.Retain);
+        ReportFixed(section + ":QueueCapacity", was.QueueCapacity, wanted.QueueCapacity);
+    }
 
     private static string PathText(string? path) => string.IsNullOrEmpty(path) ? "(unset)" : path;
 

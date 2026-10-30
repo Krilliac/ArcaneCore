@@ -5,6 +5,7 @@ using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Characters.Playerbots;
 using ArcaneCore.Data.Schema;
+using ArcaneCore.Data.Schema.Upgrade.Cli;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
@@ -93,7 +94,7 @@ public sealed class WorldHostSingleWriterTests
 
         Assert.Equal(0, firstCode);
         Assert.Equal(1, firstInitializations);
-        Assert.NotEqual(0, secondCode);
+        Assert.Equal(DbUpgradeExitCodes.Refused, secondCode); // refused at once (4), never retried and never reported as unreachable (6)
         Assert.Equal(0, secondInitializations);
         Assert.False(File.Exists(database)); // the file was never opened, created or upgraded
         Assert.Contains("already owned by another world process", secondError.ToString());
@@ -166,7 +167,7 @@ public sealed class WorldHostSingleWriterTests
         var contendedError = new StringWriter();
         int contendedCode = await WorldStartup.RunAsync(contended, () => throw new InvalidOperationException("must not initialize"), contendedError, () => 0);
         contended.Dispose();
-        Assert.NotEqual(0, contendedCode);
+        Assert.Equal(DbUpgradeExitCodes.Refused, contendedCode);
         Assert.Contains("already owned by another world process", contendedError.ToString());
 
         string unusable = Path.Combine(directory.Path, "other.db");
@@ -175,7 +176,7 @@ public sealed class WorldHostSingleWriterTests
         var brokenError = new StringWriter();
         int brokenCode = await WorldStartup.RunAsync(broken, () => throw new InvalidOperationException("must not initialize"), brokenError, () => 0);
         broken.Dispose();
-        Assert.Equal(contendedCode, brokenCode);
+        Assert.Equal(DbUpgradeExitCodes.Refused, brokenCode);
         Assert.Contains("could not create the characters database writer lock", brokenError.ToString());
         Assert.DoesNotContain("already owned", brokenError.ToString());
     }
@@ -214,6 +215,8 @@ public sealed class WorldHostSingleWriterTests
         {
             services.AddSingleton(database);
             services.AddSingleton<WorldWriterGuard>();
+            services.AddLogging();
+            services.AddDatabaseResilience(new ConfigurationBuilder().Build()); // with the DatabaseGuard, as production registers it
             services.AddSingleton<IHostedService>(sp => service(sp.GetRequiredService<IHostApplicationLifetime>()));
         }).Build();
 
@@ -236,17 +239,17 @@ public sealed class WorldHostSingleWriterTests
     }
 
     private static IServiceProvider Services(WorldWriterGuard guard)
-        => new ServiceCollection().AddSingleton(guard).BuildServiceProvider();
+        => new ServiceCollection().AddLogging().AddSingleton(guard).AddDatabaseResilience(new ConfigurationBuilder().Build()).BuildServiceProvider(); // with the DatabaseGuard, as production registers it
 
     [Fact]
-    public async Task AServerDatabase_IsNotFileLocked_ItReliesOnTheDurableClaim()
+    public async Task AServerDatabase_TakesTheAdvisoryLock_SoAnUnreachableServerFailsTheStartBeforeAnyClaim()
     {
-        var options = Options.Create(new DatabaseOptions { Provider = DatabaseProvider.MariaDb, ConnectionString = "Server=nowhere;Database=characters" });
-        await using Kit first = Kit.Create(options, fencing: false);
-        await using Kit second = Kit.Create(options, fencing: false);
+        // A server database is guarded by a session advisory lock on a dedicated connection (CharacterDatabaseWriterLockTests runs the refusal against a real server).
+        // Here there is no server: the start must reach for the lock and fail with the driver's own error, not skip it and start a second writer.
+        var options = Options.Create(new DatabaseOptions { Provider = DatabaseProvider.MariaDb, ConnectionString = "Server=nowhere.invalid;Database=characters;Connection Timeout=2" });
+        await using Kit kit = Kit.Create(options, fencing: false);
 
-        await first.Host.StartAsync(CancellationToken.None);
-        await second.Host.StartAsync(CancellationToken.None);
+        await Assert.ThrowsAnyAsync<System.Data.Common.DbException>(() => kit.Host.StartAsync(CancellationToken.None));
     }
 
     [Fact]

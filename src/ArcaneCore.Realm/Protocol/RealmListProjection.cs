@@ -26,7 +26,9 @@ public readonly record struct RealmView(RealmFlags Flags, TimeSpan? HeartbeatAge
 public static class RealmListProjection
 {
     /// <summary>How far ahead of the realm daemon's clock a heartbeat may be and still count as fresh (clock drift between hosts).</summary>
-    public static readonly TimeSpan MaxClockSkew = TimeSpan.FromSeconds(5);
+    public const int MaxClockSkewSeconds = 5;
+
+    public static readonly TimeSpan MaxClockSkew = TimeSpan.FromSeconds(MaxClockSkewSeconds);
 
     /// <summary>The view of one realm for one account at <paramref name="now"/>.</summary>
     public static RealmView Evaluate(RealmEntry realm, AccountSecurity accountSecurity, DateTimeOffset now, RealmLivenessOptions options)

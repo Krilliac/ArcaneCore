@@ -148,6 +148,7 @@ public sealed class ResetCommands : ICommandGroup
     private static void Store<T>(CommandContext context, TalentFeature feature, Func<ITalentResetFlagStore, Task<T>> work, Action<T> done)
     {
         ILogger logger = context.Session.Logger;
+        IDisposable hold = context.Defer(); // open until the world-thread reply ran
         _ = Task.Run(async () =>
         {
             T result;
@@ -158,11 +159,32 @@ public sealed class ResetCommands : ICommandGroup
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 logger.LogError(ex, "storing a talent reset request failed");
-                context.World.Post(() => context.Reply(StoreFailed));
+                context.Fail("failed");
+                context.World.Post(() =>
+                {
+                    try
+                    {
+                        context.Reply(StoreFailed);
+                    }
+                    finally
+                    {
+                        hold.Dispose();
+                    }
+                });
                 return;
             }
 
-            context.World.Post(() => done(result));
+            context.World.Post(() =>
+            {
+                try
+                {
+                    done(result);
+                }
+                finally
+                {
+                    hold.Dispose();
+                }
+            });
         });
     }
 }

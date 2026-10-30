@@ -37,6 +37,13 @@ public sealed partial class SpellSystem
     private bool WaitsForCreatedObject(Unit unit, SpellInfo spell)
         => spell.HasAttribute(SpellAttributes.CooldownOnEvent) && SpellObjects.IsCreatedBySpell(unit, spell.Id);
 
+    /// <summary>
+    /// Whether a stored cooldown or lockout end lies after <paramref name="now"/>. <see cref="NowMs"/> wraps every 2^32 ms (about 49.7 days),
+    /// so the ends are compared as a signed difference: correct for any span under 2^31 ms (cooldowns are capped at
+    /// <see cref="MaxReasonableCooldownMs"/>, 7 days).
+    /// </summary>
+    internal static bool IsStillRunning(uint until, uint now) => unchecked((int)(until - now)) > 0;
+
     private bool IsSpellReady(UnitSpellState state, SpellInfo spell, uint? itemCategory = null, Item? castItem = null, bool includeGlobal = true)
     {
         ItemSpellCooldown cooldown = ItemSpellCooldowns.Pick(spell, castItem);
@@ -46,14 +53,14 @@ public sealed partial class SpellSystem
         }
 
         uint now = NowMs;
-        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && until > now)
+        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && IsStillRunning(until, now))
         {
             return false;
         }
 
         // crafting lane: an item spell may carry its own category (Player.cpp:22139-22160); an explicit item use passes it.
         uint category = itemCategory ?? cooldown.Category;
-        if (category != 0 && state.CategoryCooldowns.TryGetValue(category, out until) && until > now)
+        if (category != 0 && state.CategoryCooldowns.TryGetValue(category, out until) && IsStillRunning(until, now))
         {
             return false;
         }
@@ -64,12 +71,12 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        if (spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now)
+        if (spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && IsStillRunning(until, now))
         {
             return false;
         }
 
-        return !includeGlobal || !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && until > now);
+        return !includeGlobal || !(state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out until) && IsStillRunning(until, now));
     }
 
     /// <summary>vmangos Player::AddGCD (see <see cref="SpellConstants.GlobalCooldownCategory"/>).</summary>
@@ -183,7 +190,7 @@ public sealed partial class SpellSystem
         if (category != 0 && categoryRecovery > 0)
         {
             // vmangos CooldownMap::AddCooldown: a running category cooldown keeps its original owner and is only extended.
-            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || running <= now)
+            if (!state.CategoryOwners.ContainsKey(category) || !state.CategoryCooldowns.TryGetValue(category, out uint running) || !IsStillRunning(running, now))
             {
                 state.CategoryOwners[category] = spell.Id;
             }
@@ -245,11 +252,11 @@ public sealed partial class SpellSystem
         var result = new List<InitialSpellCooldown>();
         foreach ((uint spellId, uint until) in state.SpellCooldowns)
         {
-            if (until > now && Store.Get(spellId) is { } spell)
+            if (IsStillRunning(until, now) && Store.Get(spellId) is { } spell)
             {
                 ItemCooldownOwner owner = state.CooldownOwners.GetValueOrDefault(spellId);
                 uint categoryId = owner.Category != 0 ? owner.Category : spell.Category;
-                uint category = categoryId != 0 && state.CategoryCooldowns.TryGetValue(categoryId, out uint catUntil) && catUntil > now
+                uint category = categoryId != 0 && state.CategoryCooldowns.TryGetValue(categoryId, out uint catUntil) && IsStillRunning(catUntil, now)
                     ? catUntil - now : 0;
                 result.Add(new InitialSpellCooldown(spellId, owner.ItemId, categoryId, until - now, category));
             }
@@ -257,8 +264,8 @@ public sealed partial class SpellSystem
 
         foreach ((uint spellId, ItemCooldownOwner owner) in state.CooldownOwners)
         {
-            if ((state.SpellCooldowns.TryGetValue(spellId, out uint spellUntil) && spellUntil > now)
-                || owner.Category == 0 || !state.CategoryCooldowns.TryGetValue(owner.Category, out uint until) || until <= now
+            if ((state.SpellCooldowns.TryGetValue(spellId, out uint spellUntil) && IsStillRunning(spellUntil, now))
+                || owner.Category == 0 || !state.CategoryCooldowns.TryGetValue(owner.Category, out uint until) || !IsStillRunning(until, now)
                 || Store.Get(spellId) is not { } spell)
                 continue;
             result.Add(new InitialSpellCooldown(spellId, owner.ItemId, owner.Category, 0, until - now));
@@ -269,7 +276,7 @@ public sealed partial class SpellSystem
         // category (vmangos "client keeps track of category cd by original spellId"), so name the recorded owner or else a known spell.
         foreach ((uint categoryId, uint categoryUntil) in state.CategoryCooldowns.OrderBy(c => c.Key))
         {
-            if (categoryUntil <= now || result.Any(c => c.Category == categoryId))
+            if (!IsStillRunning(categoryUntil, now) || result.Any(c => c.Category == categoryId))
             {
                 continue;
             }
@@ -331,7 +338,7 @@ public sealed partial class SpellSystem
         Expire(state.GlobalCooldowns, now);
         foreach ((SpellSchool school, uint until) in state.SchoolLockouts)
         {
-            if (until <= now)
+            if (!IsStillRunning(until, now))
             {
                 state.SchoolLockouts.Remove(school);
             }
@@ -341,7 +348,7 @@ public sealed partial class SpellSystem
         {
             foreach ((uint key, uint until) in cooldowns)
             {
-                if (until <= now)
+                if (!IsStillRunning(until, now))
                 {
                     cooldowns.Remove(key);
                 }

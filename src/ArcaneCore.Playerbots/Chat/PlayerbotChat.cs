@@ -793,9 +793,11 @@ internal sealed partial class PlayerbotChat : IAsyncDisposable
                 continue;
             }
 
-            if (screening && safety.ScreenOutput && _safety.ScreenOutput(text).Category is { } said)
+            if (screening && safety.ScreenOutput && _safety.ScreenOutput(text) is { } verdict && (verdict.Flagged || verdict.TimedOut))
             {
-                _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
+                // Flagged, or not judged in time (fails closed like the answer path: an unjudged line is never said). A category that
+                // came from a timeout is no finding: no flag record with the model's text as its excerpt.
+                if (verdict.Category is { } said && !verdict.CategoryFromTimeout) _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
                 if (safety.OnOutputFlagged == PlayerbotChatOutputAction.Drop) return null;
                 modelAllowed = false; // the built-in provider writes the (clean) line instead
                 continue;
@@ -820,9 +822,10 @@ internal sealed partial class PlayerbotChat : IAsyncDisposable
 
         // The template is ours, but its values are names (a member's, a boss's): the line is screened like a model's before it is said.
         PlayerbotChatSafetyOptions safety = Options.Safety;
-        if (safety.Enabled && safety.ScreenOutput && _safety.ScreenOutput(text).Category is { } said)
+        if (safety.Enabled && safety.ScreenOutput && _safety.ScreenOutput(text) is { } verdict && (verdict.Flagged || verdict.TimedOut))
         {
-            _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
+            // An unjudged line (screening ran out of time) is not said either; a category from a timeout is not flagged.
+            if (verdict.Category is { } said && !verdict.CategoryFromTimeout) _safety.Flag(ask, said.ToString(), BotChatFlagSource.Output, strike: false, text);
             return null;
         }
 

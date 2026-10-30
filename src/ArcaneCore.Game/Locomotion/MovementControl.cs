@@ -9,7 +9,7 @@ namespace ArcaneCore.Game.Locomotion;
 /// AddMovementFlagChangeToController / SendMovementFlagChangeToObservers / SendMovementFlagChangeToAll and
 /// Unit::Set{Rooted,WaterWalking,Hover,FeatherFall}, Unit.cpp:7195-7296): the server sends the order and
 /// records it in the <see cref="PendingMovementChanges"/> ledger; the state itself changes only when the matching
-/// ack arrives (<see cref="Acknowledge"/>) or the ack times out (<see cref="Enforce"/>). A player that is not in a
+/// ack arrives (<see cref="Acknowledge"/> accepts it and the caller then calls <see cref="ApplyReal"/>) or the ack times out (<see cref="Enforce"/>). A player that is not in a
 /// map yet cannot answer, so the state is set directly and nothing is sent.
 /// </summary>
 public static class MovementControl
@@ -65,8 +65,9 @@ public static class MovementControl
     /// <summary>
     /// The client's ack for a change: it must match a pending change by counter, apply flag and type
     /// (vmangos HandleMovementFlagChangeToggleAck / HandleMoveRootAck, MovementHandler.cpp:536-745). Returns false,
-    /// and counts a wrong ack, when nothing matches; the caller then ignores the packet. On success the state is
-    /// applied; relaying the movement block to the observers is the caller's job (it first stores the client's block).
+    /// and counts a wrong ack, when nothing matches; the caller then ignores the packet. On success the pending entry is
+    /// removed from the pending ledger and true is returned; the caller then applies the state itself with <see cref="ApplyReal"/>
+    /// (after it has stored the client's movement block), and relays the block to the observers.
     /// </summary>
     public static bool Acknowledge(Player player, MovementChangeType type, uint counter, bool apply)
     {
@@ -83,7 +84,9 @@ public static class MovementControl
 
     /// <summary>
     /// The client's ack for a speed change (vmangos HandleForceSpeedChangeAckOpcodes): it must match a pending change of the
-    /// type by counter and, within 0.01, speed. False, and a counted wrong ack, when nothing matches. On success the
+    /// type by counter and, within 0.01, speed. False when nothing matches; the mismatch is a counted wrong ack only when the counter is 0 or above the
+    /// current counter (as <see cref="AcknowledgeTurnRate"/>; vmangos OnWrongAckData, MovementHandler.cpp:463-483), so a late ack of an order that already
+    /// timed out is not counted twice. On success the
     /// caller applies <paramref name="speed"/> (the speed the client reports) with <see cref="UnitSpeed.SetReal"/>.
     /// </summary>
     public static bool AcknowledgeSpeed(Player player, MoveType type, uint counter, float speed)
@@ -92,7 +95,11 @@ public static class MovementControl
         LocomotionState state = player.Locomotion;
         if (!state.Pending.TryAcknowledgeSpeed(counter, UnitSpeed.ChangeTypeOf(type), speed))
         {
-            state.NoteWrongAck();
+            if (counter == 0 || counter > player.MovementCounter)
+            {
+                state.NoteWrongAck();
+            }
+
             return false;
         }
 

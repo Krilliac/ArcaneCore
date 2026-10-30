@@ -135,7 +135,8 @@ public static class ClusterSupervisorHosting
             capacityProbe: sp.GetRequiredService<IClusterCapacityProbe>(),
             timeProvider: sp.GetService<TimeProvider>(),
             hangCapture: sp.GetRequiredService<ISupervisedHangCapture>(),
-            crashDialog: sp.GetService<SupervisorCrashDialog>()));
+            crashDialog: sp.GetService<SupervisorCrashDialog>(),
+            logger: sp.GetService<ILoggerFactory>()?.CreateLogger<ClusterHostSupervisor>()));
         services.AddHostedService<ClusterSupervisorHostedService>();
         return services;
     }

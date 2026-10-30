@@ -282,6 +282,43 @@ public sealed class RollingFileWriterTests : IDisposable
         Assert.Equal("line 004\n", ReadShared(kept[0]));
     }
 
+    /// <summary>
+    /// Prune must only touch the writer's own name-yyyyMMdd-NNN segments: an operator's saved copy, or another daemon's world-bots
+    /// file next to world.log, matches the glob but is neither counted toward Retain nor deleted.
+    /// </summary>
+    [Fact]
+    public void Retention_NeverTouchesFilesThatAreNotItsOwnSegments()
+    {
+        Directory.CreateDirectory(_dir);
+        string[] foreign =
+        [
+            "world-1.log",
+            "world-2025-archive.log",
+            "world-crash-repro.log",
+            "world-bots.log",
+            "world-bots-20261004-001.log",
+            "world-20261004-001.log.bak",
+            "world-20261004.log",
+        ];
+        foreach (string name in foreign)
+        {
+            File.WriteAllText(Path.Combine(_dir, name), "keep me\n");
+        }
+
+        using RollingFileWriter writer = Writer(rollSizeBytes: 10, daily: false, retain: 2);
+        for (int i = 0; i < 6; i++)
+        {
+            writer.Write(Line(i));
+        }
+
+        foreach (string name in foreign)
+        {
+            Assert.True(File.Exists(Path.Combine(_dir, name)), $"{name} was deleted");
+        }
+
+        Assert.Equal(["world-20261004-005.log", "world-20261004-004.log"], writer.RolledSegments().Select(f => Path.GetFileName(f)).ToArray());
+    }
+
     [Fact]
     public void RetainZero_KeepsEverySegment()
     {

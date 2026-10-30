@@ -17,6 +17,7 @@ public sealed class ItemFoundationTests
     private const uint TimedStone = 92002; // Duration 1800
     private const uint ChippedBlade = 92011;
     private const uint ReforgedBlade = 92012;
+    private const uint GreatSword = 92013;
 
     private static readonly ItemTemplateStore Store = new(
         [
@@ -25,6 +26,7 @@ public sealed class ItemFoundationTests
             new ItemTemplate { Entry = TimedStone, Class = 12, Name = "Timed Stone", DisplayId = 1, Duration = 1800 },
             new ItemTemplate { Entry = ChippedBlade, Class = 2, Name = "Chipped Blade", DisplayId = 1, Stackable = 1, MaxDurability = 100 },
             new ItemTemplate { Entry = ReforgedBlade, Class = 2, Name = "Reforged Blade", DisplayId = 1, Stackable = 1, MaxDurability = 50 },
+            new ItemTemplate { Entry = GreatSword, Class = 2, SubClass = 1, Name = "Great Sword", DisplayId = 1, Stackable = 1, InventoryType = 17, MaxDurability = 50 },
         ], []);
 
     private static PlayerInventory Loaded()
@@ -88,6 +90,24 @@ public sealed class ItemFoundationTests
         Item changed = Assert.IsType<Item>(inv.ChangeItem(old, ReforgedBlade));
 
         Assert.Equal(49u, changed.Durability);
+    }
+
+    [Fact]
+    public void ChangeItem_WornMainHandBecomingATwoHander_SendsTheOffhandToTheBags()
+    {
+        // vmangos Spell::EffectSummonChangeItem equips the new item and then calls Player::AutoUnequipOffhandIfNeed.
+        PlayerInventory inv = Loaded();
+        Item sword = Give(inv, WornShortsword);
+        inv.AutoEquipItem(sword.BagSlot, sword.Slot);
+        Item shield = Give(inv, WornWoodenShield);
+        inv.AutoEquipItem(shield.BagSlot, shield.Slot);
+        Assert.Same(shield, inv.GetItem(InventorySlots.Bag0, InventorySlots.OffHand));
+
+        Item changed = Assert.IsType<Item>(inv.ChangeItem(sword, GreatSword));
+
+        Assert.Same(changed, inv.GetItem(InventorySlots.Bag0, InventorySlots.MainHand));
+        Assert.Null(inv.GetItem(InventorySlots.Bag0, InventorySlots.OffHand));
+        Assert.InRange(shield.Slot, InventorySlots.ItemStart, InventorySlots.ItemEnd - 1);
     }
 
     [Fact]

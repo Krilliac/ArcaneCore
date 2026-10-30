@@ -10,6 +10,7 @@ using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Skills;
 using ArcaneCore.World.Tests.GameObjects;
 using Microsoft.Extensions.DependencyInjection;
@@ -105,7 +106,53 @@ public sealed class ItemLootWorldTests
         await client.SendAsync(WorldOpcode.CmsgOpenItem, [clam.BagSlot, clam.Slot]);
         byte[] error = await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure);
         Assert.Equal((byte)InventoryResult.YouAreDead, error[0]);
+        Assert.Equal(clam.Guid.Value, BitConverter.ToUInt64(error, 1)); // the refusal names the item (guid1 follows the result byte)
         Assert.DoesNotContain((await client.CollectAsync()).Select(p => p.Opcode), op => op == WorldOpcode.SmsgLootResponse);
+    }
+
+    [Fact]
+    public async Task OpenItem_OnALootableClamDuringATaxiFlight_RepliesCantDoRightNow_NamingTheItem_AndDoesNotOpenIt()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("TAXICLAM", "Taxiclam");
+        Player player = await host.PlayerAsync("Taxiclam");
+        Item clam = await GiveAsync(host, player, Clam);
+        await host.OnWorldAsync(() => player.UnitFlags |= UnitFlags.TaxiFlight);
+        await client.CollectAsync();
+
+        // vmangos HandleOpenItemOpcode: the taxi refusal comes first (SpellHandler.cpp:163-174).
+        await client.SendAsync(WorldOpcode.CmsgOpenItem, [clam.BagSlot, clam.Slot]);
+        byte[] error = await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure);
+        Assert.Equal((byte)InventoryResult.CantDoRightNow, error[0]);
+        Assert.Equal(clam.Guid.Value, BitConverter.ToUInt64(error, 1));
+        Assert.DoesNotContain((await client.CollectAsync()).Select(p => p.Opcode), op => op == WorldOpcode.SmsgLootResponse);
+    }
+
+    [Fact]
+    public async Task OpenItem_WithNoLootService_WhileDead_StillRepliesYouAreDead()
+    {
+        await using WorldTestHost host = Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("NOLOOTSVC", "Nolootsvc");
+        Player player = await host.PlayerAsync("Nolootsvc");
+        Item clam = await GiveAsync(host, player, Clam);
+        // The map's loot service is gone (the game object feature never built a system for it). Its per-map table is private, so it is emptied through the non-generic dictionary interface.
+        GameObjectLootFeature feature = host.WorldServices.GetRequiredService<GameObjectLootFeature>();
+        await host.OnWorldAsync(() =>
+        {
+            var systems = (System.Collections.IDictionary)typeof(GameObjectLootFeature)
+                .GetField("_systems", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(feature)!;
+            systems.Remove(player.Map!);
+            Assert.Null(feature.FindSystem(player.Map!));
+            player.Map!.Combat.KillPlayer(player);
+        });
+        await client.CollectAsync();
+
+        // vmangos HandleOpenItemOpcode checks taxi and dead before anything that needs the loot service (SpellHandler.cpp:163-174); the open used to return silently first.
+        await client.SendAsync(WorldOpcode.CmsgOpenItem, [clam.BagSlot, clam.Slot]);
+        byte[] error = await client.ReadUntilAsync(WorldOpcode.SmsgInventoryChangeFailure);
+
+        Assert.Equal((byte)InventoryResult.YouAreDead, error[0]);
+        Assert.Equal(clam.Guid.Value, BitConverter.ToUInt64(error, 1));
     }
 
     private static byte[] CastOn(Item item)

@@ -13,23 +13,41 @@ namespace ArcaneCore.World;
 internal static class WorldStartup
 {
     /// <summary>
-    /// First the single-writer lock (<see cref="WorldWriterGuard"/>), then the schema initializers (<see cref="DatabaseStartup"/>): a second world on the same
-    /// characters file is refused before anything opens, upgrades or checkpoints it. A lock that is held elsewhere, and one that cannot be created at all (permissions,
+    /// First the single-writer lock (<see cref="WorldWriterGuard"/>: the SQLite sidecar file, or the MariaDB/MySQL/PostgreSQL session advisory lock), then the schema initializers
+    /// (<see cref="DatabaseStartup"/>): a second world on the same characters database is refused before anything opens, upgrades or checkpoints it. A lock that is held elsewhere, and one that cannot be created at all (permissions,
     /// a full disk), are both one line on <paramref name="error"/> and the refusal exit code instead of an unhandled crash.
     /// </summary>
     /// <returns>0 when ready, otherwise the exit code the process should return.</returns>
     public static async Task<int> PrepareDatabasesAsync(IServiceProvider services, Func<Task> initialize, TextWriter error)
     {
-        try
+        if (services.GetService<WorldWriterGuard>() is { } guard)
         {
-            services.GetService<WorldWriterGuard>()?.Acquire();
-        }
-        catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
-        {
-            await error.WriteLineAsync($"database refused: {DatabaseStartup.Scrub(ex.Message, services)}").ConfigureAwait(false);
-            return DbUpgradeExitCodes.Refused;
-        }
+            // Through the same start-up wrapper as the schema step, so a MariaDB/MySQL/PostgreSQL server that is not reachable yet gets the Resilience:Database:Bootstrap backoff and the
+            // "database unreachable" exit code. An ownership refusal is NEVER retried or classified as unreachable (a CharacterDatabaseAlreadyOwnedException wraps an IOException, which the
+            // transience classifier would call transient): it is captured inside the wrapped step and reported as the refusal, at once, on every provider. So is a lock that cannot be created
+            // (permissions, a full disk): its own message, not "owned by another world".
+            Exception? refusal = null;
+            int lockCode = await DatabaseStartup.InitializeAsync(() =>
+            {
+                try
+                {
+                    guard.Acquire();
+                }
+                catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
+                {
+                    refusal = ex;
+                }
 
+                return Task.CompletedTask;
+            }, services, error).ConfigureAwait(false);
+            if (refusal is not null)
+            {
+                await error.WriteLineAsync($"database refused: {DatabaseStartup.Scrub(refusal.Message, services)}").ConfigureAwait(false);
+                return DbUpgradeExitCodes.Refused;
+            }
+
+            if (lockCode != 0) return lockCode;
+        }
         return await DatabaseStartup.InitializeAsync(initialize, services, error).ConfigureAwait(false);
     }
 

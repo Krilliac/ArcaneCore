@@ -1140,7 +1140,10 @@ public sealed class DataDrivenEscortTests
     [Fact]
     public void Windsor_AReplayedKeepStart_AndAReplayedGossipSelect_DoNotRewindTheRunningScene() => RunWindsorMasquerade(evadeMidScene: false, replayStart: true);
 
-    private static void RunWindsorMasquerade(bool evadeMidScene, bool replayStart = false)
+    [Fact]
+    public void Windsor_ARoyalGuardKilledBeforeTheTurn_DoesNotStallTheGuardCheck() => RunWindsorMasquerade(evadeMidScene: false, killGuardBeforeTurn: true);
+
+    private static void RunWindsorMasquerade(bool evadeMidScene, bool replayStart = false, bool killGuardBeforeTurn = false)
     {
         // npc_reginald_windsorAI (stormwind_city.cpp at 3e8597afe7) on the z2815 path (27 points).
         const uint entry = ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.Entry;
@@ -1239,12 +1242,19 @@ public sealed class DataDrivenEscortTests
             bool engaged = !evadeMidScene;
             int windsorEvades = 0;
             bool windsorFighting = false;
+            bool guardKilledCollected = false;
             for (int elapsed = 0; elapsed < 600_000 && quests.Completed.Count == 0; elapsed += 100)
             {
                 player.Relocate(windsor.X, windsor.Y, windsor.Z, 0, 0);
                 world.RunTick(100);
                 windsorEvades += windsorFighting && !windsor.Combat.IsInCombat ? 1 : 0; // he left the fight: the evade (Reset)
                 windsorFighting = windsor.Combat.IsInCombat;
+                if (killGuardBeforeTurn && throneGuards[1].IsAlive && throneGuards[1].Entry == 1756 && all0().Contains("-1000852") && !all0().Contains("-1000865"))
+                {
+                    guardKilledCollected = ai.RoyalGuards.Contains(throneGuards[1]); // it was collected at -1000852, so the later check waits on it
+                    map.Combat.Kill(null, throneGuards[1]); // a player (or GM) kills one collected guard in the ~70 s before the guards turn
+                }
+
                 if (!engaged && all0().Contains("-1000865"))
                 {
                     // The guards have turned and the guard check runs: Windsor is drawn into their fight (on some combat rolls he is),
@@ -1273,7 +1283,15 @@ public sealed class DataDrivenEscortTests
 
             Assert.True(quests.Completed.Count == 1, $"evades {windsorEvades} point {ai.CurrentWaypointIndex} step {ai.DialogueStep} alive {windsor.IsAlive} bolvar {bolvar.IsAlive} royal {string.Join(" ", ai.RoyalGuards.Select(g => $"{g.Entry}/{g.IsAlive}/{throneGuards.Contains(g)}"))} said {string.Join(' ', all)}");
             Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade), quests.Completed[0]);
-            Assert.All(throneGuards, g => Assert.Equal(12739u, g.Entry));
+            if (killGuardBeforeTurn)
+            {
+                // Not vacuous: the guard really was collected, died before the turn, and kept its old entry (UpdateEntry refuses the dead).
+                Assert.True(guardKilledCollected, "the guard was never collected before it was killed");
+                Assert.False(throneGuards[1].IsAlive);
+                Assert.Equal(1756u, throneGuards[1].Entry);
+            }
+
+            Assert.All(throneGuards.Where(g => !(killGuardBeforeTurn && g == throneGuards[1])), g => Assert.Equal(12739u, g.Entry));
             Assert.Contains("-1000827", all); // SAY_PRESTOR_SIEZE at the start
             Assert.Contains("-1000868", all); // SAY_PRESTOR_KEEP_14
             Assert.Contains("-1000870", all); // SAY_WINDSOR_KEEP_16, with the credit
@@ -1338,6 +1356,48 @@ public sealed class DataDrivenEscortTests
             Assert.Contains("-1001105", all); // SAY_EPILOG_5
             Assert.Equal(5, system.Creatures.Count(c => c.Entry == 12128)); // two elites with Isillien, three more at the fight
             Assert.NotEqual(0u, Assert.IsType<Creature>(ai.Tirion).NpcFlags & (uint)NpcFlags.QuestGiver);
+        }
+    }
+
+    [Fact]
+    public void InDreams_IsillienBelowTwentyPercent_DoesNotSummonTirionWhileTaelanStillStands()
+    {
+        // cmangos npc_isillienAI only knows Taelan (m_taelanGuid) once AI_EVENT_CUSTOM_A has struck him down, so the <20% summon cannot run before it.
+        const uint entry = ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.Entry;
+        CreatureWaypoint first = RealPath(entry)[0];
+        int[] texts = [.. Enumerable.Range(1078, 28).Select(i => -1000000 - i)];
+        CreatureContent content = new([Template(entry), Template(1840, t => t.Faction = 14), Template(12126), Template(12128, t => t.Faction = 14)],
+            [Spawn(1, entry, first.X, first.Y, first.Z)], [], [], [],
+            new CreatureAiContent([], [.. texts.Select(id => new CreatureAiText(id, id.ToString(CultureInfo.InvariantCulture), 0, 0, 0))]),
+            scriptWaypoints: new[] { entry, 1840u, 12126u }.SelectMany(e => RealPath(e).Select(p => (e, 0u, p))));
+        var quests = new EscortQuests();
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content,
+            new CreatureAiServices { ScriptQuests = quests, QuestEvents = quests });
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, first.X, first.Y);
+            Creature taelan = Assert.Single(system.Creatures, c => c.Entry == entry);
+            var ai = Assert.IsType<ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI>(taelan.AI);
+            world.RunTick(100);
+            ai.OnQuestAccept(player, ArcaneCore.Game.Creatures.Scripts.TaelanFordringAI.QuestInDreams);
+            taelan.FactionTemplate = 35;
+            for (int elapsed = 0; elapsed < 2_400_000 && ai.Isillien is null; elapsed += 100)
+            {
+                player.Relocate(taelan.X, taelan.Y, taelan.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Creature isillien = Assert.IsType<Creature>(ai.Isillien);
+            isillien.Health = isillien.MaxHealth / 10; // a burst takes him under 20% before Taelan is struck down
+            for (int elapsed = 0; elapsed < 3_000 && isillien.IsAlive && !ai.TaelanDead; elapsed += 100)
+            {
+                player.Relocate(taelan.X, taelan.Y, taelan.Z, 0, 0);
+                world.RunTick(100);
+            }
+
+            Assert.False(ai.TaelanDead);
+            Assert.Null(ai.Tirion);
+            Assert.DoesNotContain(system.Creatures, c => c.Entry == 12126);
         }
     }
 

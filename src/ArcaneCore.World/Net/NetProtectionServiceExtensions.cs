@@ -11,7 +11,7 @@ public static class NetProtectionServiceExtensions
     /// Bind <see cref="NetProtectionOptions"/> from <c>Net:Protection</c>. <see cref="Net.WorldServer"/>
     /// builds its <see cref="Kernel.Net.NetGuard"/> from these options when it starts; without this
     /// call the defaults apply (every protection on), so a missing line cannot switch anything off.
-    /// The values are also validated by <c>check-config</c> (<see cref="Ops.Validation.NetProtectionConfigChecks"/>).
+    /// The values are also validated by <c>check-config</c> (<see cref="ArcaneCore.Kernel.Configuration.Validation.NetProtectionConfigChecks"/>).
     /// </summary>
     public static IServiceCollection AddNetProtection(this IServiceCollection services, IConfiguration configuration)
     {

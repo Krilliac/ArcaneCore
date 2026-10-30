@@ -46,6 +46,7 @@ public sealed class ConfigFileReloadFeature : IWorldFeature
     private bool _again;
     private bool _stopped;
     private Task _last = Task.CompletedTask;
+    private readonly CancellationTokenSource _stopping = new();
 
     public ConfigFileReloadFeature(IServiceProvider services, ILogger<ConfigFileReloadFeature> logger)
     {
@@ -118,6 +119,8 @@ public sealed class ConfigFileReloadFeature : IWorldFeature
             last = _last;
         }
 
+        // A pending apply waits on the world thread's swap, which never runs once the world has stopped: release it instead of awaiting it forever.
+        await _stopping.CancelAsync().ConfigureAwait(false);
         await last.ConfigureAwait(false);
     }
 
@@ -162,6 +165,10 @@ public sealed class ConfigFileReloadFeature : IWorldFeature
         {
             retry = await ApplyOnceAsync().ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
+        {
+            _logger.LogInformation("The pending configuration file apply was abandoned: the world is stopping");
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogFault("reload.config-file", ex, "Applying the changed configuration file failed");
@@ -197,7 +204,8 @@ public sealed class ConfigFileReloadFeature : IWorldFeature
             return false; // a save that changed nothing: no reload, the overrides stay
         }
 
-        ReloadResult result = await coordinator.ReloadAsync("config", origin: FileOrigin).ConfigureAwait(false);
+        // Abandoned (not awaited further) when the feature stops; the coordinator's own commit timeout still bounds the swap while the world runs.
+        ReloadResult result = await coordinator.ReloadAsync("config", _stopping.Token, FileOrigin).WaitAsync(_stopping.Token).ConfigureAwait(false);
         if (result.Status == ReloadStatus.Busy)
         {
             return true;

@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Pets;
 using Xunit;
 using static ArcaneCore.Game.Tests.Duel.DuelRig;
 
@@ -131,6 +132,27 @@ public sealed class DuelCompletionTests
 
         Assert.Equal(0, combos.GetComboPoints(rig.A));
         Assert.Equal(2, combos.GetComboPoints(rig.B));
+    }
+
+    [Fact]
+    public void Completion_ClearsComboPointsAimedAtTheOtherPlayersPet_OnBothSides()
+    {
+        using var rig = new DuelRig();
+        var combos = new ComboPointService(rig.Kit.System, (_, guid) => rig.Map.Combat.FindUnit(guid));
+        rig.Service.Combos = combos;
+        Player petA = rig.Kit.AddPlayer(3, 14, 10).Player; // any unit of the map stands in for a pet: the link is the owner's UNIT_FIELD_SUMMON
+        Player petB = rig.Kit.AddPlayer(4, 15, 10).Player;
+        rig.A.SetPetGuid(petA.Guid);
+        rig.B.SetPetGuid(petB.Guid);
+        rig.Challenge();
+        rig.AcceptAndStart();
+        combos.AddComboPoints(rig.A, petB, 3);
+        combos.AddComboPoints(rig.B, petA, 2);
+
+        rig.Service.Complete(rig.A, DuelCompleteType.Won);
+
+        Assert.Equal(0, combos.GetComboPoints(rig.A));
+        Assert.Equal(0, combos.GetComboPoints(rig.B));
     }
 
     [Fact]

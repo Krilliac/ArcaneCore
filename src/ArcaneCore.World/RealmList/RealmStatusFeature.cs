@@ -31,6 +31,7 @@ public sealed class RealmStatusFeature : IWorldFeature
     private readonly Lock _gate = new();
     private readonly List<IDisposable> _subscriptions = [];
     private float? _pendingPopulation;
+    private float? _latestPopulation;        // the newest requested value, kept so it can be re-issued after the Online write resets it
     private Task _populationWriter = Task.CompletedTask;
     private bool _stopping;
     private int _warnedMissing;
@@ -70,6 +71,11 @@ public sealed class RealmStatusFeature : IWorldFeature
             Action<WorldSession> added = _ => RequestPopulation(sessions.Count);
             sessions.Registered += added;
             _subscriptions.Add(new Unsubscribe(() => sessions.Registered -= added));
+
+            // The Online write sets the population to 0 (vmangos Master.cpp:215); a population write that landed before it would be lost.
+            Action online = ReissuePopulation;
+            _liveness.OnlineWritten += online;
+            _subscriptions.Add(new Unsubscribe(() => _liveness.OnlineWritten -= online));
         }
     }
 
@@ -108,12 +114,31 @@ public sealed class RealmStatusFeature : IWorldFeature
                 return;
             }
 
-            bool idle = _pendingPopulation is null && _populationWriter.IsCompleted;
-            _pendingPopulation = Population(sessions, _options.PlayerLimit);
-            if (idle)
+            Enqueue(Population(sessions, _options.PlayerLimit));
+        }
+    }
+
+    /// <summary>The Online write landed: write the latest requested population again, so an earlier write cannot leave the row at 0.</summary>
+    private void ReissuePopulation()
+    {
+        lock (_gate)
+        {
+            if (!_stopping && _latestPopulation is { } latest)
             {
-                _populationWriter = Task.Run(WritePopulationAsync);
+                Enqueue(latest);
             }
+        }
+    }
+
+    /// <summary>Caller holds <c>_gate</c>.</summary>
+    private void Enqueue(float population)
+    {
+        bool idle = _pendingPopulation is null && _populationWriter.IsCompleted;
+        _latestPopulation = population;
+        _pendingPopulation = population;
+        if (idle)
+        {
+            _populationWriter = Task.Run(WritePopulationAsync);
         }
     }
 

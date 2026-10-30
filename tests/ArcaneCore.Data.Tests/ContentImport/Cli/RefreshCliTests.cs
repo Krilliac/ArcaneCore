@@ -73,6 +73,82 @@ public sealed class RefreshCliTests : IDisposable
     private static WorldDbContext Open(string path)
         => new(new DbContextOptionsBuilder<WorldDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options);
 
+    private const string WeatherOnlyDump = """
+        CREATE TABLE `game_weather` (
+          `zone` mediumint unsigned NOT NULL,
+          `spring_rain_chance` tinyint unsigned NOT NULL,
+          `spring_snow_chance` tinyint unsigned NOT NULL,
+          `spring_storm_chance` tinyint unsigned NOT NULL,
+          `summer_rain_chance` tinyint unsigned NOT NULL,
+          `summer_snow_chance` tinyint unsigned NOT NULL,
+          `summer_storm_chance` tinyint unsigned NOT NULL,
+          `fall_rain_chance` tinyint unsigned NOT NULL,
+          `fall_snow_chance` tinyint unsigned NOT NULL,
+          `fall_storm_chance` tinyint unsigned NOT NULL,
+          `winter_rain_chance` tinyint unsigned NOT NULL,
+          `winter_snow_chance` tinyint unsigned NOT NULL,
+          `winter_storm_chance` tinyint unsigned NOT NULL,
+          PRIMARY KEY (`zone`)
+        ) ENGINE=MyISAM;
+        INSERT INTO `game_weather` VALUES (12,1,2,3,4,5,6,7,8,9,10,11,12);
+        """;
+
+    private async Task<string> SeededWorldAsync()
+    {
+        string world = await OldWorldAsync(withShip: false);
+        await using WorldDbContext seed = Open(world);
+        seed.Set<WorldSafeLocRow>().Add(new WorldSafeLocRow { Id = 5, MapId = 0, X = 1, Y = 2, Z = 3, Orientation = 1.5f, Name = "Local graveyard" });
+        seed.Set<GraveyardZoneRow>().Add(new GraveyardZoneRow { Id = 5, GhostZone = 12, Team = 0 });
+        seed.Set<ExplorationBaseXpRow>().Add(new ExplorationBaseXpRow { Level = 9, BaseXp = 99 });
+        await seed.SaveChangesAsync();
+        return world;
+    }
+
+    [Fact]
+    public async Task Refresh_WithOnlyGraveyardLinks_LeavesTheWorldsSafeLocations()
+    {
+        string world = await SeededWorldAsync();
+        string dump = PathOf("links.sql");
+        File.WriteAllText(dump, "INSERT INTO `game_graveyard_zone` (`id`,`ghost_loc`,`link_kind`,`faction`) VALUES (610,2597,0,67);");
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        await using WorldDbContext db = Open(world);
+        Assert.Equal([5u], await db.Set<WorldSafeLocRow>().Select(r => r.Id).ToListAsync());
+        Assert.Equal([610u], await db.Set<GraveyardZoneRow>().Select(r => r.Id).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Refresh_WithOnlySafeLocations_LeavesTheWorldsGraveyardLinks()
+    {
+        string world = await SeededWorldAsync();
+        string dump = PathOf("locs.sql");
+        File.WriteAllText(dump, "INSERT INTO `world_safe_locs` (`id`,`map`,`x`,`y`,`z`,`o`,`name`) VALUES (610,30,1,2,3,2.5,'AV Horde');");
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        await using WorldDbContext db = Open(world);
+        Assert.Equal([610u], await db.Set<WorldSafeLocRow>().Select(r => r.Id).ToListAsync());
+        Assert.Equal([5u], await db.Set<GraveyardZoneRow>().Select(r => r.Id).ToListAsync());
+    }
+
+    [Fact]
+    public async Task Refresh_WithOnlyWeather_LeavesTheWorldsExplorationBaseXp()
+    {
+        string world = await SeededWorldAsync();
+        string dump = PathOf("weather.sql");
+        File.WriteAllText(dump, WeatherOnlyDump);
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        await using WorldDbContext db = Open(world);
+        Assert.Equal([12u], await db.Set<GameWeatherRow>().Select(r => r.Zone).ToListAsync());
+        Assert.Equal(99u, (await db.Set<ExplorationBaseXpRow>().SingleAsync(r => r.Level == 9)).BaseXp);
+    }
+
     [Fact]
     public async Task Refresh_RestoresPortalRequirements_WithoutReplacingCustomPortalsOrDestinations()
     {
