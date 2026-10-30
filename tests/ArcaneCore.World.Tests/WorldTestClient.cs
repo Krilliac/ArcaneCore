@@ -38,6 +38,22 @@ internal sealed class WorldTestClient : IAsyncDisposable
         _stream = client.GetStream();
     }
 
+    /// <summary>This client's own endpoint, which is the session's remote endpoint on the server side; null once the socket is disposed.</summary>
+    internal string? LocalEndpoint
+    {
+        get
+        {
+            try
+            {
+                return _client.Client?.LocalEndPoint?.ToString();
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
+            }
+        }
+    }
+
     /// <summary>Bytes received but not yet read.</summary>
     public int Available => _client.Available;
 
