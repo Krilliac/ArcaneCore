@@ -99,10 +99,9 @@ public sealed class BotGoalLadderTests
         var bot = new TestBot(7);
         for (int i = 0; i < 200; i++) ladder.Choose(bot, catalog, i);
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 5000; i++) ladder.Choose(bot, catalog, i);
+        void Window() { for (int i = 0; i < 5000; i++) ladder.Choose(bot, catalog, i); }
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "5000 BotGoalLadder.Choose passes");
     }
 
     [Fact]

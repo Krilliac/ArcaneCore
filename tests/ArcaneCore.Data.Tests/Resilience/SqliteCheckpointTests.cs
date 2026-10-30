@@ -461,7 +461,14 @@ public sealed class SqliteCheckpointTests : IDisposable
             }
         });
 
-        started.Wait();
+        // Bounded, and watching the writer: a writer that faulted or gave up before its fourth commit never sets `started`, and an
+        // unbounded Wait would hang the run with no message. Awaiting the finished task rethrows its fault.
+        if (!started.Wait(TimeSpan.FromSeconds(60)) || writes.IsCompleted)
+        {
+            Volatile.Write(ref stop, 1);
+            await writes.WaitAsync(TimeSpan.FromSeconds(30)); // rethrows the writer's exception
+            Assert.True(started.IsSet, "the writer ended before its fourth commit without failing");
+        }
         var checkpointer = new SqliteWalCheckpointer(Target(path), options, new ListLogger(), TimeProvider.System);
         for (int run = 0; run < 30; run++)
         {

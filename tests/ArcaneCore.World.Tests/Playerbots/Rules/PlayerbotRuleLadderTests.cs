@@ -207,13 +207,15 @@ public sealed class PlayerbotRuleLadderTests
         var bot = new PlayerbotLadderReplayTests.ReplayBot(3);
         for (int i = 0; i < 50; i++) ladder.Choose(bot, host.Catalog(), i);
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        void Window()
         {
-            ladder.Choose(bot, host.Catalog(), i);
+            for (int i = 0; i < 1000; i++)
+            {
+                ladder.Choose(bot, host.Catalog(), i);
+            }
         }
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "1000 catalog Choose passes");
     }
 
     [Fact]

@@ -183,20 +183,23 @@ public sealed class PacketHeuristicsFollowUpTests
         feature.Malformed(bot, WorldOpcode.CmsgPing, 2, "constant reason");
         feature.OrphanAck(bot, WorldOpcode.MsgMoveTeleportAck, "constant reason");
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        int rounds = 0;
+        void Window()
         {
-            feature.WrongState(bot, WorldOpcode.CmsgCastSpell, "bot action while the session is not in the world", SessionState.CharacterSelect);
-            feature.Unhandled(bot, (WorldOpcode)5000, 3);
-            feature.Unhandled(bot, WorldOpcode.SmsgPong, 3);
-            feature.BadHeader(bot, default, 99, 0x1234);
-            feature.Malformed(bot, WorldOpcode.CmsgPing, 2, "constant reason");
-            feature.OrphanAck(bot, WorldOpcode.MsgMoveTeleportAck, "constant reason");
+            rounds++;
+            for (int i = 0; i < 1000; i++)
+            {
+                feature.WrongState(bot, WorldOpcode.CmsgCastSpell, "bot action while the session is not in the world", SessionState.CharacterSelect);
+                feature.Unhandled(bot, (WorldOpcode)5000, 3);
+                feature.Unhandled(bot, WorldOpcode.SmsgPong, 3);
+                feature.BadHeader(bot, default, 99, 0x1234);
+                feature.Malformed(bot, WorldOpcode.CmsgPing, 2, "constant reason");
+                feature.OrphanAck(bot, WorldOpcode.MsgMoveTeleportAck, "constant reason");
+            }
         }
 
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(0, allocated);
-        Assert.Equal(1001, feature.Count(PacketCheck.WrongState, PacketTraffic.Bot));
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "6000 packet heuristic reports");
+        Assert.Equal(1 + (1000 * rounds), feature.Count(PacketCheck.WrongState, PacketTraffic.Bot));
     }
 
     [Fact]

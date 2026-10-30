@@ -154,13 +154,15 @@ public sealed class ObservabilityTests
         var (detector, state, _, _) = NewDetector();
         byte[] payload = [1, 2, 3, 4];
         detector.Observe(state, WorldOpcode.SmsgPong, payload, out _);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        void Window()
         {
-            detector.Observe(state, WorldOpcode.SmsgPong, payload, out _);
+            for (int i = 0; i < 1000; i++)
+            {
+                detector.Observe(state, WorldOpcode.SmsgPong, payload, out _);
+            }
         }
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "1000 allow-listed Observe calls");
     }
 
     [Fact]
@@ -170,14 +172,16 @@ public sealed class ObservabilityTests
         byte[] payload = ItemPush(3, 1);
         detector.Observe(state, WorldOpcode.SmsgItemPushResult, payload, out _);
         clock.AdvanceMs(1000);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1000; i++)
+        void Window()
         {
-            clock.AdvanceMs(1000);
-            detector.Observe(state, WorldOpcode.SmsgItemPushResult, payload, out _);
+            for (int i = 0; i < 1000; i++)
+            {
+                clock.AdvanceMs(1000);
+                detector.Observe(state, WorldOpcode.SmsgItemPushResult, payload, out _);
+            }
         }
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "1000 non-repeating checked Observe calls");
     }
 
     // ---- A: rejections ----------------------------------------------------------------------------------------------

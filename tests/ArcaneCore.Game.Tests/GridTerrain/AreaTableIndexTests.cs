@@ -70,6 +70,7 @@ public sealed class AreaTableIndexTests
     /// either, so an allocation assert would pass on it (and the first call's JIT makes a byte count flaky).
     /// </summary>
     [Fact]
+    [Trait("Category", "Timing")]
     public void ALookup_DoesNotScanTheTable()
     {
         var areas = new List<AreaTemplate> { new(7, 0, 0, 0, 0, 1, "Linked EK", 0, 0) };

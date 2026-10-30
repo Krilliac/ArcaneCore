@@ -9,7 +9,10 @@ public sealed class WorldRuntimePositionTests
 {
     private const long FeaturesSince = 1_000_000;
 
+    // Wall-clock dependent: reads give up after a time budget, so a starved writer on a loaded runner can fail the unverified-ratio assert.
+    // It runs in the serial Timing stage with its isolated rerun.
     [Fact]
+    [Trait("Category", "Timing")]
     public void CurrentPosition_UnderConcurrentPublishing_NeverPairsOnePositionsPhaseWithAnothersWork()
     {
         var options = new WorldRuntimeOptions { TickIntervalMs = 5, UpdateCompressionThreshold = 0, AutosaveIntervalMs = 0 };

@@ -63,11 +63,9 @@ public sealed class RuleEngineAllocationTests
         }
 
         Run(5_000);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        Run(20_000);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        void Window() => Run(20_000);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "20000 rule evaluator iterations");
 
-        Assert.Equal(0, allocated);
         Assert.True(evaluator.Counters.Fired > 20_000, $"only {evaluator.Counters.Fired} rules ran: the measurement would not cover the path");
         Assert.True(evaluator.Counters.ActionsRun > 40_000, $"only {evaluator.Counters.ActionsRun} actions ran");
     }

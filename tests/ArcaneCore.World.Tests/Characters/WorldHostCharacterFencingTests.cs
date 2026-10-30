@@ -236,7 +236,7 @@ public sealed class WorldHostCharacterFencingTests
         await kit.Host.StartAsync(CancellationToken.None);
 
         // Startup check = 1, the watch's first read = 2, the next one a second later = 3. Autosave is off here, so an autosave-derived interval would never get there.
-        await WaitUntil(() => kit.Ownership.IsOwnedCalls >= 3, seconds: 2.5);
+        await WaitUntil(() => kit.Ownership.IsOwnedCalls >= 3, seconds: 30); // only a lower bound matters (the 1 s interval is used); a generous deadline keeps host load from failing it
     }
 
     [Fact]

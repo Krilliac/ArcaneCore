@@ -125,9 +125,16 @@ public sealed class ConsoleLineReaderTests
         await WaitAsync(() => received.Count == 1);
 
         Assert.True(reader.Thread!.IsBackground, "a background thread cannot keep the process alive");
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        reader.Stop();
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
+        // The read is blocked until "after" is posted below, so a Stop that joined it would never return; the bound only turns a hang
+        // into a failure.
+        try
+        {
+            await Task.Run(reader.Stop).WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            Assert.Fail("Stop waited for the blocked read");
+        }
         Assert.True(reader.Thread!.IsAlive, "the read is blocked and cannot be interrupted; Stop must not wait for it");
 
         // The line that unblocks the read after Stop is dropped, and the thread then ends.

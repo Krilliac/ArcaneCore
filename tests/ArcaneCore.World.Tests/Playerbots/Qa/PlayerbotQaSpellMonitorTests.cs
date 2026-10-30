@@ -808,11 +808,8 @@ public sealed class PlayerbotQaSpellMonitorTests
         HotPath(); // warm: the JIT, the dictionaries' buckets; the repeats above reported once, the next ones are throttled
         int signals = kit.Signals.Count;
         Assert.Equal(2, signals);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        HotPath();
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(HotPath, 0, "the throttled monitor hot path");
 
-        Assert.Equal(0, allocated);
         Assert.Equal(signals, kit.Signals.Count);
     }
 

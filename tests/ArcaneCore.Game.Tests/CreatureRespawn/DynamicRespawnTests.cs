@@ -318,14 +318,17 @@ public sealed class DynamicRespawnTests
         {
             Map map = world.GetMap(0);
             map.CountPlayersWithin(0, 0, 100, true); // grows the scratch list once
-            long before = GC.GetAllocatedBytesForCurrentThread();
             int n = 0;
-            for (int i = 0; i < 100; i++)
+            void Window()
             {
-                n += map.CountPlayersWithin(0, 0, 100, true);
+                n = 0;
+                for (int i = 0; i < 100; i++)
+                {
+                    n += map.CountPlayersWithin(0, 0, 100, true);
+                }
             }
 
-            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "100 CountPlayersWithin calls");
             Assert.Equal(4000, n);
         }
     }

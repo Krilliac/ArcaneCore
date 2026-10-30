@@ -411,6 +411,7 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ContenderGetsSqliteBusyAtOnceWhenTheBusyTimeoutIsZero()
     {
         // The control for the test above: without the pragma the same call fails immediately, so the 250 ms there is the pragma's doing.
