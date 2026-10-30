@@ -671,6 +671,7 @@ public sealed partial class SpellSystem
                 cast.State = SpellCastState.Casting;
                 cast.Timer = duration;
                 cast.ElapsedMs = 0;
+                cast.Uninterruptible = Mage.EnigmaBlizzardBonus.RollAtChannelStart(this, cast); // Enigma Vestments 3-piece 26127: one roll per Blizzard channel
                 SealModScope(cast); // vmangos Spell.cpp:3834: a channel ends its mods when it starts, not when it ends
                 cast.RememberCastPosition(); // vmangos Spell.cpp:4108-4110: the channel's movement check starts here
                 if (caster is Player player)

@@ -157,6 +157,9 @@ public sealed class SpellCast
     /// <summary>Damage pushbacks taken (cast bar or channel; vmangos m_delayAtDamageCount).</summary>
     public int PushbackCount { get; internal set; }
 
+    /// <summary>The Enigma Vestments roll succeeded at channel start: this channel ignores interrupt effects and pushback (<see cref="Mage.EnigmaBlizzardBonus"/>; inferred, not verified against a retail capture).</summary>
+    internal bool Uninterruptible { get; set; }
+
     /// <summary>Total elapsed milliseconds spent in the current cast state (Preparing or Casting).</summary>
     internal long ElapsedMs { get; set; }
 
