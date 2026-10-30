@@ -137,6 +137,43 @@ public sealed partial class SpellSystem
         return SelectScriptTargets(cast, effect, effectIndex, nearest: false, unitTarget, centre);
     }
 
+    /// <summary>The implicit targets the built-in switch of <c>SelectEffectTargets</c> (and its script-target defaults) answers with a list, never null.</summary>
+    private static readonly HashSet<uint> s_builtInTargets =
+    [
+        0, 1, 6, 7, 8, 9, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 28, 30, 31, 33, 34, 35, 36, 37, 38, 39, 45, 53, 54, 56, 57,
+        2, 3, 4, SpellTargetSelectors.UnitsScriptInCone,
+    ];
+
+    /// <summary>
+    /// The unit-or-location selector <c>SelectTargets</c> uses for <paramref name="effect"/>: target B when target A only names a location and B
+    /// picks the units, else target A.
+    /// </summary>
+    public SpellImplicitTarget SelectorOf(SpellEffectInfo effect)
+        => IsLocationTarget(effect.TargetA) && effect.TargetB != SpellImplicitTarget.None && !IsLocationTarget(effect.TargetB)
+            ? effect.TargetB
+            : effect.TargetA;
+
+    /// <summary>
+    /// Whether a cast of <paramref name="spell"/> can select the units of <paramref name="effect"/>: false is exactly what makes <c>SelectTargets</c>
+    /// report an "implicit target" as unsupported (a static answer for the QA gap check, against the selectors registered so far). An empty effect and
+    /// the resurrect effects (which take the explicit unit whatever the target says) never need one.
+    /// </summary>
+    public bool CanSelectImplicitTarget(SpellInfo spell, SpellEffectInfo effect)
+    {
+        ArgumentNullException.ThrowIfNull(spell);
+        ArgumentNullException.ThrowIfNull(effect);
+        if (effect.IsEmpty || effect.Effect is SpellEffectName.Resurrect or SpellEffectName.ResurrectNew)
+        {
+            return true;
+        }
+
+        SpellImplicitTarget selector = SelectorOf(effect);
+        // The game object script targets (40, 51, 52) select a list only for ACTIVATE_OBJECT (SelectScriptGameObjects).
+        return s_builtInTargets.Contains((uint)selector) || (selector is (SpellImplicitTarget)40 or (SpellImplicitTarget)51 or (SpellImplicitTarget)52
+                && effect.Effect == SpellEffectName.ActivateObject) || _targetSelectors.ContainsKey(selector)
+            || _spellTargetSelectors.ContainsKey((spell.Id, selector));
+    }
+
     private static Dictionary<SpellImplicitTarget, TargetSelectorEntry> CreateDefaultTargetSelectors() => new()
     {
         [SpellImplicitTarget.LocationUnitMinionPosition] = new((_, cast, effect, _) =>
@@ -147,6 +184,9 @@ public sealed partial class SpellSystem
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterBackLeft] = Location(0.75f),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterFrontLeft] = Location(0.25f),
         [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterFront] = Location(0f),
+        [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterBack] = Location(1f),
+        [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterLeft] = Location(0.5f),
+        [(SpellImplicitTarget)SpellTargetSelectors.LocationCasterRight] = Location(-0.5f),
         [(SpellImplicitTarget)SpellTargetSelectors.UnitRaidAndClass] = new(SpellTargetSelectors.SelectRaidAndClass, LocationOnly: false),
     };
 

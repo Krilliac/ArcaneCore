@@ -2,6 +2,7 @@ using System.Numerics;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Spells.Targets;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
@@ -66,7 +67,9 @@ public sealed class ChargeEffects : ISpellHandlerModule
             return;
         }
 
-        Vector3 destination = ForcedMovement.LeapDestination(target, context.Effect.Radius);
+        // Blink 29209-29211 name the side in target B (48 back, 49 left, 50 right); every other leap goes forward (vmangos Spell.cpp:2986-3014).
+        float angle = SpellTargetSelectors.CasterSideAngle(context.Effect.TargetB) ?? 0f;
+        Vector3 destination = ForcedMovement.LeapDestination(target, context.Effect.Radius, angle);
         context.System.Teleports.Teleport(target, map.MapId, destination.X, destination.Y, destination.Z, target.Orientation);
     }
 
