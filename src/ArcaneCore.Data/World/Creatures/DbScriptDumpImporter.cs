@@ -290,10 +290,12 @@ public sealed class DbScriptDumpImporter
         {
             ConditionEntry = U32(row, "condition_entry"),
             Type = I32(row, "type"),
-            Value1 = U32(row, "value1"),
-            Value2 = U32(row, "value2"),
-            Value3 = U32(row, "value3"),
-            Value4 = U32(row, "value4"),
+            // vmangos conditions.value1..4 are signed int(11) (mangos.sql); ConditionRow stores them as uint, so a negative keeps its
+            // two's-complement bits. Only TEAM rows with value2..4 = 0 are ever resolved, and no such row is negative-valued.
+            Value1 = ConditionValue(row, "value1"),
+            Value2 = ConditionValue(row, "value2"),
+            Value3 = ConditionValue(row, "value3"),
+            Value4 = ConditionValue(row, "value4"),
             Flags = (byte)U32(row, "flags"),
         };
         if (row.Has("comments"))
@@ -465,6 +467,12 @@ public sealed class DbScriptDumpImporter
     private static uint U32(DumpRow row, string name)
         => row.TryGet(out string? value, name) && !string.IsNullOrWhiteSpace(value)
             ? uint.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture)
+            : 0;
+
+    /// <summary>A conditions value: signed in vmangos, unsigned in classic-db; either range keeps its 32 bits (a negative wraps).</summary>
+    private static uint ConditionValue(DumpRow row, string name)
+        => row.TryGet(out string? value, name) && !string.IsNullOrWhiteSpace(value)
+            ? unchecked((uint)long.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture))
             : 0;
 
     private static int I32(DumpRow row, string name)

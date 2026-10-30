@@ -156,4 +156,24 @@ public sealed class VmangosSpellScriptImportTests
         Assert.Equal([(11u, 100u, 3u), (11u, 101u, 4u)], rows.Select(r => (r.Id, r.DataLong, r.ConditionId)));
         Assert.Contains(importer.Warnings, w => w.Contains("spell_scripts 12", StringComparison.Ordinal) && w.Contains("condition 9", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task Conditions_WithNegativeValues_DoNotAbortTheImport_AndATeamConditionStillResolves()
+    {
+        // vmangos conditions.value1..4 are signed int(11); these two rows are verbatim from its dump (mangos.sql) and used to throw an
+        // OverflowException that aborted the whole import. Neither is a TEAM row, so spell 12 (condition 4866) is left out whole.
+        string dump = $"""
+            INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`,`comments`) VALUES
+            (3,6,67,0,0,0,0,'Horde Player');
+            INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`) VALUES
+            (4866,1,16468,-1,0,0,0),(487,54,-287,-1872,93,50,0),(2,6,67,0,0,0,0);
+            INSERT INTO `spell_scripts` ({VmangosColumns}) VALUES
+            (11,0,0,15,100,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,'horde'),
+            (12,0,0,15,102,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4866,'negative');
+            """;
+        (DbScriptDumpImporter importer, List<SpellScriptRow> rows) = await WriteAsync(dump, null);
+
+        Assert.Equal([(11u, 100u, 3u)], rows.Select(r => (r.Id, r.DataLong, r.ConditionId)));
+        Assert.Contains(importer.Warnings, w => w.Contains("spell_scripts 12", StringComparison.Ordinal) && w.Contains("condition 4866", StringComparison.Ordinal));
+    }
 }
