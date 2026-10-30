@@ -100,6 +100,7 @@ database older than the baseline reaches it through `arcane-db upgrade` are in [
 | 6 | the database server could not be reached or refused the connection (message scrubbed) | no |
 | 7 | the wait for another process's schema lock ran out | no |
 | 8 | `upgrade` with pending steps and no confirmed backup, or a backup that could not be made | no |
+| 9 | `copy`: the rows were copied but a table differs from its source (row count or content); the target is not safe to use, run `copy --replace` again after fixing the cause | the target: yes |
 
 These differ from the content importer's codes (`arcane-content-importer`: 3 wrong source schema, 4 database error,
 5 repository path, 6 verify); each tool lists its own in `--help`.
@@ -117,6 +118,7 @@ These differ from the content importer's codes (`arcane-content-importer`: 3 wro
 | `export-updates` | write the SQL update files and schema snapshots under `--out` (normally `sql/updates`) without contacting any database; a first export writes each component's baseline, later exports add one file per new schema step; refuses a non-additive model change or a reserved placeholder version (exit 4) |
 | `dbc` | read-only client data check: every file of the DBC directory against its vmangos, ArcaneCore or WoWDBDefs layout, then the world database's spell, map, area, faction, display ... ids that no DBC row has, then the client DBCs' own references into each other (a diagnostic that never sets exit 5; `clientReferences` in `--json`) (docs/areas/client-data.md); `--json` |
 | `dbc dump <file.dbc>` | read-only named record dump of one build-5875 DBC; uses generated signedness, needs `--dbc-dir` or `ClientData:DbcDirectory`, and does not open a database |
+| `copy` | move a component's rows to another database, typically SQLite to PostgreSQL or MariaDB (see "Moving from SQLite to PostgreSQL or MariaDB"); refuses before writing anything, creates the target schema, copies, resets key counters, verifies and runs `check` on the target |
 
 | Option | Applies to | Meaning |
 |---|---|---|
@@ -127,14 +129,69 @@ These differ from the content importer's codes (`arcane-content-importer`: 3 wro
 | `--apply` | migrate-codex | migrate; without it `migrate-codex` is a read-only dry run |
 | `--confirm-backup` | upgrade, migrate-codex | you hold a backup of every database that has pending steps |
 | `--backup-dir <directory>` | upgrade, migrate-codex | also write a verified copy of each SQLite database there (server engines still need `--confirm-backup`) |
-| `--allow-active-sessions` | upgrade, migrate-codex | do not refuse when other sessions are connected to the database |
-| `--lock-timeout <seconds>` | upgrade, migrate-codex | wait for another process's schema lock (default 60) |
+| `--allow-active-sessions` | upgrade, migrate-codex, copy | do not refuse when other sessions are connected to the database |
+| `--lock-timeout <seconds>` | upgrade, migrate-codex, copy | wait for another process's schema lock (default 60) |
 | `--dbc-dir <directory>` | dbc | the build-5875 DBC directory; default `ClientData:DbcDirectory` of the configuration |
 | `--out <directory>` | export-updates | the update root to write; required |
+| `--source-provider <engine>`, `--source-connection <string>` | copy | name the source instead of the configured `Database` section: `sqlite`, `mariadb`, `mysql` or `postgresql`; one component only |
+| `--target-provider <engine>`, `--target-connection <string>` | copy | the target database; one component only. Without them the target comes from ARCANE_DB_TARGET_PROVIDER and ARCANE_DB_TARGET_AUTH_CONNECTION, ARCANE_DB_TARGET_CHARACTERS_CONNECTION, ARCANE_DB_TARGET_WORLD_CONNECTION (ARCANE_DB_TARGET_CONNECTION for a single component) |
+| `--replace` | copy | empty the target component's tables first; without it a target that holds rows is refused |
 
 `status`, `plan`, `check` and `migrate-codex` without `--apply` open SQLite read-only and never create a file. All
 connections are unpooled so the session count only sees other processes. On a failure in one component the later ones
 are not run and the message names it.
+
+### Moving from SQLite to PostgreSQL or MariaDB
+
+`arcane-db copy` moves a realm's databases from one engine to another; it is the supported way to leave SQLite for a server engine.
+The source is never changed (SQLite is opened read-only). Run it once per realm configuration, auth once for all realms.
+
+1. **Stop every daemon** (realm, world, tools). `copy` refuses a SQLite characters file that a world process owns (it takes the same
+   `<database>.world.lock` sidecar for the length of the copy) and, on a server engine, other connected sessions.
+2. **Back up the SQLite files** (`arcane-db backup-info`; with `--backup-dir` `upgrade` writes a verified copy). The copy does not modify them, but you
+   will keep them until the new install has run for a while.
+3. **Create empty databases and a login role** on the target server, one database per component you move (for example `arcane_auth`,
+   `arcane_characters`, `arcane_world`), owned by a role that may create tables. Do not create any tables: `copy` builds the schema with the same
+   bootstrap the daemons run, so the target ends at exactly the source's schema version.
+4. **Copy.** Put the target connection strings in the environment (a flag shows in the process list):
+
+   ```
+   export ARCANE_DB_TARGET_PROVIDER=postgresql
+   export ARCANE_DB_TARGET_AUTH_CONNECTION='Host=db;Port=5432;Database=arcane_auth;Username=arcane;Password=...;'
+   export ARCANE_DB_TARGET_CHARACTERS_CONNECTION='Host=db;Port=5432;Database=arcane_characters;Username=arcane;Password=...;'
+   export ARCANE_DB_TARGET_WORLD_CONNECTION='Host=db;Port=5432;Database=arcane_world;Username=arcane;Password=...;'
+   arcane-db copy --component all
+   ```
+
+   The source is the configured `Database` section (the realm's current SQLite settings), or `--source-provider` and `--source-connection` for one
+   component. For one component the target may also be `--target-provider` and `--target-connection`. Connection strings and passwords are never printed.
+5. **Read the summary.** Every table prints its source and target row count and `ok` once the content check agrees. Exit 0 means every table of every
+   selected component matched and `check` is clean on the target. Exit 9 means a table differs: the target is not safe; fix the cause and run again
+   with `--replace`.
+6. **Switch the configuration** to the new engine: `Database:Auth:Provider` and `Database:Auth:ConnectionString`, and the same keys under
+   `Database:Characters` and `Database:World` (or `Database:Provider` and `Database:ConnectionString` for a single database).
+7. **Start the daemons** and verify: `arcane-db status` shows every component `Current`, the realm list and a login work, and a character
+   loads. Keep the SQLite files, untouched, as the rollback.
+
+What `copy` does, in order. It refuses, for every selected component, before the first write: a source that is not at this build's schema
+version (run `arcane-db upgrade` on it first), a source whose tables or columns differ from the model or that holds a table no data module owns,
+a source and target that are the same database, a world process owning a SQLite characters file, other sessions connected, a target that cannot be
+brought to the current schema, and a target that holds rows (any table other than the version table and the rows the schema bootstrap itself
+seeds) without `--replace`. Then, per component: creates or upgrades the target schema through the normal bootstrap; requires the target's tables and
+columns to equal the source's; empties the component's tables (reverse foreign-key order) and fills them (parents first, from the model's foreign keys;
+a cycle is refused and named) with batched multi-row `INSERT`s inside **one** target transaction, so a failure leaves the target as it was; converts each
+value to the target column's type (SQLite's text timestamps to `timestamp with time zone` / `datetime`, integer flags to booleans, text decimals and
+GUIDs, blobs, NULLs; timestamps keep microseconds, the precision of PostgreSQL and `datetime(6)`); resets the key counters (PostgreSQL `setval` on every
+identity or serial sequence, MariaDB `AUTO_INCREMENT`; SQLite continues from the largest rowid by itself); and verifies every table: the row counts on
+both sides, and an order-independent SHA-256 digest of every converted source row against every row read back from the target. Finally it runs the
+`check` comparison on every target.
+
+The schema version table is not copied: the target's bootstrap wrote it and the copy requires it to equal the source's. Rows the bootstrap seeds
+(the world-ownership fence row, id-range and lease scopes, the playerbot ladder) are replaced by the source's rows, so the target ends equal to the
+source. `--replace` makes a re-run idempotent; it touches only the selected component's tables, never other tables in the same database.
+Limits: a table that references itself, or a foreign-key cycle, is refused (none exists today); a value the target type cannot hold (a NUL character in
+PostgreSQL text, an integer outside the target column's range) fails the table's transaction and names the table and column; the copy is one pass over
+a stopped realm, not a replication.
 
 ### Databases created by the Codex line
 
