@@ -98,6 +98,7 @@ How to read the tables:
 - [`World:Honor`](#worldhonor)
 - [`World:HotCode`](#worldhotcode)
 - [`World:Instances`](#worldinstances)
+- [`World:MeetingStone`](#worldmeetingstone)
 - [`World:PacketHeuristics`](#worldpacketheuristics)
 - [`World:Playerbots`](#worldplayerbots)
 - [`World:Playerbots:Qa`](#worldplayerbotsqa)
@@ -1435,6 +1436,12 @@ How to read the tables:
 | `World:Instances:ResetRefusedNoticeSeconds` | `int` | `10` | - | Seconds between two "Please leave the instance so it can be reset." notices to the players inside an instance that a refused personal reset asks to leave (an ArcaneCore limit: the refusal itself is an ArcaneCore choice, see docs/integration/instances.md, and the requester can repeat CMSG_RESET_INSTANCES at will). The requester still gets SMSG_INSTANCE_RESET_FAILED every time. 0 sends the notice on every refusal. |
 | `World:Instances:ResetTimeHour` | `int` | `4` | - | Hour of the day (UTC, 0–23) of global raid resets (vmangos `Instance.ResetTimeHour`, default 4). |
 | `World:Instances:UnloadDelayMs` | `int` | `1800000` | - | How long an empty instance map stays loaded before it is unloaded (vmangos `Instance.UnloadDelay`, default 30 minutes). Its save and binds survive the unload. |
+
+## `World:MeetingStone`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:MeetingStone:LeaveSoloQueueOnPartyJoin` | `bool` | `false` | - | ArcaneCore deviation, off by default (retail): a player queued alone at a meeting stone who joins a party by an ordinary invitation leaves the solo queue (the client is told SETQUEUE LEAVE_QUEUE). vmangos keeps the stale entry (Group.cpp AddMember only updates the LFG state of a party that is itself in the queue), so that player keeps blocking the roles of everyone queued after them until they log out, and is lost from a pair the queue forms. This also applies to the inviter of a new party who had queued alone. |
 
 ## `World:PacketHeuristics`
 
