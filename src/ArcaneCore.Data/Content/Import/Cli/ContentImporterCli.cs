@@ -607,7 +607,9 @@ public static partial class ContentImporterCli
             {
                 try
                 {
-                    graveyards.ReadSafeLocs(WorldSafeLocsDbcReader.Load(safeLocsPath));
+                    // A dump row wins (cmangos `o` is the facing the DBC lacks, and classic-db corrects coordinates and names);
+                    // the DBC only fills ids the dump never had, as vmangos, which has no world_safe_locs table, needs.
+                    graveyards.AddMissingSafeLocs(WorldSafeLocsDbcReader.Load(safeLocsPath));
                 }
                 catch (InvalidDataException ex)
                 {
