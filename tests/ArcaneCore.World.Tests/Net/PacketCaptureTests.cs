@@ -219,6 +219,29 @@ public sealed class PacketCaptureTests
         }
     }
 
+    [Fact]
+    public void AHeaderFlushThatFails_DisposesTheStreamAndRethrows()
+    {
+        using var stream = new FlushFailsStream();
+
+        Assert.Throws<IOException>(() => new PacketCapture(stream, "unused.pkt", 1024));
+
+        Assert.True(stream.WasDisposed);
+    }
+
+    private sealed class FlushFailsStream : MemoryStream
+    {
+        public bool WasDisposed { get; private set; }
+
+        public override void Flush() => throw new IOException("disk full");
+
+        protected override void Dispose(bool disposing)
+        {
+            WasDisposed = true;
+            base.Dispose(disposing);
+        }
+    }
+
     private static long CaptureFaults()
         => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Snapshot().Where(s => s.Site == "net.packet-capture").Sum(s => s.Count);
 
