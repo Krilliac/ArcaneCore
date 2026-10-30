@@ -48,6 +48,7 @@ public sealed class ZoneUpdateWorldTests
         WorldStateHooks.For(host.World).Locator = new Locator(hasAreaData: true);
 
         await using WorldTestClient client = await host.EnterWorldAsync("ZONER", "Zoner");
+        client.IgnoreEnergyRegenUpdates = true; // vmangos regenerates energy for every player (Player.cpp:2283); only that hidden update may arrive
 
         Assert.Single(client.LastLoginPackets, p => p.Opcode == WorldOpcode.SmsgInitWorldStates);
         Assert.Equal(40u, ZoneOf(client.LoginPacket(WorldOpcode.SmsgInitWorldStates)));
@@ -60,6 +61,7 @@ public sealed class ZoneUpdateWorldTests
         await using var host = WorldTestHost.Start();
         WorldStateHooks.For(host.World).Locator = new Locator(hasAreaData: true);
         await using WorldTestClient client = await host.EnterWorldAsync("IGNORE", "Ignore");
+        client.IgnoreEnergyRegenUpdates = true; // vmangos regenerates energy for every player (Player.cpp:2283); only that hidden update may arrive
 
         await client.SendAsync(WorldOpcode.CmsgZoneupdate, ZonePayload(12));
         await client.AssertSilentAsync(TimeSpan.FromMilliseconds(300));
@@ -73,6 +75,7 @@ public sealed class ZoneUpdateWorldTests
         await using var host = WorldTestHost.Start();
         WorldStateHooks.For(host.World).Locator = new Locator(hasAreaData: false);
         await using WorldTestClient client = await host.EnterWorldAsync("TRUST", "Trust");
+        client.IgnoreEnergyRegenUpdates = true; // vmangos regenerates energy for every player (Player.cpp:2283); only that hidden update may arrive
 
         await client.SendAsync(WorldOpcode.CmsgZoneupdate, ZonePayload(40));
         Assert.Equal(40u, ZoneOf(await client.ReadUntilAsync(WorldOpcode.SmsgInitWorldStates)));
@@ -88,6 +91,7 @@ public sealed class ZoneUpdateWorldTests
         var locator = new Locator(hasAreaData: true) { Zone = 12, Area = 9 };
         WorldStateHooks.For(host.World).Locator = locator;
         await using WorldTestClient client = await host.EnterWorldAsync("WALKER", "Walker");
+        client.IgnoreEnergyRegenUpdates = true; // vmangos regenerates energy for every player (Player.cpp:2283); only that hidden update may arrive
         Assert.Equal(12u, await host.PlayerStateAsync("Walker", p => p.ZoneId));
 
         locator.Area = 10; // another area of the same zone: no packet
