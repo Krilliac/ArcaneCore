@@ -351,6 +351,7 @@ public sealed class CreaturePathJobTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // asserts a Stopwatch budget while a background thread holds the gate
     public void AnUngatedDrape_IsTimedInsideTheGate_SoTheWaitForAnotherMapIsNotChargedToThePathBudget()
     {
         const int HoldMs = 50;

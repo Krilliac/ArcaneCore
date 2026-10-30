@@ -106,12 +106,17 @@ public sealed class BulkheadTests
             _ = bulkhead.ExecuteAsync(op, i);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
+        Action window = () =>
         {
-            Assert.True(bulkhead.ExecuteAsync(op, i).IsCompletedSuccessfully);
-        }
+            for (int i = 0; i < 10_000; i++)
+            {
+                if (!bulkhead.ExecuteAsync(op, i).IsCompletedSuccessfully)
+                {
+                    throw new InvalidOperationException("The free-slot call did not complete synchronously.");
+                }
+            }
+        };
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "Bulkhead free-slot fast path x10000");
     }
 }
