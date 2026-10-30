@@ -188,9 +188,9 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   other member, and every other bot member loses `TrustPerFirstDeathInWipe` (-30) toward the member seen dead first in a wipe. Trust stays
   within 0..1000. On a success and on a wipe each bot member also stores the role (tank, healer or damage) every other bot member played,
   replacing the one it stored before; the role of a real player is not known and is left alone.
-- *War Mode* (`World:Playerbots:Social:WarMode`, **off by default**; a server mode for massive world PvP) is a separate layer. The normal layer
+- *War Mode* (the switch is `World:WarMode:Enabled`, **off by default**, one server-wide switch for the game rules and for the bots; the bots' memory and hunt knobs are `World:Playerbots:Social:WarMode`; a server mode for massive world PvP) is a separate layer. The normal layer
   (affinity, trust, flags, drift, daily cap, apology limit) is always updated with the normal rules and War Mode never writes to it. Each
-  relation also has a war layer (`WarAffinity`, `WarFlags`: Rival and a seeded marker, stored in the same row). While `Enabled`, every event is
+  relation also has a war layer (`WarAffinity`, `WarFlags`: Rival and a seeded marker, stored in the same row). While War Mode is on, every event is
   also applied to the war layer under the war rules: negative changes multiplied by `NegativeMultiplier` (3); with `NeverForget` negative war
   affinity does not drift and the war Rival flag is not cleared by drift; with `RemoveCaps` the war layer has no daily cap and no
   once-a-day apology limit. The normal rules alone decide what a full memory evicts, so the normal layer is the same with or without War Mode;
@@ -202,8 +202,11 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   normal layer effective at once; the war layer takes no events while it is off but is not frozen: its drift still follows the clock, so
   positive war affinity halves on its half-life while dormant and, with `NeverForget` off, so does negative war affinity (with it on, a
   war grudge keeps its value). It comes back as it has drifted when War Mode is switched on again, war-only rows included, unless
-  `ClearOnDisable` is set, in which case the first checkpoint after the switch starts a background task (one at a time, never inside a bot's own save or stop) that wipes the war layers and deletes the war-only rows of every bot, running or not, and writes each bot it changed once. The keys are live. War Mode changes what the bots remember, not the rules of the game: it
-  never force-flags anyone for PvP and a player's opt-out still applies (the first rivalry that acts on this memory is Rivalry (P6a) below: emotes only; hunting parties are a later phase).
+  `ClearOnDisable` is set, in which case the first checkpoint after the switch starts a background task (one at a time, never inside a bot's own save or stop) that wipes the war layers and deletes the war-only rows of every bot, running or not, and writes each bot it changed once. The keys are live. War Mode is also a rule of the game, not only a memory: it is the same switch as the player rules in
+  [World state and exploration](world-state.md#war-mode-non-retail) (every player and bot is PvP-flagged outside the exempt areas, honour is multiplied, a
+  PvP death costs durability), so it does flag everyone, bots included, and there is no opt-out. A rivalry opt-out (`rivals off`) still silences the
+  rivalry *emotes*; it does not exempt anyone from War Mode. The war layer decides the Rival grudges the bots act on: the rivalry emote lane reads it toward bots
+  as toward players (`RudeAtBots` still gates a rude emote at a bot), and the hunt below attacks on it.
 
 **Persistence**: loaded at startup; a bot's rows are written by the checkpoint when its version changed, and on stop or drop (not under a
 split-brain latch), off the world thread with the transient-busy retry. A failed write is a fault and a warning, never a blocked stop.
@@ -239,6 +242,19 @@ alive, in a fight (not a duel) and below 40% health, or a caster below 20% mana 
 helpfulness and by `1 + affinity / 100`, so the answer is the same on every pass of one fight and a rival is never helped. The bot must be free
 (see above) and take the victim's attacker under the flag rule below; the help is the same assist lane as answering a call.
 
+**Against players and bots.** The attacker a helping bot takes (`PlayerbotHelpRules.AttackerOf`) is a creature, or a player or bot of the other
+faction that is PvP-flagged, the nearest first. A player attacker needs the same flag rule as a creature that would flag the helper (the helper is flagged
+already, or War Mode is on), is not at more than three levels above the helper, must be attackable under the combat hooks and is never taken inside an
+exempt area (`PvpAreaState.IsWarModeExempt`). This holds with War Mode off too: a bot attacked by a flagged enemy bot or player draws a same-faction
+helper that is flagged. The helper's brain takes such an attacker on with the PvP fight (`PlayerbotBrain.Hunt.cs`, engage reason `Help`) and lets go
+when the attacker dies, runs out of reach or enters an exempt area. Calls for help and the trouble scan work against these attackers unchanged.
+
+**The hunt** (`World:Playerbots:Social:WarMode:HuntRadiusYards`, default 60, 10 to 150, live). Only while `World:WarMode:Enabled` is on. An idle bot
+(alive, out of combat and duels, no defend post, no resurrection sickness, not in a group with a real player) looks at most every two seconds for the
+nearest visible player or bot of the other faction within the radius that is PvP-flagged, outside the exempt areas and a Rival in its *war* layer, and attacks
+it (`PlayerbotHostility.MayEngage` with the `Grudge` reason, allowed only while War Mode is on). It never attacks into an exempt area and gives up the chase when
+the target enters one, dies, or is farther than the radius plus 10 yards. Real players and bots are the same to the rule.
+
 **Resurrecting** (`ResurrectStrangers`). A priest, paladin, druid or shaman that is free and sees a same-faction player dead within reach (25 yards,
 unit or, once released, the corpse) rolls once per corpse and casts its resurrection spell (the group AI's `FindResurrectionSpell`: highest
 rank, reagents carried). A dead player the bot owes a favour (gratitude, below) bypasses the roll. A flagged corpse is not raised by an unflagged
@@ -248,10 +264,10 @@ bot. A bot that is raised by a same-faction player it does not hold as a rival a
 paladin (Blessing of Might) that passes a same-faction player out of combat within 25 yards offers the buff with a small hash chance, once per
 bot and stranger per `BuffCooldownMinutes` (default 30), never to a player who carries it already or to a flagged one when the bot is not flagged.
 
-**Never against a fight that would flag the bot.** A creature a player controls (a pet or a totem), or a player, would flag the bot for PvP:
-the bot takes such a fight only when it is flagged already or `World:Playerbots:Social:WarMode:Enabled` is on, and the brain's targets are
-creatures, so a player attacker is never taken. A heal is only cast at a unit `IsSafeHealTarget` allows (never a flagged player for an unflagged
-healer).
+**Only a fight the bot may take.** A creature a player controls (a pet or a totem), or a player, would flag the bot for PvP: the bot takes such a fight
+only when it is flagged already or `World:WarMode:Enabled` is on. A player or bot attacker is taken like any other attacker (see *Against players and
+bots* above), a creature a player controls is a creature target. A heal is only cast at a unit `IsSafeHealTarget` allows (never a flagged player for an
+unflagged healer).
 
 ## Gratitude (`World:Playerbots:Social:Gratitude`, live)
 

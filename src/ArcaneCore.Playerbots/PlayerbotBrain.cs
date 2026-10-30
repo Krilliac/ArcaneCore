@@ -1050,6 +1050,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotThinkProbe.Phase("pvp");
         if (TryFightPlayer(player, interval)) return;
 
+        // War Mode (World:WarMode:Enabled): an idle bot hunts a flagged enemy it holds a grudge against (PlayerbotBrain.Hunt.cs).
+        if (HuntScanDue() && TryHunt(player, interval)) return;
+
         // A scenario stay (PlayerbotStay) owns the bot while its lease lives: no quest, grind or explore step chooses a destination.
         if (TryStay(player, interval)) return;
 
