@@ -9,7 +9,10 @@ namespace ArcaneCore.World.Cluster.Supervision;
 /// </summary>
 public static class SupervisorLineReader
 {
-    /// <summary>The longest line kept whole; a longer one is delivered in pieces of this size.</summary>
+    /// <summary>
+    /// The longest line kept whole; a longer one is delivered in pieces of this size. A line is cut only when a further character
+    /// arrives, and a CR directly after a full piece is held (one extra character at most) so its LF still ends a normal CRLF line.
+    /// </summary>
     public const int MaxLineLength = 64 * 1024;
 
     /// <summary>Reads <paramref name="reader"/> to its end and calls <paramref name="onLine"/> for each line. A final line without a newline is delivered at the end. Stream errors propagate.</summary>
@@ -32,11 +35,12 @@ public static class SupervisorLineReader
                 }
                 else
                 {
-                    line.Append(c);
-                    if (line.Length >= MaxLineLength)
+                    if (line.Length >= MaxLineLength && !(c == '\r' && line.Length == MaxLineLength))
                     {
                         Deliver(line, onLine, dropCarriageReturn: false);
                     }
+
+                    line.Append(c);
                 }
             }
         }

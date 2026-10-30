@@ -213,7 +213,53 @@ public sealed class ClusterSupervisorRecoveryOptionsTests
         ConfigIssue[] issues = [.. new ClusterSupervisorConfigChecks().Check(configuration)];
 
         Assert.Contains(issues, i => i.Severity == ConfigSeverity.Error && i.Problem.Contains("HangTimeoutSeconds", StringComparison.Ordinal));
-        Assert.Contains(issues, i => i.Severity == ConfigSeverity.Warning && i.Problem.Contains("HangCapture", StringComparison.Ordinal));
+        ConfigIssue dumpWarning = Assert.Single(issues, i => i.Severity == ConfigSeverity.Warning && i.Problem.Contains("HangCapture", StringComparison.Ordinal));
+        Assert.Contains("HangCaptureDirectory", dumpWarning.Fix, StringComparison.Ordinal); // its own remediation, not the drain-timeout advice
+        Assert.DoesNotContain("DrainTimeoutMs", dumpWarning.Fix, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConfigCheck_DrainWarnings_KeepTheirDrainRemediation()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Cluster:Supervisor:Enabled"] = "true",
+            ["Cluster:Supervisor:MinClusterProcesses"] = "1",
+            ["Cluster:Supervisor:Processes:world:Role"] = "combined",
+            ["Cluster:Supervisor:Processes:world:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:world:DrainTimeoutMs"] = "1000",
+        }).Build();
+
+        ConfigIssue warning = Assert.Single(new ClusterSupervisorConfigChecks().Check(configuration), i => i.Severity == ConfigSeverity.Warning);
+
+        Assert.Contains("DrainTimeoutMs", warning.Problem, StringComparison.Ordinal);
+        Assert.Contains("DrainTimeoutMs", warning.Fix, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(SupervisedConsoleMode.Merged, true)]
+    [InlineData(SupervisedConsoleMode.Window, true)]
+    [InlineData(SupervisedConsoleMode.None, true)]
+    [InlineData((SupervisedConsoleMode)99, false)]
+    [InlineData((SupervisedConsoleMode)(-1), false)]
+    public void Validate_Console_MustBeADefinedMode(SupervisedConsoleMode mode, bool valid)
+    {
+        AssertValidity(WithProcess(c => c.Console = mode), valid, "Console");
+    }
+
+    [Fact]
+    public void ConfigCheck_ANumericConsoleValueOutsideTheModes_IsAnError()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Cluster:Supervisor:Enabled"] = "true",
+            ["Cluster:Supervisor:MinClusterProcesses"] = "1",
+            ["Cluster:Supervisor:Processes:world:Role"] = "combined",
+            ["Cluster:Supervisor:Processes:world:ExecutablePath"] = "dotnet",
+            ["Cluster:Supervisor:Processes:world:Console"] = "99", // Enum.Parse accepts a number that names no mode
+        }).Build();
+
+        Assert.Contains(new ClusterSupervisorConfigChecks().Check(configuration), i => i.Severity == ConfigSeverity.Error && i.Problem.Contains("Console", StringComparison.Ordinal));
     }
 
     private static void AssertValidity(ClusterSupervisorOptions options, bool valid, string key)
