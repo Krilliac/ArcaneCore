@@ -177,6 +177,9 @@ public static class KillRewards
     /// <summary>vmangos CREATURE_STATIC_FLAG_NO_XP (static_flags1 bit 0x2, same bit in cmangos).</summary>
     private const uint StaticFlagNoXp = 0x00000002;
 
+    /// <summary>MaNGOS::XP::Gain (Formulas.h:112): a CREATURE_STATIC_FLAG_NO_XP victim gives no experience to players or their pets.</summary>
+    internal static bool GrantsNoExperience(Creature victim) => (victim.Template.StaticFlags1 & StaticFlagNoXp) != 0;
+
     /// <summary>
     /// Group::RewardGroupAtKill / RewardSinglePlayerAtKill experience: one share per recipient,
     /// granted through <paramref name="progression"/> (rested bonus applies to kills).
@@ -188,7 +191,7 @@ public static class KillRewards
         ArgumentNullException.ThrowIfNull(progression);
         ArgumentNullException.ThrowIfNull(recipients);
         ArgumentNullException.ThrowIfNull(victim);
-        if ((victim.Template.StaticFlags1 & StaticFlagNoXp) != 0)
+        if (GrantsNoExperience(victim))
         {
             // MaNGOS::XP::Gain (Formulas.h:112): CREATURE_STATIC_FLAG_NO_XP (CreatureDefines.h:99) gives no experience.
             return new uint[recipients.Count];
