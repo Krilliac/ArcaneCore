@@ -12,7 +12,11 @@
 #   ARCANECORE_DBC_DIR) is set, ARCANECORE_TEST_TERRAIN_DIR / ARCANECORE_TEST_DBC_DIR, so real-data tests run instead of skipping.
 # - ARCANECORE_TEST_CLIENT_DIR / ARCANECORE_TEST_CLIENT_FILES_DIR are passed through when set; otherwise filled from the optional gitignored
 #   slot-env.local.json ({"clientDir": "...", "clientFilesDir": "..."}) in WorkDir or LanesRoot; if still unset one line says client-data tests skip.
-# - Always releases the slot (finally). A slot file whose holder pwsh is dead (or older than $StaleMin minutes) is abandoned and removed.
+# - Always releases the slot (finally), and only when the file still holds this run's pid (a reaped slot may belong to another lane by then).
+#   A slot file is abandoned and removed when its holder pwsh is dead, or when the holder is older than the -TimeoutMin it declared in the
+#   file (plus -TimeoutGraceMin, default 5 minutes: the holder kills its own child at the timeout). A holder whose process is alive and inside its timeout is never
+#   reaped, however long it runs. $StaleMin applies only to a lock whose pid cannot be read at all (a hand-made file); locks younger than
+#   30 s are never touched (they may be mid-write).
 # - Exit code: 124 on timeout; else the last native command's code if non-zero (also when the command then threw); else 1 if the command threw
 #   or its last statement failed ($? false, incl. -ErrorAction SilentlyContinue that hit an error); else 0. A statement-terminating error
 #   stops the rest of a `;` chain. Limit: a function that only calls Write-Error (non-terminating) and ends the command still gives 0.
@@ -25,6 +29,7 @@ param(
     [int]$Slots = 2,
     [int]$MinAvailableMB = 2000,
     [int]$StaleMin = 75,
+    [int]$TimeoutGraceMin = 5,
     [int]$MaxCpuCount = 6,
     [string]$LanesRoot
 )
@@ -56,19 +61,26 @@ while (-not $held) {
     foreach ($f in Get-ChildItem $root -Filter 'slot-*.lock' -ErrorAction SilentlyContinue) {
         # A holder killed outright (taskkill, TaskStop) never runs its finally: free its slot as soon as its pwsh is gone,
         # not only after $StaleMin. A lock younger than 30 s may still be mid-write, so its pid is not read yet.
-        $holderDead = $false
-        if ($f.LastWriteTime -lt (Get-Date).AddSeconds(-30) -and (Get-Content $f.FullName -ErrorAction SilentlyContinue) -match 'pid=(\d+)') {
+        if ($f.LastWriteTime -ge (Get-Date).AddSeconds(-30)) { continue }
+        $content = (Get-Content $f.FullName -ErrorAction SilentlyContinue) -join ' '
+        $reap = $false
+        if ($content -match 'pid=(\d+)') {
             $hp = Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue
             $holderDead = -not $hp -or $hp.ProcessName -notmatch '^pwsh' -or $hp.StartTime -gt $f.LastWriteTime
+            # A live holder is only reaped once it outlived the timeout it declared (it kills its own child at that point).
+            $outlivedOwnTimeout = $content -match 'timeout=(\d+)' -and $f.LastWriteTime -lt (Get-Date).AddMinutes(-([int]$Matches[1] + $TimeoutGraceMin))
+            $reap = $holderDead -or $outlivedOwnTimeout
+        } else {
+            $reap = $f.LastWriteTime -lt (Get-Date).AddMinutes(-$StaleMin)
         }
-        if ($holderDead -or $f.LastWriteTime -lt (Get-Date).AddMinutes(-$StaleMin)) { Remove-Item $f.FullName -ErrorAction SilentlyContinue }
+        if ($reap) { Remove-Item $f.FullName -ErrorAction SilentlyContinue }
     }
     if ((Get-AvailableMB) -ge $MinAvailableMB) {
         for ($i = 1; $i -le $Slots -and -not $held; $i++) {
             $path = Join-Path $root "slot-$i.lock"
             try {
                 $fs = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
-                $bytes = [Text.Encoding]::UTF8.GetBytes("$Lane pid=$PID since=$(Get-Date -Format s)")
+                $bytes = [Text.Encoding]::UTF8.GetBytes("$Lane pid=$PID since=$(Get-Date -Format s) timeout=$TimeoutMin")
                 $fs.Write($bytes, 0, $bytes.Length); $fs.Dispose(); $held = $path
             } catch [System.IO.IOException] { }
         }
@@ -111,7 +123,7 @@ try {
         $rc = 124; "[$Lane] TIMEOUT after $TimeoutMin min; killed PID $($p.Id) and its children"
     } else { $p.WaitForExit(); $rc = $p.ExitCode }
 } finally {
-    Remove-Item $held -ErrorAction SilentlyContinue
+    if (((Get-Content $held -ErrorAction SilentlyContinue) -join ' ') -match "pid=$PID(\D|$)") { Remove-Item $held -ErrorAction SilentlyContinue }
     "[$Lane] released $(Split-Path $held -Leaf); exit $rc"
 }
 if (Test-Path "$log.err") { Get-Content "$log.err" | Add-Content $log; Remove-Item "$log.err" }
