@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Kernel.Logging;
@@ -10,7 +12,8 @@ namespace ArcaneCore.Kernel.Logging;
 /// timestamp/category/scopes dimmed); the layout is identical, so a <c>sed 's/\x1b\[[0-9;]*m//g'</c> of a colour log equals the plain log.
 /// Allocation: none for a message without exception or scopes (every field is formatted into the caller's <see cref="LogBuffer"/>).
 /// Variable text (message, category, event name, scopes, exception lines) goes through <see cref="AppendEscaped"/>: CR, LF, every other C0
-/// control (including ESC), DEL, the C1 controls (including NEL) and U+2028/U+2029 are written as visible escapes, so no caller can make
+/// control (including ESC), DEL, the C1 controls (including NEL), U+2028/U+2029 and every Unicode Format character (bidi overrides such as
+/// U+202E, zero-width U+200B, the byte order mark U+FEFF) are written as visible escapes, so no caller can make
 /// a sink emit a forged line (CWE-117). Text without such characters is copied unchanged and allocates nothing. Callers still use
 /// <see cref="LogSafe"/> where truncation is wanted.
 /// </summary>
@@ -94,26 +97,53 @@ public static class LogLineFormatter
         }
     }
 
-    /// <summary>True for a character a line-oriented sink must not emit raw: C0 controls, DEL, C1 controls, U+2028 and U+2029.</summary>
-    public static bool NeedsEscape(char c) => c < 0x20 || (c >= 0x7F && c <= 0x9F) || c == (char)0x2028 || c == (char)0x2029;
+    // Every BMP character NeedsEscape accepts, built once from NeedsEscape itself so the two cannot drift: C0 controls, DEL, C1 controls,
+    // U+2028/U+2029 and the Unicode Format category. IndexOfAny over this set is vectorised, so clean text costs one scan and no allocation.
+    // Surrogates are never in the set (a lone or paired surrogate is copied as is; supplementary-plane Format characters such as the tag
+    // characters U+E0000-U+E007F are not escaped).
+    private static readonly SearchValues<char> Searchable = SearchValues.Create(BuildSearchable());
+
+    private static string BuildSearchable()
+    {
+        var chars = new System.Text.StringBuilder();
+        for (int c = 0; c <= 0xFFFF; c++)
+        {
+            if (NeedsEscape((char)c))
+            {
+                chars.Append((char)c);
+            }
+        }
+
+        return chars.ToString();
+    }
+
+    /// <summary>
+    /// True for a character a line-oriented sink must not emit raw: C0 controls, DEL, C1 controls, U+2028, U+2029 and the Unicode Format
+    /// category (<see cref="UnicodeCategory.Format"/>: bidi overrides U+202A-U+202E and isolates U+2066-U+2069, zero-width U+200B-U+200F,
+    /// U+FEFF, soft hyphen, ...), which can reorder or hide log text when the log is viewed.
+    /// </summary>
+    public static bool NeedsEscape(char c) => c < 0x20 || (c >= 0x7F && c <= 0x9F) || c == (char)0x2028 || c == (char)0x2029
+        || (c >= 0xAD && char.GetUnicodeCategory(c) == UnicodeCategory.Format);
 
     /// <summary>
     /// Appends <paramref name="text"/> with every <see cref="NeedsEscape"/> character written as a visible escape: <c>\r</c>, <c>\n</c>,
-    /// <c>\t</c> or <c>\uXXXX</c> (upper-case hex). Clean runs are copied in one piece.
+    /// <c>\t</c> or <c>\uXXXX</c> (upper-case hex). Clean runs are copied in one piece; the scan for the next character to escape is
+    /// vectorised (<see cref="SearchValues{T}"/>).
     /// </summary>
     public static void AppendEscaped(ref LogBuffer buffer, scoped ReadOnlySpan<char> text)
     {
-        int flushed = 0;
-        for (int i = 0; i < text.Length; i++)
+        ReadOnlySpan<char> rest = text;
+        while (true)
         {
-            char c = text[i];
-            if (!NeedsEscape(c))
+            int at = rest.IndexOfAny(Searchable);
+            if (at < 0)
             {
-                continue;
+                break;
             }
 
-            buffer.Append(text[flushed..i]);
-            flushed = i + 1;
+            buffer.Append(rest[..at]);
+            char c = rest[at];
+            rest = rest[(at + 1)..];
             switch (c)
             {
                 case '\r':
@@ -135,7 +165,7 @@ public static class LogLineFormatter
             }
         }
 
-        buffer.Append(text[flushed..]);
+        buffer.Append(rest);
     }
 
     private static char HexUpper(int value) => (char)(value < 10 ? '0' + value : 'A' + value - 10);
