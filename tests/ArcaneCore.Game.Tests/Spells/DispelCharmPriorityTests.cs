@@ -39,7 +39,8 @@ public sealed class DispelCharmPriorityTests
         relations.Hostile.Add(target.Guid);
 
         // The charmed unit is hostile to the caster by its current template; its original (race) template is friendly to the caster's.
-        uint casterTemplate = caster.FactionTemplate;
+        const uint casterTemplate = 9_001; // not the race template of either player, so the two records differ
+        caster.FactionTemplate = casterTemplate;
         uint originalTemplate = target.RaceFactionTemplate;
         var catalog = new FactionTemplateCatalog(
         [

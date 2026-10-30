@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 
 namespace ArcaneCore.Game.Spells;
 
