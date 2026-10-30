@@ -222,6 +222,10 @@ public sealed partial class PlayerbotGroupCoordinator
     internal bool IsVolunteer(ObjectGuid player, (PlayerbotGroupGoalKind, uint) key)
         => _volunteers.TryGetValue(player, out var entry) && entry.Key == key && unchecked((int)(entry.Until - Now)) > 0;
 
+    /// <summary>How many milliseconds <paramref name="player"/>'s volunteer entry has left (0 when there is none or it expired; tests).</summary>
+    internal int VolunteerRemainingMs(ObjectGuid player)
+        => _volunteers.TryGetValue(player, out var entry) ? Math.Max(0, unchecked((int)(entry.Until - Now))) : 0;
+
     /// <summary>
     /// <see cref="Match"/>'s volunteer step: a group one short (a role or a member) takes a volunteer for its goal (<see cref="Volunteer"/>)
     /// who is online, alive, of the team, ungrouped, of the level and on the meeting map within <see cref="MaxMeetingYards"/> of the

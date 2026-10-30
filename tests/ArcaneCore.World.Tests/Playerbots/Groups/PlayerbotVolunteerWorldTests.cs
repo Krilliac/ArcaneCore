@@ -547,6 +547,8 @@ public sealed class PlayerbotVolunteerWorldTests
         Assert.Empty(world.Coordinator.Groups);
 
         await PlaceAtTheEntranceAsync(world, "Volkeep"); // back in reach: every Match tick now plans with the volunteer
+        // The window below must end before the volunteer would expire on its own, or a kept volunteer could not be told from an expired one.
+        Assert.True(world.Coordinator.VolunteerRemainingMs(volunteer) > 65_000, $"setup used too much of the volunteer's life ({world.Coordinator.VolunteerRemainingMs(volunteer)} ms left)");
 
         Assert.False(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Count > 0 || PlayerInvited(world)), "a group formed without a waiting anchor" + Environment.NewLine + await world.TraceAsync());
         Assert.True(world.Coordinator.IsVolunteer(volunteer, key), "the volunteer was dropped when its plan was rejected");
