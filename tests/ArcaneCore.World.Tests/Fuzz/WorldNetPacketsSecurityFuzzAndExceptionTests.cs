@@ -768,7 +768,7 @@ public sealed class WorldNetPacketsSecurityFuzzAndExceptionTests
         var saveQueue = new CharacterSaveQueue(
             StubServiceScopeFactory.Instance,
             NullLogger<CharacterSaveQueue>.Instance);
-        using var source = new LocalWorldHandoffSource(new WorkerNodeId("w1"), world, saveQueue, admission);
+        using var source = new LocalWorldHandoffSource(new WorkerNodeId("w1"), world, saveQueue, admission, new WorldWriterGuard());
         Assert.Throws<InvalidOperationException>(() => _ = source.Ownership);
         await Assert.ThrowsAsync<InvalidOperationException>(() => source.FlushAsync(CancellationToken.None));
         await source.RetireAsync(CancellationToken.None);

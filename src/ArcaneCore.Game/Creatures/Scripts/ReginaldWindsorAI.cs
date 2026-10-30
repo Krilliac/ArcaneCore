@@ -358,6 +358,9 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
 
                 break;
             case -1000865: // SAY_PRESTOR_KEEP_11: the guards turn
+                // A guard that died or left the world since -1000852 can no longer turn (UpdateEntry refuses the dead); dropping it keeps
+                // the guard check below from waiting on an entry change that never comes.
+                _royalGuards.RemoveAll(g => !g.IsAlive || !g.IsInWorld);
                 foreach (Creature guard in _royalGuards.Where(g => g.IsAlive))
                 {
                     system.UpdateEntry(guard, NpcGuardOnyxia);
@@ -482,7 +485,7 @@ public sealed class ReginaldWindsorAI(Creature creature) : EscortAI(creature), I
         {
             if (_guardCheckMs <= diffMs)
             {
-                if (_royalGuards.All(g => !g.IsAlive && g.Entry == NpcGuardOnyxia))
+                if (_royalGuards.All(g => (!g.IsAlive || !g.IsInWorld) && g.Entry == NpcGuardOnyxia))
                 {
                     StartDialogue(Array.FindIndex(s_dialogue, d => d.Entry == (int)NpcGuardOnyxia));
                     _guardCheckMs = 0;

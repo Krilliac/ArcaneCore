@@ -205,6 +205,20 @@ public sealed class SmartAiTests
     }
 
     [Fact]
+    public void EventChanceOne_FiresAboutOnePercentOfTheTime_NotNever()
+    {
+        // AzerothCore roll_chance_i(1) passes on a roll of 1 in 1..100: event_chance 1 is a 1% row, it must not be a never row.
+        using Fight f = Start(Row(0, SmartEvent.Aggro, SmartAction.Cast, SmartTarget.ActionInvoker, a1: 9, chance: 1));
+        for (int i = 0; i < 3000; i++)
+        {
+            f.Ai.OnAggro(f.Player);
+        }
+
+        int fired = f.Spells.Casts.Count(c => c.Spell == 9);
+        Assert.InRange(fired, 1, 150); // 3000 draws seeded: ~30 expected
+    }
+
+    [Fact]
     public void Cast_AuraNotPresentSkips_InterruptPreviousInterrupts_AndABusyCasterDelaysTheTimer()
     {
         using Fight f = Start(

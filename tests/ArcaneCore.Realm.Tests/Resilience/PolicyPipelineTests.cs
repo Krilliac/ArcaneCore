@@ -79,14 +79,19 @@ public sealed class PolicyPipelineTests
             _ = pipeline.ExecuteAsync(op, i);
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
+        Action window = () =>
         {
-            ValueTask<int> vt = pipeline.ExecuteAsync(op, i);
-            Assert.True(vt.IsCompletedSuccessfully);
-        }
+            for (int i = 0; i < 10_000; i++)
+            {
+                ValueTask<int> vt = pipeline.ExecuteAsync(op, i);
+                if (!vt.IsCompletedSuccessfully)
+                {
+                    throw new InvalidOperationException("The pipeline call did not complete synchronously.");
+                }
+            }
+        };
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "ResiliencePipeline fast path x10000");
     }
 
     [Fact]

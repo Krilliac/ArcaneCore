@@ -20,7 +20,7 @@ public static class DbUpgradeExitCodes
     /// <summary><c>status</c> or <c>plan</c>: an upgrade is pending (a normal report, not an error; <c>--no-fail-on-pending</c> turns it into 0).</summary>
     public const int UpgradePending = 3;
 
-    /// <summary>Refused: the database is newer than the code, in an unknown state, blocked (duplicate rows, conflicting index, mismatching table) or has other sessions; nothing was changed. The world daemon also exits with it when another world process holds the characters database writer lock (the `.world.lock` file beside it), or when that lock file cannot be created at all (permissions, a full disk).</summary>
+    /// <summary>Refused: the database is newer than the code, in an unknown state, blocked (duplicate rows, conflicting index, mismatching table) or has other sessions; nothing was changed. The world daemon also exits with it when another world process holds the characters database writer lock (the `.world.lock` file beside it, or the MariaDB/MySQL/PostgreSQL advisory lock for the characters database name), or when that lock file cannot be created at all (permissions, a full disk).</summary>
     public const int Refused = 4;
 
     /// <summary><c>check</c>, or the check after <c>upgrade</c>: the database differs from the model.</summary>

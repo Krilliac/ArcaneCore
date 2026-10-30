@@ -558,6 +558,7 @@ public sealed partial class Creature : Unit, ICombatCreature
         // from the template exactly like the melee pair above (the importer derives them from creature_classlevelstats).
         SetFloat(UpdateFields.UnitFieldMinrangeddamage, t.MinRangedDamage * damageRate);
         SetFloat(UpdateFields.UnitFieldMaxrangeddamage, t.MaxRangedDamage * damageRate);
+        SetUInt32(UpdateFields.UnitFieldAttackPower, t.MeleeAttackPower); // vmangos Creature::UpdateAttackPowerAndDamage (StatSystem.cpp:820-840) writes UNIT_FIELD_ATTACK_POWER (0xA5) from the template, beside the ranged one
         SetUInt32(UpdateFields.UnitFieldRangedAttackPower, t.RangedAttackPower);
         SetUInt32(UpdateFields.UnitFieldResistances, t.Armor);
         ApplyCreateResistances();

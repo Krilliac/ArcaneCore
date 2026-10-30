@@ -96,14 +96,16 @@ characters write fence is registered whatever `Cluster:Fencing:Enabled` says, an
 ### Standby worker (Tier 3b groundwork)
 
 `Cluster:Worker:Standby = true` (needs `Enabled`) starts a second World on the same databases as a handoff target. It
-builds its services, validates the schema without DDL (`Database:Upgrade:ValidateOnly`), takes no characters writer lock,
+builds its services, validates the schema without DDL (`Database:Upgrade:ValidateOnly`), takes no characters writer lock at start (the active world holds it),
 claims no ownership, registers no `World:Port` listener, and links to a gateway; but it attaches no feature and starts no
 simulation (features read the characters database, which the active World still owns: the fence refuses a non-owner's
 transactions, reads included), and it refuses every session open with `AUTH_UNAVAILABLE` (`WorkerAdmission`). It runs
 only after `WorldHost.PromoteAsync(token)`: the token must be the ownership the database holds, under this process's
-incarnation, as the handoff's epoch takeover leaves it. Promotion only reads the ownership row
+incarnation, as the handoff's epoch takeover leaves it. Promotion first takes the characters database writer lock the standby deferred (the SQLite sidecar `<database>.world.lock`, or the MariaDB/MySQL/PostgreSQL session advisory lock of [operating a realm](../guide/operations.md)), before it reads the ownership row: while the old world is alive it still holds that lock, so the promotion is refused with a message saying so, nothing is held and the standby stays a standby (a later retry may succeed once the old world has released it or exited). The in-process handoff coordinator makes the source world give up its lock (`IWorldHandoffSource.ReleaseWriterLockAsync`) after the epoch takeover and before it promotes B (the window until B takes the lock is guarded by the ownership row, which already names B's incarnation, and by the fence on A's late writes, not by the lock); a source that is a separate process must have exited or released its lock the same way. Promotion only reads the ownership row
 (`ICharacterOwnershipStore.GetCurrentAsync`); a refused promotion claims nothing, even when the row is released. There is no operator command for it yet; the drain protocol
 below drives it in process.
+
+A clustered realm needs a server database: with the characters database on SQLite, `Cluster:Worker:Enabled` (standby included), `Cluster:Node:Role` = MapWorker, or a supervisor listing a gateway-worker child or more than one world-type child is a configuration error (exit 78, even without `Startup:Strict`), because SQLite allows one writer process and the clusters world processes write it concurrently. Use PostgreSQL or MariaDB for `Database:Characters` (moving a SQLite realm: [database upgrade](../ops/database-upgrade.md)); `tools/ops/live/start-cluster.ps1 -Gateway` makes the world a gateway worker, so it needs a server database too. A supervisor running exactly one combined world child on SQLite is allowed and warns that the realm cannot grow beyond one world.
 
 ### Whole-World handoff (Tier 3b groundwork, in process only)
 
