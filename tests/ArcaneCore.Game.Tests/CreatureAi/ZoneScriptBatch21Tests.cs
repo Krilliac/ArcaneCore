@@ -124,4 +124,38 @@ public sealed class ZoneScriptBatch21Tests
             Assert.NotEqual(0u, shortJohn.NpcFlags & (uint)NpcFlags.QuestGiver);
         }
     }
+
+    [Fact]
+    public void GurubashiArenaEvent_AnEvadeOnTheWayToTheFloor_ResumesTheRunFromTheLedge()
+    {
+        CreatureContent content = new(
+            [Template(ShortJohnMithrilAI.Entry, b => { b.Name = "Short John Mithril"; b.Faction = 35; b.NpcFlags = (uint)(NpcFlags.Gossip | NpcFlags.QuestGiver); })],
+            [Spawn(1, ShortJohnMithrilAI.Entry, -13184.5f, 332.671f, 40.33f)], [], [], [], new CreatureAiContent([], []));
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content);
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, -13220f, 290f);
+            Creature shortJohn = Assert.Single(system.Creatures);
+            var ai = Assert.IsType<ShortJohnMithrilAI>(shortJohn.AI);
+
+            ai.StartBootyRun();
+            for (int i = 0; i < 3000 && (ai.Stage != ShortJohnMithrilAI.RunStage.ToFloor || Distance2D(shortJohn, -13184.5f, 332.671f) < 10f); i++)
+            {
+                player.Relocate(shortJohn.X, shortJohn.Y, shortJohn.Z, 0, 0);
+                Run(world, 100);
+            }
+
+            Assert.Equal(ShortJohnMithrilAI.RunStage.ToFloor, ai.Stage);
+            system.EnterEvadeMode(shortJohn); // a fight on the way broke the spline; the evade walks him back to his ledge spawn
+            for (int i = 0; i < 6000 && ai.Stage != ShortJohnMithrilAI.RunStage.Idle; i++)
+            {
+                player.Relocate(shortJohn.X, shortJohn.Y, shortJohn.Z, 0, 0);
+                Run(world, 100);
+            }
+
+            Assert.Equal(ShortJohnMithrilAI.RunStage.Idle, ai.Stage); // the run finished instead of sticking at ToFloor with the flags off
+            Assert.NotEqual(0u, shortJohn.NpcFlags & (uint)NpcFlags.QuestGiver);
+            _ = map;
+        }
+    }
 }

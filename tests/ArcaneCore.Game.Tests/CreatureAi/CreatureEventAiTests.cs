@@ -83,11 +83,35 @@ public sealed class CreatureEventAiTests
         Assert.False(ai.MeleeEnabled); // action 20, not ranged mode, owns this state.
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    public void RangedModeAction_AcceptsCmangosModeTypes(int type)
+    {
+        // cmangos CreatureEventAI.cpp ACTION_T_SET_RANGED_MODE applies every type below TYPE_MAX (FULL_CASTER 1, PROXIMITY 2, DISTANCER 4);
+        // classic-db uses types 1, 2 and 4 on ~700 caster creatures.
+        CreatureContent content = EventContent(
+            [Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, type, 20))]);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using WorldRuntime world = runtime;
+        AddPlayer(world, 1, 50, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
+
+        ai.OnRespawn();
+
+        Assert.True(ai.RangedMode);
+        Assert.True(ai.CurrentRangedMode);
+        Assert.Equal(type, ai.RangedModeType);
+        Assert.Equal(20f, ai.ChaseDistance);
+    }
+
     [Fact]
-    public void RangedModeAction_RejectsUnimplementedModeTypes()
+    public void RangedModeAction_RejectsTypesPastTypeMax()
     {
         CreatureContent content = EventContent(
-            [Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, 2, 20))]);
+            [Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, 5, 20))]);
         (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
         using WorldRuntime world = runtime;
         AddPlayer(world, 1, 50, 0);
@@ -98,6 +122,23 @@ public sealed class CreatureEventAiTests
 
         Assert.False(ai.RangedMode);
         Assert.True(ai.MeleeEnabled);
+    }
+
+    [Fact]
+    public void OnRespawn_ResetsAttackDistanceLeftByRangedMovementAction()
+    {
+        CreatureContent content = EventContent([Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.AutoAttack, 1))]);
+        (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);
+        using WorldRuntime world = runtime;
+        AddPlayer(world, 1, 50, 0);
+        Creature wolf = Assert.Single(system.Creatures);
+        var ai = Assert.IsType<CreatureEventAI>(wolf.AI);
+        Assert.True(ai.SetRangedMode(true, 10f, 3));
+        ai.AttackDistance = 30f; // ACTION_T_RANGED_MOVEMENT from a previous life
+
+        ai.OnRespawn();
+
+        Assert.Equal(ai.ChaseDistance, ai.AttackDistance); // cmangos JustRespawned/Reset: m_attackDistance = m_chaseDistance
     }
 
     /// <summary>

@@ -110,6 +110,12 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         {
             creature.Combat.Threat.AddThreat(target, 0f);
             Map.Combat.SetInCombatState(target, 0);
+            // vmangos Unit::SetInCombatState -> Creature::OnEnterCombat -> AttackedBy: an idle creature target retaliates. Without it the target is
+            // flagged in combat with no victim, and SelectHostileTarget evades it again and again (Alterac Valley mine mobs).
+            if (target is Creature idleTarget && idleTarget.Combat.Victim is null)
+            {
+                idleTarget.OnAttackedBy(creature);
+            }
         }
     }
 

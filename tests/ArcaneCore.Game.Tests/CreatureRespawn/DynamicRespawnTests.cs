@@ -107,6 +107,18 @@ public sealed class DynamicRespawnTests
     }
 
     [Fact]
+    public void AForcedDespawn_ScalesItsRespawnLikeADeath()
+    {
+        // vmangos Creature::ForcedDespawn goes through SetDeathState(JUST_DIED), the same path as a death (and its respawn scaling).
+        (WorldRuntime world, CreatureMapSystem system, Creature c) = Start(20);
+        using (world)
+        {
+            system.ForcedDespawn(c, 0);
+            Assert.Equal(48, (c.RespawnAtMs - system.ClockMs) / 1000); // 120 / (1 + 0.1 * 15), as after a kill
+        }
+    }
+
+    [Fact]
     public void TheMinimumSeconds_IsAFloor()
     {
         (WorldRuntime world, CreatureMapSystem system, Creature c) = Start(20, tune: o => o.MinimumSeconds = 100);

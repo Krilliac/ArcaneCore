@@ -135,13 +135,14 @@ public class CreatureEventAI : AggressorAI
     }
 
     /// <summary>
-    /// ACTION_T_SET_RANGED_MODE (57). Type 3 is TYPE_NO_MELEE_MODE: it keeps the creature in
-    /// ranged mode even when the victim is inside melee reach. Movement selection remains owned by
+    /// ACTION_T_SET_RANGED_MODE (57). The types are cmangos UnitAI RangedModeType: 0 none, 1 full caster, 2 proximity,
+    /// 3 no melee mode (keeps the creature in ranged mode even when the victim is inside melee reach) and 4 distancer;
+    /// cmangos CreatureEventAIMgr.cpp rejects only types at or past TYPE_MAX. Movement selection remains owned by
     /// CreatureMapSystem; this state is the contract consumed by EventAI gates and melee control.
     /// </summary>
     internal bool SetRangedMode(bool enabled, float chaseDistance, int type)
     {
-        if (type is not (0 or 3) || !float.IsFinite(chaseDistance) || chaseDistance < 0)
+        if (type is < 0 or > 4 || !float.IsFinite(chaseDistance) || chaseDistance < 0)
         {
             return false;
         }
@@ -169,6 +170,7 @@ public class CreatureEventAI : AggressorAI
     {
         CombatMovement = true;
         _currentRangedMode = _rangedMode;
+        AttackDistance = _chaseDistance; // cmangos JustRespawned/Reset: m_attackDistance = m_chaseDistance, so action 29 of the last life does not carry over
         SetMeleeEnabled(Me.MeleeAllowedByTemplate);
         _engine.Respawn();
     }

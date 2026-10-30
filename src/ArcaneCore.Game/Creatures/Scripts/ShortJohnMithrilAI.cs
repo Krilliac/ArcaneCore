@@ -67,6 +67,21 @@ public sealed class ShortJohnMithrilAI(Creature creature) : CreatureAI(creature)
 
     public override void OnRespawn() => Finish();
 
+    /// <summary>
+    /// An evade breaks the raw spline the run walks and sends him back to his ledge spawn. vmangos runs this as a creature_movement path, so an
+    /// evade returns to the last waypoint and the path continues; this port has no such generator, so the leg to the floor starts again from
+    /// home. (The leg back to the ledge ends at his spawn and finishes by itself.)
+    /// </summary>
+    public override void OnReachedHome()
+    {
+        base.OnReachedHome();
+        if (_stage is RunStage.ToFloor or RunStage.OnFloor && System is { } system)
+        {
+            _stage = RunStage.ToFloor;
+            system.MovePath(Me, s_toFloor, run: false, SplineFacing.None);
+        }
+    }
+
     public override void OnDeath(Unit? killer)
     {
         base.OnDeath(killer);
