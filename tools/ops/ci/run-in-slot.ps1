@@ -64,11 +64,11 @@ while (-not $held) {
         if ($f.LastWriteTime -ge (Get-Date).AddSeconds(-30)) { continue }
         $content = (Get-Content $f.FullName -ErrorAction SilentlyContinue) -join ' '
         $reap = $false
-        if ($content -match 'pid=(\d+)') {
+        if ($content -match ' pid=(\d+)') {
             $hp = Get-Process -Id ([int]$Matches[1]) -ErrorAction SilentlyContinue
             $holderDead = -not $hp -or $hp.ProcessName -notmatch '^pwsh' -or $hp.StartTime -gt $f.LastWriteTime
             # A live holder is only reaped once it outlived the timeout it declared (it kills its own child at that point).
-            $outlivedOwnTimeout = $content -match 'timeout=(\d+)' -and $f.LastWriteTime -lt (Get-Date).AddMinutes(-([int]$Matches[1] + $TimeoutGraceMin))
+            $outlivedOwnTimeout = $content -match ' timeout=(\d+)' -and $f.LastWriteTime -lt (Get-Date).AddMinutes(-([int]$Matches[1] + $TimeoutGraceMin))
             $reap = $holderDead -or $outlivedOwnTimeout
         } else {
             $reap = $f.LastWriteTime -lt (Get-Date).AddMinutes(-$StaleMin)
@@ -123,7 +123,7 @@ try {
         $rc = 124; "[$Lane] TIMEOUT after $TimeoutMin min; killed PID $($p.Id) and its children"
     } else { $p.WaitForExit(); $rc = $p.ExitCode }
 } finally {
-    if (((Get-Content $held -ErrorAction SilentlyContinue) -join ' ') -match "pid=$PID(\D|$)") { Remove-Item $held -ErrorAction SilentlyContinue }
+    if (((Get-Content $held -ErrorAction SilentlyContinue) -join ' ') -match " pid=$PID(\D|$)") { Remove-Item $held -ErrorAction SilentlyContinue }
     "[$Lane] released $(Split-Path $held -Leaf); exit $rc"
 }
 if (Test-Path "$log.err") { Get-Content "$log.err" | Add-Content $log; Remove-Item "$log.err" }

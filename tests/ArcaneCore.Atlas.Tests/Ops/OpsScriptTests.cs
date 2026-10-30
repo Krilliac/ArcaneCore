@@ -8,8 +8,9 @@ namespace ArcaneCore.Atlas.Tests.Ops;
 
 /// <summary>
 /// The operator scripts that gate and diagnose builds (tools/ops/ci, tools/ops/diag, scripts). Each test runs the real script against a temp
-/// directory: nothing here touches the real lanes root, the live allowlist or the caller's checkout. Needs <c>pwsh</c>, <c>bash</c> and
-/// <c>git</c> on the PATH, as ci.yml's runners and the dev boxes have; a missing tool fails the test instead of skipping it.
+/// directory: nothing here touches the real lanes root, the live allowlist or the caller's checkout. Each test declares the tools it needs
+/// (<c>pwsh</c>, <c>bash</c>, <c>git</c>, Windows for run-in-slot.ps1) through <see cref="OpsFactAttribute"/>; a host without one reports the
+/// test as SKIPPED with the reason. A skip is not a pass: the test did not run there, so read the skipped count.
 /// </summary>
 public sealed class OpsScriptTests : IDisposable
 {
@@ -97,7 +98,7 @@ public sealed class OpsScriptTests : IDisposable
         => Run(Start("pwsh", ["-NoProfile", "-NonInteractive", "-File", script, .. args]), timeoutMs);
 
     /// <summary>The first bash on the PATH that is not Windows' WSL launcher (System32\bash.exe), which cannot run these scripts.</summary>
-    private static string Bash()
+    private static string? FindBash()
     {
         string name = OperatingSystem.IsWindows() ? "bash.exe" : "bash";
         string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
@@ -110,14 +111,76 @@ public sealed class OpsScriptTests : IDisposable
             }
         }
 
-        throw new InvalidOperationException("no bash on the PATH");
+        return null;
+    }
+
+    private static string Bash() => FindBash() ?? throw new InvalidOperationException("no bash on the PATH (the test should have been skipped)");
+
+    [Flags]
+    private enum Needs
+    {
+        None = 0,
+        Pwsh = 1,
+        Bash = 2,
+        Git = 4,
+        Windows = 8,
+    }
+
+    /// <summary>A fact that is skipped, with the reason, when the host lacks a tool it needs. A skip is not a pass.</summary>
+    private sealed class OpsFactAttribute : FactAttribute
+    {
+        public OpsFactAttribute(Needs needs = Needs.None)
+        {
+            var missing = new List<string>();
+            if (needs.HasFlag(Needs.Windows) && !OperatingSystem.IsWindows())
+            {
+                missing.Add("Windows (run-in-slot.ps1 uses Get-Counter, taskkill and USERPROFILE)");
+            }
+
+            if (needs.HasFlag(Needs.Pwsh) && !OnPath("pwsh"))
+            {
+                missing.Add("pwsh");
+            }
+
+            if (needs.HasFlag(Needs.Bash) && FindBash() is null)
+            {
+                missing.Add("bash");
+            }
+
+            if (needs.HasFlag(Needs.Git) && !OnPath("git"))
+            {
+                missing.Add("git");
+            }
+
+            if (missing.Count > 0)
+            {
+                Skip = "not run on this host, needs " + string.Join(", ", missing) + ". A skip is not a pass.";
+            }
+        }
+    }
+
+    private static bool OnPath(string tool)
+    {
+        string[] names = OperatingSystem.IsWindows() ? [tool + ".exe", tool + ".cmd"] : [tool];
+        foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty).Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            foreach (string name in names)
+            {
+                if (File.Exists(Path.Combine(dir, name)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static string Sha(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
 
     // ---- full-suite-gate.ps1 --------------------------------------------------------------------------------------------------------
 
-    [Fact]
+    [OpsFact]
     public void TheFullSuiteGate_DefaultSuites_AreExactlyCiYmlsSolutionFilters()
     {
         string gate = File.ReadAllText(Script("tools/ops/ci/full-suite-gate.ps1"));
@@ -157,7 +220,7 @@ public sealed class OpsScriptTests : IDisposable
         return [.. File.ReadAllLines(list).Where(l => l.Length > 0)];
     }
 
-    [Fact]
+    [OpsFact(Needs.Pwsh)]
     public void HotModuleHash_AHashOnlyInACommentLine_IsNotApproved_AndIsAppended()
     {
         (string dll, string sha) = Module();
@@ -166,7 +229,7 @@ public sealed class OpsScriptTests : IDisposable
         Assert.StartsWith(sha, lines[2], StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [OpsFact(Needs.Pwsh)]
     public void HotModuleHash_AHashOnlyInAnotherLinesLabel_IsNotApproved_AndIsAppended()
     {
         (string dll, string sha) = Module();
@@ -176,7 +239,7 @@ public sealed class OpsScriptTests : IDisposable
         Assert.StartsWith(sha, lines[1], StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [OpsFact(Needs.Pwsh)]
     public void HotModuleHash_AListedHash_IsLeftAlone_InEitherCase()
     {
         (string dll, string sha) = Module();
@@ -184,7 +247,7 @@ public sealed class OpsScriptTests : IDisposable
         Assert.Equal(2, lines.Length);
     }
 
-    [Fact]
+    [OpsFact(Needs.Pwsh)]
     public void HotModuleHash_AFileWithoutAFinalNewline_GetsTheEntryOnItsOwnLine()
     {
         (string dll, string sha) = Module();
@@ -197,7 +260,7 @@ public sealed class OpsScriptTests : IDisposable
 
     // ---- bisect-one.sh --------------------------------------------------------------------------------------------------------------
 
-    [Fact]
+    [OpsFact(Needs.Bash | Needs.Git)]
     public void BisectOne_RefusesADirtyWorktree_AndKeepsItsEdits()
     {
         string repo = Path.Combine(_temp, "repo");
@@ -250,9 +313,17 @@ public sealed class OpsScriptTests : IDisposable
         var env = new Dictionary<string, string> { ["USERPROFILE"] = home };
         using Process p = Process.Start(Start(Bash(), [Script("tools/ops/diag/hang-stacks.sh"), "4242", log, "1", outDir], env: env))!;
         p.StandardInput.Close();
-        _ = p.StandardOutput.ReadToEndAsync();
+        using var started = new ManualResetEventSlim(false);
+        p.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null && e.Data.StartsWith("watching ", StringComparison.Ordinal))
+            {
+                started.Set();
+            }
+        };
+        p.BeginOutputReadLine();
         _ = p.StandardError.ReadToEndAsync();
-        Thread.Sleep(4000); // the script has recorded the log size by now
+        Assert.True(started.Wait(30_000), "hang-stacks.sh never reported that it was watching the log"); // it has recorded the log size by now
         touchLog(log);
         if (!p.WaitForExit(20_000))
         {
@@ -262,7 +333,7 @@ public sealed class OpsScriptTests : IDisposable
         return Directory.Exists(outDir) ? Directory.GetFiles(outDir) : [];
     }
 
-    [Fact]
+    [OpsFact(Needs.Bash)]
     public void HangStacks_CapturesWhenTheHangLineIsFollowedByALargeBurst()
     {
         string[] captured = HangStacks("start\n", log =>
@@ -272,7 +343,7 @@ public sealed class OpsScriptTests : IDisposable
         Assert.Single(captured);
     }
 
-    [Fact]
+    [OpsFact(Needs.Bash)]
     public void HangStacks_RescansATruncatedLogFromItsStart()
     {
         string[] captured = HangStacks(new string('y', 300_000) + "\n", log =>
@@ -299,7 +370,7 @@ public sealed class OpsScriptTests : IDisposable
     private static string[] SlotArgs(string root, string command, params string[] extra)
         => ["-Lane", "t", "-WorkDir", AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar), "-Command", command, "-Slots", "1", "-MinAvailableMB", "1", "-LanesRoot", root, .. extra];
 
-    [Fact]
+    [OpsFact(Needs.Windows | Needs.Pwsh)]
     public void RunInSlot_AHolderThatIsGone_IsReaped_AndTheSlotIsTaken()
     {
         using Process dead = Process.Start(Start("pwsh", ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]))!;
@@ -312,7 +383,8 @@ public sealed class OpsScriptTests : IDisposable
         Assert.Contains("holding slot-1.lock", output, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [OpsFact(Needs.Windows | Needs.Pwsh)]
+    [Trait("Category", "Timing")]
     public void RunInSlot_ALiveHolder_IsNeverReapedForAge_ButIsOnceItOutlivedItsOwnTimeout()
     {
         using Process live = Process.Start(Start("pwsh", ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 300"]))!;
@@ -362,7 +434,7 @@ public sealed class OpsScriptTests : IDisposable
         }
     }
 
-    [Fact]
+    [OpsFact(Needs.Windows | Needs.Pwsh)]
     public void RunInSlot_TheRelease_LeavesASlotFileThatNowBelongsToAnotherRun()
     {
         string root = SlotRoot();

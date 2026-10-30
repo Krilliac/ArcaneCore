@@ -16,18 +16,22 @@ fi
 mkdir -p "$out"
 n=0
 pos=$(stat -c %s "$log")
+echo "watching $log from byte $pos"
 while [ "$n" -lt "$max" ]; do
   sz=$(stat -c %s "$log")
   # A log that shrank was truncated or replaced: scan the new content from its start.
   if [ "$sz" -lt "$pos" ]; then pos=0; fi
   if [ "$sz" -gt "$pos" ]; then
-    # grep reads to EOF (no -q): with -q it exits at the first match and tail/head die of SIGPIPE, which pipefail turns into a false condition
-    # for a segment of ~100 KB or more, so the hang line would be skipped for good.
-    if tail -c +$((pos+1)) "$log" | head -c $((sz-pos)) | grep "world tick has been running for" > /dev/null; then
+    # Copy the new byte range to a file and grep the file: no pipe, so a segment larger than a pipe buffer cannot SIGPIPE a writer
+    # (which pipefail would turn into a false condition and drop the hang line for good).
+    seg="$out/.segment.$$"
+    dd if="$log" of="$seg" iflag=skip_bytes,count_bytes skip="$pos" count=$((sz-pos)) status=none
+    if grep "world tick has been running for" "$seg" > /dev/null; then
       f="$out/stack-$(date +%H%M%S).txt"
       "$USERPROFILE/.dotnet/tools/dotnet-stack.exe" report -p "$pid" > "$f" 2>&1
       n=$((n+1)); echo "captured $f ($(wc -l < "$f") lines)"
     fi
+    rm -f "$seg"
     pos=$sz
   fi
   sleep 1
