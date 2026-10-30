@@ -551,6 +551,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly TimeProvider _time;
     private readonly ISupervisedHangCapture? _hangCapture;
+    private readonly SupervisorCrashDialog? _crashDialog;
     private readonly string _protocolToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
     private int _belowMinimumRaised;
     private int _minimumWatchArmed;
@@ -565,7 +566,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         IClusterCapacityProbe? capacityProbe = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
         TimeProvider? timeProvider = null,
-        ISupervisedHangCapture? hangCapture = null)
+        ISupervisedHangCapture? hangCapture = null,
+        SupervisorCrashDialog? crashDialog = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(launcher);
@@ -577,6 +579,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         _time = timeProvider ?? TimeProvider.System;
         _delayAsync = delayAsync ?? ((delay, ct) => Task.Delay(delay, _time, ct));
         _hangCapture = hangCapture;
+        _crashDialog = crashDialog;
 
         foreach ((string key, SupervisedProcessConfig config) in _options.Processes)
         {
@@ -1009,7 +1012,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private void LaunchEntryUnderLock(ManagedEntry entry)
     {
         entry.Config.ProtocolToken = _protocolToken;
+        DateTimeOffset launchedUtc = _time.GetUtcNow(); // before the launch: a crash report the child writes is never older than this
         ISupervisedProcess process = _launcher.Launch(entry.Config);
+        entry.LaunchUtc = launchedUtc;
         entry.BeginIncarnation(_time.GetTimestamp());
         process.OutputLineReceived += (line, isStdErr) => OnChildLine(entry, process, line, isStdErr);
         entry.Process = process;
@@ -1465,6 +1470,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 }
 
                 bool notify = false;
+                SupervisorChildExit? crashExit = null; // an unexpected nonzero exit the supervisor did not cause: offered to the crash dialog after the lock
                 lock (_gate)
                 {
                     entry.LastExitCode = exitCode;
@@ -1498,6 +1504,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                             entry.State = SupervisedProcessState.Faulted;
                             announcement = $"FATAL: Process '{entry.Config.Name}' exited with code {exitCode} ({(exitCode == ExitCodes.InvalidConfiguration ? "invalid configuration" : "usage error")}); not restarting.";
                             notify = true;
+                            crashExit = NewCrashExit(entry, currentProcess, exitCode, "not restarting it (a restart would fail the same way)");
                             break;
 
                         case SupervisedExitDisposition.RelaunchNow:
@@ -1527,6 +1534,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                             if (GiveUpOnCrashLoopUnderLock(entry, now, exitCode, out announcement))
                             {
                                 notify = true;
+                                if (killedBy == SupervisorKillKind.None)
+                                    crashExit = NewCrashExit(entry, currentProcess, exitCode, "giving up on it (crash loop), not restarting it");
                                 break;
                             }
 
@@ -1534,6 +1543,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                             delayMs = ClusterSupervisorOptions.ComputeBackoffDelayMs(entry.ConsecutiveFailures, entry.Config.RestartBackoffMinMs, entry.Config.RestartBackoffMaxMs);
                             entry.LastBackoffDelayMs = delayMs;
                             entry.State = SupervisedProcessState.BackingOff;
+                            if (killedBy == SupervisorKillKind.None)
+                                crashExit = NewCrashExit(entry, currentProcess, exitCode, $"restarting it in {delayMs / 1000.0:0.##} s (restart #{entry.RestartCount})");
                             announcement = killedBy == SupervisorKillKind.Hang
                                 ? $"ERROR: Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) was killed as hung (exit code {exitCode}); restarting in {delayMs} ms (restart #{entry.RestartCount})."
                                 : $"ERROR: Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) exited unexpectedly with code {exitCode}; restarting in {delayMs} ms (restart #{entry.RestartCount}).";
@@ -1546,6 +1557,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 if (announcement is not null)
                 {
                     _multiplexer.RouteLine(entry.Config, announcement, isStdErr: announcementIsError);
+                }
+
+                if (crashExit is not null)
+                {
+                    OfferToCrashDialog(crashExit);
                 }
 
                 if (notify)
@@ -1611,6 +1627,27 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 NotifyIfBelowMinimum();
                 return;
             }
+        }
+    }
+
+    /// <summary>The facts of an unexpected exit for <see cref="SupervisorCrashDialog"/>. Call under <c>_gate</c>, before the incarnation's launch time is replaced.</summary>
+    private static SupervisorChildExit NewCrashExit(ManagedEntry entry, ISupervisedProcess process, int exitCode, string decision)
+        => new(entry.Config.Name, entry.Config.Role, process.ProcessId, exitCode, entry.LaunchUtc, decision,
+            entry.Config.ExecutablePath, entry.Config.Arguments, entry.Config.WorkingDirectory);
+
+    /// <summary>Hands an unexpected exit to the crash dialog, which starts its own thread and never throws; nothing here may delay the restart.</summary>
+    private void OfferToCrashDialog(SupervisorChildExit exit)
+    {
+        if (_crashDialog is null || exit.ExitCode == 0)
+            return;
+
+        try
+        {
+            _crashDialog.OnChildExited(exit);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record(SupervisorCrashDialog.FaultSite, ex);
         }
     }
 
@@ -1764,6 +1801,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
         // Per-incarnation hang-watch state; all of it is read and written under the supervisor's _gate.
         public long LaunchTimestamp { get; set; }
+        public DateTimeOffset LaunchUtc { get; set; }
         public bool Armed { get; set; }
         public bool GraceWarned { get; set; }
         public long? StopAnnouncedTimestamp { get; set; }

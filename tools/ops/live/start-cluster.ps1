@@ -29,11 +29,12 @@
   MinClusterProcesses equals the child count by default and the supervisor stops everything when fewer remain (StopWhenBelowMinimum is
   on): if it gives up on a crash-looping gateway or realm, the whole cluster stops, not just that child.
   In cluster mode the diagnostics sidecar (-Diagnostics Max) collects counters from the supervisor process, not from the world child.
-  Crash and fault dialogs (Diagnostics:CrashDialog / FaultDialog) do NOT appear for these children in any -ChildConsole mode: the dialog
+  A child's own crash and fault dialogs (Diagnostics:CrashDialog / FaultDialog) do NOT appear in any -ChildConsole mode: the dialog
   needs standard input, output and error unredirected, and the supervisor starts every child with all three redirected
   (ClusterHostSupervisor.BuildStartInfo), also for Window. Window only gives the child its own console window (stdout still goes to the
-  supervisor, so heartbeats and the hang watch work unchanged); it does not enable dialogs, which is why the default stays Merged. A
-  dialog needs a change in the supervisor (an unredirected child), not a launcher option.
+  supervisor, so heartbeats and the hang watch work unchanged); it does not enable dialogs, which is why the default stays Merged.
+  Instead, with Diagnostics:CrashDialog on for the SUPERVISOR (e.g. Diagnostics__CrashDialog=true in its console), the supervisor opens
+  the crash dialog itself when a child exits unexpectedly with a nonzero code (SupervisorCrashDialog; docs/ops/invariants.md).
   A second World (a standby worker, several map workers) is not started: all worlds of a realm share one characters database and one
   writer lock, so only a worker, the standby handoff target, can coexist, and that is not hosted by a launcher yet.
 

@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace ArcaneCore.World.Cluster.Supervision;
@@ -127,14 +128,46 @@ public static class ClusterSupervisorHosting
         services.TryAddSingleton<ISupervisedProcessLauncher, SystemProcessSupervisedLauncher>();
         services.TryAddSingleton<IClusterCapacityProbe, SystemClusterCapacityProbe>();
         services.TryAddSingleton<ISupervisedHangCapture, SystemSupervisedHangCapture>();
+        services.TryAddSingleton(sp => CreateCrashDialog(configuration, sp));
         services.AddSingleton(sp => new ClusterHostSupervisor(
             sp.GetRequiredService<IOptions<ClusterSupervisorOptions>>().Value,
             sp.GetRequiredService<ISupervisedProcessLauncher>(),
             capacityProbe: sp.GetRequiredService<IClusterCapacityProbe>(),
             timeProvider: sp.GetService<TimeProvider>(),
-            hangCapture: sp.GetRequiredService<ISupervisedHangCapture>()));
+            hangCapture: sp.GetRequiredService<ISupervisedHangCapture>(),
+            crashDialog: sp.GetService<SupervisorCrashDialog>()));
         services.AddHostedService<ClusterSupervisorHostedService>();
         return services;
+    }
+
+    /// <summary>
+    /// The supervisor's own crash dialog for children that exit unexpectedly. The supervisor mode never calls <c>UseArcaneDiagnostics</c>, so the
+    /// <c>Diagnostics</c> section is read here; a section the binder cannot convert counts as off (start-up validation reports it).
+    /// </summary>
+    private static SupervisorCrashDialog CreateCrashDialog(IConfiguration configuration, IServiceProvider services)
+    {
+        bool enabled;
+        try
+        {
+            enabled = configuration.GetSection(DiagnosticsOptions.SectionName).Get<DiagnosticsOptions>()?.CrashDialog ?? false;
+        }
+        catch (InvalidOperationException)
+        {
+            enabled = false;
+        }
+
+        string? dumpNote = null;
+        if (Environment.GetEnvironmentVariable("DOTNET_DbgEnableMiniDump") == "1")
+        {
+            string? dumpName = Environment.GetEnvironmentVariable("DOTNET_DbgMiniDumpName");
+            dumpNote = "DOTNET_DbgEnableMiniDump=1 is set for the children: a crash dump goes to "
+                + (string.IsNullOrEmpty(dumpName) ? "the runtime's default location (the temp directory)" : dumpName);
+        }
+
+        ILogger logger = (services.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance).CreateLogger("ArcaneCore.Cluster.Supervisor.CrashDialog");
+        var dialog = new SupervisorCrashDialog(enabled, logger, dumpNote: dumpNote);
+        dialog.LogAvailability();
+        return dialog;
     }
 
     /// <summary>

@@ -313,7 +313,7 @@ internal sealed class RecordingHangCapture : ISupervisedHangCapture
 /// <summary>One supervisor wired to scripted children, a manual clock and manual delays.</summary>
 internal sealed class SupervisorRig : IAsyncDisposable
 {
-    public SupervisorRig(ClusterSupervisorOptions options, ScriptedLauncher? launcher = null, bool holdAllDelays = false, RecordingHangCapture? capture = null)
+    public SupervisorRig(ClusterSupervisorOptions options, ScriptedLauncher? launcher = null, bool holdAllDelays = false, RecordingHangCapture? capture = null, SupervisorCrashDialog? crashDialog = null)
     {
         Launcher = launcher ?? new ScriptedLauncher();
         Options = options;
@@ -321,7 +321,7 @@ internal sealed class SupervisorRig : IAsyncDisposable
         Mux = new SupervisedOutputMultiplexer(Console);
         Capture = capture;
         Delays.AutoComplete = holdAllDelays ? _ => false : ManualDelays.IsBackoff;
-        Supervisor = new ClusterHostSupervisor(options, Launcher, Mux, new FixedMemoryProbe(), Delays.Delay, Clock, capture);
+        Supervisor = new ClusterHostSupervisor(options, Launcher, Mux, new FixedMemoryProbe(), Delays.Delay, Clock, capture, crashDialog);
     }
 
     public ClusterSupervisorOptions Options { get; }

@@ -130,6 +130,17 @@ site, signature, thread, time, log file and the condensed `ArcaneCore.*` frames;
 when the host has started. The tradeoff: a burst of new signatures still means one box after another, which is why it is a separate
 key from the crash dialog.
 
+**Under the cluster supervisor.** A supervised child's standard streams are always redirected, so the child's own crash dialog never
+opens. The supervisor (`Cluster:Supervisor:Enabled`) reads `Diagnostics:CrashDialog` from its own configuration and, in an interactive
+console session as above, opens the box itself when a child exits unexpectedly with a nonzero code: not a drain or stop it asked for,
+not exit code 0, not the restart request (exit code 2), not a hang kill. The box names the child, its pid, exit code and the
+supervisor's decision (restarting in N s, or giving up), then the newest `crash-report.<daemon>.<yyyyMMdd-HHmmss>Z.txt` in the
+child's `AppContext.BaseDirectory` (next to its executable, or its assembly under `dotnet`) written since that child started, cut
+at 12000 characters with the path of the full file. A child that crashed natively, overflowed its stack or aborted before the
+report left none; the box says so. The box is shown on its own thread, one at a time across all children; a crash while it is open
+is only logged, a presenter failure is recorded under `cluster.supervisor.crash-dialog`, and the restart never waits for it. Source:
+`src/ArcaneCore.World/Cluster/Supervision/SupervisorCrashDialog.cs`.
+
 **Configuration timing.** `UseArcaneDiagnostics` binds the section before it installs the hooks, so the key applies from the first
 moment a hook exists. A crash before that call (in the world daemon, before the start-up configuration validation has finished)
 has no ArcaneCore hook at all and gets the runtime's own output. The log file path is filled in when the host starts.
