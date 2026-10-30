@@ -4,6 +4,7 @@
 //   --spawn-child              start a copy of itself first, for the tree-kill case (the copy gets the same --lifetime-ms)
 //   --pid-file <path>          append "self <pid>" and, after --spawn-child, "child <pid>" (race-free alternative to parsing stdout)
 //   --lifetime-ms <n>          maximum life in milliseconds (default 60000)
+//   --cr-heartbeat             after "ready", write one line "noise<CR>heartbeat <utc> pid=<pid> alive" (a bare CR, not CRLF), then the line "done"
 // Otherwise: print "ready" on stdout and sleep for the bounded lifetime, then exit 0. The bound is what cleans up after a failing test:
 // nothing ever kills a fixture by pid, so a fixture that is left behind ends by itself.
 using System.Diagnostics;
@@ -33,5 +34,13 @@ if (args.Contains("--spawn-child"))
 
 Console.Out.WriteLine("ready");
 Console.Out.Flush();
+if (args.Contains("--cr-heartbeat"))
+{
+    // A bare CR inside one LF-terminated line: a reader that also splits at CR would see a second line that is a valid heartbeat.
+    Console.Out.Write($"noise\rheartbeat 2026-10-29T00:00:00.000Z pid={Environment.ProcessId} alive\n");
+    Console.Out.Write("done\n");
+    Console.Out.Flush();
+}
+
 Thread.Sleep(lifetimeMs);
 return 0;

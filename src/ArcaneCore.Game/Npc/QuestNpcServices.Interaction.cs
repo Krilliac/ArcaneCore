@@ -475,6 +475,27 @@ public sealed partial class QuestNpcServices
     }
 
     /// <summary>
+    /// Why <see cref="GmCompleteQuest"/> would refuse (<see cref="GmQuestCompleteResult.NotReady"/>, <see cref="GmQuestCompleteResult.NotOnQuest"/>
+    /// or <see cref="GmQuestCompleteResult.Failed"/>), or null when it would proceed. Changes nothing, so a caller can check before it
+    /// applies a side effect of its own (the reputation objective in <c>.quest complete</c>).
+    /// </summary>
+    public GmQuestCompleteResult? GmCompleteRefusal(Player player, Quest quest)
+    {
+        ArgumentNullException.ThrowIfNull(quest);
+        if (Ready(player) is not { } state)
+        {
+            return GmQuestCompleteResult.NotReady;
+        }
+
+        if (state.Quests.Get(quest.Id) is not { } data || data.Status == QuestStatus.None)
+        {
+            return GmQuestCompleteResult.NotOnQuest;
+        }
+
+        return data.Status == QuestStatus.Failed ? GmQuestCompleteResult.Failed : null;
+    }
+
+    /// <summary>
     /// <c>.quest complete</c> (HandleQuestCompleteCommand, QuestCommands.cpp:166-283) for a quest the player has a status for:
     /// the missing delivery items are stored and announced (silently skipped when they do not fit), every kill, cast and
     /// game-object objective is credited to its count (<paramref name="creatureExists"/> plays ObjectMgr::GetCreatureTemplate:
@@ -495,15 +516,12 @@ public sealed partial class QuestNpcServices
             return GmQuestCompleteResult.NotReady;
         }
 
-        if (state.Quests.Get(quest.Id) is not { } data || data.Status == QuestStatus.None)
+        if (GmCompleteRefusal(player, quest) is { } refused)
         {
-            return GmQuestCompleteResult.NotOnQuest;
+            return refused;
         }
 
-        if (data.Status == QuestStatus.Failed)
-        {
-            return GmQuestCompleteResult.Failed;
-        }
+        QuestStatusData data = state.Quests.Get(quest.Id)!; // present: GmCompleteRefusal found a status
 
         // Add quest items for quests that require items (QuestCommands.cpp:186-205).
         if (player.Inventory.IsLoaded)

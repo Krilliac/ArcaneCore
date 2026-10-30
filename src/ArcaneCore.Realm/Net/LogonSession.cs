@@ -938,6 +938,7 @@ public sealed class LogonSession(
         _accountId = _reconnectAccountId;
         _accountSecurity = _reconnectSecurity;
         _authenticated = true;
+        _unauthenticatedLifetime?.CancelAfter(Timeout.InfiniteTimeSpan); // proven: the pre-proof lifetime no longer applies
         var writer = new PacketWriter(2);
         writer.WriteByte((byte)AuthCommand.ReconnectProof);
         writer.WriteByte((byte)AuthResult.Success);
@@ -1259,7 +1260,7 @@ public sealed class LogonSession(
         {
             logger.LogWarning(
                 "A realm heartbeat is more than {Seconds} s ahead of this host's clock, the beat is treated as fresh; synchronise the clocks of the world and logon hosts (NTP) ({Suppressed} more since the last line)",
-                RealmListProjection.MaxClockSkew.Seconds, suppressed);
+                RealmListProjection.MaxClockSkewSeconds, suppressed);
         }
 
         IReadOnlyDictionary<int, int> counts = await ReadCharacterCountsAsync(cancellationToken).ConfigureAwait(false);

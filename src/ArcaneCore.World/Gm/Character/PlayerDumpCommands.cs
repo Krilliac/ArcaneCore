@@ -168,6 +168,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
         {
             if (await FindAccountAsync(services, account).ConfigureAwait(false) is not { } owner)
             {
+                context.Fail("no-such-account");
                 ReplyLater(context, string.Format(CultureInfo.InvariantCulture, AccountNotExist, account.ToUpperInvariant()));
                 return;
             }
@@ -179,6 +180,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                context.Fail("file-open-failed");
                 ReplyLater(context, string.Format(CultureInfo.InvariantCulture, FileOpenFail, file));
                 return;
             }
@@ -195,15 +197,19 @@ public sealed class PlayerDumpCommands : ICommandGroup
                     ReplyLater(context, ImportSuccess);
                     break;
                 case DumpReturn.FileBroken or DumpReturn.UnexpectedEnd:
+                    context.Fail("dump-broken");
                     ReplyLater(context, DumpBroken);
                     break;
                 case DumpReturn.TooManyChars:
+                    context.Fail("account-full");
                     ReplyLater(context, string.Format(CultureInfo.InvariantCulture, AccountFull, owner.Username, owner.Id));
                     break;
                 case DumpReturn.NameInUse:
+                    context.Fail("invalid-name");
                     ReplyLater(context, InvalidName);
                     break;
                 default:
+                    context.Fail("import-failed");
                     ReplyLater(context, ImportFailed);
                     break;
             }
@@ -254,6 +260,7 @@ public sealed class PlayerDumpCommands : ICommandGroup
     {
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
         ILogger logger = context.Session.Logger;
+        IDisposable hold = context.Defer(); // the command is done when its replies are
         _ = Task.Run(async () =>
         {
             try
@@ -265,7 +272,12 @@ public sealed class PlayerDumpCommands : ICommandGroup
             {
                 FaultLedger.Shared.Record("gm.pdump", ex);
                 logger.LogError(ex, "the .pdump command failed");
+                context.Fail("failed");
                 ReplyLater(context, failure);
+            }
+            finally
+            {
+                context.World.Post(hold.Dispose); // after the replies posted above (the world queue is FIFO)
             }
         });
     }

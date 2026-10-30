@@ -52,7 +52,7 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
     private bool _startingPending;           // guarded by _gate once the loop runs: the Starting write has not succeeded yet
     private RealmRuntimeState _written;      // guarded by _gate: the state last written
     private DateTime _lastBeatUtc;           // guarded by _gate: the last time a beat vouched for the world
-    private DateTime _lastAttemptUtc;        // guarded by _gate: the last beat decision, written or withheld
+    private DateTime _lastAttemptUtc;        // guarded by _gate: the last beat that was written or deliberately withheld (a failed write does not advance it)
     private long _lastTicks;                 // guarded by _gate: TicksStarted at the last written beat
     private int _desiredCountdown;           // written by the world thread, read by the loop: 0 none, 1 restart, 2 shutdown
     private volatile bool _listenerBound;
@@ -92,6 +92,9 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
 
     /// <summary>Test seam: false leaves the timer loop off, so a test drives <see cref="WakeAsync"/> itself.</summary>
     internal bool StartLoop { get; init; } = true;
+
+    /// <summary>Raised on the writer thread, under the writer's gate, right after the Online write landed (it sets the population to 0). Handlers must not block.</summary>
+    internal event Action? OnlineWritten;
 
     /// <summary>The queued first pass (the Starting write). <see cref="StartAsync"/> does not wait for it; tests do.</summary>
     internal Task StartWrite { get; private set; } = Task.CompletedTask;
@@ -193,11 +196,11 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
             {
                 if (_startingPending)
                 {
-                    _lastAttemptUtc = now;
                     if (await WriteAsync("starting", store => store.SetStartingAsync(_options.Id, now, CancellationToken.None)).ConfigureAwait(false) is true)
                     {
                         _startingPending = false;
                         _lastBeatUtc = now;
+                        _lastAttemptUtc = now;
                         _written = RealmRuntimeState.Starting;
                     }
 
@@ -214,6 +217,7 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
                         _lastAttemptUtc = now;
                         _lastTicks = ticks;
                         _logger.LogInformation("Realm {RealmId} is online in the realm list", _options.Id);
+                        OnlineWritten?.Invoke(); // the Online write reset the population to 0: let the population writer re-issue its latest value
                     }
 
                     return;
@@ -221,9 +225,9 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
 
                 if (BeatDue(now))
                 {
-                    _lastAttemptUtc = now;
                     if (await WriteAsync("starting heartbeat", store => store.BeatAsync(_options.Id, now, CancellationToken.None)).ConfigureAwait(false) is true)
                     {
+                        _lastAttemptUtc = now;
                         _lastBeatUtc = now; // process liveness only: there is no world loop to vouch for yet
                     }
                 }
@@ -250,9 +254,9 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
                 return;
             }
 
-            _lastAttemptUtc = now;
             if (ticks == _lastTicks)
             {
+                _lastAttemptUtc = now; // a withheld beat is a decision: look again after a full interval
                 if (_withheldWarning.TryEnter(out int suppressed))
                 {
                     _logger.LogWarning(
@@ -265,6 +269,8 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
 
             if (await WriteAsync("heartbeat", store => store.BeatAsync(_options.Id, now, CancellationToken.None)).ConfigureAwait(false) is true)
             {
+                // A failed write leaves _lastAttemptUtc alone, so the next wake (at most one second away) retries instead of waiting a full interval.
+                _lastAttemptUtc = now;
                 _lastBeatUtc = now;
                 _lastTicks = ticks;
             }
@@ -296,6 +302,14 @@ public sealed class RealmLivenessService : IHostedService, IDisposable
         _startedRegistration.Dispose();
         await _stop.CancelAsync().ConfigureAwait(false);
         await _loop.ConfigureAwait(false);
+        try
+        {
+            await StartWrite.ConfigureAwait(false); // a Starting write still in flight must land before the stopped write, not after it
+        }
+        catch (OperationCanceledException)
+        {
+            // cancelled before it wrote anything
+        }
 
         await _gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try

@@ -795,17 +795,17 @@ public sealed partial class SpellSystem
         }
 
         uint now = NowMs;
-        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && until > now)
+        if (state.SpellCooldowns.TryGetValue(spell.Id, out uint until) && IsStillRunning(until, now))
         {
             return false;
         }
 
-        if (spell.Category != 0 && state.CategoryCooldowns.TryGetValue(spell.Category, out until) && until > now)
+        if (spell.Category != 0 && state.CategoryCooldowns.TryGetValue(spell.Category, out until) && IsStillRunning(until, now))
         {
             return false;
         }
 
-        return !(spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && until > now);
+        return !(spell.PreventionType == SpellConstants.PreventionTypeSilence && state.SchoolLockouts.TryGetValue(spell.School, out until) && IsStillRunning(until, now));
     }
 
     /// <summary>The hidden cooldown of a proc (vmangos AddCooldown(spell, nullptr, false, cooldown)): server side only, the client is not told.</summary>
@@ -813,7 +813,7 @@ public sealed partial class SpellSystem
     {
         UnitSpellState state = GetOrCreateState(unit);
         uint until = NowMs + cooldownMs;
-        if (!state.SpellCooldowns.TryGetValue(spell.Id, out uint current) || current < until)
+        if (!state.SpellCooldowns.TryGetValue(spell.Id, out uint current) || IsStillRunning(until, current))
         {
             state.SpellCooldowns[spell.Id] = until;
         }

@@ -761,7 +761,10 @@ public static partial class DbUpgradeCli
 
             for (Exception? inner = ex; inner is not null; inner = inner.InnerException)
             {
-                if (inner is DbException or SocketException or TimeoutException)
+                // A DbException the server answered with (key too long, constraint, syntax) is a failed step, not an unreachable server;
+                // only a connection-level one counts (DatabaseTransience, the classifier of the daemon bootstrap), because supervisors restart on exit 6.
+                if (inner is SocketException or TimeoutException
+                    || (inner is DbException && Resilience.DatabaseTransience.IsTransient(inner)))
                 {
                     string detail = Scrub(inner.Message);
                     return new ComponentFailure(

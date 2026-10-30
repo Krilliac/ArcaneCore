@@ -68,19 +68,20 @@ public sealed class PlayerbotPacketIntakeTests
         {
             Assert.False(bot.WantsUpdateObjects);
             bot.DrainManagedPackets();
-            long packetsBefore = BotLeanStats.RingPackets;
+            long skippedBefore = bot.LeanRingPacketsSkipped; // per session: BotLeanStats.RingPackets is process-wide and other tests' lean bots bump it
             bot.Send(WorldOpcode.SmsgNotification, Notification);
             bot.Send(WorldOpcode.SmsgLootResponse, LootResponse);
-            Assert.True(BotLeanStats.RingPackets > packetsBefore, "the skipped packet is counted");
+            Assert.Equal(skippedBefore + 1, bot.LeanRingPacketsSkipped); // the notification, and only it, was counted as skipped
             Assert.Equal(WorldOpcode.SmsgLootResponse, Assert.Single(bot.DrainManagedPackets()).Opcode);
 
             // An observer sees everything, and the map builds update blocks for the bot again.
+            // The map tick runs on its own thread and, now that the bot wants update objects, may deliver one at any point: look only at the opcodes this test sends.
             var seen = new List<WorldOpcode>();
-            bot.ManagedPacketObserver = (opcode, _) => seen.Add(opcode);
+            bot.ManagedPacketObserver = (opcode, _) => { lock (seen) seen.Add(opcode); };
             Assert.True(bot.WantsUpdateObjects);
             bot.Send(WorldOpcode.SmsgNotification, Notification);
-            Assert.Equal([WorldOpcode.SmsgNotification], seen);
-            Assert.Equal(WorldOpcode.SmsgNotification, Assert.Single(bot.DrainManagedPackets()).Opcode);
+            lock (seen) Assert.Equal([WorldOpcode.SmsgNotification], seen.Where(o => o is not (WorldOpcode.SmsgUpdateObject or WorldOpcode.SmsgCompressedUpdateObject)));
+            Assert.Equal(WorldOpcode.SmsgNotification, Assert.Single(bot.DrainManagedPackets(WorldOpcode.SmsgNotification)).Opcode);
         }
         finally { bot.Kick(); await bot.ManagedClosed; }
     }

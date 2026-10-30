@@ -8,6 +8,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -17,7 +18,9 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
     : IWorldFeature, ICharacterHooks, ICharacterDeleteHook
 {
     private readonly Lock _pendingGate = new();
-    private readonly Dictionary<Player, LoadedPet> _pending = [];
+    // Weak keys: a login that aborts after the loading hooks (a later hook throws, TryBeginLogin/EnterWorld refuse) never raises
+    // PlayerLoggedIn, so nothing removes its entry; the table must not keep that Player (and its session) alive. Same idiom as SpellFeature._staged.
+    private readonly ConditionalWeakTable<Player, LoadedPet> _pending = [];
     private PetsFeature? _pets;
     private WorldRuntime? _world;
     private Action<Player>? _onLoggedIn;
@@ -70,7 +73,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
             await saves.FlushCharacterAsync(character.Id).ConfigureAwait(false);
         await _pets.Service.FlushCharacterAsync(character.Id).ConfigureAwait(false);
         LoadedPet loaded = await ReadAsync(player, _pets).ConfigureAwait(false);
-        lock (_pendingGate) _pending[player] = loaded;
+        lock (_pendingGate) _pending.AddOrUpdate(player, loaded);
     }
 
     /// <summary>The stored pet with the pet generation it was read at (taken before the read, so any change during it shows).</summary>
@@ -88,7 +91,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
     private void PublishLoaded(WorldRuntime world, Player player, PetsFeature pets)
     {
         LoadedPet? loaded;
-        lock (_pendingGate) { if (!_pending.Remove(player, out loaded)) return; }
+        lock (_pendingGate) { if (!_pending.TryGetValue(player, out loaded)) return; _pending.Remove(player); }
         Publish(world, player, pets, loaded);
     }
 
@@ -143,7 +146,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
 
     public Task OnCharacterDeletedAsync(WorldSession session, CharacterRecord character)
     {
-        lock (_pendingGate) foreach (Player player in _pending.Keys.Where(p => p.Guid.Low == (uint)character.Id).ToArray()) _pending.Remove(player);
+        lock (_pendingGate) foreach (Player player in _pending.Select(e => e.Key).Where(p => p.Guid.Low == (uint)character.Id).ToArray()) _pending.Remove(player);
         _pets?.Service.ForgetCharacter(character.Id);
         return Task.CompletedTask;
     }

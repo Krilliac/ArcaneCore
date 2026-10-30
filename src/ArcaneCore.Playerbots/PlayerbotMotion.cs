@@ -1011,6 +1011,17 @@ internal static partial class PlayerbotMotion
                         // Keeping the old height is only safe with a floor within reach under it (live: a dock edge over a seabed 20 yd down).
                         resolved = rawCandidate with { Z = from.Z };
                     }
+                    else if (hasMeshSurface && float.IsNaN(best) && resolved.Z > from.Z
+                        && MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
+                        && IsStairRise(from, resolved))
+                    {
+                        // Stairs: the probe found no floor under the step (Deathknell crypt) and no sight line clears the climb, but the mesh has
+                        // a surface there (`resolved` is it: the probe found nothing to replace it with, and a probed floor is never replaced).
+                        // Only a step UP is trusted on it, whether the mesh walk reached it or only the vertical search (NearFloor) did: at the
+                        // crypt stairs' foot the walk fails and that search is the only mesh evidence, and climbing onto a wrong polygon is
+                        // bounded by StairStepMaxRiseYards. A step DOWN stays refused, as does any step with no mesh surface (resolved is then
+                        // the route's straight-line height): that is what #1648 guards (a dock edge over a seabed, an unconnected lower polygon).
+                    }
                     else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards)
                     {
                         // No sight line clears the storey change: returning `resolved` would put the bot through a floor or slab.
@@ -1034,6 +1045,20 @@ internal static partial class PlayerbotMotion
         if (!PlayerbotMoveCheck.TryValidateStep(map, from, candidate, out Vector3 draped, out rejectReason))
             return null;
         return draped;
+    }
+
+    /// <summary>The most one step of a stair may rise or fall, however long the step is (a stalled bot's step covers many yards): well under a storey (the Orgrimmar slab is 18.6 yd), over a heartbeat's rise on the Deathknell stairs (2.3 yd).</summary>
+    internal const float StairStepMaxRiseYards = 3.5f;
+
+    /// <summary>
+    /// True when <paramref name="to"/> is a stair step from <paramref name="from"/>: no higher or lower than it is far horizontally (a 45 degree
+    /// climb; a chosen heuristic, the repository holds no navigation-mesh slope configuration) and at most <see cref="StairStepMaxRiseYards"/>.
+    /// </summary>
+    private static bool IsStairRise(Vector3 from, Vector3 to)
+    {
+        float rise = MathF.Abs(to.Z - from.Z);
+        float run = MathF.Sqrt(((to.X - from.X) * (to.X - from.X)) + ((to.Y - from.Y) * (to.Y - from.Y)));
+        return rise <= run && rise <= StairStepMaxRiseYards;
     }
 
     /// <summary>True when walkable floor lies at or just under <paramref name="z"/> at x/y, within one step height (a client falls, it does not hover).</summary>

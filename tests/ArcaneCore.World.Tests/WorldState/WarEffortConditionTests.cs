@@ -20,8 +20,16 @@ public sealed class WarEffortConditionTests
 
         public Task<WarEffortSnapshot> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(State);
 
+        public bool FailNextSetPhase { get; set; }
+
         public Task SetPhaseAsync(WarEffortPhase phase, long phaseEndsAtUnix, CancellationToken cancellationToken = default)
         {
+            if (FailNextSetPhase)
+            {
+                FailNextSetPhase = false;
+                throw new IOException("transient realm database failure");
+            }
+
             State = State with { Phase = phase, PhaseEndsAtUnix = phaseEndsAtUnix };
             return Task.CompletedTask;
         }
@@ -102,6 +110,34 @@ public sealed class WarEffortConditionTests
         world.RunTick(5_000);
         Assert.Equal(true, conditions.Current.EvaluateWithoutSubjects(2037));
         Assert.Null(conditions.Current.EvaluateWithoutSubjects(2038));
+    }
+
+    [Fact]
+    public void AFailedGatheringPhaseWrite_IsRetriedOnTheNextRefresh_InsteadOfBeingDropped()
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<MemoryStore>();
+        services.AddScoped<IWarEffortStateStore>(sp => sp.GetRequiredService<MemoryStore>());
+        services.AddScoped<IGameEventDataStore, Events>();
+        services.AddSingleton(sp => new GameEventFeature(sp, NullLogger<GameEventFeature>.Instance));
+        services.AddSingleton(sp => new WarEffortFeature(sp.GetRequiredService<IServiceScopeFactory>(),
+            sp.GetRequiredService<GameEventFeature>(), NullLogger<WarEffortFeature>.Instance));
+        using ServiceProvider provider = services.BuildServiceProvider();
+        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
+            new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
+            NullLogger<WorldRuntime>.Instance);
+        provider.GetRequiredService<GameEventFeature>().Attach(world);
+        WarEffortFeature war = provider.GetRequiredService<WarEffortFeature>();
+        war.StoreOffload = work => work(); // the fake store completes synchronously
+        war.Attach(world);
+        MemoryStore store = provider.GetRequiredService<MemoryStore>();
+
+        store.FailNextSetPhase = true;
+        war.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false);
+        Assert.Equal(WarEffortPhase.Disabled, store.State.Phase);   // the write failed
+        world.RunTick(5_000);
+
+        Assert.Equal(WarEffortPhase.Gathering, store.State.Phase);
     }
 
     [Fact]

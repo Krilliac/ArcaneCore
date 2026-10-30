@@ -107,6 +107,18 @@ public sealed class DynamicRespawnTests
     }
 
     [Fact]
+    public void AForcedDespawn_ScalesItsRespawnLikeADeath()
+    {
+        // vmangos Creature::ForcedDespawn goes through SetDeathState(JUST_DIED), the same path as a death (and its respawn scaling).
+        (WorldRuntime world, CreatureMapSystem system, Creature c) = Start(20);
+        using (world)
+        {
+            system.ForcedDespawn(c, 0);
+            Assert.Equal(48, (c.RespawnAtMs - system.ClockMs) / 1000); // 120 / (1 + 0.1 * 15), as after a kill
+        }
+    }
+
+    [Fact]
     public void TheMinimumSeconds_IsAFloor()
     {
         (WorldRuntime world, CreatureMapSystem system, Creature c) = Start(20, tune: o => o.MinimumSeconds = 100);
@@ -282,6 +294,20 @@ public sealed class DynamicRespawnTests
             system.Despawn(go);
             Assert.Equal(60, (go.RespawnAtMs - system.ClockMs) / 1000);
         }
+    }
+
+    [Fact]
+    public void CountPlayersWithin_SkipsAGmWhoIsInvisible_EvenOutsideGmMode()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        AddCrowd(world, 3, 0);
+        Map map = world.GetMap(0);
+        Assert.Equal(3, map.CountPlayersWithin(0, 0, 100, true));
+
+        Player hidden = map.Players.First();
+        hidden.GmInvisible = true; // `.gm visible off`: GM mode stays off
+
+        Assert.Equal(2, map.CountPlayersWithin(0, 0, 100, true));
     }
 
     [Fact]

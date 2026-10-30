@@ -59,7 +59,8 @@ public sealed class CreatureImmunitySet
                 case CreatureImmunityType.Damage:
                     DamageMask |= row.Value;
                     break;
-                case CreatureImmunityType.Dispel when row.Value < 32:
+                // Value 0 is DISPEL_NONE: vmangos would match it literally, but then every undispellable spell would be refused; no row means that, so it is dropped.
+                case CreatureImmunityType.Dispel when row.Value is >= 1 and < 32:
                     DispelMask |= 1u << (int)row.Value;
                     break;
                 case CreatureImmunityType.Mechanic when row.Value is >= 1 and <= 31:

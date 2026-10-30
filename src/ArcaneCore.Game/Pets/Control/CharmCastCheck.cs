@@ -41,6 +41,23 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
                 return SpellCastResult.AlreadyHaveCharm;
             }
 
+            // SPELL_EFFECT_SUMMON, SUMMON_PHANTASM, SUMMON_DEMON and SUMMON_PET (Spell.cpp:6124-6141): a caster that charms something
+            // uncharms it first when the spell has SPELL_ATTR_EX_DISMISS_PET_FIRST, else ALREADY_HAVE_CHARM. (The old-pet half,
+            // ALREADY_HAVE_SUMMON, is SummonService's.)
+            if (effect.Effect is SpellEffectName.Summon or SpellEffectName.SummonPhantasm or SpellEffectName.SummonDemon or SpellEffectName.SummonPet
+                && !caster.CharmGuid.IsEmpty)
+            {
+                if (((uint)spell.AttributesEx & DismissPetFirst) == 0)
+                {
+                    return SpellCastResult.AlreadyHaveCharm;
+                }
+
+                if (context.Strict)
+                {
+                    service.Uncharm(caster);
+                }
+            }
+
             if (effect.Effect != SpellEffectName.ApplyAura)
             {
                 continue;

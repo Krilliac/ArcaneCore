@@ -101,6 +101,17 @@ public sealed class WorldStateDataTests : IAsyncLifetime
         Assert.Contains(message, ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("INSERT INTO `exploration_basexp` (`level`,`basexp`) VALUES (1,2);")]
+    [InlineData("INSERT IGNORE INTO `exploration_basexp` VALUES (1,2);")]
+    [InlineData("REPLACE INTO `exploration_basexp` VALUES (1,2);")]
+    public void Parse_NamesAnInsertFormItDoesNotRead_InsteadOfDroppingTheRows(string insert)
+    {
+        string dump = "CREATE TABLE `exploration_basexp` (\n  `level` tinyint NOT NULL,\n  `basexp` mediumint NOT NULL,\n  PRIMARY KEY (`level`)\n) ENGINE=MyISAM;\n" + insert;
+        InvalidDataException ex = Assert.Throws<InvalidDataException>(() => WorldStateDumpImporter.Parse(new StringReader(dump)));
+        Assert.Contains("exploration_basexp", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Parse_RejectsRowsWithoutACreateTable_AndMissingColumns()
     {

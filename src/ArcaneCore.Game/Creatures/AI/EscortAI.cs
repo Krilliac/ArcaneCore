@@ -50,7 +50,6 @@ public abstract class EscortAI : CreatureAI
     private bool _canInstantRespawn;
     private bool _canReturnToStart;
     private bool _respawnedOnce;
-    private float _combatStartO;
     private ObjectGuid _escortPlayerGuid;
     private uint _escortQuestId;
     private uint _playerCheckMs = 1000;
@@ -60,7 +59,6 @@ public abstract class EscortAI : CreatureAI
     {
         _waypointWaitMs = DelayBeforeFirstWaypointMs;
         CombatStartPosition = new Vector3(creature.X, creature.Y, creature.Z);
-        _combatStartO = creature.Orientation;
     }
 
     /// <summary>vmangos eEscortState.</summary>
@@ -344,7 +342,6 @@ public abstract class EscortAI : CreatureAI
         if (!HasEscortState(EscortState.Returning))
         {
             CombatStartPosition = new Vector3(Me.X, Me.Y, Me.Z);
-            _combatStartO = Me.Orientation;
         }
 
         Aggro(target);

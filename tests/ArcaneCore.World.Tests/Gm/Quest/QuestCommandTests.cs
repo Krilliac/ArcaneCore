@@ -3,6 +3,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Items;
@@ -12,8 +13,10 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
+using ArcaneCore.World.Reputation;
 using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Npc;
+using ArcaneCore.World.Tests.Reputation;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using static ArcaneCore.World.Tests.Gm.Quest.QuestCommandFixture;
@@ -329,6 +332,26 @@ public sealed class QuestCommandTests
         return writer.ToArray();
     }
 
+    [Fact]
+    public async Task Complete_RaisesTheReputationObjectiveOnlyForAQuestTheTargetHolds()
+    {
+        var fixture = new QuestCommandFixture();
+        await using WorldTestHost host = Start(fixture);
+        await using WorldTestClient gm = await host.EnterWorldAsync("QREPGM", "Qrepgm", AccountSecurity.Administrator);
+        await gm.CollectAsync();
+        ReputationService reputation = host.WorldServices.GetRequiredService<ReputationFeature>().Service;
+        int before = await host.PlayerStateAsync("Qrepgm", p => reputation.GetReputation(p, RepFaction));
+
+        // QuestCommands.cpp:178-183 refuses before the reputation block: a refused command leaves no standing change behind.
+        Assert.Equal($"Quest {RepQuest} not found.", await Run(gm, $".quest complete {RepQuest}"));
+        Assert.Equal(before, await host.PlayerStateAsync("Qrepgm", p => reputation.GetReputation(p, RepFaction)));
+
+        Assert.Null(await Run(gm, $".quest add {RepQuest}", expectReply: false));
+        Assert.Null(await Run(gm, $".quest complete {RepQuest}", expectReply: false));
+        Assert.True(await host.PlayerStateAsync("Qrepgm", p => reputation.GetReputation(p, RepFaction)) >= RepObjectiveStanding);
+        Assert.Equal(QuestStatus.Complete, await host.PlayerStateAsync("Qrepgm", p => Services(p).StateOf(p)!.Quests.GetStatus(RepQuest)));
+    }
+
     private static Game.Npc.QuestNpcServices Services(Player player)
         => ((WorldSession)player.Session).Services.GetRequiredService<QuestNpcFeature>().Services;
 
@@ -365,6 +388,7 @@ public sealed class QuestCommandTests
         ]);
         content.Templates.StartingItems.AddRange([new StartingItem(1, 1, 25, 1), new StartingItem(1, 1, 117, 4)]);
         QuestCommandTestServices.Current.Value = fixture;
+        ReputationTestServices.Current.Value = new MemoryReputationStore();
         try
         {
             using (content.Use())
@@ -375,6 +399,7 @@ public sealed class QuestCommandTests
         finally
         {
             QuestCommandTestServices.Current.Value = null;
+            ReputationTestServices.Current.Value = null;
         }
     }
 }
@@ -409,6 +434,9 @@ internal sealed class QuestCommandFixture : IQuestContentStore, ICreatureDataSto
     public const uint WithheldQuest = 910004;
     public const uint MoneyQuest = 910005;
     public const uint SelfDeliveredQuest = 910006;
+    public const uint RepQuest = 910007;
+    public const uint RepFaction = 21; // Booty Bay
+    public const int RepObjectiveStanding = 3000;
     public const uint FillerQuest = 920001;
     public const uint QuestPelt = 910100;
     public const uint SourceToken = 910101;
@@ -426,6 +454,7 @@ internal sealed class QuestCommandFixture : IQuestContentStore, ICreatureDataSto
             new() { Entry = ItemStartedQuest, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Read the test", ReqCreatureOrGOId1 = 91, ReqCreatureOrGOCount1 = 1 },
             new() { Entry = WithheldQuest, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Mail the test", RewMailTemplateId = 1 },
             new() { Entry = MoneyQuest, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Pay the test", RewOrReqMoney = -100 },
+            new() { Entry = RepQuest, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Befriend the test", RepObjectiveFaction = RepFaction, RepObjectiveValue = RepObjectiveStanding },
             new() { Entry = SelfDeliveredQuest, Method = 2, MinLevel = 1, QuestLevel = 1, Title = "Deliver the test", ReqItemId1 = Letter, ReqItemCount1 = 1 },
         ];
         for (uint i = 0; i < QuestConstants.MaxQuestLogSize; i++)

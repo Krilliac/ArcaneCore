@@ -44,7 +44,7 @@ public static partial class ContentImporterCli
         try
         {
             await using WorldDbContext db = OpenWorld(target);
-            await EnsureRefreshSchemaAsync(db, migrate: false, o, ct).ConfigureAwait(false);
+            await EnsureImporterSchemaAsync(db, a.Flag("--migrate"), o, ct, "refresh-portals").ConfigureAwait(false);
             await importer.ReplacePortalsAsync(db, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not (OperationCanceledException or CliException or ImportSchemaException))

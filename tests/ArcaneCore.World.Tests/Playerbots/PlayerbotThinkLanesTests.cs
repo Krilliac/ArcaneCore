@@ -1073,6 +1073,7 @@ public sealed class PlayerbotThinkLanesTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // a real 20 s world-thread stall and wall thresholds
     public async Task AStragglerShortlyAfterAStall_IsStillReported()
     {
         // A zero budget thinks one bot per tick and each think takes 50 ms: the three bots are thought in rotation, about 150 ms apart for one bot,

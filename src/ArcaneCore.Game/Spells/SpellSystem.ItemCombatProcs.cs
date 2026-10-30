@@ -87,5 +87,5 @@ public sealed partial class SpellSystem
     private bool IsGlobalCooldownActive(Player player, SpellInfo spell)
         => GetState(player.Guid) is { } state
             && state.GlobalCooldowns.TryGetValue(spell.StartRecoveryCategory, out uint until)
-            && until > NowMs;
+            && IsStillRunning(until, NowMs);
 }

@@ -91,7 +91,11 @@ public sealed class EasternPlaguelandsTower : CapturePoint
                 Team team = State == ObjectiveState.Alliance ? Team.Alliance : Team.Horde;
                 TowerState = team == Team.Alliance ? EpTowerState.Alliance : EpTowerState.Horde;
                 PlaySound(team == Team.Alliance ? C.SoundVictoryAlliance : C.SoundVictoryHorde);
-                if (Data.Tower == EpTower.CrownGuard)
+                if (Data.Tower == EpTower.Northpass)
+                {
+                    SummonCuringShrine(team); // vmangos OPvPCapturePointEP_NPT::ChangeState re-summons the shrine in the full states
+                }
+                else if (Data.Tower == EpTower.CrownGuard)
                 {
                     GraveyardTeam = team;
                     SummonBannerAura(team);

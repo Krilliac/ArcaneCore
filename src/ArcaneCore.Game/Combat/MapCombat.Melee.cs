@@ -1166,10 +1166,16 @@ public sealed partial class MapCombat
         }
     }
 
+    /// <summary>
+    /// The player whose PvP flag a unit's hostile act touches: the player behind the unit, so a pet, guardian, totem or charmed unit (or a
+    /// mind-controlled player) resolves to its owner or charmer (the per-swing pulse in the melee loop stays player-only, Unit.cpp:432-433; (vmangos Unit::GetAffectingPlayer, used by TogglePlayerPvPFlagOnAttackVictim and SetInCombatWithAggressor, Unit.cpp:5959-6053).
+    /// </summary>
+    private static Player? PvpActor(Unit unit) => DuelRules.ControllingPlayer(unit);
+
     /// <summary>vmangos Unit::SetOutOfCombatWithVictim: flag the attacker, do not enter combat (touchOnly).</summary>
     private static void SetOutOfCombatWithVictim(Unit attacker, Unit victim)
     {
-        if (attacker is Player player)
+        if (PvpActor(attacker) is { } player)
         {
             TogglePlayerPvpFlagOnAttackVictim(player, victim, touchOnly: true);
         }
@@ -1183,7 +1189,9 @@ public sealed partial class MapCombat
     private void SetInCombatWithAggressor(Unit victim, Unit aggressor, string caller)
     {
         // Duel opponents do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith).
-        if ((aggressor.UnitFlags & UnitFlags.Pvp) != 0 && victim is Player pv && aggressor is Player pa && !ReferenceEquals(pv, pa)
+        // Both sides resolve to the player behind them (vmangos Unit.cpp:5959-5975 reads GetAffectingPlayer), so a pet's or totem's hit
+        // pulses its owner's PvP combat too. The owner's flag stands in as the pet's PvP state (pets copy it only when created).
+        if (PvpActor(aggressor) is { } pa && (pa.UnitFlags & UnitFlags.Pvp) != 0 && PvpActor(victim) is { } pv && !ReferenceEquals(pv, pa)
             && !DuelRules.IsInDuelWith(pv, pa))
         {
             pv.Combat.InPvpCombat = true;
@@ -1203,7 +1211,7 @@ public sealed partial class MapCombat
     /// <summary>vmangos Unit::SetInCombatWithVictim (Unit.cpp:6070): PvP flag on attack, then combat (5.5 s when the victim uses the PvP combat timer).</summary>
     private void SetInCombatWithVictim(Unit attacker, Unit victim, string caller)
     {
-        if (attacker is Player player)
+        if (PvpActor(attacker) is { } player)
         {
             TogglePlayerPvpFlagOnAttackVictim(player, victim);
         }

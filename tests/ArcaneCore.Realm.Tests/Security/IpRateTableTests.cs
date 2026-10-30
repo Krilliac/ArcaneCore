@@ -277,19 +277,21 @@ public sealed class IpRateTableTests
         // slot idle (a busy address refreshed in the same round is never evicted); the rest of each
         // round runs the forced path over a table that is full again. Both allocate nothing.
         Array.Reverse(keys);
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int round = 0; round < 50; round++)
+        Action window = () =>
         {
-            clock.Advance(TimeSpan.FromMinutes(11)); // every slot idles out: inserts evict
-            foreach (IpKey key in keys)
+            for (int round = 0; round < 50; round++)
             {
-                table.TryTake(key, RateBucket.Connections);
-                table.Peek(key, RateBucket.AuthFailures);
-                table.TryTake(key, RateBucket.AuthFailures);
+                clock.Advance(TimeSpan.FromMinutes(11)); // every slot idles out: inserts evict
+                foreach (IpKey key in keys)
+                {
+                    table.TryTake(key, RateBucket.Connections);
+                    table.Peek(key, RateBucket.AuthFailures);
+                    table.TryTake(key, RateBucket.AuthFailures);
+                }
             }
-        }
+        };
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "IpRateTable eviction paths");
         Assert.True(table.Evictions > 0, $"no idle evictions: count {table.Count}, capacity {table.Capacity}");
         Assert.True(table.ForcedEvictions > forcedAfterFill, $"no forced evictions in the rounds: count {table.Count}, capacity {table.Capacity}");
     }

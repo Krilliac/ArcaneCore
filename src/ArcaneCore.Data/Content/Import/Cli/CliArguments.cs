@@ -27,7 +27,7 @@ internal sealed class CliArguments
         ["spell-threat"] = ["--database", "--provider", "--connection-string", "--dry-run", "--migrate"],
         ["convert-rules"] = ["--database", "--provider", "--connection-string", "--report", "--dry-run", "--migrate"],
         ["refresh"] = ["--database", "--provider", "--connection-string", "--dbc-dir", "--cooldown-unit", "--report", "--dry-run", "--migrate"],
-        ["refresh-portals"] = ["--dialect", "--database", "--provider", "--connection-string", "--dry-run"],
+        ["refresh-portals"] = ["--dialect", "--database", "--provider", "--connection-string", "--dry-run", "--migrate"],
     };
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

@@ -112,6 +112,12 @@ public sealed class GraveyardDumpImporter
     /// <summary>Whether anything was read (an empty importer must not empty the tables on a replace).</summary>
     public bool HasRows => _locs.Count > 0 || _links.Count > 0;
 
+    /// <summary>Whether any <c>world_safe_locs</c> row was read (a dump row or <c>WorldSafeLocs.dbc</c>).</summary>
+    public bool HasSafeLocs => _locs.Count > 0;
+
+    /// <summary>Whether any <c>game_graveyard_zone</c> link was kept.</summary>
+    public bool HasLinks => _links.Count > 0;
+
     /// <summary>The rows that would be written (for inspection and tests): the facing table applied.</summary>
     public (IReadOnlyCollection<WorldSafeLocRow> SafeLocs, IReadOnlyCollection<GraveyardZoneRow> Links) Snapshot()
     {
@@ -151,9 +157,11 @@ public sealed class GraveyardDumpImporter
 
     /// <summary>
     /// Write both tables atomically with the contract of <see cref="ImportTransaction"/>. With
-    /// <paramref name="replace"/> they are emptied first; without it an existing key fails the write and nothing changes.
+    /// <paramref name="replace"/> they are emptied first; without it an existing key fails the write and nothing changes. With
+    /// <paramref name="onlyCarried"/> a table is emptied only when the inputs carried rows for it (<see cref="HasSafeLocs"/>,
+    /// <see cref="HasLinks"/>), so a table the inputs do not carry is left as it is (the refresh command).
     /// </summary>
-    public async Task<GraveyardImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default)
+    public async Task<GraveyardImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default, bool onlyCarried = false)
     {
         ArgumentNullException.ThrowIfNull(db);
         var snapshot = Snapshot();
@@ -165,8 +173,15 @@ public sealed class GraveyardDumpImporter
             {
                 if (replace)
                 {
-                    await db.Set<GraveyardZoneRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
-                    await db.Set<WorldSafeLocRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    if (!onlyCarried || HasLinks)
+                    {
+                        await db.Set<GraveyardZoneRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    }
+
+                    if (!onlyCarried || HasSafeLocs)
+                    {
+                        await db.Set<WorldSafeLocRow>().ExecuteDeleteAsync(token).ConfigureAwait(false);
+                    }
                 }
 
                 await ImportBatch.InsertAsync(db, snapshot.SafeLocs, token).ConfigureAwait(false);

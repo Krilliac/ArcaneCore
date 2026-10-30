@@ -70,7 +70,8 @@ public sealed class MirrorTimer(MirrorTimerType type)
     /// <summary>A frozen timer stands still (a game master); a regenerating one cannot be frozen.</summary>
     public bool IsFrozen => _frozen && !IsRegenerating;
 
-    public uint Remaining => _tracker.Interval - _tracker.Current;
+    /// <summary>Time left (ms); 0 when <see cref="SetDuration"/> shrank the interval below the time already elapsed.</summary>
+    public uint Remaining => _tracker.Current >= _tracker.Interval ? 0 : _tracker.Interval - _tracker.Current;
 
     public uint Duration => _tracker.Interval;
 

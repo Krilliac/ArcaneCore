@@ -1,3 +1,5 @@
+using ArcaneCore.Kernel.Diagnostics;
+using Microsoft.Extensions.Logging;
 using System.Text;
 
 namespace ArcaneCore.World.Cluster.Supervision;
@@ -28,6 +30,9 @@ public sealed class SupervisedOutputMultiplexer : IDisposable
     private readonly Action<string> _mergedConsoleSink;
     private readonly Dictionary<string, StreamWriter> _logWriters = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
+
+    /// <summary>Where a failed child-log write is logged (through <see cref="FaultLedgerLogging.LogFault(ILogger, string, Exception, string, object?[])"/>); without one the fault is only recorded in the ledger.</summary>
+    public ILogger? Logger { get; init; }
 
     public SupervisedOutputMultiplexer(Action<string>? mergedConsoleSink = null)
     {
@@ -92,15 +97,40 @@ public sealed class SupervisedOutputMultiplexer : IDisposable
 
             if (!string.IsNullOrWhiteSpace(config.LogFilePath))
             {
-                StreamWriter writer = GetOrCreateLogWriter(config.LogFilePath);
-                writer.WriteLine(formatted);
-                writer.Flush();
+                // A log file that cannot be opened or written (disk full, sharing violation, read-only directory) must not unwind the caller:
+                // that is the child's stdout pump, and a pump that stops leaves the child blocked on a full pipe. Record it and keep going to the console.
+                try
+                {
+                    StreamWriter writer = GetOrCreateLogWriter(config.LogFilePath);
+                    writer.WriteLine(formatted);
+                    writer.Flush();
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or NotSupportedException or ArgumentException)
+                {
+                    RecordLogFault(config, ex);
+                }
             }
 
             if (shouldWriteToMergedConsole)
             {
                 _mergedConsoleSink(formatted);
             }
+        }
+    }
+
+    private void RecordLogFault(SupervisedProcessConfig config, Exception ex)
+    {
+        const string site = "cluster.supervisor.log-file";
+        try
+        {
+            if (Logger is { } logger)
+                logger.LogFault(site, ex, "Supervised process {Process} log file {Path} cannot be written; its output continues on the console only ({Type})", config.Name, config.LogFilePath, ex.GetType().Name);
+            else
+                FaultLedger.Shared.Record(site, ex);
+        }
+        catch (Exception sinkEx) when (sinkEx is not OutOfMemoryException)
+        {
+            // A broken log sink must not stop the pump either; the fault is already in the ledger.
         }
     }
 

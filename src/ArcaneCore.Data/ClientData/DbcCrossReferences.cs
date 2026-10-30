@@ -1,11 +1,13 @@
 using System.Data.Common;
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace ArcaneCore.Data.ClientData;
 
 /// <summary>
 /// One world-database column whose non-zero values must be ids of a client DBC (field 0). <paramref name="Where"/> is an extra
-/// SQL condition (column names unquoted, both sides of it constant) for columns that only sometimes hold such an id.
+/// SQL condition (column names in square brackets, which are replaced by the provider's identifier quotes: PostgreSQL folds an unquoted
+/// name to lower case, so a mixed-case column must be quoted; both sides of it constant) for columns that only sometimes hold such an id.
 /// </summary>
 public sealed record DbcReference(string Dbc, string Table, string Column, string? Where = null)
 {
@@ -64,11 +66,11 @@ public static partial class DbcCrossReferences
     /// <summary>Every reference checked, grouped by DBC.</summary>
     public static IReadOnlyList<DbcReference> All { get; } =
     [
-        new("Spell.dbc", "spell_template", "Id", "IsServerSide = 0"),
+        new("Spell.dbc", "spell_template", "Id", "[IsServerSide] = 0"),
         new("Spell.dbc", "npc_trainer", "spell"),
         .. Many("Spell.dbc", "item_template", "spellid_1", "spellid_2", "spellid_3", "spellid_4", "spellid_5"),
         new("Spell.dbc", "playercreateinfo_spell", "Spell"),
-        new("Spell.dbc", "playercreateinfo_action", "action", "type = 0"),
+        new("Spell.dbc", "playercreateinfo_action", "action", "[type] = 0"),
         new("Spell.dbc", "totem_spell", "SpellId"),
         .. Many("Spell.dbc", "quest_template", "SrcSpell", "RewSpell", "RewSpellCast", "ReqSpellCast1", "ReqSpellCast2", "ReqSpellCast3", "ReqSpellCast4"),
         new("Spell.dbc", "creature_template", "TrainerSpell"),
@@ -155,10 +157,7 @@ public static partial class DbcCrossReferences
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
-        if (connection.State != System.Data.ConnectionState.Open)
-        {
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        }
+        await DbConnectionOpen.EnsureOpenAsync(connection, cancellationToken).ConfigureAwait(false);
 
         (string open, string close) = connection.GetType().Name.Contains("MySql", StringComparison.OrdinalIgnoreCase) ? ("`", "`") : ("\"", "\"");
         var dbcs = new Dictionary<string, (HashSet<long>? Ids, string? Reason)>(StringComparer.OrdinalIgnoreCase);
@@ -179,12 +178,11 @@ public static partial class DbcCrossReferences
                 continue;
             }
 
-            string column = open + reference.Column + close;
-            string where = $"{column} > 0" + (reference.Where is null ? string.Empty : " AND " + reference.Where);
+            string sql = BuildCountSql(reference, open, close);
             Dictionary<long, long> counts;
             try
             {
-                counts = await CountAsync(connection, $"SELECT {column}, COUNT(*) FROM {open}{reference.Table}{close} WHERE {where} GROUP BY {column}", cancellationToken).ConfigureAwait(false);
+                counts = await CountAsync(connection, sql, cancellationToken).ConfigureAwait(false);
             }
             catch (DbException ex)
             {
@@ -222,6 +220,20 @@ public static partial class DbcCrossReferences
         var lines = new List<string> { summary };
         lines.AddRange(results.Where(r => all || r.Status != DbcReferenceStatus.Ok).Select(r => r.Describe()));
         return lines;
+    }
+
+    /// <summary>The GROUP BY query for <paramref name="reference"/>, every identifier (and each <c>[column]</c> of its Where) wrapped in <paramref name="open"/>/<paramref name="close"/>.</summary>
+    internal static string BuildCountSql(DbcReference reference, string open, string close)
+    {
+        string column = open + reference.Column + close;
+        string where = $"{column} > 0";
+        if (reference.Where is not null)
+        {
+            string extra = Regex.Replace(reference.Where, @"\[([^\]]+)\]", m => open + m.Groups[1].Value + close);
+            where += " AND " + extra;
+        }
+
+        return $"SELECT {column}, COUNT(*) FROM {open}{reference.Table}{close} WHERE {where} GROUP BY {column}";
     }
 
     private static async Task<Dictionary<long, long>> CountAsync(DbConnection connection, string sql, CancellationToken cancellationToken)

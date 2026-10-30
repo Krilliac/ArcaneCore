@@ -267,8 +267,8 @@ public sealed partial class SpellSystem
                 }
 
                 uint remaining = Math.Max(
-                    state.SpellCooldowns.TryGetValue(spell.Id, out uint own) && own > now ? own - now : 0,
-                    spell.Category != 0 && state.CategoryCooldowns.TryGetValue(spell.Category, out uint category) && category > now ? category - now : 0);
+                    state.SpellCooldowns.TryGetValue(spell.Id, out uint own) && IsStillRunning(own, now) ? own - now : 0,
+                    spell.Category != 0 && state.CategoryCooldowns.TryGetValue(spell.Category, out uint category) && IsStillRunning(category, now) ? category - now : 0);
                 if (remaining < durationMs)
                 {
                     entries.Add((spell.Id, durationMs));
@@ -286,6 +286,6 @@ public sealed partial class SpellSystem
     public bool IsSchoolLocked(Unit unit, SpellSchool school)
     {
         ArgumentNullException.ThrowIfNull(unit);
-        return GetState(unit.Guid) is { } state && state.SchoolLockouts.TryGetValue(school, out uint until) && until > NowMs;
+        return GetState(unit.Guid) is { } state && state.SchoolLockouts.TryGetValue(school, out uint until) && IsStillRunning(until, NowMs);
     }
 }

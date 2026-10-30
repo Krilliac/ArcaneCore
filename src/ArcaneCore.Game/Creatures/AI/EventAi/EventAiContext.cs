@@ -128,8 +128,8 @@ public sealed class EventAiContext
             case (int)EventAiTarget.Invoker:
                 result = invocation.Invoker;
                 break;
-            case 7: // TARGET_T_ACTION_INVOKER_OWNER: the beneficiary; without pets or owners that is the invoker
-                result = invocation.Invoker;
+            case 7: // TARGET_T_ACTION_INVOKER_OWNER: cmangos invoker->GetCharmerOrOwnerOrSelf() (vmangos Unit::GetCharmerOrOwnerOrSelf)
+                result = invocation.Invoker?.GetCharmerOrOwnerOrSelf();
                 break;
             case 10: // TARGET_T_EVENT_SENDER
                 result = invocation.Sender;
