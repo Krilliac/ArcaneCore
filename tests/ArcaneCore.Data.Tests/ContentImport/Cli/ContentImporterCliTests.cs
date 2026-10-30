@@ -1010,6 +1010,33 @@ public sealed class ContentImporterCliTests : IDisposable
     }
 
     [Fact]
+    public async Task ProviderSqliteInsideAGitWorkTree_IsRefusedLikeDatabase()
+    {
+        string repo = Path.Combine(_directory, "repo");
+        Directory.CreateDirectory(repo);
+        Git(repo, "init", "-q");
+        string tracked = Path.Combine(repo, "world.db");
+
+        (int code, _, string err) = await RunAsync(
+            "import", WriteDump("cmangos.sql", CMangosDump), "--provider", "sqlite", "--connection-string", $"Data Source={tracked}");
+
+        Assert.Equal(ExitCodes.RepositoryPath, code);
+        Assert.Contains("git", err, StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(tracked));
+    }
+
+    [Fact]
+    public async Task ProviderSqliteVerify_OfAMissingFile_FailsWithoutCreatingIt()
+    {
+        string missing = Path.Combine(_directory, "typo.db");
+
+        (int code, _, _) = await RunAsync("verify", "--provider", "sqlite", "--connection-string", $"Data Source={missing}");
+
+        Assert.Equal(ExitCodes.Io, code);
+        Assert.False(File.Exists(missing));
+    }
+
+    [Fact]
     public async Task ReportInsideAGitWorkTree_IsRefusedToo()
     {
         string repo = Path.Combine(_directory, "repo");
@@ -1037,6 +1064,19 @@ public sealed class ContentImporterCliTests : IDisposable
         Assert.Contains("Server=db", redacted.Replace("Host=db", "Server=db", StringComparison.Ordinal), StringComparison.Ordinal);
         Assert.Contains("***", redacted, StringComparison.Ordinal);
         Assert.DoesNotContain("hunter2", ConnectionStringRedactor.Scrub("could not connect with Password=hunter2 to db", connectionString), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("Server=h;Database=O'Brien;Password=secret", "secret", "Database=O'Brien")]
+    [InlineData("Server=h;Database=O\"x;Pwd=secret;Port=3306", "secret", "Port=3306")]
+    [InlineData("Server=h;Password='it''s;secret';Port=3306", "secret", "Port=3306")]
+    public void AnApostropheInsideAValue_DoesNotSwallowALaterPassword(string connectionString, string secret, string kept)
+    {
+        string redacted = ConnectionStringRedactor.Redact(connectionString);
+
+        Assert.DoesNotContain(secret, redacted, StringComparison.Ordinal);
+        Assert.Contains(kept, redacted, StringComparison.Ordinal);
+        Assert.Contains("=***", redacted, StringComparison.Ordinal);
     }
 
     [Fact]

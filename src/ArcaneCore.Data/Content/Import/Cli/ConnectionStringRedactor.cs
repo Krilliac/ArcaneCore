@@ -63,20 +63,30 @@ public static partial class ConnectionStringRedactor
     {
         var current = new StringBuilder();
         char quote = '\0';
-        foreach (char c in connectionString)
+        for (int i = 0; i < connectionString.Length; i++)
         {
+            char c = connectionString[i];
             if (quote != '\0')
             {
                 current.Append(c);
                 if (c == quote)
                 {
-                    quote = '\0';
+                    if (i + 1 < connectionString.Length && connectionString[i + 1] == quote)
+                    {
+                        // A doubled quote is an escaped quote character inside the value.
+                        current.Append(quote);
+                        i++;
+                    }
+                    else
+                    {
+                        quote = '\0';
+                    }
                 }
 
                 continue;
             }
 
-            if (c is '\'' or '"')
+            if (c is '\'' or '"' && StartsValue(current))
             {
                 quote = c;
                 current.Append(c);
@@ -100,6 +110,31 @@ public static partial class ConnectionStringRedactor
         {
             yield return Parse(current.ToString());
         }
+    }
+
+    /// <summary>
+    /// True when nothing but white space follows the <c>=</c> of <paramref name="segment"/>: only then does a quote
+    /// open a quoted value (as in <c>DbConnectionStringBuilder</c>). An apostrophe inside <c>O'Brien</c> is data.
+    /// </summary>
+    private static bool StartsValue(StringBuilder segment)
+    {
+        bool seenEquals = false;
+        for (int i = 0; i < segment.Length; i++)
+        {
+            if (seenEquals)
+            {
+                if (!char.IsWhiteSpace(segment[i]))
+                {
+                    return false;
+                }
+            }
+            else if (segment[i] == '=')
+            {
+                seenEquals = true;
+            }
+        }
+
+        return seenEquals;
     }
 
     private static (string Key, string? Value, string Segment) Parse(string segment)

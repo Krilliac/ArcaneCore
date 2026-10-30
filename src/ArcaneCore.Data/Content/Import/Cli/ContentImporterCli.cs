@@ -24,6 +24,7 @@ using ArcaneCore.Data.World.Totems;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.PlayerStats;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Content.Import;
@@ -1426,7 +1427,51 @@ public static partial class ContentImporterCli
             throw new UsageException($"--provider needs --connection-string (or the {ConnectionVariable} variable)");
         }
 
-        return new Target(parsed, connection, null);
+        return new Target(parsed, connection, parsed == DatabaseProvider.Sqlite ? SqliteFilePath(connection) : null);
+    }
+
+    /// <summary>
+    /// The full path of the file a SQLite connection string opens, so the repository guard and the existence checks
+    /// apply to <c>--provider sqlite</c> as they do to <c>--database</c>; null for an in-memory or unparsable target.
+    /// </summary>
+    private static string? SqliteFilePath(string connectionString)
+    {
+        string dataSource;
+        SqliteOpenMode mode;
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder(connectionString);
+            dataSource = builder.DataSource.Trim();
+            mode = builder.Mode;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+
+        if (dataSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            dataSource = dataSource["file:".Length..];
+            int query = dataSource.IndexOf('?', StringComparison.Ordinal);
+            if (query >= 0)
+            {
+                dataSource = dataSource[..query];
+            }
+
+            if (dataSource.StartsWith("//", StringComparison.Ordinal))
+            {
+                dataSource = dataSource[2..];
+            }
+
+            dataSource = Uri.UnescapeDataString(dataSource);
+        }
+
+        if (mode == SqliteOpenMode.Memory || dataSource.Length == 0 || dataSource == ":memory:")
+        {
+            return null;
+        }
+
+        return Path.GetFullPath(dataSource);
     }
 
     private static WorldDbContext OpenWorld(Target target)
