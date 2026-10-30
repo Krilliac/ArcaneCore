@@ -25,6 +25,7 @@ public sealed class PetCharmFixesTests
     private const uint CallSpell = 925003;
     private const uint SummonImpSpell = 925004;
     private const uint SummonImpDismissFirst = 925005;
+    private const uint SummonDemonEffect = 925006;
 
     private static PetTestKit Kit()
     {
@@ -41,6 +42,8 @@ public sealed class PetCharmFixesTests
             Spell(Bite, Effect(SpellEffectName.Dummy, 1)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
             Spell(CallSpell, Effect(SpellEffectName.SummonPet, 0, misc: 0)),
             Spell(SummonImpSpell, Effect(SpellEffectName.SummonPet, 0, (SpellImplicitTarget)32, misc: (int)ImpEntry))
+                with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
+            Spell(SummonDemonEffect, Effect(SpellEffectName.SummonDemon, 0, (SpellImplicitTarget)32, misc: (int)ImpEntry))
                 with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
             Spell(SummonImpDismissFirst, Effect(SpellEffectName.SummonPet, 0, (SpellImplicitTarget)32, misc: (int)ImpEntry))
                 with { StartRecoveryCategory = 0, StartRecoveryTime = 0, AttributesEx = (SpellAttributesEx)0x00000001 },
@@ -99,6 +102,8 @@ public sealed class PetCharmFixesTests
         kit.Controller.HandleAction(player, PetPackets.ReadAction(PetAction(mob.Guid, PetBiteSpell, ActionType.Disabled, enemy.Guid)));
 
         Assert.Empty(Packets(session, WorldOpcode.SmsgPetCastFailed));
+        kit.Spells.Advance(2_000);
+        Assert.True(enemy.Health < enemy.MaxHealth); // the cast went off
     }
 
     // --- idx 39: a level-up keeps the rename and abandon flags ----------------------------------------------------
@@ -228,5 +233,83 @@ public sealed class PetCharmFixesTests
         var r = new PacketReader(Assert.Single(Packets(session, WorldOpcode.SmsgPetNameQueryResponse)));
         Assert.Equal(number, r.ReadUInt32());
         Assert.Equal(demon.Template.Name, r.ReadCString());
+        Assert.Equal(demon.GetUInt32(UpdateFields.UnitFieldPetNameTimestamp), r.ReadUInt32());
+    }
+
+    // --- review: SummonDemon and friends share the charm check ---------------------------------------------------------
+
+    [Fact]
+    public void SummonDemonEffect_WithACharmOut_FailsAlreadyHaveCharm()
+    {
+        using PetTestKit kit = Kit();
+        (Player warlock, _) = kit.AddPlayer(1, 5, 5);
+        warlock.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+        Creature enslaved = Mob(kit);
+        CastAt(kit, warlock, CharmPossessTests.CharmSpell, enslaved);
+
+        Assert.Equal(SpellCastResult.AlreadyHaveCharm, kit.Cast(warlock, SummonDemonEffect));
+    }
+
+    // --- review: abandon is the owner's; a charmer only releases its charm --------------------------------------------
+
+    [Fact]
+    public void AbandoningSomeoneElsesCharmedPet_DoesNotUnsummonIt_ButTheOwnerCan()
+    {
+        using PetTestKit kit = Kit();
+        (Player owner, _) = kit.AddPlayer(1, 5, 5);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+        (Player charmer, _) = kit.AddPlayer(2, 6, 5);
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, SummonImpSpell));
+        Creature pet = Assert.Single(kit.Creatures.Creatures, c => c.Guid == owner.PetGuid);
+        Assert.Equal(SpellCastResult.CastOk, CastAt(kit, charmer, CharmPossessTests.CharmSpell, pet));
+        Assert.Equal(pet.Guid, charmer.CharmGuid);
+
+        kit.Controller.HandleAbandon(charmer, pet.Guid);
+
+        Assert.Same(pet, kit.Creatures.FindCreature(pet.Guid)); // the charmer may release it, not dismiss the owner's pet
+        Assert.Equal(pet.Guid, owner.PetGuid);
+        Assert.True(charmer.CharmGuid.IsEmpty);
+
+        // the owner of a charmed pet still abandons it
+        Assert.Equal(SpellCastResult.CastOk, CastAt(kit, charmer, CharmPossessTests.CharmSpell, pet));
+        kit.Controller.HandleAbandon(owner, pet.Guid);
+        Assert.True(owner.PetGuid.IsEmpty);
+    }
+
+    // --- review: Pet::SynchronizeLevelWithOwner -------------------------------------------------------------------------
+
+    [Fact]
+    public void WarlockDemon_FollowsTheOwnersLevel()
+    {
+        using PetTestKit kit = Kit();
+        (Player warlock, _) = kit.AddPlayer(1);
+        warlock.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+        warlock.Level = 30;
+        Assert.Equal(SpellCastResult.CastOk, kit.Cast(warlock, SummonImpSpell));
+        Creature demon = Assert.Single(kit.Creatures.Creatures, c => c.Guid == warlock.PetGuid);
+        int training = demon.Summon!.Charm!.TrainingPoints;
+
+        warlock.Level = 35;
+        kit.Service.SynchronizeLevelWithOwner(warlock);
+
+        Assert.Equal(35, (int)demon.Level);
+        Assert.Equal(training, demon.Summon.Charm.TrainingPoints);
+    }
+
+    [Fact]
+    public void HunterPet_IsOnlyClampedDownToTheOwnersLevel()
+    {
+        using PetTestKit kit = Kit();
+        (Player hunter, Creature pet) = Tame(kit, ownerLevel: 30);
+        Assert.Equal(20, (int)pet.Level);
+
+        hunter.Level = 40;
+        kit.Service.SynchronizeLevelWithOwner(hunter);
+        Assert.Equal(20, (int)pet.Level);
+
+        hunter.Level = 10;
+        kit.Service.SynchronizeLevelWithOwner(hunter);
+        Assert.Equal(10, (int)pet.Level);
+        Assert.NotEqual(UnitFlags.None, pet.UnitFlags & UnitFlags.PetRename);
     }
 }

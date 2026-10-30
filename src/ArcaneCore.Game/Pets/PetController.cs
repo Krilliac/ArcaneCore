@@ -620,14 +620,24 @@ public sealed partial class PetController
             return;
         }
 
-        // The owner check is CharmerOrOwnerGuid, like OwnedPet: a charmed unit has a charmer but no summoner (UNIT_FIELD_SUMMONEDBY), so an
-        // OwnerGuid test would make the charm release below unreachable.
-        if (OwnedPet(player, petGuid) is not var (pet, _))
+        if (player.Map?.FindObject(petGuid) is not Creature pet || pet.GetCharmInfo() is null)
         {
             return;
         }
 
-        // vmangos HandlePetAbandon (PetHandler.cpp:368-372): a unit that is not a Pet but is the player's charm is released.
+        // vmangos HandlePetAbandon (PetHandler.cpp:355-376): only the owner abandons a pet; a unit that is not a Pet but is the player's
+        // charm is released. A charmed unit has a charmer but no summoner (UNIT_FIELD_SUMMONEDBY), so the owner test alone would make the
+        // release unreachable (it also takes the charmer here). A charmed pet of someone else is released, never unsummoned.
+        if (pet.OwnerGuid != player.Guid)
+        {
+            if (petGuid == player.CharmGuid && pet.CharmerGuid == player.Guid)
+            {
+                _summons.Charms.Uncharm(player);
+            }
+
+            return;
+        }
+
         if (pet.Summon?.Charm is null)
         {
             if (petGuid == player.CharmGuid)
