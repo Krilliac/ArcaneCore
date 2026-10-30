@@ -422,9 +422,10 @@ public sealed class LiveLaunchScriptTests : IDisposable
     public void WaitLiveDaemonUp_FollowRelaunch_WaitsForTheNextProcess_AndWithoutItAnEarlyExitThrows()
     {
         const string preamble = """
-            $quick = Start-Process pwsh -ArgumentList '-NoProfile','-Command','exit 3' -PassThru -WindowStyle Hidden
+            $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} } # -WindowStyle is Windows-only
+            $quick = Start-Process pwsh -ArgumentList '-NoProfile','-Command','exit 3' -PassThru @hide
             $quick.WaitForExit()
-            $long = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -PassThru -WindowStyle Hidden
+            $long = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -PassThru @hide
             $script:calls = 0
             function Find-LiveChildProcess { param($ParentPid, $ImageName) $script:calls++; if ($script:calls -eq 1) { return $quick } elseif ($script:calls -le 3) { return $null } else { return $long } }
             function Get-LivePortOwner { param($Port) if ($script:calls -ge 4) { return $long.Id } else { return 0 } }
@@ -456,7 +457,8 @@ public sealed class LiveLaunchScriptTests : IDisposable
     public void WaitLiveDaemonUp_FollowRelaunch_StillStopsWhenTheSupervisorIsGone()
     {
         string output = RunPwsh("""
-            $gone = Start-Process pwsh -ArgumentList '-NoProfile','-Command','exit 0' -PassThru -WindowStyle Hidden
+            $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} } # -WindowStyle is Windows-only
+            $gone = Start-Process pwsh -ArgumentList '-NoProfile','-Command','exit 0' -PassThru @hide
             $gone.WaitForExit()
             function Find-LiveChildProcess { param($ParentPid, $ImageName) return $null }
             try { Wait-LiveDaemonUp -Label 'child w' -ParentPid $PID -ImageName 'x.exe' -Port 4242 -TimeoutSec 30 -SettleSeconds 0 -WatchPid $gone.Id -FollowRelaunch; 'returned' }
@@ -651,7 +653,10 @@ public sealed class LiveLaunchScriptTests : IDisposable
         File.WriteAllText(wrapper, $$"""
             $ErrorActionPreference = 'Stop'
             function Start-Process { Set-Content -LiteralPath '{{Q(marker)}}' -Value ($args -join ' '); throw 'Start-Process must not run in a plan' }
-            & '{{Q(Path.Combine(LiveDir, script))}}' {{string.Join(' ', arguments)}}
+            # A refusal is printed as its plain message: the default error view word-wraps it to the console width (80 on Linux CI),
+            # which splits the text the tests look for.
+            try { & '{{Q(Path.Combine(LiveDir, script))}}' {{string.Join(' ', arguments)}} }
+            catch { Write-Output ('ERROR: ' + $_.Exception.Message); exit 1 }
             exit $LASTEXITCODE
             """, new UTF8Encoding(false));
         var start = NewPwsh();

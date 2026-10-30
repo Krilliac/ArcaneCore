@@ -200,8 +200,17 @@ public sealed class InactiveQueueWireTests
         Assert.Same(before.Player, after.Player);
         Assert.Equal((before.Map, before.Zone, before.X, before.Y, before.Z, before.Orientation),
             (after.Map, after.Zone, after.X, after.Y, after.Z, after.Orientation));
-        Assert.Equal(before.Fields, after.Fields);
+        Assert.Equal(WithoutEnergy(before.Fields), WithoutEnergy(after.Fields));
         Assert.Equal(before.Inventory, after.Inventory);
+    }
+
+    // Every player regenerates energy up to its maximum (vmangos Player::RegenerateAll), so UNIT_FIELD_POWER4 climbs on its own while the
+    // test runs; it is the one field these queries are not answerable for.
+    private static uint[] WithoutEnergy(uint[] fields)
+    {
+        uint[] copy = (uint[])fields.Clone();
+        copy[UpdateFields.UnitFieldPower1 + (int)PowerType.Energy] = 0;
+        return copy;
     }
 
     private static async Task<CharacterQuestStatus> LoadJournalAsync(SyntheticArcaneServer server, ulong guid, CancellationToken token)
