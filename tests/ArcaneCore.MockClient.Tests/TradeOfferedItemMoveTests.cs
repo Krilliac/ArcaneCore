@@ -303,6 +303,33 @@ public sealed class TradeOfferedItemMoveTests
     }
 
     [Fact]
+    public async Task OpenOfOfferedGift_OnATaxiFlight_RepliesCantDoRightNow_NotTheOfferedRefusal()
+    {
+        await using Rig rig = await Rig.StartAsync(loginReceiver: true);
+        (Item paper, Item gift) = await StartWrapAsync(rig, wrapFirst: true);
+        await OpenAndOfferAsync(rig, gift.Slot);
+        await AcceptAsync(rig);
+        await rig.Server.World.InvokeAsync(() =>
+            rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!.UnitFlags |= UnitFlags.TaxiFlight).WaitAsync(rig.Token);
+        await AssertOfferedAsync(rig, gift.Guid);
+
+        // vmangos HandleOpenItemOpcode refuses on a taxi before anything else (SpellHandler.cpp:163-174); the offered-in-trade refusal (ItemLocked) is ours and comes after.
+        await RefusedAsync(rig, WorldOpcode.CmsgOpenItem, [InventorySlots.Bag0, gift.Slot], scored: false, expectedResult: (byte)InventoryResult.CantDoRightNow);
+
+        await AssertEntryAndCountAsync(rig, gift.Guid, GiftEntry, 1);
+    }
+
+    /// <summary>The gift is still in the sender's side of an open trade: the state the offered refusal would act on.</summary>
+    private static async Task AssertOfferedAsync(Rig rig, ObjectGuid guid)
+        => await rig.Server.World.InvokeAsync(() =>
+        {
+            Player sender = rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!;
+            Item item = sender.Inventory.GetItemByGuid(guid)!;
+            Assert.True(rig.Server.Services.GetRequiredService<ArcaneCore.World.Economy.EconomyFeature>().IsOffered(sender, item), "the gift is no longer offered");
+            return true;
+        }).WaitAsync(rig.Token);
+
+    [Fact]
     public async Task AutoStoreBankItemOfABankStack_CannotTopUpTheOfferedStack()
     {
         await using Rig rig = await Rig.StartAsync(loginReceiver: true);

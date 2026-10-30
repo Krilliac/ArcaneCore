@@ -424,7 +424,7 @@ public static partial class ContentImporterCli
             try
             {
                 await using WorldDbContext db = OpenWorld(target);
-                await EnsureRefreshSchemaAsync(db, migrate, o, ct).ConfigureAwait(false);
+                await EnsureImporterSchemaAsync(db, migrate, o, ct).ConfigureAwait(false);
                 await ImportTransaction.RunAsync(db, async token =>
                 {
                     if (graveyards.HasRows)
@@ -768,7 +768,7 @@ public static partial class ContentImporterCli
     /// library default <c>Always</c>, which would upgrade a production world silently).
     /// </para>
     /// </summary>
-    private static async Task EnsureRefreshSchemaAsync(WorldDbContext db, bool migrate, TextWriter o, CancellationToken ct, string verb = "refresh", bool createMissing = false)
+    private static async Task EnsureImporterSchemaAsync(WorldDbContext db, bool migrate, TextWriter o, CancellationToken ct, string verb = "refresh", bool createMissing = false)
     {
         SchemaPlan before = await SchemaPlanner.PlanAsync(db, WorldDbContext.Schema, cancellationToken: ct).ConfigureAwait(false);
         SchemaPolicy policy = migrate ? SchemaPolicy.Always : createMissing ? SchemaPolicy.CreateOnly : SchemaPolicy.Never;

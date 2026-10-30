@@ -1259,7 +1259,7 @@ public sealed class LogonSession(
         {
             logger.LogWarning(
                 "A realm heartbeat is more than {Seconds} s ahead of this host's clock, the beat is treated as fresh; synchronise the clocks of the world and logon hosts (NTP) ({Suppressed} more since the last line)",
-                RealmListProjection.MaxClockSkew.Seconds, suppressed);
+                RealmListProjection.MaxClockSkewSeconds, suppressed);
         }
 
         IReadOnlyDictionary<int, int> counts = await ReadCharacterCountsAsync(cancellationToken).ConfigureAwait(false);

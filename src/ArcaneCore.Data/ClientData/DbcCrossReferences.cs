@@ -155,10 +155,7 @@ public static partial class DbcCrossReferences
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
-        if (connection.State != System.Data.ConnectionState.Open)
-        {
-            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        }
+        await DbConnectionOpen.EnsureOpenAsync(connection, cancellationToken).ConfigureAwait(false);
 
         (string open, string close) = connection.GetType().Name.Contains("MySql", StringComparison.OrdinalIgnoreCase) ? ("`", "`") : ("\"", "\"");
         var dbcs = new Dictionary<string, (HashSet<long>? Ids, string? Reason)>(StringComparer.OrdinalIgnoreCase);

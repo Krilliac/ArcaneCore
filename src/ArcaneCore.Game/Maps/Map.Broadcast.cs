@@ -160,7 +160,7 @@ public sealed partial class Map
     /// The number of players of this map within <paramref name="radius"/> yards (2D, centre to centre) of a point. One grid query over the
     /// few cells the circle touches (<see cref="GridContainer.CollectPlayers"/>) plus an exact distance test on the players it returns:
     /// no walk over every player of the map, and no allocation once the scratch list has grown. A playerbot is skipped when
-    /// <paramref name="includeBots"/> is false (<see cref="IPlayerSession.IsPlayerbot"/>), and so is a player in GM mode (ArcaneCore has no GM invisibility state); ghosts count. World thread.
+    /// <paramref name="includeBots"/> is false (<see cref="IPlayerSession.IsPlayerbot"/>), and so is a player in GM mode or hidden by <see cref="Player.GmInvisible"/> (<c>.gm visible off</c> and the invisibility spell do not turn GM mode on); ghosts count. World thread.
     /// </summary>
     public int CountPlayersWithin(float x, float y, float radius, bool includeBots)
     {
@@ -174,7 +174,7 @@ public sealed partial class Map
             float dx = player.X - x;
             float dy = player.Y - y;
             // Written as a negation so a player at a non-finite position (which every grid query returns) is never counted.
-            if (!ReferenceEquals(player.Map, this) || player.IsGameMaster || !((dx * dx) + (dy * dy) <= limit) || (!includeBots && player.Session.IsPlayerbot))
+            if (!ReferenceEquals(player.Map, this) || player.IsGameMaster || player.GmInvisible || !((dx * dx) + (dy * dy) <= limit) || (!includeBots && player.Session.IsPlayerbot))
             {
                 continue;
             }

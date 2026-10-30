@@ -90,11 +90,7 @@ public static class SpellThreatDumpImporter
 
             uint entry = ToUInt(Get("entry") ?? throw new InvalidDataException("spell_threat has no column 'entry'"), "entry");
             string threatText = Get("threat") ?? throw new InvalidDataException("spell_threat has no column 'threat'");
-            long threat = ToLong(threatText, "threat");
-            if (threat is < 0 or > ushort.MaxValue)
-            {
-                throw new InvalidDataException($"spell_threat spell {entry}: threat {threat} is outside 0..65535 (vmangos reads a uint16)");
-            }
+            long threat = ToThreat(threatText, entry);
 
             float multiplier = Get("multiplier") is { } m ? ToFloat(m, "multiplier") : 1f;
             if (!float.IsFinite(multiplier) || multiplier < 0f)
@@ -232,6 +228,26 @@ public static class SpellThreatDumpImporter
         => long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long value)
             ? value
             : throw new InvalidDataException($"spell_threat column '{column}': '{text}' is not an integer");
+
+    // vmangos stores spell_threat.threat as a FLOAT column (migration 20230810230833; spell 592 is 20.5) but reads it with
+    // Field::GetUInt16(), which is static_cast<uint16>(atol(text)) (shared/Database/Field.h): the fraction is truncated, so 20.5 is 20.
+    // SpellThreatRecord.Threat stays a ushort, as in vmangos' SpellThreatEntry; a fractional value truncates toward zero the same way.
+    // Anything that is not a finite number, or whose whole part is outside 0..65535, is refused rather than wrapped.
+    private static long ToThreat(string text, uint entry)
+    {
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) || !double.IsFinite(value))
+        {
+            throw new InvalidDataException($"spell_threat spell {entry}: threat '{text}' is not a number");
+        }
+
+        double whole = Math.Truncate(value);
+        if (whole is < 0 or > ushort.MaxValue)
+        {
+            throw new InvalidDataException($"spell_threat spell {entry}: threat {text} is outside 0..65535 (vmangos reads a uint16)");
+        }
+
+        return (long)whole;
+    }
 
     private static uint ToUInt(string text, string column)
     {

@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Cluster.Supervision;
 using ArcaneCore.World.Tests.Ops;
 using Xunit;
@@ -275,5 +277,115 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         {
             mux.Dispose();
         }
+    }
+
+    [Fact]
+    public async Task Launch_WithAHandler_DeliversTheChildsFirstLine_AndABareCrDoesNotSplitALine()
+    {
+        var launcher = new SystemProcessSupervisedLauncher();
+        var lines = new ConcurrentQueue<string>();
+        using ISupervisedProcess p = launcher.Launch(FixtureConfig("cr-line", "--cr-heartbeat"), (_, line, isStdErr) =>
+        {
+            if (!isStdErr)
+            {
+                lines.Enqueue(line);
+            }
+        });
+
+        await TestWait.UntilAsync(() => lines.Contains("done"), "the fixture's last line");
+
+        // "ready" is the first thing the child writes: it arrives only because the handler was subscribed before the pumps started.
+        Assert.Equal(
+            ["ready", $"noise{(char)13}heartbeat 2026-10-29T00:00:00.000Z pid={p.ProcessId} alive", "done"],
+            lines.ToArray());
+        Assert.All(lines, line => Assert.False(SupervisorProtocol.TryParseHeartbeat(line, out _), "a line holding a bare CR must not parse as a heartbeat"));
+    }
+
+    [Fact]
+    public async Task Supervisor_ChildLineWithABareCrBeforeAHeartbeat_DoesNotForgeABeat()
+    {
+        var launcher = new SystemProcessSupervisedLauncher();
+        var options = new ClusterSupervisorOptions();
+        SupervisedProcessConfig config = FixtureConfig("child", "--cr-heartbeat");
+        config.Console = SupervisedConsoleMode.Merged;
+        options.Processes["child"] = config;
+        var console = new StringWriter();
+        var mux = new SupervisedOutputMultiplexer(console);
+        var supervisor = new ClusterHostSupervisor(options, launcher, mux, new FixedProbe(16_384));
+        try
+        {
+            await supervisor.StartAllAsync();
+
+            // "done" follows the CR line on the same pipe, and one pump handles a pipe in order: once it shows, the CR line has been handled.
+            await TestWait.UntilAsync(() =>
+            {
+                lock (console)
+                {
+                    return console.ToString().Contains("done", StringComparison.Ordinal);
+                }
+            }, "the child's last line");
+
+            Assert.Null(supervisor.GetSnapshot("child").LastBeatAgeMs);
+            string text;
+            lock (console)
+            {
+                text = console.ToString();
+            }
+
+            Assert.Contains("noise", text, StringComparison.Ordinal); // the CR line was ordinary output, not swallowed as protocol
+        }
+        finally
+        {
+            supervisor.Dispose();
+            mux.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task RequestDrain_WhenTheChildsStdinPipeIsFull_StillTimesOut_AndKillEndsTheBlockedWriter()
+    {
+        var launcher = new SystemProcessSupervisedLauncher();
+        using ISupervisedProcess p = launcher.Launch(FixtureConfig("full-stdin")); // never reads stdin
+        int sent = 0;
+        string filler = new('x', 1000);
+        Task flood = Task.Run(() =>
+        {
+            while (p.TrySendLine(filler))
+            {
+                Interlocked.Increment(ref sent);
+            }
+        });
+
+        try
+        {
+            // The pipe is full when the sent count stops moving: the writer is now blocked inside the stdin lock.
+            int last = -1;
+            int stable = 0;
+            for (int i = 0; i < 300 && stable < 10; i++)
+            {
+                await Task.Delay(100);
+                int now = Volatile.Read(ref sent);
+                stable = now > 0 && now == last ? stable + 1 : 0;
+                last = now;
+            }
+
+            Assert.True(stable >= 10, "the child's stdin pipe never filled");
+            Assert.False(flood.IsCompleted);
+
+            // Without the fix the drain's own write blocks the caller before the timeout is armed, so this never returns.
+            var stopwatch = Stopwatch.StartNew();
+            bool drained = await Task.Run(() => p.RequestDrainAsync(TimeSpan.FromMilliseconds(500))).WaitAsync(TimeSpan.FromSeconds(20));
+
+            Assert.False(drained);
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"the drain took {stopwatch.Elapsed}");
+            Assert.Contains(p.ProcessId, launcher.OwnedProcessIds);
+        }
+        finally
+        {
+            p.KillOwnedProcess(); // breaks the pipe, which is what ends the writer that is still blocked
+        }
+
+        await flood.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.True(p.HasExited);
     }
 }
