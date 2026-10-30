@@ -15,6 +15,8 @@ namespace ArcaneCore.Kernel.Tests;
 /// Trying the crash dialog by hand on Windows: from an interactive console (no redirection),
 /// <c>dotnet ArcaneCore.Kernel.Tests.dll --diagnostics-probe unhandled-dialog-live</c> crashes with <c>Diagnostics:CrashDialog</c> on and
 /// the real message box; the process exits 70 once it is closed. The automated test runs the same scenario redirected, where no box opens.
+/// <c>--diagnostics-probe fault-dialog-live</c> does the same for the new-fault box (<c>Diagnostics:FaultDialog</c>): it records one caught
+/// fault, waits until the box with its Copy and OK buttons is closed, and prints the survived marker.
 /// </para>
 /// </summary>
 public static class Program
@@ -93,6 +95,10 @@ public static class DiagnosticsProbe
                 CrashHandler.Install(new DiagnosticsOptions { OnUnhandled = UnhandledExceptionPolicy.Exit, CrashDialog = true }, StandardErrorCrashSink.Instance, [new ProbeContext()]);
                 return ThrowOnThread(withInner: true);
 
+            case "fault-dialog-live":
+                // The real presenter and the real environment probe: one caught fault, one box, and a wait until it is closed.
+                return FaultDialogLive();
+
             case "hosting-bad-config":
                 // UseArcaneDiagnostics must exit 78 before anything else runs.
                 Host.CreateApplicationBuilder(rest).UseArcaneDiagnostics();
@@ -117,6 +123,59 @@ public static class DiagnosticsProbe
         CrashDialog.EnvironmentProbe = static () => new CrashDialogEnvironment(true, true, false, false, false, false);
         CrashHandler.Install(new DiagnosticsOptions { OnUnhandled = policy, CrashDialog = true }, StandardErrorCrashSink.Instance, [new ProbeContext()]);
         return ThrowOnThread(withInner: true);
+    }
+
+    private static int FaultDialogLive()
+    {
+        FaultLedger.Shared.Reset();
+        FaultLedger.Shared.Configure(new DiagnosticsOptions { FaultDialog = true });
+        using var closed = new ManualResetEventSlim(false);
+        ICrashDialogPresenter real = CrashDialog.Presenter;
+        CrashDialog.Presenter = new ClosingSignalDialog(real, closed);
+        Action<FaultNotice> subscribed = notice =>
+        {
+            if (!CrashDialog.TryShowFault(enabled: true, notice, onFailure: ex =>
+                {
+                    Console.Error.WriteLine($"FAULT-DIALOG failed: {ex.GetType().Name}: {ex.Message}");
+                    Console.Error.Flush();
+                }))
+            {
+                closed.Set();
+            }
+        };
+        FaultLedger.Shared.FaultNoticed += subscribed;
+        try
+        {
+            string? whyNot = CrashDialog.EnvironmentProbe().WhyNot();
+            if (whyNot is not null)
+            {
+                Console.Error.WriteLine($"FAULT-DIALOG none opens in this session: {whyNot}");
+                Console.Error.Flush();
+                return Survive();
+            }
+
+            try
+            {
+                throw new InvalidOperationException("probe-fault-message", new FormatException("probe-inner-message"));
+            }
+            catch (InvalidOperationException ex)
+            {
+                FaultLedger.Shared.Record("probe.fault-dialog-live", ex);
+            }
+
+            if (!closed.Wait(TimeSpan.FromMinutes(10)))
+            {
+                Console.Error.WriteLine("FAULT-DIALOG was not closed within 10 minutes");
+                Console.Error.Flush();
+            }
+
+            return Survive();
+        }
+        finally
+        {
+            FaultLedger.Shared.FaultNoticed -= subscribed;
+            CrashDialog.Presenter = real;
+        }
     }
 
     private static int ThrowOnThread(bool withInner = false)
@@ -193,6 +252,22 @@ public static class DiagnosticsProbe
         public static ThrowingDialog Instance { get; } = new();
 
         public void Show(string title, string text) => throw new InvalidOperationException("probe-dialog-failure");
+    }
+
+    /// <summary>Hands the box to the real presenter and signals when it has been closed (or has failed), so the probe can wait for the fault dialog's background thread.</summary>
+    private sealed class ClosingSignalDialog(ICrashDialogPresenter inner, ManualResetEventSlim closed) : ICrashDialogPresenter
+    {
+        public void Show(string title, string text)
+        {
+            try
+            {
+                inner.Show(title, text);
+            }
+            finally
+            {
+                closed.Set();
+            }
+        }
     }
 
     private sealed class ProbeContext : ICrashContextProvider
