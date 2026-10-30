@@ -21,7 +21,7 @@ public sealed class RealmAuthorityLeaseKeeperTests
     // The keeper reports its exit code to a sink here instead of the process-global ExitCodes.Current, which other tests assert on in parallel.
     private readonly List<int> _exitCodes = [];
 
-    private RealmAuthorityLeaseKeeper Create(IRealmAuthorityLeaseStore? store = null)
+    private RealmAuthorityLeaseKeeper Create(IRealmAuthorityLeaseStore? store = null, IEnumerable<IRealmSingletonHalt>? halts = null)
         => new(store ?? _inner,
             Options.Create(new ClusterNodeOptions { Role = ClusterNodeRole.MapWorker, AuthorityLeaseTtlSeconds = 30, AuthorityLeaseRenewSeconds = 10 }),
             Options.Create(new GatewayWorkerOptions { Enabled = true, NodeId = Node }),
@@ -34,7 +34,8 @@ public sealed class RealmAuthorityLeaseKeeperTests
                 {
                     _exitCodes.Add(code);
                 }
-            });
+            },
+            halts);
 
     private static long ClusterLeaseFaults() => FaultLedger.Shared.Snapshot().Where(f => f.Site == "cluster.lease").Sum(f => f.Count);
 
@@ -178,12 +179,14 @@ public sealed class RealmAuthorityLeaseKeeperTests
     [Fact]
     public async Task AcquireAtStart_StartsRenewingAtOnce_SoASlowStartCannotOutlastTheLease()
     {
-        await using RealmAuthorityLeaseKeeper keeper = Create();
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
         await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
 
-        // The rest of the host start (attach, id allocators, the world thread) takes 25 s: longer than TTL - renew. Nobody calls anything on the keeper meanwhile.
-        _time.Advance(TimeSpan.FromSeconds(25));
+        // The rest of the host start (attach, id allocators, the world thread) takes 35 s: longer than the TTL of 30 s. Nobody calls anything on the keeper meanwhile.
+        _time.Advance(TimeSpan.FromSeconds(35));
 
+        Assert.True(store.Renewals > 0);
         Assert.Equal(0, _lifetime.Stops);
         Assert.True(_inner.ValidateFencingToken(RealmAuthorityScopes.Social, Node, 1, _time.GetUtcNow()));
         Assert.True(_inner.ValidateFencingToken(RealmAuthorityScopes.Economy, Node, 1, _time.GetUtcNow()));
@@ -261,6 +264,86 @@ public sealed class RealmAuthorityLeaseKeeperTests
         await keeper.ReleaseAllAsync();
 
         Assert.Equal(2, store.Releases);
+    }
+
+    [Fact]
+    public async Task RenewalRefusedAfterReleaseAllBegan_IsNotALoss()
+    {
+        var store = new ControlledStore(_inner) { RejectRenewals = true };
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.OnRenew = () => keeper.ReleaseAllAsync().GetAwaiter().GetResult(); // the orderly stop begins while the renewal is in the store; the store then refuses it
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(0, _lifetime.Stops);
+        lock (_exitCodes)
+        {
+            Assert.Empty(_exitCodes);
+        }
+    }
+
+    [Fact]
+    public async Task Lose_HaltsEachSingletonOnce_ThenStopsTheApplication()
+    {
+        var first = new FakeHalt();
+        var second = new FakeHalt();
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store, [first, second]);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.RejectRenewals = true;
+
+        _time.Advance(TimeSpan.FromSeconds(30)); // several refused ticks: only the first is a loss
+
+        Assert.Equal(1, first.Calls);
+        Assert.Equal(1, second.Calls);
+        Assert.Equal(1, _lifetime.Stops);
+    }
+
+    [Fact]
+    public async Task Lose_WithAThrowingHalt_StillHaltsTheOthers_AndStopsTheApplication()
+    {
+        var before = new FakeHalt();
+        var thrower = new FakeHalt { Throw = true };
+        var after = new FakeHalt();
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store, [before, thrower, after]);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.RejectRenewals = true;
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, before.Calls);
+        Assert.Equal(1, thrower.Calls);
+        Assert.Equal(1, after.Calls);
+        Assert.Equal(1, _lifetime.Stops);
+    }
+
+    [Fact]
+    public void ManualTimeProvider_WhenACallbackAdvancesBeyondTheTarget_NeverRewinds()
+    {
+        DateTimeOffset start = _time.GetUtcNow();
+        using ITimer timer = _time.CreateTimer(_ => _time.Advance(TimeSpan.FromSeconds(100)), null, TimeSpan.FromSeconds(5), Timeout.InfiniteTimeSpan);
+
+        _time.Advance(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(start + TimeSpan.FromSeconds(105), _time.GetUtcNow());
+    }
+
+    private sealed class FakeHalt : IRealmSingletonHalt
+    {
+        private int _calls;
+        public int Calls => Volatile.Read(ref _calls);
+        public bool Throw { get; init; }
+
+        public void Halt()
+        {
+            Interlocked.Increment(ref _calls);
+            if (Throw)
+            {
+                throw new InvalidOperationException("halt failed");
+            }
+        }
     }
 
     private sealed class StopCounter : IHostApplicationLifetime
@@ -392,7 +475,11 @@ internal sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
                 next = _timers.Where(t => t.IsArmed && t.Due <= target).OrderBy(t => t.Due).FirstOrDefault();
                 if (next is null)
                 {
-                    _now = target;
+                    if (target > _now)
+                    {
+                        _now = target; // a callback may already have advanced past the target
+                    }
+
                     return;
                 }
 
