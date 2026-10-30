@@ -8,9 +8,11 @@ using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -316,17 +318,119 @@ public sealed class LogonHandshakeTests
             (await ReadProofReplyAsync(client)).Result);
     }
 
+    [Fact]
+    [Trait("Category", "Timing")]
+    public async Task AuthenticatedSession_ClosedBySessionCap_ReportsNoHandshakeTimeout()
+    {
+        byte[] salt = WowSrp6.GenerateSalt();
+        var accounts = new InMemoryAccountStore();
+        await accounts.CreateAsync(new Account
+        {
+            Username = Username,
+            Salt = salt,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, Username, Password), WowSrp6.KeyLength),
+        });
+
+        using AnomalyCapture timeouts = AnomalyLedger.Shared.Capture(n => n.Key == "logon/handshake-timeout");
+        Task? serverTask = null;
+        await using NetworkStream client = await StartSessionAsync(accounts, new InMemoryRealmStore([]), autocreate: false,
+            options: new AuthOptions { MaxSessionDurationSeconds = 2 }, onServerTask: t => serverTask = t);
+        await SendAsync(client, BuildChallenge(Username, Password));
+        ChallengeReply challenge = await ReadChallengeReplyAsync(client);
+        await SendAsync(client, BuildProof(ClientSession.Compute(Username, Password, salt, challenge.B)));
+        Assert.Equal((byte)AuthResult.Success, (await ReadProofReplyAsync(client)).Result);
+
+        await serverTask!.WaitAsync(TimeSpan.FromSeconds(15)); // the 2 s cap closes the authenticated session
+        Assert.Empty(timeouts.Notices);
+    }
+
+    [Fact]
+    [Trait("Category", "Timing")]
+    public async Task UnauthenticatedSession_ClosedBySessionCap_ReportsHandshakeTimeout()
+    {
+        using AnomalyCapture timeouts = AnomalyLedger.Shared.Capture(n => n.Key == "logon/handshake-timeout");
+        Task? serverTask = null;
+        await using NetworkStream client = await StartSessionAsync(new InMemoryAccountStore(), new InMemoryRealmStore([]), autocreate: false,
+            options: new AuthOptions { MaxSessionDurationSeconds = 1 }, onServerTask: t => serverTask = t);
+        await serverTask!.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Single(timeouts.Notices);
+    }
+
+    [Fact]
+    public async Task FaultAfterTheProofConsumedTheChallenge_KeepsStageAndAccountInTelemetry()
+    {
+        var fault = new InvalidOperationException("duplicate username");
+        var log = new CapturingLogger();
+        Task? serverTask = null;
+        await using NetworkStream client = await StartSessionAsync(new FailingCreateAccountStore(fault), new InMemoryRealmStore([]), autocreate: true,
+            logger: log, onServerTask: t => serverTask = t);
+        await SendAsync(client, BuildChallenge("NEWBIE", "NEWBIE"));
+        ChallengeReply challenge = await ReadChallengeReplyAsync(client);
+        await SendAsync(client, BuildProof(ClientSession.Compute("NEWBIE", "NEWBIE", challenge.Salt, challenge.B)));
+
+        InvalidOperationException thrown = await Assert.ThrowsAsync<InvalidOperationException>(() => serverTask!.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Same(fault, thrown);
+        Assert.Equal("logon-proof-autocreate", thrown.Data["arcanecore.logon.stage"]);
+        Assert.Contains(log.Messages, m => m.Contains("stage=logon-proof-autocreate", StringComparison.Ordinal) && m.Contains("account='NEWBIE'", StringComparison.Ordinal));
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        private readonly List<string> _messages = [];
+
+        public IReadOnlyList<string> Messages
+        {
+            get
+            {
+                lock (_messages)
+                {
+                    return [.. _messages];
+                }
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            string text = formatter(state, exception);
+            lock (_messages)
+            {
+                _messages.Add(text);
+            }
+        }
+    }
+
+    /// <summary>An account store that has no account and fails the autocreate insert (a concurrent creation of the same name).</summary>
+    private sealed class FailingCreateAccountStore(Exception createException) : IAccountStore
+    {
+        public Task<Account?> FindByUsernameAsync(string username, CancellationToken cancellationToken = default) => Task.FromResult<Account?>(null);
+
+        public Task<Account> CreateAsync(Account account, CancellationToken cancellationToken = default) => Task.FromException<Account>(createException);
+
+        public Task UpdateCredentialsAsync(string username, byte[] salt, byte[] verifier, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task UpdateSessionKeyAsync(string username, byte[] sessionKey, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task UpdateLoginAsync(string username, byte[] sessionKey, string? address, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> UpdateSecurityAsync(string username, AccountSecurity security, CancellationToken cancellationToken = default) => Task.FromResult(false);
+    }
+
     // --- session host ------------------------------------------------------------
 
     private static async Task<NetworkStream> StartSessionAsync(
         IAccountStore accounts, IRealmStore realms, bool autocreate, AuthOptions? options = null,
-        string endpoint = "test", TimeProvider? clock = null, RealmLivenessOptions? liveness = null, IRealmCharacterCountStore? counts = null)
+        string endpoint = "test", TimeProvider? clock = null, RealmLivenessOptions? liveness = null, IRealmCharacterCountStore? counts = null,
+        ILogger? logger = null, Action<Task>? onServerTask = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
 
-        _ = Task.Run(async () =>
+        Task serverTask = Task.Run(async () =>
         {
             using TcpClient server = await listener.AcceptTcpClientAsync();
             listener.Stop();
@@ -334,9 +438,10 @@ public sealed class LogonHandshakeTests
             var session = new LogonSession(
                 stream, accounts, realms,
                 options ?? new AuthOptions { AutocreateAccounts = autocreate },
-                NullLogger.Instance, endpoint, timeProvider: clock, liveness: liveness, characterCounts: counts);
+                logger ?? NullLogger.Instance, endpoint, timeProvider: clock, liveness: liveness, characterCounts: counts);
             await session.RunAsync(CancellationToken.None);
         });
+        onServerTask?.Invoke(serverTask);
 
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, port);
