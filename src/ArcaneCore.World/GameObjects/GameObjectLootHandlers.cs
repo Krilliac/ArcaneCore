@@ -198,33 +198,39 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
     /// <summary>CMSG_OPEN_ITEM: u8 bag, u8 slot.</summary>
     private static void OpenItem(WorldSession session, Player player, byte[] payload)
     {
+        if (payload.Length < 2)
+        {
+            return;
+        }
+
+        Item? item = player.Inventory.GetItem(payload[0], payload[1]);
+
+        // Taxi, then dead, before either branch (vmangos SpellHandler.cpp:163-174), loot service or not, so a gift and a lootable item get the same replies.
+        if (item is not null && RefuseWhileFlyingOrDead(player, item))
+        {
+            return;
+        }
+
         // A wrapped gift opens into its contents (vmangos HandleOpenItemOpcode, SpellHandler.cpp:200-227), loot service or not.
-        if (payload.Length >= 2 && player.Inventory.GetItem(payload[0], payload[1]) is { } wrapped
-            && (wrapped.DynamicFlags & ItemDynFlags.Wrapped) != 0)
+        if (item is not null && (item.DynamicFlags & ItemDynFlags.Wrapped) != 0)
         {
             // Opening can destroy the gift or change its entry; refused while it is offered in a trade (stricter than vmangos, unscored).
-            if (!ItemHandlers.RefuseIfOffered(session, player, wrapped, score: false))
+            if (!ItemHandlers.RefuseIfOffered(session, player, item, score: false))
             {
-                OpenGift(player, wrapped);
+                player.Inventory.OpenGift(item);
             }
 
             return;
         }
 
-        if (payload.Length < 2 || LootOf(session, player) is not { } loot)
+        if (LootOf(session, player) is not { } loot)
         {
             return;
         }
 
-        if (player.Inventory.GetItem(payload[0], payload[1]) is not { } item)
+        if (item is null)
         {
             player.Inventory.SendEquipError(InventoryResult.ItemNotFound, null, null);
-            return;
-        }
-
-        // Taxi, then dead, before either branch (vmangos SpellHandler.cpp:163-174), so a lootable item gets the same reply as a gift.
-        if (RefuseWhileFlyingOrDead(player, item))
-        {
             return;
         }
 
@@ -253,13 +259,5 @@ public sealed class GameObjectLootHandlers : IOpcodeHandlerGroup
         }
 
         return false;
-    }
-
-    private static void OpenGift(Player player, Item gift)
-    {
-        if (!RefuseWhileFlyingOrDead(player, gift))
-        {
-            player.Inventory.OpenGift(gift);
-        }
     }
 }
