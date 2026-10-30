@@ -25,6 +25,7 @@ while [ "$n" -lt "$max" ]; do
     # Copy the new byte range to a file and grep the file: no pipe, so a segment larger than a pipe buffer cannot SIGPIPE a writer
     # (which pipefail would turn into a false condition and drop the hang line for good).
     seg="$out/.segment.$$"
+    trap 'rm -f "$seg"' EXIT
     dd if="$log" of="$seg" iflag=skip_bytes,count_bytes skip="$pos" count=$((sz-pos)) status=none
     if grep "world tick has been running for" "$seg" > /dev/null; then
       f="$out/stack-$(date +%H%M%S).txt"
