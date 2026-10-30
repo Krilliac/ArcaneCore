@@ -163,6 +163,8 @@ public sealed class TaxiFlightSystem : ITaxiFlights, IMapUpdater
     /// <summary>Save the unpaid tail for logout; the ordinary character snapshot saves this position.</summary>
     public TaxiFlightRoute? SuspendForLogout(Player player)
     {
+        // A player leaving for good has no later reader of the aborted flag; pruning it here bounds the set by online players.
+        _aborted.Remove(player.Guid);
         if (!_flights.TryGetValue(player.Guid, out Flight? flight) || !ReferenceEquals(flight.Player, player))
         {
             return null;
