@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -17,13 +18,15 @@ namespace ArcaneCore.World;
 /// Thread-safe; <see cref="Acquire"/> and <see cref="Dispose"/> may be called from any thread.
 /// <para>
 /// A MariaDB/MySQL/PostgreSQL lock can be lost while the world runs (the session died, the server dropped it). The loss is logged Critical, <see cref="LockPath"/> is null while it lasts, and the
-/// lock tries to take itself back on every health check (logged as a warning when it works). If another session holds it for longer than a dead session of this process could, the guard logs
-/// Critical, records a fault, sets the failure exit code and asks the host for an orderly stop (<see cref="IHostApplicationLifetime.StopApplication"/>, as the realm authority lease does): the
-/// shutdown saves still run, so the stop does not make the second writer's data worse than leaving this world up would. New logins are not gated separately.
+/// lock tries to take itself back on every health check (logged as a warning when it works). If the retake finds the lock held by a session other than this process's own earlier one, another
+/// world writes the database: the guard logs Critical, records a fault, sets the failure exit code, asks the host for an orderly stop (<see cref="IHostApplicationLifetime.StopApplication"/>, as the
+/// realm authority lease does) and suppresses the shutdown drain lanes (<see cref="StopDrainBudget.Suppress"/>), so the shutdown saves are NOT written into the other world's database; they stay
+/// retained and are lost with the process. Residual window: until that first retake (the second health tick after the loss) this world keeps writing, and its save queues are not paused while
+/// merely lost; the stopping window before the host reaches the queues' stop is likewise unguarded. New logins are not gated separately.
 /// </para>
 /// </summary>
 public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions = null, ILogger<WorldWriterGuard>? logger = null, bool deferUntilPromotion = false,
-    IHostApplicationLifetime? lifetime = null, TimeSpan? lockHealthInterval = null, Action<int>? setExitCode = null) : IDisposable
+    IHostApplicationLifetime? lifetime = null, TimeSpan? lockHealthInterval = null, Action<int>? setExitCode = null, ShutdownDrain? drain = null) : IDisposable
 {
     private readonly object _gate = new();
     private CharacterDatabaseWriterLock? _lock;
@@ -52,7 +55,7 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
         lock (_gate)
         {
             if (_lock is not null || databaseOptions?.Value is not { } options) return false;
-            _lock = CharacterDatabaseWriterLock.TryAcquire(options.Resolve(DatabaseComponent.Characters), OnLockLost, lockHealthInterval, OnLockRecovered, OnLockConflict);
+            _lock = CharacterDatabaseWriterLock.TryAcquire(options.Resolve(DatabaseComponent.Characters), OnLockLost, lockHealthInterval, OnLockRecovered, OnLockConflict, OnLockRetakeBlocked);
             if (_lock is null) return false;
             logger?.LogInformation("Holding the characters database writer lock {LockPath}", _lock.Path);
             return true;
@@ -67,13 +70,25 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
     internal void OnLockRecovered(string description)
         => logger?.LogWarning("The characters database writer lock was RE-TAKEN: {LockPath}. This world excludes a second world writer again; writes during the gap were not guarded.", DatabaseStartup.Scrub(description, null));
 
-    /// <summary>A lost server lock is held by another session beyond the stale-session window: another world writes this database. Stops this world, once.</summary>
+    /// <summary>A retake of the lost lock could not complete (server unreachable, or this process's own dead session still holds it). Throttled by the lock.</summary>
+    internal void OnLockRetakeBlocked(string reason)
+        => logger?.LogWarning("The characters database writer lock is still lost: {Reason}. Retrying on the next health check.", DatabaseStartup.Scrub(reason, null));
+
+    /// <summary>A lost server lock is held by another session (not this process's own earlier one): another world writes this database. Stops this world, once, without its shutdown saves.</summary>
     internal void OnLockConflict(string description)
     {
         if (Interlocked.Exchange(ref _stopRequested, 1) != 0) return;
         string message = $"the characters database writer lock was lost and is now held by another session ({DatabaseStartup.Scrub(description, null)}); another world is writing this database, so this world is stopping";
         logger?.LogCritical("{Message}", message);
         FaultLedger.Shared.Record("world.writer-lock", new InvalidOperationException(message));
+        if (drain is not null)
+        {
+            const string Why = "another world holds the characters database writer lock";
+            drain.Saves.Suppress(Why);
+            drain.Features.Suppress(Why);
+            logger?.LogCritical("The shutdown saves of this world are SKIPPED ({Why}): unsaved character and feature changes since the last completed save are lost, so they cannot overwrite the other world's data.", Why);
+        }
+
         (setExitCode ?? (code => ExitCodes.Current = code))(ExitCodes.Failure);
         lifetime?.StopApplication();
     }

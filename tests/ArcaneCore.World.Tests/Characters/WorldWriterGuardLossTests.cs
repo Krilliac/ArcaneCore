@@ -1,6 +1,7 @@
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -42,20 +43,21 @@ public sealed class WorldWriterGuardLossTests
         public void StopApplication() => Interlocked.Increment(ref _stops);
     }
 
-    private static (WorldWriterGuard Guard, CapturingLoggerProvider Log, FakeLifetime Lifetime, List<int> ExitCodes) Guard(TimeSpan? interval = null, DatabaseOptions? options = null)
+    private static (WorldWriterGuard Guard, CapturingLoggerProvider Log, FakeLifetime Lifetime, List<int> ExitCodes, ShutdownDrain Drain) Guard(TimeSpan? interval = null, DatabaseOptions? options = null)
     {
         var provider = new CapturingLoggerProvider();
         var lifetime = new FakeLifetime();
         var exitCodes = new List<int>();
+        var drain = new ShutdownDrain();
         ILogger<WorldWriterGuard> logger = new LoggerFactory([provider]).CreateLogger<WorldWriterGuard>();
-        var guard = new WorldWriterGuard(options is null ? null : Options.Create(options), logger, lifetime: lifetime, lockHealthInterval: interval, setExitCode: code => { lock (exitCodes) exitCodes.Add(code); });
-        return (guard, provider, lifetime, exitCodes);
+        var guard = new WorldWriterGuard(options is null ? null : Options.Create(options), logger, lifetime: lifetime, lockHealthInterval: interval, setExitCode: code => { lock (exitCodes) exitCodes.Add(code); }, drain: drain);
+        return (guard, provider, lifetime, exitCodes, drain);
     }
 
     [Fact]
     public void ALostLock_IsLoggedCritical_WithoutAnySecret_AndDoesNotStopTheWorld()
     {
-        (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes) = Guard();
+        (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes, ShutdownDrain drain) = Guard();
         using (guard)
         {
             guard.OnLockLost("PostgreSQL advisory lock 1: the lock connection failed (NpgsqlException: login failed, Password=hunter2secret;\nHost=db)");
@@ -72,7 +74,7 @@ public sealed class WorldWriterGuardLossTests
     [Fact]
     public void ARecoveredLock_IsLoggedAtWarning_AndAConflictStopsTheWorldWithAFailureExitCode()
     {
-        (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes) = Guard();
+        (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes, ShutdownDrain drain) = Guard();
         using (guard)
         {
             guard.OnLockRecovered("PostgreSQL advisory lock 1");
@@ -85,6 +87,27 @@ public sealed class WorldWriterGuardLossTests
             Assert.Contains(log.Entries, e => e.Level == LogLevel.Critical && e.Message.Contains("another session", StringComparison.Ordinal));
             Assert.Equal(1, lifetime.Stops);
             Assert.Equal([ArcaneCore.Kernel.Ops.ExitCodes.Failure], exitCodes);
+            // The stop must not write the shutdown saves into the other world's database: both lanes refuse every attempt, and it is said at Critical.
+            Assert.NotNull(drain.Saves.SuppressedReason);
+            Assert.NotNull(drain.Features.SuppressedReason);
+            Assert.True(drain.Saves.Exhausted);
+            Assert.NotNull(drain.Saves.Refuse());
+            Assert.NotNull(drain.Features.Refuse());
+            Assert.Contains(log.Entries, e => e.Level == LogLevel.Critical && e.Message.Contains("SKIPPED", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void ABlockedRetake_IsLoggedAsAScrubbedWarning()
+    {
+        (WorldWriterGuard guard, CapturingLoggerProvider log, _, _, _) = Guard();
+        using (guard)
+        {
+            guard.OnLockRetakeBlocked("lock X: the lock could not be retaken (NpgsqlException: refused, Password=hunter2secret)");
+
+            CapturedCategoryLog entry = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
+            Assert.DoesNotContain("hunter2secret", entry.Message);
+            Assert.Contains("still lost", entry.Message);
         }
     }
 
@@ -127,12 +150,13 @@ public sealed class WorldWriterGuardLossTests
     }
 
     [PostgresFact]
+    [Trait("Category", "Timing")]
     public async Task WhileTheLockIsLost_LockPathIsNull_AndOnceRetaken_TheGuardClaimsItAgain()
     {
         (DatabaseOptions options, string scratch) = await ScratchAsync();
         try
         {
-            (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes) = Guard(TimeSpan.FromMilliseconds(300), options);
+            (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes, ShutdownDrain drain) = Guard(TimeSpan.FromMilliseconds(300), options);
             using (guard)
             {
                 Assert.True(guard.Acquire());
@@ -153,12 +177,13 @@ public sealed class WorldWriterGuardLossTests
     }
 
     [PostgresFact]
-    public async Task ALockTakenOverByAnotherSession_StopsTheWorld_OnceTheStaleWindowHasPassed()
+    [Trait("Category", "Timing")]
+    public async Task ALockTakenOverByAnotherSession_StopsTheWorld_AtTheFirstRetake_WithoutTheShutdownSaves()
     {
         (DatabaseOptions options, string scratch) = await ScratchAsync();
         try
         {
-            (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes) = Guard(TimeSpan.FromSeconds(1), options);
+            (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes, ShutdownDrain drain) = Guard(TimeSpan.FromSeconds(4), options); // the 4 s between the tick that notices the loss and the tick that retakes is the rival's window
             using (guard)
             {
                 Assert.True(guard.Acquire());
@@ -175,8 +200,10 @@ public sealed class WorldWriterGuardLossTests
                 Assert.NotNull(rival);
                 using (rival)
                 {
-                    await WaitUntilAsync(() => lifetime.Stops > 0, TimeSpan.FromSeconds(60), "the world to be asked to stop");
+                    await WaitUntilAsync(() => lifetime.Stops > 0, TimeSpan.FromSeconds(30), "the world to be asked to stop");
                     Assert.Null(guard.LockPath);
+                    Assert.NotNull(drain.Saves.SuppressedReason);
+                    Assert.NotNull(drain.Features.SuppressedReason);
                     Assert.Contains(log.Entries, e => e.Level == LogLevel.Critical && e.Message.Contains("another session", StringComparison.Ordinal));
                     Assert.Equal([ArcaneCore.Kernel.Ops.ExitCodes.Failure], exitCodes);
                 }

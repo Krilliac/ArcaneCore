@@ -150,7 +150,8 @@ public static class GatewayWorkerServiceCollectionExtensions
         services.RemoveAll<WorldWriterGuard>();
         // Keeps the database options but defers the lock: Acquire (WorldStartup, WorldHost.StartAsync) takes nothing while the active world holds it; WorldHost.PromoteAsync takes it.
         services.AddSingleton(sp => new WorldWriterGuard(sp.GetService<Microsoft.Extensions.Options.IOptions<Data.DatabaseOptions>>(),
-            sp.GetService<Microsoft.Extensions.Logging.ILogger<WorldWriterGuard>>(), deferUntilPromotion: true));
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<WorldWriterGuard>>(), deferUntilPromotion: true,
+            lifetime: sp.GetService<IHostApplicationLifetime>(), drain: sp.GetService<ArcaneCore.World.Persistence.ShutdownDrain>())); // a promoted standby must be able to stop itself on a take-over
         ServiceDescriptor? listener = services.LastOrDefault(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(WorldServer));
         if (listener is not null)
         {

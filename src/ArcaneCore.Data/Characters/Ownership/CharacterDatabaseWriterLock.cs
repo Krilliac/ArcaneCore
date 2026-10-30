@@ -74,13 +74,13 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
     /// propagates the driver's <see cref="System.Data.Common.DbException"/>.
     /// </summary>
     public static CharacterDatabaseWriterLock? TryAcquire(DatabaseConnectionOptions options, Action<string>? onLost = null, TimeSpan? healthInterval = null,
-        Action<string>? onRecovered = null, Action<string>? onConflict = null)
+        Action<string>? onRecovered = null, Action<string>? onConflict = null, Action<string>? onRetakeBlocked = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (options.Provider != DatabaseProvider.Sqlite)
         {
             if (ServerAdvisoryWriterLock.DatabaseNameOf(options) is not { } name) return null;
-            ServerAdvisoryWriterLock advisory = ServerAdvisoryWriterLock.TryAcquire(options, name, onLost, healthInterval, onRecovered, onConflict);
+            ServerAdvisoryWriterLock advisory = ServerAdvisoryWriterLock.TryAcquire(options, name, onLost, healthInterval, onRecovered, onConflict, onRetakeBlocked: onRetakeBlocked);
             return new CharacterDatabaseWriterLock(advisory.Description, advisory);
         }
 

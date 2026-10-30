@@ -73,7 +73,21 @@ public sealed class CharacterDatabaseWriterLockHardeningTests
         finally { await ExecuteAdminAsync($"DROP DATABASE IF EXISTS \"{scratch}\" WITH (FORCE)"); }
     }
 
-    // ---- 2. A lost lock is re-taken, or reported as taken over
+    // ---- 2. A lost lock is re-taken, or reported as taken over. The state machine is stepped by hand (CheckHealth with a one-hour interval), so no timer races the test.
+
+    private sealed class Reports
+    {
+        public int Lost, Recovered, Conflicts, Blocked;
+        public string? ConflictText;
+    }
+
+    private static ServerAdvisoryWriterLock Acquire(DatabaseConnectionOptions options, Reports reports)
+        => ServerAdvisoryWriterLock.TryAcquire(options, ServerAdvisoryWriterLock.DatabaseNameOf(options)!,
+            _ => Interlocked.Increment(ref reports.Lost),
+            TimeSpan.FromHours(1),
+            onRecovered: _ => Interlocked.Increment(ref reports.Recovered),
+            onConflict: text => { reports.ConflictText = text; Interlocked.Increment(ref reports.Conflicts); },
+            onRetakeBlocked: _ => Interlocked.Increment(ref reports.Blocked));
 
     [ServerProviderTheory]
     [MemberData(nameof(ServerProviders))]
@@ -81,65 +95,132 @@ public sealed class CharacterDatabaseWriterLockHardeningTests
     {
         await using var databases = new TestDatabases();
         DatabaseConnectionOptions options = await databases.CreateAsync(provider);
-        string name = ServerAdvisoryWriterLock.DatabaseNameOf(options)!;
-        var lost = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var recovered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        int lostReports = 0, recoveredReports = 0, conflicts = 0;
-        using ServerAdvisoryWriterLock held = ServerAdvisoryWriterLock.TryAcquire(options, name,
-            reason => { Interlocked.Increment(ref lostReports); lost.TrySetResult(reason); },
-            TimeSpan.FromMilliseconds(300),
-            onRecovered: reason => { Interlocked.Increment(ref recoveredReports); recovered.TrySetResult(reason); },
-            onConflict: _ => Interlocked.Increment(ref conflicts));
+        var reports = new Reports();
+        using ServerAdvisoryWriterLock held = Acquire(options, reports);
+        long firstSession = held.SessionId;
 
-        await CharacterDatabaseWriterLockTests.KillLockSessionAsync(options, name);
+        await CharacterDatabaseWriterLockTests.KillLockSessionAsync(options, ServerAdvisoryWriterLock.DatabaseNameOf(options)!);
+        held.CheckHealth(); // notices the loss
+        Assert.True(held.IsLost);
+        Assert.Equal(1, reports.Lost);
 
-        await lost.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        string recoveredReason = await recovered.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.Contains(held.Description, recoveredReason);
-        Assert.True(held.IsHeld());
+        for (int attempt = 0; attempt < 100 && held.IsLost; attempt++)
+        {
+            held.CheckHealth(); // retakes (the killed session may need a moment to leave the server)
+            if (held.IsLost) await Task.Delay(50);
+        }
+
         Assert.False(held.IsLost);
-        // The re-taken lock excludes a second world again, and a later loss is reported afresh.
-        Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => ServerAdvisoryWriterLock.TryAcquire(options, name));
-        Assert.Equal((1, 1, 0), (Volatile.Read(ref lostReports), Volatile.Read(ref recoveredReports), Volatile.Read(ref conflicts)));
+        Assert.True(held.IsHeld());
+        Assert.NotEqual(firstSession, held.SessionId);
+        Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => ServerAdvisoryWriterLock.TryAcquire(options, ServerAdvisoryWriterLock.DatabaseNameOf(options)!));
+        Assert.Equal((1, 1, 0), (reports.Lost, reports.Recovered, reports.Conflicts));
     }
 
     [ServerProviderTheory]
     [MemberData(nameof(ServerProviders))]
-    public async Task ALostLock_TakenByAnotherSession_IsReportedAsAConflict_AndNeverRecovered(DatabaseProvider provider)
+    public async Task ALostLock_TakenByAnotherSession_IsAConflictAtTheFirstRetake_AndNeverRecovered(DatabaseProvider provider)
     {
         await using var databases = new TestDatabases();
         DatabaseConnectionOptions options = await databases.CreateAsync(provider);
         string name = ServerAdvisoryWriterLock.DatabaseNameOf(options)!;
-        var lost = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var conflict = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        int recoveredReports = 0, conflicts = 0;
-        using ServerAdvisoryWriterLock held = ServerAdvisoryWriterLock.TryAcquire(options, name,
-            reason => lost.TrySetResult(reason),
-            TimeSpan.FromSeconds(1),
-            onRecovered: _ => Interlocked.Increment(ref recoveredReports),
-            onConflict: reason => { Interlocked.Increment(ref conflicts); conflict.TrySetResult(reason); });
+        var reports = new Reports();
+        using ServerAdvisoryWriterLock held = Acquire(options, reports);
+        long firstSession = held.SessionId;
 
         await CharacterDatabaseWriterLockTests.KillLockSessionAsync(options, name);
-        await lost.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        held.CheckHealth(); // notices the loss
+        Assert.Equal(1, reports.Lost);
 
-        // Another world takes the freed lock before this one's next health tick.
+        // Another world takes the freed lock.
         ServerAdvisoryWriterLock? rival = null;
-        for (int attempt = 0; attempt < 100 && rival is null; attempt++)
+        for (int attempt = 0; attempt < 200 && rival is null; attempt++)
         {
             try { rival = ServerAdvisoryWriterLock.TryAcquire(options, name); }
-            catch (CharacterDatabaseAlreadyOwnedException) { await Task.Delay(10); }
+            catch (CharacterDatabaseAlreadyOwnedException) { await Task.Delay(25); }
         }
 
         Assert.NotNull(rival);
         using (rival)
         {
-            string reason = await conflict.Task.WaitAsync(TimeSpan.FromSeconds(60));
-            Assert.Contains(held.Description, reason);
-            await Task.Delay(2500); // more ticks: the conflict is reported once, and the lock is not recovered
-            Assert.Equal((0, 1), (Volatile.Read(ref recoveredReports), Volatile.Read(ref conflicts)));
+            held.CheckHealth(); // the first retake: refused, and the holder is not this process's earlier session
+            Assert.Equal(1, reports.Conflicts); // at once, with no stale-session wait
+            Assert.Contains(held.Description, reports.ConflictText);
+            Assert.Contains($"server session {rival.SessionId}", reports.ConflictText);
+            Assert.NotEqual(firstSession, rival.SessionId);
+            held.CheckHealth();
+            held.CheckHealth();
+            Assert.Equal((1, 0, 1, 0), (reports.Lost, reports.Recovered, reports.Conflicts, reports.Blocked)); // reported once, never recovered, not mistaken for a blocked retake
             Assert.True(held.IsLost);
             Assert.False(held.IsHeld());
         }
+    }
+
+    [ServerProviderTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task ALostLock_StillHeldByThisProcessesOwnDeadSession_WaitsAndThenRetakes_WithoutAConflict(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        var reports = new Reports();
+        using ServerAdvisoryWriterLock held = Acquire(options, reports);
+        System.Data.Common.DbConnection? zombie = null;
+        held.CloseDeadConnection = connection => zombie = connection; // the server has not noticed that this session is dead: it stays open and keeps the lock
+        held.MarkLostForTest();
+
+        held.CheckHealth();
+        held.CheckHealth();
+        held.CheckHealth();
+
+        Assert.NotNull(zombie);
+        Assert.True(held.IsLost);
+        Assert.Equal((0, 0, 1), (reports.Recovered, reports.Conflicts, reports.Blocked)); // its own session: not another world; reported once (throttled), retried each tick
+
+        await zombie.DisposeAsync(); // the server ends the stale session
+        for (int attempt = 0; attempt < 100 && held.IsLost; attempt++)
+        {
+            held.CheckHealth();
+            if (held.IsLost) await Task.Delay(50);
+        }
+
+        Assert.False(held.IsLost);
+        Assert.True(held.IsHeld());
+        Assert.Equal((1, 0), (reports.Recovered, reports.Conflicts));
+    }
+
+    // ---- The pg_locks decomposition of a negative key whose halves are both >= 2^31
+
+    private const string NegativeKeyDatabase = "wl_neg_5"; // key -8484032823849904770: classid 2319624472, objid 3618379134
+
+    [Fact]
+    public void TheFixedNegativeKeyDatabase_HasBothHalvesAboveTwoToThe31()
+    {
+        long key = ServerAdvisoryWriterLock.PostgresLockKey(NegativeKeyDatabase);
+
+        Assert.Equal(-8484032823849904770L, key);
+        Assert.Equal(2319624472u, (uint)(key >> 32));
+        Assert.Equal(3618379134u, (uint)key);
+    }
+
+    [PostgresFact]
+    public async Task ANegativeKey_IsListedInPgLocksAsItsTwoUnsignedHalves_AndTheHealthCheckAndTheClusterCheckSeeIt()
+    {
+        var options = new DatabaseConnectionOptions
+        {
+            Provider = DatabaseProvider.PostgreSql,
+            ConnectionString = Environment.GetEnvironmentVariable(TestDatabases.PostgresVariable)!.TrimEnd(';') + ";Database=" + NegativeKeyDatabase,
+        };
+        using ServerAdvisoryWriterLock held = ServerAdvisoryWriterLock.TryAcquire(options, NegativeKeyDatabase);
+
+        await using var connection = new NpgsqlConnection(AdminBuilder().ConnectionString);
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1 AND classid::bigint = 2319624472 AND objid::bigint = 3618379134";
+        object? pid = await command.ExecuteScalarAsync();
+
+        Assert.Equal(held.SessionId, Convert.ToInt64(pid, CultureInfo.InvariantCulture));
+        Assert.True(held.IsHeld()); // the health check's own decomposition found it
+        Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => ServerAdvisoryWriterLock.TryAcquire(options, NegativeKeyDatabase));
     }
 
     // ---- 3. Stale sessions of a host that died without a TCP reset are bounded
@@ -171,6 +252,7 @@ public sealed class CharacterDatabaseWriterLockHardeningTests
     }
 
     [ServerProviderTheory]
+    [Trait("Category", "Timing")] // waits 9 s of wall time against the server's idle limit
     [MemberData(nameof(ServerProviders))]
     public async Task TheIdleTimeout_KeepsAHealthyLockSession_AndWouldEndAnUncheckedOne(DatabaseProvider provider)
     {

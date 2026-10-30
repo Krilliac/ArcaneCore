@@ -42,9 +42,13 @@ and MySQL need no database for `GET_LOCK`, so the lock works before the characte
 naming the advisory lock instead of a file, having read and written nothing; a server that cannot be reached is retried and reported like the schema step (`Resilience:Database:Bootstrap`, exit code for an
 unreachable database). The server releases the lock when the connection ends, so a process crash leaves nothing to clean up. Limits: the lock lives in a server session. A periodic check (every 30 s, on the lock
 connection) logs at Critical when the lock is lost (server restart, dropped connection, killed session); until it is back this world does not exclude a second one, and the fencing claim below is the remaining guard.
-On every later check the world tries to take the lock again on a fresh connection and logs a warning (`RE-TAKEN`) when that works. If another session holds it for longer than a dead session of this process
-could (four check intervals plus one, 150 s), another world is writing the database: the world logs Critical, sets exit code 1 and stops in an orderly way (new logins are not gated separately; the shutdown
-saves still run). A server that cannot be reached leaves the lock lost and is retried on every check.
+On every later check the world tries to take the lock again on a fresh connection and logs a warning (`RE-TAKEN`) when that works. If the retake finds the lock held by a session other than this process's own earlier one (the server session id is compared: PostgreSQL `pid` in `pg_locks`, MariaDB/MySQL `IS_USED_LOCK`),
+another world is writing the database: the world logs Critical, sets exit code 1, asks for an orderly stop and **skips its shutdown saves** (the save and feature write queues refuse every attempt, so nothing is
+written into the other world's database; unsaved changes since the last completed save are lost, and a Critical line says so). The stop is requested at the first retake, which is the second health check
+after the loss (the first notices it): between 30 and 60 s after the loss at the 30 s default. A lock still held by this process's own dead session, which the server has not ended yet, is not a conflict: it is
+logged as a throttled warning and retried every check until the idle limit below ends that session. A server that cannot be reached is logged the same way and retried.
+Residual window, a known limit: from the loss until that first retake (up to about a minute) this world keeps writing, because its save queues are not paused while the lock is merely lost; pausing them
+is a follow-up. The same holds for the short stop itself before the host reaches the queues.
 The opposite failure also exists: a host that died or a network partition can leave the server holding the dead session, so a new world is refused until the server ends it. The lock session carries an idle
 limit of four check intervals (120 s): `wait_timeout` on MariaDB/MySQL, `idle_session_timeout` on PostgreSQL 14 and later (the 30 s check keeps a live session far below it), and PostgreSQL's server-side
 `tcp_keepalives_idle` / `tcp_keepalives_interval` are set too, so a vanished host is dropped within about two minutes. To clear it sooner use
