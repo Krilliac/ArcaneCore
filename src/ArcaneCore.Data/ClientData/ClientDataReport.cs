@@ -110,7 +110,15 @@ public sealed class ClientDataReport
         }
 
         var checks = new Dictionary<string, ClientDbcFileCheck>(StringComparer.OrdinalIgnoreCase);
-        ClientDbcFileCheck CheckOnce(string path) => checks.TryGetValue(path, out ClientDbcFileCheck? known) ? known : checks[path] = ClientDbcInspector.Check(path);
+        // The file is judged against the layout of the DBC its consumer reads, not of the on-disk name: a renamed copy
+        // (CharSections_Custom.dbc) of another build's file must still fail the field-count check.
+        ClientDbcFileCheck CheckOnce(string path, string consumerFile)
+        {
+            string cacheKey = consumerFile + "|" + path;
+            return checks.TryGetValue(cacheKey, out ClientDbcFileCheck? known)
+                ? known
+                : checks[cacheKey] = ClientDbcInspector.Check(path, ClientDbcLayouts.Find(consumerFile));
+        }
 
         // First pass: what each key would get on its own.
         var candidates = new List<(ClientDbcConsumer Consumer, ClientDbcSource Source, string? Path, ClientDbcFileCheck? Check)>();
@@ -119,7 +127,7 @@ public sealed class ClientDataReport
             string? own = configuration[consumer.Key];
             if (!string.IsNullOrWhiteSpace(own))
             {
-                ClientDbcFileCheck check = CheckOnce(own.Trim());
+                ClientDbcFileCheck check = CheckOnce(own.Trim(), consumer.File);
                 candidates.Add((consumer, ClientDbcSource.Explicit, own, check));
                 if (!check.IsUsable)
                 {
@@ -130,7 +138,7 @@ public sealed class ClientDataReport
             else if (directoryExists)
             {
                 string path = System.IO.Path.Combine(directory, consumer.File);
-                candidates.Add((consumer, ClientDbcSource.Directory, path, CheckOnce(path)));
+                candidates.Add((consumer, ClientDbcSource.Directory, path, CheckOnce(path, consumer.File)));
             }
             else
             {
@@ -216,7 +224,8 @@ public sealed class ClientDataReport
 
         foreach (IGrouping<string, ClientDbcResolution> file in Resolutions.GroupBy(r => r.Consumer.File, StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
-            foreach (IGrouping<string?, ClientDbcResolution> byPath in file.GroupBy(r => r.Check?.Path, StringComparer.OrdinalIgnoreCase))
+            // Keys that share a file share a line only while they resolved alike: one blocked by its group (not used) must not read as in use.
+            foreach (var byPath in file.GroupBy(r => (Path: r.Check?.Path?.ToUpperInvariant(), r.Source, r.Note)))
             {
                 ClientDbcResolution first = byPath.First();
                 string keys = string.Join(", ", byPath.Select(r => r.Consumer.Key));
