@@ -45,7 +45,7 @@ binds or touches a database.
 | `Diagnostics:OnInvariant` | `Continue` | `Continue`, `FailFast` | unknown name: exit 78 at start. `Continue`: the caller's own refusal runs (drop the packet, refuse the login, throw `SchemaMismatchException`). `FailFast`: the process aborts with the site and message |
 | `Diagnostics:BreakOnInvariant` | `false` | `true`, `false` | acts only with a debugger attached, so an unattended process never waits on a prompt |
 | `Diagnostics:InvariantLogLimit` | `10` | 0 or more | `0` logs nothing and counts everything; negative is a configuration error (exit 78); a hot-path check that fails per packet cannot flood the log |
-| `Diagnostics:OnUnhandled` | `FailFast` | `FailFast`, `Exit` | the report is always written first (standard error synchronously, then the logger). `FailFast`: `Environment.FailFast`, the runtime's own behaviour: SIGABRT 134 on Linux, 0x80131623 on Windows, a dump when `DOTNET_DbgEnableMiniDump=1`. `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), no dump, an exit code a supervisor can match |
+| `Diagnostics:OnUnhandled` | `FailFast` | `FailFast`, `Exit` | the report is always written first (standard error synchronously, then the logger). `FailFast`: `Environment.FailFast`, the runtime's own behaviour: SIGABRT 134 on Linux, 0x80131623 on Windows. `Exit`: `Environment.Exit(70)` (`ExitCodes.UnhandledException`, sysexits EX_SOFTWARE), an exit code a supervisor can match. Either way the daemon writes a dump of itself first (`Diagnostics:CrashDump`, [below](#the-crash-dump)) |
 | `Diagnostics:OnUnobservedTask` | `Log` | `Log`, `Exit`, `FailFast` | `Log` is the runtime's own behaviour (the exception is marked observed) made visible at Error level. `Exit`/`FailFast` as above. Default stays `Log` so a fire-and-forget task that faulted silently before this lane does not start killing production servers |
 | `Diagnostics:FirstChanceExceptions` | `false` | `true`, `false` | honoured only by a Debug build of the Kernel (the hook is compiled out of Release, and a Release daemon logs once that the key is ignored). Logs every throw, caught or not, at Debug level; the hook is re-entrancy guarded |
 | `Diagnostics:CrashDialog` | `false` | `true`, `false` | a Windows message box for a crash that ends the process, after the report and the fault record and before the exit policy, which it never changes ([the crash dialog](#the-crash-dialog)). Only an interactive Windows console session opens one; anywhere else the key does nothing |
@@ -86,6 +86,33 @@ Everything it reads is a volatile field or lock-free, except the statistics snap
 its ring and never while calling out; nothing can wait on the world thread, so a wedged world thread still reports. The realm
 daemon has no context provider.
 
+## The crash dump
+
+A daemon started by hand, without the launcher's `DOTNET_DbgEnableMiniDump`, used to leave only the text report. The crash hooks now also
+write a dump of the process (`CrashDumpService`): after the report and the fault record, before the exit policy, under `FailFast` and `Exit`
+alike, for an unhandled exception, for an unobserved task exception under a policy that ends the process, and for a tick hang the watchdog
+ends. The dump is requested from the process's own diagnostics endpoint, the mechanism `.debug dump` uses ([diagnostics.md](diagnostics.md)).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Diagnostics:CrashDump:Mode` | `Full` | `Off`, `Mini`, `Heap` or `Full`. A failure falls back Full, Heap, Mini and is logged |
+| `Diagnostics:CrashDump:Directory` | empty | empty: `dumps` beside the log file (`logs/dumps`), the directory `.debug dump` uses; without file logging, `dumps` in the daemon's directory |
+| `Diagnostics:CrashDump:MaxFiles` | `5` | the newest N files of the pattern are kept; 0 keeps all. Other files in the directory are never touched |
+| `Diagnostics:CrashDump:FullMinFreeGB` | `16` | below this much free space on the volume Full starts at Heap (the launcher's threshold) |
+| `Diagnostics:CrashDump:TimeoutSeconds` | `120` | one attempt is abandoned after this long and the process ends anyway; a timeout is not retried with a smaller type |
+
+The file is `<daemon>-<pid>-<utc yyyyMMdd-HHmmss>.dmp`. The crash report names the path that writes the dump in a `[crash dump]` section
+("written in-process by ArcaneCore", "written by the runtime", or "none"), and the log carries one line per attempt, failure and prune. When
+`DOTNET_DbgEnableMiniDump=1` is set and the process ends by FailFast, the runtime's `createdump` writes the dump, so the in-process one is skipped
+(no double dump); under `Exit` the runtime writes none, so ours is written. A Full dump suspends the process for about a minute at 7 GB.
+
+Security: a dump holds everything in memory, session keys and passwords included. It stays on the local disk; on Linux and macOS the directory is
+created readable by the daemon's account only and the file is mode 0600, on Windows it inherits the directory's ACL. Keep the directory private,
+never attach a dump to an issue, and delete files after the analysis.
+
+Limits: native or fatal runtime errors and a stack overflow bypass every managed handler, so only `DOTNET_DbgEnableMiniDump=1` covers them;
+keep it in the launcher. The invariant `FailFast` policy (`Diagnostics:OnInvariant`) aborts without this dump.
+
 ## The crash dialog
 
 For interactive local runs, where a console scrolling past a crash is easy to miss. Both keys are off by default, because an
@@ -112,7 +139,7 @@ why not.
 stamped one) and pid; what happens when the box is closed and which key decided it; the exception type and message; the crashing
 thread's id and name; the time in UTC and local time; the fault-ledger site and signature id (`.server faults show ID` after a
 restart, from the crash journal); the paths of the crash report file, the crash journal (`crash-faults.<daemon>.jsonl`), the log file
-when `Logging:ArcaneCore:File:Enabled` is on, and the dump location when `DOTNET_DbgEnableMiniDump=1` is set; then the full stack
+when `Logging:ArcaneCore:File:Enabled` is on, and the crash dump (written in-process by `Diagnostics:CrashDump`, or the runtime's location when `DOTNET_DbgEnableMiniDump=1`); then the full stack
 trace, outer exception first and every inner exception after it. The box shows at most 40 lines of 400 characters, so its OK button
 stays on the screen. The box has a **Copy** button, which puts the box's title and text on the clipboard and leaves the box open, and an
 OK button, which closes it (Esc closes it too). comctl32 version 6, which the task dialog needs and the daemons' exes carry no manifest
@@ -288,8 +315,9 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
   `CrashReportTests.FirstChanceHook_FollowsTheKernelBuild` only.
 - `Environment.FailFast` exit statuses are the runtime's; the process tests assert "not 0 and not 70" rather than 134, because
   Windows reports a different code.
-- A dump on abort needs `DOTNET_DbgEnableMiniDump=1` (and `DOTNET_DbgMiniDumpName`) in the daemon's environment; this lane does
-  not set it.
+- The in-process crash dump cannot cover a native crash, a stack overflow or a fatal runtime error: those never reach a managed handler,
+  so only `DOTNET_DbgEnableMiniDump=1` (with `DOTNET_DbgMiniDumpName` and `DOTNET_DbgMiniDumpType`) in the daemon's environment covers them. Keep the launcher setting
+  ([live-diagnostics.md](live-diagnostics.md)).
 - The crash dialog exists only on Windows. CI runs on Linux and every test swaps in a recording presenter, so the real message box
   is verified by hand only (the probe in [the crash dialog](#the-crash-dialog)). A crash on a thread that is already reporting a crash
   shows no second dialog.

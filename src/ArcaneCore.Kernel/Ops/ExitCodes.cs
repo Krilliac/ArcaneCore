@@ -29,8 +29,8 @@ public static class ExitCodes
 
     /// <summary>
     /// An exception escaped every handler and Diagnostics:OnUnhandled (or OnUnobservedTask) is Exit (sysexits EX_SOFTWARE, an ArcaneCore addition). The crash report
-    /// precedes it on standard error and in the log. The default policy, FailFast, aborts instead (134 on Linux, 0x80131623 on Windows) and leaves a dump when
-    /// DOTNET_DbgEnableMiniDump is set. Supervisors may restart on either.
+    /// precedes it on standard error and in the log. The default policy, FailFast, aborts instead (134 on Linux, 0x80131623 on Windows). Both write a dump of the daemon first
+    /// (Diagnostics:CrashDump, Full by default), and a FailFast also leaves the runtime's own when DOTNET_DbgEnableMiniDump is set. Supervisors may restart on either.
     /// </summary>
     public const int UnhandledException = 70;
 

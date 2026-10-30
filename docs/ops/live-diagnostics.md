@@ -29,7 +29,7 @@ At launch the script prints one `[diagnostics]` line per active capture (and a w
 
 | Variable | Value | Daemons | What it does, and why that value |
 |---|---|---|---|
-| `DOTNET_DbgEnableMiniDump` | `1` | both | The runtime's `createdump` writes a dump when the process crashes. `Diagnostics:OnUnhandled=FailFast` (the default, `DiagnosticsOptions.cs:45`) ends in a runtime abort, so an unhandled exception leaves a dump. (`invariants.md` already names this variable.) |
+| `DOTNET_DbgEnableMiniDump` | `1` | both | The runtime's `createdump` writes a dump when the process crashes, including the native crashes, stack overflows and fatal runtime errors that no managed handler sees; keep it. A managed unhandled exception also gets the daemon's own in-process dump (`Diagnostics:CrashDump`, [invariants.md](invariants.md#the-crash-dump)), so a daemon started by hand, without this launcher, still leaves a `.dmp`. Under `FailFast` with this variable set the in-process dump is skipped (the runtime writes that one); under `Exit` both apply. |
 | `DOTNET_DbgMiniDumpType` | `4` (Full), or `2` (Heap) | both | Full holds every mapped page: the most information, about 7 GB for the 5.5 GB live heap (`diagnostics.md`). Heap (`-DumpType Heap`) is smaller. Full falls back to Heap, with a warning, when the volume has less than 16 GB free. |
 | `DOTNET_DbgMiniDumpName` | `<LiveHome>\dumps\<role>-%p-%t.dmp` | both | One file per crash (process id, time), under the live home's `dumps` directory. |
 | `DOTNET_CreateDumpDiagnostics`, `DOTNET_CreateDumpVerboseDiagnostics` | `1` | both | `createdump` says what it did and why a dump failed. |

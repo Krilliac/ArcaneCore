@@ -39,7 +39,8 @@ public sealed class RuntimeTickHangActuator(IHostApplicationLifetime? lifetime =
             Console.Error.WriteLine(report);
             Console.Error.Flush();
 
-            // Opt-in (Diagnostics:CrashDialog); returns at once when off or headless, never throws, and the exit below still runs.
+            // The in-process crash dump (Diagnostics:CrashDump) of the hung process, then the opt-in dialog (Diagnostics:CrashDialog);
+            // both return at once when off or headless, never throw, and the exit below still runs.
             handler?.ShowFatalDialog(CrashKind.Unhandled, timeout, failFast: false, "the world tick watchdog: Ops:Watchdog:TickMonitor:Action = FailFast", report);
         }
         catch

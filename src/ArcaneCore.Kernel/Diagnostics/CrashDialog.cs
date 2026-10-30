@@ -184,7 +184,7 @@ public sealed record CrashDialogFacts
     /// <summary>The configured log file in either format (the resolved <c>Logging:ArcaneCore:File:Path</c>, see <c>LogFileSinkPlan</c>) when the file sink is enabled, or null.</summary>
     public string? LogPath { get; init; }
 
-    /// <summary>Where the runtime writes a dump, or null when no dump is configured (<c>DOTNET_DbgEnableMiniDump</c>).</summary>
+    /// <summary>Where the dump is or will be (written in-process by <c>Diagnostics:CrashDump</c>, or by the runtime's <c>DOTNET_DbgEnableMiniDump</c>), or null when no dump is configured.</summary>
     public string? DumpNote { get; init; }
 }
 
@@ -269,7 +269,7 @@ public static class CrashDialog
     /// to a report file, then open the box and wait until it is dismissed. Never throws; a failure is recorded under <see cref="FailureSite"/>
     /// and written to standard error, and the caller goes on to its exit policy unchanged.
     /// </summary>
-    public static CrashDialogOutcome TryShowFatal(bool enabled, CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? faultSite, string? faultId, string? report)
+    public static CrashDialogOutcome TryShowFatal(bool enabled, CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? faultSite, string? faultId, string? report, string? dumpNote = null)
     {
         if (!enabled)
         {
@@ -285,7 +285,7 @@ public static class CrashDialog
             }
 
             DateTime nowUtc = DateTime.UtcNow;
-            CrashDialogFacts facts = GatherFacts(kind, exception, failFast, decidedBy, faultSite, faultId, nowUtc);
+            CrashDialogFacts facts = GatherFacts(kind, exception, failFast, decidedBy, faultSite, faultId, nowUtc, dumpNote);
             string directory = ReportDirectory ?? AppContext.BaseDirectory;
             string path = CrashJournalPaths.ReportPathFor(directory, facts.Daemon, nowUtc);
             facts = facts with { ReportPath = path };
@@ -489,7 +489,7 @@ public static class CrashDialog
             ? "aborts (Environment.FailFast; " + decidedBy + ")"
             : "exits with code " + Ops.ExitCodes.UnhandledException.ToString(CultureInfo.InvariantCulture) + " (" + decidedBy + ")";
 
-    private static CrashDialogFacts GatherFacts(CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? faultSite, string? faultId, DateTime nowUtc)
+    private static CrashDialogFacts GatherFacts(CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? faultSite, string? faultId, DateTime nowUtc, string? dumpNote)
     {
         Thread current = Thread.CurrentThread;
         return new CrashDialogFacts
@@ -508,7 +508,7 @@ public static class CrashDialog
             FaultId = faultId,
             JournalPath = Guard(static () => FaultLedger.Shared.CrashJournalPath, null),
             LogPath = LogFilePath,
-            DumpNote = DescribeDump(failFast),
+            DumpNote = dumpNote ?? DescribeDump(failFast),
         };
     }
 
@@ -522,7 +522,7 @@ public static class CrashDialog
 
         if (!failFast)
         {
-            return "DOTNET_DbgEnableMiniDump=1 is set, but an exit writes no dump (only FailFast does)";
+            return "DOTNET_DbgEnableMiniDump=1 is set, but an exit writes no runtime dump (only FailFast does) and Diagnostics:CrashDump:Mode = Off";
         }
 
         string? name = Environment.GetEnvironmentVariable("DOTNET_DbgMiniDumpName");
