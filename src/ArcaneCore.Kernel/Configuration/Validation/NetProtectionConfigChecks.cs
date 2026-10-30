@@ -1,9 +1,8 @@
 using System.Globalization;
 using ArcaneCore.Kernel.Configuration;
-using ArcaneCore.Kernel.Configuration.Validation;
 using Microsoft.Extensions.Configuration;
 
-namespace ArcaneCore.World.Ops.Validation;
+namespace ArcaneCore.Kernel.Configuration.Validation;
 
 /// <summary>
 /// Startup checks for the <c>Net:Protection</c> section (docs/ops/netguard.md). A value that would

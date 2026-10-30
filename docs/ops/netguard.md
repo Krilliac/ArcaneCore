@@ -168,10 +168,10 @@ injectable for tests, monotonic so a wall-clock jump cannot refill or starve a b
 | `Net:Protection:WorldFloodPacketsPerSecond` | 8000 | world only: packets in one second that close the connection; 0 disables | connection closed, one rate-limited line; `check-config` warns when not above `WorldPacketsPerSecond` |
 | `Net:Protection:LogInterval` | 00:00:10 | shortest interval between two lines about one kind of refusal | n/a (00:00:00 logs every refusal) |
 
-Every value is validated by `check-config` and at every world start (`NetProtectionConfigChecks`,
-`World/Ops/Validation`, run by `OpsCli.Validate`); a value that would make a protection
-meaningless is an error (exit 78), a weakening one a warning. The logon daemon has no
-`check-config`; `NetGuard` clamps negatives to 0 and an unusable table size or idle window to the
+Every value is validated by `check-config` and at every world and realm start (`NetProtectionConfigChecks`,
+`Kernel/Configuration/Validation`, run by `OpsCli.Validate` and `RealmOpsCli.Validate`); a value that would make a protection
+meaningless is an error (exit 78), a weakening one a warning. A bad value therefore stops the realm at start-up; as a backstop
+`NetGuard` clamps negatives to 0 and an unusable table size or idle window to the
 default, so a bad value can only disable one limit, never crash the listener. Nothing under
 `Net:Protection` is in the `.reload config` set: the guard, its table and its gates are built when
 the listener starts (restart-only, like `World:Port`). The shipped `appsettings.json` files do not
