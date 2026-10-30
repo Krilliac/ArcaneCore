@@ -33,6 +33,12 @@ public sealed partial class UnitCombat
 
     internal HashSet<Unit> AttackersInternal { get; } = [];
 
+    /// <summary>
+    /// For a player: the players it struck or started on lately, by guid, with the time of the last strike and whether it was the one that started the fight
+    /// (<see cref="MapCombat.StruckFirst"/>). Null until the player first strikes another player. Written by <see cref="MapCombat"/> on the world thread only.
+    /// </summary>
+    internal Dictionary<ObjectGuid, PvpStrike>? PvpStrikes { get; set; }
+
     /// <summary>Units whose threat lists hold this one (vmangos HostileRefManager).</summary>
     public IReadOnlySet<Unit> ThreatenedBy => ThreatenedByInternal;
 
@@ -333,3 +339,6 @@ public sealed partial class UnitCombat
         }
     }
 }
+
+/// <summary>One recorded PvP strike on a player: the world time (ms) of the last strike and whether the striker started the fight.</summary>
+internal readonly record struct PvpStrike(uint LastMs, bool First);

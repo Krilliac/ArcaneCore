@@ -23,7 +23,7 @@ public sealed class PlayerbotPvpOptions
 /// <summary>
 /// <c>World:Playerbots:Pvp:Initiate</c>: while enabled an idle bot (out of combat, not rested or sick, no defend post, in no group that follows a real
 /// player) attacks the nearest PvP-flagged enemy-faction player or bot within <see cref="RadiusYards"/> that stands outside the exempt areas, inside the
-/// level window and does not have the bot outnumbered. Independent of War Mode; War Mode's grudge hunt takes priority over it.
+/// level window and does not have the bot outnumbered. War Mode on means attack on sight with these same limits and needs no <c>Initiate:Enabled</c>; this switch is the opt-in for on-sight engagement while War Mode is off. War Mode's grudge hunt takes priority.
 /// </summary>
 public sealed class PlayerbotPvpInitiateOptions
 {
@@ -36,7 +36,7 @@ public sealed class PlayerbotPvpInitiateOptions
     /// <summary>Highest level window.</summary>
     public const int MaxLevelWindow = 60;
 
-    /// <summary>Let idle bots start PvP fights (off by default: not retail behaviour).</summary>
+    /// <summary>Let idle bots start PvP fights while War Mode is off (off by default: not retail behaviour; War Mode on already means attack on sight).</summary>
     public bool Enabled { get; set; }
 
     /// <summary>A bot looks for a target within this many yards, and counts the friends and enemies around it within the same radius (5 to 100).</summary>

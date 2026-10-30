@@ -63,7 +63,9 @@ internal sealed partial class PlayerbotBrain
             : _engagedReason == PlayerbotEngageReason.Grudge
             ? _options.Social.WarMode.HuntRadiusYards + HuntChaseMarginYards
             : PvpPursuitYards;
-        if (PlayerbotHostility.MayEngage(player, target, _engagedReason, null, _options.Social.WarMode.SharedSwitch(), _options.Pvp.Initiate)
+        // A target in an exempt area that keeps attacking the bot is still fought (self-defense); otherwise the reason's rule decides.
+        if ((PlayerbotHostility.MayEngage(player, target, _engagedReason, null, _options.Social.WarMode.SharedSwitch(), _options.Pvp.Initiate)
+                || PlayerbotHostility.IsAttackingBot(player, target))
             && _pvpFight?.IsSkipped(target) != true && Distance(player, target) <= reach)
             return target;
 
@@ -126,12 +128,12 @@ internal sealed partial class PlayerbotBrain
     }
 
     /// <summary>
-    /// Whether the initiate rule looks for a target in this think: <c>Pvp:Initiate:Enabled</c>, nothing engaged yet, and the last look at least
+    /// Whether the initiate rule looks for a target in this think: <c>Pvp:Initiate:Enabled</c> or War Mode on (attack on sight), nothing engaged yet, and the last look at least
     /// <see cref="HuntScanMs"/> ago. With the rule off this is one flag read.
     /// </summary>
     private bool InitiateScanDue()
     {
-        if (!_options.Pvp.Initiate.Enabled || _engaged is not null) return false;
+        if (!(_options.Pvp.Initiate.Enabled || _options.Social.WarMode.Enabled) || _engaged is not null) return false;
         uint now = _session.World.NowMs;
         if (_initiateScanned && unchecked((int)(now - _initiateScanAtMs)) < HuntScanMs) return false;
         _initiateScanned = true;
@@ -140,7 +142,7 @@ internal sealed partial class PlayerbotBrain
     }
 
     /// <summary>
-    /// World PvP (<c>World:Playerbots:Pvp:Initiate</c>, independent of War Mode): an idle bot (alive, out of combat and duels, a free goal, no defend post, no
+    /// Attack on sight (<c>World:Playerbots:Pvp:Initiate</c>, or War Mode on, which needs no Initiate switch; the rule's radius, level window, health and numbers apply either way): an idle bot (alive, out of combat and duels, a free goal, no defend post, no
     /// resurrection sickness, not in a group with a real player, at least <c>MinHealthPct</c> health) takes on the nearest visible player or bot of the other
     /// faction within <c>RadiusYards</c> that is PvP-flagged (so the combat hooks allow it), outside the exempt areas and inside the level window
     /// (<c>MaxLevelBelow</c> under the bot to <c>MaxLevelAbove</c> over it), unless that would leave it outnumbered: more living enemy-faction players and bots within
@@ -150,7 +152,7 @@ internal sealed partial class PlayerbotBrain
     internal bool TryInitiate(Player player, uint interval)
     {
         PlayerbotPvpInitiateOptions rule = _options.Pvp.Initiate;
-        if (!rule.Enabled || _engaged is not null || _defend is not null || !player.IsAlive || player.Combat.IsInCombat || player.Duel is not null) return false;
+        if (!(rule.Enabled || _options.Social.WarMode.Enabled) || _engaged is not null || _defend is not null || !player.IsAlive || player.Combat.IsInCombat || player.Duel is not null) return false;
         if (!PlayerbotHelpRules.IsFreeGoal(_goal) || player.MaxHealth == 0 || player.Health * 100UL < (ulong)rule.MinHealthPct * player.MaxHealth) return false;
         if (PlayerbotSickness.Holder(_session, player) is { IsPermanent: false, Duration: > 0 } || InGroupWithRealPlayer(player)) return false;
 
@@ -173,7 +175,7 @@ internal sealed partial class PlayerbotBrain
             if (yards >= bestYards && best is not null) continue;
             if (other.Level + rule.MaxLevelBelow < player.Level || other.Level > player.Level + rule.MaxLevelAbove) continue;
             if (!PlayerbotHelpRules.IsPvpFlagged(other) || _pvpFight?.IsSkipped(other) == true) continue;
-            if (!PlayerbotHostility.MayEngage(player, other, PlayerbotEngageReason.Initiate, null, null, rule)) continue;
+            if (!PlayerbotHostility.MayEngage(player, other, PlayerbotEngageReason.Initiate, null, _options.Social.WarMode.SharedSwitch(), rule)) continue;
             best = other;
             bestYards = yards;
         }
@@ -184,8 +186,12 @@ internal sealed partial class PlayerbotBrain
         return true;
     }
 
-    /// <summary>Whether <paramref name="other"/> is the player the bot itself started on and it now stands in a War Mode exempt area (the bot lets go of it).</summary>
-    private bool StartedAndExempt(Player other) => ReferenceEquals(other, _startedOn) && PvpAreaState.IsWarModeProtected(other);
+    /// <summary>
+    /// Whether <paramref name="other"/> is the player the bot itself started on and it now stands in a War Mode exempt area without attacking the bot (the bot lets go
+    /// of it). A target that keeps attacking the bot from there is fought back (<see cref="PlayerbotHostility.IsAttackingBot"/>).
+    /// </summary>
+    private bool StartedAndExempt(Player player, Player other)
+        => ReferenceEquals(other, _startedOn) && PvpAreaState.IsWarModeProtected(other) && !PlayerbotHostility.IsAttackingBot(player, other);
 
     // A group with a real player in it follows that player's orders (or the group coordinator's), not the hunt. A member who is offline counts as real
     // unless the social recorder knows it as a bot.

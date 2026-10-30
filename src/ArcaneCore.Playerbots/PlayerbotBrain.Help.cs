@@ -133,7 +133,7 @@ internal sealed partial class PlayerbotBrain
 
                 bool mayFlag = PlayerbotHelpRules.MayFlag(player, _options.Social.WarMode.Enabled);
                 int groupSize = _session.Services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.GetGroup(player.Guid)?.MemberCount ?? 1;
-                if (PlayerbotHelpRules.AttackerOf(player, target, mayFlag, groupSize) is not { } found)
+                if (PlayerbotHelpRules.AttackerOf(player, target, mayFlag, groupSize, _options.Social.WarMode.Enabled) is not { } found)
                 {
                     ClearHelp();
                     return 0;

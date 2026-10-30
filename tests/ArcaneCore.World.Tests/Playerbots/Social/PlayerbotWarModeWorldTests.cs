@@ -138,7 +138,7 @@ public sealed class PlayerbotWarModeWorldTests
 
     // --- help against players and bots -----------------------------------------------------------------------------------------------------------
 
-    public enum HelpCase { HelperFlaggedWarModeOff, HelperUnflaggedWarModeOn, HelperUnflaggedWarModeOff, AttackerInExemptArea, AttackerNotFlagged }
+    public enum HelpCase { HelperFlaggedWarModeOff, HelperUnflaggedWarModeOn, HelperUnflaggedWarModeOff, AttackerInExemptArea, AttackerNotFlagged, VictimStartedIt, VictimStartedItWarModeOn }
 
     private sealed record HelpOutcome(int Helped, bool Engaged, PlayerbotEngageReason Reason);
 
@@ -161,10 +161,12 @@ public sealed class PlayerbotWarModeWorldTests
                 Player self = HelpTestKit.Online(world, "Hhelp"), vic = HelpTestKit.Online(world, "Hvic"), foe = HelpTestKit.Online(world, "Hfoe");
                 FlagForGood(vic); // the victim is a fair target; the enemy attacks it
                 if (scenario != HelpCase.AttackerNotFlagged) FlagForGood(foe);
-                if (scenario == HelpCase.HelperFlaggedWarModeOff) FlagForGood(self);
+                if (scenario is HelpCase.HelperFlaggedWarModeOff or HelpCase.VictimStartedIt) FlagForGood(self);
                 if (scenario == HelpCase.AttackerInExemptArea) PvpAreaState.SetWarModeExempt(foe, true);
-                world.Options.Social.WarMode.Enabled = scenario == HelpCase.HelperUnflaggedWarModeOn;
+                world.Options.Social.WarMode.Enabled = scenario is HelpCase.HelperUnflaggedWarModeOn or HelpCase.VictimStartedItWarModeOn;
 
+                // The victim started on the enemy, who only fights back: the helper must not take the defender on.
+                if (scenario is HelpCase.VictimStartedIt or HelpCase.VictimStartedItWarModeOn) Assert.True(vic.Map!.Combat.Attack(vic, foe), "the victim could not attack the enemy");
                 Assert.True(vic.Map!.Combat.Attack(foe, vic), "the enemy could not attack the victim");
                 vic.Map!.Combat.DealDamage(foe, vic, 1);
                 vic.Health = Math.Max(1u, vic.MaxHealth * 25 / 100);
@@ -203,10 +205,22 @@ public sealed class PlayerbotWarModeWorldTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UnderWarMode_AHelperJoinsAgainstAnyEnemyAttacker_EvenOneThatOnlyFightsBack(bool attackerIsBot)
+    {
+        HelpOutcome outcome = await HelpAsync(HelpCase.VictimStartedItWarModeOn, attackerIsBot);
+
+        Assert.Equal(1, outcome.Helped);
+        Assert.True(outcome.Engaged);
+    }
+
+    [Theory]
     [InlineData(HelpCase.HelperUnflaggedWarModeOff)]
     [InlineData(HelpCase.AttackerInExemptArea)]
     [InlineData(HelpCase.AttackerNotFlagged)]
-    public async Task NoHelperComes_WhenTheHelperWouldFlagItself_TheAttackerIsInAnExemptArea_OrTheAttackerIsNotFlagged(HelpCase scenario)
+    [InlineData(HelpCase.VictimStartedIt)]
+    public async Task NoHelperComes_WhenTheHelperWouldFlagItself_TheAttackerIsInAnExemptArea_TheAttackerIsNotFlagged_OrTheAttackerOnlyFightsBack(HelpCase scenario)
     {
         foreach (bool attackerIsBot in new[] { true, false })
         {
@@ -243,12 +257,94 @@ public sealed class PlayerbotWarModeWorldTests
         });
     }
 
+    public enum SightCase { WarModeOn, WarModeOff, WarModeOnExempt }
+
+    private static async Task<bool> InitiatesAsync(SightCase scenario, bool foeIsBot)
+    {
+        await using SocialWorld world = await RivalryKit.StartAsync();
+        Guid bot = await world.AddBotAsync("Osbot");
+        WorldTestClient? client = null;
+        try
+        {
+            if (foeIsBot) await world.AddBotAsync("Osfoe", race: RivalryKit.Undead);
+            else client = await world.AddPlayerAsync("Osfoe", RivalryKit.Undead);
+            await HelpTestKit.StandAsync(world, "Osbot", ("Osfoe", 5f));
+            await world.Host.OnWorldAsync(() => PvpAreaState.SetWarModeExempt(RivalryKit.Online(world, "Osfoe"), true)); // nothing the bot thinks meanwhile may start the fight
+            Assert.False(world.Options.Pvp.Initiate.Enabled);
+            PlayerbotBrain brain = HelpTestKit.BrainOf(world, bot);
+            return await world.Host.OnWorldAsync(() =>
+            {
+                Player self = RivalryKit.Online(world, "Osbot"), foe = RivalryKit.Online(world, "Osfoe");
+                FlagForGood(foe);
+                PvpAreaState.SetWarModeExempt(foe, scenario == SightCase.WarModeOnExempt);
+                world.Options.Social.WarMode.Enabled = scenario != SightCase.WarModeOff;
+                return brain.TryInitiate(self, 500) && brain.EngagedReason == PlayerbotEngageReason.Initiate;
+            });
+        }
+        finally
+        {
+            if (client is not null) await client.DisposeAsync();
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task UnderWarMode_AnIdleBot_AttacksAnEnemyOnSight_WithoutThePvpInitiateSwitch(bool foeIsBot)
+        => Assert.True(await InitiatesAsync(SightCase.WarModeOn, foeIsBot));
+
+    [Theory]
+    [InlineData(SightCase.WarModeOff)]
+    [InlineData(SightCase.WarModeOnExempt)]
+    public async Task OnSight_IsRefused_WithWarModeOff_OrForATargetInAnExemptArea(SightCase scenario)
+    {
+        Assert.False(await InitiatesAsync(scenario, foeIsBot: true));
+        Assert.False(await InitiatesAsync(scenario, foeIsBot: false));
+    }
+
+    [Fact]
+    public async Task AttackerOf_TakesTheAggressor_ButNotAnEnemyThatOnlyFightsBack()
+    {
+        await using SocialWorld world = await SocialWorld.StartAsync(frozen: true);
+        await world.AddBotAsync("Hhelp");
+        await world.AddBotAsync("Hvic");
+        await world.AddBotAsync("Hfoe", race: RivalryKit.Undead);
+        await HelpTestKit.StandAsync(world, "Hhelp", ("Hvic", 6f), ("Hfoe", 8f));
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player self = HelpTestKit.Online(world, "Hhelp"), vic = HelpTestKit.Online(world, "Hvic"), foe = HelpTestKit.Online(world, "Hfoe");
+            FlagForGood(vic);
+            FlagForGood(foe);
+
+            // The victim started on the enemy; the enemy answers: a defender.
+            Assert.True(vic.Map!.Combat.Attack(vic, foe));
+            Assert.True(vic.Map!.Combat.Attack(foe, vic));
+            Assert.Null(PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: true, groupSize: 1));
+            Assert.False(vic.Map!.Combat.StruckFirst(foe, vic));
+            Assert.True(vic.Map!.Combat.StruckFirst(vic, foe));
+            return true;
+        });
+
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player self = HelpTestKit.Online(world, "Hhelp"), vic = HelpTestKit.Online(world, "Hvic"), foe = HelpTestKit.Online(world, "Hfoe");
+            // A fresh fight the enemy starts: the aggressor.
+            vic.Map!.Combat.CombatStop(vic);
+            vic.Map!.Combat.CombatStop(foe);
+            vic.Combat.PvpStrikes?.Clear();
+            foe.Combat.PvpStrikes?.Clear();
+            Assert.True(vic.Map!.Combat.Attack(foe, vic));
+            Assert.Same(foe, PlayerbotHelpRules.AttackerOf(self, vic, mayFlag: true, groupSize: 1));
+            return true;
+        });
+    }
+
     // --- a fight the bot started is not chased into an exempt area ---------------------------------------------------------------------------------
 
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task ABotThatStartedAFight_LetsGoWhenTheTargetRunsIntoItsCapital_EvenWhileTheTargetKeepsAttackingIt_AndFightsBackOnceItIsOutAgain(bool grudge)
+    public async Task ABotThatStartedAFight_KeepsFightingATargetThatHitsItFromItsCapital_LetsGoOfOneThatRetreatsThere_AndFightsBackOnceItIsOutAgain(bool grudge)
     {
         await using SocialWorld world = await RivalryKit.StartAsync();
         Guid bot = await world.AddBotAsync("Chbot");
@@ -274,18 +370,27 @@ public sealed class PlayerbotWarModeWorldTests
         Player target = await world.Host.OnWorldAsync(() => RivalryKit.Online(world, "Chfoe"));
         await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => ReferenceEquals(brain.InspectionPvpTarget, target)).Result, "the bot to fight its target");
 
-        // The target runs into its capital and keeps hitting the bot from there.
+        // The target runs into its capital and keeps hitting the bot from there: self-defense, the bot keeps fighting it.
         await world.Host.OnWorldAsync(() =>
         {
             PvpAreaState.SetWarModeExempt(target, true);
             RivalryKit.Online(world, "Chbot").Map!.Combat.Attack(target, RivalryKit.Online(world, "Chbot"));
         });
+        await Task.Delay(1500);
+        Assert.Same(target, await world.Host.OnWorldAsync(() => brain.InspectionPvpTarget));
+
+        // It stops attacking and stays in the capital: once its last strike is stale the bot lets go, and never reaches in.
+        await world.Host.OnWorldAsync(() => RivalryKit.Online(world, "Chbot").Map!.Combat.AttackStop(target));
         await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => brain.InspectionPvpTarget is null && brain.EngagedPlayer is null).Result, "the bot to let go");
         await Task.Delay(1500);
         Assert.Null(await world.Host.OnWorldAsync(() => brain.InspectionPvpTarget));
 
-        // Out of the capital and still attacking the bot: it is fought back, as any attacker is.
-        await world.Host.OnWorldAsync(() => PvpAreaState.SetWarModeExempt(target, false));
+        // Out of the capital and attacking the bot again: it is fought back, as any attacker is.
+        await world.Host.OnWorldAsync(() =>
+        {
+            PvpAreaState.SetWarModeExempt(target, false);
+            RivalryKit.Online(world, "Chbot").Map!.Combat.Attack(target, RivalryKit.Online(world, "Chbot"));
+        });
         await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => ReferenceEquals(brain.InspectionPvpTarget, target)).Result, "the bot to fight back");
     }
 }

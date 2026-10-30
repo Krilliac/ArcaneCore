@@ -115,10 +115,10 @@ internal static class PlayerbotHelpRules
     /// <summary>
     /// The attacker among the victim's attackers a helping bot takes: the nearest to the bot that is alive, on its map, one the combat hooks let it
     /// attack, and (when it would flag the bot) only if <paramref name="mayFlag"/>. A creature, or a player or bot of the other faction that is
-    /// PvP-flagged, wherever War Mode is on or off, and never one standing in a War Mode exempt area (<see cref="PvpAreaState.IsWarModeProtected"/>).
+    /// PvP-flagged that struck the victim first with War Mode off (<c>MapCombat.StruckFirst</c>: never one that only fights back; with <paramref name="warMode"/> on, any such attacker), wherever War Mode is on or off, and never one standing in a War Mode exempt area (<see cref="PvpAreaState.IsWarModeProtected"/>).
     /// Null when there is none.
     /// </summary>
-    internal static Unit? AttackerOf(Player bot, Player victim, bool mayFlag, int groupSize)
+    internal static Unit? AttackerOf(Player bot, Player victim, bool mayFlag, int groupSize, bool warMode = false)
     {
         if (bot.Map is not { } map) return null;
         Unit? best = null;
@@ -136,6 +136,8 @@ internal static class PlayerbotHelpRules
                 {
                     if (!enemy.IsAlive || !enemy.IsInWorld || !ReferenceEquals(enemy.Map, map) || enemy.Team == bot.Team || !IsPvpFlagged(enemy)) continue;
                     if (!mayFlag || PvpAreaState.IsWarModeProtected(enemy)) continue;
+                    // War Mode off: only the aggressor is taken on (an enemy who merely fights back a same-faction player's attack is a defender). War Mode on: any enemy attacker.
+                    if (!warMode && !map.Combat.StruckFirst(enemy, victim)) continue;
                     if (!Winnable(bot.Level, enemy.Level, false, groupSize)) continue;
                 }
                 else

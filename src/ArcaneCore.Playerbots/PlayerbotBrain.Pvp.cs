@@ -29,11 +29,11 @@ internal sealed partial class PlayerbotBrain
         Player? opponent = PlayerbotHostility.FirstProvokingPlayer(player, _pvpFight);
         Player? engaged = EngagedOpponent(player);
         opponent ??= engaged;
-        // A fight the bot started (help, grudge, initiate) is not chased into an exempt area; a player who attacks the bot from outside one is fought back as ever.
+        // A fight the bot started (help, grudge, initiate) is not chased into an exempt area unless the target keeps attacking the bot from there (self-defense); a player who attacks the bot is fought back as ever.
         bool anyOpponent = opponent is not null;
-        if (opponent is not null && StartedAndExempt(opponent)) opponent = null;
+        if (opponent is not null && StartedAndExempt(player, opponent)) opponent = null;
         if (opponent is null && _pvpFight is { Target: Player current } && PlayerbotHostility.IsHostilePlayer(player, current)
-            && !_pvpFight.IsSkipped(current) && !StartedAndExempt(current)
+            && !_pvpFight.IsSkipped(current) && !StartedAndExempt(player, current)
             && Vector3.Distance(PlayerbotMotion.CurrentPosition(player), PlayerbotMotion.CurrentPosition(current)) <= PvpPursuitYards)
             opponent = current;
 

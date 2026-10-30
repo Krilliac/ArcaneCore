@@ -35,7 +35,7 @@ internal enum PlayerbotEngageReason : byte
     Grudge,
 
     /// <summary>
-    /// <c>World:Playerbots:Pvp:Initiate</c> is on and an idle bot starts on a flagged enemy near it. Never into a War Mode exempt area. The level window, health
+    /// <c>World:Playerbots:Pvp:Initiate</c> is on, or War Mode is on (attack on sight), and an idle bot starts on a flagged enemy near it. Never into a War Mode exempt area. The level window, health
     /// and numbers are the caller's (<c>PlayerbotBrain.TryInitiate</c>); this only names the reason.
     /// </summary>
     Initiate,
@@ -73,7 +73,7 @@ internal static class PlayerbotHostility
         if (!IsHostilePlayer(self, other)) return false;
         // Help and the War Mode hunt never reach into an exempt area (a capital or neutral town of the player's own side, a battleground, an arena).
         if (granted is PlayerbotEngageReason.Help or PlayerbotEngageReason.Grudge or PlayerbotEngageReason.Initiate)
-            return (granted switch { PlayerbotEngageReason.Help => true, PlayerbotEngageReason.Grudge => warMode is { Enabled: true }, _ => initiate is { Enabled: true } }) && !PvpAreaState.IsWarModeProtected(other);
+            return (granted switch { PlayerbotEngageReason.Help => true, PlayerbotEngageReason.Grudge => warMode is { Enabled: true }, _ => initiate is { Enabled: true } || warMode is { Enabled: true } }) && !PvpAreaState.IsWarModeProtected(other);
         if (granted is PlayerbotEngageReason.Ordered or PlayerbotEngageReason.Defend or PlayerbotEngageReason.Siege) return true;
         if (IsProvokedBy(self, other)) return true;
         return groups is not null && IsGroupProvokedBy(self, other, groups);
@@ -90,6 +90,16 @@ internal static class PlayerbotHostility
 
         return null;
     }
+
+    /// <summary>How recently another player's hit counts as an attack on the bot still going on, for a target in an exempt area (the PvP combat linger, 5.5 s).</summary>
+    internal const uint RecentAttackMs = CombatConstants.PvpCombatTimerMs;
+
+    /// <summary>
+    /// Whether <paramref name="other"/> is a hostile player that is attacking the bot now (<see cref="IsProvokedBy"/>) or hit, spelled or started on it within
+    /// <see cref="RecentAttackMs"/>. The bot keeps fighting such a player even from inside a War Mode exempt area (self-defense); it never starts or chases there.
+    /// </summary>
+    internal static bool IsAttackingBot(Player self, Player other)
+        => IsHostilePlayer(self, other) && (IsProvokedBy(self, other) || (self.Map is { } map && map.Combat.StruckRecently(other, self, RecentAttackMs)));
 
     private static bool IsProvokedBy(Player self, Player other)
         => self.Combat.Attackers.Contains(other) || ReferenceEquals(other.Combat.Victim, self);
