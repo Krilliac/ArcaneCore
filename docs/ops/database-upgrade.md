@@ -100,7 +100,7 @@ database older than the baseline reaches it through `arcane-db upgrade` are in [
 | 6 | the database server could not be reached or refused the connection (message scrubbed) | no |
 | 7 | the wait for another process's schema lock ran out | no |
 | 8 | `upgrade` with pending steps and no confirmed backup, or a backup that could not be made | no |
-| 9 | `copy`: the rows were copied but a table differs from its source (row count or content); the target is not safe to use, run `copy --replace` again after fixing the cause | the target: yes |
+| 9 | `copy`: a table differed from its source when read back through the model column types (row count or a value); the copy was rolled back and the target is as it was | no |
 
 These differ from the content importer's codes (`arcane-content-importer`: 3 wrong source schema, 4 database error,
 5 repository path, 6 verify); each tool lists its own in `--help`.
@@ -146,7 +146,7 @@ are not run and the message names it.
 `arcane-db copy` moves a realm's databases from one engine to another; it is the supported way to leave SQLite for a server engine.
 The source is never changed (SQLite is opened read-only). Run it once per realm configuration, auth once for all realms.
 
-1. **Stop every daemon** (realm, world, tools). `copy` refuses a SQLite characters file that a world process owns (it takes the same
+1. **Stop every daemon** (`authd`, `worldd`, tools). `copy` refuses a SQLite characters file that a world process owns (it takes the same
    `<database>.world.lock` sidecar for the length of the copy) and, on a server engine, other connected sessions.
 2. **Back up the SQLite files** (`arcane-db backup-info`; with `--backup-dir` `upgrade` writes a verified copy). The copy does not modify them, but you
    will keep them until the new install has run for a while.
@@ -165,9 +165,9 @@ The source is never changed (SQLite is opened read-only). Run it once per realm 
 
    The source is the configured `Database` section (the realm's current SQLite settings), or `--source-provider` and `--source-connection` for one
    component. For one component the target may also be `--target-provider` and `--target-connection`. Connection strings and passwords are never printed.
-5. **Read the summary.** Every table prints its source and target row count and `ok` once the content check agrees. Exit 0 means every table of every
-   selected component matched and `check` is clean on the target. Exit 9 means a table differs: the target is not safe; fix the cause and run again
-   with `--replace`.
+5. **Read the summary.** Every table prints its source and target row count and `ok` once the values agree. Exit 0 means every table of every
+   selected component matched and `check` is clean on the target. Exit 9 means a table differed after the rows were read back: the copy was rolled back and the
+   target is as it was; fix the cause and run again. A MariaDB `AUTO_INCREMENT` failure after the commit exits 1 and says so; run again with `--replace`.
 6. **Switch the configuration** to the new engine: `Database:Auth:Provider` and `Database:Auth:ConnectionString`, and the same keys under
    `Database:Characters` and `Database:World` (or `Database:Provider` and `Database:ConnectionString` for a single database).
 7. **Start the daemons** and verify: `arcane-db status` shows every component `Current`, the realm list and a login work, and a character
@@ -181,17 +181,33 @@ seeds) without `--replace`. Then, per component: creates or upgrades the target 
 columns to equal the source's; empties the component's tables (reverse foreign-key order) and fills them (parents first, from the model's foreign keys;
 a cycle is refused and named) with batched multi-row `INSERT`s inside **one** target transaction, so a failure leaves the target as it was; converts each
 value to the target column's type (SQLite's text timestamps to `timestamp with time zone` / `datetime`, integer flags to booleans, text decimals and
-GUIDs, blobs, NULLs; timestamps keep microseconds, the precision of PostgreSQL and `datetime(6)`); resets the key counters (PostgreSQL `setval` on every
-identity or serial sequence, MariaDB `AUTO_INCREMENT`; SQLite continues from the largest rowid by itself); and verifies every table: the row counts on
-both sides, and an order-independent SHA-256 digest of every converted source row against every row read back from the target. Finally it runs the
-`check` comparison on every target.
+GUIDs, blobs, NULLs; an unsigned 64-bit column such as a character aura's caster GUID is read from SQLite's signed storage back to its unsigned value, so
+GUIDs of `0xF130...` land as `numeric(20,0)` / `bigint unsigned` and are written back to SQLite as the same 64 bits); resets the key counters (PostgreSQL
+`setval` on every identity or serial sequence, inside the transaction; MariaDB `AUTO_INCREMENT`, which is DDL and therefore runs right after the commit,
+with its own failure message and exit 1 if it fails; SQLite continues from the largest rowid by itself); and, still before committing, verifies every table:
+both sides are read back through the model's column types (the same property type EF Core materialises, decoded by each engine's own driver, not by the
+copy's conversion code), their row counts and an order-independent SHA-256 digest of every value are compared (a `real` column at float precision), and
+only if every table matches does the transaction commit. A difference rolls the whole component back (exit 9), as does any error. The source is read in one
+read transaction (a consistent snapshot of that component). Finally it runs the `check` comparison on every target.
 
 The schema version table is not copied: the target's bootstrap wrote it and the copy requires it to equal the source's. Rows the bootstrap seeds
 (the world-ownership fence row, id-range and lease scopes, the playerbot ladder) are replaced by the source's rows, so the target ends equal to the
 source. `--replace` makes a re-run idempotent; it touches only the selected component's tables, never other tables in the same database.
-Limits: a table that references itself, or a foreign-key cycle, is refused (none exists today); a value the target type cannot hold (a NUL character in
-PostgreSQL text, an integer outside the target column's range) fails the table's transaction and names the table and column; the copy is one pass over
-a stopped realm, not a replication.
+
+Limits, stated plainly:
+
+- Timestamps are truncated to **microseconds** on PostgreSQL and MariaDB (their precision); the sub-microsecond ticks of a .NET `DateTime` are an intentional
+  loss, and the content check compares at that precision.
+- The key-counter reset covers tables with a **single-column** primary key (every generated key in the schema is one); a composite key has no counter.
+- Create the target database as **UTF8** (PostgreSQL) or **utf8mb4** (MariaDB). `arcane-db check` on the target reports another encoding or character set, but
+  non-BMP text (emoji) only survives a utf8mb4 / UTF8 database. PostgreSQL text cannot hold a NUL character: a row that has one is refused with the table,
+  column and primary key, and nothing is written.
+- Stop `authd` and `worldd` (the realm and world daemons) before copying: the copy sees a consistent snapshot of each component but cannot see writes a
+  running daemon makes to the other components afterwards. A SQLite source is opened read-only; the tool does not inspect its `-wal` file, so make sure the
+  daemons exited cleanly (a clean exit checkpoints it; a crash leaves it, and SQLite replays it when the copy opens the file).
+- A table that references itself, or a foreign-key cycle, is refused (none exists today); a value the target type cannot hold (an integer outside the
+  target column's range, text that is not a number in a numeric column) fails the copy and names the table, column and primary key of the row; the copy is
+  one pass over a stopped realm, not a replication.
 
 ### Databases created by the Codex line
 
