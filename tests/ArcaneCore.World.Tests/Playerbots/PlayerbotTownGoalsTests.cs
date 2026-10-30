@@ -981,7 +981,7 @@ public sealed class PlayerbotTownGoalsTests
         finally { HolidayVendorServices.Current.Value = null; }
     }
 
-    private static ItemTemplate Boots(uint entry, uint durability) => new()
+    internal static ItemTemplate Boots(uint entry, uint durability) => new()
     {
         Entry = entry, Name = $"boots-{entry}", Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorMisc,
         InventoryType = (uint)InventoryType.Feet, Armor = 10, MaxDurability = durability, ItemLevel = 10, Quality = 1, Stackable = 1,
@@ -989,7 +989,7 @@ public sealed class PlayerbotTownGoalsTests
     };
 
     /// <summary>DurabilityCosts row for item level 10 (every multiplier 1) and DurabilityQuality factor 1 for quality 1 ((1 + 1) x 2).</summary>
-    private static RepairCostTable RepairPrices() => new([(10u, Enumerable.Repeat(1u, RepairCostTable.MultiplierCount).ToArray())], [(4u, 1f)]);
+    internal static RepairCostTable RepairPrices() => new([(10u, Enumerable.Repeat(1u, RepairCostTable.MultiplierCount).ToArray())], [(4u, 1f)]);
 
     [Fact]
     public async Task MissingNpcContent_IsAClosedNoActionFallback()
@@ -1323,7 +1323,7 @@ public sealed class PlayerbotTownGoalsTests
             => refuses(end) ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
     }
 
-    private static ItemTestContent FoodAndGrayContent()
+    internal static ItemTestContent FoodAndGrayContent()
     {
         var items = new ItemTestContent();
         items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable,
@@ -1335,7 +1335,7 @@ public sealed class PlayerbotTownGoalsTests
     }
 
     /// <summary>Registers the spell that makes item 117 a food (a regeneration aura that standing cancels), as the real food rows are.</summary>
-    private static void RegisterFoodSpell(WorldTestHost host)
+    internal static void RegisterFoodSpell(WorldTestHost host)
     {
         var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
         spells.Store = new ArcaneCore.Game.Spells.SpellStore([.. spells.Store.All,

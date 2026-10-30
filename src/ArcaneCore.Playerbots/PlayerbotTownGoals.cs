@@ -208,6 +208,28 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         // A bot already in reach that is walking to its own spot (PlayerbotStandSpots) walks on until it is there.
         bool toSpot = inReach && _route is { Complete: false } && _routeTarget == npc.Guid && _visitOnSpot
             && Vector3.Distance(new(player.X, player.Y, player.Z), _visitSpot) > VisitSpotArrivedYards;
+        // A bot that comes into reach with another bot standing on its place also takes its own spot (once per NPC and minute): bots that
+        // arrive the same way stop at the same point of the reach's edge, and the first thing to do then is to step apart.
+        if (inReach && !toSpot && (_crowdSpotNpc != npc.Guid || unchecked((int)(_crowdSpotUntil - session.World.NowMs)) <= 0)
+            && AnotherBotWithin(player, CrowdedYards))
+        {
+            _crowdSpotNpc = npc.Guid;
+            _crowdSpotUntil = unchecked(session.World.NowMs + CrowdSpotMs);
+            PlanOutcome crowded = PlanVisit(player, npc, out _route);
+            if (crowded == PlanOutcome.Route && _visitOnSpot && _route is not null)
+            {
+                _routeTarget = npc.Guid;
+                _visitAnchor = new(player.X, player.Y, player.Z);
+                _visitStuckMs = 0;
+                toSpot = true;
+            }
+            else
+            {
+                _route = null; // no spot to step to: the NPC is used from here
+                _visitSpotAttempt = 0;
+            }
+        }
+
         if (!inReach || toSpot)
         {
             if (player.Map is not { }) return false;
@@ -255,8 +277,10 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             {
                 ClearRepairTrip();
                 if (PlayerbotNavigation.TryAdvance(session, _route!, options, elapsedMs, session.World.NowMs)) return true;
-                // The walk to its own spot ended: it stands there, in reach. Any other end of a walk is as before.
-                if (!inReach || !_route!.Complete) return false;
+                // A walk that does not go on (it ended at the spot, or a stale route, a stop or a hazard holds it) is no reason to hold a
+                // bot that is in reach: it is dropped and the NPC is used from here, so no lower rung moves the bot away. Out of reach
+                // it is as it was.
+                if (!inReach) return false;
             }
         }
 
@@ -270,10 +294,51 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         // at the advertised speed until ordinary interaction distance is reached.
         _cooldownMs = ThinkCooldownMs;
         _requestNotSent = false;
-        if (TryServices(player, services, npc)) return true;
+        if (ServicesForTests?.Invoke(npc) ?? TryServices(player, services, npc)) return true;
         // Useful, yet nothing was asked for: the same answer would come at every think, and the bot lingered at the vendor for minutes.
         // The NPC is left out of the search a while; a request that could not be sent (budget) only backs off briefly.
-        Refuse(_nothingToDo, npc.Guid, _requestNotSent ? RequestBackoffMs : NothingToDoMs);
+        // The service a trip was set out for is never left out: that would end the visit and send the bot on to a farther NPC.
+        if (wantedTrip == NpcFlags.None || (npc.NpcFlags & wantedTrip) == 0)
+        {
+            Refuse(_nothingToDo, npc.Guid, _requestNotSent ? RequestBackoffMs : NothingToDoMs);
+            if (Logger.IsEnabled(LogLevel.Debug))
+            {
+                var needs = new ServiceNeeds();
+                _usefulReason = null;
+                bool useful = HasUsefulService(player, services, npc, ref needs);
+                Logger.LogDebug("Playerbot {Bot} found nothing to do at NPC {Npc} and leaves it out for {Ms} ms (useful: {Useful}, reason: {Reason}, budget spent: {Budget})",
+                    player.Name, npc.Entry, _requestNotSent ? RequestBackoffMs : NothingToDoMs, useful, _usefulReason ?? "none", _requestNotSent);
+            }
+        }
+
+        return false;
+    }
+
+    private string? _usefulReason;
+
+    /// <summary>Test seam: replaces the services chain of a visit (null: the real one), so a test can make a useful NPC be one the bot does nothing at.</summary>
+    internal Func<NpcInfo, bool>? ServicesForTests { get; set; }
+
+    /// <summary>A bot this close to the one that comes into reach counts as standing on its place (yards).</summary>
+    internal const float CrowdedYards = 1f;
+
+    /// <summary>How long a bot that stepped to its own spot at an NPC (or found none) is not moved to another one by the crowd rule.</summary>
+    internal const uint CrowdSpotMs = 60_000;
+
+    private ObjectGuid _crowdSpotNpc;
+    private uint _crowdSpotUntil;
+
+    /// <summary>Whether another player stands within <paramref name="yards"/> of the bot on the ground plane (a player in sight).</summary>
+    private static bool AnotherBotWithin(Player player, float yards)
+    {
+        if (player.Map is not { } map) return false;
+        foreach (ObjectGuid guid in player.VisibleObjects)
+        {
+            if (!guid.IsPlayer || guid == player.Guid || map.FindObject(guid) is not Player other) continue;
+            float dx = other.X - player.X, dy = other.Y - player.Y;
+            if ((dx * dx) + (dy * dy) <= yards * yards) return true;
+        }
+
         return false;
     }
 
@@ -524,7 +589,8 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                     return ring; // the same spot again next think
                 }
 
-                if (ring == PlanOutcome.Route)
+                if (ring == PlanOutcome.Route && ringRoute is { Points.Count: > 0 }
+                    && PlayerbotQuestGoals.WithinReachAt(ringRoute.Points[^1], player.BoundingRadius, npc))
                 {
                     route = ringRoute;
                     _visitSpot = spot;
@@ -1578,21 +1644,27 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         return false;
     }
 
+    private bool Useful(string reason)
+    {
+        _usefulReason = reason;
+        return true;
+    }
+
     private bool HasUsefulVendorService(Player player, QuestNpcServices services, NpcInfo npc, ref ServiceNeeds needs)
     {
-        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && needs.Repair(this, player, services)) return true;
+        if ((npc.NpcFlags & NpcFlags.Repair) != 0 && needs.Repair(this, player, services)) return Useful("repair");
         if ((npc.NpcFlags & NpcFlags.Vendor) != 0 && services.Npcs.VendorItems(npc.Entry).Count > 0)
         {
             if (session.Services.GetService<SpellFeature>()?.System is { } spells
                 && needs.Consumables(player, spells, out bool food, out bool drink)
-                && FindConsumableVendorRow(player, services, npc, spells, food, drink) is not null) return true;
-            if (needs.Ammo(player) && FindAmmoRowOf(player, services, npc) is not null) return true;
-            if (FindMountRow(player, services, npc) is not null) return true;
-            if (FindEquipmentUpgradeRow(player, services, npc) is not null) return true;
+                && FindConsumableVendorRow(player, services, npc, spells, food, drink) is not null) return Useful("food or drink");
+            if (needs.Ammo(player) && FindAmmoRowOf(player, services, npc) is not null) return Useful("ammunition");
+            if (FindMountRow(player, services, npc) is not null) return Useful("mount");
+            if (FindEquipmentUpgradeRow(player, services, npc) is not null) return Useful("equipment upgrade");
             if (player.Money != 0 && FreeBagSlots(player) > 0
-                && FindCraftingSupplyRow(player, services, npc, needs.Supply(this, player)) is not null) return true;
-            if (services.Deps.Items is not null && needs.Grays(this, player, services)) return true;
-            if (needs.Junk(this, player, services)) return true;
+                && FindCraftingSupplyRow(player, services, npc, needs.Supply(this, player)) is not null) return Useful("crafting supplies");
+            if (services.Deps.Items is not null && needs.Grays(this, player, services)) return Useful("grays");
+            if (needs.Junk(this, player, services)) return Useful("junk");
         }
         return false;
     }
