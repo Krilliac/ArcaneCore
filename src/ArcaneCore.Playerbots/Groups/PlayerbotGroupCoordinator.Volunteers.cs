@@ -27,6 +27,9 @@ internal enum PlayerbotVolunteerOutcome : byte
 
     /// <summary>The player declined one of the bots' invitations lately.</summary>
     Declined,
+
+    /// <summary>Ready: a dry-run match over the bot's real candidates includes the player, so the group forms and the invitation follows.</summary>
+    Ready,
 }
 
 /// <summary>The answer to <see cref="PlayerbotGroupCoordinator.Volunteer"/>: the outcome and, when noted, how many more the group still lacks.</summary>
