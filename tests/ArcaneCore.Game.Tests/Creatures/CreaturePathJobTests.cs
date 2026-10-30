@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using Xunit.Abstractions;
 using static ArcaneCore.Game.Tests.CreatureAi.CreatureAiTestKit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
 
@@ -20,7 +21,7 @@ namespace ArcaneCore.Game.Tests.Creatures;
 /// follow or chase answer that only lags its moving target is still walked when its path ends closer; follow (without PathJobsFollow)
 /// and every move with the setting off stay on the map's thread.
 /// </summary>
-public sealed class CreaturePathJobTests
+public sealed class CreaturePathJobTests(ITestOutputHelper output)
 {
     /// <summary>A thread-safe pathfinder that answers a three-point path and records which thread searched.</summary>
     private sealed class RecordingPathfinder : IPathfinder, ISharedPathSearch
@@ -263,6 +264,147 @@ public sealed class CreaturePathJobTests
         }
 
         Assert.True(Distance2D(s.Wolf, s.Player) <= 4f, $"the follower ended {Distance2D(s.Wolf, s.Player):F1} yd from its owner");
+    }
+
+    /// <summary>What a run behind a moving target looked like (<see cref="RunBehindARunningTarget"/>).</summary>
+    private sealed record RunReport(int StandingOutOfPlace, long AppliedWhileMoving, long Submitted, long Applied, long Stale, int MostInFlight)
+    {
+        public override string ToString()
+            => $"stood out of place {StandingOutOfPlace} updates, applied while moving {AppliedWhileMoving}, submitted {Submitted}, applied {Applied}, stale {Stale}, most in flight {MostInFlight}";
+    }
+
+    /// <summary>
+    /// The wolf is already running behind the player (its first answer applied); then the player runs on at 7 yd/s (0.7 yd per 100 ms
+    /// update) for <paramref name="updates"/> updates while the pool answers each search one or two updates late (the gate opens after
+    /// every second update). Counts the updates the wolf stood still while out of place (farther than <paramref name="inPlace"/> from
+    /// the point it wants, <paramref name="wanted"/>), and the answers applied while it was on a spline.
+    /// </summary>
+    private static RunReport RunBehindARunningTarget(Scene s, int updates, Func<Vector3> wanted, float inPlace)
+    {
+        for (int i = 0; i < 50 && !s.Wolf.IsMoving; i++)
+        {
+            s.World.RunTick(100);
+            Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        }
+
+        Assert.True(s.Wolf.IsMoving, "the wolf never set off");
+        long submitted0 = s.System.PathJobsSubmitted;
+        long applied0 = s.System.PathJobsApplied;
+        long stale0 = s.System.PathJobsStale;
+        s.Paths.Gate.Reset();
+        int standing = 0;
+        long appliedWhileMoving = 0;
+        int mostInFlight = 0;
+        float y = s.Player.Y;
+        for (int i = 0; i < updates; i++)
+        {
+            y += 0.7f;
+            s.Player.Relocate(s.Player.X, y, s.Player.Z, MathF.PI / 2f, 0);
+            bool wasMoving = s.Wolf.IsMoving;
+            long applied = s.System.PathJobsApplied;
+            s.World.RunTick(100);
+            mostInFlight = Math.Max(mostInFlight, s.System.PathJobsPending);
+            if (wasMoving && s.System.PathJobsApplied > applied)
+            {
+                appliedWhileMoving++;
+            }
+
+            Vector3 point = wanted();
+            if (!s.Wolf.IsMoving && Distance2D(s.Wolf, point.X, point.Y) > inPlace)
+            {
+                standing++;
+            }
+
+            if (i % 2 == 1)
+            {
+                // The answers land between this update and the next one: one or two updates after they were asked for.
+                s.Paths.Gate.Set();
+                Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+                s.Paths.Gate.Reset();
+            }
+        }
+
+        s.Paths.Gate.Set();
+        return new RunReport(standing, appliedWhileMoving, s.System.PathJobsSubmitted - submitted0, s.System.PathJobsApplied - applied0, s.System.PathJobsStale - stale0, mostInFlight);
+    }
+
+    [Fact]
+    public void WithPathJobsFollow_AFollowerAlreadyRunning_TakesPoolAnswersMidSpline_AndNeverStopsBehindItsRunningOwner()
+    {
+        // The follower is on a spline when each answer lands, 0.7-1.4 yd past the job's start (it runs ~7 yd/s). Before the re-anchor
+        // every such answer was dropped as stale (the start no longer fit) and asked again on every update, so the follower ran out its
+        // spline, stood, and only then took an answer: stop-and-go behind a running owner, one abandoned job per update.
+        using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true;
+        s.Player.Relocate(5, 14, s.Player.Z, MathF.PI / 2f, 0);
+        s.Wolf.Motion.MoveFollow(s.Player, 2, MathF.PI);
+        Vector3 FollowPoint()
+        {
+            float reach = s.Player.BoundingRadius + s.Wolf.BoundingRadius + 2f;
+            return new Vector3(s.Player.X + (reach * MathF.Cos(s.Player.Orientation + MathF.PI)), s.Player.Y + (reach * MathF.Sin(s.Player.Orientation + MathF.PI)), s.Player.Z);
+        }
+
+        RunReport run = RunBehindARunningTarget(s, updates: 60, FollowPoint, inPlace: FollowMovementGenerator.Leeway + 0.5f);
+        output.WriteLine($"follow: {run}");
+
+        Assert.True(run.AppliedWhileMoving >= 10, $"pool answers were not applied mid-spline: {run}");
+        Assert.True(run.StandingOutOfPlace == 0, $"the follower stopped behind its running owner: {run}");
+        Assert.True(run.Stale <= 2, $"jobs were abandoned and resubmitted while the follower ran: {run}");
+        Assert.True(run.MostInFlight <= 1, $"more than one job in flight for one follower: {run}");
+    }
+
+    [Fact]
+    public void AChaserAlreadyRunning_TakesPoolAnswersMidSpline_AndNeverStopsBehindItsRunningTarget()
+    {
+        using Scene s = Start(movementType: 0);
+        s.Player.Relocate(5, 14, s.Player.Z, MathF.PI / 2f, 0);
+        s.Wolf.Motion.MoveChase(s.Player);
+        Vector3 Victim() => new(s.Player.X, s.Player.Y, s.Player.Z);
+
+        // In melee reach the chaser stands by design; anything farther must be closing.
+        RunReport run = RunBehindARunningTarget(s, updates: 60, Victim, inPlace: s.Player.BoundingRadius + s.Wolf.BoundingRadius + 5f);
+        output.WriteLine($"chase: {run}");
+
+        Assert.True(run.AppliedWhileMoving >= 10, $"pool answers were not applied mid-spline: {run}");
+        Assert.True(run.StandingOutOfPlace == 0, $"the chaser stopped behind its running target: {run}");
+        Assert.True(run.Stale <= 2, $"jobs were abandoned and resubmitted while the chaser ran: {run}");
+        Assert.True(s.Wolf.Motion.IsReachable);
+    }
+
+    [Fact]
+    public void WithPathJobsFollow_AnAnswerForAFollowerThatLeftItsSpline_IsDroppedAndAskedAgain()
+    {
+        // Only travel along the creature's own spline carries a job's start: a creature stopped and put elsewhere (a knockback, a
+        // teleport) is no longer on the path the job was asked from, so the answer is dropped as before.
+        using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true;
+        s.Player.Relocate(5, 30, s.Player.Z, MathF.PI / 2f, 0);
+        s.Wolf.Motion.MoveFollow(s.Player, 2, MathF.PI);
+        for (int i = 0; i < 50 && !s.Wolf.IsMoving; i++)
+        {
+            s.World.RunTick(100);
+            Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        }
+
+        Assert.True(s.Wolf.IsMoving);
+        s.Paths.Gate.Reset();
+        s.Player.Relocate(5, 31, s.Player.Z, MathF.PI / 2f, 0);
+        s.World.RunTick(100); // the moving follower asks again: one job in flight, asked from a point on its spline
+        Assert.Equal(1, s.System.PathJobsInFlight);
+        long stale = s.System.PathJobsStale;
+        long applied = s.System.PathJobsApplied;
+
+        s.System.StopMoving(s.Wolf);
+        s.Wolf.Relocate(s.Wolf.X + 3f, s.Wolf.Y, s.Wolf.Z, s.Wolf.Orientation, 0);
+        s.Paths.Gate.Set();
+        Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        s.Paths.Gate.Reset();
+        s.World.RunTick(100);
+
+        Assert.Equal(applied, s.System.PathJobsApplied);
+        Assert.Equal(stale + 1, s.System.PathJobsStale);
+        Assert.Equal(1, s.System.PathJobsInFlight); // asked again from where it now stands
+        s.Paths.Gate.Set();
     }
 
     /// <summary>
