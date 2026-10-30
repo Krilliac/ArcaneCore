@@ -104,6 +104,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         if (options.RunCalls) Runs(pass, chat);
         if (options.LookingForGroup || options.QuestHelp) LookingForGroup(pass, chat, options);
         Recruits(pass, chat);
+        ExpiredVolunteers(pass, chat);
         Bots(pass, chat, options);
         Prune(pass);
     }
@@ -1017,6 +1018,27 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         }
     }
 
+    /// <summary>
+    /// A player who asked a bot for an invitation and was never placed (the offer ran out, <see cref="PlayerbotGroupCoordinator.TakeExpiredVolunteers"/>)
+    /// hears one honest whisper from that bot. The bot's own limits apply: a bot that cannot speak now stays silent.
+    /// </summary>
+    private void ExpiredVolunteers(PlayerbotSocialPass pass, PlayerbotChat chat)
+    {
+        if (services.GetService<PlayerbotGroupCoordinator>() is not { } coordinator) return;
+        foreach ((Guid botId, ObjectGuid playerGuid) in coordinator.TakeExpiredVolunteers())
+        {
+            if (_budget <= 0) return;
+            PlayerbotSocialBot? bot = null;
+            foreach (PlayerbotSocialBot running in pass.Bots)
+                if (running.Id == botId) { bot = running; break; }
+            if (bot is null || !bot.Player.IsAlive || bot.Player.Session is not WorldSession session || session.World.FindOnlinePlayer(playerGuid) is not { } asker) continue;
+            if (!Spend()) continue;
+            BotSpeech speech = BotSpeech.WhisperTo(asker.Name, asker.Guid, string.Empty, "voice-reply", BotSpeechPriority.Normal);
+            Say(chat, bot.Id, bot.Player, bot.Party, speech, "voice.reply.lfg.expired", $"You could not get a group together for {asker.Name}.",
+                $"Tell {asker.Name} by whisper that you could not get a group together after all.");
+        }
+    }
+
     private bool Answer(PlayerbotChat chat, PlayerbotVoiceOptions options, BotHeardLine line, Player player, PlayerbotPartyAI party)
     {
         PlayerbotVoicePost? found = chat.Voice.Find(line.BotId, chat.NowMs, options.PostLifeSeconds * 1000L);
@@ -1035,8 +1057,9 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                 PlayerbotVolunteerResult result = coordinator.Volunteer(line.BotId, asker);
                 (string key, string sentence) = result.Outcome switch
                 {
-                    PlayerbotVolunteerOutcome.Noted when result.Missing == 0 => ("voice.reply.lfg.ready", $"{asker.Name} wants to join your group for {post.What}; the group is complete with them."),
+                    PlayerbotVolunteerOutcome.Ready => ("voice.reply.lfg.ready", $"{asker.Name} wants to join your group for {post.What}; the group is complete with them."),
                     PlayerbotVolunteerOutcome.Noted => ("voice.reply.lfg.noted", $"{asker.Name} wants to join your group for {post.What}; you still need {Number(result.Missing)} more."),
+                    PlayerbotVolunteerOutcome.CannotPlace => ("voice.reply.lfg.cant", $"You cannot fit {asker.Name} into your group for {post.What} right now."),
                     PlayerbotVolunteerOutcome.Level => ("voice.reply.lfg.level", $"{asker.Name} is below level {Number(post.MinLevel)} for {post.What}."),
                     PlayerbotVolunteerOutcome.Grouped => ("voice.reply.lfg.grouped", $"{asker.Name} is already in a group."),
                     PlayerbotVolunteerOutcome.NotWaiting => ("voice.reply.lfg.gone", $"You are no longer looking for a group for {post.What}."),

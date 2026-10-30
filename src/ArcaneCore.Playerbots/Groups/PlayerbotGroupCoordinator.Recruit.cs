@@ -204,6 +204,7 @@ public sealed partial class PlayerbotGroupCoordinator
         _lfgPosts.Clear();
         _guildCalls.Clear();
         _recruitSays.Clear();
+        _expiredVolunteers.Clear();
         _capLoggedMs = 0;
         _capEverLogged = false;
     }

@@ -6,6 +6,7 @@ using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
+using ArcaneCore.Kernel.Net;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Cluster.Auxiliary;
 using ArcaneCore.World.Net;
@@ -144,38 +145,37 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     /// <summary>Admitted gateway links.</summary>
     public int AdmittedLinkCount => _links.Values.Count(link => link.Admitted);
 
+    /// <summary>Test seam: awaited before every accept; an exception it throws behaves like a failed accept.</summary>
+    internal Func<CancellationToken, ValueTask>? BeforeAcceptForTests { get; set; }
+
     public void Start()
     {
         _listener.Start();
         _acceptTask = Task.Run(() => AcceptLoopAsync(_stop.Token));
     }
 
-    private async Task AcceptLoopAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            TcpClient client;
-            try
+    // The shared accept loop: a transient accept failure (connection reset, fd exhaustion) is logged (throttled), backed off
+    // and retried; only cancellation (DisposeAsync) ends it, so a gateway can always reconnect.
+    private Task AcceptLoopAsync(CancellationToken ct) =>
+        AcceptLoop.RunAsync(
+            async token =>
             {
-                client = await _listener.AcceptTcpClientAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException
-                || (ex is SocketException && ct.IsCancellationRequested))
-            {
-                break;
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("cluster.transport", ex);
-                break;
-            }
+                if (BeforeAcceptForTests is { } before)
+                {
+                    await before(token).ConfigureAwait(false);
+                }
 
-            int id = Interlocked.Increment(ref _nextLinkId);
-            var link = new Link(id, new GatewayLinkChannel(client), client.Client.RemoteEndPoint?.ToString() ?? "unknown");
-            _links[id] = link;
-            link.Receive = Task.Run(() => RunLinkAsync(link, ct), CancellationToken.None);
-        }
-    }
+                return await _listener.AcceptTcpClientAsync(token).ConfigureAwait(false);
+            },
+            client =>
+            {
+                int id = Interlocked.Increment(ref _nextLinkId);
+                var link = new Link(id, new GatewayLinkChannel(client), client.Client.RemoteEndPoint?.ToString() ?? "unknown");
+                _links[id] = link;
+                link.Receive = Task.Run(() => RunLinkAsync(link, ct), CancellationToken.None);
+            },
+            _logger,
+            ct);
 
     private async Task RunLinkAsync(Link link, CancellationToken ct)
     {
