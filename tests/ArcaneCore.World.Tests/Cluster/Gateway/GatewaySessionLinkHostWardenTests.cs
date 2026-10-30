@@ -183,6 +183,36 @@ public sealed class GatewaySessionLinkHostWardenTests
     }
 
     [Fact]
+    public async Task ASupersededIncarnationReconnecting_NeverDemotesTheLiveOne()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        await using GatewaySessionLinkHost host = StartHost(verifier);
+        Guid inc1 = Guid.NewGuid();
+        Guid inc2 = Guid.NewGuid();
+        var source1 = new ClusterWardenVerdictSource("gateway-a", inc1);
+        var source2 = new ClusterWardenVerdictSource("gateway-a", inc2);
+        GatewaySessionLinkClient first1 = await ConnectAsync(host, "gateway-a", inc1, 1, cts.Token);
+        GatewaySessionLinkClient link2 = await ConnectAsync(host, "gateway-a", inc2, 1, cts.Token);
+
+        // inc1 (draining) drops its link and reconnects while inc2 is live.
+        await first1.DisposeAsync();
+        await WaitUntilAsync(() => host.OpenLinkCount(source1) == 0, cts.Token);
+        await using GatewaySessionLinkClient again1 = await ConnectAsync(host, "gateway-a", inc1, 1, cts.Token);
+
+        // inc2 loses all links, then reconnects: it must still be the live incarnation.
+        await link2.DisposeAsync();
+        await WaitUntilAsync(() => host.OpenLinkCount(source2) == 0, cts.Token);
+        Assert.True(verifier.TryAcceptVerdict(Verdict(1200UL, 243), source2, 1, OwnerEpoch, out string? whileClosed), whileClosed);
+        await using GatewaySessionLinkClient again2 = await ConnectAsync(host, "gateway-a", inc2, 1, cts.Token);
+
+        int link2Id = host.AdmittedLinkIds().Max();
+        Assert.True(host.TryAcceptWardenVerdict(link2Id, Verdict(1200UL, 244), 1, OwnerEpoch, out string? fresh), fresh);
+        Assert.False(host.TryAcceptWardenVerdict(link2Id, Verdict(1200UL, 244), 1, OwnerEpoch, out string? replay));
+        Assert.Contains("duplicate Warden verdict", replay, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ANewIncarnationOfTheSameNodeId_NeverRetiresTheOldOneWhileItsLinksAreOpen()
     {
         using var cts = new CancellationTokenSource(Deadline);

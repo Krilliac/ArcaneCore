@@ -86,6 +86,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     // Newest incarnation admitted per node id. A gateway process keeps one incarnation for life and reconnects with it, so
     // an incarnation is only superseded (and retirable) once a different incarnation of its node id has been admitted.
     private readonly Dictionary<string, Guid> _newestIncarnationByNode = [];
+    // Incarnations that lost newest status. Incarnation ids are unordered GUIDs, so supersession is recorded explicitly and is
+    // monotonic: a superseded incarnation that reconnects never becomes newest again and never supersedes the live one.
+    private readonly HashSet<ClusterWardenVerdictSource> _supersededSources = [];
     private readonly LogGate _dropGate = new(TimeSpan.FromSeconds(10));
     private Task? _acceptTask;
     private int _nextLinkId;
@@ -241,18 +244,22 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                             {
                                 _openLinksBySource[source] = _openLinksBySource.GetValueOrDefault(source) + 1;
                                 link.Source = source;
-                                if (_newestIncarnationByNode.TryGetValue(source.NodeId, out Guid previous) && previous != source.NodeIncarnation)
+                                if (!_supersededSources.Contains(source))
                                 {
-                                    // The previous incarnation is now superseded: retire it at once if it has no open link,
-                                    // else ReleaseSource retires it when its last link goes.
-                                    var superseded = new ClusterWardenVerdictSource(source.NodeId, previous);
-                                    if (!_openLinksBySource.ContainsKey(superseded))
+                                    if (_newestIncarnationByNode.TryGetValue(source.NodeId, out Guid previous) && previous != source.NodeIncarnation)
                                     {
-                                        _wardenVerifier?.RetireSource(superseded);
+                                        // The previous newest is now superseded for good: retire it at once if it has no open
+                                        // link, else ReleaseSource retires it when its last link goes.
+                                        var superseded = new ClusterWardenVerdictSource(source.NodeId, previous);
+                                        _supersededSources.Add(superseded);
+                                        if (!_openLinksBySource.ContainsKey(superseded))
+                                        {
+                                            _wardenVerifier?.RetireSource(superseded);
+                                        }
                                     }
-                                }
 
-                                _newestIncarnationByNode[source.NodeId] = source.NodeIncarnation;
+                                    _newestIncarnationByNode[source.NodeId] = source.NodeIncarnation;
+                                }
                             }
 
                             link.Admitted = true;
@@ -383,7 +390,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             }
 
             _openLinksBySource.Remove(source);
-            if (_newestIncarnationByNode.TryGetValue(source.NodeId, out Guid newest) && newest != source.NodeIncarnation)
+            if (_supersededSources.Contains(source))
             {
                 _wardenVerifier?.RetireSource(source);
             }
