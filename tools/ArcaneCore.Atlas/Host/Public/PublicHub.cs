@@ -106,7 +106,8 @@ internal sealed class PublicHub
         Interlocked.Decrement(ref _count);
         if (_perIp.AddOrUpdate(ipKey, 0, (_, n) => n - 1) <= 0)
         {
-            _perIp.TryRemove(ipKey, out _);
+            // Remove only while the entry still holds zero: a TryReserve that incremented it in between keeps its count.
+            _perIp.TryRemove(new KeyValuePair<string, int>(ipKey, 0));
         }
     }
 

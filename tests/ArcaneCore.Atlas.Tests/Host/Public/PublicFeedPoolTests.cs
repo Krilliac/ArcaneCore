@@ -218,6 +218,22 @@ public sealed class PublicFeedPoolTests
     }
 
     [Fact]
+    public async Task ADemandThatIsCancelled_GivesItsViewerCountBack_SoTheMapIsStillReleased()
+    {
+        var rig = new Rig();
+        await rig.Pool.StartAsync(CancellationToken.None);
+        IDisposable? viewer = await rig.Pool.DemandAsync(0, CancellationToken.None);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await rig.Pool.DemandAsync(0, cancelled.Token));
+
+        viewer!.Dispose();
+        rig.Time.Advance(TimeSpan.FromSeconds(61));
+        await rig.Pool.MaintainAsync(CancellationToken.None);
+        Assert.Empty(rig.Pool.SubscribedMaps); // the failed demand left no phantom viewer behind
+    }
+
+    [Fact]
     public async Task ALostConnection_IsReplacedAtMostOncePerTenSecondsPerMap()
     {
         var rig = new Rig();
