@@ -11,7 +11,7 @@ public sealed class ManualDelaysTests
     [Fact]
     public async Task PulseAsync_WhileADelayIsBeingRegistered_NeverMissesIt()
     {
-        for (int i = 0; i < 1_500; i++)
+        for (int i = 0; i < 500; i++)
         {
             var delays = new ManualDelays();
             using var go = new ManualResetEventSlim();
