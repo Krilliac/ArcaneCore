@@ -218,6 +218,50 @@ public sealed class CreaturePathJobTests
     }
 
     [Fact]
+    public void WithPathJobsFollow_AFollowerWhoseAnswersLagTheRunningOwner_StillSetsOffAndCatchesUp()
+    {
+        // A loaded pool answers every follow search two updates late. The owner runs 0.7 yd per 100 ms update (7 yd/s), so each answer
+        // is aimed 1.4 yd behind the owner's latest follow point, past PathJobFollowTolerance. Before the fix every such answer was
+        // dropped as stale and asked again, so the follower stood still for as long as the owner kept running (the WSG ramp flake:
+        // 57 of 58 follow jobs stale, the pet never moved).
+        using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true;
+        s.Paths.Gate.Reset();
+        s.Wolf.Motion.MoveFollow(s.Player, 2, 0);
+        float startX = s.Wolf.X;
+        float startY = s.Wolf.Y;
+
+        float y = 0f;
+        for (int i = 0; i < 40; i++)
+        {
+            y += 0.7f;
+            s.Player.Relocate(0, y, s.Player.Z, MathF.PI / 2f, 0);
+            s.World.RunTick(100);
+            if (i % 2 == 1)
+            {
+                // The answer lands between this update and the next one.
+                s.Paths.Gate.Set();
+                Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+                s.Paths.Gate.Reset();
+            }
+        }
+
+        float covered = Distance2D(s.Wolf, startX, startY);
+        Assert.True(s.System.PathJobsApplied >= 1, $"no lagging follow answer was applied (submitted {s.System.PathJobsSubmitted}, stale {s.System.PathJobsStale})");
+        Assert.True(covered >= 10f, $"the follower covered only {covered:F1} yd while its owner ran {y:F1} yd");
+
+        // The owner stops: the follower closes up on the follow point.
+        s.Paths.Gate.Set();
+        for (int i = 0; i < 60; i++)
+        {
+            s.World.RunTick(100);
+            Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        }
+
+        Assert.True(Distance2D(s.Wolf, s.Player) <= 4f, $"the follower ended {Distance2D(s.Wolf, s.Player):F1} yd from its owner");
+    }
+
+    [Fact]
     public void WithTheSettingOff_EverySearchStaysOnTheMapThread()
     {
         using Scene s = Start(movementType: 1, jobs: false);

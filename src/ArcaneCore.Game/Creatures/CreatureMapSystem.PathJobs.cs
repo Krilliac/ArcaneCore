@@ -163,16 +163,25 @@ public sealed partial class CreatureMapSystem
         if (_creaturePathJobs.TryGetValue(creature, out NavJob? job))
         {
             var key = (PathJobKey)job.Tag!;
-            bool fits = ReferenceEquals(key.Options, options) && key.ToSpawn == toSpawn && key.AnyDestination == anyDestination
-                && Vector3.DistanceSquared(job.Start, start) <= PathJobStartTolerance * PathJobStartTolerance
-                && (anyDestination || Vector3.DistanceSquared(job.Destination, destination) <= destinationTolerance * destinationTolerance);
-            if (fits && !job.IsDone)
+            bool sameRequest = ReferenceEquals(key.Options, options) && key.ToSpawn == toSpawn && key.AnyDestination == anyDestination
+                && Vector3.DistanceSquared(job.Start, start) <= PathJobStartTolerance * PathJobStartTolerance;
+            bool done = job.IsDone; // read once: a worker may publish between two reads
+            bool destinationFits = anyDestination
+                || Vector3.DistanceSquared(job.Destination, destination) <= destinationTolerance * destinationTolerance;
+
+            // A moving target (follow, formation, chase) whose point has drifted past the tolerance: the job is still waited for, and its
+            // answer is walked if it brings the creature closer (LaggingAnswerStillCloses). Dropping it would restart the wait every time
+            // the target moves another yard, so a pool slower than that would never answer at all.
+            bool lagging = sameRequest && !destinationFits && (follow || formation || chasing);
+            if (!done && ((sameRequest && destinationFits) || lagging))
             {
                 PathJobWaits++;
                 _lastPlanQueued = true;
                 plan = PlannedPath.Of(PathOutcome.Deferred);
                 return true;
             }
+
+            bool fits = sameRequest && (destinationFits || (lagging && LaggingAnswerStillCloses(start, job.Destination, destination)));
 
             if (fits && job.Status == NavJobStatus.Completed && job.Result is not null && !HasDrapeBudget)
             {
@@ -228,6 +237,17 @@ public sealed partial class CreatureMapSystem
         plan = PlannedPath.Of(PathOutcome.Deferred);
         return true;
     }
+
+    /// <summary>
+    /// A finished follow, formation or chase answer whose target has since moved past <see cref="PathJobFollowTolerance"/> is still
+    /// walked when its end lies closer to the target's new point than the creature stands. Dropping it and asking again starves the
+    /// follower whenever the pool answers slower than the target moves 1 yd (an owner running 7 yd/s with answers two 100 ms updates
+    /// late): every answer would be stale and the follower would stand until the target stopped. A follower keeps chasing instead
+    /// (vmangos TargetedMovementGenerator::Update keeps the unit on its current spline and re-aims it once the target has moved; it never
+    /// waits standing for an exact path): the creature sets off on the lagging path and the generator re-aims at its next re-check.
+    /// </summary>
+    private static bool LaggingAnswerStillCloses(Vector3 start, Vector3 answered, Vector3 wanted)
+        => Vector3.DistanceSquared(answered, wanted) < Vector3.DistanceSquared(start, wanted);
 
     /// <summary>A job's search in this map's counters (not in the per-update budget: it did not run on this thread).</summary>
     private void CountJobSearch(Creature creature, NavJob job)

@@ -81,7 +81,8 @@ public sealed class CreatureMovementOptions
     /// <c>Creatures:Movement:PathJobsFollow</c>: out-of-combat follow searches (pets and escorts following their leader) go to the path-job
     /// pool too (<see cref="PathJobs"/> must be on). The follower keeps its current spline until the answer arrives (one or two updates);
     /// an answer whose destination is within <c>CreatureMapSystem.PathJobFollowTolerance</c> (1 yd) of the re-asked one still applies,
-    /// since a leader on the move shifts the follow point every update. Chase stays synchronous.
+    /// since a leader on the move shifts the follow point every update. A slower answer is still waited for and walked when its end is
+    /// closer to the leader's new point than the follower stands, so a loaded pool slows a follower but never stops it. Chase stays synchronous.
     /// </summary>
     public bool PathJobsFollow { get; set; }
 

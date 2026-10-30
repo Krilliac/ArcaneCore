@@ -2835,8 +2835,10 @@ Creatures.Movement.PathJobs = false
 #                     on). The follower keeps its current spline until the answer arrives (one or
 #                     two updates); an answer whose destination is within
 #                     CreatureMapSystem.PathJobFollowTolerance (1 yd) of the re-asked one still
-#                     applies, since a leader on the move shifts the follow point every update.
-#                     Chase stays synchronous.
+#                     applies, since a leader on the move shifts the follow point every update. A
+#                     slower answer is still waited for and walked when its end is closer to the
+#                     leader's new point than the follower stands, so a loaded pool slows a follower
+#                     but never stops it. Chase stays synchronous.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
