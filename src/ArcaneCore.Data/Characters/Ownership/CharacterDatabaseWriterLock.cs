@@ -37,6 +37,9 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
     /// <summary>The lock file's full path (SQLite), or the advisory lock's identity (MariaDB, MySQL, PostgreSQL).</summary>
     public string Path { get; }
 
+    /// <summary>True when a server advisory lock was held and is now found lost (not yet re-taken); always false for a SQLite file lock and after <see cref="Dispose"/>.</summary>
+    public bool IsLost => _holder is ServerAdvisoryWriterLock { IsLost: true };
+
     /// <summary>
     /// The lock file path for a resolved characters component, or null when the database is not a plain file-backed read-write SQLite database
     /// (or its directory does not exist, in which case SQLite cannot open it either).
@@ -70,13 +73,14 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
     /// Throws <see cref="CharacterDatabaseAlreadyOwnedException"/> when another process (or another lock object in this one) holds it. A server database that cannot be reached
     /// propagates the driver's <see cref="System.Data.Common.DbException"/>.
     /// </summary>
-    public static CharacterDatabaseWriterLock? TryAcquire(DatabaseConnectionOptions options, Action<string>? onLost = null)
+    public static CharacterDatabaseWriterLock? TryAcquire(DatabaseConnectionOptions options, Action<string>? onLost = null, TimeSpan? healthInterval = null,
+        Action<string>? onRecovered = null, Action<string>? onConflict = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (options.Provider != DatabaseProvider.Sqlite)
         {
             if (ServerAdvisoryWriterLock.DatabaseNameOf(options) is not { } name) return null;
-            ServerAdvisoryWriterLock advisory = ServerAdvisoryWriterLock.TryAcquire(options, name, onLost);
+            ServerAdvisoryWriterLock advisory = ServerAdvisoryWriterLock.TryAcquire(options, name, onLost, healthInterval, onRecovered, onConflict);
             return new CharacterDatabaseWriterLock(advisory.Description, advisory);
         }
 

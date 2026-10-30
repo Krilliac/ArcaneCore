@@ -311,7 +311,10 @@ Database.Auth.Provider = MariaDb
 #                     default postgres). PostgreSQL scopes advisory locks to the database a session
 #                     is connected to, so every world must take the lock in the same database, and
 #                     it must exist before the characters database does. The login needs CONNECT on
-#                     it. MariaDB, MySQL and SQLite ignore it.
+#                     it. Only the characters database takes the single-writer lock, so this key has
+#                     an effect under Database:Characters only and the realm daemon ignores it;
+#                     under Database:Auth and Database:World it does nothing. MariaDB, MySQL and
+#                     SQLite ignore it.
 #        Type: string
 #        Default: (not set)
 #        Allowed: text
@@ -555,9 +558,11 @@ Database.Upgrade.ValidateOnly = false
 #                     the world takes its single-writer advisory lock. PostgreSQL scopes advisory
 #                     locks to the database the session is connected to, so all worlds of one
 #                     characters database must lock in the same database, one that exists before the
-#                     characters database is created. The login needs CONNECT on it. Each component
-#                     may override it with a Database:Characters WriterLockDatabase key. MariaDB,
-#                     MySQL and SQLite ignore it (docs/guide/operations.md).
+#                     characters database is created. The login needs CONNECT on it. Only the
+#                     characters database takes the single-writer lock, so the world uses this value
+#                     (or the Database:Characters WriterLockDatabase key that overrides it) for the
+#                     characters database alone; the realm daemon and the Auth and World components
+#                     ignore it. MariaDB, MySQL and SQLite ignore it (docs/guide/operations.md).
 #        Type: string
 #        Default: "postgres"
 #        Allowed: text

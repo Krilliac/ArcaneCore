@@ -35,14 +35,20 @@ connection (MariaDB/MySQL `GET_LOCK(name, 0)`, PostgreSQL `pg_try_advisory_lock(
 `arcanecore.world.writer:<lower-cased database name>` (lower-cased because the server folds database-name case on case-insensitive file systems, `lower_case_table_names`; replaced by the prefix and 32 hex
 characters of the name's SHA-256 when longer than MariaDB's 64-character limit) and the PostgreSQL key is the first 8 bytes of the SHA-256 of `arcanecore.world.writer:<database name>`, so different realms'
 databases do not collide and two worlds configured with the same database name on the same server do. PostgreSQL scopes advisory locks to the database a session is connected to, so every world takes
-the lock in one fixed maintenance database, `postgres` unless `Database:WriterLockDatabase` (or `Database:Characters:WriterLockDatabase`) names another; it must exist and the login needs CONNECT on it. MariaDB
+the lock in one fixed maintenance database, `postgres` unless `Database:WriterLockDatabase` (or `Database:Characters:WriterLockDatabase`) names another; it must exist and the login needs CONNECT on it.
+Only the characters database takes this lock, so the key means nothing under `Database:Auth` or `Database:World`. `pg_locks` is cluster-wide, so after taking the lock the world also checks that no other
+session holds the same key in any database: two worlds configured with different lock databases still exclude each other (started at the same instant, both may refuse). MariaDB
 and MySQL need no database for `GET_LOCK`, so the lock works before the characters database has been created. A second world gets the exit code `Refused` at once, with the same message shape as for SQLite
 naming the advisory lock instead of a file, having read and written nothing; a server that cannot be reached is retried and reported like the schema step (`Resilience:Database:Bootstrap`, exit code for an
 unreachable database). The server releases the lock when the connection ends, so a process crash leaves nothing to clean up. Limits: the lock lives in a server session. A periodic check (every 30 s, on the lock
-connection) logs at Critical when the lock is lost (server restart, dropped connection, killed session); after that this world no longer excludes a second one, and the fencing claim below is the remaining guard.
-The opposite failure also exists: a host that died or a network partition can leave the server holding the dead session, so a new world is refused until the server notices (TCP timeouts, `wait_timeout`); clear it
-with `SELECT pg_terminate_backend(pid)` (PostgreSQL, the pid is in `pg_locks` for `locktype = 'advisory'`) or `KILL <id>` (MariaDB/MySQL, the id is `SELECT IS_USED_LOCK('<lock name>')`). The MariaDB/MySQL
-session's `wait_timeout` is raised to about 24 days so an idle server does not end it. A standby worker takes the lock (SQLite or server) when it is promoted,
+connection) logs at Critical when the lock is lost (server restart, dropped connection, killed session); until it is back this world does not exclude a second one, and the fencing claim below is the remaining guard.
+On every later check the world tries to take the lock again on a fresh connection and logs a warning (`RE-TAKEN`) when that works. If another session holds it for longer than a dead session of this process
+could (four check intervals plus one, 150 s), another world is writing the database: the world logs Critical, sets exit code 1 and stops in an orderly way (new logins are not gated separately; the shutdown
+saves still run). A server that cannot be reached leaves the lock lost and is retried on every check.
+The opposite failure also exists: a host that died or a network partition can leave the server holding the dead session, so a new world is refused until the server ends it. The lock session carries an idle
+limit of four check intervals (120 s): `wait_timeout` on MariaDB/MySQL, `idle_session_timeout` on PostgreSQL 14 and later (the 30 s check keeps a live session far below it), and PostgreSQL's server-side
+`tcp_keepalives_idle` / `tcp_keepalives_interval` are set too, so a vanished host is dropped within about two minutes. To clear it sooner use
+`SELECT pg_terminate_backend(pid)` (PostgreSQL, the pid is in `pg_locks` for `locktype = 'advisory'`) or `KILL <id>` (MariaDB/MySQL, the id is `SELECT IS_USED_LOCK('<lock name>')`). A standby worker takes the lock (SQLite or server) when it is promoted,
 see [the gateway](../areas/gateway.md#standby-worker-tier-3b-groundwork).
 The `Cluster:Fencing` claim, which an unfenced world checks at start and then every
 `Cluster:Fencing:ClaimWatchIntervalSeconds`, and that fence (`CharacterWriteFenceInterceptor`) remain the guard against a lost lock and the thing that bounds character autosaves and session-close saves of a

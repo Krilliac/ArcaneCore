@@ -59,7 +59,8 @@ public sealed class DatabaseConnectionOptions
     /// <summary>
     /// PostgreSQL only: the existing maintenance database the single-writer advisory lock is taken in (overrides <c>Database:WriterLockDatabase</c>; unset inherits it, default <c>postgres</c>).
     /// PostgreSQL scopes advisory locks to the database a session is connected to, so every world must take the lock in the same database, and it must exist before the characters database does.
-    /// The login needs CONNECT on it. MariaDB, MySQL and SQLite ignore it.
+    /// The login needs CONNECT on it. Only the characters database takes the single-writer lock, so this key has an effect under <c>Database:Characters</c> only and the realm daemon ignores it;
+    /// under <c>Database:Auth</c> and <c>Database:World</c> it does nothing. MariaDB, MySQL and SQLite ignore it.
     /// </summary>
     public string? WriterLockDatabase { get; set; }
 }
@@ -110,7 +111,8 @@ public sealed class DatabaseOptions
     /// <summary>
     /// PostgreSQL only: the existing maintenance database (default <c>postgres</c>) in which the world takes its single-writer advisory lock. PostgreSQL scopes advisory locks to the database
     /// the session is connected to, so all worlds of one characters database must lock in the same database, one that exists before the characters database is created. The login needs
-    /// CONNECT on it. Each component may override it with a Database:Characters WriterLockDatabase key. MariaDB, MySQL and SQLite ignore it (docs/guide/operations.md).
+    /// CONNECT on it. Only the characters database takes the single-writer lock, so the world uses this value (or the Database:Characters WriterLockDatabase key that overrides it) for the
+    /// characters database alone; the realm daemon and the Auth and World components ignore it. MariaDB, MySQL and SQLite ignore it (docs/guide/operations.md).
     /// </summary>
     public string WriterLockDatabase { get; set; } = ArcaneCore.Data.Characters.Ownership.CharacterDatabaseWriterLock.DefaultPostgresLockDatabase;
 
