@@ -584,17 +584,10 @@ b.removed-early	21827	gone before its duration
 b.removed-early	21863	gone before its duration
 b.removed-early	3410	gone before its duration
 b.removed-early	6410	gone before its duration
-b.removed-early	8326	permanent aura gone after 1 s
 b.removed-early	9484	gone before its duration
 b.state-not-restored	4948	max-power1
 b.state-not-restored	5759	max-power3
 b.state-not-restored	7164	max-power1
-c.removed-without-flag	8326	cast flags=0x0
-c.removed-without-flag	8326	melee-hit-taken flags=0x0
-c.removed-without-flag	8326	mount flags=0x0
-c.removed-without-flag	8326	move flags=0x0
-c.removed-without-flag	8326	stand-up flags=0x0
-c.removed-without-flag	8326	turn flags=0x0
 i.not-dispelled	10831	type=1 helpful
 i.not-dispelled	12843	type=1 helpful
 i.not-dispelled	13235	type=1 harmful
