@@ -388,11 +388,16 @@ public sealed class SqliteCheckpointTests : IDisposable
         Insert(app, 1200);
         SqliteConnection writer = OpenApp(path, options);
         // The writer commits through SQLite directly with no busy wait, so a commit that meets a lock another connection holds returns
-        // SQLITE_BUSY at once (Microsoft.Data.Sqlite would retry it until its command timeout). Counting those measures the claim
-        // (PASSIVE takes no lock a writer waits on) directly. A wall-clock bound measured the disk instead: a commit's fsync on a runner
-        // whose disk other jobs are loading can take seconds with no lock involved at all.
+        // SQLITE_BUSY at once (Microsoft.Data.Sqlite would retry it until its command timeout). The contract is that a checkpoint never holds
+        // a lock a writer must wait out (the TRUNCATE hold through the copy and fsync), not that a writer can never see SQLITE_BUSY: SQLite's
+        // walIndexReadHdr takes WAL_WRITE_LOCK for the instant it takes a reader (every fresh checkpoint connection) to re-read a wal-index
+        // header it caught mid-update, and a commit that starts in that instant returns SQLITE_BUSY (CI saw 1 and 2 of these). So a BUSY
+        // commit is retried at once, as a busy handler would, and what is measured is how many separate lock episodes there were and how
+        // long the longest one lasted. A wall-clock bound on whole commits measured the disk instead: a commit's fsync on a runner whose
+        // disk other jobs are loading can take seconds with no lock involved at all.
         SQLitePCL.raw.sqlite3_busy_timeout(writer.Handle, 0);
-        int lockWaits = 0;
+        int lockEpisodes = 0;
+        long longestEpisodeMs = 0;
 
         using var started = new ManualResetEventSlim();
         int stop = 0;
@@ -404,9 +409,22 @@ public sealed class SqliteCheckpointTests : IDisposable
             // and the log stay small even when the runner's disk is slow and the checkpoints are starved; the wall-clock deadline is a backstop that ends the loop if the checkpoint side never signals stop.
             for (int i = 0; (Volatile.Read(ref stop) == 0 && System.Diagnostics.Stopwatch.GetElapsedTime(loopStart) < TimeSpan.FromSeconds(30)) || i < 5; i++)
             {
-                int rc = SQLitePCL.raw.sqlite3_exec(writer.Handle, $"INSERT OR REPLACE INTO t VALUES ({100_000 + (i % 256)}, zeroblob(3000))");
-                if (rc is SQLitePCL.raw.SQLITE_BUSY or SQLitePCL.raw.SQLITE_LOCKED) lockWaits++;
-                else if (rc != SQLitePCL.raw.SQLITE_OK) throw new InvalidOperationException($"insert {i} failed: {SQLitePCL.raw.sqlite3_errmsg(writer.Handle).utf8_to_string()}");
+                string insert = $"INSERT OR REPLACE INTO t VALUES ({100_000 + (i % 256)}, zeroblob(3000))";
+                int rc = SQLitePCL.raw.sqlite3_exec(writer.Handle, insert);
+                if (rc is SQLitePCL.raw.SQLITE_BUSY or SQLitePCL.raw.SQLITE_LOCKED)
+                {
+                    lockEpisodes++;
+                    long episodeStart = System.Diagnostics.Stopwatch.GetTimestamp();
+                    do
+                    {
+                        Thread.Yield();
+                        rc = SQLitePCL.raw.sqlite3_exec(writer.Handle, insert);
+                    }
+                    while (rc is SQLitePCL.raw.SQLITE_BUSY or SQLitePCL.raw.SQLITE_LOCKED);
+                    longestEpisodeMs = Math.Max(longestEpisodeMs, (long)System.Diagnostics.Stopwatch.GetElapsedTime(episodeStart).TotalMilliseconds);
+                }
+
+                if (rc != SQLitePCL.raw.SQLITE_OK) throw new InvalidOperationException($"insert {i} failed: {SQLitePCL.raw.sqlite3_errmsg(writer.Handle).utf8_to_string()}");
 
                 if (i == 3)
                 {
@@ -426,9 +444,12 @@ public sealed class SqliteCheckpointTests : IDisposable
         Volatile.Write(ref stop, 1);
         await writes;
 
-        // PASSIVE takes no writer lock and waits on no lock, so no commit ever met one (the old TRUNCATE escalation held the writer lock
-        // through the copy and the database fsync: a 5078 ms commit, the busy timeout expiring, was seen once). Disk speed is not judged.
-        Assert.True(lockWaits == 0, $"the writer met a lock {lockWaits} times while the checkpoints ran");
+        // PASSIVE takes no writer lock and waits on no lock, so a writer is only ever turned away by the instant a fresh checkpoint connection
+        // holds WAL_WRITE_LOCK to re-read a torn header: at most a few such episodes per run (a connection reads the header for its pragma and
+        // for the checkpoint), each over almost at once. The old TRUNCATE escalation held the writer lock through the copy and the database
+        // fsync (a 5078 ms commit, the busy timeout expiring, was seen once), which is what the 2 s bound would catch. Disk speed is not judged.
+        Assert.True(lockEpisodes <= 4 * 30, $"the writer met a lock in {lockEpisodes} separate episodes during 30 checkpoint runs");
+        Assert.True(longestEpisodeMs < 2000, $"the writer was held off for {longestEpisodeMs} ms by a lock while the checkpoints ran");
     }
 
     [Fact]
