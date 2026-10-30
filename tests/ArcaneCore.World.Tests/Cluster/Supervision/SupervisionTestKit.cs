@@ -69,21 +69,25 @@ internal sealed class ManualDelays
     public Task Delay(TimeSpan duration, CancellationToken ct)
     {
         Requested.Enqueue(duration);
-        Interlocked.Increment(ref _requests);
         if (ct.IsCancellationRequested)
         {
+            Interlocked.Increment(ref _requests);
             return Task.FromCanceled(ct);
         }
 
         if (AutoComplete(duration))
         {
+            Interlocked.Increment(ref _requests);
             return Task.CompletedTask;
         }
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (_gate)
         {
+            // Register and count under one lock: a request that RequestCount shows is always already pending, so a snapshot taken under
+            // this lock (PulseAsync) either releases it or does not count it.
             _pending.Add((duration, tcs));
+            Interlocked.Increment(ref _requests);
         }
 
         ct.Register(() =>
@@ -116,11 +120,25 @@ internal sealed class ManualDelays
     }
 
     /// <summary>Releases every pending delay and waits until something requests a new one: the loop that was waiting has run once more.</summary>
-    public async Task PulseAsync()
+    public async Task PulseAsync(int timeoutMs = 15_000)
     {
-        int before = RequestCount;
-        ReleaseAll();
-        await TestWait.UntilAsync(() => RequestCount > before, "the supervisor to request another delay");
+        // Snapshot the request count and take the pending delays in one critical section. Counting before registering (or reading the count
+        // outside the lock) lets a delay be counted as "already requested" yet missed by the release, and then nothing ever wakes it.
+        int before;
+        List<TaskCompletionSource> toRelease;
+        lock (_gate)
+        {
+            before = RequestCount;
+            toRelease = [.. _pending.Select(p => p.Tcs)];
+            _pending.Clear();
+        }
+
+        foreach (TaskCompletionSource tcs in toRelease)
+        {
+            tcs.TrySetResult();
+        }
+
+        await TestWait.UntilAsync(() => RequestCount > before, "the supervisor to request another delay", timeoutMs);
     }
 
     public Task WaitForPendingAsync(Func<TimeSpan, bool> match, string what)
