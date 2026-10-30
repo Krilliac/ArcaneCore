@@ -82,6 +82,57 @@ public sealed class MovementHandlerAnomalyTests
     }
 
     [Fact]
+    public async Task AFloodOfNonFinitePackets_IsLoggedOncePerInterval_WithTheSuppressedCount()
+    {
+        var log = new WarningLogger();
+        await using var host = WorldTestHost.Start(sessionLogger: log);
+        await using WorldTestClient client = await host.EnterWorldAsync("NFACCOUNTF", "Nfplayerf");
+        await client.CollectAsync();
+
+        for (int i = 0; i < 25; i++)
+        {
+            await client.SendAsync(WorldOpcode.MsgMoveHeartbeat, Encode(Block(float.NaN)));
+        }
+
+        await SyncAsync(host, client, "Nfplayerf", StartX + 1); // in-order handler: the 25 earlier packets were judged by now
+
+        string[] lines = log.Warnings.Where(m => m.Contains("non-finite world coordinates", StringComparison.Ordinal)).ToArray();
+        Assert.True(lines.Length == 1, $"{lines.Length} warning lines for 25 rejected packets; expected one per interval");
+        Assert.Contains("(0 more since the last line)", lines[0], StringComparison.Ordinal);
+    }
+
+    private sealed class WarningLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        private readonly List<string> _warnings = [];
+
+        public string[] Warnings
+        {
+            get
+            {
+                lock (_warnings)
+                {
+                    return [.. _warnings];
+                }
+            }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning)
+            {
+                lock (_warnings)
+                {
+                    _warnings.Add(formatter(state, exception));
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task APitchOrJumpFieldThatIsNaN_IsReportedOnlyUnderStrictFiniteness()
     {
         await using var strict = WorldTestHost.Start(sessionOptions: new WorldSessionOptions { StrictMovementFiniteness = true });
