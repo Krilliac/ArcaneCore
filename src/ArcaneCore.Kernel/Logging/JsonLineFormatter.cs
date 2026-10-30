@@ -58,6 +58,40 @@ public static class JsonLineFormatter
         }
 
         buffer.Append("}\n");
+        if (buffer.Truncated)
+        {
+            WriteTruncatedRecord(ref buffer, in evt);
+        }
+    }
+
+    // The cut left the record open (an unterminated string, object or escape), and the closing brace and newline were dropped, so the
+    // line would merge with the next event and be invalid NDJSON. Replace it with a short valid record that keeps the head of the message.
+    private static void WriteTruncatedRecord(ref LogBuffer buffer, in LogEvent evt)
+    {
+        const int KeptMessageLength = 1024;
+        buffer.Reset();
+        buffer.Append("{\"ts\":\"");
+        WriteTimestamp(ref buffer, evt.Timestamp);
+        buffer.Append("\",\"level\":\"");
+        buffer.Append(LogLineFormatter.LevelName(evt.Level));
+        buffer.Append("\",\"category\":");
+        WriteString(ref buffer, evt.Category);
+        buffer.Append(",\"message\":");
+        string message = evt.Message;
+        if (message.Length > KeptMessageLength)
+        {
+            int keep = char.IsHighSurrogate(message[KeptMessageLength - 1]) ? KeptMessageLength - 1 : KeptMessageLength;
+            message = message[..keep];
+        }
+
+        WriteString(ref buffer, message + " ...[truncated]");
+        buffer.Append("}\n");
+        if (buffer.Truncated)
+        {
+            // Only an absurd category gets here; the guarantee that matters is one valid, terminated line.
+            buffer.Reset();
+            buffer.Append("{\"truncated\":true}\n");
+        }
     }
 
     /// <summary>ISO 8601 with milliseconds: <c>Z</c> for UTC, the local offset otherwise.</summary>
