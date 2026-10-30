@@ -15,6 +15,9 @@ namespace ArcaneCore.Data.World.WorldState;
 /// </summary>
 public static class WorldStateDumpImporter
 {
+    /// <summary>The chance columns of <c>game_weather</c> the importer reads (besides <c>zone</c>).</summary>
+    internal static IReadOnlyList<string> WeatherColumns => s_weatherColumns;
+
     private static readonly string[] s_weatherColumns =
     [
         "spring_rain_chance", "spring_snow_chance", "spring_storm_chance",

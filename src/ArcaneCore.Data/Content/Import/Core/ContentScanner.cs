@@ -163,6 +163,11 @@ public static class ContentScanner
 
         private string? KeyPart(DumpRow row, int part)
         {
+            if (_keyIndexes[part] < 0)
+            {
+                return string.Empty; // an optional key part the dump lacks
+            }
+
             string? value = _keyIndexes[part] < row.Values.Count ? row.Values[_keyIndexes[part]] : null;
             if (string.IsNullOrEmpty(value))
             {

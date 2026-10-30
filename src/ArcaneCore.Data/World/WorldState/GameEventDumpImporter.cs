@@ -52,6 +52,19 @@ public sealed class GameEventDumpImporter
     private static readonly RowMapper<GameEventQuestRow> s_quests = new();
     private static readonly RowMapper<GameEventMailRow> s_mails = new();
 
+    /// <summary>Whether the importer reads source column <paramref name="column"/> of game-event table <paramref name="table"/> (the table spec's rule).</summary>
+    internal static bool ReadsColumn(string table, string column) => table switch
+    {
+        GameEventDataModule.EventTable => s_events.Maps(column),
+        GameEventDataModule.TimeTable => s_times.Maps(column),
+        GameEventDataModule.CreatureTable => s_creatures.Maps(column),
+        GameEventDataModule.GameObjectTable => s_gameObjects.Maps(column),
+        GameEventDataModule.CreatureDataTable => s_creatureData.Maps(column) || column.Equals("patch", StringComparison.OrdinalIgnoreCase),
+        GameEventDataModule.QuestTable => s_quests.Maps(column) || column.Equals("patch_min", StringComparison.OrdinalIgnoreCase),
+        GameEventDataModule.MailTable => s_mails.Maps(column),
+        _ => false,
+    };
+
     private readonly Dictionary<uint, GameEventRow> _events = [];
     private readonly Dictionary<uint, GameEventTimeRow> _times = [];
     private readonly Dictionary<(uint, int), GameEventCreatureRow> _creatures = [];

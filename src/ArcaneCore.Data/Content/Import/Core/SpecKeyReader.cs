@@ -26,7 +26,7 @@ internal sealed class SpecKeyReader
         var key = new uint[cached.Indexes.Length];
         for (int i = 0; i < key.Length; i++)
         {
-            string? raw = cached.Indexes[i] < row.Values.Count ? row.Values[cached.Indexes[i]] : null;
+            string? raw = cached.Indexes[i] >= 0 && cached.Indexes[i] < row.Values.Count ? row.Values[cached.Indexes[i]] : null;
             if (!uint.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out key[i]))
             {
                 string column = spec.Keys[i].Canonical;
