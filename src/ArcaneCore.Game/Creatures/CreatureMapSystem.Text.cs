@@ -14,7 +14,7 @@ public sealed partial class CreatureMapSystem
 {
     /// <summary>
     /// Speak a creature_ai_texts entry (cmangos DoScriptText): type 0 say (25 yd), 1 yell
-    /// (300 yd), 2 text emote (25 yd), 3 boss emote and 6 zone yell (whole map), 4 and 5 whisper
+    /// (300 yd), 2 text emote (25 yd), 3 boss emote (whole map), 6 zone yell (the speaker's zone), 4 and 5 whisper
     /// to the target player. <c>$N</c> becomes the target's name; a non-zero emote plays too.
     /// </summary>
     public void Say(Creature creature, CreatureAiText text, Unit? target)
@@ -50,8 +50,20 @@ public sealed partial class CreatureMapSystem
 
                 break;
             case 6:
-                Broadcast(ChatType.MonsterYell, 0);
+            {
+                // cmangos CHAT_TYPE_ZONE_YELL: Map::MonsterYellToZone, the map's players whose zone is the speaker's (as ZoneYell does).
+                uint zone = ZoneAndAreaOf(creature).ZoneId;
+                byte[] yell = CreatureChatPackets.BuildMonsterMessage(ChatType.MonsterYell, text.Language, creature.Guid, name, targetGuid, content);
+                foreach (Player zonePlayer in Map.Players)
+                {
+                    if (Map.GetZoneAndAreaId(zonePlayer.X, zonePlayer.Y, zonePlayer.Z).ZoneId == zone)
+                    {
+                        zonePlayer.Session.Send(WorldOpcode.SmsgMessagechat, yell);
+                    }
+                }
+
                 break;
+            }
             default:
                 Broadcast(ChatType.MonsterSay, CreatureChatPackets.SayRange);
                 break;

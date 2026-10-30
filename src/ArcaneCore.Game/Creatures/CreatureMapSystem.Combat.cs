@@ -109,7 +109,17 @@ public sealed partial class CreatureMapSystem : ICreaturePathQuery
         else if (!ReferenceEquals(creature.Combat.Victim, target) && target.IsAlive && ReferenceEquals(target.Map, Map))
         {
             creature.Combat.Threat.AddThreat(target, 0f);
+            bool targetWasInCombat = target.Combat.IsInCombat;
             Map.Combat.SetInCombatState(target, 0);
+            // vmangos Unit::SetInCombatState calls Creature::OnEnterCombat only for a creature that was not yet in combat (creatureNotInCombat),
+            // and OnEnterCombat skips AttackedBy while confused or fleeing (Creature.cpp:3652): the idle target retaliates. Without it the target
+            // is flagged in combat with no victim, and SelectHostileTarget evades it again and again (Alterac Valley mine mobs).
+            if (!targetWasInCombat && target is Creature idleTarget && idleTarget.Combat.Victim is null
+                && (idleTarget.UnitFlags & (UnitFlags.Confused | UnitFlags.Fleeing)) == 0
+                && idleTarget.Motion.CurrentType is not (MovementGeneratorType.Fleeing or MovementGeneratorType.Confused))
+            {
+                idleTarget.OnAttackedBy(creature);
+            }
         }
     }
 
