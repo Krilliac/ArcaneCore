@@ -24,7 +24,7 @@ namespace ArcaneCore.Game.Tests.Creatures;
 public sealed class CreaturePathJobTests(ITestOutputHelper output)
 {
     /// <summary>A thread-safe pathfinder that answers a three-point path and records which thread searched.</summary>
-    private sealed class RecordingPathfinder : IPathfinder, ISharedPathSearch
+    private class RecordingPathfinder : IPathfinder, ISharedPathSearch
     {
         private int _syncCalls;
 
@@ -59,6 +59,30 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         private static PathResult Answer(Vector3 start, Vector3 end) => new(PathType.Normal, [start, (start + end) * 0.5f, end]);
     }
 
+    /// <summary>
+    /// A <see cref="RecordingPathfinder"/> that also answers mesh walks (<see cref="IMeshPointQuery"/>), so a map counts as having
+    /// navigation: <see cref="Walk"/> answers each <c>Raycast</c> (by default the walk reaches its end on the same surface). It has no
+    /// random mesh point.
+    /// </summary>
+    private sealed class MeshRecordingPathfinder : RecordingPathfinder, IMeshPointQuery
+    {
+        public Func<Vector3, Vector3, MeshRaycastResult> Walk { get; set; } = (_, end) => new MeshRaycastResult(true, false, 1f, end);
+
+        public int Walks { get; private set; }
+
+        public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
+        {
+            point = center;
+            return false;
+        }
+
+        public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            Walks++;
+            return Walk(start, end);
+        }
+    }
+
     private sealed record Scene(WorldRuntime World, CreatureMapSystem System, Player Player, Creature Wolf, RecordingPathfinder Paths, NavJobSystem? Jobs)
         : IDisposable
     {
@@ -69,11 +93,11 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         }
     }
 
-    private static Scene Start(byte movementType, bool jobs = true)
+    private static Scene Start(byte movementType, bool jobs = true, RecordingPathfinder? pathfinder = null)
     {
         CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 5, 0, movementType: movementType, wander: 5)]);
         (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content);
-        var paths = new RecordingPathfinder();
+        RecordingPathfinder paths = pathfinder ?? new RecordingPathfinder();
         WorldCollision.Of(world).Install(pathfinder: paths);
         NavJobSystem? pool = jobs ? new NavJobSystem(threads: 2) : null;
         if (pool is not null)
@@ -357,6 +381,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
     public void AChaserAlreadyRunning_TakesPoolAnswersMidSpline_AndNeverStopsBehindItsRunningTarget()
     {
         using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true; // a chase takes answers mid-spline only with PathJobsFollow
         s.Player.Relocate(5, 14, s.Player.Z, MathF.PI / 2f, 0);
         s.Wolf.Motion.MoveChase(s.Player);
         Vector3 Victim() => new(s.Player.X, s.Player.Y, s.Player.Z);
@@ -369,6 +394,257 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         Assert.True(run.StandingOutOfPlace == 0, $"the chaser stopped behind its running target: {run}");
         Assert.True(run.Stale <= 2, $"jobs were abandoned and resubmitted while the chaser ran: {run}");
         Assert.True(s.Wolf.Motion.IsReachable);
+    }
+
+    [Fact]
+    public void WithoutPathJobsFollow_ARunningChaser_KeepsDroppingAnswersItRanPast()
+    {
+        // PathJobs alone keeps a chase as it was: the mid-spline carry is part of PathJobsFollow.
+        using Scene s = Start(movementType: 0);
+        s.Player.Relocate(5, 14, s.Player.Z, MathF.PI / 2f, 0);
+        s.Wolf.Motion.MoveChase(s.Player);
+        Vector3 Victim() => new(s.Player.X, s.Player.Y, s.Player.Z);
+
+        RunReport run = RunBehindARunningTarget(s, updates: 20, Victim, inPlace: s.Player.BoundingRadius + s.Wolf.BoundingRadius + 5f);
+        output.WriteLine($"chase without PathJobsFollow: {run}");
+
+        Assert.True(run.Stale >= 10, $"a chase carried answers mid-spline without PathJobsFollow: {run}");
+    }
+
+    /// <summary>
+    /// The wolf follows (or chases) the player on a spline (answers land at once until it is moving); then the player steps 0.6 yd on,
+    /// the moving wolf asks (one job), runs one more update while the job waits (its start is now ~0.7 yd behind it, on its spline),
+    /// <paramref name="beforeAnswer"/> runs, the job finishes, and the update that claims it runs. Returns how the applied and stale
+    /// counters moved on that claiming update.
+    /// </summary>
+    private static (long Applied, long Stale) ClaimACarriedAnswer(Scene s, Action? beforeAnswer = null, bool chase = false)
+    {
+        s.System.Options.Movement.PathJobsFollow = true;
+        s.Player.Relocate(5, 30, s.Player.Z, MathF.PI / 2f, 0);
+        if (chase)
+        {
+            s.Wolf.Motion.MoveChase(s.Player);
+        }
+        else
+        {
+            s.Wolf.Motion.MoveFollow(s.Player, 2, MathF.PI);
+        }
+
+        for (int i = 0; i < 50 && !s.Wolf.IsMoving; i++)
+        {
+            s.World.RunTick(100);
+            Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        }
+
+        Assert.True(s.Wolf.IsMoving, "the wolf never set off");
+        s.Paths.Gate.Reset();
+        s.Player.Relocate(5, 30.6f, s.Player.Z, MathF.PI / 2f, 0);
+        long submitted = s.System.PathJobsSubmitted;
+        s.World.RunTick(100); // asks: one job, from where it runs now
+        Assert.Equal(submitted + 1, s.System.PathJobsSubmitted);
+        s.World.RunTick(100); // runs on; the job is waited for, carried
+        Assert.Equal(submitted + 1, s.System.PathJobsSubmitted);
+        Assert.True(s.Wolf.IsMoving);
+        beforeAnswer?.Invoke();
+        long applied = s.System.PathJobsApplied;
+        long stale = s.System.PathJobsStale;
+        s.Paths.Gate.Set();
+        Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        s.Paths.Gate.Reset();
+        s.World.RunTick(100);
+        (long, long) moved = (s.System.PathJobsApplied - applied, s.System.PathJobsStale - stale);
+        s.Paths.Gate.Set();
+        return moved;
+    }
+
+    [Fact]
+    public void WithAMesh_ACarriedAnswer_IsWalkedFromHere_WhenItsFirstLegWalks()
+    {
+        var mesh = new MeshRecordingPathfinder();
+        using Scene s = Start(movementType: 0, pathfinder: mesh);
+        int walks = 0;
+        (long applied, long stale) = ClaimACarriedAnswer(s, () => walks = mesh.Walks);
+
+        Assert.Equal((1L, 0L), (applied, stale));
+        Assert.True(mesh.Walks > walks, "the re-anchored first leg was not walked on the mesh");
+    }
+
+    [Fact]
+    public void WithAMesh_ACarriedAnswerWhoseFirstLegIsBlocked_IsDroppedAndAskedAgain()
+    {
+        var mesh = new MeshRecordingPathfinder();
+        using Scene s = Start(movementType: 0, pathfinder: mesh);
+        (long applied, long stale) = ClaimACarriedAnswer(s, () => mesh.Walk = (start, end) => new MeshRaycastResult(true, true, 0.1f, Vector3.Lerp(start, end, 0.1f)));
+
+        Assert.Equal((0L, 1L), (applied, stale));
+        Assert.Equal(1, s.System.PathJobsInFlight); // asked again from where it stands
+    }
+
+    [Fact]
+    public void WithAMesh_ACarriedAnswer_IsRefused_WhenTheCreatureCannotBePlacedOnTheMesh()
+    {
+        // A map with navigation whose mesh has no polygon under the creature (off the mesh, tile not loaded): the leg cannot be checked,
+        // so it is not taken unchecked.
+        var mesh = new MeshRecordingPathfinder();
+        using Scene s = Start(movementType: 0, pathfinder: mesh);
+        (long applied, long stale) = ClaimACarriedAnswer(s, () => mesh.Walk = (_, end) => MeshRaycastResult.Unavailable(end));
+
+        Assert.Equal((0L, 1L), (applied, stale));
+    }
+
+    [Fact]
+    public void WithAMesh_ACarriedAnswerWhoseFirstLegEndsOnAnotherLayer_IsDroppedAndAskedAgain()
+    {
+        // The walk reaches the corner's column, but on the floor 5 yd under it (the corner is on a bridge): not the same surface.
+        var mesh = new MeshRecordingPathfinder();
+        using Scene s = Start(movementType: 0, pathfinder: mesh);
+        (long applied, long stale) = ClaimACarriedAnswer(s, () => mesh.Walk = (_, end) => new MeshRaycastResult(true, false, 1f, end with { Z = end.Z - 5f }));
+
+        Assert.Equal((0L, 1L), (applied, stale));
+    }
+
+    [Fact]
+    public void ACarriedNoPathAnswer_IsNotApplied_AndIsAskedAgain()
+    {
+        // No path from a point the chaser has already run past says nothing about where it stands: not applied (it would mark the target
+        // unreachable and feed the evade), asked again from here.
+        using Scene s = Start(movementType: 0);
+        (long applied, long stale) = ClaimACarriedAnswer(s, () => s.Paths.SharedAnswer = (_, _) => new PathResult(PathType.NoPath, []), chase: true);
+
+        Assert.Equal((0L, 1L), (applied, stale));
+        Assert.True(s.Wolf.Motion.IsReachable, "a carried no-path answer marked the chase target unreachable");
+        Assert.Equal(1, s.System.PathJobsInFlight);
+    }
+
+    [Fact]
+    public void ACarriedAnswer_DropsACornerTheCreatureHasAlreadyPassed()
+    {
+        // The answer's first corner lies 0.4 yd past the job's start, on the stretch the follower has since run: walking it would turn the
+        // follower back. The re-anchored path heads for the next corner instead.
+        using Scene s = Start(movementType: 0);
+        Vector3 passed = default;
+        (long applied, _) = ClaimACarriedAnswer(s, () => s.Paths.SharedAnswer = (start, end) =>
+        {
+            passed = start + (Vector3.Normalize(end - start) * 0.4f);
+            return new PathResult(PathType.Normal, [start, passed, end]);
+        });
+
+        Assert.Equal(1, applied);
+        CreatureSpline spline = Assert.IsType<CreatureSpline>(s.Wolf.Spline);
+        foreach (Vector3 point in spline.Points)
+        {
+            Assert.True(Vector3.Distance(point, passed) > 0.2f, $"the new spline still turns back to the passed corner {passed}");
+        }
+
+        Assert.True(Vector3.Distance(new Vector3(spline.StartX, spline.StartY, spline.StartZ), passed) > 0.5f);
+    }
+
+    [Fact]
+    public void AnAnswerForAFollowerThatRanMoreThanTheCarryDistance_IsDroppedAndAskedAgain()
+    {
+        // The pool answers slower than the follower runs PathJobCarryYards along its spline: the job is dropped and asked again from where
+        // the follower then is (still one job in flight).
+        using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true;
+        s.Player.Relocate(5, 40, s.Player.Z, MathF.PI / 2f, 0);
+        s.Wolf.Motion.MoveFollow(s.Player, 2, MathF.PI);
+        for (int i = 0; i < 50 && !s.Wolf.IsMoving; i++)
+        {
+            s.World.RunTick(100);
+            Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        }
+
+        s.Paths.Gate.Reset();
+        s.Player.Relocate(5, 40.6f, s.Player.Z, MathF.PI / 2f, 0);
+        s.World.RunTick(100);
+        Assert.Equal(1, s.System.PathJobsInFlight);
+        long stale = s.System.PathJobsStale;
+        var asked = new Vector3(s.Wolf.X, s.Wolf.Y, s.Wolf.Z);
+        float ran = 0f;
+        for (int i = 0; i < 30 && ran <= CreatureMapSystem.PathJobCarryYards; i++)
+        {
+            Assert.True(s.Wolf.IsMoving, "the follower stopped before it ran the carry distance");
+            Assert.Equal(stale, s.System.PathJobsStale); // within the carry distance the job is waited for
+            s.World.RunTick(100);
+            ran = Vector3.Distance(asked, new Vector3(s.Wolf.X, s.Wolf.Y, s.Wolf.Z));
+        }
+
+        Assert.True(ran > CreatureMapSystem.PathJobCarryYards, $"the follower ran only {ran:F1} yd");
+        Assert.Equal(stale + 1, s.System.PathJobsStale);
+        Assert.Equal(1, s.System.PathJobsInFlight);
+        s.Paths.Gate.Set();
+    }
+
+    [Fact]
+    public void AnAnswerForAFollowerThatRanItsSplineOut_IsTakenWhereItStands()
+    {
+        // The follower's spline ends while its job waits: it stands at the spline's end, still on the path it ran, so the answer is carried.
+        using Scene s = Start(movementType: 0);
+        s.System.Options.Movement.PathJobsFollow = true;
+        s.Player.Relocate(5, 6, s.Player.Z, MathF.PI / 2f, 0);
+        s.Wolf.Motion.MoveFollow(s.Player, 2, MathF.PI);
+        for (int i = 0; i < 50 && !s.Wolf.IsMoving; i++)
+        {
+            s.World.RunTick(100);
+            Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        }
+
+        Assert.True(s.Wolf.IsMoving);
+        CreatureSpline running = s.Wolf.Spline!;
+        s.Paths.Gate.Reset();
+        s.Player.Relocate(5, 8, s.Player.Z, MathF.PI / 2f, 0); // 2 yd on: the follow point leaves the spline's end behind
+        long submitted = s.System.PathJobsSubmitted;
+        s.World.RunTick(100);
+        Assert.Equal(submitted + 1, s.System.PathJobsSubmitted);
+        Assert.Same(running, s.Wolf.Spline);
+        var asked = new Vector3(s.Wolf.X, s.Wolf.Y, s.Wolf.Z);
+        long stale = s.System.PathJobsStale;
+        for (int i = 0; i < 30 && s.Wolf.IsMoving; i++)
+        {
+            s.World.RunTick(100);
+        }
+
+        Assert.False(s.Wolf.IsMoving, "the follower's spline did not run out");
+        var end = new Vector3(running.EndX, running.EndY, running.EndZ);
+        Assert.True(Vector3.Distance(asked, end) > CreatureMapSystem.PathJobStartTolerance, "the job's start was not left behind");
+        Assert.True(Vector3.Distance(asked, end) <= CreatureMapSystem.PathJobCarryYards);
+        s.World.RunTick(100); // standing at the spline's end it asks again: the job is still waited for
+        Assert.Equal(stale, s.System.PathJobsStale);
+        Assert.Equal(submitted + 1, s.System.PathJobsSubmitted);
+
+        long applied = s.System.PathJobsApplied;
+        s.Paths.Gate.Set();
+        Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+        s.World.RunTick(100);
+
+        Assert.Equal(applied + 1, s.System.PathJobsApplied);
+        Assert.Equal(stale, s.System.PathJobsStale);
+        Assert.True(s.Wolf.IsMoving, "the follower did not set off on the carried answer");
+    }
+
+    [Fact]
+    public void AJobStuckInAWorker_IsDroppedAfterTheTimeout_AndAskedAgain()
+    {
+        // A standing creature waits for its queued job; one still not answered PathJobPendingTimeoutMs after it was submitted is dropped
+        // and asked again, so a search stuck in a worker cannot hold the creature forever.
+        using Scene s = Start(movementType: 0);
+        s.Paths.Gate.Reset();
+        s.System.MoveTo(s.Wolf, 15, 0, 83.5f, run: false, finalOrientation: null);
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+        for (int i = 0; i < 45; i++)
+        {
+            s.World.RunTick(100);
+        }
+
+        Assert.Equal(0, s.System.PathJobsStale);
+        for (int i = 0; i < 10; i++)
+        {
+            s.World.RunTick(100);
+        }
+
+        Assert.Equal(1, s.System.PathJobsStale);
+        Assert.Equal(2, s.System.PathJobsSubmitted);
+        s.Paths.Gate.Set();
     }
 
     [Fact]
