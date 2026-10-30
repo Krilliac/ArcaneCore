@@ -46,52 +46,85 @@ public sealed class ClusterRoleFeatureFilter
         string nodeId = "local",
         long? fencingToken = null,
         DateTimeOffset nowUtc = default)
+        => ShouldAttachFeature(featureType, role, nodeId, _ => fencingToken, nowUtc);
+
+    /// <summary>
+    /// The lease scope whose holder runs <paramref name="featureType"/> (<see cref="RealmAuthorityScopes.Social"/> for AutoBroadcast,
+    /// <see cref="RealmAuthorityScopes.Economy"/> for the auction house bot), or null for a feature that is not a realm singleton.
+    /// </summary>
+    public static string? LeaseScopeFor(Type featureType)
     {
         ArgumentNullException.ThrowIfNull(featureType);
+        if (featureType == typeof(AutoBroadcastFeature))
+        {
+            return RealmAuthorityScopes.Social;
+        }
+
+        return featureType == typeof(AuctionBotFeature) ? RealmAuthorityScopes.Economy : null;
+    }
+
+    /// <summary>
+    /// As <see cref="ShouldAttachFeature(Type, ClusterNodeRole, string, long?, DateTimeOffset)"/>, with the fencing token looked up per
+    /// lease scope by <paramref name="tokenForScope"/> (a node holds one lease per realm singleton). A <see cref="ClusterNodeRole.MapWorker"/>
+    /// runs a realm singleton only while the store confirms <paramref name="nodeId"/> holds that scope's lease at <paramref name="nowUtc"/>;
+    /// a non-empty <paramref name="ownerIncarnation"/> must also be the lease's holder incarnation (two processes with one node id cannot both pass).
+    /// </summary>
+    public bool ShouldAttachFeature(
+        Type featureType,
+        ClusterNodeRole role,
+        string nodeId,
+        Func<string, long?> tokenForScope,
+        DateTimeOffset nowUtc,
+        Guid ownerIncarnation = default)
+    {
+        ArgumentNullException.ThrowIfNull(featureType);
+        ArgumentNullException.ThrowIfNull(tokenForScope);
         if (!typeof(IWorldFeature).IsAssignableFrom(featureType))
         {
             throw new ArgumentException($"{featureType.FullName} does not implement {nameof(IWorldFeature)}.", nameof(featureType));
         }
 
         // AutoBroadcast is a realm-wide timer that sends to every player (docs/CLUSTERING_DESIGN.md:538-542):
-        // running it on every map worker would broadcast each message once per worker. It runs only on Combined or Social.
+        // running it on every map worker would broadcast each message once per worker. It runs on Combined, on Social, or on the
+        // one MapWorker that holds the social lease.
         if (featureType == typeof(AutoBroadcastFeature))
         {
             if (role == ClusterNodeRole.Combined)
             {
-                return ValidateOptionalLease(RealmAuthorityScopes.Social, nodeId, fencingToken, nowUtc, requireLeaseWhenStorePresent: false);
+                return ValidateOptionalLease(RealmAuthorityScopes.Social, nodeId, tokenForScope(RealmAuthorityScopes.Social), nowUtc, requireLeaseWhenStorePresent: false);
             }
 
             if (role == ClusterNodeRole.Social)
             {
-                return ValidateOptionalLease(RealmAuthorityScopes.Social, nodeId, fencingToken, nowUtc, requireLeaseWhenStorePresent: true);
+                return ValidateOptionalLease(RealmAuthorityScopes.Social, nodeId, tokenForScope(RealmAuthorityScopes.Social), nowUtc, requireLeaseWhenStorePresent: true);
             }
 
-            return false;
+            return role == ClusterNodeRole.MapWorker && HoldsLease(RealmAuthorityScopes.Social, nodeId, ownerIncarnation, tokenForScope, nowUtc);
         }
 
-        // AuctionBotFeature (and its periodic sell/buy/custody reconciliation timer) runs only on Combined or the
-        // fenced Economy authority (docs/CLUSTERING_DESIGN.md:484-528, 565).
+        // AuctionBotFeature (and its periodic sell/buy/custody reconciliation timer) runs only on Combined, the
+        // fenced Economy authority, or the one MapWorker that holds the economy lease (docs/CLUSTERING_DESIGN.md:484-528, 565).
         if (featureType == typeof(AuctionBotFeature))
         {
             if (role == ClusterNodeRole.Combined)
             {
-                return ValidateOptionalLease(RealmAuthorityScopes.Economy, nodeId, fencingToken, nowUtc, requireLeaseWhenStorePresent: false);
+                return ValidateOptionalLease(RealmAuthorityScopes.Economy, nodeId, tokenForScope(RealmAuthorityScopes.Economy), nowUtc, requireLeaseWhenStorePresent: false);
             }
 
             if (role == ClusterNodeRole.Economy)
             {
-                return ValidateOptionalLease(RealmAuthorityScopes.Economy, nodeId, fencingToken, nowUtc, requireLeaseWhenStorePresent: true);
+                return ValidateOptionalLease(RealmAuthorityScopes.Economy, nodeId, tokenForScope(RealmAuthorityScopes.Economy), nowUtc, requireLeaseWhenStorePresent: true);
             }
 
-            return false;
+            return role == ClusterNodeRole.MapWorker && HoldsLease(RealmAuthorityScopes.Economy, nodeId, ownerIncarnation, tokenForScope, nowUtc);
         }
 
         // Warden derives its RC4 streams from the 40-byte session key K and belongs on the connection owner
-        // (Combined in local mode, Gateway in cluster mode; docs/CLUSTERING_DESIGN.md:348, 356-394).
+        // (Combined in local mode, Gateway in cluster mode; docs/CLUSTERING_DESIGN.md:348, 356-394). A MapWorker keeps it too:
+        // the gateway passes the client stream through to the worker (Tier 3a), so the worker still owns the Warden session.
         if (featureType == typeof(WardenFeature))
         {
-            return role is ClusterNodeRole.Combined or ClusterNodeRole.Gateway;
+            return role is ClusterNodeRole.Combined or ClusterNodeRole.Gateway or ClusterNodeRole.MapWorker;
         }
 
         // Ordinary world/map simulation features (spells, creatures, movement, quests, ServerMail login hooks, etc.)
@@ -110,7 +143,7 @@ public sealed class ClusterRoleFeatureFilter
         long fencingToken,
         DateTimeOffset nowUtc)
     {
-        if (role is not (ClusterNodeRole.Combined or ClusterNodeRole.Economy))
+        if (role is not (ClusterNodeRole.Combined or ClusterNodeRole.Economy or ClusterNodeRole.MapWorker))
         {
             return false;
         }
@@ -133,6 +166,18 @@ public sealed class ClusterRoleFeatureFilter
     {
         ArgumentNullException.ThrowIfNull(featureTypes);
         return [.. featureTypes.Where(t => ShouldAttachFeature(t, role, nodeId, fencingToken, nowUtc))];
+    }
+
+    private bool HoldsLease(string scope, string nodeId, Guid ownerIncarnation, Func<string, long?> tokenForScope, DateTimeOffset nowUtc)
+    {
+        if (_leaseStore is null || tokenForScope(scope) is not { } token)
+        {
+            return false;
+        }
+
+        return ownerIncarnation == Guid.Empty
+            ? _leaseStore.ValidateFencingToken(scope, nodeId, token, nowUtc)
+            : _leaseStore.ValidateFencingToken(scope, nodeId, ownerIncarnation, token, nowUtc);
     }
 
     private bool ValidateOptionalLease(

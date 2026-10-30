@@ -19,11 +19,14 @@ public sealed class ClusterSupervisorHostedService : IHostedService
     private readonly ClusterHostSupervisor _supervisor;
     private readonly ClusterSupervisorOptions _options;
     private readonly ILogger<ClusterSupervisorHostedService> _logger;
+    private readonly IHostApplicationLifetime? _lifetime;
+    private int _requestedExitCode;
 
     public ClusterSupervisorHostedService(
         ClusterHostSupervisor supervisor,
         IOptions<ClusterSupervisorOptions> options,
-        ILogger<ClusterSupervisorHostedService> logger)
+        ILogger<ClusterSupervisorHostedService> logger,
+        IHostApplicationLifetime? lifetime = null)
     {
         ArgumentNullException.ThrowIfNull(supervisor);
         ArgumentNullException.ThrowIfNull(options);
@@ -32,7 +35,11 @@ public sealed class ClusterSupervisorHostedService : IHostedService
         _supervisor = supervisor;
         _options = options.Value;
         _logger = logger;
+        _lifetime = lifetime;
     }
+
+    /// <summary>The exit code the supervisor process should return: 0, or 1 when it stopped itself because a child was given up on.</summary>
+    public int RequestedExitCode => Volatile.Read(ref _requestedExitCode);
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -48,15 +55,28 @@ public sealed class ClusterSupervisorHostedService : IHostedService
                 $"The supervisor can admit {plan.Admitted.Count} of its {_options.Processes.Count} configured process(es), below Cluster:Supervisor:MinClusterProcesses ({_options.MinClusterProcesses}); nothing was launched.");
         }
 
+        _supervisor.BelowMinimum += OnBelowMinimum;
         foreach (string name in plan.Admitted)
         {
             SupervisedProcessSnapshot snapshot = await _supervisor.StartProcessAsync(name, cancellationToken).ConfigureAwait(false);
             _logger.LogInformation("Supervisor started {Process} (role {Role}, pid {ProcessId})", snapshot.Name, snapshot.Role, snapshot.ProcessId);
         }
+
+        _supervisor.BeginMinimumWatch(); // an exit during the launches above must not stop the supervisor half-started
+    }
+
+    private void OnBelowMinimum(SupervisorBelowMinimum report)
+    {
+        Volatile.Write(ref _requestedExitCode, report.AnyGaveUp ? ExitCodes.Failure : ExitCodes.Success);
+        _logger.LogError(
+            "Only {Running} supervised process(es) remain, below Cluster:Supervisor:MinClusterProcesses ({Minimum}); stopping the supervisor and the rest ({Outcome}).",
+            report.Running, report.Minimum, report.AnyGaveUp ? "a process was given up on" : "all stops were deliberate");
+        _lifetime?.StopApplication();
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        _supervisor.BelowMinimum -= OnBelowMinimum;
         try
         {
             await _supervisor.DrainAndStopAsync(cancellationToken).ConfigureAwait(false);
@@ -106,10 +126,13 @@ public static class ClusterSupervisorHosting
         services.PostConfigure<HostOptions>(o => o.ShutdownTimeout = Min(Max(o.ShutdownTimeout, needed), ClusterSupervisorOptions.MaxShutdown));
         services.TryAddSingleton<ISupervisedProcessLauncher, SystemProcessSupervisedLauncher>();
         services.TryAddSingleton<IClusterCapacityProbe, SystemClusterCapacityProbe>();
+        services.TryAddSingleton<ISupervisedHangCapture, SystemSupervisedHangCapture>();
         services.AddSingleton(sp => new ClusterHostSupervisor(
             sp.GetRequiredService<IOptions<ClusterSupervisorOptions>>().Value,
             sp.GetRequiredService<ISupervisedProcessLauncher>(),
-            capacityProbe: sp.GetRequiredService<IClusterCapacityProbe>()));
+            capacityProbe: sp.GetRequiredService<IClusterCapacityProbe>(),
+            timeProvider: sp.GetService<TimeProvider>(),
+            hangCapture: sp.GetRequiredService<ISupervisedHangCapture>()));
         services.AddHostedService<ClusterSupervisorHostedService>();
         return services;
     }
@@ -155,6 +178,7 @@ public static class ClusterSupervisorHosting
         try
         {
             await host.WaitForShutdownAsync().ConfigureAwait(false);
+            return host.Services.GetServices<IHostedService>().OfType<ClusterSupervisorHostedService>().FirstOrDefault()?.RequestedExitCode ?? ExitCodes.Success;
         }
         catch (Exception ex)
         {
@@ -162,7 +186,5 @@ public static class ClusterSupervisorHosting
             await error.WriteLineAsync($"ArcaneCore.World supervisor failed while stopping: {ex.Message}").ConfigureAwait(false);
             return ExitCodes.Failure;
         }
-
-        return ExitCodes.Success;
     }
 }

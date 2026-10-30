@@ -17,7 +17,7 @@ public sealed class RuleCommands : ICommandGroup
         new ChatCommand(
             "rules",
             AccountSecurity.GameMaster,
-            "Syntax: .rules check [host] [owner_id] | vocab [host] | trace [guid] — rule engine tools for rule authors.",
+            "Syntax: .rules check [host] [owner_id] | vocab [host] | trace [guid] | stats [host] — rule engine tools for rule authors.",
             null,
             [
                 new ChatCommand("check", AccountSecurity.GameMaster,
@@ -26,6 +26,8 @@ public sealed class RuleCommands : ICommandGroup
                     "Syntax: .rules vocab [host] — every event, action and target id with its parameters (a host's own plus the shared ones).", Vocab),
                 new ChatCommand("trace", AccountSecurity.GameMaster,
                     "Syntax: .rules trace [guid] — start or stop tracing every rule evaluation of a subject (decimal or 0x guid); without a guid, show who is traced and the latest traced evaluations.", Trace),
+                new ChatCommand("stats", AccountSecurity.GameMaster,
+                    "Syntax: .rules stats [host] — the evaluator counters of the running rule hosts: rules fired, actions run and failed, dropped runs, depth-limited starts, refused re-entrant firings, lost invokers and caught faults.", Stats),
             ]),
     ];
 
@@ -138,6 +140,36 @@ public sealed class RuleCommands : ICommandGroup
         context.Reply(feature.Tracer.Toggle(guid)
             ? $"Tracing the rules of 0x{guid:X} (every evaluation is logged and kept for .rules trace)."
             : $"Stopped tracing 0x{guid:X}.");
+        return true;
+    }
+
+    private static bool Stats(CommandContext context, string args)
+    {
+        string word = args.Trim();
+        RuleHostKind? host = null;
+        if (word.Length > 0)
+        {
+            if (RuleHostNames.Parse(word) is not { } parsed)
+            {
+                context.Reply($"Unknown rule host '{word}'. Hosts: {HostList()}.");
+                return true;
+            }
+
+            host = parsed;
+        }
+
+        IReadOnlyList<string> lines = Feature(context).Counters.Lines(host);
+        if (lines.Count == 0)
+        {
+            context.Reply(host is null ? "No rule host is running an evaluator." : $"No {RuleHostNames.Of(host.Value)} evaluator is running.");
+            return true;
+        }
+
+        foreach (string line in lines)
+        {
+            context.Reply(line);
+        }
+
         return true;
     }
 

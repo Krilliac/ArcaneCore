@@ -108,6 +108,8 @@ team filled by `RaiseCapToFillTemplate`, which also has bots fill the open slots
 
 The goal ladder can be re-ranked by a built-in CPU goal policy (`World:Playerbots:Policy`, **off by default**; with no `ModelPath` it scores with the ladder itself, so it always agrees and the bots choose the goals they would without it). It replaced the ONNX/TensorRT batch pass and the local Ollama planner; see Goal policy below.
 
+The order of the out-of-combat goal ladder is data, not code (`docs/reference/rules.md`, the `bot` host). Each rung is a `playerbot_goal` row (ids 101-116, `base_priority` = its weight, `driver` = the rung the brain runs) and a shipped rule (ids 10001-10016, on `bot.goal_evaluate`) whose `bot.propose_goal(goal_id, weight)` action puts it in the pass; weights run 1600 (help a stranger) down to 200 (quest travel), the goal policy sits at 1150. A pass ranks the proposals by weight (ties by `base_priority`), tries the rung of each in turn and lets the next run when a rung does not act. To customise it, insert rows (ids from 1000000 for rules, 1000 for goals) rather than editing the shipped ones: a rule with a subject filter that proposes a goal at a higher weight moves a rung up for a share of the bots, `bot.suppress_goal(goal_id)` switches a rung off, and `enabled = 0` on a shipped row removes it. A `playerbot_goal.driver` must be one of the 16 rungs, and bot rules cannot use `delay_ms`. `.reload rules` applies a change; `.rules stats bot` shows the counters. A database with no ladder rows runs the same ladder from the code and logs one warning at the first think.
+
 ### Autonomous and scripted mode
 
 By default a running bot is **autonomous**: each world tick `PlayerbotBrain` chooses quest,
@@ -1932,6 +1934,17 @@ player first, the rest in turn) and at most `LinesPerPass` lines are handed on.
   invite ("inv", "can i join", "i can heal") within `PostLifeSeconds` puts the player into that group's matching
   (`PlayerbotGroupCoordinator.Volunteer`): the group forms with the player when enough bots wait, and the leader invites through the
   normal group path. Too low, already grouped or no longer looking is answered so.
+- **Where bots advertise** (`LfgNearDungeonOnly`, `LfgMaxTravelSeconds`): a bot posts an LFG, LFM or quest-help line for a place only
+  when it could be there soon. Of the bots waiting for one goal, the first in waiting order that is alive and out of combat and that stands
+  in the place's zone or a bordering one, or whose planned trip to the place (the travel planner: known flight paths, the hearthstone and
+  its bind point, mage portals and teleports, ships) takes at most `LfgMaxTravelSeconds`, or can be summoned by a warlock of the same
+  waiting group who knows Ritual of Summoning and is itself in or next to the place's zone, posts it. If none qualifies nothing is posted and
+  the holding bot is logged at Debug once per `LookingForGroupRepeatSeconds`. A bot's answer is worked out at most once per that interval.
+  A summon needs a warlock who knows Ritual of Summoning, carries a Soul Shard and stands in or next to the place's zone, with two more
+  of the waiting group there to help. At most eight such verdicts are worked out per social pass (the rest wait for the next one).
+  The same rule picks the dungeon of the idle "LFG" line a bot says when asked to look for a group: the dungeon whose exact level range
+  holds its level (highest minimum first) that it is near enough to. Off, the bot waiting longest always posts and the idle line names
+  the dungeon suited to its level, as before.
 - **Quest help** (`QuestHelp`): a bot waiting for partners on an elite quest asks General "anyone for <quest>?" once per
   `QuestHelpRepeatSeconds`.
 - **Trade** (`Trade`): once per `TradeRepeatSeconds`, in Trade in a capital (General `GeneralSharePercent` of the time, and only then

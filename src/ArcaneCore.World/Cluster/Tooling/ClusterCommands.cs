@@ -178,10 +178,13 @@ public sealed class ClusterCommands : ICommandGroup
         ClusterRole role = manifest?.Role ?? ClusterRole.Combined;
         Guid incarnation = manifest?.NodeIncarnation ?? worldToken?.Incarnation ?? Guid.Empty;
         int realmId = manifest?.RealmId ?? 1;
+        // Shown only for a node that runs a cluster role (Cluster:Node:Role); a Combined node's line is unchanged.
+        ClusterNodeRole nodeRole = services.GetService<IOptions<ClusterNodeOptions>>()?.Value.Role ?? ClusterNodeRole.Combined;
+        string nodeRoleText = nodeRole == ClusterNodeRole.Combined ? string.Empty : $" | nodeRole={nodeRole}";
 
         context.Reply(string.Create(
             c,
-            $"Cluster node: {nodeId} | role={role} | realm={realmId} | pid={Environment.ProcessId} | contract=v{ClusterNodeManifest.CurrentContractVersion} | inc={(incarnation == Guid.Empty ? "local" : incarnation.ToString("D"))}"));
+            $"Cluster node: {nodeId} | role={role}{nodeRoleText} | realm={realmId} | pid={Environment.ProcessId} | contract=v{ClusterNodeManifest.CurrentContractVersion} | inc={(incarnation == Guid.Empty ? "local" : incarnation.ToString("D"))}"));
 
         (int pendingWrites, int retainedFailures) = SumQueueDepths(services);
         context.Reply(string.Create(

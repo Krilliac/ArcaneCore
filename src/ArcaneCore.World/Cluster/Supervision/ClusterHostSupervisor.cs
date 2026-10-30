@@ -19,6 +19,9 @@ public enum SupervisedProcessState
     Draining = 3,
     Drained = 4,
     Faulted = 5,
+
+    /// <summary>The child stopped sending world-tick heartbeats; the supervisor is capturing, draining and killing it before it relaunches it.</summary>
+    Hung = 6,
 }
 
 /// <summary>
@@ -77,6 +80,12 @@ public interface ISupervisedProcess : IDisposable
     /// Returns <c>true</c> if the process exited cleanly within the timeout.
     /// </summary>
     Task<bool> RequestDrainAsync(TimeSpan timeout, CancellationToken ct = default);
+
+    /// <summary>
+    /// Writes one line to the child's standard input (the supervisor's forwarded lifecycle command, or the answer to a child's request). Returns false
+    /// when the line could not be delivered (the child has exited, stdin is closed, or the process does not take input). Never throws.
+    /// </summary>
+    bool TrySendLine(string line) => false;
 
     /// <summary>
     /// Terminates this supervisor-owned child process if it is still running. The system implementation kills the whole process tree
@@ -148,6 +157,22 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         };
 
         startInfo.Environment[SupervisedChild.EnvironmentVariable] = config.Name;
+
+        // The line protocol (SupervisorProtocol): the child beats on stdout, announces its stop, and may ask for a cross-world lifecycle command.
+        startInfo.Environment[SupervisorProtocol.EnvironmentVariable] = "1";
+        if (!string.IsNullOrEmpty(config.ProtocolToken))
+        {
+            startInfo.Environment[SupervisorProtocol.TokenEnvironmentVariable] = config.ProtocolToken;
+        }
+
+        if (config.RealmId > 0)
+        {
+            startInfo.Environment[SupervisorProtocol.RealmIdEnvironmentVariable] = config.RealmId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        else
+        {
+            startInfo.Environment.Remove(SupervisorProtocol.RealmIdEnvironmentVariable); // an inherited value must not name a realm this child was not given
+        }
 
         if (!string.IsNullOrWhiteSpace(config.WorkingDirectory))
         {
@@ -288,10 +313,8 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         {
             try
             {
-                while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
-                {
-                    OutputLineReceived?.Invoke(line, isStdErr);
-                }
+                // LF-delimited (a lone CR does not end a line): the protocol lines are matched whole, so a CR inside logged text cannot start a second one.
+                await SupervisorLineReader.ReadLinesAsync(reader, line => OutputLineReceived?.Invoke(line, isStdErr)).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
             {
@@ -312,6 +335,33 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             lock (_sync)
             {
                 return _exitCode ?? throw new ObjectDisposedException(nameof(OwnedSystemSupervisedProcess), $"Supervised child pid {_pid} exited, but its handle was closed before the exit code was read.");
+            }
+        }
+
+        private readonly Lock _stdinSync = new();
+
+        public bool TrySendLine(string line)
+        {
+            lock (_sync)
+            {
+                if (_exited || _disposed)
+                    return false;
+            }
+
+            try
+            {
+                lock (_stdinSync)
+                {
+                    StreamWriter stdin = _process.StandardInput;
+                    stdin.WriteLine(line);
+                    stdin.Flush();
+                }
+
+                return true;
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
+            {
+                return false; // stdin closed (a drain was sent), or the process is gone
             }
         }
 
@@ -356,24 +406,27 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
                 return; // not redirected or no associated process
             }
 
-            try
-            {
-                stdin.WriteLine(SupervisedChildDrain.DrainLine);
-                stdin.Flush();
-            }
-            catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
-            {
-                // The child does not read stdin, or already closed it (a second drain request).
-            }
-            finally
+            lock (_stdinSync) // one writer at a time with TrySendLine
             {
                 try
                 {
-                    stdin.Close();
+                    stdin.WriteLine(SupervisedChildDrain.DrainLine);
+                    stdin.Flush();
                 }
-                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
                 {
-                    // Already closed.
+                    // The child does not read stdin, or already closed it (a second drain request).
+                }
+                finally
+                {
+                    try
+                    {
+                        stdin.Close();
+                    }
+                    catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                    {
+                        // Already closed.
+                    }
                 }
             }
         }
@@ -459,6 +512,12 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
 public sealed record SupervisorStartPlan(IReadOnlyList<string> Admitted, IReadOnlyList<(string Name, string Reason)> Denied);
 
 /// <summary>
+/// Raised once when fewer than <see cref="ClusterSupervisorOptions.MinClusterProcesses"/> children are left running
+/// (<see cref="ClusterSupervisorOptions.StopWhenBelowMinimum"/>). <paramref name="AnyGaveUp"/> is true when a child was given up on (Faulted).
+/// </summary>
+public sealed record SupervisorBelowMinimum(int Running, int Minimum, bool AnyGaveUp);
+
+/// <summary>
 /// Immutable point-in-time status snapshot of a supervised process.
 /// </summary>
 public sealed record SupervisedProcessSnapshot(
@@ -472,7 +531,10 @@ public sealed record SupervisedProcessSnapshot(
     int LastBackoffDelayMs,
     SupervisedConsoleMode ConsoleMode,
     long RequiredMemoryMb,
-    ImmutableArray<uint> MapAssignments);
+    ImmutableArray<uint> MapAssignments,
+    int ConsecutiveFailures = 0,
+    SupervisedExitDisposition? LastDisposition = null,
+    long? LastBeatAgeMs = null);
 
 /// <summary>
 /// M15.4 Host Supervisor: manages process admission, windowless/windowed console multiplexing,
@@ -487,6 +549,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private readonly SupervisedOutputMultiplexer _multiplexer;
     private readonly IClusterCapacityProbe _capacityProbe;
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
+    private readonly TimeProvider _time;
+    private readonly ISupervisedHangCapture? _hangCapture;
+    private readonly string _protocolToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
+    private int _belowMinimumRaised;
+    private int _minimumWatchArmed;
     private readonly Dictionary<string, ManagedEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _supervisorStop = new();
     private bool _disposed;
@@ -496,7 +563,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         ISupervisedProcessLauncher launcher,
         SupervisedOutputMultiplexer? multiplexer = null,
         IClusterCapacityProbe? capacityProbe = null,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        TimeProvider? timeProvider = null,
+        ISupervisedHangCapture? hangCapture = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(launcher);
@@ -505,7 +574,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         _launcher = launcher;
         _multiplexer = multiplexer ?? new SupervisedOutputMultiplexer();
         _capacityProbe = capacityProbe ?? new SystemClusterCapacityProbe();
-        _delayAsync = delayAsync ?? Task.Delay;
+        _time = timeProvider ?? TimeProvider.System;
+        _delayAsync = delayAsync ?? ((delay, ct) => Task.Delay(delay, _time, ct));
+        _hangCapture = hangCapture;
 
         foreach ((string key, SupervisedProcessConfig config) in _options.Processes)
         {
@@ -513,11 +584,17 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 config.Name = key;
 
             config.Validate();
-            _entries[config.Name] = new ManagedEntry(config, key);
+            _entries[config.Name] = new ManagedEntry(config, key, _time);
         }
     }
 
     public SupervisedOutputMultiplexer Multiplexer => _multiplexer;
+
+    /// <summary>
+    /// Raised (once, on a thread-pool thread, outside the supervisor's lock) when fewer than <see cref="ClusterSupervisorOptions.MinClusterProcesses"/>
+    /// children are left running and <see cref="ClusterSupervisorOptions.StopWhenBelowMinimum"/> is on.
+    /// </summary>
+    public event Action<SupervisorBelowMinimum>? BelowMinimum;
 
     /// <summary>
     /// The one start order: ascending <see cref="SupervisedProcessConfig.StartOrder"/>, ties broken by configuration key (ordinal).
@@ -547,7 +624,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         {
             ManagedEntry[] active = _entries.Values
                 .Where(e => !string.Equals(e.Config.Name, candidate.Name, StringComparison.OrdinalIgnoreCase)
-                            && e.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff)
+                            && e.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Hung)
                 .ToArray();
 
             if (active.Length + 1 > _options.MaxConcurrentProcesses)
@@ -606,13 +683,13 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         lock (_gate)
         {
             if (_entries.TryGetValue(config.Name, out ManagedEntry? existing)
-                && existing.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Draining)
+                && existing.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Hung or SupervisedProcessState.Draining)
             {
                 throw new InvalidOperationException($"Cannot replace running supervised process '{config.Name}'.");
             }
 
             _options.Processes[config.Name] = config;
-            _entries[config.Name] = new ManagedEntry(config, config.Name);
+            _entries[config.Name] = new ManagedEntry(config, config.Name, _time);
         }
     }
 
@@ -631,7 +708,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             if (!_entries.TryGetValue(name, out entry!))
                 throw new KeyNotFoundException($"Unknown supervised process '{name}'.");
 
-            if (entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff)
+            if (entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Hung)
                 return Task.FromResult(entry.ToSnapshot());
 
             CapacityAdmissionResult admission = CheckAdmission(entry.Config);
@@ -667,7 +744,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             foreach (ManagedEntry entry in OrderedEntriesUnderLock())
             {
                 SupervisedProcessConfig cfg = entry.Config;
-                bool alreadyActive = entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff;
+                bool alreadyActive = entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Hung;
                 bool isWorker = string.Equals(cfg.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase);
 
                 if (!alreadyActive)
@@ -931,92 +1008,566 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     private void LaunchEntryUnderLock(ManagedEntry entry)
     {
+        entry.Config.ProtocolToken = _protocolToken;
         ISupervisedProcess process = _launcher.Launch(entry.Config);
-        process.OutputLineReceived += (line, isStdErr) => _multiplexer.RouteLine(entry.Config, line, isStdErr);
+        entry.BeginIncarnation(_time.GetTimestamp());
+        process.OutputLineReceived += (line, isStdErr) => OnChildLine(entry, process, line, isStdErr);
         entry.Process = process;
         entry.Incarnation++;
         entry.State = SupervisedProcessState.Running;
+        StartHangWatchUnderLock(entry, process);
     }
 
+    // ---- the line protocol (child stdout) ----
+
+    /// <summary>
+    /// One line a child wrote. Heartbeats, the stop announcement and cross-world lifecycle requests are the supervisor's own protocol: consumed here
+    /// (stdout only) and never routed to the console. Everything else, including a line that only looks like the protocol, is ordinary output.
+    /// </summary>
+    private void OnChildLine(ManagedEntry entry, ISupervisedProcess process, string line, bool isStdErr)
+    {
+        if (!isStdErr)
+        {
+            if (SupervisorProtocol.TryParseHeartbeat(line, out SupervisorHeartbeatState beat))
+            {
+                RecordBeat(entry, process, beat);
+                return;
+            }
+
+            // The stop announcement is authenticated like a request: child output includes logged text a player or GM influences, so a token-less
+            // (or wrong-token) stopping line is ordinary output and never starts the stop grace or sets the announced intent.
+            if (SupervisorProtocol.TryParseStopping(line, out string stoppingToken, out SupervisorStopIntent intent, out _) && TokenMatches(stoppingToken))
+            {
+                RecordStopping(entry, process, intent);
+                return;
+            }
+
+            if (SupervisorProtocol.TryParseLifecycleRequest(line, out SupervisorLifecycleRequest request))
+            {
+                HandleLifecycleRequest(entry, process, request);
+                return;
+            }
+        }
+
+        _multiplexer.RouteLine(entry.Config, line, isStdErr);
+    }
+
+    private void RecordBeat(ManagedEntry entry, ISupervisedProcess process, SupervisorHeartbeatState beat)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(entry.Process, process))
+                return; // a line from an incarnation that has been replaced
+
+            // A heartbeat is liveness only, whatever state it names: the authenticated stopping line is what suspends the hang watch.
+            entry.LastBeatTimestamp = _time.GetTimestamp();
+            if (beat == SupervisorHeartbeatState.Alive && !entry.Armed)
+            {
+                entry.Armed = true; // the first world-tick beat arms the hang watch (ready is sent before the world ticks)
+                entry.WakeWatcher();
+            }
+        }
+    }
+
+    private void RecordStopping(ManagedEntry entry, ISupervisedProcess process, SupervisorStopIntent intent)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(entry.Process, process))
+                return;
+
+            entry.AnnouncedIntent = intent;
+            entry.StopAnnouncedTimestamp ??= _time.GetTimestamp();
+            entry.WakeWatcher();
+        }
+    }
+
+    /// <summary>
+    /// A child asked for a lifecycle command on another child (a GM's cross-world <c>.server shutdown|restart</c>). Validates the per-run token and the
+    /// target realm id, forwards the command on the target's stdin and tells the issuer what happened. The write runs off the issuing child's output
+    /// pump so a slow target cannot stall it.
+    /// </summary>
+    private void HandleLifecycleRequest(ManagedEntry issuer, ISupervisedProcess issuerProcess, SupervisorLifecycleRequest request)
+    {
+        SupervisorLifecycleStatus status;
+        string reason;
+        ManagedEntry? target = null;
+        ISupervisedProcess? targetProcess = null;
+
+        lock (_gate)
+        {
+            if (!ReferenceEquals(issuer.Process, issuerProcess))
+                return;
+
+            if (!TokenMatches(request.Token))
+            {
+                status = SupervisorLifecycleStatus.Rejected;
+                reason = "its token is not this supervisor's";
+            }
+            else
+            {
+                target = _entries.Values.FirstOrDefault(e => e.Config.RealmId > 0 && e.Config.RealmId == request.RealmId);
+                if (target is null)
+                {
+                    status = SupervisorLifecycleStatus.UnknownRealm;
+                    reason = $"unknown realm {request.RealmId}";
+                }
+                else if (target.State != SupervisedProcessState.Running || target.Process is null)
+                {
+                    status = SupervisorLifecycleStatus.Rejected;
+                    reason = $"realm {request.RealmId} ('{target.Config.Name}') is not running";
+                }
+                else
+                {
+                    status = SupervisorLifecycleStatus.Forwarded;
+                    reason = $"forwarded to realm {request.RealmId} ('{target.Config.Name}')";
+                    targetProcess = target.Process;
+                }
+            }
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (status == SupervisorLifecycleStatus.Forwarded && targetProcess is not null && !targetProcess.TrySendLine(SupervisorProtocol.FormatForwardedLifecycle(request)))
+                {
+                    status = SupervisorLifecycleStatus.Rejected;
+                    reason = $"realm {request.RealmId} could not be written to";
+                }
+
+                string text = status == SupervisorLifecycleStatus.Forwarded
+                    ? $"Lifecycle {request.Action.ToString().ToLowerInvariant()} (delay {request.DelaySeconds} s, exit code {request.ExitCode}) requested by {request.By}: {reason}."
+                    : $"WARNING: Ignored the lifecycle {request.Action.ToString().ToLowerInvariant()} requested by {request.By}: {reason}.";
+                _multiplexer.RouteLine(issuer.Config, text, isStdErr: status != SupervisorLifecycleStatus.Forwarded);
+                issuerProcess.TrySendLine(SupervisorProtocol.FormatLifecycleResult(new SupervisorLifecycleResult(request.RealmId, status, request.By)));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("cluster.supervisor.lifecycle-request", ex);
+            }
+        });
+    }
+
+    private bool TokenMatches(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        byte[] expected = System.Text.Encoding.UTF8.GetBytes(_protocolToken);
+        byte[] given = System.Text.Encoding.UTF8.GetBytes(token);
+        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(expected, given);
+    }
+
+    // ---- the hang watch ----
+
+    private enum WatchAction
+    {
+        None,
+        WarnNoBeat,
+        Hang,
+        StopGraceKill,
+    }
+
+    private void StartHangWatchUnderLock(ManagedEntry entry, ISupervisedProcess process)
+    {
+        if (entry.Config.HangTimeoutSeconds <= 0 || entry.StopCts is null)
+            return;
+
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(entry.StopCts.Token);
+        entry.WatchCts = cts;
+        CancellationToken token = cts.Token;
+        _ = Task.Run(() => HangWatchAsync(entry, process, token));
+    }
+
+    /// <summary>
+    /// Watches one incarnation of a child. Armed by its first <c>alive</c> beat, it acts when no beat has come for <c>HangTimeoutSeconds</c>; it is
+    /// suspended once the child has announced that it is stopping (then only the stop grace applies); a child that never beats gets one warning after
+    /// <c>HeartbeatGraceSeconds</c> and is never killed for silence. It sleeps until the next moment it could have to act, or until a protocol line
+    /// that changes what it waits for, so a healthy child costs one wake-up per timeout.
+    /// </summary>
+    private async Task HangWatchAsync(ManagedEntry entry, ISupervisedProcess process, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                WatchAction action = WatchAction.None;
+                TimeSpan wait = Timeout.InfiniteTimeSpan;
+                Task wake;
+                TimeSpan silence = TimeSpan.Zero;
+
+                lock (_gate)
+                {
+                    if (!ReferenceEquals(entry.Process, process) || entry.State != SupervisedProcessState.Running)
+                        return;
+
+                    SupervisedProcessConfig config = entry.Config;
+                    long now = _time.GetTimestamp();
+                    wake = entry.NewWakeSignal();
+
+                    if (entry.StopAnnouncedTimestamp is { } stoppedAt)
+                    {
+                        TimeSpan grace = TimeSpan.FromMilliseconds(config.StopGraceMs > 0 ? config.StopGraceMs : config.DrainTimeoutMs);
+                        TimeSpan left = grace - _time.GetElapsedTime(stoppedAt, now);
+                        if (left <= TimeSpan.Zero)
+                        {
+                            action = WatchAction.StopGraceKill;
+                            entry.KillKind = SupervisorKillKind.StopGrace;
+                        }
+                        else
+                        {
+                            wait = left;
+                        }
+                    }
+                    else if (!entry.Armed)
+                    {
+                        TimeSpan left = TimeSpan.FromSeconds(config.HeartbeatGraceSeconds) - _time.GetElapsedTime(entry.LaunchTimestamp, now);
+                        if (entry.GraceWarned)
+                        {
+                            wait = Timeout.InfiniteTimeSpan; // warned; only the first beat or a stop announcement changes anything
+                        }
+                        else if (left <= TimeSpan.Zero)
+                        {
+                            action = WatchAction.WarnNoBeat;
+                            entry.GraceWarned = true;
+                        }
+                        else
+                        {
+                            wait = left;
+                        }
+                    }
+                    else
+                    {
+                        silence = _time.GetElapsedTime(entry.LastBeatTimestamp ?? entry.LaunchTimestamp, now);
+                        TimeSpan left = TimeSpan.FromSeconds(config.HangTimeoutSeconds) - silence;
+                        if (left <= TimeSpan.Zero)
+                        {
+                            action = WatchAction.Hang;
+                            entry.KillKind = SupervisorKillKind.Hang;
+                            entry.State = SupervisedProcessState.Hung;
+                        }
+                        else
+                        {
+                            wait = left;
+                        }
+                    }
+                }
+
+                switch (action)
+                {
+                    case WatchAction.None:
+                        await WaitForWakeOrDelayAsync(wait, wake, ct).ConfigureAwait(false);
+                        break;
+
+                    case WatchAction.WarnNoBeat:
+                        _multiplexer.RouteLine(
+                            entry.Config,
+                            $"WARNING: Process '{entry.Config.Name}' has sent no heartbeat {entry.Config.HeartbeatGraceSeconds} s after it was launched; hang detection stays off until its first beat (is Ops:Watchdog off, or is it still starting?).",
+                            isStdErr: true);
+                        break;
+
+                    case WatchAction.StopGraceKill:
+                        await KillStuckStopAsync(entry, process).ConfigureAwait(false);
+                        return;
+
+                    case WatchAction.Hang:
+                        await RecoverHungChildAsync(entry, process, silence, ct).ConfigureAwait(false);
+                        return;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (!ct.IsCancellationRequested)
+            {
+                FaultLedger.Shared.Record("cluster.supervisor.hang-watch", ex);
+            }
+        }
+    }
+
+    private async Task WaitForWakeOrDelayAsync(TimeSpan wait, Task wake, CancellationToken ct)
+    {
+        using var delayCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task delay = _delayAsync(wait, delayCts.Token);
+        try
+        {
+            await Task.WhenAny(delay, wake).ConfigureAwait(false);
+        }
+        finally
+        {
+            await delayCts.CancelAsync().ConfigureAwait(false);
+        }
+
+        try
+        {
+            await delay.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Released by the cancel above, or the watch is ending: the loop condition decides.
+        }
+    }
+
+    /// <summary>The child announced that it is stopping and has not exited within its grace: kill it (no second drain request) and let the monitor classify the exit by what it announced.</summary>
+    private async Task KillStuckStopAsync(ManagedEntry entry, ISupervisedProcess process)
+    {
+        _multiplexer.RouteLine(
+            entry.Config,
+            $"ERROR: Process '{entry.Config.Name}' (pid {process.ProcessId}) announced that it is stopping but has not exited; killing it.",
+            isStdErr: true);
+        await Task.Run(process.KillOwnedProcess).ConfigureAwait(false);
+        FaultIfStillAlive(entry, process);
+    }
+
+    /// <summary>No world tick for the hang timeout: capture (optional, bounded), ask the child to drain, kill it, and leave the relaunch to the monitor (with backoff). A kill that does not take leaves the child Faulted and unrestarted.</summary>
+    private async Task RecoverHungChildAsync(ManagedEntry entry, ISupervisedProcess process, TimeSpan silence, CancellationToken ct)
+    {
+        SupervisedProcessConfig config = entry.Config;
+        _multiplexer.RouteLine(
+            config,
+            $"ERROR: Process '{config.Name}' (pid {process.ProcessId}) sent no world tick heartbeat for {silence.TotalSeconds:0} s (hang timeout {config.HangTimeoutSeconds} s); draining and restarting it.",
+            isStdErr: true);
+        AnomalyLedger.Shared.Report("cluster", "supervisor-hang", config.Name, $"pid={process.ProcessId} silent={silence.TotalSeconds:0}s", AnomalySeverity.Error);
+
+        if (config.HangCapture != SupervisedHangCaptureMode.None && _hangCapture is not null)
+        {
+            await CaptureHangAsync(config, process, ct).ConfigureAwait(false);
+        }
+
+        bool exited = false;
+        try
+        {
+            exited = await process.RequestDrainAsync(TimeSpan.FromMilliseconds(config.HangDrainTimeoutMs), ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return; // the supervisor is stopping; its own drain takes over
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.supervisor.hang-drain", ex);
+        }
+
+        if (!exited)
+        {
+            await Task.Run(process.KillOwnedProcess).ConfigureAwait(false);
+        }
+
+        FaultIfStillAlive(entry, process);
+    }
+
+    private async Task CaptureHangAsync(SupervisedProcessConfig config, ISupervisedProcess process, CancellationToken ct)
+    {
+        string? tool = string.IsNullOrWhiteSpace(_options.StackCaptureTool) ? null : _options.StackCaptureTool;
+        var request = new SupervisedHangCaptureRequest(config.Name, process.ProcessId, config.HangCapture, _options.HangCaptureDirectory, tool);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task capture = _hangCapture!.CaptureAsync(request, cts.Token);
+        Task timeout = _delayAsync(TimeSpan.FromSeconds(_options.HangCaptureTimeoutSeconds), cts.Token);
+        Task winner;
+        try
+        {
+            winner = await Task.WhenAny(capture, timeout).ConfigureAwait(false);
+        }
+        finally
+        {
+            await cts.CancelAsync().ConfigureAwait(false);
+        }
+
+        // Neither loser is awaited (a capture that ignores its token must not hold up the kill): both are observed so a late fault is not unobserved.
+        _ = capture.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+        _ = timeout.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+
+        if (!ReferenceEquals(winner, capture))
+        {
+            _multiplexer.RouteLine(
+                config,
+                $"WARNING: The hang capture of process '{config.Name}' did not finish within {_options.HangCaptureTimeoutSeconds} s; draining it anyway.",
+                isStdErr: true);
+            return;
+        }
+
+        try
+        {
+            await capture.ConfigureAwait(false);
+            _multiplexer.RouteLine(config, $"Hang capture ({config.HangCapture}) of process '{config.Name}' written to {_options.HangCaptureDirectory}.", isStdErr: false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+        {
+            FaultLedger.Shared.Record("cluster.supervisor.hang-capture", ex);
+            _multiplexer.RouteLine(config, $"WARNING: The hang capture of process '{config.Name}' failed: {ex.Message}", isStdErr: true);
+        }
+    }
+
+    /// <summary>After a kill: a child that is still running cannot be restarted (it still owns its pid); mark it Faulted, report it, and let the monitor see no exit.</summary>
+    private void FaultIfStillAlive(ManagedEntry entry, ISupervisedProcess process)
+    {
+        if (process.HasExited)
+            return;
+
+        lock (_gate)
+        {
+            if (!ReferenceEquals(entry.Process, process) || entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
+                return;
+
+            entry.State = SupervisedProcessState.Faulted;
+            entry.LastDisposition = SupervisedExitDisposition.Fault;
+        }
+
+        _multiplexer.RouteLine(
+            entry.Config,
+            $"FATAL: Process '{entry.Config.Name}' (pid {process.ProcessId}) is still running after a drain request and a kill; not restarting it, and it remains in the owned set.",
+            isStdErr: true);
+        AnomalyLedger.Shared.Report("cluster", "supervisor-kill-failed", entry.Config.Name, $"pid={process.ProcessId}", AnomalySeverity.Error);
+        NotifyIfBelowMinimum();
+    }
+
+    // ---- exits and restarts ----
+
+    /// <summary>
+    /// Waits for each exit of the child and decides what happens next from <see cref="SupervisedExitClassifier"/>: stay down, relaunch at once, relaunch
+    /// after a capped exponential backoff, or fault. A crash loop (more than <c>CrashLoopMaxRestarts</c> failures inside <c>CrashLoopWindowSeconds</c>)
+    /// and a relaunch that cannot start are failures too, so they back off and eventually give up instead of looping or faulting at the first error.
+    /// </summary>
     private async Task MonitorProcessLoopAsync(ManagedEntry entry, CancellationToken ct)
     {
-        int consecutiveFailures = 0;
+        bool relaunchPending = false;
+        int delayMs = 0;
 
         while (!ct.IsCancellationRequested)
         {
-            ISupervisedProcess? currentProcess;
-            lock (_gate)
+            string? announcement = null;
+            bool announcementIsError = true;
+
+            if (!relaunchPending)
             {
-                if (entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
+                ISupervisedProcess? currentProcess;
+                lock (_gate)
+                {
+                    if (entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
+                        return;
+
+                    currentProcess = entry.Process;
+                }
+
+                if (currentProcess is null)
                     return;
 
-                currentProcess = entry.Process;
-            }
-
-            if (currentProcess is null)
-                return;
-
-            int exitCode;
-            try
-            {
-                exitCode = await currentProcess.WaitForExitAsync(ct).ConfigureAwait(false);
-            }
-            catch (Exception) when (ct.IsCancellationRequested)
-            {
-                // Stop or dispose: a cancelled wait, or a handle closed by the wrapper's Dispose after it confirmed the exit. Not a fault.
-                return;
-            }
-
-            int delayMs;
-            lock (_gate)
-            {
-                entry.LastExitCode = exitCode;
-                if (entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped
-                    || ct.IsCancellationRequested)
+                int exitCode;
+                try
                 {
+                    exitCode = await currentProcess.WaitForExitAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception) when (ct.IsCancellationRequested)
+                {
+                    // Stop or dispose: a cancelled wait, or a handle closed by the wrapper's Dispose after it confirmed the exit. Not a fault.
                     return;
                 }
 
-                if (exitCode == ExitCodes.InvalidConfiguration)
+                bool notify = false;
+                lock (_gate)
                 {
-                    // EX_CONFIG: the child refused its own configuration; a restart would fail the same way, forever.
-                    entry.State = SupervisedProcessState.Faulted;
+                    entry.LastExitCode = exitCode;
+                    if (entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped or SupervisedProcessState.Faulted
+                        || ct.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    long now = _time.GetTimestamp();
+                    bool healthy = _time.GetElapsedTime(entry.LaunchTimestamp, now) >= TimeSpan.FromSeconds(_options.HealthyUptimeSeconds);
+                    SupervisedExitDisposition disposition = SupervisedExitClassifier.Classify(exitCode, entry.KillKind, entry.AnnouncedIntent);
+                    SupervisorKillKind killedBy = entry.KillKind;
+                    entry.LastDisposition = disposition;
+                    entry.EndIncarnation();
                     entry.Process?.Dispose();
                     entry.Process = null;
-                    _multiplexer.RouteLine(
-                        entry.Config,
-                        $"FATAL: Process '{entry.Config.Name}' exited with code {exitCode} (invalid configuration); not restarting.",
-                        isStdErr: true);
-                    return;
+
+                    switch (disposition)
+                    {
+                        case SupervisedExitDisposition.StayDown:
+                            entry.State = SupervisedProcessState.Stopped;
+                            entry.ConsecutiveFailures = 0;
+                            entry.LastBackoffDelayMs = 0;
+                            announcement = $"Process '{entry.Config.Name}' exited with code {exitCode}; leaving it down.";
+                            announcementIsError = false;
+                            notify = true;
+                            break;
+
+                        case SupervisedExitDisposition.Fault:
+                            entry.State = SupervisedProcessState.Faulted;
+                            announcement = $"FATAL: Process '{entry.Config.Name}' exited with code {exitCode} ({(exitCode == ExitCodes.InvalidConfiguration ? "invalid configuration" : "usage error")}); not restarting.";
+                            notify = true;
+                            break;
+
+                        case SupervisedExitDisposition.RelaunchNow:
+                            entry.ConsecutiveFailures = 0;
+                            if (!healthy && GiveUpOnCrashLoopUnderLock(entry, now, exitCode, out announcement))
+                            {
+                                notify = true;
+                                break;
+                            }
+
+                            entry.RestartCount++;
+                            delayMs = _options.RestartDelayMs;
+                            entry.LastBackoffDelayMs = delayMs;
+                            entry.State = SupervisedProcessState.BackingOff;
+                            announcement = killedBy == SupervisorKillKind.StopGrace
+                                ? $"Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) was killed after it announced a restart; relaunching it (restart #{entry.RestartCount})."
+                                : $"Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) exited with code {exitCode} (restart requested); relaunching it (restart #{entry.RestartCount}).";
+                            announcementIsError = false;
+                            relaunchPending = true;
+                            break;
+
+                        default:
+                            if (healthy)
+                                entry.ConsecutiveFailures = 0;
+
+                            entry.ConsecutiveFailures++;
+                            if (GiveUpOnCrashLoopUnderLock(entry, now, exitCode, out announcement))
+                            {
+                                notify = true;
+                                break;
+                            }
+
+                            entry.RestartCount++;
+                            delayMs = ClusterSupervisorOptions.ComputeBackoffDelayMs(entry.ConsecutiveFailures, entry.Config.RestartBackoffMinMs, entry.Config.RestartBackoffMaxMs);
+                            entry.LastBackoffDelayMs = delayMs;
+                            entry.State = SupervisedProcessState.BackingOff;
+                            announcement = killedBy == SupervisorKillKind.Hang
+                                ? $"ERROR: Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) was killed as hung (exit code {exitCode}); restarting in {delayMs} ms (restart #{entry.RestartCount})."
+                                : $"ERROR: Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) exited unexpectedly with code {exitCode}; restarting in {delayMs} ms (restart #{entry.RestartCount}).";
+                            relaunchPending = true;
+                            break;
+                    }
                 }
 
-                consecutiveFailures++;
-                entry.RestartCount++;
-                delayMs = ClusterSupervisorOptions.ComputeBackoffDelayMs(
-                    consecutiveFailures,
-                    entry.Config.RestartBackoffMinMs,
-                    entry.Config.RestartBackoffMaxMs);
-                entry.LastBackoffDelayMs = delayMs;
-                entry.State = SupervisedProcessState.BackingOff;
-                entry.Process?.Dispose();
-                entry.Process = null;
+                // Surface the exit through the multiplexer: an error is always visible in the merged console.
+                if (announcement is not null)
+                {
+                    _multiplexer.RouteLine(entry.Config, announcement, isStdErr: announcementIsError);
+                }
+
+                if (notify)
+                {
+                    NotifyIfBelowMinimum();
+                    return;
+                }
             }
 
-            // Surface unexpected process termination through the multiplexer as an error so it is always visible in the merged console.
-            _multiplexer.RouteLine(
-                entry.Config,
-                $"ERROR: Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) exited unexpectedly with code {exitCode}; restarting in {delayMs} ms (restart #{entry.RestartCount}).",
-                isStdErr: true);
-
-            try
+            if (delayMs > 0)
             {
-                await _delayAsync(TimeSpan.FromMilliseconds(delayMs), ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                return;
+                try
+                {
+                    await _delayAsync(TimeSpan.FromMilliseconds(delayMs), ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return;
+                }
             }
 
+            bool gaveUp = false;
             lock (_gate)
             {
                 if (entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped
@@ -1028,20 +1579,94 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 try
                 {
                     LaunchEntryUnderLock(entry);
+                    relaunchPending = false;
+                    announcement = null;
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
                     FaultLedger.Shared.Record("cluster.supervisor", ex);
                     AnomalyLedger.Shared.Report("cluster", "gateway-fault", entry.Config.Name, $"phase=relaunch error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
-                    entry.State = SupervisedProcessState.Faulted;
-                    _multiplexer.RouteLine(
-                        entry.Config,
-                        $"FATAL: Failed to relaunch process '{entry.Config.Name}': {ex.Message}",
-                        isStdErr: true);
-                    return;
+                    entry.ConsecutiveFailures++;
+                    if (GiveUpOnCrashLoopUnderLock(entry, _time.GetTimestamp(), null, out announcement))
+                    {
+                        gaveUp = true;
+                    }
+                    else
+                    {
+                        delayMs = ClusterSupervisorOptions.ComputeBackoffDelayMs(entry.ConsecutiveFailures, entry.Config.RestartBackoffMinMs, entry.Config.RestartBackoffMaxMs);
+                        entry.LastBackoffDelayMs = delayMs;
+                        entry.State = SupervisedProcessState.BackingOff;
+                        announcement = $"ERROR: Failed to relaunch process '{entry.Config.Name}': {ex.Message}; trying again in {delayMs} ms.";
+                    }
                 }
             }
+
+            if (announcement is not null)
+            {
+                _multiplexer.RouteLine(entry.Config, announcement, isStdErr: true);
+            }
+
+            if (gaveUp)
+            {
+                NotifyIfBelowMinimum();
+                return;
+            }
         }
+    }
+
+    /// <summary>
+    /// Records one failure of <paramref name="entry"/> at <paramref name="now"/> and, when that is more than <c>CrashLoopMaxRestarts</c> inside the window,
+    /// marks the child Faulted, writes the ledgers and returns true with the message to show. Call under <c>_gate</c>.
+    /// </summary>
+    private bool GiveUpOnCrashLoopUnderLock(ManagedEntry entry, long now, int? exitCode, out string? message)
+    {
+        TimeSpan window = TimeSpan.FromSeconds(_options.CrashLoopWindowSeconds);
+        entry.FailureStamps.Enqueue(now);
+        while (entry.FailureStamps.Count > 0 && _time.GetElapsedTime(entry.FailureStamps.Peek(), now) > window)
+        {
+            entry.FailureStamps.Dequeue();
+        }
+
+        if (entry.FailureStamps.Count <= _options.CrashLoopMaxRestarts)
+        {
+            message = null;
+            return false;
+        }
+
+        entry.State = SupervisedProcessState.Faulted;
+        entry.LastDisposition = SupervisedExitDisposition.Fault;
+        string last = exitCode is { } code ? $"the last exit code was {code}" : "the last relaunch could not start the process";
+        message = $"FATAL: Process '{entry.Config.Name}' failed {entry.FailureStamps.Count} times within {_options.CrashLoopWindowSeconds} s (crash loop; {last}); giving up, not restarting it.";
+        AnomalyLedger.Shared.Report("cluster", "supervisor-crash-loop", entry.Config.Name, $"failures={entry.FailureStamps.Count} window={_options.CrashLoopWindowSeconds}s {last}", AnomalySeverity.Error);
+        FaultLedger.Shared.Record("cluster.supervisor.crash-loop", new InvalidOperationException(message));
+        return true;
+    }
+
+    /// <summary>Starts watching the child count: until this is called an exit during startup cannot make the supervisor stop itself, and the first call evaluates the state at once.</summary>
+    public void BeginMinimumWatch()
+    {
+        Volatile.Write(ref _minimumWatchArmed, 1);
+        NotifyIfBelowMinimum();
+    }
+
+    /// <summary>Raises <see cref="BelowMinimum"/> once when fewer than <see cref="ClusterSupervisorOptions.MinClusterProcesses"/> children are alive (running, backing off, hung or draining).</summary>
+    private void NotifyIfBelowMinimum()
+    {
+        SupervisorBelowMinimum? report = null;
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _minimumWatchArmed) == 0 || !_options.StopWhenBelowMinimum || _disposed || _belowMinimumRaised != 0)
+                return;
+
+            int alive = _entries.Values.Count(e => e.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Hung or SupervisedProcessState.Draining);
+            if (alive >= _options.MinClusterProcesses)
+                return;
+
+            _belowMinimumRaised = 1;
+            report = new SupervisorBelowMinimum(alive, _options.MinClusterProcesses, _entries.Values.Any(e => e.State == SupervisedProcessState.Faulted));
+        }
+
+        BelowMinimum?.Invoke(report);
     }
 
     public async ValueTask DisposeAsync()
@@ -1075,7 +1700,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             entries = [.. _entries.Values];
             foreach (ManagedEntry entry in entries)
             {
-                if (entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Draining)
+                if (entry.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Hung or SupervisedProcessState.Draining)
                     entry.State = SupervisedProcessState.Stopped; // the monitor loop returns at its next check instead of relaunching
             }
         }
@@ -1109,6 +1734,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         {
             foreach (ManagedEntry entry in entries)
             {
+                entry.EndIncarnation();
                 entry.StopCts?.Dispose();
                 entry.StopCts = null;
                 entry.MonitorTask = null;
@@ -1130,13 +1756,80 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public int RestartCount { get; set; }
         public int? LastExitCode { get; set; }
         public int LastBackoffDelayMs { get; set; }
+        public int ConsecutiveFailures { get; set; }
+        public SupervisedExitDisposition? LastDisposition { get; set; }
+        public long? LastBeatTimestamp { get; set; }
         public CancellationTokenSource? StopCts { get; set; }
         public Task? MonitorTask { get; set; }
 
-        public ManagedEntry(SupervisedProcessConfig config, string key)
+        // Per-incarnation hang-watch state; all of it is read and written under the supervisor's _gate.
+        public long LaunchTimestamp { get; set; }
+        public bool Armed { get; set; }
+        public bool GraceWarned { get; set; }
+        public long? StopAnnouncedTimestamp { get; set; }
+        public SupervisorStopIntent? AnnouncedIntent { get; set; }
+        public SupervisorKillKind KillKind { get; set; }
+        public CancellationTokenSource? WatchCts { get; set; }
+        public Queue<long> FailureStamps { get; } = new();
+
+        private TaskCompletionSource _wake = NewSignal();
+
+        private readonly TimeProvider _time;
+
+        private static TaskCompletionSource NewSignal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Resets the per-incarnation state for a fresh launch.</summary>
+        public void BeginIncarnation(long now)
+        {
+            EndIncarnation();
+            LaunchTimestamp = now;
+            LastBeatTimestamp = null;
+            Armed = false;
+            GraceWarned = false;
+            StopAnnouncedTimestamp = null;
+            AnnouncedIntent = null;
+            KillKind = SupervisorKillKind.None;
+            _wake = NewSignal();
+        }
+
+        /// <summary>Ends the hang watch of the current incarnation (cancels it and releases anything waiting on it).</summary>
+        public void EndIncarnation()
+        {
+            CancellationTokenSource? cts = WatchCts;
+            WatchCts = null;
+            if (cts is not null)
+            {
+                try
+                {
+                    cts.Cancel();
+                }
+                catch (ObjectDisposedException)
+                {
+                    // already torn down
+                }
+
+                cts.Dispose();
+            }
+
+            _wake.TrySetResult();
+        }
+
+        /// <summary>A task that completes at the next protocol line that changes what the watch waits for. Call under _gate.</summary>
+        public Task NewWakeSignal()
+        {
+            if (_wake.Task.IsCompleted)
+                _wake = NewSignal();
+
+            return _wake.Task;
+        }
+
+        public void WakeWatcher() => _wake.TrySetResult();
+
+        public ManagedEntry(SupervisedProcessConfig config, string key, TimeProvider time)
         {
             Config = config;
             Key = key;
+            _time = time;
             MapAssignments = [.. config.MapAssignments];
         }
 
@@ -1151,6 +1844,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             LastBackoffDelayMs,
             Config.Console,
             Config.RequiredMemoryMb,
-            [.. MapAssignments]);
+            [.. MapAssignments],
+            ConsecutiveFailures,
+            LastDisposition,
+            LastBeatTimestamp is { } beat ? (long)_time.GetElapsedTime(beat).TotalMilliseconds : null);
     }
 }

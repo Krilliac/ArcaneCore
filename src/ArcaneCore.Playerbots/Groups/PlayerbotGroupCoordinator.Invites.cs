@@ -75,8 +75,7 @@ public sealed partial class PlayerbotGroupCoordinator
     /// </summary>
     private PlayerbotGroupPlan? MatchWithPlayer(List<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupGoal goal, GroupManager groupManager)
     {
-        PlayerbotGroupCandidate oldest = candidates.OrderBy(c => c.NeedSinceMs).First();
-        if (_bots[oldest.BotId].Session.Player is not { Map: { } map } anchor) return null;
+        if (PlayerbotGroupContent.QualifyingAnchor(candidates) is not { } oldest || _bots[oldest.BotId].Session.Player is not { Map: { } map } anchor) return null;
         uint now = Now;
         if (_invitedPlayers.Count > 0)
             foreach ((ObjectGuid key, uint until) in _invitedPlayers)
@@ -104,10 +103,10 @@ public sealed partial class PlayerbotGroupCoordinator
             var withPlayer = new List<PlayerbotGroupCandidate>(candidates)
             {
                 new(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
-                    new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, _ => false), Gear(real), uint.MaxValue),
+                    new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, _ => false), Gear(real), uint.MaxValue, Qualifying: PlayerbotGroupContent.QualifiesAtLevel(goal, real.Level)),
             };
             // A real player never leads a bot group: the bots keep their goal.
-            if (PlayerbotGroupContent.Match(withPlayer, size, groups) is { } plan && plan.Leader.BotId != Guid.Empty
+            if (PlayerbotGroupContent.Match(withPlayer, size, groups, goal.InInstance) is { } plan && plan.Leader.BotId != Guid.Empty
                 && plan.Members.Any(m => m.Bot.BotId == Guid.Empty))
             {
                 _invitedPlayers[real.Guid] = unchecked(now + (uint)(groups.InvitePlayerCooldownMinutes * 60_000));

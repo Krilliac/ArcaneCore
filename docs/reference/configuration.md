@@ -25,6 +25,7 @@ How to read the tables:
 - [`CharacterCreation`](#charactercreation)
 - [`ClientData`](#clientdata)
 - [`Cluster:Fencing`](#clusterfencing)
+- [`Cluster:Node`](#clusternode)
 - [`Cluster:NodeBridge`](#clusternodebridge)
 - [`Cluster:Supervisor`](#clustersupervisor)
 - [`Cluster:Worker`](#clusterworker)
@@ -309,6 +310,14 @@ How to read the tables:
 | `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
 | `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
 
+## `Cluster:Node`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Node:AuthorityLeaseRenewSeconds` | `int` | `10` | - | How often a held lease is renewed (1 to a third of the TTL). A node that cannot renew in time stops itself rather than run a singleton without the lease. Only used when Role is not Combined. |
+| `Cluster:Node:AuthorityLeaseTtlSeconds` | `int` | `30` | - | How long a realm singleton lease stays valid without a renewal (5 to 600). A node that dies releases its singletons to another node after this long. Only used when Role is not Combined. |
+| `Cluster:Node:Role` | `ClusterNodeRole` | `Combined` | - | The role this World process runs as: `Combined` (the default) runs every feature here. `MapWorker` needs Cluster:Worker:Enabled = true; the realm-wide singletons (the auction house bot and AutoBroadcast) then run on this node only while it holds their database lease. `Social`, `Economy` and `Gateway` are refused on a World process: the shared auction, mail and presence state they would need does not exist yet. Values: `Combined`, `Gateway`, `MapWorker`, `Social`, `Economy`. |
+
 ## `Cluster:NodeBridge`
 
 | Key | Type | Default | Reload | Meaning |
@@ -320,12 +329,20 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
+| `Cluster:Supervisor:CrashLoopMaxRestarts` | `int` | `5` | - | How many times a child may be restarted within `CrashLoopWindowSeconds` before the supervisor gives up on it (default 5; 1 to 1000): that many restarts are allowed, and the next failure inside the window (the one after the last allowed restart) leaves it Faulted and is recorded in the fault and anomaly ledgers. A restart request (exit code 2) after a healthy run does not count. |
+| `Cluster:Supervisor:CrashLoopWindowSeconds` | `int` | `300` | - | The window the crash-loop count is taken over, in seconds (default 300; 10 to 86400). |
 | `Cluster:Supervisor:Enabled` | `bool` | `false` | - | Runs this World process as the host supervisor only (default: false): it launches and watches the configured `Processes` and starts no world, database, listener or feature. Off, a World start is unchanged. |
+| `Cluster:Supervisor:HangCaptureDirectory` | `string` | `"logs/supervisor-captures"` | - | Where hang captures (stack reports and dumps) are written (default `logs/supervisor-captures`); relative to the working directory. |
+| `Cluster:Supervisor:HangCaptureTimeoutSeconds` | `int` | `300` | - | The longest a hang capture may take before the supervisor drains and kills the child anyway, in seconds (default 300; 1 to 3600). |
+| `Cluster:Supervisor:HealthyUptimeSeconds` | `int` | `120` | - | A child that ran this many seconds (default 120; 1 to 86400) before it exited is healthy: its restart backoff starts over at the minimum and an exit-code-2 restart is not a crash-loop failure. |
 | `Cluster:Supervisor:MaxConcurrentProcesses` | `int` | `9` | - | Maximum number of concurrent supervised child processes allowed on this host (default: 9). |
 | `Cluster:Supervisor:MaxTotalAllocatedMemoryMb` | `long?` | `null` | - | Optional cap on the sum of `SupervisedProcessConfig.RequiredMemoryMb` across all active supervised processes. |
 | `Cluster:Supervisor:MinClusterProcesses` | `int` | `3` | - | Minimum number of supervised processes a supervisor start must be able to admit (realm, gateway and one worker; default: 3). A start that can admit fewer launches nothing and refuses with a message naming this key. |
 | `Cluster:Supervisor:MinFreeMemoryReserveMb` | `long` | `1024` | - | Minimum free host memory reserve in MiB that must remain after admitting a child process (default: 1024 MiB). |
 | `Cluster:Supervisor:Processes` | `Dictionary<string, SupervisedProcessConfig>` | `{}` | - | Supervised process definitions, started in ascending `SupervisedProcessConfig.StartOrder` (ties by key), keyed by a configuration key that must not contain `:` (e.g. `worker-EK`); the display name may, via `SupervisedProcessConfig.Name` (`worker:EK`). |
+| `Cluster:Supervisor:RestartDelayMs` | `int` | `0` | - | Milliseconds the supervisor waits before it relaunches a child that exited with the restart code 2 (default 0; 0 to 600000). Crashes use the backoff instead. |
+| `Cluster:Supervisor:StackCaptureTool` | `string` | `""` | - | The dotnet-stack executable for `HangCapture=Stacks` (default empty: none; required when any child uses Stacks). |
+| `Cluster:Supervisor:StopWhenBelowMinimum` | `bool` | `true` | - | Stop everything when fewer than `MinClusterProcesses` children are left running (default true): the rest are drained and the supervisor exits 0 when every stop was deliberate and 1 when a child was given up on. Off, the supervisor keeps the remaining children running. |
 
 ## `Cluster:Worker`
 
@@ -1562,6 +1579,8 @@ How to read the tables:
 | `World:Playerbots:Chat:Voice:Enabled` | `bool` | `true` | live | Let bots voice their goals and needs (on by default). Off: no topic is produced and no LFG or trade whisper is answered here. |
 | `World:Playerbots:Chat:Voice:GeneralSharePercent` | `int` | `25` | live | The share of LFG and trade calls said in General instead (LFG outside a capital, trade outside a capital; 0..100). |
 | `World:Playerbots:Chat:Voice:GroupCalls` | `bool` | `true` | live | Party and raid needs (on by default), each once per fight, death or stop: "oom" (a mana user below 10% in a fight), "need heals" (below 30% with a healer in the group), "rez pls" (dead, a resurrecting class alive in the group), "inc &lt;n&gt;" (a bot group's tank pulling more than one), "&lt;mob&gt; on me" (a creature on a bot that is not the tank), "brb" (the bot stops to drink, vendor or train), "ty" (after a resurrection or a long buff from a group member), "ding" (a level up), "gz" (a real player's "ding"), a quest share request in a bot group, and "first time here" (a zone the bot had never explored). |
+| `World:Playerbots:Chat:Voice:LfgMaxTravelSeconds` | `int` | `600` | live | The longest planned trip, in seconds, from which a bot still advertises a place under `LfgNearDungeonOnly` (0..7200; 0 = only the same or a bordering zone, or a summon). |
+| `World:Playerbots:Chat:Voice:LfgNearDungeonOnly` | `bool` | `true` | live | A bot advertises a dungeon, raid or group quest in chat only when it is near the place (on by default): in the same or a bordering zone, within `LfgMaxTravelSeconds` of travel by the planner (flight paths, hearthstone, mage portals, ships), or when a warlock waiting for the same goal can summon it. Otherwise the bot keeps quiet and another waiting bot may post. Off: the bot that waited longest always posts. |
 | `World:Playerbots:Chat:Voice:LinesPerPass` | `int` | `4` | live | The most lines the voice hands to the chat service in one social pass, every topic together (1..100). |
 | `World:Playerbots:Chat:Voice:LookingForGroup` | `bool` | `true` | live | LFG and LFM calls (on by default): a bot waiting for partners for a dungeon, raid or elite quest posts "LFG &lt;dungeon&gt;, &lt;lvl&gt; &lt;class&gt;" (alone) or "LFM &lt;dungeon&gt; need &lt;role&gt;" (the oldest of several waiting for the same goal) in LookingForGroup, or now and then in General (`GeneralSharePercent`); a real player who whispers the poster "inv" is matched into the group. |
 | `World:Playerbots:Chat:Voice:LookingForGroupRepeatSeconds` | `int` | `180` | live | The least seconds between two LFG or LFM calls of one bot (30..3600). |
@@ -1640,6 +1659,7 @@ How to read the tables:
 | `World:Playerbots:Groups:Cooperation:RefusalMemoryMinutes` | `int` | `10` | live | How long a candidate's refusal of a waiting group is remembered, in minutes (1..1440, default 10). The refusal is stored with its time: the candidate is not asked again until this long after it, and then rolls afresh (when the group is still waiting). The roll is made once per window of this length, with windows shifted by a phase hashed from the (candidate, group) pair, so different pairs do not all turn over together. |
 | `World:Playerbots:Groups:Cooperation:RefuseAffinity` | `int` | `-40` | live | A candidate whose affinity toward the group's caller is at or below this never joins (-100..0). |
 | `World:Playerbots:Groups:Cooperation:SameGoalMeetingRadiusYards` | `int` | `150` | live | How far from a dungeon's entrance (the group's meeting point), in yards, a player on the same continent still counts as on the dungeon goal of a bot that waits for a group (10..1500). A player inside the dungeon's instance always counts. Quest goals are unaffected. |
+| `World:Playerbots:Groups:DungeonOutOfBandNeedsReason` | `bool` | `true` | live | A bot whose level is outside a dungeon's level band (the catalogue band, else the 1.12 recommended levels with two levels of slack) waits for a group there only with a reason: a quest that is not grey for it, an attunement or key step, a gear upgrade the dungeon drops, a guildmate or friend already waiting, or a forming group of its level (on by default). Off: every dungeon holding the objective is allowed, still ranked in-band first, then nearest band. |
 | `World:Playerbots:Groups:DungeonRuns:BandAboveBoss` | `int` | `3` | live | Levels above the strongest boss the level band ends (0..20). |
 | `World:Playerbots:Groups:DungeonRuns:BandBelowBoss` | `int` | `3` | live | Levels below the weakest boss the level band starts (0..20): the band's lower end is the higher of the entrance level and the weakest boss's level minus this. |
 | `World:Playerbots:Groups:DungeonRuns:Enabled` | `bool` | `true` | live | Let free bots start dungeon runs (on by default). Off: no new run starts; running ones finish. Raid runs also need `PlayerbotRaidRunOptions.Enabled`. |
@@ -1990,6 +2010,7 @@ How to read the tables:
 | `World:Playerbots:Qa:GitHub:AutoCloseQuietMultiple` | `int` | `0` | - | Close an open issue as completed when its finding has stopped: it was last seen on an older build, the running build is newer and has not met it, and it has been quiet (since the later of its last sighting and the reporter's start) for this many times its usual gap between occurrences ((last seen - first seen) / (count - 1)) and at least `AutoCloseMinQuietHours`. One comment says why; a recurrence on any later build counts as a regression of the build it was last seen on and reopens it (`ReopenOnRegression`). 0 (default) is off (0..1000). Quiet is not proof: a finding the bots simply stopped visiting looks the same. |
 | `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates` | `bool` | `false` | - | When findings are merged into one (the same problem met in several places) and each had its own issue, comment on the absorbed issue with a link to the surviving one and close it as not planned (a duplicate). Off (the default, so the first start after an upgrade can be checked: the start-up log lists every issue it would close, each with the surviving issue) keeps the absorbed issue open and untouched; the merge is recorded in the store either way. |
 | `World:Playerbots:Qa:GitHub:CommentIntervalHours` | `int` | `24` | - | At most one comment per finding in this many hours (1..720). |
+| `World:Playerbots:Qa:GitHub:CreateWithinHours` | `int` | `24` | - | A new issue is opened only for a finding met since this start-up, or last seen within this many hours (0..8760; 0 = only findings met since this start-up). A finding known only from history (loaded at start-up, last seen earlier than that) never opens one, and is not looked up; an issue it already holds (by number) is still updated. |
 | `World:Playerbots:Qa:GitHub:Enabled` | `bool` | `false` | - | Report findings to GitHub (off by default). Enabled without `Publish` is a dry run: no network call is made. |
 | `World:Playerbots:Qa:GitHub:GhPassToken` | `bool` | `false` | - | For `GhCli` only: hand the token from `TokenEnvironmentVariable` to `gh` as `GH_TOKEN` (off by default: `GITHUB_TOKEN` and `GH_TOKEN` are removed from the child so `gh` uses its own login). |
 | `World:Playerbots:Qa:GitHub:GhPath` | `string` | `"gh"` | - | The `gh` executable for `Transport` = `GhCli`: a file name looked up on PATH (`gh`) or a full path (1..260 characters). |

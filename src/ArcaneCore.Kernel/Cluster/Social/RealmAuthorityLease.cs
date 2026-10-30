@@ -91,6 +91,12 @@ public interface IRealmAuthorityLeaseStore
     /// </summary>
     bool ValidateFencingToken(string scope, string ownerNodeId, long fencingToken, DateTimeOffset nowUtc);
 
+    /// <summary>
+    /// As <see cref="ValidateFencingToken(string, string, long, DateTimeOffset)"/>, and the lease must also be held by <paramref name="ownerIncarnation"/>:
+    /// two processes configured with the same node id cannot both pass.
+    /// </summary>
+    bool ValidateFencingToken(string scope, string ownerNodeId, Guid ownerIncarnation, long fencingToken, DateTimeOffset nowUtc);
+
     /// <summary>Return the currently active lease for <paramref name="scope"/> at <paramref name="nowUtc"/>, or <c>null</c> if unheld or expired.</summary>
     RealmAuthorityLease? GetCurrent(string scope, DateTimeOffset nowUtc);
 
@@ -236,6 +242,25 @@ public sealed class InMemoryRealmAuthorityLeaseStore : IRealmAuthorityLeaseStore
                 && current.FencingToken == fencingToken
                 && slot.HighWaterToken == fencingToken
                 && string.Equals(current.OwnerNodeId, ownerNodeId, StringComparison.Ordinal)
+                && current.IsActiveAt(nowUtc);
+        }
+    }
+
+    public bool ValidateFencingToken(string scope, string ownerNodeId, Guid ownerIncarnation, long fencingToken, DateTimeOffset nowUtc)
+    {
+        if (string.IsNullOrWhiteSpace(scope) || string.IsNullOrWhiteSpace(ownerNodeId) || fencingToken <= 0)
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            return _scopes.TryGetValue(scope, out ScopeSlot? slot)
+                && slot.Current is { } current
+                && current.FencingToken == fencingToken
+                && slot.HighWaterToken == fencingToken
+                && string.Equals(current.OwnerNodeId, ownerNodeId, StringComparison.Ordinal)
+                && current.OwnerIncarnation == ownerIncarnation
                 && current.IsActiveAt(nowUtc);
         }
     }

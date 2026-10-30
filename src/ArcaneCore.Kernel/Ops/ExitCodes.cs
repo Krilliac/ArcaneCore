@@ -4,7 +4,8 @@ namespace ArcaneCore.Kernel.Ops;
 /// The process exit-code contract shared by supervisors (systemd, Docker, Windows service
 /// recovery, scripts). 0, 1 and 2 are the vmangos ShutdownExitCode values (World.h:76-81:
 /// SHUTDOWN_EXIT_CODE, ERROR_EXIT_CODE, RESTART_EXIT_CODE). A supervisor that loops on code 2
-/// reproduces the vmangos run-mangosd restart loop.
+/// reproduces the vmangos run-mangosd restart loop. The cluster host supervisor classifies a child's exit by it: 0 stays down, 2 relaunches at once,
+/// 78 and 64 fault (no restart), anything else (and a hang kill) relaunches after a backoff.
 /// </summary>
 public static class ExitCodes
 {

@@ -119,6 +119,9 @@ public abstract class RuleHostDefinition
     public abstract IReadOnlyList<RuleOwnerKind> Owners { get; }
 
     public abstract RuleCapabilities Capabilities { get; }
+
+    /// <summary>Whether an action may have <c>delay_ms</c> above 0. A host that never calls <see cref="RuleEvaluator.Update"/> (the bot host: its passes are synchronous) returns false, and such an action, or a list with one, is rejected at load.</summary>
+    public virtual bool AllowsDelays => true;
 }
 
 /// <summary>Everything an action and its target see while running (a stack value; nothing is allocated per action).</summary>

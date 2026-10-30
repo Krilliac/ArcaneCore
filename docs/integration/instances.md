@@ -290,6 +290,8 @@ All of these are minimal and additive unless stated otherwise.
   not locked unless it was inside at the kill (its own permanent bind).
 - **Instance contents do not persist across an unload or restart.** This covers creature
   deaths and respawn timers (vmangos `creature_respawn`). A re-created map respawns everything.
+  Game object respawn times are the exception: a despawned chest, node or used object keeps its time in `gameobject_respawn`
+  (see "Next slice" below).
   The instance script state (wave 4, `Game/Instances/Scripts`, docs/areas/creature-ai.md "Instance scripts") survives an unload:
   its save string lives on the instance save (`InstanceSave.Data`) and the next map of the instance loads it. It also survives a
   restart: each script save is queued to `instance.data` (characters schema 42, `InstanceScriptDataModule`; vmangos
@@ -323,6 +325,13 @@ All of these are minimal and additive unless stated otherwise.
 
 ## Next slice
 
-- Persisted instance state (`creature_respawn`, `gameobject_respawn` per instance) once
-  `feat/creature-ai` and `feat/gameobjects-loot` expose respawn seams.
+- Persisted instance state: the `creature_respawn` half is delivered (`CreatureRespawnFeature`). The `gameobject_respawn` half is delivered too
+  (characters schema 68, `GameObjectRespawnDataModule`; `GameObjectRespawnFeature`, `GameObjectRespawnQueue`, `GameObjectMapSystem.RespawnPersistence.cs`):
+  a despawned database spawn (looted chest, gathered node, used object) stores `now + delay` per map instance when it despawns, the world
+  loads the times at start, a grid or instance map that loads applies them (the object loads despawned for what is left, an expired row is
+  deleted), a respawn deletes the row, shutdown saves what is still despawned and drains the queue, and a deleted or reset instance
+  forgets its rows (`InstanceFeature.InstanceRemoved`, and `EfInstanceStore.DeleteInstanceAsync`). Battleground maps stay in memory (vmangos
+  `MapPersistentState::SaveGORespawnTime`). Not stored: spawns with a negative `spawntimesecs`, pool and spawn-group members (that state is not
+  stored, so a time would meet another choice after a restart), and chests of a live instance save (their consumed state is already durable in
+  `loot_state`). Creature respawn times and the instance chest loot were already durable; the rest of an instance's contents are not.
 - The 5-instances-per-hour limit.

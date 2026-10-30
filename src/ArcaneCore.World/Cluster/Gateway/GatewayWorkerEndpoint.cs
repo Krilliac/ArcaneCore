@@ -58,15 +58,47 @@ public sealed class GatewayWorkerEndpoint(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_host is { } host)
+        // Clear the field before disposing so the second call (DisposeAsync after the host's StopAsync) is a no-op
+        // for the link host even when the first disposal threw.
+        GatewaySessionLinkHost? host = _host;
+        _host = null;
+        WorldGatewaySessionAcceptor? acceptor = Acceptor;
+        await StopInOrderAsync(
+            host is null ? null : host.DisposeAsync,
+            acceptor is null ? null : acceptor.StopAsync).ConfigureAwait(false);
+    }
+
+    /// <summary>Stop the link host first, then the acceptor; the acceptor is stopped even when the host's disposal throws. If both throw, both exceptions are kept (AggregateException).</summary>
+    internal static async Task StopInOrderAsync(Func<ValueTask>? stopHost, Func<Task>? stopAcceptor)
+    {
+        Exception? hostFailure = null;
+        try
         {
-            await host.DisposeAsync().ConfigureAwait(false);
-            _host = null;
+            if (stopHost is not null)
+            {
+                await stopHost().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            hostFailure = ex;
         }
 
-        if (Acceptor is { } acceptor)
+        try
         {
-            await acceptor.StopAsync().ConfigureAwait(false);
+            if (stopAcceptor is not null)
+            {
+                await stopAcceptor().ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (hostFailure is not null)
+        {
+            throw new AggregateException("the link host and the acceptor both failed to stop", hostFailure, ex);
+        }
+
+        if (hostFailure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(hostFailure).Throw();
         }
     }
 

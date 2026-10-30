@@ -82,9 +82,10 @@ public sealed class SchemaStartupResilienceTests : IAsyncLifetime
         var counter = new CommandTap();
         await EnsureAsync(component, probe, stepVersion, counter);
         int ddl = counter.Ddl;
-        // A placeholder step that holds a reserved version open (a lane schema gap class) has no changes: only its version write can be interrupted.
+        // A placeholder step that holds a reserved version open (a lane schema gap class) has no changes, and a content step (world 64, the shipped bot ladder)
+        // only inserts missing rows and issues no DDL: in both only the row writes and the version write can be interrupted.
         SchemaStep step = (component == "world" ? WorldDbContext.Schema : CharacterDbContext.Schema).Steps.Single(s => s.Version == stepVersion);
-        Assert.True(ddl > 0 || step.Changes.Count == 0, $"{component} step {stepVersion} issued no DDL");
+        Assert.True(ddl > 0 || step.Changes.All(c => c is EnsureRowChange), $"{component} step {stepVersion} issued no DDL");
 
         Func<string, bool> isVersionWrite = sql => sql.Contains(component + "_schema", StringComparison.Ordinal)
             && CommandTap.IsWrite(sql, "UPDATE", "INSERT");

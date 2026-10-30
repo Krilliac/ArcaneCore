@@ -236,7 +236,7 @@ public sealed partial class PlayerbotGroupCoordinator
             if (!_bots.TryGetValue(botId, out PlayerbotGroupBot bot) || bot.Session.Player is not { IsAlive: true } player || player.MapId != goal.MeetingMap) continue;
             if (player.Level < goal.MinLevel) continue;
             if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), goal.Meeting) > MaxMeetingYards) continue;
-            candidates.Add(Candidate(botId, player, waiting.SinceMs));
+            candidates.Add(Candidate(botId, player, waiting.SinceMs) with { Qualifying = waiting.Goal.Anchors });
         }
 
         if (candidates.Count < 2 || !Coop.Recruit || GuildsOrNull() is not { } guilds) return candidates;
@@ -318,8 +318,8 @@ public sealed partial class PlayerbotGroupCoordinator
         recruited = [];
         PlayerbotCooperationOptions coop = Coop;
         if (!coop.Recruit || waiting.Count == 0 || GroupManagerOrNull() is not { } groups) return null;
-        PlayerbotGroupCandidate anchorCandidate = Oldest(waiting);
-        if (!TryPlayer(anchorCandidate.BotId, out Player? anchor)) return null;
+        // The anchor is the longest-waiting waiter that qualifies (in band or with a direct reason); none: nothing to recruit for.
+        if (PlayerbotGroupContent.QualifyingAnchor(waiting) is not { } anchorCandidate || !TryPlayer(anchorCandidate.BotId, out Player? anchor)) return null;
         uint now = Now;
         bool offer = offerBy != Guid.Empty;
         bool waited = unchecked(now - anchorCandidate.NeedSinceMs) >= (uint)coop.RecruitWaitSeconds * 1000u;
@@ -408,7 +408,7 @@ public sealed partial class PlayerbotGroupCoordinator
             }
 
             int preference = PlayerbotRecruitment.Preference(affinitySum, trustSum, guildmate, coop) + (pledged ? 1000 : 0);
-            ranked.Add(new PlayerbotRecruitment.Ranked(Candidate(bot.BotId, player, now), preference, distSq,
+            ranked.Add(new PlayerbotRecruitment.Ranked(Candidate(bot.BotId, player, now) with { Qualifying = PlayerbotGroupContent.QualifiesAtLevel(goal, player.Level) }, preference, distSq,
                 PlayerbotGroupContent.CanTank(player.Class), PlayerbotGroupContent.CanHeal(player.Class)));
         }
 
@@ -418,7 +418,7 @@ public sealed partial class PlayerbotGroupCoordinator
         var all = new List<PlayerbotGroupCandidate>(waiting.Count + picks.Count);
         all.AddRange(waiting);
         all.AddRange(picks);
-        if (PlayerbotGroupContent.Match(all, size, _options.Groups) is not { } plan) return null;
+        if (PlayerbotGroupContent.Match(all, size, _options.Groups, goal.InInstance) is not { } plan) return null;
         foreach ((PlayerbotGroupCandidate member, PlayerbotGroupRole _, byte _) in plan.Members)
             if (!waiting.Exists(w => w.BotId == member.BotId)) recruited.Add(member.BotId);
         return recruited.Count == 0 ? null : plan;
@@ -565,7 +565,7 @@ public sealed partial class PlayerbotGroupCoordinator
 
         line.Size = size;
         line.Candidates = BuildCandidates(wanting, caller.Goal);
-        if (line.Candidates.Count > 0 && TryPlayer(Oldest(line.Candidates).BotId, out Player? anchor)) line.AnchorLevel = anchor.Level;
+        if (PlayerbotGroupContent.QualifyingAnchor(line.Candidates) is { } qualifying && TryPlayer(qualifying.BotId, out Player? anchor)) line.AnchorLevel = anchor.Level;
         else line.Candidates = [];
     }
 

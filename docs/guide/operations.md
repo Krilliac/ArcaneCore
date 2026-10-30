@@ -53,6 +53,29 @@ step, not something a daemon should do by surprise: set `Database:Upgrade:Policy
 The runbook, with the exit codes, the per-engine behaviour while a step runs and recovery, is [database upgrade tooling](../ops/database-upgrade.md).
 The schema versions are listed in the [schema reference](../reference/schema.md). Characters are per realm: run the tool once per realm configuration.
 
+## Single-host supervisor (optional)
+
+The cluster host supervisor can run the realm and a combined world on one machine and relaunch either after a crash or a hang. It is off by default; the live
+setup keeps using `tools/ops/diag/server-status.ps1 -Supervise`. To try it, run `ArcaneCore.World` with `Cluster:Supervisor:Enabled` true and two processes:
+
+```
+Cluster:Supervisor:Enabled = true
+Cluster:Supervisor:MinClusterProcesses = 2
+Cluster:Supervisor:Processes:realm:Name = realm
+Cluster:Supervisor:Processes:realm:Role = realm
+Cluster:Supervisor:Processes:realm:ExecutablePath = ArcaneCore.Realm
+Cluster:Supervisor:Processes:realm:StartOrder = 0
+Cluster:Supervisor:Processes:world:Name = world
+Cluster:Supervisor:Processes:world:Role = combined
+Cluster:Supervisor:Processes:world:ExecutablePath = ArcaneCore.World
+Cluster:Supervisor:Processes:world:StartOrder = 1
+Cluster:Supervisor:Processes:world:RealmId = 1
+```
+
+A world that sends no heartbeat tick for 120 seconds is drained, killed and relaunched; exit code 2 (`.server restart`) relaunches at once, 0 stays down, 78 and 64
+fault. With `RealmId` set, `.server restart 60 2 <realmid>` on one world restarts another world on the same host (not across hosts). Details are in the
+[clustering design](../CLUSTERING_DESIGN.md).
+
 ## Bans
 
 Ban from in-game with `.ban account`, `.ban character` and `.ban ip`, and lift with `.unban`; `.baninfo` and `.banlist` read the history. Without a client use

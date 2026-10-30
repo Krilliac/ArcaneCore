@@ -45,6 +45,13 @@ public sealed class AuctionBotCommands : ICommandGroup
             return null;
         }
 
+        // On a map worker the bot runs only on the node that holds the economy lease; elsewhere the feature exists but was never attached.
+        if (context.Session.Services.GetService<Features.FeatureHost>() is { HasAttached: true } features && !features.IsAttached(bot))
+        {
+            context.Reply("The auction house bot does not run on this node (the economy lease is held by another node).");
+            return null;
+        }
+
         if (bot.Halted)
         {
             context.Reply("The auction house bot stopped itself after a failed custody audit; see the log.");

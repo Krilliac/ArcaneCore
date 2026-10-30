@@ -110,7 +110,8 @@ internal sealed class QaLedger
 /// Reports eligible findings: a dry run (reporter enabled, <c>Publish</c> off) writes the would-be issues to <c>qa/pending-issues/</c> and makes no
 /// network call (no client is even created); publishing finds the finding's issue by its exact marker (open or closed), comments on an open one
 /// (at most once per interval and under the hourly comment cap), leaves a closed one alone (or reopens it with <c>ReopenClosed</c>), and creates an
-/// issue when none exists (under the hourly create cap). A per-fingerprint lock makes find-then-create atomic within the process. A pass lists the labelled
+/// issue when none exists (under the hourly create cap, and only for a finding met on the running build since this process started or last seen within
+/// <see cref="PlayerbotQaGitHubOptions.CreateWithinHours"/>: one replayed from the store after a restart is not new). A per-fingerprint lock makes find-then-create atomic within the process. A pass lists the labelled
 /// issues once (<see cref="IQaIssueTransport.ListIndexAsync"/>) and finds every marker in that index; a finding with no known issue is skipped before any
 /// lookup while the create cap is exhausted; the lookups outside the index (an issue by number, the search) are capped at <see cref="MaxLookupsPerPass"/> per
 /// pass and <see cref="LookupSpacing"/> apart, a finding that would need one more stays pending. The transport is the REST client or the <c>gh</c> adapter
@@ -134,6 +135,7 @@ internal sealed class PlayerbotQaPublisher
     private readonly string _build;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _gates = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _cappedRegressions = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, byte> _staleSkipped = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DateTime> _statusShown = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<int, byte> _quietCommented = new(); // issues whose quiet-close comment is posted: a failed close retries the close only
     private readonly DateTime _startedUtc;
@@ -275,6 +277,14 @@ internal sealed class PlayerbotQaPublisher
         return true;
     }
 
+    /// <summary>
+    /// Whether a NEW issue may be opened for <paramref name="f"/>: it was met on the running build by this process (that build has counted it, and it was last seen since this
+    /// publisher started), or was last seen within <see cref="PlayerbotQaGitHubOptions.CreateWithinHours"/> of <paramref name="now"/> (0 = only findings met since this start-up).
+    /// A finding known only from history (loaded at start-up, even one last met on this same build before a restart) fails this; updating its existing issue is not affected.
+    /// </summary>
+    private bool MayCreate(QaFindingView f, DateTime now)
+        => (f.CountOnBuild(_build) > 0 && f.LastSeenUtc >= _startedUtc) || (_options.GitHub.CreateWithinHours > 0 && now - f.LastSeenUtc <= TimeSpan.FromHours(_options.GitHub.CreateWithinHours));
+
     private bool Eligible(QaFindingView f, IReadOnlyList<QaFindingView> all)
     {
         PlayerbotQaGitHubOptions git = _options.GitHub;
@@ -339,14 +349,33 @@ internal sealed class PlayerbotQaPublisher
                 && Ledger.CanComment(now, git.MaxCommentsPerHour);
             if (current.Publication.Issue <= 0)
             {
-                // No known issue: only a create can make progress, and the cap forbids it, so nothing is looked up.
-                if (!Ledger.CanCreate(now, git.MaxIssuesPerHour))
+                // No known issue: only a create can make progress. A finding known only from history never opens one (nothing is listed, searched or created);
+                // if this pass has already listed the issues and the list carries its marker, it falls through and is linked and updated like any other.
+                if (!MayCreate(current, now))
                 {
-                    _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, current.ShortId);
-                    return true;
-                }
+                    if (pass.Index?.ByMarker(id) is null)
+                    {
+                        if (_staleSkipped.TryAdd(id, 0)) // once per finding per process: the pass repeats every few minutes
+                        {
+                            _logger.LogInformation("Bot QA: finding {Id} was last seen {LastSeen:u} with no occurrence on build {Build} since start-up; no new issue is opened for it", current.ShortId, current.LastSeenUtc, _build);
+                        }
 
-                if (!SpellCreateAllowed(current, pass, now)) return true;
+                        return true;
+                    }
+                }
+                else
+                {
+                    _staleSkipped.TryRemove(id, out _); // a finding that goes stale again is logged again
+
+                    // The cap forbidding the create means nothing is looked up.
+                    if (!Ledger.CanCreate(now, git.MaxIssuesPerHour))
+                    {
+                        _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, current.ShortId);
+                        return true;
+                    }
+
+                    if (!SpellCreateAllowed(current, pass, now)) return true;
+                }
             }
             else if (current.Publication.State == QaPublicationState.Published && !commentDue && !statusDue)
             {
@@ -390,6 +419,10 @@ internal sealed class PlayerbotQaPublisher
 
             if (found is null)
             {
+                if (!MayCreate(current, now)) return true; // held a number that was not found: still not a finding to open a new issue for
+
+                _staleSkipped.TryRemove(id, out _);
+
                 if (!Ledger.CanCreate(now, git.MaxIssuesPerHour))
                 {
                     _logger.LogInformation("Bot QA: the hourly issue cap ({Cap}) is reached; {Id} stays pending", git.MaxIssuesPerHour, current.ShortId);
@@ -739,6 +772,7 @@ internal sealed class PlayerbotQaPublisher
         foreach (QaFindingView f in eligible)
         {
             if (f.Publication.HoldsIssue) continue;
+            if (!MayCreate(f, now)) continue;
             if (f.Publication.State == QaPublicationState.DryRun && f.OccurrencesReported == f.Count) continue;
             QaIssueDraft draft = PlayerbotQaIssueComposer.Compose(f, LabelsFor(f), _build, _redactor);
             try

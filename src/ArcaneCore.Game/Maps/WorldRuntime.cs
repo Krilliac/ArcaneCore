@@ -43,6 +43,8 @@ public sealed partial class WorldRuntime : IDisposable
         Options = options;
         _saveQueue = saveQueue;
         _logger = logger;
+        Clock = new WorldClock(_clock);
+        PendingWork = new WorldPendingWork(WakeIfManual);
         Scripts.Logger = logger;
         // .reload config refuses a bad value; a start-up file is not checked anywhere else, and a bad value turns the scaling off.
         foreach (string problem in options.Respawn.Dynamic.Problems())
@@ -171,6 +173,11 @@ public sealed partial class WorldRuntime : IDisposable
         if (_thread is not null)
         {
             throw new InvalidOperationException("world already started");
+        }
+
+        if (Clock.Mode == WorldClockMode.Stepped)
+        {
+            throw new InvalidOperationException("the stepped clock is driven by RunTick; it has no world thread (use the manual clock for a started world)");
         }
 
         _stopped = false;
@@ -465,10 +472,8 @@ public sealed partial class WorldRuntime : IDisposable
     /// <summary>Benchmark seam: observe completed map phases without enabling warning logs.</summary>
     internal void RunTick(uint diffMs, Action<Map, MapUpdateDiagnostics>? observeMap)
     {
-        if (_manualClock)
-        {
-            Interlocked.Add(ref _manualNowMs, diffMs);
-        }
+        // First: every reading of this tick (NowMs, Uptime, UtcNow) is fixed from here on.
+        Clock.BeginTick(diffMs);
 
         // Before anything of this tick runs: the previous tick's phases, duration and slowest features are complete and still readable.
         RaiseTickStarting(diffMs);
@@ -477,7 +482,7 @@ public sealed partial class WorldRuntime : IDisposable
         long bytesStart = GC.GetAllocatedBytesForCurrentThread();
         _topCount = 0;
         SetPosition(TickPhase.Commands, null, phaseStart);
-        RunCommands();
+        RunCommands(drainAll: Clock.IsDeterministic);
         long commandsEnd = Stopwatch.GetTimestamp();
         long commandsBytesEnd = GC.GetAllocatedBytesForCurrentThread();
         // World-level services (game events, rest) run before the maps. Their time counts as world
@@ -778,7 +783,7 @@ public sealed partial class WorldRuntime : IDisposable
             lastStartTicks = startTicks;
             if (_manualClock)
             {
-                diff = NextManualDiff();
+                diff = HoldForPendingWork(NextManualDiff());
                 frameMicros = diff * 1000L;
             }
 
@@ -847,7 +852,7 @@ public sealed partial class WorldRuntime : IDisposable
             if (_manualClock)
             {
                 SettleManualAdvances(diff);
-                if (_manualAdvances.Count > 0)
+                if (_manualAdvances.Count > 0 && !_manualHeld)
                 {
                     continue; // advances run their ticks back to back
                 }

@@ -31,6 +31,14 @@ public sealed class PlayerbotGroupOptions
     /// </summary>
     public int FormationTimeoutSeconds { get; set; } = 300;
 
+    /// <summary>
+    /// A bot whose level is outside a dungeon's level band (the catalogue band, else the 1.12 recommended levels with two levels of slack)
+    /// waits for a group there only with a reason: a quest that is not grey for it, an attunement or key step, a gear upgrade the dungeon drops,
+    /// a guildmate or friend already waiting, or a forming group of its level (on by default). Off: every dungeon holding the objective is
+    /// allowed, still ranked in-band first, then nearest band.
+    /// </summary>
+    public bool DungeonOutOfBandNeedsReason { get; set; } = true;
+
     /// <summary>Convert a group to a raid when the goal needs more than five (raid instances and raid quests); on by default.</summary>
     public bool RaidsEnabled { get; set; } = true;
 

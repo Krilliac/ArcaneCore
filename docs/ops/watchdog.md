@@ -173,6 +173,8 @@ unhealthy the beats keep being withheld at that cadence and the supervisor acts.
 register more (database reachability, listener accepting). A sink that cannot deliver (socket gone, file unwritable) is a rate-limited
 warning (event `HeartbeatSink`, 7131) and the writer keeps trying. Counters: `watchdog.heartbeat.sent`, `withheld`, `failed`.
 
+Under the cluster host supervisor (`Cluster:Supervisor:Enabled`, see the [clustering design](../CLUSTERING_DESIGN.md)) the child gets `ARCANECORE_SUPERVISOR_PROTOCOL=1` and the writer also prints the stdout form beside the configured sink (a `Null` sink is replaced by it), so the supervisor can kill and relaunch a world that stops ticking. The supervisor's hang watch is armed by the first `alive` beat and acts after `Cluster:Supervisor:Processes:<name>:HangTimeoutSeconds` (default 120) without one.
+
 A systemd unit for the world daemon:
 
 ```

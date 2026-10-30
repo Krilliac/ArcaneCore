@@ -16,7 +16,7 @@ namespace ArcaneCore.World.Features;
 public static class WorldFeatures
 {
     /// <summary>Seam interfaces a feature is additionally registered as, when it implements them.</summary>
-    private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(Chat.IChatMuteSource), typeof(ICharacterHooks), typeof(ICharacterDeleteHook), typeof(ICharacterSettlementBarrier), typeof(ISpellSummonSink), typeof(Game.Creatures.ICreatureHostility)];
+    private static readonly Type[] SeamInterfaces = [typeof(IWorldFeature), typeof(IChatMessageHandler), typeof(Chat.IChatMuteSource), typeof(ICharacterHooks), typeof(ICharacterDeleteHook), typeof(ICharacterSettlementBarrier), typeof(ISpellSummonSink), typeof(Game.Creatures.ICreatureHostility), typeof(ArcaneCore.Kernel.Ops.ServerConsole.ISupervisedLifecycleRequestHandler)];
 
     /// <summary>Every feature type of the startup set (<see cref="WorldCodeAssemblies.Startup"/>: World plus the built-in packs), ordered by full name, then assembly name (deterministic, the order of before the pack moved out).</summary>
     public static IReadOnlyList<Type> FeatureTypes { get; } = AssemblyDiscovery.FindTypes<IWorldFeature>();
@@ -59,12 +59,15 @@ public static class WorldFeatures
     /// <summary>
     /// Create every registered feature and attach it to <paramref name="world"/> (before <see cref="WorldRuntime.Start"/>),
     /// through the <see cref="FeatureHost"/>: a plain feature with <see cref="IWorldFeature.Attach"/>, a detachable one with
-    /// <see cref="IDetachableWorldFeature.AttachFrom"/> and a subscription bag the host owns.
+    /// <see cref="IDetachableWorldFeature.AttachFrom"/> and a subscription bag the host owns. A non-null
+    /// <paramref name="admit"/> leaves out the features it returns false for (a node role that does not run them);
+    /// they are neither attached nor stopped.
     /// </summary>
-    public static void AttachWorldFeatures(this IServiceProvider services, WorldRuntime world)
+    public static void AttachWorldFeatures(this IServiceProvider services, WorldRuntime world, Func<IWorldFeature, bool>? admit = null)
     {
         FeatureHost host = services.GetService<FeatureHost>() ?? new FeatureHost();
-        host.AttachAll(world, services.GetServices<IWorldFeature>());
+        IEnumerable<IWorldFeature> features = services.GetServices<IWorldFeature>();
+        host.AttachAll(world, admit is null ? features : features.Where(admit));
     }
 
     /// <summary>Stop in reverse attachment order; every feature receives shutdown even if one fails.</summary>
@@ -77,6 +80,11 @@ public static class WorldFeatures
             if (host?.IsDetached(feature) == true)
             {
                 continue; // its quiesce already stopped and drained it
+            }
+
+            if (host is { HasAttached: true } && !host.IsAttached(feature))
+            {
+                continue; // a role filter never admitted it
             }
 
             try

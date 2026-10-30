@@ -39,6 +39,9 @@ public sealed class RuleFeature(IServiceProvider services, IServiceScopeFactory 
     /// <summary>The subjects <c>.rules trace</c> traces; hosts hand it to their evaluators.</summary>
     public RuleTracer Tracer { get; } = new();
 
+    /// <summary>The evaluator counters of the running hosts (<c>.rules stats</c>); a host registers each of its evaluators.</summary>
+    public RuleCountersRegistry Counters { get; } = new();
+
     /// <summary>Where hosts' evaluators write traced evaluations: the log and the recent history <c>.rules trace</c> shows.</summary>
     public IRuleTraceSink TraceSink => _sink ??= new Sink(this);
 
