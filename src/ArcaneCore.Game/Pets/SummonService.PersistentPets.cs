@@ -625,20 +625,6 @@ public sealed partial class SummonService
         }
     }
 
-    private async Task SaveQueuedAsync(Player owner)
-    {
-        try
-        {
-            await SaveCurrentPetAsync(owner).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            FaultLedger.Shared.Record("pet.persistence", ex);
-            AnomalyLedger.Shared.Report("pet", "persistence-fault", $"character {owner.Guid.Low}", ex.Message);
-            _logger.LogError(ex, "persistent pet save failed for character {CharacterId}", owner.Guid.Low);
-        }
-    }
-
     /// <summary>Load a cached current hunter pet after login. No static template is invented: the stored entry must exist.</summary>
     public async Task<PersistentPetSnapshot?> ReadCurrentPetAsync(Player owner, CancellationToken cancellationToken = default)
     {
@@ -829,6 +815,12 @@ public sealed partial class SummonService
             {
                 spellSystem.CastSpell(pet, spell.SpellId, SpellCastTargets.ForSelf(), triggered: true);
             }
+        }
+        if (owner.Class == Class.Hunter)
+        {
+            // Pet::LoadPetFromDB rebuilds m_teachspells (Pet.cpp:321-338), and a tame goes through here too (Pet::InitPetCreateSpells AddTeachSpell):
+            // they are not in the snapshot, so they are derived again from the create spells, which skips what the owner already knows.
+            InitTeachSpells(owner, pet, snapshot.Entry);
         }
         if (_spells is { } restoreSpells && snapshot.Cooldowns is { Count: > 0 })
         {

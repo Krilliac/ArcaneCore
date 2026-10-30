@@ -4,6 +4,8 @@ using ArcaneCore.Kernel.Ops.ServerConsole;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.ComponentModel;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Diagnostics;
 
 namespace ArcaneCore.World.Cluster.Supervision;
@@ -42,20 +44,58 @@ public interface IClusterCapacityProbe
 }
 
 /// <summary>
-/// Default host capacity probe backed by <see cref="GC.GetGCMemoryInfo()"/>.
+/// Default host capacity probe. Free memory comes from the operating system (<see cref="HostMemory"/>), read on every call so the memory the children
+/// launched since the last call use is seen. When the OS has no source here it falls back to the supervisor's own last garbage collection
+/// (<see cref="GC.GetGCMemoryInfo()"/>: total minus the load recorded then, which is a stale snapshot and says nothing about other processes), and when
+/// that has no data either it reports <see cref="UnknownAvailableMb"/>, which never blocks an admission. <see cref="Source"/> names the source used last.
 /// </summary>
 public sealed class SystemClusterCapacityProbe : IClusterCapacityProbe
 {
-    public long GetAvailableMemoryMb()
+    /// <summary>Reported when no source has data: large enough that the reserve check admits, finite so arithmetic on it cannot overflow.</summary>
+    public const long UnknownAvailableMb = int.MaxValue;
+
+    private readonly Func<long?> _osAvailableBytes;
+    private readonly Func<(long TotalBytes, long LoadBytes)> _gcInfo;
+    private string _source = "none";
+
+    public SystemClusterCapacityProbe()
+        : this(HostMemory.TryGetAvailableBytes, ReadGcInfo)
+    {
+    }
+
+    /// <summary>Test seam: replaces the OS reading and the GC reading.</summary>
+    internal SystemClusterCapacityProbe(Func<long?> osAvailableBytes, Func<(long TotalBytes, long LoadBytes)> gcInfo)
+    {
+        _osAvailableBytes = osAvailableBytes;
+        _gcInfo = gcInfo;
+    }
+
+    /// <summary>Where the last reading came from: <c>os</c>, <c>gc-estimate</c> or <c>unknown</c> (<c>none</c> before the first call).</summary>
+    public string Source => Volatile.Read(ref _source);
+
+    private static (long, long) ReadGcInfo()
     {
         GCMemoryInfo info = GC.GetGCMemoryInfo();
-        long totalBytes = info.TotalAvailableMemoryBytes;
-        long loadBytes = info.MemoryLoadBytes;
-        if (totalBytes <= 0)
-            return 8192;
+        return (info.TotalAvailableMemoryBytes, info.MemoryLoadBytes);
+    }
 
-        long freeBytes = Math.Max(0L, totalBytes - (loadBytes > 0 ? loadBytes : Environment.WorkingSet));
-        return freeBytes / (1024L * 1024L);
+    public long GetAvailableMemoryMb()
+    {
+        if (_osAvailableBytes() is { } osBytes and >= 0)
+        {
+            Volatile.Write(ref _source, "os");
+            return osBytes / (1024L * 1024L);
+        }
+
+        (long totalBytes, long loadBytes) = _gcInfo();
+        if (totalBytes > 0 && loadBytes > 0)
+        {
+            Volatile.Write(ref _source, "gc-estimate");
+            return Math.Max(0L, totalBytes - loadBytes) / (1024L * 1024L);
+        }
+
+        Volatile.Write(ref _source, "unknown");
+        return UnknownAvailableMb;
     }
 }
 
@@ -330,11 +370,27 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             try
             {
                 // LF-delimited (a lone CR does not end a line): the protocol lines are matched whole, so a CR inside logged text cannot start a second one.
-                await SupervisorLineReader.ReadLinesAsync(reader, line => OutputLineReceived?.Invoke(line, isStdErr)).ConfigureAwait(false);
+                await SupervisorLineReader.ReadLinesAsync(reader, line => DeliverLine(line, isStdErr)).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
             {
                 // Stream closed on process exit or dispose.
+            }
+        }
+
+        /// <summary>
+        /// Hands one line to the subscribers. A subscriber that throws (a child log file that cannot be written, for one) must not end this pump:
+        /// the exception would be taken for a closed stream, or fault the pump task and the monitor that awaits it, and the child would block on a full pipe.
+        /// </summary>
+        private void DeliverLine(string line, bool isStdErr)
+        {
+            try
+            {
+                OutputLineReceived?.Invoke(line, isStdErr);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("cluster.supervisor.output-handler", ex);
             }
         }
 
@@ -583,6 +639,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private readonly TimeProvider _time;
     private readonly ISupervisedHangCapture? _hangCapture;
     private readonly SupervisorCrashDialog? _crashDialog;
+    private readonly ILogger _logger;
     private readonly string _protocolToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
     private int _belowMinimumRaised;
     private int _minimumWatchArmed;
@@ -598,14 +655,16 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
         TimeProvider? timeProvider = null,
         ISupervisedHangCapture? hangCapture = null,
-        SupervisorCrashDialog? crashDialog = null)
+        SupervisorCrashDialog? crashDialog = null,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(launcher);
 
         _options = options;
         _launcher = launcher;
-        _multiplexer = multiplexer ?? new SupervisedOutputMultiplexer();
+        _logger = logger ?? NullLogger.Instance;
+        _multiplexer = multiplexer ?? new SupervisedOutputMultiplexer { Logger = logger };
         _capacityProbe = capacityProbe ?? new SystemClusterCapacityProbe();
         _time = timeProvider ?? TimeProvider.System;
         _delayAsync = delayAsync ?? ((delay, ct) => Task.Delay(delay, _time, ct));
@@ -900,6 +959,12 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             if (!exitedCleanly)
             {
+                bool cancelled = ct.IsCancellationRequested;
+                string reason = cancelled ? "the supervisor's shutdown timeout ran out" : $"it did not exit within its drain timeout of {entry.Config.DrainTimeoutMs} ms";
+                string text = $"WARNING: Process '{entry.Config.Name}' (pid {process.ProcessId}) is being killed: {reason}; work it had not yet saved may be lost.";
+                _logger.LogWarning("Supervised process {Process} (pid {ProcessId}) is killed after a drain request: {Reason}", entry.Config.Name, process.ProcessId, reason);
+                _multiplexer.RouteLine(entry.Config, text, isStdErr: true);
+                AnomalyLedger.Shared.Report("cluster", "supervisor-drain-timeout-kill", entry.Config.Name, $"pid={process.ProcessId} drainTimeoutMs={entry.Config.DrainTimeoutMs} shutdownCancelled={cancelled}", AnomalySeverity.Warning);
                 process.KillOwnedProcess();
             }
         }
@@ -929,6 +994,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             {
                 // Expected when cancelling backoff during drain.
             }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                // A faulted monitor must not abort the drain of the remaining children (DrainAndStopAsync drains them one after the other).
+                _logger.LogFault("cluster.supervisor.monitor", ex, "The monitor of supervised process {Process} faulted before its drain finished ({Type})", entry.Config.Name, ex.GetType().Name);
+            }
         }
 
         ISupervisedProcess? toDispose;
@@ -941,6 +1011,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             entry.State = stillAlive ? SupervisedProcessState.Faulted : SupervisedProcessState.Drained;
             snapshot = entry.ToSnapshot();
         }
+
+        if (process is not null && process.HasExited)
+            _logger.LogInformation("Supervised process {Process} (pid {ProcessId}) exited with code {ExitCode} during its drain", entry.Config.Name, process.ProcessId, process.ExitCode);
 
         // A second DrainProcessAsync on an entry that ended Faulted finds no process and marks it Drained (follow-up: keep Faulted until reconciled).
         // Outside _gate: the wrapper's Dispose kills again and can block (up to the confirm timeout) when a kill was refused; no one else may wait on that.
@@ -1530,6 +1603,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                         return;
                     }
 
+                    _logger.LogInformation("Supervised process {Process} (pid {ProcessId}, incarnation {Incarnation}) exited with code {ExitCode}", entry.Config.Name, currentProcess.ProcessId, entry.Incarnation, exitCode);
                     long now = _time.GetTimestamp();
                     bool healthy = _time.GetElapsedTime(entry.LaunchTimestamp, now) >= TimeSpan.FromSeconds(_options.HealthyUptimeSeconds);
                     SupervisedExitDisposition disposition = SupervisedExitClassifier.Classify(exitCode, entry.KillKind, entry.AnnouncedIntent);

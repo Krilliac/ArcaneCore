@@ -337,6 +337,32 @@ public sealed class GroupLootRollTests
     }
 
     [Fact]
+    public void GroupLoot_ConditionedItem_IsRolledOnlyByMembersWhoPassTheCondition()
+    {
+        // vmangos Group::StartLootRoll admits a member only when LootItem::AllowedForPlayer holds (Group.cpp:1011-1014).
+        CreatureContent creatures = Content([Template()], [Spawn(1, WolfEntry, 3, 0)]);
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateSystem(creatures);
+        var content = new LootContent([(LootTableKind.Creature, Row(WolfLoot, BlueSword, 100, condition: 7))],
+            [new CreatureLootInfo(WolfEntry, WolfLoot, 0, 0, 0)]);
+        var groups = new FakeGroups();
+        var loot = new LootService(content, random: new Random(5)) { Items = Items, Quests = new FakeQuestJournal(), Groups = groups };
+        map.Combat.UnitKilled += (killer, victim) => loot.OnCreatureKilled(killer, victim);
+        map.AddUpdater(loot.Rolls);
+        var rig = new Rig { World = world, Map = map, Creatures = system, Loot = loot, Groups = groups };
+        (Player alice, _) = rig.Join(1);
+        (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
+        rig.Groups.Create(LootMethod.GroupLoot, alice, bob);
+        rig.Loot.Conditions = (player, condition) => condition == 7 && ReferenceEquals(player, alice);
+        Creature wolf = rig.KillWolf(alice);
+
+        Assert.Equal(LootResult.Ok, rig.Loot.Open(alice, wolf.Guid));
+
+        Assert.Empty(Packets(bobSession, WorldOpcode.SmsgLootStartRoll));
+        Assert.Equal(0u, bob.Inventory.GetItemCount(BlueSword));
+        Assert.Equal(1u, alice.Inventory.GetItemCount(BlueSword)); // the lone eligible member takes it (CountSingleLooterRoll)
+    }
+
+    [Fact]
     public void NeedBeforeGreed_OnlyMembersWhoCanUseTheItemRoll_AndALoneUserAutoNeedsIt()
     {
         Rig rig = CreateRig(NeedyHelm, BlueSword);

@@ -158,6 +158,39 @@ public sealed class PlayerbotRiskWorldTests
     }
 
     /// <summary>
+    /// An enemy that drops out of the sample alive (it evaded, or left the map) took no damage from the bot: only a dead one takes
+    /// its remaining health into the observed damage rate, and so into the average a later fight starts from.
+    /// </summary>
+    [Fact]
+    public async Task AnEnemyThatLeavesTheFightAlive_IsNotCountedAsKilled_ButADeadOneIs()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        CreatureTemplate template = RiskTestWorld.Template(991023, health: 600);
+        Creature stays = await world.OnWorldAsync(() => world.Spawn(template, 0, 60));
+        Creature leaves = await world.OnWorldAsync(() => world.Spawn(template, 0, -60));
+        await world.SeeAsync(stays, leaves);
+
+        (float evaded, float killed) = await world.OnWorldAsync(() =>
+        {
+            var tracker = new PlayerbotFightTracker();
+            uint at = world.Host.World.NowMs;
+            tracker.Observe(world.Player, [stays, leaves], stays, at, 1f, 1f);
+            PlayerbotFightFacts afterEvade = tracker.Observe(world.Player, [stays], stays, at + PlayerbotFightTracker.WindowMs, 1f, 1f);
+
+            var second = new PlayerbotFightTracker();
+            second.Observe(world.Player, [stays, leaves], stays, at, 1f, 1f);
+            uint health = leaves.Health;
+            leaves.Health = 0;
+            PlayerbotFightFacts afterKill = second.Observe(world.Player, [stays], stays, at + PlayerbotFightTracker.WindowMs, 1f, 1f);
+            leaves.Health = health;
+            return (afterEvade.DpsOut, afterKill.DpsOut);
+        });
+
+        Assert.Equal(0f, evaded);
+        Assert.True(killed > 0f, $"a dead enemy's remaining health is damage dealt: {killed}");
+    }
+
+    /// <summary>
     /// The bot's damage estimate is an average that starts from the level estimate, so one short unlucky fight does not decide it
     /// alone. The losing fight above observes 8 seconds of the bot's swings against three creatures: 22 to 33 damage with the
     /// rolls of its first level, and at the low end (2.75 per second) taken alone it put a lone same-level creature of 60 health

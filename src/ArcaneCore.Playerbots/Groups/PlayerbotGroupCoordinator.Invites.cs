@@ -87,7 +87,7 @@ public sealed partial class PlayerbotGroupCoordinator
         foreach (ObjectGuid guid in anchor.VisibleObjects)
         {
             if (map.FindObject(guid) is not Player { IsAlive: true } real || real.Session is not WorldSession { IsManaged: false }) continue;
-            if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null) continue;
+            if (real.Team != anchor.Team || groupManager.GetGroup(real.Guid) is not null || groupManager.GetInvite(real.Guid) is not null || IsAwaitedMember(real.Guid)) continue;
             if (_declinedPlayers.ContainsKey(real.Guid) || _invitedPlayers.ContainsKey(real.Guid) || real.Level < goal.MinLevel) continue;
             float distanceSq = Vector3.DistanceSquared(new Vector3(real.X, real.Y, real.Z), new Vector3(anchor.X, anchor.Y, anchor.Z));
             if (distanceSq > InvitePlayerYards * InvitePlayerYards || !SharesGoal(goal, real, anchor)) continue;
@@ -105,9 +105,9 @@ public sealed partial class PlayerbotGroupCoordinator
                 new(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
                     new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, _ => false), Gear(real), uint.MaxValue, Qualifying: PlayerbotGroupContent.QualifiesAtLevel(goal, real.Level)),
             };
-            // A real player never leads a bot group: the bots keep their goal.
-            if (PlayerbotGroupContent.Match(withPlayer, size, groups, goal.InInstance) is { } plan && plan.Leader.BotId != Guid.Empty
-                && plan.Members.Any(m => m.Bot.BotId == Guid.Empty))
+            // A real player never leads a bot group: the bots keep their goal (a tank-class player dealt the tank role leads no more: a bot does).
+            if (PlayerbotGroupContent.Match(withPlayer, size, groups, goal.InInstance) is { } matched && matched.Members.Any(m => m.Bot.BotId == Guid.Empty)
+                && WithBotLeader(matched) is { } plan)
             {
                 _invitedPlayers[real.Guid] = unchecked(now + (uint)(groups.InvitePlayerCooldownMinutes * 60_000));
                 return plan;

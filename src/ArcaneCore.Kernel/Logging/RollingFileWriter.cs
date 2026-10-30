@@ -118,10 +118,52 @@ public sealed class RollingFileWriter : ILineWriter
             return [];
         }
 
-        string[] files = Directory.GetFiles(_directory, _stem + "-*" + _extension);
-        Array.Sort(files, StringComparer.Ordinal);
-        Array.Reverse(files);
+        // Only names Roll() produces: <stem>-yyyyMMdd-NNN<ext>. The glob is just a prefilter; an operator's copy (world-before-upgrade.jsonl)
+        // or another writer's file (world-bots.jsonl next to world.jsonl) matches it too and must be neither counted nor pruned.
+        List<string> files = [];
+        foreach (string file in Directory.GetFiles(_directory, _stem + "-*" + _extension))
+        {
+            if (IsOwnSegment(Path.GetFileName(file)))
+            {
+                files.Add(file);
+            }
+        }
+
+        files.Sort(StringComparer.Ordinal);
+        files.Reverse();
         return files;
+    }
+
+    private bool IsOwnSegment(string fileName)
+    {
+        if (!fileName.EndsWith(_extension, StringComparison.Ordinal) || !fileName.StartsWith(_stem + "-", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> rest = fileName.AsSpan(_stem.Length + 1, fileName.Length - _stem.Length - 1 - _extension.Length);
+        if (rest.Length < 10 || rest[8] != '-')
+        {
+            return false;
+        }
+
+        foreach (char c in rest[..8])
+        {
+            if (!char.IsAsciiDigit(c))
+            {
+                return false;
+            }
+        }
+
+        foreach (char c in rest[9..])
+        {
+            if (!char.IsAsciiDigit(c))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public void Write(ReadOnlySpan<char> line)

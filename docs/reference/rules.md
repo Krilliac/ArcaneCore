@@ -175,7 +175,7 @@ Rule and rule_text ids below 1000000 are shipped content; server-authored rows u
 | 142 | `creature.start_relay_script` | creature | 1 `relay_id` (Int): dbscripts_on_relay id; negative: a relay template. | Start a relay script with the target as its source and the creature as its target; a negative id is a relay template. Replaced by start_rule_list when the relays are converted. |
 | 143 | `creature.attack_start` | creature | - | The creature attacks the target; a target that does not resolve or is dead fails. |
 | 144 | `creature.despawn_guardians` | creature | 1 `entry` (NonNegative):  | The creature's guardians of the entry go (0: every guardian). |
-| 145 | `creature.set_ranged_mode` | creature | 1 `mode_type` (Int): <br>2 `chase_distance` (Int):  | Enter or leave ranged (caster) mode: type 0 off, 3 no-melee; the chase distance applies. |
+| 145 | `creature.set_ranged_mode` | creature | 1 `mode_type` (Int): <br>2 `chase_distance` (Int):  | Enter or leave ranged (caster) mode: type 0 off, 2/4 switch by melee reach (proximity/distancer), 3 no-melee, 1 full caster refused as unsupported; the chase distance applies. |
 | 146 | `creature.set_walk` | creature | 1 `walk_type` (Int):  | 0 run and 1 walk set how scripted moves go; 2 and 3 (chase speeds) change nothing here. |
 | 147 | `creature.set_facing` | creature | 1 `reset` (Bool):  | Face the target; with reset, face the reset orientation (the target is then not needed). |
 | 148 | `creature.set_immobilized` | creature | 1 `apply` (Bool): <br>2 `combat_only` (Bool):  | Root or free the creature; a combat-only root ends at the next reset. |
@@ -197,7 +197,7 @@ Rule and rule_text ids below 1000000 are shipped content; server-authored rows u
 | 14 | `creature.random_on_threat` | creature | 1 `optional` (Bool): 1: an unresolved target becomes no unit and the action still runs. | A random unit of the threat list. |
 | 15 | `creature.random_not_top` | creature | 1 `optional` (Bool): 1: an unresolved target becomes no unit and the action still runs. | A random unit of the threat list other than the top one. |
 | 16 | `creature.invoker` | creature | 1 `optional` (Bool): 1: an unresolved target becomes no unit and the action still runs. | Whoever caused the event. |
-| 17 | `creature.invoker_owner` | creature | 1 `optional` (Bool): 1: an unresolved target becomes no unit and the action still runs. | The beneficiary of the event's invoker (the invoker itself while there are no owners). |
+| 17 | `creature.invoker_owner` | creature | 1 `optional` (Bool): 1: an unresolved target becomes no unit and the action still runs. | The beneficiary of the event's invoker: its charmer or owner, else the invoker itself. |
 | 18 | `creature.random_player` | creature | 1 `optional` (Bool): 1: an unresolved target becomes no unit and the action still runs. | A random player of the threat list. |
 | 19 | `creature.random_not_top_player` | creature | 1 `optional` (Bool): 1: an unresolved target becomes no unit and the action still runs. | A random player of the threat list other than the top entry. |
 | 20 | `creature.event_sender` | creature | 1 `optional` (Bool): 1: an unresolved target becomes no unit and the action still runs. | The unit that sent the AI event. |

@@ -981,7 +981,7 @@ public sealed class PlayerbotTownGoalsTests
         finally { HolidayVendorServices.Current.Value = null; }
     }
 
-    private static ItemTemplate Boots(uint entry, uint durability) => new()
+    internal static ItemTemplate Boots(uint entry, uint durability) => new()
     {
         Entry = entry, Name = $"boots-{entry}", Class = (uint)ItemClass.Armor, SubClass = ItemSubClasses.ArmorMisc,
         InventoryType = (uint)InventoryType.Feet, Armor = 10, MaxDurability = durability, ItemLevel = 10, Quality = 1, Stackable = 1,
@@ -989,7 +989,7 @@ public sealed class PlayerbotTownGoalsTests
     };
 
     /// <summary>DurabilityCosts row for item level 10 (every multiplier 1) and DurabilityQuality factor 1 for quality 1 ((1 + 1) x 2).</summary>
-    private static RepairCostTable RepairPrices() => new([(10u, Enumerable.Repeat(1u, RepairCostTable.MultiplierCount).ToArray())], [(4u, 1f)]);
+    internal static RepairCostTable RepairPrices() => new([(10u, Enumerable.Repeat(1u, RepairCostTable.MultiplierCount).ToArray())], [(4u, 1f)]);
 
     [Fact]
     public async Task MissingNpcContent_IsAClosedNoActionFallback()
@@ -1168,6 +1168,297 @@ public sealed class PlayerbotTownGoalsTests
             finally { session.Kick(); await session.ManagedClosed; }
         }
         finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>
+    /// Live: every bot that visited a service NPC stood on the same spot (the first point inside the interaction reach on the common
+    /// approach, or the NPC's own position). Each bot now walks to a spot of its own on a 2 to 4 yard ring around the NPC
+    /// (<see cref="PlayerbotStandSpots"/>), inside the server's reach (<see cref="QuestNpcServices.InteractionDistance"/> plus the
+    /// bounding radii), and still buys.
+    /// </summary>
+    [Fact]
+    public async Task SeveralBotsAtOneVendor_EndOnDistinctSpots_EachInReach_AndEachBuys()
+    {
+        List<(Vector3 Position, bool InReach, uint Food, uint Money, Vector3 Spot)> ends = await RunVendorCrowdAsync(3, blocked: null);
+
+        Assert.Equal(3, ends.Count);
+        foreach (var end in ends)
+        {
+            Assert.True(end.InReach, $"a bot ended out of the vendor's reach at {end.Position}");
+            Assert.Equal(1u, end.Food);
+            Assert.Equal(90u, end.Money);
+            Assert.True(Vector2.Distance(new(end.Position.X, end.Position.Y), new(end.Spot.X, end.Spot.Y)) <= PlayerbotTownGoals.VisitSpotArrivedYards + 0.25f,
+                $"a bot ended {Vector2.Distance(new(end.Position.X, end.Position.Y), new(end.Spot.X, end.Spot.Y)):F2} yd from its own spot");
+        }
+        for (int a = 0; a < ends.Count; a++)
+            for (int b = a + 1; b < ends.Count; b++)
+                Assert.True(Vector3.Distance(ends[a].Position, ends[b].Position) >= 1f,
+                    $"bots {a} and {b} stand {Vector3.Distance(ends[a].Position, ends[b].Position):F2} yd apart");
+    }
+
+    /// <summary>Every ring spot of the bot is unplannable (no path): the visit falls back to the NPC's own position and still buys.</summary>
+    [Fact]
+    public async Task AVisitWhoseRingSpotsCannotBePlanned_FallsBackToTheNpc_AndStillBuys()
+    {
+        var npcPosition = new Vector3(-8948.95f, -132.49f, 83.53f);
+        List<(Vector3 Position, bool InReach, uint Food, uint Money, Vector3 Spot)> ends = await RunVendorCrowdAsync(1,
+            blocked: end => Vector2.Distance(new(end.X, end.Y), new(npcPosition.X, npcPosition.Y)) is > 1f and < 4.5f);
+
+        Assert.Single(ends);
+        Assert.True(ends[0].InReach, $"the bot ended out of the vendor's reach at {ends[0].Position}");
+        Assert.Equal(1u, ends[0].Food);
+        Assert.Equal(90u, ends[0].Money);
+    }
+
+    /// <summary>Only the bot's first ring spot cannot be planned: it takes another angle of the ring, not the NPC's own position.</summary>
+    [Fact]
+    public async Task AVisitWhoseFirstRingSpotCannotBePlanned_TakesAnotherAngle()
+    {
+        List<(Vector3 Position, bool InReach, uint Food, uint Money, Vector3 Spot)> ends = await RunVendorCrowdAsync(1, blocked: null, blockFirstSpot: true);
+
+        Assert.Single(ends);
+        Assert.True(ends[0].InReach);
+        Assert.Equal(1u, ends[0].Food);
+        var npcPosition = new Vector3(-8948.95f, -132.49f, 83.53f);
+        Assert.True(Vector2.Distance(new(ends[0].Position.X, ends[0].Position.Y), new(npcPosition.X, npcPosition.Y)) >= 1.5f,
+            "the bot walked onto the NPC instead of another ring angle");
+    }
+
+    /// <summary>
+    /// <paramref name="bots"/> bots 20 yards west of the town vendor, all with 100 copper and no food, each running the visit until it buys
+    /// (at most 400 thinks of 500 ms). Returns where each ended, whether the server would let it interact, and what it holds.
+    /// <paramref name="blocked"/> names path ends the pathfinder refuses; <paramref name="blockFirstSpot"/> also refuses a bot's own first spot.
+    /// </summary>
+    private static async Task<List<(Vector3 Position, bool InReach, uint Food, uint Money, Vector3 Spot)>> RunVendorCrowdAsync(
+        int bots, Func<Vector3, bool>? blocked, bool blockFirstSpot = false)
+    {
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable,
+            Stackable = 20, BuyPrice = 10, SellPrice = 1, FoodType = 1,
+            Spells = [new ItemSpell(922012, 0, -1, 0, 0, 0, 0)] });
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            var sessions = new List<WorldSession>();
+            try
+            {
+                for (int i = 0; i < bots; i++)
+                    sessions.Add(await Combat.CombatTestSessions.EnterAsync(host, "SPREAD" + (char)('A' + i), "Spreadbot" + (char)('a' + i)));
+                foreach (WorldSession session in sessions)
+                    await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "vendor visible");
+                return await host.OnWorldAsync(() =>
+                {
+                    var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+                    spells.Store = new ArcaneCore.Game.Spells.SpellStore([.. spells.Store.All,
+                        new ArcaneCore.Game.Spells.SpellInfo
+                        {
+                            Id = 922012, AuraInterruptFlags = ArcaneCore.Game.Spells.SpellAuraInterruptFlags.StandingCancels,
+                            Effects = [new ArcaneCore.Game.Spells.SpellEffectInfo
+                            {
+                                Effect = ArcaneCore.Game.Spells.SpellEffectName.ApplyAura,
+                                AuraType = ArcaneCore.Game.Spells.AuraType.ModRegen, BasePoints = 4, BaseDice = 1,
+                            }, new(), new()],
+                        }], [], []);
+                    QuestNpcServices services = sessions[0].Services.GetRequiredService<QuestNpcFeature>().Services;
+                    var npcPosition = new Vector3(-8948.95f, -132.49f, 83.53f);
+                    var firstSpots = new List<Vector3>();
+                    foreach (WorldSession session in sessions)
+                        firstSpots.Add(PlayerbotStandSpots.ServiceSpot(session.Player!.Guid.Value, TownVendorFixture.Guid.Value, npcPosition, 0));
+                    bool Refuses(Vector3 end) => blocked?.Invoke(end) == true
+                        || (blockFirstSpot && firstSpots.Any(spot => Vector2.Distance(new(spot.X, spot.Y), new(end.X, end.Y)) < 0.5f));
+                    WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new RefusingPathfinder(Refuses));
+
+                    var goals = new List<PlayerbotTownGoals>();
+                    foreach (WorldSession session in sessions)
+                    {
+                        Player player = session.Player!;
+                        player.Money = 100;
+                        player.Relocate(npcPosition.X - 20f, npcPosition.Y, player.Z, player.Orientation, host.World.NowMs);
+                        goals.Add(new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true }));
+                    }
+
+                    var done = new bool[sessions.Count];
+                    for (int think = 0; think < 400 && done.Contains(false); think++)
+                    {
+                        for (int i = 0; i < sessions.Count; i++)
+                        {
+                            Player player = sessions[i].Player!;
+                            if (done[i]) continue;
+                            PlayerbotMotion.ElapseForTests(player, 500);
+                            sessions[i].ManagedBudget = new ManagedActionBudget(4);
+                            goals[i].BeginThink();
+                            goals[i].Update(player, 500);
+                            done[i] = player.Inventory.GetItemCount(117) >= 1;
+                        }
+                    }
+
+                    var ends = new List<(Vector3 Position, bool InReach, uint Food, uint Money, Vector3 Spot)>();
+                    foreach (WorldSession session in sessions)
+                    {
+                        Player player = session.Player!;
+                        ends.Add((new Vector3(player.X, player.Y, player.Z),
+                            services.InteractableNpc(player, TownVendorFixture.Guid, NpcFlags.Vendor) is not null,
+                            player.Inventory.GetItemCount(117), player.Money,
+                            PlayerbotStandSpots.ServiceSpot(player.Guid.Value, TownVendorFixture.Guid.Value, npcPosition, 0)));
+                    }
+
+                    return ends;
+                });
+            }
+            finally
+            {
+                foreach (WorldSession session in sessions) { session.Kick(); await session.ManagedClosed; }
+            }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    private sealed class RefusingPathfinder(Func<Vector3, bool> refuses) : IPathfinder
+    {
+        public bool Enabled => true;
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+            => refuses(end) ? PathResult.None(start) : PathResult.StraightLine(start, end, PathType.Normal);
+    }
+
+    internal static ItemTestContent FoodAndGrayContent()
+    {
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable,
+            Stackable = 20, BuyPrice = 10, SellPrice = 1, FoodType = 1,
+            Spells = [new ItemSpell(922012, 0, -1, 0, 0, 0, 0)] });
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 9002, Name = "Plain gray", Class = (uint)ItemClass.TradeGoods,
+            Stackable = 20, SellPrice = 5 });
+        return items;
+    }
+
+    /// <summary>Registers the spell that makes item 117 a food (a regeneration aura that standing cancels), as the real food rows are.</summary>
+    internal static void RegisterFoodSpell(WorldTestHost host)
+    {
+        var spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
+        spells.Store = new ArcaneCore.Game.Spells.SpellStore([.. spells.Store.All,
+            new ArcaneCore.Game.Spells.SpellInfo
+            {
+                Id = 922012, AuraInterruptFlags = ArcaneCore.Game.Spells.SpellAuraInterruptFlags.StandingCancels,
+                Effects = [new ArcaneCore.Game.Spells.SpellEffectInfo
+                {
+                    Effect = ArcaneCore.Game.Spells.SpellEffectName.ApplyAura,
+                    AuraType = ArcaneCore.Game.Spells.AuraType.ModRegen, BasePoints = 4, BaseDice = 1,
+                }, new(), new()],
+            }], [], []);
+    }
+
+    /// <summary>
+    /// Live: a druid in Cat Form (using food is barred in a form) with food in its bags was told it had none, so the vendor bought it
+    /// food every 1.5 seconds. Carried food counts for the need to buy whatever the form; nothing is bought, and the vendor is no candidate.
+    /// </summary>
+    [Fact]
+    public async Task ADruidInCatFormWithFoodInItsBags_BuysNoFood_AndTheVendorIsNoCandidate()
+    {
+        var npc = new TownVendorFixture();
+        using IDisposable itemScope = FoodAndGrayContent().Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "vendor visible");
+                await host.OnWorldAsync(() =>
+                {
+                    RegisterFoodSpell(host);
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    player.Inventory.AddItem(117, 1, out _);
+                    player.SetByte(ArcaneCore.Game.UpdateFields.UnitFieldBytes1, 2, (byte)ArcaneCore.Game.Spells.ShapeshiftForm.Cat);
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    Assert.False(goals.HasCandidate(player));
+                    session.ManagedBudget = new ManagedActionBudget(4);
+                    Assert.False(goals.Update(player, 1500));
+                    Assert.Equal(100u, player.Money);
+                    Assert.Equal(1u, player.Inventory.GetItemCount(117));
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>
+    /// The general rule of the town goal: while it names a candidate and its cooldown has run out, an Update either sends a request or
+    /// the NPC stops being a candidate; it never keeps the bot at a vendor it does nothing at. A Cat Form druid with food and a gray
+    /// to sell: the gray is sold, then nothing is left to do.
+    /// </summary>
+    [Fact]
+    public async Task ACandidateVendor_IsEitherServedAtTheNextUpdate_OrNoLongerACandidate()
+    {
+        var npc = new TownVendorFixture();
+        using IDisposable itemScope = FoodAndGrayContent().Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start();
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "vendor visible");
+                await host.OnWorldAsync(() =>
+                {
+                    RegisterFoodSpell(host);
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    player.Inventory.AddItem(117, 1, out _);
+                    player.Inventory.AddItem(9002, 1, out _);
+                    player.SetByte(ArcaneCore.Game.UpdateFields.UnitFieldBytes1, 2, (byte)ArcaneCore.Game.Spells.ShapeshiftForm.Cat);
+                    var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                    bool served = false;
+                    for (int think = 0; think < 6; think++)
+                    {
+                        if (!goals.HasCandidate(player)) continue;
+                        session.ManagedBudget = new ManagedActionBudget(4);
+                        goals.BeginThink();
+                        goals.Update(player, 1500);
+                        bool requested = session.ManagedBudget.Remaining < 4;
+                        served |= requested;
+                        Assert.True(requested || !goals.HasCandidate(player), $"think {think}: a candidate vendor was left unserved");
+                    }
+
+                    Assert.True(served, "the gray was never sold");
+                    Assert.Equal(0u, player.Inventory.GetItemCount(9002));
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>An item a vendor refused is not offered again for <see cref="PlayerbotTownGoals.UnsellableMs"/>, then it is: the memory expires.</summary>
+    [Fact]
+    public async Task AnUnsellableItem_IsOfferedAgainOnceItsRefusalExpires()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            var goals = await host.OnWorldAsync(() => new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true }));
+            ObjectGuid item = ObjectGuid.WithEntry(HighGuid.Item, 9002, 1);
+            Assert.False(await host.OnWorldAsync(() => goals.IsUnsellable(item)));
+            await host.OnWorldAsync(() => { goals.NoteUnsellable(item, 50); return true; });
+            Assert.True(await host.OnWorldAsync(() => goals.IsUnsellable(item)));
+            await host.WaitForWorldAsync(() => !goals.IsUnsellable(item), "the refusal expires");
+            await host.OnWorldAsync(() =>
+            {
+                for (uint low = 100; low < 300; low++) goals.NoteUnsellable(ObjectGuid.WithEntry(HighGuid.Item, 9002, low));
+                Assert.True(goals.IsUnsellable(ObjectGuid.WithEntry(HighGuid.Item, 9002, 299)));
+                return true;
+            });
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
     }
 
     private sealed class BlockWestPathfinder(float minX) : IPathfinder

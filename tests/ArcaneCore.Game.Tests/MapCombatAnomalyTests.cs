@@ -23,6 +23,15 @@ public sealed class MapCombatAnomalyTests
         return unit;
     }
 
+    /// <summary>Whole sweeps of one second each: a single huge frame is capped (a hang is one observation), so long spans are stepped like the real tick.</summary>
+    private static void Advance(Map map, int totalMs)
+    {
+        for (int elapsed = 0; elapsed < totalMs; elapsed += 1000)
+        {
+            map.Combat.Update(1000);
+        }
+    }
+
     [Fact]
     public void HealthZeroButAlive_IsReportedOnceAfterTheBudget_NotBefore()
     {
@@ -36,6 +45,20 @@ public sealed class MapCombatAnomalyTests
         map.Combat.Update(1000);
         map.Combat.Update(1000);
         Assert.Equal(1, cap.Count("combat/death-not-processed"));
+    }
+
+    [Fact]
+    public void AHungWorldFrame_IsNotChargedAsTimeSpentWithTheStateWrong()
+    {
+        // A 12 s world-tick hang is one frame: a unit seen at health 0 for the first time in it has not been wrong for the 3 s budget.
+        (_, Map map, _, _) = CombatTestKit.CreateWorld();
+        CombatTestUnit unit = Spawn(map);
+        using AnomalyCapture cap = CaptureFor(unit);
+        unit.Health = 0;
+
+        map.Combat.Update(12_000);
+
+        Assert.False(cap.Any("combat/death-not-processed"), cap.Describe());
     }
 
     [Fact]
@@ -85,9 +108,9 @@ public sealed class MapCombatAnomalyTests
         busy.Combat.Threat.AddThreat(Spawn(map), 5);
         using AnomalyCapture s = CaptureFor(stuck);
         using AnomalyCapture b = CaptureFor(busy);
-        map.Combat.Update(60_000);
+        Advance(map, 60_000);
         Assert.False(s.Any("combat/combat-never-left"));
-        map.Combat.Update(60_000);
+        Advance(map, 60_000);
         Assert.Equal(1, s.Count("combat/combat-never-left"));
         Assert.False(b.Any("combat/combat-never-left"));
     }
@@ -105,8 +128,8 @@ public sealed class MapCombatAnomalyTests
         map.Combat.SetInCombatState(stuck, 0);
         map.Combat.SetInCombatState(stuck, 0);
         using AnomalyCapture s = CaptureFor(stuck);
-        map.Combat.Update(60_000);
-        map.Combat.Update(60_000);
+        Advance(map, 60_000);
+        Advance(map, 60_000);
         string detail = Assert.Single(s.Notices).Detail;
         Assert.Contains($"set by {nameof(CombatNeverLeft_NamesWhatPutTheUnitInCombat)} x2", detail);
         Assert.Contains("pvp timer False", detail);
@@ -128,8 +151,8 @@ public sealed class MapCombatAnomalyTests
         map.Combat.SetInCombatState(near, 0);
         using AnomalyCapture f = CaptureFor(far);
         using AnomalyCapture n = CaptureFor(near);
-        map.Combat.Update(60_000);
-        map.Combat.Update(60_000);
+        Advance(map, 60_000);
+        Advance(map, 60_000);
         Assert.Equal(1, f.Count("combat/combat-never-left"));
         Assert.False(n.Any("combat/combat-never-left"));
     }
@@ -147,7 +170,7 @@ public sealed class MapCombatAnomalyTests
         using AnomalyCapture s = CaptureFor(stalled);
         using AnomalyCapture h = CaptureFor(healthy);
         using AnomalyCapture q = CaptureFor(noRegen);
-        for (int i = 0; i < 5; i++) map.Combat.Update(10_000);
+        Advance(map, 50_000);
         Assert.Equal(1, s.Count("combat/regen-stalled"));
         Assert.False(h.Any("combat/regen-stalled"), h.Describe());
         Assert.False(q.Any("combat/regen-stalled"));

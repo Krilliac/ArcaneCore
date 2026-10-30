@@ -159,6 +159,22 @@ public sealed class EasternPlaguelandsTests
     }
 
     [Fact]
+    public void Northpass_curing_shrine_stays_while_the_tower_is_fully_held()
+    {
+        // vmangos OPvPCapturePointEP_NPT::ChangeState re-summons the curing shrine (SummonCuringShrine) in the full-control states too.
+        (FakeOutdoorPvPHost host, EasternPlaguelandsZone zone) = Setup();
+        AtTower(host, zone, 1, Team.Alliance, C.Northpass);
+
+        zone.Update(250_000);
+        Assert.Equal(ObjectiveState.AllianceProgressing, zone.Tower(EpTower.Northpass).State);
+        zone.Update(1_000_000);
+
+        Assert.Equal(ObjectiveState.Alliance, zone.Tower(EpTower.Northpass).State);
+        Assert.Equal(1, host.ObjectsOf(C.NorthpassShrineAlliance[0].Entry));
+        Assert.Equal(1, host.ObjectsOf(C.NorthpassShrineAlliance[1].Entry));
+    }
+
+    [Fact]
     public void Four_towers_give_rank_four_and_the_all_towers_announcement()
     {
         (FakeOutdoorPvPHost host, EasternPlaguelandsZone zone) = Setup();

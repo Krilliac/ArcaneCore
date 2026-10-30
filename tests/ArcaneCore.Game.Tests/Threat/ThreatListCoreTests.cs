@@ -497,6 +497,34 @@ public sealed class ThreatListCoreTests
     }
 
     [Fact]
+    public void AnInvalidCurrentVictim_IsReplaced_EvenWhenAValidRivalSitsWithin110PercentAboveIt()
+    {
+        var owner = new CombatTestUnit();
+        var tank = new CombatTestUnit();
+        var dps = new CombatTestUnit();
+        ThreatList list = owner.Combat.Threat;
+        list.AddThreat(tank, 1000);
+        Assert.Same(tank, list.SelectVictim(Valid, _ => true));
+
+        list.AddThreat(dps, 1050); // above the tank, but not past 110%
+        Assert.Same(dps, list.SelectVictim(u => !ReferenceEquals(u, tank), _ => true));
+    }
+
+    [Fact]
+    public void ALowPriorityCurrentVictim_IsReplaced_EvenWhenAValidRivalSitsWithin110PercentAboveIt()
+    {
+        var owner = new CombatTestUnit();
+        var feared = new CombatTestUnit();
+        var dps = new CombatTestUnit();
+        ThreatList list = owner.Combat.Threat;
+        list.AddThreat(feared, 1000);
+        Assert.Same(feared, list.SelectVictim(Valid, _ => true));
+
+        list.AddThreat(dps, 1050);
+        Assert.Same(dps, list.SelectVictim(Valid, _ => true, null, u => ReferenceEquals(u, feared)));
+    }
+
+    [Fact]
     public void OutOfArea_StillAbandonsTheSelection_AndAnInvalidCurrentVictimIsReplaced()
     {
         var owner = new CombatTestUnit();

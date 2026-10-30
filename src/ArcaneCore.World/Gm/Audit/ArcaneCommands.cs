@@ -156,6 +156,7 @@ public sealed class ArcaneCommands : ICommandGroup
     {
         IServiceScopeFactory scopes = context.Session.Services.GetRequiredService<IServiceScopeFactory>();
         ILogger logger = context.Session.Logger;
+        IDisposable hold = context.Defer(); // the command is done when the store work and its replies are
         _ = Task.Run(async () =>
         {
             try
@@ -166,7 +167,12 @@ public sealed class ArcaneCommands : ICommandGroup
             catch (Exception ex)
             {
                 logger.LogError(ex, "An .arcane command failed");
+                context.Fail("failed");
                 context.Reply(GmAuditStrings.BanStoreUnavailable);
+            }
+            finally
+            {
+                hold.Dispose();
             }
         });
     }

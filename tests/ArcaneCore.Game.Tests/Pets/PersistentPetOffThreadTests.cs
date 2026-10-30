@@ -28,23 +28,24 @@ public sealed class PersistentPetOffThreadTests
         (PetTestKit kit, Player player) = HunterWithPet();
         using (kit)
         {
-            int callerThread = Environment.CurrentManagedThreadId;
-            int storeThread = -1;
             var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var release = new ManualResetEventSlim(false);
             kit.Service.SavePersistence = (_, _) =>
             {
-                storeThread = Environment.CurrentManagedThreadId;
                 entered.SetResult();
                 release.Wait(HangBound); // a blocked store (database is locked) must not hold the caller
                 return Task.CompletedTask;
             };
 
-            kit.Service.QueueCurrentPetSave(player); // returns while the store is still blocked, or this test hangs on main
+            // Comparing thread ids would be flaky: the test itself runs on a pool thread that the queued store can reuse.
+            // Run inline, the call below would sit in the blocked store until the HangBound wait ends, then return with the store done and the flush complete.
+            kit.Service.QueueCurrentPetSave(player);
+            Task flush = kit.Service.FlushCharacterAsync(1);
+            Assert.False(flush.IsCompleted, "QueueCurrentPetSave did not return until the blocked store call finished: the save ran on the calling thread");
             await entered.Task.WaitAsync(HangBound);
-            Assert.NotEqual(callerThread, storeThread);
+            Assert.False(flush.IsCompleted);
             release.Set();
-            await kit.Service.FlushCharacterAsync(1).WaitAsync(HangBound);
+            await flush.WaitAsync(HangBound);
         }
     }
 

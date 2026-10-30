@@ -76,6 +76,33 @@ public sealed class LogonReconnectTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
+    public async Task ReconnectProof_DisarmsThePreAuthLifetime_SoTheAuthenticatedSessionOutlivesIt()
+    {
+        byte[] key = Enumerable.Range(1, 40).Select(i => (byte)i).ToArray();
+        var accounts = new InMemoryAccountStore();
+        await accounts.CreateAsync(new Account { Username = "RECONNECT", Salt = [1], Verifier = [2], SessionKey = key });
+        var realms = new InMemoryRealmStore([new RealmEntry { Name = "ArcaneCore", Address = "127.0.0.1:8085" }]);
+        var guard = new ArcaneCore.Kernel.Net.NetGuard(
+            new NetProtectionOptions { LogonUnauthenticatedLifetime = TimeSpan.FromSeconds(2) }, () => 0, () => 0, NullLogger.Instance);
+        await using NetworkStream client = await StartAsync(accounts, realms, guard: guard);
+
+        await client.WriteAsync(BuildChallenge("RECONNECT"));
+        byte[] challenge = await ReadExactAsync(client, 34);
+        byte[] r1 = RandomNumberGenerator.GetBytes(16);
+        byte[] proofInput = Encoding.ASCII.GetBytes("RECONNECT")
+            .Concat(r1).Concat(challenge[2..18]).Concat(key).ToArray();
+        await client.WriteAsync(new byte[] { (byte)AuthCommand.ReconnectProof }.Concat(r1).Concat(SHA1.HashData(proofInput)).Concat(new byte[21]).ToArray());
+        Assert.Equal(new byte[] { (byte)AuthCommand.ReconnectProof, (byte)AuthResult.Success }, await ReadExactAsync(client, 2));
+
+        await Task.Delay(3000); // well past the 2 s pre-auth lifetime
+        await client.WriteAsync(new byte[] { (byte)AuthCommand.RealmList, 0, 0, 0, 0 });
+        byte[] realmHeader = await ReadExactAsync(client, 3);
+        Assert.Equal((byte)AuthCommand.RealmList, realmHeader[0]);
+        await ReadExactAsync(client, BinaryPrimitives.ReadUInt16LittleEndian(realmHeader.AsSpan(1, 2))); // drain, so teardown is a clean close
+    }
+
+    [Fact]
     public async Task ReconnectProofWithWrongSessionProof_IsRejected()
     {
         var accounts = new InMemoryAccountStore();
@@ -165,7 +192,7 @@ public sealed class LogonReconnectTests : IAsyncLifetime
     }
 
     private async Task<NetworkStream> StartAsync(IAccountStore accounts, IRealmStore realms, IBanStore? bans = null,
-        AuthOptions? options = null)
+        AuthOptions? options = null, ArcaneCore.Kernel.Net.NetGuard? guard = null)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
@@ -176,7 +203,7 @@ public sealed class LogonReconnectTests : IAsyncLifetime
             {
                 using TcpClient server = await listener.AcceptTcpClientAsync(_lifetime.Token);
                 await using NetworkStream stream = server.GetStream();
-                await new LogonSession(stream, accounts, realms, options ?? new AuthOptions(), NullLogger.Instance, "127.0.0.1:1", bans).RunAsync(_lifetime.Token);
+                await new LogonSession(stream, accounts, realms, options ?? new AuthOptions(), NullLogger.Instance, "127.0.0.1:1", bans, guard).RunAsync(_lifetime.Token);
             }
             finally
             {

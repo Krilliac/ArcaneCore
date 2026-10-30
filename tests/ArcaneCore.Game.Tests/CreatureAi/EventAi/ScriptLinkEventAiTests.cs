@@ -715,6 +715,26 @@ public sealed class ScriptLinkEventAiTests
     }
 
     [Fact]
+    public void InvokerOwnerTarget_ResolvesThePetsOwner_AndTheInvokerItselfWithoutOne()
+    {
+        // cmangos GetTargetByType TARGET_T_ACTION_INVOKER_OWNER: invoker->GetCharmerOrOwnerOrSelf().
+        using Scene s = Start([]);
+        Creature pet = s.System.SpawnSummoned(s.System.Content.FindTemplate(Minion)!, HighGuid.Pet, c =>
+        {
+            c.SetOwnerGuid(s.Player.Guid);
+            return new CreatureHome(2, 2, 83.5f, 0);
+        });
+
+        Unit? ofPet = s.Ai.Engine.Context.SelectTarget(7, new EventAiInvocation(0, 0, pet, null, null), out bool petError);
+        Unit? ofPlayer = s.Ai.Engine.Context.SelectTarget(7, new EventAiInvocation(0, 0, s.Player, null, null), out bool playerError);
+
+        Assert.False(petError);
+        Assert.False(playerError);
+        Assert.Same(s.Player, ofPet);
+        Assert.Same(s.Player, ofPlayer);
+    }
+
+    [Fact]
     public void EveryTypeTheLiveWorldReported_HasAHandlerNow()
     {
         // The world log of 2026-10-08 (live-w2-r1/world.log) and the classic-db z2815 rows.

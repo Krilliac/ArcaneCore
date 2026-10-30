@@ -30,6 +30,7 @@ public sealed class TalentPersistence : IAsyncDisposable
     private readonly Channel<PendingWrite> _writes =
         Channel.CreateUnbounded<PendingWrite>(new UnboundedChannelOptions { SingleReader = true });
     private Exception? _terminalFailure;
+    private int _disposed;
 
     private Task? _writer;
     private bool _warnedNoStore;
@@ -177,6 +178,11 @@ public sealed class TalentPersistence : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
         _writes.Writer.TryComplete();
         if (_writer is not null)
         {
@@ -186,6 +192,53 @@ public sealed class TalentPersistence : IAsyncDisposable
         if (_terminalFailure is { } terminal)
         {
             throw new InvalidOperationException("TalentPersistence stopped with a terminal ownership failure", terminal);
+        }
+
+        await ReconcileFailedAtShutdownAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The writer has drained, so nothing else touches the store: reconcile every character whose write failed against its desired
+    /// state, as the class doc promises ("login, shutdown"). A character that still cannot be written is reported and thrown, not dropped.
+    /// </summary>
+    private async Task ReconcileFailedAtShutdownAsync()
+    {
+        int[] failed;
+        lock (_lock)
+        {
+            failed = [.. _failed];
+        }
+
+        if (failed.Length == 0 || _scopes is null)
+        {
+            return;
+        }
+
+        var errors = new List<Exception>();
+        await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<ICharacterTalentStore>() is not { } store)
+        {
+            return;
+        }
+
+        foreach (int characterId in failed)
+        {
+            try
+            {
+                await RetryFailedAsync(store, characterId).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                errors.Add(ex);
+                FaultLedger.Shared.Record("talents.persistence-shutdown", ex);
+                AnomalyLedger.Shared.Report("talents", "persistence-failed", $"character {characterId}", $"shutdown reconcile error={ex.GetType().Name}: {ex.Message}");
+                _logger.LogFault("writequeue.talent-shutdown", ex, "Reconciling talent state of character {CharacterId} at shutdown failed", characterId);
+            }
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new AggregateException("TalentPersistence stopped with unreconciled talent state", errors);
         }
     }
 
