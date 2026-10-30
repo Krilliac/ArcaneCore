@@ -1027,10 +1027,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private void Match()
     {
         PruneRecruiting(Now);
+        PruneVolunteers(Now);
+        // A group with a real player (a volunteer) takes no slot from the cap, so a full cap only stops the bots-only plans.
         if (!QuestGroupSlotFree())
         {
             NoteCapBlocked();
-            return;
+            if (_volunteers.Count == 0) return;
         }
 
         if (GroupManagerOrNull() is not { } groupManager) return;
@@ -1039,10 +1041,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                      .GroupBy(w => (w.Waiting.Goal.Key, Team: _bots[w.BotId].Session.Player?.Team ?? 0))
                      .OrderBy(g => g.Min(w => w.Waiting.SinceMs)).ToArray())
         {
-            if (!QuestGroupSlotFree())
+            bool slotFree = QuestGroupSlotFree();
+            if (!slotFree)
             {
                 NoteCapBlocked();
-                return;
+                if (_volunteers.Count == 0) return;
             }
 
             PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
@@ -1057,11 +1060,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             int size = wanting.Max(w => w.Waiting.Goal.Size);
             List<PlayerbotGroupCandidate> candidates = BuildCandidates(wanting, goal);
 
-            PlayerbotGroupPlan? plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups, goal.InInstance);
-            if (plan is null && candidates.Count >= 1) plan = MatchWithVolunteer(candidates, size, goal, groupManager); // asked for it (Volunteers.cs)
+            // A player who asked for the group (Volunteers.cs) comes first, ahead of surplus bots; it forms even with the cap full.
+            PlayerbotGroupPlan? plan = candidates.Count >= 1 ? MatchWithVolunteer(candidates, size, goal, groupManager) : null;
+            if (plan is null && slotFree) plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups, goal.InInstance);
             List<Guid> recruited = [];
-            if (plan is null && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
-            if (plan is null && _options.Groups.InvitePlayers && candidates.Count >= 1)
+            if (plan is null && slotFree && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
+            if (plan is null && slotFree && _options.Groups.InvitePlayers && candidates.Count >= 1)
                 plan = MatchWithPlayer(candidates, size, goal, groupManager);
             if (plan is not null && goal.InInstance && !PlanAnchored(plan))
             {
@@ -1494,6 +1498,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         // one at a time until then.
         int room = formed is null ? 1 - group.Members.Count(m => m.Invited && !m.Joined)
             : (formed.IsRaid ? Group.MaxRaidSize : PlayerbotGroupContent.PartySize) - formed.MemberCount - group.Members.Count(m => m.Invited && !m.Joined);
+        if (group.InviteHoldUntilMs != 0 && unchecked((int)(group.InviteHoldUntilMs - now)) > 0) room = 0;
         foreach (Member member in group.Members.Where(m => !m.Joined && !m.Invited).Take(Math.Max(0, room)).ToArray())
         {
             if (world.FindOnlinePlayer(member.Guid) is null)
@@ -2096,6 +2101,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public List<Member> Members { get; } = [];
         public PlayerbotGroupState State { get; set; } = PlayerbotGroupState.Forming;
         public uint StateSinceMs { get; set; } = formedMs;
+
+        /// <summary>No invitation goes out before this time (0 = none): a volunteer's group lets the bot's "inv in a sec" whisper arrive first.</summary>
+        public uint InviteHoldUntilMs { get; set; }
 
         /// <summary>When the group entered its state; unlike <see cref="StateSinceMs"/> a step's own retry (<c>BringOut</c>) does not move it.</summary>
         public uint StateEnteredMs { get; set; } = formedMs;
