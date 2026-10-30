@@ -235,6 +235,26 @@ public sealed class FormationTests
             $"evade would send it to {reset.Value.X},{reset.Value.Y}, not where the fight took it ({startX},{startY})");
     }
 
+    [Theory]
+    [InlineData(-0.01f)]
+    [InlineData(0.01f)]
+    public void Kargath_AFollowerAlmostFacingTheLeader_SendsNoFacingTurn(float offset)
+    {
+        (WorldRuntime w, CreatureMapSystem system) = Start();
+        using WorldRuntime world = w;
+        Run(world, 30_000, 200); // every follower settles into its slot; the leader waits at point 1
+        Creature leader = Member(system, 6883);
+        Creature follower = Member(system, 6886);
+        Assert.Null(leader.Spline);
+        Assert.False(follower.IsMoving);
+        float almost = Creature.NormalizeOrientation(leader.Orientation + offset);
+        follower.Orientation = almost;
+
+        Run(world, 1000, 100); // past the recheck interval: the follower re-measures its facing
+
+        Assert.Equal(almost, follower.Orientation); // a facing turn would have set it to the leader's heading exactly
+    }
+
     private static void AssertInSlots(CreatureMapSystem system, Creature leader, FormationState formation, float leeway)
     {
         foreach (FormationSlot slot in formation.Slots.Where(s => s.SlotId != 0))

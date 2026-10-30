@@ -285,6 +285,20 @@ public sealed class DynamicRespawnTests
     }
 
     [Fact]
+    public void CountPlayersWithin_SkipsAGmWhoIsInvisible_EvenOutsideGmMode()
+    {
+        using WorldRuntime world = TestWorld.CreateRuntime();
+        AddCrowd(world, 3, 0);
+        Map map = world.GetMap(0);
+        Assert.Equal(3, map.CountPlayersWithin(0, 0, 100, true));
+
+        Player hidden = map.Players.First();
+        hidden.GmInvisible = true; // `.gm visible off`: GM mode stays off
+
+        Assert.Equal(2, map.CountPlayersWithin(0, 0, 100, true));
+    }
+
+    [Fact]
     public void CountPlayersWithin_AllocatesNothingInSteadyState()
     {
         (WorldRuntime world, CreatureMapSystem system, Creature c) = Start(40);
