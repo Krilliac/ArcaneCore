@@ -239,14 +239,14 @@ public sealed class WorldHostSingleWriterTests
         => new ServiceCollection().AddSingleton(guard).BuildServiceProvider();
 
     [Fact]
-    public async Task AServerDatabase_IsNotFileLocked_ItReliesOnTheDurableClaim()
+    public async Task AServerDatabase_TakesTheAdvisoryLock_SoAnUnreachableServerFailsTheStartBeforeAnyClaim()
     {
-        var options = Options.Create(new DatabaseOptions { Provider = DatabaseProvider.MariaDb, ConnectionString = "Server=nowhere;Database=characters" });
-        await using Kit first = Kit.Create(options, fencing: false);
-        await using Kit second = Kit.Create(options, fencing: false);
+        // A server database is guarded by a session advisory lock on a dedicated connection (CharacterDatabaseWriterLockTests runs the refusal against a real server).
+        // Here there is no server: the start must reach for the lock and fail with the driver's own error, not skip it and start a second writer.
+        var options = Options.Create(new DatabaseOptions { Provider = DatabaseProvider.MariaDb, ConnectionString = "Server=nowhere.invalid;Database=characters;Connection Timeout=2" });
+        await using Kit kit = Kit.Create(options, fencing: false);
 
-        await first.Host.StartAsync(CancellationToken.None);
-        await second.Host.StartAsync(CancellationToken.None);
+        await Assert.ThrowsAnyAsync<System.Data.Common.DbException>(() => kit.Host.StartAsync(CancellationToken.None));
     }
 
     [Fact]

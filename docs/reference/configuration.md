@@ -356,7 +356,7 @@ How to read the tables:
 | `Cluster:Worker:NodeId` | `string` | `"world"` | - | This worker's node id in the link manifest (shown in the gateway's log). |
 | `Cluster:Worker:Port` | `int` | `8095` | - | Port of the gateway listener; must equal the gateway's Gateway:WorkerPort. |
 | `Cluster:Worker:RealmId` | `int` | `1` | - | Realm id both ends of the link must agree on. |
-| `Cluster:Worker:Standby` | `bool` | `false` | - | Standby (Tier 3b handoff target; needs Enabled): start the process, build its services and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock, open no World:Port listener, and attach no feature nor start the simulation until promoted by a handoff (features read the characters database, which the active world still owns). `false`, the default, is an active worker. |
+| `Cluster:Worker:Standby` | `bool` | `false` | - | Standby (Tier 3b handoff target; needs Enabled): start the process, build its services and link to the gateway, but admit no session, claim no characters ownership, run no schema DDL, take no writer lock until promoted (promotion takes it and is refused while the old world holds it), open no World:Port listener, and attach no feature nor start the simulation until promoted by a handoff (features read the characters database, which the active world still owns). `false`, the default, is an active worker. |
 | `Cluster:Worker:WorldSchemaVersion` | `int` | `1` | - | World schema version both ends must agree on (an operator label, not read from the database). |
 
 ## `Combat`

@@ -13,8 +13,8 @@ namespace ArcaneCore.World;
 internal static class WorldStartup
 {
     /// <summary>
-    /// First the single-writer lock (<see cref="WorldWriterGuard"/>), then the schema initializers (<see cref="DatabaseStartup"/>): a second world on the same
-    /// characters file is refused before anything opens, upgrades or checkpoints it. A lock that is held elsewhere, and one that cannot be created at all (permissions,
+    /// First the single-writer lock (<see cref="WorldWriterGuard"/>: the SQLite sidecar file, or the MariaDB/MySQL/PostgreSQL session advisory lock), then the schema initializers
+    /// (<see cref="DatabaseStartup"/>): a second world on the same characters database is refused before anything opens, upgrades or checkpoints it. A lock that is held elsewhere, and one that cannot be created at all (permissions,
     /// a full disk), are both one line on <paramref name="error"/> and the refusal exit code instead of an unhandled crash.
     /// </summary>
     /// <returns>0 when ready, otherwise the exit code the process should return.</returns>
@@ -22,7 +22,17 @@ internal static class WorldStartup
     {
         try
         {
-            services.GetService<WorldWriterGuard>()?.Acquire();
+            if (services.GetService<WorldWriterGuard>() is { } guard)
+            {
+                // Through the same start-up wrapper as the schema step: a MariaDB/MySQL/PostgreSQL server that is not reachable yet gets the Resilience:Database:Bootstrap
+                // backoff and the "database unreachable" exit code, as it does for the initializers. A held lock is not transient and surfaces as the refusal below.
+                int lockCode = await DatabaseStartup.InitializeAsync(() =>
+                {
+                    guard.Acquire();
+                    return Task.CompletedTask;
+                }, services, error).ConfigureAwait(false);
+                if (lockCode != 0) return lockCode;
+            }
         }
         catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
         {

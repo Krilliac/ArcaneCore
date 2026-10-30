@@ -29,13 +29,30 @@ holds the file open with `FileShare.None`, so it cannot be deleted). On Windows 
 refuses to start, and starting it again fixes that.
 Before it restores any playerbot the world also checks that `World:Port` can be bound; that is check-then-bind, which narrows the window and does not close it, and a port that is still
 taken fails the start before a single bot is logged in.
-MariaDB, MySQL and PostgreSQL databases have no file to lock: they rely on the `Cluster:Fencing` claim, which an unfenced world checks at start and then every
-`Cluster:Fencing:ClaimWatchIntervalSeconds`, and that fence (`CharacterWriteFenceInterceptor`) is also the only thing that bounds character autosaves and session-close saves of a
+MariaDB, MySQL and PostgreSQL databases have no file, so the world takes the same process-lifetime exclusive lock as a session-level advisory lock held on one dedicated, unpooled
+connection (MariaDB/MySQL `GET_LOCK(name, 0)`, PostgreSQL `pg_try_advisory_lock(key)`), in the same place and order as the SQLite lock: before the schema initializers, whether or not
+`Cluster:Fencing:Enabled` is on, released last with the container. The lock is keyed on the name of the characters database from `Database:Characters` (lock name `arcanecore.world.writer:<database name>`,
+replaced by the prefix and 32 hex characters of the name's SHA-256 when longer than MariaDB's 64-character limit; the PostgreSQL key is the first 8 bytes of the SHA-256 of that name), so different realms'
+databases do not collide and two worlds configured with the same database name on the same server do. A second world gets the same exit code and message shape as for SQLite, naming the advisory lock instead of a file,
+having read and written nothing. The server releases the lock when the connection ends, so a crash leaves nothing to clean up. Limits: a server restart or a network partition that drops the connection silently drops the
+lock (the fencing claim below is still the guard then); the MariaDB/MySQL session's `wait_timeout` is raised to about 24 days so an idle server does not end it; the lock connection needs the same host and login as the
+characters database but no database to exist yet (on PostgreSQL it connects to the characters database, or to `postgres` before the first bootstrap has created it, and a world started in that window is not excluded);
+an unreachable server is retried and reported like the schema step (`Resilience:Database:Bootstrap`, exit code for an unreachable database). A standby worker takes the lock (SQLite or server) when it is promoted,
+see [the gateway](../areas/gateway.md#standby-worker-tier-3b-groundwork).
+The `Cluster:Fencing` claim, which an unfenced world checks at start and then every
+`Cluster:Fencing:ClaimWatchIntervalSeconds`, and that fence (`CharacterWriteFenceInterceptor`) remain the guard against a lost lock and the thing that bounds character autosaves and session-close saves of a
 second writer. If two worlds still end up writing the same playerbot rows, the world that already owned them (the older one, whose checkpoints are refused) logs `Split brain` at Critical,
 stops every bot and stops writing playerbot rows (checkpoints, creates, starts, stops, deletes, homes and the fleet reset), and reports it in `.playerbot status`, `.playerbot splitbrain` and the gauge
 `arcanecore.playerbots.split_brain` ([playerbots](../areas/playbots.md#another-world-on-the-same-database)). Character rows are still saved by the character autosave and when a session closes; split brain does not stop those.
 The older world stands down and the intruder keeps running on purpose: neither world can stop the other, and the one that already lost its rows backing off is the only move that guarantees a single writer
 (the operator then stops the intruder and clears the latch).
+
+A clustered realm must keep its characters on a server database. A SQLite characters database allows one writer process, and the world processes of a cluster write it concurrently, so the config check
+(`--check-config`; start-up as well, whatever `Startup:Strict` says) is an error, exit code 78, when the characters provider is SQLite and any of these is set: `Cluster:Worker:Enabled` (a gateway worker, a standby
+included), `Cluster:Node:Role` = MapWorker, or `Cluster:Supervisor:Enabled` with more than one world-type child (role `combined` or `worker`) under `Cluster:Supervisor:Processes`. The message names the setting and
+the provider and points at "Moving from SQLite to PostgreSQL or MariaDB" in [database upgrade](../ops/database-upgrade.md). The supervisor refuses before it launches any child. A supervisor with exactly one world child is
+still allowed on SQLite (one writer), with a warning that the realm cannot grow beyond one world on SQLite. The provider checked is the one the process's own configuration resolves for `Database:Characters`
+(for a supervisor, its own; its children are expected to share it).
 
 Both daemons accept typed commands at their console window (`World:Console:Enabled`, `Realm:Console:Enabled`, both on by default). The world console runs the GM commands with Administrator authority and no character; the realm console has `help`, `info`, `realmlist`, `online`, `account create|set-password|set-gmlevel` and `quit`. Nothing is read when standard input is redirected (a service, a pipe, a deploy script). Commands that need a character or a selection answer that they need a player. See [the server console](../areas/server-console.md). The world daemon also takes the same commands from local tools: over the control pipe, a Windows named pipe (`World:Control:Pipe:Enabled`, off by default; `tools/ops/live/redeploy.ps1` uses it), and over [remote administration](../ops/remote-admin.md) (RA, `World:RemoteAdmin`), a TCP listener that is on by default on 127.0.0.1:3443 and runs each command with the security level of the account that logged in. RA is clear text, passwords included: keep `World:RemoteAdmin:BindAddress` on a loopback address, or set `World:RemoteAdmin:Enabled` to `false`. For account, password and ban work without a running daemon use the `arcane-account` tool.
 

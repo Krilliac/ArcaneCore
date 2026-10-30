@@ -20,7 +20,8 @@ public sealed class LocalWorldHandoffSource(
     WorldRuntime world,
     CharacterSaveQueue saveQueue,
     WorkerAdmission admission,
-    CharacterPersistenceBarrier? barrier = null) : IWorldHandoffSource, IDisposable
+    CharacterPersistenceBarrier? barrier = null,
+    WorldWriterGuard? writerGuard = null) : IWorldHandoffSource, IDisposable
 {
     /// <summary>The admission closed reason while A drains.</summary>
     public const string DrainingReason = "draining";
@@ -131,6 +132,13 @@ public sealed class LocalWorldHandoffSource(
             admission.Close(RetiredReason);
         }
 
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Gives up A's characters database writer lock (the guard of A's container) so the promoted standby can take it; A is fenced out by the epoch takeover. Idempotent.</summary>
+    public Task ReleaseWriterLockAsync(CancellationToken cancellationToken)
+    {
+        writerGuard?.Dispose();
         return Task.CompletedTask;
     }
 

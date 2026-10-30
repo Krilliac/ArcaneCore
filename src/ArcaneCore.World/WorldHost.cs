@@ -264,8 +264,18 @@ public sealed class WorldHost(
         if (takenOver.Scope != "world" || takenOver.Incarnation != _incarnation)
             throw new InvalidOperationException("the ownership to promote under was not handed to this world's incarnation");
 
-        await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
+        // The process-lifetime writer lock first (SQLite sidecar file, or the MariaDB/MySQL/PostgreSQL advisory lock), before the ownership row is read: while the old
+        // world is alive it still holds it, and the promotion is refused with the standby untouched (nothing held, still a standby, retryable).
+        bool lockedHere;
+        try { lockedHere = writerGuard?.AcquireForPromotion() == true; }
+        catch (Exception ex) when (ex is Data.Characters.Ownership.CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
         {
+            throw new InvalidOperationException($"the characters database writer lock is held elsewhere (the old world is still running); refusing to promote, the standby stays a standby: {ex.Message}", ex);
+        }
+
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             ICharacterOwnershipStore store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>()
                 ?? throw new InvalidOperationException("no characters ownership store is registered; a standby cannot be promoted");
             // Only reads the row: the token must be the database's current active one. Never TryAcquireAsync here, which would claim a released
@@ -273,6 +283,11 @@ public sealed class WorldHost(
             CharacterOwnershipToken? current = await store.GetCurrentAsync("world", cancellationToken).ConfigureAwait(false);
             if (current != takenOver)
                 throw new InvalidOperationException("the characters database is not owned by this standby under the promoted token; refusing to promote");
+        }
+        catch
+        {
+            if (lockedHere) writerGuard?.Dispose(); // a refused promotion holds nothing
+            throw;
         }
 
         _ownership = takenOver;
