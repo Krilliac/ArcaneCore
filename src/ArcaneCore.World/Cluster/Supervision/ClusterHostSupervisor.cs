@@ -551,6 +551,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private readonly Func<TimeSpan, CancellationToken, Task> _delayAsync;
     private readonly TimeProvider _time;
     private readonly ISupervisedHangCapture? _hangCapture;
+    private readonly SupervisorCrashDialog? _crashDialog;
     private readonly string _protocolToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
     private int _belowMinimumRaised;
     private int _minimumWatchArmed;
@@ -565,7 +566,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         IClusterCapacityProbe? capacityProbe = null,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
         TimeProvider? timeProvider = null,
-        ISupervisedHangCapture? hangCapture = null)
+        ISupervisedHangCapture? hangCapture = null,
+        SupervisorCrashDialog? crashDialog = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(launcher);
@@ -577,6 +579,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         _time = timeProvider ?? TimeProvider.System;
         _delayAsync = delayAsync ?? ((delay, ct) => Task.Delay(delay, _time, ct));
         _hangCapture = hangCapture;
+        _crashDialog = crashDialog;
 
         foreach ((string key, SupervisedProcessConfig config) in _options.Processes)
         {
@@ -1009,7 +1012,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private void LaunchEntryUnderLock(ManagedEntry entry)
     {
         entry.Config.ProtocolToken = _protocolToken;
+        DateTimeOffset launchedUtc = _time.GetUtcNow(); // before the launch: a crash report the child writes is never older than this
         ISupervisedProcess process = _launcher.Launch(entry.Config);
+        entry.LaunchUtc = launchedUtc;
         entry.BeginIncarnation(_time.GetTimestamp());
         process.OutputLineReceived += (line, isStdErr) => OnChildLine(entry, process, line, isStdErr);
         entry.Process = process;
@@ -1246,6 +1251,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                             action = WatchAction.Hang;
                             entry.KillKind = SupervisorKillKind.Hang;
                             entry.State = SupervisedProcessState.Hung;
+                            entry.HangSilence = silence; // with the kill kind, so an early self-exit is never shown as a hang of 0 s
                         }
                         else
                         {
@@ -1332,7 +1338,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
         if (config.HangCapture != SupervisedHangCaptureMode.None && _hangCapture is not null)
         {
-            await CaptureHangAsync(config, process, ct).ConfigureAwait(false);
+            await CaptureHangAsync(entry, process, ct).ConfigureAwait(false);
         }
 
         bool exited = false;
@@ -1351,14 +1357,29 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
         if (!exited)
         {
+            lock (_gate)
+            {
+                entry.HangKillIssued = true; // before the kill: the monitor only sees the exit after it, so it can tell a kill from a self-exit
+            }
+
             await Task.Run(process.KillOwnedProcess).ConfigureAwait(false);
         }
 
         FaultIfStillAlive(entry, process);
     }
 
-    private async Task CaptureHangAsync(SupervisedProcessConfig config, ISupervisedProcess process, CancellationToken ct)
+    private void SetHangNote(ManagedEntry entry, ISupervisedProcess process, string note)
     {
+        lock (_gate)
+        {
+            if (ReferenceEquals(entry.Process, process))
+                entry.HangCaptureNote = note;
+        }
+    }
+
+    private async Task CaptureHangAsync(ManagedEntry entry, ISupervisedProcess process, CancellationToken ct)
+    {
+        SupervisedProcessConfig config = entry.Config;
         string? tool = string.IsNullOrWhiteSpace(_options.StackCaptureTool) ? null : _options.StackCaptureTool;
         var request = new SupervisedHangCaptureRequest(config.Name, process.ProcessId, config.HangCapture, _options.HangCaptureDirectory, tool);
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -1380,6 +1401,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
         if (!ReferenceEquals(winner, capture))
         {
+            SetHangNote(entry, process, $"the {config.HangCapture} capture did not finish within {_options.HangCaptureTimeoutSeconds} s");
             _multiplexer.RouteLine(
                 config,
                 $"WARNING: The hang capture of process '{config.Name}' did not finish within {_options.HangCaptureTimeoutSeconds} s; draining it anyway.",
@@ -1390,10 +1412,12 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         try
         {
             await capture.ConfigureAwait(false);
+            SetHangNote(entry, process, $"{config.HangCapture} capture written to {_options.HangCaptureDirectory}");
             _multiplexer.RouteLine(config, $"Hang capture ({config.HangCapture}) of process '{config.Name}' written to {_options.HangCaptureDirectory}.", isStdErr: false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
         {
+            SetHangNote(entry, process, $"the {config.HangCapture} capture failed: {ex.Message}");
             FaultLedger.Shared.Record("cluster.supervisor.hang-capture", ex);
             _multiplexer.RouteLine(config, $"WARNING: The hang capture of process '{config.Name}' failed: {ex.Message}", isStdErr: true);
         }
@@ -1465,6 +1489,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 }
 
                 bool notify = false;
+                SupervisorChildExit? crashExit = null; // an unexpected nonzero exit the supervisor did not cause: offered to the crash dialog after the lock
                 lock (_gate)
                 {
                     entry.LastExitCode = exitCode;
@@ -1498,6 +1523,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                             entry.State = SupervisedProcessState.Faulted;
                             announcement = $"FATAL: Process '{entry.Config.Name}' exited with code {exitCode} ({(exitCode == ExitCodes.InvalidConfiguration ? "invalid configuration" : "usage error")}); not restarting.";
                             notify = true;
+                            crashExit = NewCrashExit(entry, currentProcess, exitCode, "not restarting it (a restart would fail the same way)");
                             break;
 
                         case SupervisedExitDisposition.RelaunchNow:
@@ -1527,6 +1553,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                             if (GiveUpOnCrashLoopUnderLock(entry, now, exitCode, out announcement))
                             {
                                 notify = true;
+                                if (killedBy != SupervisorKillKind.StopGrace)
+                                    crashExit = NewCrashExit(entry, currentProcess, exitCode, "giving up on it (crash loop), not restarting it");
                                 break;
                             }
 
@@ -1534,6 +1562,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                             delayMs = ClusterSupervisorOptions.ComputeBackoffDelayMs(entry.ConsecutiveFailures, entry.Config.RestartBackoffMinMs, entry.Config.RestartBackoffMaxMs);
                             entry.LastBackoffDelayMs = delayMs;
                             entry.State = SupervisedProcessState.BackingOff;
+                            if (killedBy != SupervisorKillKind.StopGrace)
+                                crashExit = NewCrashExit(entry, currentProcess, exitCode, $"restarting it in {delayMs / 1000.0:0.##} s (restart #{entry.RestartCount})");
                             announcement = killedBy == SupervisorKillKind.Hang
                                 ? $"ERROR: Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) was killed as hung (exit code {exitCode}); restarting in {delayMs} ms (restart #{entry.RestartCount})."
                                 : $"ERROR: Process '{entry.Config.Name}' (incarnation {entry.Incarnation}) exited unexpectedly with code {exitCode}; restarting in {delayMs} ms (restart #{entry.RestartCount}).";
@@ -1546,6 +1576,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 if (announcement is not null)
                 {
                     _multiplexer.RouteLine(entry.Config, announcement, isStdErr: announcementIsError);
+                }
+
+                if (crashExit is not null)
+                {
+                    OfferToCrashDialog(crashExit);
                 }
 
                 if (notify)
@@ -1612,6 +1647,21 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 return;
             }
         }
+    }
+
+    /// <summary>The facts of an unexpected exit for <see cref="SupervisorCrashDialog"/>. Call under <c>_gate</c>, before the incarnation's launch time is replaced.</summary>
+    private static SupervisorChildExit NewCrashExit(ManagedEntry entry, ISupervisedProcess process, int exitCode, string decision)
+        => new(entry.Config.Name, entry.Config.Role, process.ProcessId, exitCode, entry.LaunchUtc, decision,
+            entry.Config.ExecutablePath, entry.Config.Arguments, entry.Config.WorkingDirectory,
+            entry.KillKind == SupervisorKillKind.Hang ? entry.HangSilence ?? TimeSpan.Zero : null, entry.KillKind == SupervisorKillKind.Hang ? entry.HangCaptureNote : null, entry.KillKind == SupervisorKillKind.Hang && !entry.HangKillIssued);
+
+    /// <summary>Hands an unexpected exit to the crash dialog, which starts its own thread and never throws; nothing here may delay the restart.</summary>
+    private void OfferToCrashDialog(SupervisorChildExit exit)
+    {
+        if (_crashDialog is null || (exit.ExitCode == 0 && exit.HangSilence is null))
+            return;
+
+        _crashDialog.OnChildExited(exit); // never throws: its own failures are recorded there with LogFault
     }
 
     /// <summary>
@@ -1764,6 +1814,10 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
         // Per-incarnation hang-watch state; all of it is read and written under the supervisor's _gate.
         public long LaunchTimestamp { get; set; }
+        public DateTimeOffset LaunchUtc { get; set; }
+        public TimeSpan? HangSilence { get; set; }
+        public string? HangCaptureNote { get; set; }
+        public bool HangKillIssued { get; set; }
         public bool Armed { get; set; }
         public bool GraceWarned { get; set; }
         public long? StopAnnouncedTimestamp { get; set; }
@@ -1789,6 +1843,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             StopAnnouncedTimestamp = null;
             AnnouncedIntent = null;
             KillKind = SupervisorKillKind.None;
+            HangSilence = null;
+            HangCaptureNote = null;
+            HangKillIssued = false;
             _wake = NewSignal();
         }
 
