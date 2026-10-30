@@ -123,13 +123,13 @@ public sealed partial class SummonService
     /// The pet share of a kill. Alone (RewardSinglePlayerAtKill) the pet gets MaNGOS::XP::Gain for its own level when the kill is worth
     /// experience to the owner; in a group (RewardGroupAtKill) each member's pet gets half the member's share before rested bonus
     /// (itr_xp / 2). Shares come from <see cref="KillExperience.Distribute"/> with the inputs <see cref="KillRewards.AwardExperience"/> uses,
-    /// so an owner at the maximum level (who is given nothing himself) still levels his pet. Totems and PvP victims give nothing.
+    /// so an owner at the maximum level (who is given nothing himself) still levels his pet. Totems, PvP victims and CREATURE_STATIC_FLAG_NO_XP victims give nothing (Formulas.h:112).
     /// </summary>
     public void AwardKillExperience(IReadOnlyList<Player> recipients, Creature victim, bool nonRaidDungeon, float killRate, float eliteRate)
     {
         ArgumentNullException.ThrowIfNull(recipients);
         ArgumentNullException.ThrowIfNull(victim);
-        if (recipients.Count == 0 || Totems.TotemQuery.IsTotem(victim) || KillRewards.IsPvpVictim(victim))
+        if (recipients.Count == 0 || Totems.TotemQuery.IsTotem(victim) || KillRewards.IsPvpVictim(victim) || KillRewards.GrantsNoExperience(victim))
         {
             return;
         }
