@@ -268,6 +268,11 @@ public sealed class RealmLivenessTests
         Assert.Equal(lastBeat, rig.Row.HeartbeatUtc);
         Assert.Contains(rig.Log.Lines, l => l.Level >= LogLevel.Warning && l.Text.Contains("heartbeat", StringComparison.Ordinal) && l.Text.Contains("failed", StringComparison.Ordinal));
 
+        // A failed write is retried on the next wake (one second), not after a full interval.
+        rig.Clock.Advance(TimeSpan.FromSeconds(1));
+        await rig.WakeAsync();
+        Assert.Equal(rig.Clock.UtcNow, rig.Row.HeartbeatUtc);
+
         // The world kept ticking; the next interval's write goes through.
         rig.Ticks++;
         rig.Clock.Advance(TimeSpan.FromSeconds(10));
