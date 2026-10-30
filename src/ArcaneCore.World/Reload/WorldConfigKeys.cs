@@ -897,6 +897,7 @@ public static class WorldConfigKeys
         LiveWarMode("Enabled", o => o.Enabled, (o, v) => o.Enabled = v, null),
         LiveWarMode("HonorMultiplier", o => o.HonorMultiplier, (o, v) => o.HonorMultiplier = v, WarModeOptions.CheckHonorMultiplier),
         LiveWarMode("PvpDeathDurabilityLoss", o => o.PvpDeathDurabilityLoss, (o, v) => o.PvpDeathDurabilityLoss = v, WarModeOptions.CheckPvpDeathDurabilityLoss),
+        LiveWarMode("ExemptAreas", o => o.ExemptAreas, (o, v) => o.ExemptAreas = v, WarModeOptions.CheckExemptAreas),
 
         // The player speed rates (non-retail when not 1; the MaNGOS Zero fork's Movement.*SpeedRate): UnitSpeed.SetRate reads them through the
         // player's copy, which the reload refreshes for every online player (ConfigContentReloadable re-sends the speeds after these keys).

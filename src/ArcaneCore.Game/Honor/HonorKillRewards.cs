@@ -330,7 +330,7 @@ public sealed class HonorKillRewards
     // multiplier of 1 changes nothing and the integer rounding stays the retail one.
     private void Award(Player player, Player victim, float points)
     {
-        if (_warMode.Enabled)
+        if (_warMode.Enabled && victim.Map?.Template is not { IsBattleground: true }) // a battleground keeps its own honour
         {
             points *= _warMode.HonorMultiplier;
         }

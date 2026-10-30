@@ -25228,6 +25228,22 @@
       "isCollection": false
     },
     {
+      "path": "World:WarMode:ExemptAreas",
+      "section": "World:WarMode",
+      "type": "string",
+      "kind": "scalar",
+      "elementType": "string",
+      "enumValues": null,
+      "default": "35,392,976,2255,2361,2268,3425",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "live",
+      "meaning": "Area or zone ids (comma separated) War Mode leaves alone besides the capitals and cities of a player's own team: the neutral towns, which the 1.12.1 area table flags neither Capital nor City (they carry flag 0x40 and no team). The default is 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook, 2361 Nighthaven, 2268 Light's Hope Chapel and 3425 Cenarion Hold. Arenas (the Gurubashi Battle Ring, 2177; not the stands around it, 1741) and battlegrounds are always exempt. Live.",
+      "allowed": "text",
+      "docs": "docs/reference/configuration.md#worldwarmode",
+      "isCollection": false
+    },
+    {
       "path": "World:WarMode:HonorMultiplier",
       "section": "World:WarMode",
       "type": "float",

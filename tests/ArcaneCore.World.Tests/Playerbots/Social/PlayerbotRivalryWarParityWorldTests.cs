@@ -128,9 +128,15 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         Assert.Equal(rudeAtBots, war.Sends.Any(s => s.TargetIsBot && s.Rude)); // a bot sends one rude emote per ten minutes, so which of its rivals gets it is not fixed
 
         // The assertion the test exists for. Toward a bot the war layer now decides what the bots do to each other (no greeting, with RudeAtBots a rude emote, and which
-        // rival gets a bot's one rude emote is not fixed), and the events of those emotes land in their own normal layers like any other, so the rows between the bots may
-        // differ. The rows about the real player, among them everything the war grudges of A were seeded on, are identical.
-        Func<KeyValuePair<string, string>, bool> compared = row => row.Key.EndsWith("->Rvparp", StringComparison.Ordinal);
+        // rival gets a bot's one rude emote is not fixed), and the events of those emotes land in the normal layers of the pairs involved like any other, so the rows of the
+        // war-Rival pairs (everything with C, the bot A and B hold a war grudge against) may differ. Every other normal-layer row is identical: the rows about the real
+        // player, among them everything the war grudges of A were seeded on, and the rows between bots that are no war Rivals of each other (A and B).
+        Func<KeyValuePair<string, string>, bool> aboutThePlayer = row => row.Key.EndsWith("->Rvparp", StringComparison.Ordinal);
+        Func<KeyValuePair<string, string>, bool> compared = row => !row.Key.Contains("Rvparc", StringComparison.Ordinal);
+        Assert.Contains(calm.FinalRows, new Predicate<KeyValuePair<string, string>>(aboutThePlayer)); // non-vacuity: there is something to compare
+        Assert.Contains(war.FinalRows, new Predicate<KeyValuePair<string, string>>(aboutThePlayer));
+        Assert.Contains(calm.FinalRows, new Predicate<KeyValuePair<string, string>>(compared));
+        Assert.Equal(calm.FinalRows.Where(aboutThePlayer), war.FinalRows.Where(aboutThePlayer));
         Assert.Equal(calm.FinalRows.Where(compared), war.FinalRows.Where(compared));
     }
 }

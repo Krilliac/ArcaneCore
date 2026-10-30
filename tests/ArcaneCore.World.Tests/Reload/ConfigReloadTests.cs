@@ -252,6 +252,17 @@ public sealed class ConfigReloadTests : IDisposable
         => Assert.Throws<InvalidOperationException>(() => new PlayerbotWarModeOptions { HuntRadiusYards = yards }.Validate());
 
     [Fact]
+    public void WarModeExemptAreas_IsALiveKey_WhoseValueMustBeAListOfAreaIds()
+    {
+        WorldConfigKey key = Assert.Single(WorldConfigKeys.All, k => k.Path == "World:WarMode:ExemptAreas");
+        Assert.True(key.Live);
+        Assert.Null(key.Check!("35,392"));
+        Assert.Null(key.Check!(""));
+        Assert.NotNull(key.Check!("35,Booty Bay"));
+        Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:WarMode:ExemptAreas", ConfigDaemon.World).Status);
+    }
+
+    [Fact]
     public void PvpInitiate_DefaultsAreOffWithTheSpecifiedWindow_BindAndAreLiveKeys()
     {
         var defaults = new PlayerbotPvpInitiateOptions();

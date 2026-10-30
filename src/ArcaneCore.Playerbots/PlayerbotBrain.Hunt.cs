@@ -27,6 +27,9 @@ internal sealed partial class PlayerbotBrain
     private const float HuntChaseMarginYards = 10f;
 
     private Player? _engaged;
+
+    // The player the bot itself started on (a help, a grudge or an initiate), kept while that fight lasts: a fight the bot started is not chased into an exempt area (TryFightPlayer).
+    private Player? _startedOn;
     private PlayerbotEngageReason _engagedReason;
     private uint _huntScanAtMs;
     private uint _initiateScanAtMs;
@@ -43,6 +46,7 @@ internal sealed partial class PlayerbotBrain
     private void Engage(Player target, PlayerbotEngageReason reason)
     {
         _engaged = target;
+        _startedOn = target;
         _engagedReason = reason;
     }
 
@@ -96,6 +100,7 @@ internal sealed partial class PlayerbotBrain
     {
         PlayerbotWarModeOptions war = _options.Social.WarMode;
         if (!war.Enabled || _engaged is not null || _defend is not null || !player.IsAlive || player.Combat.IsInCombat || player.Duel is not null) return false;
+        if (!PlayerbotHelpRules.IsFreeGoal(_goal)) return false;
         if (Social is not { Enabled: true } recorder || !recorder.TryBot(player.Guid, out Guid botId, out _)) return false;
         if (PlayerbotSickness.Holder(_session, player) is { IsPermanent: false, Duration: > 0 } || InGroupWithRealPlayer(player)) return false;
 
@@ -179,12 +184,24 @@ internal sealed partial class PlayerbotBrain
         return true;
     }
 
-    // A group with a real player in it follows that player's orders (or the group coordinator's), not the hunt.
+    /// <summary>Whether <paramref name="other"/> is the player the bot itself started on and it now stands in a War Mode exempt area (the bot lets go of it).</summary>
+    private bool StartedAndExempt(Player other) => ReferenceEquals(other, _startedOn) && PvpAreaState.IsWarModeProtected(other);
+
+    // A group with a real player in it follows that player's orders (or the group coordinator's), not the hunt. A member who is offline counts as real
+    // unless the social recorder knows it as a bot.
     private bool InGroupWithRealPlayer(Player player)
     {
         if (_session.Services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.GetGroup(player.Guid) is not { } group) return false;
         foreach (ArcaneCore.Game.Groups.GroupMemberSlot slot in group.Members)
-            if (slot.Guid != player.Guid && _session.World.FindOnlinePlayer(slot.Guid) is { } member && member.Session is not WorldSession { IsManaged: true }) return true;
+        {
+            if (slot.Guid == player.Guid) continue;
+            if (_session.World.FindOnlinePlayer(slot.Guid) is { } member)
+            {
+                if (member.Session is not WorldSession { IsManaged: true }) return true;
+            }
+            else if (Social is not { } recorder || !recorder.TryBot(slot.Guid, out _, out _)) return true;
+        }
+
         return false;
     }
 }

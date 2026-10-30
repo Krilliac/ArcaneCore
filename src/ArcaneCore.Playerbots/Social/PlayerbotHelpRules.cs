@@ -115,7 +115,7 @@ internal static class PlayerbotHelpRules
     /// <summary>
     /// The attacker among the victim's attackers a helping bot takes: the nearest to the bot that is alive, on its map, one the combat hooks let it
     /// attack, and (when it would flag the bot) only if <paramref name="mayFlag"/>. A creature, or a player or bot of the other faction that is
-    /// PvP-flagged, wherever War Mode is on or off, and never one standing in a War Mode exempt area (<see cref="PvpAreaState.IsWarModeExempt"/>).
+    /// PvP-flagged, wherever War Mode is on or off, and never one standing in a War Mode exempt area (<see cref="PvpAreaState.IsWarModeProtected"/>).
     /// Null when there is none.
     /// </summary>
     internal static Unit? AttackerOf(Player bot, Player victim, bool mayFlag, int groupSize)
@@ -135,7 +135,7 @@ internal static class PlayerbotHelpRules
                 if (unit is Player enemy)
                 {
                     if (!enemy.IsAlive || !enemy.IsInWorld || !ReferenceEquals(enemy.Map, map) || enemy.Team == bot.Team || !IsPvpFlagged(enemy)) continue;
-                    if (!mayFlag || PvpAreaState.IsWarModeExempt(enemy)) continue;
+                    if (!mayFlag || PvpAreaState.IsWarModeProtected(enemy)) continue;
                     if (!Winnable(bot.Level, enemy.Level, false, groupSize)) continue;
                 }
                 else

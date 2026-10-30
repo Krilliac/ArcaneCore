@@ -2121,6 +2121,7 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `World:WarMode:Enabled` | `bool` | `false` | live | Switch War Mode on for every player and bot, with no opt-out. Default false (retail). Switching it off returns the flags to the normal rules: a flag then lapses by its 5-minute timer unless the player wants it. |
+| `World:WarMode:ExemptAreas` | `string` | `"35,392,976,2255,2361,2268,3425"` | live | Area or zone ids (comma separated) War Mode leaves alone besides the capitals and cities of a player's own team: the neutral towns, which the 1.12.1 area table flags neither Capital nor City (they carry flag 0x40 and no team). The default is 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook, 2361 Nighthaven, 2268 Light's Hope Chapel and 3425 Cenarion Hold. Arenas (the Gurubashi Battle Ring, 2177; not the stands around it, 1741) and battlegrounds are always exempt. Live. |
 | `World:WarMode:HonorMultiplier` | `float` | `1.5` | live | While War Mode is on, the honour of an honourable kill is multiplied by this (1 to 10, default 1.5). 1 gives the same honour as with War Mode off. |
 | `World:WarMode:PvpDeathDurabilityLoss` | `float` | `0.1` | live | While War Mode is on, the fraction of every equipped item's durability a player loses when killed by another player outside a battleground (0 to 1, default 0.10). 0 costs nothing. Retail, and War Mode off: a PvP death costs no durability. `Items:DurabilityLossEnable` = false still turns all durability loss off. |
 

@@ -242,4 +242,50 @@ public sealed class PlayerbotWarModeWorldTests
             return true;
         });
     }
+
+    // --- a fight the bot started is not chased into an exempt area ---------------------------------------------------------------------------------
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ABotThatStartedAFight_LetsGoWhenTheTargetRunsIntoItsCapital_EvenWhileTheTargetKeepsAttackingIt_AndFightsBackOnceItIsOutAgain(bool grudge)
+    {
+        await using SocialWorld world = await RivalryKit.StartAsync();
+        Guid bot = await world.AddBotAsync("Chbot");
+        await using WorldTestClient client = await world.AddPlayerAsync("Chfoe", RivalryKit.Undead);
+        await HelpTestKit.StandAsync(world, "Chbot", ("Chfoe", 5f));
+        await world.Host.OnWorldAsync(() => PvpAreaState.SetWarModeExempt(RivalryKit.Online(world, "Chfoe"), true));
+        if (grudge)
+        {
+            world.Options.Social.WarMode.Enabled = true;
+            await RivalryKit.SeedAsync(world, "Chbot", "Chfoe", killerIsBot: false, kills: 1);
+        }
+
+        PlayerbotBrain brain = HelpTestKit.BrainOf(world, bot);
+        bool started = await world.Host.OnWorldAsync(() =>
+        {
+            Player self = RivalryKit.Online(world, "Chbot"), foe = RivalryKit.Online(world, "Chfoe");
+            FlagForGood(foe);
+            PvpAreaState.SetWarModeExempt(foe, false);
+            if (!grudge) world.Options.Pvp.Initiate.Enabled = true;
+            return grudge ? brain.TryHunt(self, 500) : brain.TryInitiate(self, 500);
+        });
+        Assert.True(started);
+        Player target = await world.Host.OnWorldAsync(() => RivalryKit.Online(world, "Chfoe"));
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => ReferenceEquals(brain.InspectionPvpTarget, target)).Result, "the bot to fight its target");
+
+        // The target runs into its capital and keeps hitting the bot from there.
+        await world.Host.OnWorldAsync(() =>
+        {
+            PvpAreaState.SetWarModeExempt(target, true);
+            RivalryKit.Online(world, "Chbot").Map!.Combat.Attack(target, RivalryKit.Online(world, "Chbot"));
+        });
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => brain.InspectionPvpTarget is null && brain.EngagedPlayer is null).Result, "the bot to let go");
+        await Task.Delay(1500);
+        Assert.Null(await world.Host.OnWorldAsync(() => brain.InspectionPvpTarget));
+
+        // Out of the capital and still attacking the bot: it is fought back, as any attacker is.
+        await world.Host.OnWorldAsync(() => PvpAreaState.SetWarModeExempt(target, false));
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => ReferenceEquals(brain.InspectionPvpTarget, target)).Result, "the bot to fight back");
+    }
 }

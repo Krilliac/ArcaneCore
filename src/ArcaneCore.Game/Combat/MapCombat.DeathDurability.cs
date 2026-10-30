@@ -9,7 +9,8 @@ public sealed partial class MapCombat
     /// <summary>
     /// vmangos Unit::Kill: eligible PvE deaths lose 10% equipment durability (Unit.cpp:1191-1202). A PvP death costs none, except
     /// with War Mode on (<c>World:WarMode:Enabled</c>, not retail): then an open-world PvP death costs
-    /// <c>World:WarMode:PvpDeathDurabilityLoss</c> of every equipped item. A battleground death costs none either way.
+    /// <c>World:WarMode:PvpDeathDurabilityLoss</c> of every equipped item. A battleground death costs none either way, and neither does a self-kill, a death to
+    /// a killer of the victim's own team or a death in a War Mode exempt area (an arena, the Gurubashi Battle Ring, a capital).
     /// </summary>
     private void ApplyDeathDurability(Player victim, bool durabilityLoss, Player? playerTap, SpellInfo? spell)
     {
@@ -21,6 +22,12 @@ public sealed partial class MapCombat
         double percent = 0.10;
         if (playerTap is not null)
         {
+            // A self-kill, a same-team killer (mind control) and a death in an exempt area (an arena, the Battle Ring, a capital) cost nothing: War Mode leaves them alone.
+            if (ReferenceEquals(playerTap, victim) || playerTap.Team == victim.Team || WorldState.Zones.PvpAreaState.IsWarModeExempt(victim))
+            {
+                return;
+            }
+
             WorldState.WarModeOptions war = WarMode;
             if (!war.Enabled || war.PvpDeathDurabilityLoss <= 0f)
             {

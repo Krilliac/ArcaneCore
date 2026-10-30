@@ -25,7 +25,10 @@ public sealed class WarModeTests
             [1519] = new AreaTemplate(1519, 0, 0, 44, (uint)AreaFlags.Capital, 1, "Stormwind", AreaTeams.Ally, 0),
             [1637] = new AreaTemplate(1637, 1, 0, 50, (uint)AreaFlags.Capital, 1, "Orgrimmar", AreaTeams.Horde, 0),
             [33] = new AreaTemplate(33, 0, 0, 60, 0, 1, "Stranglethorn", 0, 0),
-            [35] = new AreaTemplate(35, 0, 33, 61, (uint)AreaFlags.City, 1, "Booty Bay", 0, 0),
+            // The real 5875 rows: a neutral town is flagged 0x40 with no team, neither Capital nor City.
+            [35] = new AreaTemplate(35, 0, 33, 61, 0x40, 1, "Booty Bay", 0, 0),
+            [2177] = new AreaTemplate(2177, 0, 33, 62, (uint)AreaFlags.Arena, 1, "The Battle Ring", 0, 0),
+            [1741] = new AreaTemplate(1741, 0, 33, 63, 0, 1, "Gurubashi Arena", 0, 0),
             [77] = new AreaTemplate(77, 0, 12, 43, (uint)AreaFlags.Arena, 1, "Arena", 0, 0),
         };
 
@@ -268,6 +271,90 @@ public sealed class WarModeTests
         Assert.Equal(expected, WarModeAreas.IsExempt(area, zone, player));
     }
 
+
+    [Fact]
+    public void ExemptAreas_DefaultToTheSevenNeutralTowns_AndRefuseAnythingButIds()
+    {
+        var options = new WarModeOptions();
+        Assert.Equal(new uint[] { 35, 392, 976, 2255, 2268, 2361, 3425 }, options.ExemptAreaIds().OrderBy(id => id));
+        Assert.Null(WarModeOptions.CheckExemptAreas(""));
+        Assert.Null(WarModeOptions.CheckExemptAreas(" 35 , 392 "));
+        Assert.NotNull(WarModeOptions.CheckExemptAreas("35,Booty"));
+        Assert.NotNull(WarModeOptions.CheckExemptAreas("-5"));
+        Assert.Throws<InvalidOperationException>(() => new WarModeOptions { ExemptAreas = "35,x" }.Validate());
+    }
+
+    [Fact]
+    public void ANeutralTownWithTheRealFlagsAndNoCity_IsExemptOnlyThroughTheList_AndTheListIsLive()
+    {
+        (WorldRuntime world, Locator locator, Player player, WarModeOptions war) = Setup();
+        using (world)
+        {
+            war.Enabled = true;
+            locator.Position = (33, 35);
+            world.RunTick(1000);
+            world.RunTick(1000);
+            Assert.True(PvpAreaState.IsWarModeExempt(player));
+            Assert.False(IsPvp(player));
+
+            war.ExemptAreas = "392"; // Booty Bay struck off the list
+            locator.Position = (33, 33);
+            world.RunTick(1000);
+            locator.Position = (33, 35);
+            world.RunTick(1000);
+            world.RunTick(1000);
+            Assert.False(PvpAreaState.IsWarModeExempt(player));
+            Assert.True(IsPvp(player));
+        }
+    }
+
+    [Fact]
+    public void OnlyTheBattleRing_IsExemptOfTheGurubashiArena_NotTheStandsAroundIt()
+    {
+        (WorldRuntime world, Locator locator, Player player, WarModeOptions war) = Setup();
+        using (world)
+        {
+            war.Enabled = true;
+            locator.Position = (33, 1741);
+            world.RunTick(1000);
+            world.RunTick(1000);
+            Assert.False(PvpAreaState.IsWarModeExempt(player));
+            Assert.True(IsPvp(player));
+
+            locator.Position = (33, 2177);
+            world.RunTick(1000);
+            Assert.True(PvpAreaState.IsWarModeExempt(player));
+        }
+    }
+
+    [Fact]
+    public void APlayerTheTrackerHasNotPlacedYet_IsProtectedFromTheBots_ButNotExempt()
+    {
+        WorldRuntime world = TestWorld.CreateRuntime();
+        using (world)
+        {
+            Player player = TestWorld.CreatePlayer(1, 0, 0, new FakeSession());
+            world.AddPlayer(player);
+
+            Assert.False(PvpAreaState.IsWarModeKnown(player));
+            Assert.True(PvpAreaState.IsWarModeProtected(player));
+            Assert.False(PvpAreaState.IsWarModeExempt(player));
+        }
+    }
+
+    [Theory]
+    [InlineData(0x40u, 35u, true)]
+    [InlineData(0x40u, 36u, false)]
+    [InlineData(0x00u, 1741u, false)]
+    [InlineData(0x80u, 2177u, true)]
+    public void IsExempt_TheRealNeutralTownFlagsAreNoCity_SoTheListDecides(uint flags, uint entry, bool expected)
+    {
+        var zone = new AreaTemplate(33, 0, 0, 1, 0, 1, "Stranglethorn", 0, 0);
+        var area = new AreaTemplate(entry, 0, 33, 2, flags, 1, "Area", 0, 0);
+        var listed = new HashSet<uint> { 35 };
+        Assert.Equal(expected, WarModeAreas.IsExempt(area, zone, Team.Alliance, listed));
+        if (flags == 0x40) Assert.False(WarModeAreas.IsExempt(area, zone, Team.Alliance));
+    }
     [Fact]
     public void IsExempt_ASubzoneOfACapitalIsExemptThroughItsZone_AndUnknownAreasAreNot()
     {

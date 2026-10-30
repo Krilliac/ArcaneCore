@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.WorldState;
+using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -208,7 +209,7 @@ public sealed class PlayerDeathDurabilityTests
         using (world)
         {
             Assert.False(WorldStateHooks.For(world).WarMode.Enabled);
-            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), race: Race.Orc);
 
             victim.Map!.Combat.Kill(killer, victim);
 
@@ -224,7 +225,7 @@ public sealed class PlayerDeathDurabilityTests
         using (world)
         {
             WarModeOn(world, loss: 0.5f);
-            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), race: Race.Orc);
 
             victim.Map!.Combat.Kill(killer, victim);
 
@@ -240,7 +241,7 @@ public sealed class PlayerDeathDurabilityTests
         using (world)
         {
             WarModeOn(world, loss: new WarModeOptions().PvpDeathDurabilityLoss);
-            Player owner = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+            Player owner = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), race: Race.Orc);
 
             victim.Map!.Combat.Kill(new PetStandIn(owner), victim);
 
@@ -255,7 +256,7 @@ public sealed class PlayerDeathDurabilityTests
         using (world)
         {
             WarModeOn(world, loss: 0f);
-            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), race: Race.Orc);
 
             victim.Map!.Combat.Kill(killer, victim);
 
@@ -264,6 +265,57 @@ public sealed class PlayerDeathDurabilityTests
         }
     }
 
+
+    [Fact]
+    public void WarModeOn_ASelfKill_CostsNothing()
+    {
+        (WorldRuntime world, Player victim, FakeSession session, Item sword) = Setup();
+        using (world)
+        {
+            WarModeOn(world, loss: 0.5f);
+
+            victim.Map!.Combat.Kill(victim, victim);
+
+            Assert.Equal(20u, sword.Durability);
+            Assert.False(Told(session));
+        }
+    }
+
+    [Fact]
+    public void WarModeOn_ASameTeamKiller_CostsNothing()
+    {
+        (WorldRuntime world, Player victim, FakeSession session, Item sword) = Setup();
+        using (world)
+        {
+            WarModeOn(world, loss: 0.5f);
+            Player mindControlled = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2)); // a human, like the victim
+
+            victim.Map!.Combat.Kill(mindControlled, victim);
+
+            Assert.Equal(20u, sword.Durability);
+            Assert.False(Told(session));
+        }
+    }
+
+    [Fact]
+    public void WarModeOn_ADeathInAnExemptArea_CostsNothing_AndTheSameDeathOutsideOneCostsTheConfiguredFraction()
+    {
+        foreach (bool exempt in new[] { true, false })
+        {
+            (WorldRuntime world, Player victim, FakeSession session, Item sword) = Setup();
+            using (world)
+            {
+                WarModeOn(world, loss: 0.5f);
+                PvpAreaState.SetWarModeExempt(victim, exempt); // the Gurubashi Battle Ring, an arena or a capital when true
+                Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), race: Race.Orc);
+
+                victim.Map!.Combat.Kill(killer, victim);
+
+                Assert.Equal(exempt ? 20u : 10u, sword.Durability);
+                Assert.Equal(!exempt, Told(session));
+            }
+        }
+    }
     [Fact]
     public void WarModeOn_InABattleground_APlayerKillStillCostsNothing()
     {
@@ -271,7 +323,7 @@ public sealed class PlayerDeathDurabilityTests
         using (world)
         {
             WarModeOn(world, loss: 0.5f);
-            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), mapId: 30);
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), race: Race.Orc, mapId: 30);
 
             victim.Map!.Combat.Kill(killer, victim);
 
@@ -288,7 +340,7 @@ public sealed class PlayerDeathDurabilityTests
         {
             WarModeOn(world, loss: 0.5f);
             victim.Inventory.Options.DurabilityLossEnable = false;
-            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), race: Race.Orc);
 
             victim.Map!.Combat.Kill(killer, victim);
 

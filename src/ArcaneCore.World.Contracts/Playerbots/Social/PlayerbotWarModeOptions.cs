@@ -6,8 +6,9 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// <c>World:Playerbots:Social:WarMode</c>: the memory side of the War Mode server mode for massive world PvP. The switch itself is
 /// <c>World:WarMode:Enabled</c> (<see cref="WarModeOptions"/>, one switch for the rules and the bots); this section only tunes how bots remember
 /// and hunt while it is on. War Mode never changes what a bot normally remembers: each relation keeps a second, war layer (affinity and Rival flag) that is fed the
-/// same events under the war rules only while War Mode is on, and every decision reads the war layer only while it is on, so switching it off leaves
-/// normal behaviour exactly as if it had never been on. The war layer decides the Rival grudges bots act on: the rivalry emote lane (<c>Social:Rivalry</c>) and the
+/// same events under the war rules only while War Mode is on, and every decision reads the war layer only while it is on. Switching it off puts every bot's decisions back on its
+/// normal layer, which War Mode never writes to; it is not byte-identical to a world that never had War Mode, because the bots' war-layer decisions while it was on changed which
+/// events happened between bots. The war layer decides the Rival grudges bots act on: the rivalry emote lane (<c>Social:Rivalry</c>) and the
 /// hunt (<c>HuntRadiusYards</c>). A rivalry opt-out silences emotes; it does not exempt anyone from War Mode. Every key is live.
 /// </summary>
 public sealed class PlayerbotWarModeOptions

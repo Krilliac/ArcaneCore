@@ -4,6 +4,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Locomotion;
@@ -11,6 +12,7 @@ using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Honor;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -236,6 +238,37 @@ public sealed class HonorKillRewardsTests : IDisposable
         Assert.Equal(188f, Assert.Single(RowsOf(_a)).Cp);
     }
 
+
+    [Fact]
+    public void WarModeOn_ABattlegroundKill_IsNotMultiplied()
+    {
+        (WorldRuntime world, _, _, _) = CombatTestKit.CreateWorld();
+        using (world)
+        {
+            WorldMaps.Of(world).Load(new MapContent(
+                [
+                    new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+                    new MapTemplate(30, 0, MapType.Battleground, 0, 40, 0, -1, 0, 0, "Alterac Valley", ""),
+                ],
+                [], [], [], []));
+            Map bg = world.GetMap(30);
+            var clock = new FixedHonorClock(Today);
+            var honor = new HonorService(new HonorOptions(), clock, () => 19_997);
+            var warMode = new WarModeOptions { Enabled = true, HonorMultiplier = 10f };
+            var rewards = new HonorKillRewards(honor, _ => null, noPvpCredit: _ => false, warMode: warMode);
+            rewards.Attach(bg.Combat);
+            Player killer = CombatTestKit.AddPlayer(world, 11, 0, 0, new FakeSession(11), Race.Human, 60, mapId: 30);
+            Player victim = CombatTestKit.AddPlayer(world, 12, 2, 0, new FakeSession(12), Race.Orc, 60, mapId: 30);
+            honor.Track(killer, honor.Create(killer, CharacterHonorData.Empty));
+            honor.Track(victim, honor.Create(victim, CharacterHonorData.Empty));
+            world.RunTick(1);
+
+            bg.Combat.DealDamage(killer, victim, 5000);
+
+            Assert.False(victim.IsAlive);
+            Assert.Equal(188f, Assert.Single(honor.For(killer)!.Rows).Cp); // not 1880
+        }
+    }
     [Fact]
     public void WarModeOn_EveryShareIsScaledBeforeItIsTruncated_ForLoneAttackersAndGroups()
     {

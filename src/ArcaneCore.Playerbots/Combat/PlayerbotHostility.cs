@@ -73,7 +73,7 @@ internal static class PlayerbotHostility
         if (!IsHostilePlayer(self, other)) return false;
         // Help and the War Mode hunt never reach into an exempt area (a capital or neutral town of the player's own side, a battleground, an arena).
         if (granted is PlayerbotEngageReason.Help or PlayerbotEngageReason.Grudge or PlayerbotEngageReason.Initiate)
-            return (granted switch { PlayerbotEngageReason.Help => true, PlayerbotEngageReason.Grudge => warMode is { Enabled: true }, _ => initiate is { Enabled: true } }) && !PvpAreaState.IsWarModeExempt(other);
+            return (granted switch { PlayerbotEngageReason.Help => true, PlayerbotEngageReason.Grudge => warMode is { Enabled: true }, _ => initiate is { Enabled: true } }) && !PvpAreaState.IsWarModeProtected(other);
         if (granted is PlayerbotEngageReason.Ordered or PlayerbotEngageReason.Defend or PlayerbotEngageReason.Siege) return true;
         if (IsProvokedBy(self, other)) return true;
         return groups is not null && IsGroupProvokedBy(self, other, groups);

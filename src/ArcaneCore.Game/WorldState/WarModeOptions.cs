@@ -40,6 +40,58 @@ public sealed class WarModeOptions
     [ConfigAllowed("0 to 1")]
     public float PvpDeathDurabilityLoss { get; set; } = 0.10f;
 
+    /// <summary>The default <see cref="ExemptAreas"/>: Booty Bay, Ratchet, Gadgetzan, Everlook, Nighthaven, Light's Hope Chapel and Cenarion Hold.</summary>
+    public const string DefaultExemptAreas = "35,392,976,2255,2361,2268,3425";
+
+    private sealed record Parsed(string Text, IReadOnlySet<uint> Ids);
+
+    // One reference, swapped whole: the parsed list is rebuilt only when the text is replaced (a reload), and a reader never sees half of one.
+    private volatile Parsed? _parsed;
+
+    /// <summary>
+    /// Area or zone ids (comma separated) War Mode leaves alone besides the capitals and cities of a player's own team: the neutral towns, which the 1.12.1
+    /// area table flags neither Capital nor City (they carry flag 0x40 and no team). The default is 35 Booty Bay, 392 Ratchet, 976 Gadgetzan, 2255 Everlook,
+    /// 2361 Nighthaven, 2268 Light's Hope Chapel and 3425 Cenarion Hold. Arenas (the Gurubashi Battle Ring, 2177; not the stands around it, 1741) and
+    /// battlegrounds are always exempt. Live.
+    /// </summary>
+    public string ExemptAreas { get; set; } = DefaultExemptAreas;
+
+    /// <summary>The ids of <see cref="ExemptAreas"/>; an entry that is not an unsigned number is left out (<see cref="Validate"/> refuses the text).</summary>
+    public IReadOnlySet<uint> ExemptAreaIds()
+    {
+        string text = ExemptAreas ?? string.Empty;
+        if (_parsed is { } cached && ReferenceEquals(cached.Text, text))
+        {
+            return cached.Ids;
+        }
+
+        var ids = new HashSet<uint>();
+        foreach (string part in text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (uint.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out uint id))
+            {
+                ids.Add(id);
+            }
+        }
+
+        _parsed = new Parsed(text, ids);
+        return ids;
+    }
+
+    /// <summary>The problem with an <see cref="ExemptAreas"/> text, or null when it is a list of area ids.</summary>
+    public static string? CheckExemptAreas(string? text)
+    {
+        foreach (string part in (text ?? string.Empty).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!uint.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out _))
+            {
+                return $"\"{part}\" is not an area id";
+            }
+        }
+
+        return null;
+    }
+
     /// <summary>The problem with a <see cref="HonorMultiplier"/> value, or null.</summary>
     public static string? CheckHonorMultiplier(float value)
         => float.IsFinite(value) && value is >= MinHonorMultiplier and <= MaxHonorMultiplier ? null : "must be 1..10";
@@ -54,6 +106,11 @@ public sealed class WarModeOptions
         if (CheckHonorMultiplier(HonorMultiplier) is { } honor)
         {
             throw new InvalidOperationException(string.Create(CultureInfo.InvariantCulture, $"{SectionName}:{nameof(HonorMultiplier)} ({HonorMultiplier}) {honor}."));
+        }
+
+        if (CheckExemptAreas(ExemptAreas) is { } areas)
+        {
+            throw new InvalidOperationException($"{SectionName}:{nameof(ExemptAreas)} must be a comma separated list of area ids ({areas}).");
         }
 
         if (CheckPvpDeathDurabilityLoss(PvpDeathDurabilityLoss) is { } loss)
