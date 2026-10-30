@@ -341,4 +341,72 @@ public sealed class GatewayWardenVerdictReplayGuardTests
             Assert.False(Accept(verifier, source, Verdict(1200UL, 149, 0), out _));
         }
     }
+
+    [Fact]
+    public void ReplayGuard_ParallelAcceptAndRetire_NeverThrows_AndAcceptsEachIdAtMostOnce()
+    {
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        const int ids = 4000;
+        var sources = Enumerable.Range(0, 8).Select(i => new ClusterWardenVerdictSource("gateway-stress", Guid.NewGuid())).ToArray();
+        int[] acceptedPerId = new int[ids];
+
+        Parallel.For(0, ids * 4, new ParallelOptions { MaxDegreeOfParallelism = 16 }, n =>
+        {
+            int id = n % ids;
+            ClusterWardenVerdictSource source = sources[id % sources.Length];
+            // One character per id, so ids never share a generation floor; every id is offered four times from different threads.
+            if (Accept(verifier, source, Verdict(10_000UL + (ulong)id, generation: 1, checkId: 243), out _))
+            {
+                Interlocked.Increment(ref acceptedPerId[id]);
+            }
+
+            // Retire sources while others are being accepted; retiring is idempotent.
+            if (n % 97 == 0)
+            {
+                verifier.RetireSource(sources[(n / 97) % sources.Length]);
+            }
+        });
+
+        for (int id = 0; id < ids; id++)
+        {
+            Assert.InRange(acceptedPerId[id], 0, 1);
+        }
+
+        // Every source is retired by now or refuses fresh verdicts after we retire it: nothing can be accepted afterwards.
+        foreach (ClusterWardenVerdictSource source in sources)
+        {
+            verifier.RetireSource(source);
+            Assert.False(Accept(verifier, source, Verdict(99_999UL, generation: 1, checkId: 1), out string? reason));
+            Assert.Contains("retired gateway incarnation", reason, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Equal(0, verifier.RetainedVerdictKeyCount);
+    }
+
+    [Fact]
+    public void ReplayGuard_RetiringOneIncarnationOfANodeId_LeavesTheLiveIncarnationAcceptingAndRefusingReplays()
+    {
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        var oldIncarnation = new ClusterWardenVerdictSource("gateway-a", Guid.NewGuid());
+        var liveIncarnation = new ClusterWardenVerdictSource("gateway-a", Guid.NewGuid());
+
+        ClusterWardenVerdict oldVerdict = Verdict(1200UL, generation: 1, checkId: 243);
+        ClusterWardenVerdict liveFirst = Verdict(1200UL, generation: 1, checkId: 244);
+        Assert.True(Accept(verifier, oldIncarnation, oldVerdict, out string? oldAccepted), oldAccepted);
+        Assert.True(Accept(verifier, liveIncarnation, liveFirst, out string? liveAccepted), liveAccepted);
+
+        verifier.RetireSource(oldIncarnation);
+
+        // The retired incarnation is refused, even for a fresh verdict.
+        Assert.False(Accept(verifier, oldIncarnation, Verdict(1200UL, generation: 1, checkId: 245), out string? retired));
+        Assert.Contains("retired gateway incarnation", retired, StringComparison.OrdinalIgnoreCase);
+
+        // The live incarnation of the same node id is untouched: fresh verdicts accepted, replays refused.
+        Assert.False(Accept(verifier, liveIncarnation, liveFirst, out string? replay));
+        Assert.Contains("duplicate Warden verdict", replay, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Accept(verifier, liveIncarnation, Verdict(1200UL, generation: 1, checkId: 246), out string? fresh), fresh);
+        Assert.True(Accept(verifier, liveIncarnation, Verdict(1200UL, generation: 2, checkId: 244), out string? nextGeneration), nextGeneration);
+        // Generation 2 replaced the live incarnation's generation-1 keys; the retired incarnation's key is gone.
+        Assert.Equal(1, verifier.RetainedVerdictKeyCount);
+    }
 }
