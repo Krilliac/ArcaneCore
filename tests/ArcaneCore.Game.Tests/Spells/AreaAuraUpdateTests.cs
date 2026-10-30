@@ -538,4 +538,101 @@ public sealed class AreaAuraUpdateTests
         SpellAuraHolder source = Assert.Single(kit.System.GetAuras(paladin));
         Assert.Empty(source.AreaChildren);
     }
+
+    private const uint FriendAura = 946021;
+
+    private static SpellInfo FriendArea(uint id) => Spell(id,
+        Effect(SpellEffectName.ApplyAreaAuraFriend, 5, aura: AuraType.ModResistance, misc: 1) with { Radius = 30 }) with
+    {
+        Duration = new SpellDuration(-1, 0, -1),
+        SpellVisual = 1,
+        StartRecoveryCategory = 0,
+        StartRecoveryTime = 0,
+    };
+
+    [Fact]
+    public void FriendAreaAura_GivesTheCasterTheRealAuraAndEveryFriendlyUnitInRangeAChild_AndNotAnEnemy()
+    {
+        using var kit = new SpellTestKit(FriendArea(FriendAura));
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player friend, _) = kit.AddPlayer(2, 10, 0);
+        (Player enemy, _) = kit.AddHostilePlayer(3, 12, 0);
+
+        kit.System.CastSpell(caster, FriendAura, SpellCastTargets.ForSelf(), triggered: true);
+        kit.Advance(200);
+
+        SpellAuraHolder source = Assert.Single(kit.System.GetAuras(caster));
+        Assert.True(source.IsAreaSource);
+        Assert.Equal(AuraType.ModResistance, source.Auras[0]?.Type);
+        SpellAuraHolder child = Assert.Single(kit.System.GetAuras(friend));
+        Assert.Same(source, child.AreaParent);
+        Assert.Equal(caster.Guid, child.CasterGuid);
+        Assert.Equal(AuraType.ModResistance, child.Auras[0]?.Type);
+        Assert.Same(child, Assert.Single(source.AreaChildren.Values));
+        Assert.Empty(kit.System.GetAuras(enemy));
+    }
+
+    [Fact]
+    public void FriendAreaAura_LeavingTheRadius_RemovesTheChild_AndComingBackGrantsANewOne()
+    {
+        using var kit = new SpellTestKit(FriendArea(FriendAura));
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player friend, _) = kit.AddPlayer(2, 10, 0);
+        kit.System.CastSpell(caster, FriendAura, SpellCastTargets.ForSelf(), triggered: true);
+        kit.Advance(200);
+        SpellAuraHolder first = Assert.Single(kit.System.GetAuras(friend));
+
+        friend.Relocate(60, 0, friend.Z, 0, kit.Now);
+        kit.Advance(200);
+
+        Assert.True(first.IsRemoved);
+        Assert.Empty(kit.System.GetAuras(friend));
+        Assert.Empty(kit.System.GetAuras(caster).Single(h => h.IsAreaSource).AreaChildren);
+
+        friend.Relocate(10, 0, friend.Z, 0, kit.Now);
+        kit.Advance(200);
+        Assert.NotSame(first, Assert.Single(kit.System.GetAuras(friend)));
+    }
+
+    [Fact]
+    public void FriendAreaAura_CasterDeath_RemovesEveryChild()
+    {
+        using var kit = new SpellTestKit(FriendArea(FriendAura));
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player a, _) = kit.AddPlayer(2, 4, 0);
+        (Player b, _) = kit.AddPlayer(3, 8, 0);
+        kit.System.CastSpell(caster, FriendAura, SpellCastTargets.ForSelf(), triggered: true);
+        kit.Advance(200);
+        SpellAuraHolder source = kit.System.GetAuras(caster).Single(h => h.IsAreaSource);
+        SpellAuraHolder childA = Assert.Single(kit.System.GetAuras(a));
+        Assert.Single(kit.System.GetAuras(b));
+
+        caster.Health = 0;
+        kit.Advance(200);
+
+        Assert.True(childA.IsRemoved);
+        Assert.Empty(kit.System.GetAuras(a));
+        Assert.Empty(kit.System.GetAuras(b));
+        Assert.Empty(source.AreaChildren);
+    }
+
+    [Fact]
+    public void FriendAreaAura_AFriendWhoArrivesLate_GetsTheAura_AnEnemyInRangeNeverDoes()
+    {
+        using var kit = new SpellTestKit(FriendArea(FriendAura));
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player late, _) = kit.AddPlayer(2, 100, 0);
+        (Player enemy, _) = kit.AddHostilePlayer(3, 5, 0);
+        kit.System.CastSpell(caster, FriendAura, SpellCastTargets.ForSelf(), triggered: true);
+        kit.Advance(200);
+        Assert.Empty(kit.System.GetAuras(late));
+
+        late.Relocate(15, 0, late.Z, 0, kit.Now);
+        kit.Advance(200);
+
+        SpellAuraHolder child = Assert.Single(kit.System.GetAuras(late));
+        Assert.Equal(caster.Guid, child.CasterGuid);
+        Assert.Empty(kit.System.GetAuras(enemy));
+        Assert.Single(kit.System.GetAuras(caster).Single(h => h.IsAreaSource).AreaChildren);
+    }
 }

@@ -312,7 +312,6 @@ public sealed partial class SpellSystem
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             // Cast already recorded the fault ("spell.script") and finished the cast; the rest of the batch still goes off.
-            FaultLedger.Shared.Record("spell.batch", ex);
             _logger.LogFault("spell.batch", ex, "spell {Spell} of {Caster} failed in the spell batch", cast.Spell.Id, cast.Caster.Guid);
         }
         finally
