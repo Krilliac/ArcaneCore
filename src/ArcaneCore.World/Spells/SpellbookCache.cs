@@ -40,6 +40,7 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
     private readonly Lock _writesLock = new();
     private readonly SemaphoreSlim _writesSignal = new(0);
     private bool _writesCompleted;
+    private bool _disposed;
     private Exception? _terminalFailure;
 
     private Task? _writer;
@@ -327,6 +328,12 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
     {
         lock (_writesLock)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
             _writesCompleted = true;
         }
 
@@ -339,6 +346,51 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         if (_terminalFailure is { } terminal)
         {
             throw new InvalidOperationException("SpellbookCache stopped with a terminal ownership failure", terminal);
+        }
+
+        await ReconcileFailedAtShutdownAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The writer has drained, so nothing else touches the store: retry every character whose write failed against its cached book in one
+    /// scope. A character that still cannot be written is logged once and thrown in an <see cref="AggregateException"/>, not dropped.
+    /// </summary>
+    private async Task ReconcileFailedAtShutdownAsync()
+    {
+        int[] failed;
+        lock (_lock)
+        {
+            failed = [.. _failedCharacters];
+        }
+
+        if (failed.Length == 0 || _scopes is null)
+        {
+            return;
+        }
+
+        await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
+        if (scope.ServiceProvider.GetService<ICharacterSpellStore>() is not { } store)
+        {
+            return;
+        }
+
+        var errors = new List<Exception>();
+        foreach (int characterId in failed)
+        {
+            try
+            {
+                await RetryFailedCharacterAsync(store, characterId).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                errors.Add(new InvalidOperationException($"spellbook of character {characterId} could not be written at shutdown", ex));
+                _logger.LogFault("writequeue.spellbook-shutdown", ex, "Reconciling the spellbook of character {CharacterId} at shutdown failed", characterId);
+            }
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new AggregateException("SpellbookCache stopped with unreconciled spellbooks", errors);
         }
     }
 

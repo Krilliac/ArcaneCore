@@ -167,6 +167,39 @@ public sealed class SpellbookCacheBatchingTests
     }
 
     [Fact]
+    public async Task DisposeRetriesAFailedCharacterAndASecondDisposeIsANoOp()
+    {
+        await using Fixture fixture = Fixture.Create();
+        fixture.Cache.LoadCharacter(7, []);
+        fixture.Store.FailAddsFor = 7;
+        fixture.Cache.LearnSpell(NewPlayer(7), 60);
+        await fixture.Cache.FlushAsync().WaitAsync(Wait); // the write fails and the character is marked
+        Assert.Empty(await fixture.Store.GetAsync(7));
+
+        fixture.Store.FailAddsFor = null;
+        await fixture.Cache.DisposeAsync();
+        Assert.Equal([60u], await fixture.Store.GetAsync(7));
+
+        int adds = fixture.Store.AddCalls.Count();
+        await fixture.Cache.DisposeAsync();
+        Assert.Equal(adds, fixture.Store.AddCalls.Count());
+    }
+
+    [Fact]
+    public async Task DisposeThrowsAnAggregateNamingACharacterThatCannotBeWritten()
+    {
+        await using Fixture fixture = Fixture.Create();
+        fixture.Cache.LoadCharacter(7, []);
+        fixture.Store.FailAddsFor = 7;
+        fixture.Cache.LearnSpell(NewPlayer(7), 61);
+        await fixture.Cache.FlushAsync().WaitAsync(Wait);
+
+        AggregateException ex = await Assert.ThrowsAsync<AggregateException>(async () => await fixture.Cache.DisposeAsync());
+        Assert.Contains("character 7", Assert.Single(ex.InnerExceptions).Message);
+        await fixture.Cache.DisposeAsync(); // a second dispose does not throw again
+    }
+
+    [Fact]
     public async Task AWriterThatIsNotBusyStillPersistsEveryLearn()
     {
         await using Fixture fixture = Fixture.Create();
