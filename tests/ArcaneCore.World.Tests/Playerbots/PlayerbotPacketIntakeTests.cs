@@ -75,12 +75,13 @@ public sealed class PlayerbotPacketIntakeTests
             Assert.Equal(WorldOpcode.SmsgLootResponse, Assert.Single(bot.DrainManagedPackets()).Opcode);
 
             // An observer sees everything, and the map builds update blocks for the bot again.
+            // The map tick runs on its own thread and, now that the bot wants update objects, may deliver one at any point: look only at the opcodes this test sends.
             var seen = new List<WorldOpcode>();
-            bot.ManagedPacketObserver = (opcode, _) => seen.Add(opcode);
+            bot.ManagedPacketObserver = (opcode, _) => { lock (seen) seen.Add(opcode); };
             Assert.True(bot.WantsUpdateObjects);
             bot.Send(WorldOpcode.SmsgNotification, Notification);
-            Assert.Equal([WorldOpcode.SmsgNotification], seen);
-            Assert.Equal(WorldOpcode.SmsgNotification, Assert.Single(bot.DrainManagedPackets()).Opcode);
+            lock (seen) Assert.Equal([WorldOpcode.SmsgNotification], seen.Where(o => o is not (WorldOpcode.SmsgUpdateObject or WorldOpcode.SmsgCompressedUpdateObject)));
+            Assert.Equal(WorldOpcode.SmsgNotification, Assert.Single(bot.DrainManagedPackets(WorldOpcode.SmsgNotification)).Opcode);
         }
         finally { bot.Kick(); await bot.ManagedClosed; }
     }
