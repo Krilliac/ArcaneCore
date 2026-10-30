@@ -35,13 +35,17 @@ public sealed class CooldownCommandTests
     {
         await using WorldTestHost host = WorldTestHost.Start();
         await using WorldTestClient gm = await host.EnterWorldAsync("CDGM", "Cdgm", AccountSecurity.GameMaster);
+        long restoredAtMs = 0;
         await host.OnWorldAsync(() =>
         {
             SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
             spells.Store = new SpellStore([.. spells.Store.All, new SpellInfo { Id = Spell, Name = "Test Cooldown" }], [], []);
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             spells.RestoreCooldowns(host.World.FindOnlinePlayer("Cdgm")!, [new PersistedCooldown(SpellCooldownKind.Spell, Spell, now + 600_000)], now);
+            restoredAtMs = host.World.Clock.ElapsedMs;
         });
+        // Cooldown ends run on the tick-start game clock, so the list shows exactly 10m until a tick has begun after the restore.
+        await host.WaitForWorldAsync(() => host.World.Clock.ElapsedMs > restoredAtMs, "game clock to move past the restore");
 
         await gm.SendChatAsync(ChatType.Say, Language.Common, ".cooldown list");
         Assert.StartsWith($"Spell {Spell} (Test Cooldown) has 9m", (await gm.ReadChatAsync()).Text);
