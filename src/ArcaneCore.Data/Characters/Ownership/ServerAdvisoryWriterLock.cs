@@ -45,8 +45,10 @@ namespace ArcaneCore.Data.Characters.Ownership;
 /// died, or the server dropped the lock). While it is lost this process does not exclude a second world. Every later tick closes the dead connection and tries to take the lock on a fresh one:
 /// when that works <c>onRecovered</c> is called and the lock is held again (a later loss is reported afresh). When the lock is refused the holder's server session id is read (PostgreSQL: the
 /// <c>pid</c> in <c>pg_locks</c>; MariaDB/MySQL: <c>IS_USED_LOCK</c>) and compared with the id this process's own earlier session had. A different session is another world writing the database:
-/// <c>onConflict</c> is called at once, once per loss. The same id is this process's own dead session that the server has not ended yet (no TCP reset reached it): that is not a conflict, it is
-/// reported through <c>onRetakeBlocked</c> (first time and every tenth) and retried on every tick until the server ends the session (the idle timeout above). A server that cannot be reached is
+/// <c>onConflict</c> is called at once, once per loss. Every session id this process opened since the lock was last held counts as its own (a take that failed after the server granted the lock
+/// leaves such a session behind). An own session that the server has not ended yet (no TCP reset reached it) is not a conflict, it is reported through <c>onRetakeBlocked</c> (first time and
+/// every tenth) and retried on every tick until the server ends the session (the idle timeout above); but ids are only names (a server restart or a reused backend pid can make a rival look
+/// like one), so an own holder still there one stale timeout plus one check interval after the first such retake is declared a conflict. A server that cannot be reached is
 /// reported the same way. The opposite failure also exists: a host that died or a network partition can leave the server holding the dead session, so the lock stays taken until the server ends it;
 /// <c>pg_terminate_backend(pid)</c> / <c>KILL &lt;id&gt;</c> of the stale session clears it at once.
 /// </para>
@@ -80,11 +82,13 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
     private readonly Action<string>? _onRetakeBlocked;
     private DbConnection? _connection; // null while lost and between the swap-out and the replacement of a retake; whoever swaps it out disposes it
     private Timer? _timer;
-    private bool _disposed;
-    private bool _lost;
+    private volatile bool _disposed; // written under the gate; read lock-free by IsLost
+    private volatile bool _lost;
     private bool _retaking;
     private bool _conflictReported;
     private long _sessionId; // the server session (PostgreSQL backend pid, MariaDB connection id) that holds, or last held, the lock
+    private readonly HashSet<long> _ownSessions = []; // every server session this process opened since the lock was last held (guarded by the gate): a holder in this set is this process's own dead session, never a rival
+    private long _ownBlockedSince; // Time timestamp of the first retake of this loss that found the lock held by an own session; 0 when none
     private int _blockedReports; // retakes that could not be completed in the current loss, for the throttle of onRetakeBlocked
 
     private ServerAdvisoryWriterLock(DbConnection connection, bool postgres, string mySqlName, long postgresKey, string connectionString, string lockDatabase, string description,
@@ -92,6 +96,7 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
     {
         _connection = connection;
         _sessionId = sessionId;
+        _ownSessions.Add(sessionId);
         _onRetakeBlocked = onRetakeBlocked;
         _postgres = postgres;
         _mySqlName = mySqlName;
@@ -111,9 +116,18 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
     public string Description { get; }
 
     /// <summary>True from the moment the held lock is found lost until it has been taken again; false after <see cref="Dispose"/>.</summary>
-    internal bool IsLost
+    internal bool IsLost => _lost && !_disposed; // lock-free: a health check holds the gate for the length of a server round trip, and callers (WorldWriterGuard.LockPath) must not wait on it
+
+    /// <summary>The clock the own-session wait is bounded by (tests step a manual one).</summary>
+    internal TimeProvider Time { get; set; } = TimeProvider.System;
+
+    /// <summary>Runs on a freshly taken lock's connection right after the take, inside the retake's failure handling (tests make the post-take step fail with it).</summary>
+    internal Action<DbConnection>? AfterTakeHook { get; set; }
+
+    /// <summary>Every server session id this process has opened since the lock was last held (tests).</summary>
+    internal long[] OwnSessionsForTest()
     {
-        get { lock (_gate) return _lost && !_disposed; }
+        lock (_gate) return [.. _ownSessions];
     }
 
     /// <summary>The database name from the connection string of a server provider, or null when the provider is not a server engine, the string is malformed or names no database.</summary>
@@ -205,7 +219,8 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
         DbConnection connection = Open(postgres, options.ConnectionString, lockDatabase, stale, interval);
         try
         {
-            TakeResult taken = TryTake(connection, postgres, mySqlName, key);
+            long session = ReadSessionId(connection, postgres); // before the take: a failure after the take must not leave a session we cannot name
+            TakeResult taken = TryTake(connection, postgres, mySqlName, key, session);
             if (taken.Kind != TakeKind.Taken) throw new CharacterDatabaseAlreadyOwnedException(description);
             return new ServerAdvisoryWriterLock(connection, postgres, mySqlName, key, options.ConnectionString, lockDatabase, description, interval, stale, taken.SessionId, onLost, onRecovered, onConflict, onRetakeBlocked);
         }
@@ -334,9 +349,10 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
     private void Retake()
     {
         DbConnection? fresh = null;
-        TakeResult result = default;
+        TakeResult result = NotTaken; // default(TakeResult) would read as Taken (the first enum member)
         string? failure = null;
         long ownEarlierSession = 0;
+        TimeSpan ownWaitLimit = _staleTimeout + _interval; // the server ends a dead session of ours within the stale timeout; one more check interval covers the tick that notices
         try
         {
             DbConnection? old;
@@ -356,10 +372,14 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
             try
             {
                 fresh = Open(_postgres, _connectionString, _lockDatabase, _staleTimeout, _interval);
-                result = TryTake(fresh, _postgres, _mySqlName, _postgresKey);
+                long session = ReadSessionId(fresh, _postgres); // before the take, and recorded before it: if anything after the take fails the server may still hold the lock in this session
+                lock (_gate) _ownSessions.Add(session);
+                result = TryTake(fresh, _postgres, _mySqlName, _postgresKey, session);
+                AfterTakeHook?.Invoke(fresh);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                result = NotTaken; // a failure after the take: the connection is disposed below and the lock is not held by this lock object
                 failure = DescribeFailure(ex, _connectionString); // the server cannot be reached (or refused a statement): still lost, tried again on the next tick
             }
         }
@@ -381,7 +401,7 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
                             notice = Blocked($"{Description}: the lock could not be retaken, the server was not usable ({failure})");
                             callback = _onRetakeBlocked;
                         }
-                        else if (result.Kind == TakeKind.Held && result.SessionId != ownEarlierSession)
+                        else if (result.Kind == TakeKind.Held && !_ownSessions.Contains(result.SessionId))
                         {
                             if (!_conflictReported)
                             {
@@ -392,8 +412,23 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
                         }
                         else if (result.Kind == TakeKind.Held)
                         {
-                            notice = Blocked($"{Description}: still held by this process's own earlier session {ownEarlierSession}, which the server has not ended yet");
-                            callback = _onRetakeBlocked;
+                            long now = Time.GetTimestamp();
+                            if (_ownBlockedSince == 0) _ownBlockedSince = Math.Max(1, now);
+                            if (Time.GetElapsedTime(_ownBlockedSince, now) > ownWaitLimit)
+                            {
+                                // A session id is only a name: a server restart or a reused backend pid can make a rival look like our dead session. A real dead session is gone within the stale timeout.
+                                if (!_conflictReported)
+                                {
+                                    _conflictReported = true;
+                                    notice = $"{Description}: still held by server session {result.SessionId}, which this process opened earlier, more than {ownWaitLimit.TotalSeconds:0} s after the loss: the server should have ended it by now, so it is treated as another session (a reused session id)";
+                                    callback = _onConflict;
+                                }
+                            }
+                            else
+                            {
+                                notice = Blocked($"{Description}: still held by this process's own earlier session {result.SessionId}, which the server has not ended yet");
+                                callback = _onRetakeBlocked;
+                            }
                         }
                     }
                 }
@@ -401,6 +436,9 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
                 {
                     _connection = fresh!;
                     _sessionId = result.SessionId;
+                    _ownSessions.Clear();
+                    _ownSessions.Add(result.SessionId);
+                    _ownBlockedSince = 0;
                     _lost = false;
                     _conflictReported = false;
                     _blockedReports = 0;
@@ -484,18 +522,20 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
 
     private enum TakeKind { Taken, Held, Unknown }
 
-    /// <summary>The outcome of a take. <see cref="SessionId"/> is this session's id when taken, the holder's when held, 0 when unknown.</summary>
+    /// <summary>The outcome of a take. <see cref="SessionId"/> is this session's id (read before the take) when taken, the holder's when held, 0 when unknown.</summary>
     private readonly record struct TakeResult(TakeKind Kind, long SessionId);
 
+    private static readonly TakeResult NotTaken = new(TakeKind.Unknown, 0);
+
     /// <summary>
-    /// Takes the lock on a freshly opened connection. Held: another session holds it (on PostgreSQL: in any database of the cluster, <c>pg_locks</c> is cluster-wide), with that session's id; what
+    /// Takes the lock on a freshly opened connection whose session id <paramref name="sessionId"/> was read beforehand. Held: another session holds it (on PostgreSQL: in any database of the cluster, <c>pg_locks</c> is cluster-wide), with that session's id; what
     /// this call took is given back before it returns. Unknown: it was refused but the holder is gone by the time it is looked up.
     /// </summary>
-    private static TakeResult TryTake(DbConnection connection, bool postgres, string mySqlName, long postgresKey)
+    private static TakeResult TryTake(DbConnection connection, bool postgres, string mySqlName, long postgresKey, long sessionId)
     {
         if (!postgres)
         {
-            if (TryTakeMySql(connection, mySqlName)) return new TakeResult(TakeKind.Taken, Convert.ToInt64(Scalar(connection, "SELECT CONNECTION_ID()"), CultureInfo.InvariantCulture));
+            if (TryTakeMySql(connection, mySqlName)) return new TakeResult(TakeKind.Taken, sessionId);
             using DbCommand holder = CreateCommand(connection, "SELECT IS_USED_LOCK(@name)");
             AddParameter(holder, "@name", mySqlName);
             object? id = holder.ExecuteScalar();
@@ -504,7 +544,7 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
 
         bool taken = TryTakePostgres(connection, postgresKey);
         long? other = OtherPostgresHolder(connection, postgresKey);
-        if (taken && other is null) return new TakeResult(TakeKind.Taken, Convert.ToInt64(Scalar(connection, "SELECT pg_backend_pid()"), CultureInfo.InvariantCulture));
+        if (taken && other is null) return new TakeResult(TakeKind.Taken, sessionId);
         if (taken)
         {
             // The same key is held in another lock database (a world configured with a different WriterLockDatabase).
@@ -515,6 +555,10 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
 
         return other is { } holderPid ? new TakeResult(TakeKind.Held, holderPid) : new TakeResult(TakeKind.Unknown, 0);
     }
+
+    /// <summary>This connection's server session id (PostgreSQL backend pid, MariaDB/MySQL connection id), read before the lock is taken.</summary>
+    private static long ReadSessionId(DbConnection connection, bool postgres)
+        => Convert.ToInt64(Scalar(connection, postgres ? "SELECT pg_backend_pid()" : "SELECT CONNECTION_ID()"), CultureInfo.InvariantCulture);
 
     private static bool TryTakeMySql(DbConnection connection, string name)
     {

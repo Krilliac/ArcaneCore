@@ -742,7 +742,7 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 }
             }
 
-            if (attempt == 1 && IsStopping() && _drain.Refuse() is { } refused)
+            if (attempt == 1 && (IsStopping() || _drain.IsSuppressed) && _drain.Refuse() is { } refused)
             {
                 lock (_gate)
                 {

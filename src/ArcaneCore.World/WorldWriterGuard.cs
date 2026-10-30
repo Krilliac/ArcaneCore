@@ -20,22 +20,23 @@ namespace ArcaneCore.World;
 /// A MariaDB/MySQL/PostgreSQL lock can be lost while the world runs (the session died, the server dropped it). The loss is logged Critical, <see cref="LockPath"/> is null while it lasts, and the
 /// lock tries to take itself back on every health check (logged as a warning when it works). If the retake finds the lock held by a session other than this process's own earlier one, another
 /// world writes the database: the guard logs Critical, records a fault, sets the failure exit code, asks the host for an orderly stop (<see cref="IHostApplicationLifetime.StopApplication"/>, as the
-/// realm authority lease does) and suppresses the shutdown drain lanes (<see cref="StopDrainBudget.Suppress"/>), so the shutdown saves are NOT written into the other world's database; they stay
-/// retained and are lost with the process. Residual window: until that first retake (the second health tick after the loss) this world keeps writing, and its save queues are not paused while
-/// merely lost; the stopping window before the host reaches the queues' stop is likewise unguarded. New logins are not gated separately.
+/// realm authority lease does) and suppresses the drain lanes (<see cref="StopDrainBudget.Suppress"/>). A suppressed lane refuses every attempt of every save and feature queue from then on, stopping or not (the host's
+/// <c>SaveAll</c> runs while the queues are still live), so nothing more, shutdown saves included, is written into the other world's database; the snapshots stay retained and are lost with
+/// the process. Residual window: while the lock is merely lost, and until the first retake that finds the rival (the second health tick after the loss), this world keeps writing and its
+/// queues are not paused; those saves land. New logins are not gated separately.
 /// </para>
 /// </summary>
 public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions = null, ILogger<WorldWriterGuard>? logger = null, bool deferUntilPromotion = false,
     IHostApplicationLifetime? lifetime = null, TimeSpan? lockHealthInterval = null, Action<int>? setExitCode = null, ShutdownDrain? drain = null) : IDisposable
 {
     private readonly object _gate = new();
-    private CharacterDatabaseWriterLock? _lock;
+    private volatile CharacterDatabaseWriterLock? _lock; // written under the gate, read lock-free by LockPath
     private int _stopRequested;
 
     /// <summary>The held lock file's path (SQLite) or advisory lock identity (MariaDB, MySQL, PostgreSQL); null when no lock is held (not acquired, a database that has none, or a server lock that is currently lost).</summary>
     public string? LockPath
     {
-        get { lock (_gate) return _lock is { IsLost: false } held ? held.Path : null; }
+        get => _lock is { IsLost: false } held ? held.Path : null; // no gate: Acquire holds it across the connection to the server
     }
 
     /// <summary>

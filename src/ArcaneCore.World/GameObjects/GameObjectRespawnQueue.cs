@@ -495,7 +495,7 @@ public sealed class GameObjectRespawnQueue(IServiceScopeFactory scopes, ILogger 
         int attempts = sweep || _stopping ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
         for (int attempt = 1; ; attempt++)
         {
-            if (attempt == 1 && _stopping && _drain.Refuse() is { } refused)
+            if (attempt == 1 && (_stopping || _drain.IsSuppressed) && _drain.Refuse() is { } refused)
             {
                 return refused; // shutdown drain only: nothing is attempted, the write stays retained
             }

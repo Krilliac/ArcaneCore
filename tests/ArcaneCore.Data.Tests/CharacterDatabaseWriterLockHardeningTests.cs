@@ -188,6 +188,94 @@ public sealed class CharacterDatabaseWriterLockHardeningTests
         Assert.Equal((1, 0), (reports.Recovered, reports.Conflicts));
     }
 
+    private sealed class ManualTime : TimeProvider
+    {
+        private long _milliseconds = 1000;
+
+        public override long TimestampFrequency => 1000;
+
+        public override long GetTimestamp() => Interlocked.Read(ref _milliseconds);
+
+        public void Advance(TimeSpan by) => Interlocked.Add(ref _milliseconds, (long)by.TotalMilliseconds);
+    }
+
+    [ServerProviderTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task ARetakeWhoseStepAfterTheTakeFails_LeavesASessionThatCountsAsOwn_NotAConflict(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        var reports = new Reports();
+        using ServerAdvisoryWriterLock held = Acquire(options, reports);
+        long firstSession = held.SessionId;
+        long failedSession = 0;
+        int calls = 0;
+        held.AfterTakeHook = connection =>
+        {
+            if (Interlocked.Increment(ref calls) != 1) return;
+            // The server granted the lock to this session; the step after the take then fails, and the connection is disposed with the lock possibly still held server-side.
+            using System.Data.Common.DbCommand command = ServerAdvisoryWriterLock.CreateCommand(connection, provider == DatabaseProvider.PostgreSql ? "SELECT pg_backend_pid()" : "SELECT CONNECTION_ID()");
+            failedSession = Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+            throw new InvalidOperationException("the step after the take failed");
+        };
+
+        await CharacterDatabaseWriterLockTests.KillLockSessionAsync(options, ServerAdvisoryWriterLock.DatabaseNameOf(options)!);
+        held.CheckHealth(); // notices the loss
+        Assert.True(held.IsLost);
+
+        held.CheckHealth(); // the retake: takes the lock, then fails
+        Assert.True(calls >= 1, "the retake never reached the post-take step");
+        Assert.NotEqual(0, failedSession);
+        Assert.Contains(failedSession, held.OwnSessionsForTest()); // named and kept as own although the take did not complete
+        Assert.Contains(firstSession, held.OwnSessionsForTest());
+        Assert.True(held.IsLost);
+
+        for (int attempt = 0; attempt < 100 && held.IsLost; attempt++)
+        {
+            held.CheckHealth(); // the failed session may still hold the lock for a moment: it is our own, so this waits and retakes
+            if (held.IsLost) await Task.Delay(50);
+        }
+
+        Assert.False(held.IsLost);
+        Assert.True(held.IsHeld());
+        Assert.Equal(0, reports.Conflicts);
+        Assert.Equal(1, reports.Recovered);
+    }
+
+    [ServerProviderTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task AnOwnHolderThatOutlivesTheStaleTimeoutPlusOneInterval_IsDeclaredAConflict(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        var reports = new Reports();
+        using ServerAdvisoryWriterLock held = Acquire(options, reports); // interval 1 h: stale timeout 4 h, so the own-session wait is bounded at 5 h
+        var time = new ManualTime();
+        held.Time = time;
+        System.Data.Common.DbConnection? zombie = null;
+        held.CloseDeadConnection = connection => zombie = connection; // a session whose id looks like ours and that the server never ends
+        held.MarkLostForTest();
+
+        held.CheckHealth();
+        held.CheckHealth();
+        Assert.NotNull(zombie);
+        Assert.Equal((0, 0, 1), (reports.Recovered, reports.Conflicts, reports.Blocked)); // inside the wait: our own session, not a conflict
+
+        time.Advance(TimeSpan.FromHours(4.5));
+        held.CheckHealth();
+        Assert.Equal(0, reports.Conflicts); // past the stale timeout but within one more interval
+
+        time.Advance(TimeSpan.FromHours(1));
+        held.CheckHealth();
+        Assert.Equal(1, reports.Conflicts);
+        Assert.Contains("treated as another session", reports.ConflictText);
+        held.CheckHealth();
+        Assert.Equal(1, reports.Conflicts); // once per loss
+        Assert.True(held.IsLost);
+
+        await zombie.DisposeAsync();
+    }
+
     // ---- The pg_locks decomposition of a negative key whose halves are both >= 2^31
 
     private const string NegativeKeyDatabase = "wl_neg_5"; // key -8484032823849904770: classid 2319624472, objid 3618379134

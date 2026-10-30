@@ -43,6 +43,12 @@ public sealed class WorldWriterGuardLossTests
         public void StopApplication() => Interlocked.Increment(ref _stops);
     }
 
+    // OnLockConflict records a fault in the process-wide ledger; a test that reaches it forgets that entry again when it ends.
+    private sealed class LedgerCleanup : IDisposable
+    {
+        public void Dispose() => ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Reset();
+    }
+
     private static (WorldWriterGuard Guard, CapturingLoggerProvider Log, FakeLifetime Lifetime, List<int> ExitCodes, ShutdownDrain Drain) Guard(TimeSpan? interval = null, DatabaseOptions? options = null)
     {
         var provider = new CapturingLoggerProvider();
@@ -74,6 +80,7 @@ public sealed class WorldWriterGuardLossTests
     [Fact]
     public void ARecoveredLock_IsLoggedAtWarning_AndAConflictStopsTheWorldWithAFailureExitCode()
     {
+        using var ledger = new LedgerCleanup();
         (WorldWriterGuard guard, CapturingLoggerProvider log, FakeLifetime lifetime, List<int> exitCodes, ShutdownDrain drain) = Guard();
         using (guard)
         {
@@ -180,6 +187,7 @@ public sealed class WorldWriterGuardLossTests
     [Trait("Category", "Timing")]
     public async Task ALockTakenOverByAnotherSession_StopsTheWorld_AtTheFirstRetake_WithoutTheShutdownSaves()
     {
+        using var ledger = new LedgerCleanup();
         (DatabaseOptions options, string scratch) = await ScratchAsync();
         try
         {

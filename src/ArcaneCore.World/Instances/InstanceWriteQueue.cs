@@ -934,7 +934,7 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
 
         for (int attempt = 1; ; attempt++)
         {
-            if (attempt == 1 && _stopped && _drain.Refuse() is { } refused)
+            if (attempt == 1 && (_stopped || _drain.IsSuppressed) && _drain.Refuse() is { } refused)
             {
                 return refused; // shutdown drain only: nothing is attempted, the write stays retained
             }

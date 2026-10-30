@@ -102,8 +102,7 @@ public sealed class StopDrainBudget
 
     /// <summary>
     /// Refuses every later attempt on this lane, whether or not it was <see cref="Begin"/>-started: the write stays retained with a <see cref="StopDrainExhaustedException"/> naming
-    /// <paramref name="reason"/>, and <see cref="Exhausted"/> is true. Queues consult the lane while they stop, so this skips the shutdown saves; it does not pause a queue that is still
-    /// running. The first reason stays.
+    /// <paramref name="reason"/>, and <see cref="Exhausted"/> is true. Queues refuse every attempt on a suppressed lane, whether or not they are stopping, so nothing more is written through them. The first reason stays.
     /// </summary>
     public void Suppress(string reason)
     {
@@ -113,6 +112,9 @@ public sealed class StopDrainBudget
             _suppressedReason ??= reason;
         }
     }
+
+    /// <summary>True once <see cref="Suppress"/> was called. Queues refuse every attempt on a suppressed lane, stopping or not (see <see cref="Refuse"/>).</summary>
+    public bool IsSuppressed => SuppressedReason is not null;
 
     /// <summary>The stalled time so far in milliseconds, counting completed failed attempts only; 0 when not started.</summary>
     public double StalledMs
