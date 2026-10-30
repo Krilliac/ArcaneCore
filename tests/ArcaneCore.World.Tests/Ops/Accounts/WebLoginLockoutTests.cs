@@ -85,6 +85,69 @@ public sealed class WebLoginLockoutTests
     }
 
     [Fact]
+    public void FloodingFreshNames_DoesNotEvictALockedAccount()
+    {
+        var time = new FeedTestClock();
+        var lockout = new WebLoginLockout(time, maxTracked: 64);
+        for (int i = 0; i < WebLoginLockout.NetworkLimit; i++)
+        {
+            lockout.RecordFailure("staff", "attacker");
+            time.Advance(TimeSpan.FromMilliseconds(1));
+        }
+
+        Assert.True(lockout.IsLocked("staff", "attacker"));
+
+        for (int i = 0; i < 1000; i++)
+        {
+            lockout.RecordFailure("invented" + i, "flood");
+            time.Advance(TimeSpan.FromMilliseconds(1));
+        }
+
+        Assert.True(lockout.IsLocked("staff", "attacker"), "a flood of fresh names reset a standing lockout");
+        Assert.True(lockout.Tracked <= 64, $"{lockout.Tracked} keys tracked");
+    }
+
+    [Fact]
+    public void FloodingFreshNames_DoesNotEraseAPartialCount()
+    {
+        var time = new FeedTestClock();
+        var lockout = new WebLoginLockout(time, maxTracked: 64);
+        for (int i = 0; i < WebLoginLockout.NetworkLimit - 1; i++)
+        {
+            lockout.RecordFailure("staff", "attacker");
+            time.Advance(TimeSpan.FromMilliseconds(1));
+        }
+
+        for (int i = 0; i < 1000; i++)
+        {
+            lockout.RecordFailure("invented" + i, "flood");
+            time.Advance(TimeSpan.FromMilliseconds(1));
+        }
+
+        lockout.RecordFailure("staff", "attacker");
+
+        Assert.True(lockout.IsLocked("staff", "attacker"), "the flood forgot the earlier failures");
+    }
+
+    [Fact]
+    public void ATableFullOfLockedKeys_StillBoundsMemory_AndNewNamesAreDropped()
+    {
+        var time = new FeedTestClock();
+        var lockout = new WebLoginLockout(time, maxTracked: 16);
+        for (int name = 0; name < 20; name++)
+        {
+            for (int i = 0; i < WebLoginLockout.NetworkLimit; i++)
+            {
+                lockout.RecordFailure("locked" + name, "net");
+                time.Advance(TimeSpan.FromMilliseconds(1));
+            }
+        }
+
+        Assert.True(lockout.Tracked <= 16, $"{lockout.Tracked} keys tracked");
+        Assert.True(lockout.IsLocked("locked0", "net"));
+    }
+
+    [Fact]
     public void MemoryIsBounded_ByDroppingTheOldestKeys()
     {
         var time = new FeedTestClock();
