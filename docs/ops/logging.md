@@ -58,8 +58,10 @@ crash dialog and the dump directory all use.
   environment `Json` paths never collapse the realm and the world onto one default. Rolling and queue
   tuning come from `Logging:ArcaneCore:File:*`. If `Logging:ArcaneCore:Json:Enabled` is true, a startup Warning (key `Logging:ArcaneCore:Json:Enabled`) says
   it is deprecated and the file is configured under `Logging:ArcaneCore:File`. Otherwise, if `Logging:ArcaneCore:Json:Path` is set and differs from
-  `Logging:ArcaneCore:File:Path`, the same Warning is keyed `Logging:ArcaneCore:Json:Path`; a `Logging:ArcaneCore:Json:Path` equal to `Logging:ArcaneCore:File:Path`
-  (compared as full paths) with `Logging:ArcaneCore:Json:Enabled` false does not warn.
+  `Logging:ArcaneCore:File:Path`, the same Warning is keyed `Logging:ArcaneCore:Json:Path`, but only when the file sink is enabled
+  (`Logging:ArcaneCore:File:Enabled` or `Logging:ArcaneCore:Json:Enabled`); with logging off it warns nothing, so it cannot fail startup under
+  `Startup:Strict` (exit 78). A `Logging:ArcaneCore:Json:Path` equal to `Logging:ArcaneCore:File:Path` (compared as full paths) with
+  `Logging:ArcaneCore:Json:Enabled` false does not warn either.
 - The section not in force (`Logging:ArcaneCore:Json:*` when the file section is `Logging:ArcaneCore:File`, and the reverse for a legacy `Json` file) is
   not used, but an out-of-range `RollSizeMb`, `Retain` or `QueueCapacity` in it is reported by `check-config` as a WARNING naming that key and saying
   the section is not in force. The same values in the section in force are errors.
@@ -130,8 +132,10 @@ settings stay.
 
 **Hot reload.** The host re-reads `appsettings.json` on change (the generic host's `reloadOnChange`), and
 `ArcaneLoggerProvider` follows `IOptionsMonitor<ArcaneLoggingOptions>`: the console mode, `Timestamps` and
-`IncludeScopes` are applied at once and logged (`Logging:ArcaneCore:Console:Mode changed to Plain.`). Every file key is
-restart-only: a changed value logs `Logging:ArcaneCore:File:Path option can't be changed at reload; still ...`, the
+`IncludeScopes` are applied at once and logged (`Logging:ArcaneCore:Console:Mode changed to Plain.`). Every file setting is
+restart-only, compared as the resolved `LogFileSinkPlan` (enabled, format, path and rolling/queue tuning), not as raw keys: a changed
+value logs `Logging:ArcaneCore:File:Path option can't be changed at reload; still ...` under the key the plan reads it from, and a
+change that resolves to the same plan (for example `Logging:ArcaneCore:Json:Path` set to the effective `Logging:ArcaneCore:File:Path`) logs nothing. The message uses the
 wording vmangos uses for `World::configNoReload` (World.cpp:3044-3055). The `.reload config` command and the
 `WorldConfigKeys` catalog (docs/areas/hot-reload.md) are scoped to the `World` section and do not touch `Logging`; the
 logging section has no `.reload` verb and needs none, because the file watch already delivers it. `Logging:LogLevel`
