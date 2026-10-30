@@ -1049,7 +1049,7 @@
 1459	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up f g i
 1460	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up f g i
 1461	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up f g i
-1462	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up f g
+1462	TargetIsPlayer
 1463	CastOk	b c:move,turn,cast,mount,stand-up f i
 1464	EquippedItemClassMainhand
 1465	CastOk	b c:move,turn,melee-hit-taken,melee-swing,cast,mount,stand-up d f g i
@@ -1921,7 +1921,7 @@
 2646	CastOk	b c:move,turn,melee-hit-taken,melee-swing,mount,stand-up e
 2647	CastOk	b c:melee-hit-taken,melee-swing e f g i
 2649	CastOk	e g
-2650	DontReport	g
+2650	TargetIsPlayer
 2651	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up e f i
 2652	CastOk	b c:move,turn,melee-hit-taken,cast,mount,stand-up f i
 2653	CastOk	g
@@ -7482,7 +7482,7 @@
 9452	CastOk
 9453	CastOk
 9454	CastOk	b c:melee-hit-taken,melee-swing,mount
-9455	CastOk	g
+9455	TargetIsPlayer
 9456	CastOk	d f g
 9457	CastOk	d
 9458	CastOk	b c:move,turn,melee-hit-taken,mount,stand-up
@@ -11392,7 +11392,7 @@
 15054	CastOk	f
 15055	CastOk	f
 15056	CastOk
-15057	CastOk	d g
+15057	TargetIsPlayer
 15058	CastOk
 15059	CastOk
 15060	CastOk
