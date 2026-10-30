@@ -4,7 +4,7 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 namespace ArcaneCore.Game.Creatures;
 
 /// <summary>
-/// SCRIPT_COMMAND_CAST_SPELL (15) with a source that is no creature, which the spell scripts need (a player's own cast starts them, and
+/// The relay cast-spell script command (15) with a source that is no creature, which the spell scripts need (a player's own cast starts them, and
 /// SCRIPT_FLAG_REVERSE_DIRECTION makes the player the source): cmangos ScriptAction::ExecuteDbscriptCommand, DBScripts/ScriptMgr.cpp:2155-2202.
 /// </summary>
 public sealed partial class CreatureMapSystem
