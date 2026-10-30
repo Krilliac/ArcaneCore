@@ -113,6 +113,10 @@ try {
         @{ Name = 'native exit 3 then success stays failed'; Cmd = 'cmd /c exit 3; Write-Output ok'; Want = 3 },
         @{ Name = 'native success then PowerShell failure'; Cmd = 'cmd /c exit 0; Get-Item C:/definitely/missing'; Want = 1 },
         @{ Name = 'non-terminating cmdlet failure, no native command'; Cmd = 'Get-Item C:/definitely/missing'; Want = 1 },
+        @{ Name = 'unknown command then success'; Cmd = 'nonexistentcmd_zz; Write-Output ok'; Want = 'nonzero' },
+        @{ Name = '.NET exception then native success'; Cmd = "[IO.File]::ReadAllText('C:/definitely/missing'); cmd /c exit 0"; Want = 'nonzero' },
+        @{ Name = 'native failure then throw keeps native code'; Cmd = "cmd /c exit 3; throw 'x'"; Want = 3 },
+        @{ Name = 'last statement SilentlyContinue error'; Cmd = 'Get-Item C:/definitely/missing -ErrorAction SilentlyContinue'; Want = 1 },
         @{ Name = 'plain success, no native command'; Cmd = 'Write-Output ok'; Want = 0 },
         @{ Name = 'native exit 0'; Cmd = 'cmd /c exit 0'; Want = 0 })
     foreach ($c in $gateCases) {
@@ -121,6 +125,9 @@ try {
         $ok = if ($c.Want -eq 'nonzero') { $rc -ne 0 } else { $rc -eq $c.Want }
         Check "gate exit: $($c.Name) (got $rc, want $($c.Want))" $ok
     }
+    $longWork = Join-Path $base ('w' * 250)
+    $null = & pwsh -NoProfile -File $gate -Lane 'selftest' -WorkDir $longWork -Command 'Write-Output ok' -LanesRoot $gateLanes -MinAvailableMB 1 2>&1
+    Check "gate refuses a WorkDir over 247 characters (got $LASTEXITCODE)" ($LASTEXITCODE -ne 0)
 }
 finally {
     Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue

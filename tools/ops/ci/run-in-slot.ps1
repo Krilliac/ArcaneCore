@@ -13,7 +13,10 @@
 # - ARCANECORE_TEST_CLIENT_DIR / ARCANECORE_TEST_CLIENT_FILES_DIR are passed through when set; otherwise filled from the optional gitignored
 #   slot-env.local.json ({"clientDir": "...", "clientFilesDir": "..."}) in WorkDir or LanesRoot; if still unset one line says client-data tests skip.
 # - Always releases the slot (finally). A slot file whose holder pwsh is dead (or older than $StaleMin minutes) is abandoned and removed.
-# - Exit code: 124 on timeout; else the last native command's code if non-zero; else 1 if the command threw or its last statement failed; else 0. Prints the log path and the log's last 60 lines.
+# - Exit code: 124 on timeout; else the last native command's code if non-zero (also when the command then threw); else 1 if the command threw
+#   or its last statement failed ($? false, incl. -ErrorAction SilentlyContinue that hit an error); else 0. A statement-terminating error
+#   stops the rest of a `;` chain. Limit: a function that only calls Write-Error (non-terminating) and ends the command still gives 0.
+#   A WorkDir longer than 247 characters is refused (exit 1) before a slot is taken: native commands cannot start in a longer cwd. Prints the log path and the log's last 60 lines.
 param(
     [Parameter(Mandatory)] [string]$Lane,
     [Parameter(Mandatory)] [string]$WorkDir,
@@ -26,6 +29,7 @@ param(
     [string]$LanesRoot
 )
 $ErrorActionPreference = 'Stop'
+if ($WorkDir.Length -gt 247) { [Console]::Error.WriteLine("[$Lane] refusing WorkDir of $($WorkDir.Length) characters (max 247): native commands cannot start when the child's cwd is over 260 characters, and the gate would pass silently."); exit 1 }
 . (Join-Path $PSScriptRoot '..\OpsEnv.ps1')
 if (-not $LanesRoot) { $LanesRoot = Get-OpsRequiredEnv 'ARCANECORE_LANES_ROOT' 'the root that holds lane worktrees, slot-locks and slot-logs' }
 $root = Join-Path $LanesRoot 'slot-locks'
@@ -94,11 +98,11 @@ try {
     $setup += "Write-Output $(ConvertTo-PsSingleQuoted $widthNote)`n"
     # Honest exit code. $LASTEXITCODE only tracks native commands, so `exit $LASTEXITCODE` alone reported 0 for a thrown error, a failed
     # cmdlet, or a command that ran no native program (and an earlier native success masked a later PowerShell failure).
-    # Child exit: the last native code if non-zero (so `cmd /c exit 3; Write-Output ok` is 3: a native failure is not forgiven by a later
-    # success); else 1 on a terminating error (caught, written to stderr) or when the command's last statement failed ($? false); else 0.
+    # Child exit: the last native code if non-zero (so `cmd /c exit 3; Write-Output ok` and `cmd /c exit 3; throw 'x'` are 3: a native failure
+    # is not forgiven by a later success or masked by a later throw); else 1 on a terminating error (caught, written to stderr) or when the command's last statement failed ($? false); else 0.
     # $ErrorActionPreference is deliberately NOT 'Stop' here: that would turn benign non-terminating errors (a probe Get-Item, a native
     # program's stderr) into fatal ones and change what existing dotnet/bash commands do. Terminating errors are still caught.
-    $script = "$setup`$global:LASTEXITCODE = 0`n`$__slotOk = `$true`ntry {`n$Command`n`$__slotOk = `$?`n} catch {`n[Console]::Error.WriteLine((`$_ | Out-String))`nexit 1`n}`nif (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nif (-not `$__slotOk) { exit 1 }`nexit 0"
+    $script = "$setup`$global:LASTEXITCODE = 0`n`$__slotOk = `$true`ntry {`n$Command`n`$__slotOk = `$?`n} catch {`n[Console]::Error.WriteLine((`$_ | Out-String))`nif (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nexit 1`n}`nif (`$LASTEXITCODE -ne 0) { exit `$LASTEXITCODE }`nif (-not `$__slotOk) { exit 1 }`nexit 0"
     $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     $p = Start-Process pwsh -ArgumentList '-NoProfile', '-NonInteractive', '-EncodedCommand', $enc -PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError "$log.err"
     try { $p.PriorityClass = 'BelowNormal' } catch { }
