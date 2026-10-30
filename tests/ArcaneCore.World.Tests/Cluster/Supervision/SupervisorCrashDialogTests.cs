@@ -424,6 +424,7 @@ public sealed class SupervisorCrashDialogTests
             Directory.Delete(directory, recursive: true);
         }
     }
+
     [Theory]
     [InlineData("ArcaneCore.World.exe", "", "ArcaneCore.World")]
     [InlineData("ArcaneCore.World", "", "ArcaneCore.World")]
