@@ -21,7 +21,7 @@ public sealed class MeetingStoneQueueTests : IDisposable
     {
         GroupManager groups = _f.Context.Groups;
         _queue = new LfgQueue(new Groups(groups, _f));
-        groups.MemberAdded += (group, _) => _queue.OnMemberJoined(group);
+        groups.MemberAdded += _queue.OnMemberJoined;
         groups.MemberLeft += _queue.OnMemberRemoved;
         groups.Disbanding += (group, _) => _queue.OnDisbanding(group);
     }
@@ -329,6 +329,24 @@ public sealed class MeetingStoneQueueTests : IDisposable
         Assert.True(_queue.IsPlayerQueued(invited.Guid));
         Assert.False(_queue.IsGroupQueued(party));
         Assert.Equal(free.Guid.Value, BitConverter.ToUInt64(Assert.Single(_f.Sent(warrior, WorldOpcode.SmsgMeetingstoneMemberAdded))));
+    }
+
+    /// <summary>A player queued alone who then joins a party by an ordinary invitation is no longer a solo candidate: a stale entry would block the roles and be dropped from a formed pair.</summary>
+    [Fact]
+    public void SoloPlayers_WhoJoinAPartyByInvitation_LeaveTheSoloQueue()
+    {
+        Player inviter = Add(1, Class.Priest);
+        Player joiner = Add(2, Class.Priest);
+        _queue.Join(inviter, Area);
+        _queue.Join(joiner, Area);
+        _f.ClearAll();
+
+        Party(inviter, joiner);
+
+        Assert.False(_queue.IsPlayerQueued(inviter.Guid));
+        Assert.False(_queue.IsPlayerQueued(joiner.Guid));
+        Assert.Equal(0u, _queue.PlayerAreaOf(joiner.Guid));
+        Assert.Equal([(0u, MeetingStoneStatus.LeaveQueue)], SetQueues(joiner)); // the client stops showing the queue
     }
 
     [Fact]

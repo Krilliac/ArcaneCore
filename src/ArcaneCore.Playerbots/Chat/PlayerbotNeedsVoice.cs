@@ -1059,6 +1059,7 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
                 {
                     PlayerbotVolunteerOutcome.Ready => ("voice.reply.lfg.ready", $"{asker.Name} wants to join your group for {post.What}; the group is complete with them."),
                     PlayerbotVolunteerOutcome.Noted => ("voice.reply.lfg.noted", $"{asker.Name} wants to join your group for {post.What}; you still need {Number(result.Missing)} more."),
+                    PlayerbotVolunteerOutcome.CannotPlace => ("voice.reply.lfg.cant", $"You cannot fit {asker.Name} into your group for {post.What} right now."),
                     PlayerbotVolunteerOutcome.Level => ("voice.reply.lfg.level", $"{asker.Name} is below level {Number(post.MinLevel)} for {post.What}."),
                     PlayerbotVolunteerOutcome.Grouped => ("voice.reply.lfg.grouped", $"{asker.Name} is already in a group."),
                     PlayerbotVolunteerOutcome.NotWaiting => ("voice.reply.lfg.gone", $"You are no longer looking for a group for {post.What}."),

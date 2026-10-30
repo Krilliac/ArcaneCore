@@ -1048,6 +1048,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 if (_volunteers.Count == 0) return;
             }
 
+            if (!slotFree && !HasLiveVolunteer(wanting.Key.Key)) continue; // a full cap lets only a goal with a volunteer through
             PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
             if (goal.InInstance)
             {
@@ -1061,7 +1062,8 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             List<PlayerbotGroupCandidate> candidates = BuildCandidates(wanting, goal);
 
             // A player who asked for the group (Volunteers.cs) comes first, ahead of surplus bots; it forms even with the cap full.
-            PlayerbotGroupPlan? plan = candidates.Count >= 1 ? MatchWithVolunteer(candidates, size, goal, groupManager) : null;
+            ObjectGuid? volunteer = null;
+            PlayerbotGroupPlan? plan = candidates.Count >= 1 ? MatchWithVolunteer(candidates, size, goal, groupManager, out volunteer) : null;
             if (plan is null && slotFree) plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups, goal.InInstance);
             List<Guid> recruited = [];
             if (plan is null && slotFree && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
@@ -1075,6 +1077,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
             if (plan is null) continue;
             Form(goal with { Size = size }, plan);
+            if (volunteer is { } formedVolunteer && plan.Members.Any(m => m.Bot.Guid == formedVolunteer.Value)) _volunteers.Remove(formedVolunteer);
             if (recruited.Count > 0) NoteRecruited(plan, recruited);
         }
     }
@@ -1498,7 +1501,6 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         // one at a time until then.
         int room = formed is null ? 1 - group.Members.Count(m => m.Invited && !m.Joined)
             : (formed.IsRaid ? Group.MaxRaidSize : PlayerbotGroupContent.PartySize) - formed.MemberCount - group.Members.Count(m => m.Invited && !m.Joined);
-        if (group.InviteHoldUntilMs != 0 && unchecked((int)(group.InviteHoldUntilMs - now)) > 0) room = 0;
         foreach (Member member in group.Members.Where(m => !m.Joined && !m.Invited).Take(Math.Max(0, room)).ToArray())
         {
             if (world.FindOnlinePlayer(member.Guid) is null)
@@ -2101,9 +2103,6 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         public List<Member> Members { get; } = [];
         public PlayerbotGroupState State { get; set; } = PlayerbotGroupState.Forming;
         public uint StateSinceMs { get; set; } = formedMs;
-
-        /// <summary>No invitation goes out before this time (0 = none): a volunteer's group lets the bot's "inv in a sec" whisper arrive first.</summary>
-        public uint InviteHoldUntilMs { get; set; }
 
         /// <summary>When the group entered its state; unlike <see cref="StateSinceMs"/> a step's own retry (<c>BringOut</c>) does not move it.</summary>
         public uint StateEnteredMs { get; set; } = formedMs;

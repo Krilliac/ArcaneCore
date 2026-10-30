@@ -105,9 +105,9 @@ public sealed partial class PlayerbotGroupCoordinator
                 new(Guid.Empty, real.Guid.Value, real.Name, real.Class, real.Level, (uint)real.Team, real.MapId,
                     new Vector3(real.X, real.Y, real.Z), PlayerbotRoles.Assign(real.Class, _ => false), Gear(real), uint.MaxValue, Qualifying: PlayerbotGroupContent.QualifiesAtLevel(goal, real.Level)),
             };
-            // A real player never leads a bot group: the bots keep their goal.
-            if (PlayerbotGroupContent.Match(withPlayer, size, groups, goal.InInstance) is { } plan && plan.Leader.BotId != Guid.Empty
-                && plan.Members.Any(m => m.Bot.BotId == Guid.Empty))
+            // A real player never leads a bot group: the bots keep their goal (a tank-class player dealt the tank role leads no more: a bot does).
+            if (PlayerbotGroupContent.Match(withPlayer, size, groups, goal.InInstance) is { } matched && matched.Members.Any(m => m.Bot.BotId == Guid.Empty)
+                && WithBotLeader(matched) is { } plan)
             {
                 _invitedPlayers[real.Guid] = unchecked(now + (uint)(groups.InvitePlayerCooldownMinutes * 60_000));
                 return plan;

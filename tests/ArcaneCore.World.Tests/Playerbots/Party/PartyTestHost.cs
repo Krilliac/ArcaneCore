@@ -168,6 +168,24 @@ internal static class PartyTestHost
         }
     }
 
+    /// <summary>
+    /// Read packets until both the bot's whisper to this client and a SMSG_GROUP_INVITE have arrived, in either order (the whisper is queued
+    /// asynchronously, so the two have no fixed order). Returns the whisper and the name of whoever invites.
+    /// </summary>
+    public static async Task<(ChatMessage Whisper, string Inviter)> ReadWhisperAndInviteAsync(WorldTestClient client, ulong bot)
+    {
+        ChatMessage? whisper = null;
+        string? inviter = null;
+        while (whisper is null || inviter is null)
+        {
+            (WorldOpcode op, byte[] payload) = await client.ReadAsync(TimeSpan.FromSeconds(30));
+            if (op == WorldOpcode.SmsgGroupInvite) inviter ??= new PacketReader(payload).ReadCString();
+            else if (op == WorldOpcode.SmsgMessagechat && ChatMessage.Parse(payload) is { Type: ChatType.Whisper } line && line.Sender == bot) whisper ??= line;
+        }
+
+        return (whisper, inviter);
+    }
+
     private sealed class MemoryProvisionStore(IAccountStore accounts) : IManagedPlayerbotProvisionStore
     {
         private readonly ConcurrentDictionary<Guid, ManagedPlayerbotProvision> _pending = new();

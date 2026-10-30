@@ -70,6 +70,7 @@ internal static class PlayerbotVoiceTemplates
         ["voice.reply.lfg.level"] = ["sorry, need {minlevel}+ for this", "need lvl {minlevel} for it, sorry", "its {minlevel}+ sorry"],
         ["voice.reply.lfg.grouped"] = ["leave your group and whisper me again", "you're in a group, drop it and pst", "need you out of your group first"],
         ["voice.reply.lfg.gone"] = ["sorry, not looking anymore", "nvm, gave up on it", "sorry, got it done already", "not anymore, sorry"],
+        ["voice.reply.lfg.cant"] = ["sorry, cant fit you in right now", "cant take you right now, sorry", "sorry, it wont work out for you this time", "sorry, cant get you in"],
         ["voice.reply.lfg.expired"] = ["sorry, couldnt get a group together", "sorry, no group came together", "couldnt get it going, sorry", "sorry, nobody else showed, no group"],
         ["voice.reply.wts"] =
         [

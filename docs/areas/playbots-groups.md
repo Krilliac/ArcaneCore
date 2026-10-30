@@ -271,7 +271,7 @@ deterministic hash (the same state gives the same answer; no `Random`), and is o
 ## Few bots and stray cases
 
 * With few bots most needs find no partners: the goal is set aside after the timeout and the bot keeps soloing what it can.
-* `MaxGroups` caps the groups; `Enabled` off forms no new group (running ones finish).
+* `MaxGroups` caps the groups; `Enabled` off forms no new group (running ones finish). A group formed for a real player who asked a waiting bot for an invitation (a volunteer) counts toward the cap but is not held back by it, so volunteer groups can exceed `MaxGroups` by at most one per real volunteer.
   When `MaxGroups` is above 1, one slot is kept for dungeon runs (`MaxGroups - 1` for quest, instance-item and risk groups while runs can start). A failed goal is set aside 10 minutes, doubling per repeated failure for the same bot up to 2 h. Instance groups gather and walk on a distance budget (`distance / MoveSpeed * 3 + 120 s`, 300 s minimum, `TravelTimeoutMinutes` cap); a gather or travel timeout logs every bot member's (never a real player's) map, position and distances. An item objective is an instance goal only when no creature that drops it spawns outside an instance.
 * A bot that logs in inside an instance (a world restart while it was in one) is let in: the login gate is now
   `PlayerbotMapPolicy.MayStayOnMap` (its map is allowed, or it is the dungeon it is in), as `playbots-dungeons.md` planned. A free bot

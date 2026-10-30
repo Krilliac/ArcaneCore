@@ -1,5 +1,6 @@
 using System.Numerics;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
@@ -24,13 +25,13 @@ public sealed class PlayerbotVolunteerWorldTests
     private const byte Human = 1, Warrior = 1, Mage = 8;
     private const uint Fireball = 133;
 
-    private static void Quiet(PlayerbotOptions options, int maxGroups = 16)
+    private static void Quiet(PlayerbotOptions options, int maxGroups = 16, int minTank = 0)
     {
         options.MoveSpeed = 0.1f;                         // bots stay where the test puts them
         options.Social.Guilds.Enabled = false;
         options.Groups.InvitePlayers = false;             // only a volunteer can be invited
         options.Groups.MaxGroups = maxGroups;
-        options.Groups.MinTank = 0;
+        options.Groups.MinTank = minTank;
         options.Groups.MinHealer = 0;
         options.Groups.Cooperation.Recruit = false;
     }
@@ -125,13 +126,14 @@ public sealed class PlayerbotVolunteerWorldTests
         Assert.Equal(group.Members.Single(m => m.BotId == group.LeaderBotId).Name, new PacketReader(invite).ReadCString());
     }
 
-    public enum Unplaceable { TooFar, OtherMap, OutOfLevelRange }
+    public enum Unplaceable { TooFar, OtherMap, OutOfLevelRange, Dead }
 
     /// <summary>(C) A player the coordinator cannot place gets no promise: not Ready, and no invitation ever comes.</summary>
     [Theory]
     [InlineData(Unplaceable.TooFar)]
     [InlineData(Unplaceable.OtherMap)]
     [InlineData(Unplaceable.OutOfLevelRange)]
+    [InlineData(Unplaceable.Dead)]
     public async Task AVolunteerTheCoordinatorCannotPlace_IsNotReady_AndGetsNoInvitation(Unplaceable why)
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], options => Quiet(options));
@@ -142,9 +144,9 @@ public sealed class PlayerbotVolunteerWorldTests
 
         PlayerbotVolunteerResult result = await VolunteerAsync(world, bot.Id, "Volnope");
 
-        Assert.NotEqual(PlayerbotVolunteerOutcome.Ready, result.Outcome);
-        // "Noted, nothing missing" is what the whisper reads as "ready, inv in a sec": a promise nobody can keep for this player.
-        Assert.False(result.Outcome == PlayerbotVolunteerOutcome.Noted && result.Missing == 0, "Noted with Missing == 0 promises an invitation");
+        // Headcount is not short (one bot plus the player make the group of two): the honest answer is that the player cannot be placed.
+        Assert.Equal(PlayerbotVolunteerOutcome.CannotPlace, result.Outcome);
+        Assert.False(world.Coordinator.IsVolunteer(Online(world, "Volnope").Guid, (PlayerbotGroupGoalKind.Quest, OgreEntry)), "an unplaceable volunteer was kept");
         await world.RunAsync(30_000);
         Assert.False(PlayerInvited(world), "an unplaceable volunteer was invited");
         Assert.Null(await world.OnWorldAsync(() => world.GroupManager.GetInvite(Online(world, "Volnope").Guid)));
@@ -160,6 +162,10 @@ public sealed class PlayerbotVolunteerWorldTests
             {
                 case Unplaceable.TooFar: // 3000 yards from the meeting point, beyond the 1500 yard limit
                     player.Relocate(player.X + 3000f, player.Y, player.Z, 0, world.World.Host.World.NowMs);
+                    break;
+                case Unplaceable.Dead:
+                    player.Health = 0;
+                    player.Map!.Combat.KillPlayer(player);
                     break;
                 case Unplaceable.OtherMap:
                     world.World.Services.GetRequiredService<ArcaneCore.World.Teleport.TeleportFeature>().Teleports.TeleportTo(player, 1, player.X, player.Y, player.Z, 0f);
@@ -184,7 +190,7 @@ public sealed class PlayerbotVolunteerWorldTests
         });
 
     /// <summary>The bot has an open LFM post; the player whispers "inv me" and the bot's whisper (or its silence, within 20 s of game time) is returned.</summary>
-    private static async Task<string?> AskForInviteAsync(GroupTestWorld world, WorldTestClient player, (Guid Id, string Name) bot)
+    private static async Task<(string? Said, string? Inviter)> AskForInviteAsync(GroupTestWorld world, WorldTestClient player, (Guid Id, string Name) bot, bool expectInvite)
     {
         PlayerbotChat chat = world.Bots.Chat!;
         Assert.True(await world.RunUntilAsync(10_000, () => chat.Responder is not null), await world.TraceAsync());
@@ -195,12 +201,17 @@ public sealed class PlayerbotVolunteerWorldTests
         });
         ulong botGuid = (await world.OnWorldAsync(() => world.Player(bot.Id).Guid)).Value;
         await player.SendChatAsync(ChatType.Whisper, Language.Common, "inv me pls", bot.Name);
-        Task<ChatMessage> reply = PartyTestHost.ReadWhisperFromAsync(player, botGuid);
-        await world.RunUntilPacedAsync(() => reply.IsCompleted, 20_000);
-        return reply.IsCompleted ? (await reply).Text : null;
+        Task<(ChatMessage Whisper, string Inviter)> both = expectInvite ? PartyTestHost.ReadWhisperAndInviteAsync(player, botGuid)
+            : PartyTestHost.ReadWhisperFromAsync(player, botGuid).ContinueWith(t => (t.Result, string.Empty), TaskScheduler.Default);
+        await world.RunUntilPacedAsync(() => both.IsCompleted, 20_000);
+        if (!both.IsCompleted) return (null, null);
+        (ChatMessage whisper, string inviter) = await both;
+        return (whisper.Text, inviter);
     }
 
     private static readonly string[] ReadyLines = [.. PlayerbotVoiceTemplates.Lines["voice.reply.lfg.ready"]];
+    private static readonly string[] CantLines = [.. PlayerbotVoiceTemplates.Lines["voice.reply.lfg.cant"]];
+    private static readonly string[] ExpiredLines = [.. PlayerbotVoiceTemplates.Lines["voice.reply.lfg.expired"]];
 
     /// <summary>(E) Control and the live bug: "sure, inv in a sec" goes only to a player the bot can really group with.</summary>
     [Fact]
@@ -211,11 +222,11 @@ public sealed class PlayerbotVolunteerWorldTests
         var bot = await WaitingBotAsync(world, "Volvoicebot", Warrior, 1, []);
         await using WorldTestClient player = await world.World.EnterWorldAsync("VOLVOICE", "Volvoice", AccountSecurity.Player);
 
-        string? said = await AskForInviteAsync(world, player, bot);
+        (string? said, string? inviter) = await AskForInviteAsync(world, player, bot, expectInvite: true);
 
         Assert.NotNull(said);
         Assert.Contains(said, ReadyLines);
-        await AssertInvitedByAsync(world, player, bot.Name);
+        Assert.Equal(bot.Name, inviter); // the whisper and the invitation arrive in either order
     }
 
     [Fact]
@@ -227,9 +238,127 @@ public sealed class PlayerbotVolunteerWorldTests
         await using WorldTestClient player = await world.World.EnterWorldAsync("VOLMUTE", "Volmute", AccountSecurity.Player);
         await PlaceAsync(world, "Volmute", Unplaceable.TooFar);
 
-        string? said = await AskForInviteAsync(world, player, bot);
+        (string? said, _) = await AskForInviteAsync(world, player, bot, expectInvite: false);
 
-        if (said is not null) Assert.DoesNotContain(said, ReadyLines); // silence or a "still need N" reply are both fine; a promise is not
+        Assert.NotNull(said); // the voice path works: the bot answers, and honestly
+        Assert.Contains(said, CantLines);
+        Assert.DoesNotContain(said, ReadyLines);
         Assert.False(PlayerInvited(world));
+    }
+
+    // --- the roles, the cap on the Match path, expiry ---------------------------------------------------------------------------------
+
+    /// <summary>With the default tank quota a higher-level warrior volunteer would win the tank slot and lead: a bot tanks and leads instead.</summary>
+    [Fact]
+    public async Task AWarriorVolunteerAboveTheBotWarrior_IsReady_AndTheBotTanksAndLeads()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options => Quiet(options, minTank: 1));
+        await world.World.PrepareCharacterAsync("VOLTANK", "Voltank", AccountSecurity.Player);
+        var warrior = await WaitingBotAsync(world, "Voltankbot", Warrior, 1, []);
+        await WaitingBotAsync(world, "Voltankmage", Mage, 1, [Fireball]);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLTANK", "Voltank", AccountSecurity.Player);
+        await world.OnWorldAsync(() =>
+        {
+            Online(world, "Voltank").Level = 3;
+            return true;
+        });
+
+        PlayerbotVolunteerResult result = await VolunteerAsync(world, warrior.Id, "Voltank");
+
+        Assert.Equal(PlayerbotVolunteerOutcome.Ready, result.Outcome);
+        await AssertInvitedByAsync(world, player, warrior.Name);
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single(g => g.Members.Any(m => m.Real));
+        Assert.Equal(warrior.Id, group.LeaderBotId);
+        Assert.Equal(PlayerbotGroupRole.Tank, group.Members.Single(m => m.BotId == warrior.Id).Role);
+    }
+
+    /// <summary>The volunteer waits (Noted, a true count), the bots then become enough while the cap is full: the Match path forms the group.</summary>
+    [Fact]
+    public async Task ANotedVolunteer_IsPlacedByMatch_WhileBotGroupsFillTheCap()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options => Quiet(options, maxGroups: 1));
+        await world.World.PrepareCharacterAsync("VOLMP", "Volmp", AccountSecurity.Player);
+        await FillTheCapAsync(world, "Volmpfill", 3, Mage, [Fireball]);
+        var first = await WaitingBotAsync(world, "Volmpone", Mage, 1, [Fireball]);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLMP", "Volmp", AccountSecurity.Player);
+
+        PlayerbotVolunteerResult result = await VolunteerAsync(world, first.Id, "Volmp");
+
+        Assert.Equal(PlayerbotVolunteerOutcome.Noted, result.Outcome);
+        Assert.Equal(1, result.Missing); // three are asked for: one bot and the player are two
+        Assert.Single(world.Coordinator.Groups);
+        var second = await world.AddBotAsync("Volmptwo", Human, Mage, 1, [Fireball]); // joins the volunteer at once: it is never seen waiting
+        Assert.True(await world.RunUntilPacedAsync(() => PlayerInvited(world), 30_000), "the volunteer was not placed by Match" + Environment.NewLine + await world.TraceAsync());
+        Assert.Equal(2, world.Coordinator.Groups.Count); // beyond MaxGroups = 1: a group with a real player is not held back by the cap
+        Assert.Contains(world.Coordinator.Groups, g => g.Members.Any(m => m.Real) && g.Members.Any(m => m.BotId == first.Id) && g.Members.Any(m => m.BotId == second.Id));
+    }
+
+    /// <summary>A volunteer that ran out unplaced hears one honest whisper from the bot.</summary>
+    [Fact]
+    public async Task AnExpiredVolunteer_HearsTheBotSayItCouldNotGetAGroupTogether()
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Quiet(options);
+            options.Chat.Enabled = true;
+            options.Chat.PerPlayerCooldownSeconds = 0;
+            options.Chat.Voice.LookingForGroup = false;
+        });
+        await world.World.PrepareCharacterAsync("VOLEXP", "Volexp", AccountSecurity.Player);
+        var bot = await WaitingBotAsync(world, "Volexpbot", Warrior, 1, []);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLEXP", "Volexp", AccountSecurity.Player);
+        Assert.True(await world.RunUntilAsync(10_000, () => world.Bots.Chat!.Responder is not null), await world.TraceAsync());
+        Assert.Equal(PlayerbotVolunteerOutcome.Noted, (await VolunteerAsync(world, bot.Id, "Volexp")).Outcome);
+        ulong botGuid = (await world.OnWorldAsync(() => world.Player(bot.Id).Guid)).Value;
+
+        await world.RunAsync(PlayerbotGroupCoordinator.VolunteerLifeMs + 15_000);
+
+        string? said = null;
+        for (int i = 0; i < 6 && said is null; i++) // other whispers of the bot, if any, are not the one asked about
+        {
+            Task<ChatMessage> reply = PartyTestHost.ReadWhisperFromAsync(player, botGuid);
+            await world.RunUntilPacedAsync(() => reply.IsCompleted, 20_000);
+            if (!reply.IsCompleted) break;
+            string text = (await reply).Text;
+            if (ExpiredLines.Contains(text)) said = text;
+        }
+
+        Assert.NotNull(said);
+    }
+
+    public enum Engaged { Ungrouped, InvitePending, Grouped }
+
+    /// <summary>Only a volunteer who is still free is told: one with an invitation pending or in a group of their own hears nothing.</summary>
+    [Theory]
+    [InlineData(Engaged.Ungrouped)]
+    [InlineData(Engaged.InvitePending)]
+    [InlineData(Engaged.Grouped)]
+    public async Task AnExpiringVolunteer_IsQueuedForTheWhisper_OnlyWhileFree(Engaged engaged)
+    {
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([EliteQuest], options =>
+        {
+            Quiet(options);
+            options.Chat.Voice.Enabled = false; // the voice would take the queue
+        });
+        await world.World.PrepareCharacterAsync("VOLQ", "Volq", AccountSecurity.Player);
+        var bot = await WaitingBotAsync(world, "Volqbot", Warrior, 1, []);
+        await using WorldTestClient player = await world.World.EnterWorldAsync("VOLQ", "Volq", AccountSecurity.Player);
+        Assert.Equal(PlayerbotVolunteerOutcome.Noted, (await VolunteerAsync(world, bot.Id, "Volq")).Outcome);
+        await world.RunAsync(PlayerbotGroupCoordinator.VolunteerLifeMs - 20_000); // an invitation lapses on its own: engage the player just before the end
+        if (engaged != Engaged.Ungrouped)
+        {
+            await world.OnWorldAsync(() =>
+            {
+                world.GroupManager.Invite(world.Player(bot.Id), "Volq");
+                if (engaged == Engaged.Grouped) world.GroupManager.Accept(Online(world, "Volq"));
+                return true;
+            });
+        }
+
+        await world.RunAsync(40_000);
+
+        var queued = await world.OnWorldAsync(() => world.Coordinator.TakeExpiredVolunteers());
+        if (engaged == Engaged.Ungrouped) Assert.Equal(bot.Id, Assert.Single(queued).BotId);
+        else Assert.Empty(queued);
     }
 }
