@@ -174,6 +174,9 @@ public static class KillRewards
     public static bool IsElite(Creature creature)
         => (CreatureRank)creature.Template.Rank is CreatureRank.Elite or CreatureRank.RareElite or CreatureRank.WorldBoss;
 
+    /// <summary>vmangos CREATURE_STATIC_FLAG_NO_XP (static_flags1 bit 0x2, same bit in cmangos).</summary>
+    private const uint StaticFlagNoXp = 0x00000002;
+
     /// <summary>
     /// Group::RewardGroupAtKill / RewardSinglePlayerAtKill experience: one share per recipient,
     /// granted through <paramref name="progression"/> (rested bonus applies to kills).
@@ -185,6 +188,12 @@ public static class KillRewards
         ArgumentNullException.ThrowIfNull(progression);
         ArgumentNullException.ThrowIfNull(recipients);
         ArgumentNullException.ThrowIfNull(victim);
+        if ((victim.Template.StaticFlags1 & StaticFlagNoXp) != 0)
+        {
+            // MaNGOS::XP::Gain (Formulas.h:112): CREATURE_STATIC_FLAG_NO_XP (CreatureDefines.h:99) gives no experience.
+            return new uint[recipients.Count];
+        }
+
         if (TotemQuery.IsTotem(victim) || IsPvpVictim(victim))
         {
             // Player::IsHonorOrXPTarget (Player.cpp:19950) and MaNGOS::XP::Gain (Formulas.h:102-107): a summoned totem is worth nothing;
