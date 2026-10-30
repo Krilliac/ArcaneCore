@@ -1,6 +1,9 @@
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
+using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Data.Schema;
+using System.Text;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -67,6 +70,7 @@ public sealed class ImporterSchemaGateCliTests : IDisposable
 
         Assert.Equal(ExitCodes.Schema, code);
         Assert.Contains("--migrate", error, StringComparison.Ordinal);
+        Assert.Contains($"{verb} does not migrate", error, StringComparison.Ordinal);
         await using (WorldDbContext db = Open(world))
         {
             Assert.Equal(current - 1, await Upgrade.UpgradeTestSupport.ReadVersionAsync(db, "world"));
@@ -80,6 +84,129 @@ public sealed class ImporterSchemaGateCliTests : IDisposable
         {
             Assert.Equal(current, await Upgrade.UpgradeTestSupport.ReadVersionAsync(db, "world"));
         }
+    }
+
+    private const string ImportDump = """
+        INSERT INTO `broadcast_text` (`Id`,`Text`) VALUES (991,'Synthetic broadcast');
+        """;
+
+    private const string PortalDump = """
+        CREATE TABLE `areatrigger_teleport` (`id` mediumint unsigned NOT NULL, `name` text, `required_level` tinyint unsigned NOT NULL DEFAULT '0', `required_item` mediumint unsigned, `required_item2` mediumint unsigned, `required_quest_done` mediumint unsigned, `target_map` smallint unsigned NOT NULL, `target_position_x` float NOT NULL, `target_position_y` float NOT NULL, `target_position_z` float NOT NULL, `target_orientation` float NOT NULL, `status_failed_text` text, `condition_id` int, PRIMARY KEY (`id`));
+        INSERT INTO `areatrigger_teleport` VALUES (2848,'Onyxias Lair - Entering',50,16309,0,0,249,30.8916,-54.079,-5.02784,4.71239,'Need the amulet.',0);
+        """;
+
+    private static void WriteWdbc(string path, int fields, params uint[][] records)
+    {
+        byte[] strings = Encoding.UTF8.GetBytes("\0fixture\0");
+        using var writer = new BinaryWriter(File.Create(path));
+        writer.Write(Encoding.ASCII.GetBytes("WDBC"));
+        writer.Write((uint)records.Length);
+        writer.Write((uint)fields);
+        writer.Write((uint)(fields * 4));
+        writer.Write((uint)strings.Length);
+        foreach (uint[] record in records)
+        {
+            foreach (uint value in record) writer.Write(value);
+        }
+
+        writer.Write(strings);
+    }
+
+    /// <summary>Writes the smallest accepted input of <paramref name="verb"/> and returns its arguments (without the database) and the table it fills.</summary>
+    private string[] InputsFor(string verb, out string table)
+    {
+        string dump = Path.Combine(_directory, "dump.sql");
+        switch (verb)
+        {
+            case "import":
+                File.WriteAllText(dump, ImportDump);
+                table = "broadcast_text";
+                return [verb, dump];
+            case "refresh-portals":
+                File.WriteAllText(dump, PortalDump);
+                table = "areatrigger_teleport";
+                return [verb, dump];
+            case "import-map-dbc":
+                {
+                    string map = Path.Combine(_directory, "Map.dbc"), area = Path.Combine(_directory, "AreaTable.dbc");
+                    uint[] eastern = new uint[42], kalimdor = new uint[42]; // Map.dbc must hold both continents (ids 0 and 1)
+                    eastern[0] = 0; eastern[4] = 1;
+                    kalimdor[0] = 1; kalimdor[4] = 1;
+                    uint[] areaRow = new uint[25];
+                    areaRow[0] = 12; areaRow[3] = 12; areaRow[11] = 1;
+                    WriteWdbc(map, 42, eastern, kalimdor);
+                    WriteWdbc(area, 25, areaRow);
+                    table = "map_template";
+                    return [verb, map, area];
+                }
+            case "import-dbc":
+                {
+                    string dbc = Path.Combine(_directory, "dbc");
+                    Directory.CreateDirectory(dbc);
+                    uint[] spell = new uint[SpellDbcImporter.SpellFieldCount];
+                    spell[0] = 133;
+                    spell[120] = 1;
+                    WriteWdbc(Path.Combine(dbc, "Spell.dbc"), spell.Length, spell);
+                    WriteWdbc(Path.Combine(dbc, "SpellCastTimes.dbc"), 4, [5u, 3500u, 0u, 3500u]);
+                    WriteWdbc(Path.Combine(dbc, "SpellDuration.dbc"), 4, [21u, unchecked((uint)-1), 0u, unchecked((uint)-1)]);
+                    WriteWdbc(Path.Combine(dbc, "SpellRange.dbc"), 22, [4u, 0u, BitConverter.SingleToUInt32Bits(30f), 0u, .. new uint[18]]);
+                    WriteWdbc(Path.Combine(dbc, "SpellRadius.dbc"), 4, [7u, BitConverter.SingleToUInt32Bits(2f), 0u, BitConverter.SingleToUInt32Bits(2f)]);
+                    table = "spell_template";
+                    return [verb, dbc];
+                }
+            default:
+                throw new ArgumentOutOfRangeException(nameof(verb), verb, null);
+        }
+    }
+
+    private static async Task<long> CountAsync(string world, string table)
+    {
+        await using var connection = new SqliteConnection($"Data Source={world};Pooling=False");
+        await connection.OpenAsync();
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM \"{table}\"";
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    [Theory]
+    [InlineData("import")]
+    [InlineData("import-dbc")]
+    [InlineData("import-map-dbc")]
+    [InlineData("refresh-portals")]
+    public async Task OtherWritingVerb_RefusesAWorldBehindTheImportersSchema_ChangingNothing_UnlessToldToMigrate(string verb)
+    {
+        string world = Path.Combine(_directory, "world.db");
+        int current = WorldDbContext.Schema.CurrentVersion;
+        await using (WorldDbContext db = Open(world))
+        {
+            await SchemaBootstrapper.EnsureAsync(db, WorldDbContext.Schema);
+            await Upgrade.UpgradeTestSupport.SetVersionAsync(db, "world", current - 1);
+        }
+
+        string[] inputs = InputsFor(verb, out string table);
+
+        (int code, string output, string error) = await RunAsync([.. inputs, "--database", world]);
+
+        Assert.Equal(ExitCodes.Schema, code);
+        Assert.Contains("--migrate", error, StringComparison.Ordinal);
+        Assert.Contains($"{verb} does not migrate", error, StringComparison.Ordinal); // the error names the verb that ran, not the default "refresh"
+        await using (WorldDbContext db = Open(world))
+        {
+            Assert.Equal(current - 1, await Upgrade.UpgradeTestSupport.ReadVersionAsync(db, "world"));
+        }
+
+        Assert.Equal(0, await CountAsync(world, table));
+
+        (code, output, error) = await RunAsync([.. inputs, "--database", world, "--migrate"]);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains($"world schema {current - 1} -> {current}", output, StringComparison.Ordinal);
+        await using (WorldDbContext db = Open(world))
+        {
+            Assert.Equal(current, await Upgrade.UpgradeTestSupport.ReadVersionAsync(db, "world"));
+        }
+
+        Assert.True(await CountAsync(world, table) > 0);
     }
 
     [Theory]
