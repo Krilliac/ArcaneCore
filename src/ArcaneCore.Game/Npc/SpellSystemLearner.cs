@@ -18,7 +18,8 @@ namespace ArcaneCore.Game.Npc;
 /// Player::GetTrainerSpellState, a skill a SkillRaceClassInfo row marks not trainable or above the player's
 /// level is not offered, and buying casts the teaching spell through the spell system so its effects
 /// (LEARN_SPELL, SKILL_STEP) run. Without it every skill value reads 0 and no primary-profession points exist.
-/// spell_chain "req_spell" requirements (talent-dependent ranks) are not modelled.
+/// The spell_chain req_spell column is not modelled (ChainReq is always 0); the talent-dependent ranks are gated through prev_spell, which
+/// <see cref="TalentAbilityRankLinks"/> merges into the rank chains.
 /// </remarks>
 /// <param name="spells">The spell system (resolved lazily: features attach in name order).</param>
 /// <param name="abilities">SkillLineAbility.dbc data (empty: no rank chain, every spell fits).</param>

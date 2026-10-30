@@ -69,6 +69,68 @@ public sealed class SpellLearnSkillTable
 }
 
 /// <summary>
+/// Rank links the client DBC lacks for the trainer-sold higher ranks of single-rank talent abilities (Pyroblast, Holy Shield, ...).
+/// Talent.dbc lists one spell for these talents and SkillLineAbility.dbc has forward_spellid 0 on every rank, so the DBC chain stops
+/// at rank 1. The reference servers keep the link in spell_chain prev_spell (mangos-classic sql/archive/0.6/2875_spell_chain.sql,
+/// e.g. <c>('12505','11366','11366','2')</c>; vmangos SpellMgr::LoadSpellChains merges those rows over the DBC chains). With the link a
+/// trainer refuses the rank until the player knows the talent spell (Player::GetTrainerSpellState) and a respec walks up to the
+/// purchased ranks. A link the DBC provides always wins; Mortal Strike, Bloodthirst and Shield Slam are chained by the DBC already.
+/// </summary>
+public static class TalentAbilityRankLinks
+{
+    /// <summary>(rank spell, previous rank spell) pairs, lowest rank first within each ability.</summary>
+    public static IReadOnlyList<(uint Rank, uint Previous)> Links { get; } = Build();
+
+    private static (uint Rank, uint Previous)[] Build() =>
+    [
+        // Pyroblast
+        (12505, 11366), (12522, 12505), (12523, 12522), (12524, 12523), (12525, 12524), (12526, 12525), (18809, 12526),
+        // Blast Wave
+        (13018, 11113), (13019, 13018), (13020, 13019), (13021, 13020),
+        // Ice Barrier
+        (13031, 11426), (13032, 13031), (13033, 13032),
+        // Aimed Shot
+        (20900, 19434), (20901, 20900), (20902, 20901), (20903, 20902), (20904, 20903),
+        // Shadowburn
+        (18867, 17877), (18868, 18867), (18869, 18868), (18870, 18869), (18871, 18870),
+        // Conflagrate
+        (18930, 17962), (18931, 18930), (18932, 18931),
+        // Siphon Life
+        (18879, 18265), (18880, 18879), (18881, 18880),
+        // Holy Shock
+        (20929, 20473), (20930, 20929),
+        // Seal of Command
+        (20915, 20375), (20918, 20915), (20919, 20918), (20920, 20919),
+        // Insect Swarm
+        (24974, 5570), (24975, 24974), (24976, 24975), (24977, 24976),
+        // Faerie Fire (Feral)
+        (17390, 16857), (17391, 17390), (17392, 17391),
+        // Wyvern Sting
+        (24132, 19386), (24133, 24132),
+        // Counterattack
+        (20909, 19306), (20910, 20909),
+        // Mind Flay
+        (17311, 15407), (17312, 17311), (17313, 17312), (17314, 17313), (18807, 17314),
+        // Holy Nova
+        (15430, 15237), (15431, 15430), (27799, 15431), (27800, 27799), (27801, 27800),
+        // Divine Spirit
+        (14818, 14752), (14819, 14818), (27841, 14819),
+        // Lightwell
+        (27870, 724), (27871, 27870),
+        // Dark Pact
+        (18937, 18220), (18938, 18937),
+        // Trueshot Aura
+        (20905, 19506), (20906, 20905),
+        // Blessing of Sanctuary
+        (20912, 20911), (20913, 20912), (20914, 20913),
+        // Holy Shield
+        (20927, 20925), (20928, 20927),
+        // Hemorrhage
+        (17347, 16511), (17348, 17347),
+    ];
+}
+
+/// <summary>
 /// Ranks of ranked spells derived from SkillLineAbility.dbc forward links (vmangos SpellMgr::LoadSpellChains,
 /// Spells/SpellMgr.cpp:1543-1650 and LoadSpellChains_AbilityHelper :1440-1503), with the two reference patches:
 /// Herb Gathering Apprentice (2366) forwards to 2368 although the 1.12 client has no link for it
@@ -156,6 +218,15 @@ public sealed class SpellRankChains
 
             // Conflicting data (two spells forwarding to one) asserts in the reference; the lowest spell id is kept.
             previous.TryAdd(forward, spell);
+        }
+
+        // vmangos merges spell_chain rows over the DBC chains; the link is kept only when both ranks are real abilities and the DBC gave none.
+        foreach ((uint rankSpell, uint before) in TalentAbilityRankLinks.Links)
+        {
+            if (withAbilities.Contains(rankSpell) && withAbilities.Contains(before) && spellExists(rankSpell) && spellExists(before))
+            {
+                previous.TryAdd(rankSpell, before);
+            }
         }
 
         var prev = new Dictionary<uint, uint>();
