@@ -943,7 +943,8 @@ internal static partial class PlayerbotMotion
         bool navigated = route.LegsNavigated(fromPoint, toPoint) && OnLeg(route, fromPoint, from);
         Vector3 rawCandidate = candidate;
         bool hasMeshSurface = false;
-        if (navigated && MeshSurface(map.Collision, route, fromPoint, toPoint, from, candidate) is { } surface)
+        bool meshWalked = false;
+        if (navigated && MeshSurface(map.Collision, route, fromPoint, toPoint, from, candidate, out meshWalked) is { } surface)
         {
             // The leg is a straight line between string-pulled corners, so its own height is a chord: through the hill, over the hollow,
             // under the ramp. The mesh's surface under the walk is where the floor is (live: bots 8-30 yd under the terrain and 6-10 yd
@@ -1011,11 +1012,16 @@ internal static partial class PlayerbotMotion
                         // Keeping the old height is only safe with a floor within reach under it (live: a dock edge over a seabed 20 yd down).
                         resolved = rawCandidate with { Z = from.Z };
                     }
-                    else if (hasMeshSurface && IsWalkableMeshRise(from, candidate))
+                    else if (float.IsNaN(best) && (meshWalked || resolved.Z > from.Z)
+                        && MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
+                        && IsStairRise(from, resolved))
                     {
-                        // Stairs: the probe finds no floor under the steps (Deathknell crypt) and no sight line clears the climb, but the mesh's
-                        // own surface is the floor there, and the mesh excludes steep slopes. Only a rise a walker could climb over the step's run is trusted.
-                        resolved = candidate;
+                        // Stairs: the probe found no floor under the step (Deathknell crypt) and no sight line clears the climb. `resolved` is
+                        // the mesh surface (the probe found nothing to replace it with; a probed floor is never replaced). A surface the mesh
+                        // walk reached from the bot's own position or the leg's corner is connected to where the bot stands. At the crypt
+                        // stairs' foot that walk fails and the vertical search (NearFloor) is the only mesh evidence there, so a step UP is
+                        // trusted on it: climbing onto a wrong polygon is bounded by StairStepMaxRiseYards. A step DOWN onto a surface the walk
+                        // did not reach stays refused: that is what #1648 guards (a dock edge over a seabed, an unconnected lower polygon).
                     }
                     else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards)
                     {
@@ -1042,11 +1048,18 @@ internal static partial class PlayerbotMotion
         return draped;
     }
 
-    /// <summary>True when <paramref name="to"/> (a point on the mesh's surface) lies no higher or lower than it is far horizontally from <paramref name="from"/> (a 45 degree stair), so the step is a climb and not a storey change.</summary>
-    private static bool IsWalkableMeshRise(Vector3 from, Vector3 to)
+    /// <summary>The most one step of a stair may rise or fall, however long the step is (a stalled bot's step covers many yards): well under a storey (the Orgrimmar slab is 18.6 yd), over a heartbeat's rise on the Deathknell stairs (2.3 yd).</summary>
+    internal const float StairStepMaxRiseYards = 3.5f;
+
+    /// <summary>
+    /// True when <paramref name="to"/> is a stair step from <paramref name="from"/>: no higher or lower than it is far horizontally (a 45 degree
+    /// climb; a chosen heuristic, the repository holds no navigation-mesh slope configuration) and at most <see cref="StairStepMaxRiseYards"/>.
+    /// </summary>
+    private static bool IsStairRise(Vector3 from, Vector3 to)
     {
+        float rise = MathF.Abs(to.Z - from.Z);
         float run = MathF.Sqrt(((to.X - from.X) * (to.X - from.X)) + ((to.Y - from.Y) * (to.Y - from.Y)));
-        return MathF.Abs(to.Z - from.Z) <= run;
+        return rise <= run && rise <= StairStepMaxRiseYards;
     }
 
     /// <summary>True when walkable floor lies at or just under <paramref name="z"/> at x/y, within one step height (a client falls, it does not hover).</summary>
@@ -1153,13 +1166,15 @@ internal static partial class PlayerbotMotion
     /// corner goes around. When no leg can be walked (a route started off the mesh), the surface straight under or over the leg's
     /// height within <see cref="MeshFloorToleranceYards"/>. Null: none.
     /// </summary>
-    private static float? MeshSurface(MapCollision collision, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
+    private static float? MeshSurface(MapCollision collision, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
+        out bool walked)
     {
+        walked = false;
         PathOptions options = PlayerbotMoveCheck.MeshOptions;
         if (toPoint <= fromPoint)
         {
-            if (collision.TryWalkMeshSurface(from, candidate, out float walked, options)) return walked;
-            return WalkFromCorner(collision, route, toPoint, candidate, options) ?? NearFloor(collision, candidate);
+            if (collision.TryWalkMeshSurface(from, candidate, out float onWalk, options)) { walked = true; return onWalk; }
+            return FromCornerOrNear(collision, route, toPoint, candidate, options, out walked);
         }
 
         Vector3 at = from;
@@ -1168,12 +1183,20 @@ internal static partial class PlayerbotMotion
         for (int point = first; point <= lastCorner; point++)
         {
             if (!collision.TryWalkMeshSurface(at, route.Points[point], out float surface, options))
-                return WalkFromCorner(collision, route, toPoint, candidate, options) ?? NearFloor(collision, candidate);
+                return FromCornerOrNear(collision, route, toPoint, candidate, options, out walked);
             at = route.Points[point] with { Z = surface };
         }
 
-        if (collision.TryWalkMeshSurface(at, candidate, out float end, options)) return end;
-        return WalkFromCorner(collision, route, toPoint, candidate, options) ?? NearFloor(collision, candidate);
+        if (collision.TryWalkMeshSurface(at, candidate, out float end, options)) { walked = true; return end; }
+        return FromCornerOrNear(collision, route, toPoint, candidate, options, out walked);
+    }
+
+    /// <summary>The surface walked from the leg's corner (<paramref name="walked"/> true: it is connected to the walk), else the nearest one by height (false: a vertical search that can land on an unconnected polygon).</summary>
+    private static float? FromCornerOrNear(MapCollision collision, PlayerbotRoute route, int toPoint, Vector3 candidate, PathOptions options, out bool walked)
+    {
+        float? along = WalkFromCorner(collision, route, toPoint, candidate, options);
+        walked = along.HasValue;
+        return along ?? NearFloor(collision, candidate);
     }
 
     /// <summary>The surface walked from the corner the leg ending at <paramref name="toPoint"/> starts at, or null when that corner is not on the mesh.</summary>
