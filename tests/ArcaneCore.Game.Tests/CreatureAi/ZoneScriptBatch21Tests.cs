@@ -131,7 +131,7 @@ public sealed class ZoneScriptBatch21Tests
         CreatureContent content = new(
             [Template(ShortJohnMithrilAI.Entry, b => { b.Name = "Short John Mithril"; b.Faction = 35; b.NpcFlags = (uint)(NpcFlags.Gossip | NpcFlags.QuestGiver); })],
             [Spawn(1, ShortJohnMithrilAI.Entry, -13184.5f, 332.671f, 40.33f)], [], [], [], new CreatureAiContent([], []));
-        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content);
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content);
         using (world)
         {
             (Player player, _) = AddPlayer(world, 1, -13220f, 290f);
@@ -155,7 +155,6 @@ public sealed class ZoneScriptBatch21Tests
 
             Assert.Equal(ShortJohnMithrilAI.RunStage.Idle, ai.Stage); // the run finished instead of sticking at ToFloor with the flags off
             Assert.NotEqual(0u, shortJohn.NpcFlags & (uint)NpcFlags.QuestGiver);
-            _ = map;
         }
     }
 }

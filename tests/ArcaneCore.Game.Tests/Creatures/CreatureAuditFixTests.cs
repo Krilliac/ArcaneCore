@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -16,7 +17,7 @@ public sealed class CreatureAuditFixTests
     [Fact]
     public void SelectLevel_WritesTheTemplateMeleeAttackPowerToTheAttackPowerField()
     {
-        // vmangos Creature::SelectLevel writes both attack power fields from the template alongside the damage pair.
+        // vmangos Creature::UpdateAttackPowerAndDamage (StatSystem.cpp:820-840) writes both attack power fields from the template.
         CreatureContent content = Content([Template() with { MeleeAttackPower = 123, RangedAttackPower = 45 }], [Spawn(1, WolfEntry, 8, 0)]);
         (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content);
         using (world)
@@ -74,7 +75,7 @@ public sealed class CreatureAuditFixTests
     {
         // vmangos Creature::EnterCombatWithTarget -> pVictim->SetInCombatWith(this) -> Creature::OnEnterCombat -> AttackedBy: the target retaliates.
         CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 8, 0), Spawn(2, WolfEntry, 10, 0)]);
-        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
         using (world)
         {
             (Player player, _) = AddPlayer(world, 1, 0, 0);
@@ -87,7 +88,35 @@ public sealed class CreatureAuditFixTests
             system.EnterCombatWithTarget(busy, idle);
 
             Assert.Same(busy, idle.Combat.Victim);
-            _ = map;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ProximityAggroOntoACreature_AlreadyInCombatOrFleeing_DoesNotMakeItRetaliate(bool fleeing)
+    {
+        // vmangos Unit::SetInCombatState runs OnEnterCombat only for a creature not yet in combat; OnEnterCombat skips AttackedBy when confused or fleeing.
+        CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, 8, 0), Spawn(2, WolfEntry, 10, 0)]);
+        (WorldRuntime world, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new AlwaysHostile() });
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 0);
+            Creature busy = system.Creatures.Single(c => c.Spawn?.Guid == 1);
+            Creature idle = system.Creatures.Single(c => c.Spawn?.Guid == 2);
+            system.AttackStart(busy, player);
+            if (fleeing)
+            {
+                idle.UnitFlags |= UnitFlags.Fleeing;
+            }
+            else
+            {
+                map.Combat.SetInCombatState(idle, 0); // flagged by an earlier call: no OnEnterCombat this time
+            }
+
+            system.EnterCombatWithTarget(busy, idle);
+
+            Assert.Null(idle.Combat.Victim);
         }
     }
 }

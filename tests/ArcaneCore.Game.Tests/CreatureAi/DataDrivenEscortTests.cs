@@ -1242,6 +1242,7 @@ public sealed class DataDrivenEscortTests
             bool engaged = !evadeMidScene;
             int windsorEvades = 0;
             bool windsorFighting = false;
+            bool guardKilledCollected = false;
             for (int elapsed = 0; elapsed < 600_000 && quests.Completed.Count == 0; elapsed += 100)
             {
                 player.Relocate(windsor.X, windsor.Y, windsor.Z, 0, 0);
@@ -1250,6 +1251,7 @@ public sealed class DataDrivenEscortTests
                 windsorFighting = windsor.Combat.IsInCombat;
                 if (killGuardBeforeTurn && throneGuards[1].IsAlive && throneGuards[1].Entry == 1756 && all0().Contains("-1000852") && !all0().Contains("-1000865"))
                 {
+                    guardKilledCollected = ai.RoyalGuards.Contains(throneGuards[1]); // it was collected at -1000852, so the later check waits on it
                     map.Combat.Kill(null, throneGuards[1]); // a player (or GM) kills one collected guard in the ~70 s before the guards turn
                 }
 
@@ -1281,6 +1283,14 @@ public sealed class DataDrivenEscortTests
 
             Assert.True(quests.Completed.Count == 1, $"evades {windsorEvades} point {ai.CurrentWaypointIndex} step {ai.DialogueStep} alive {windsor.IsAlive} bolvar {bolvar.IsAlive} royal {string.Join(" ", ai.RoyalGuards.Select(g => $"{g.Entry}/{g.IsAlive}/{throneGuards.Contains(g)}"))} said {string.Join(' ', all)}");
             Assert.Equal((player, ArcaneCore.Game.Creatures.Scripts.ReginaldWindsorAI.QuestTheGreatMasquerade), quests.Completed[0]);
+            if (killGuardBeforeTurn)
+            {
+                // Not vacuous: the guard really was collected, died before the turn, and kept its old entry (UpdateEntry refuses the dead).
+                Assert.True(guardKilledCollected, "the guard was never collected before it was killed");
+                Assert.False(throneGuards[1].IsAlive);
+                Assert.Equal(1756u, throneGuards[1].Entry);
+            }
+
             Assert.All(throneGuards.Where(g => !(killGuardBeforeTurn && g == throneGuards[1])), g => Assert.Equal(12739u, g.Entry));
             Assert.Contains("-1000827", all); // SAY_PRESTOR_SIEZE at the start
             Assert.Contains("-1000868", all); // SAY_PRESTOR_KEEP_14
