@@ -135,6 +135,7 @@ public sealed class LiveWin32DebuggerV2
     private readonly BlockingCollection<string> _fileQueue = new BlockingCollection<string>(QueueCapacity);
     private readonly Thread _consoleThread;
     private readonly Thread _fileThread;
+    private readonly ConcurrentDictionary<int, bool> _exitedPids = new ConcurrentDictionary<int, bool>();
     private long _consolePendingDrops;
     private long _filePendingDrops;
     private long _consoleDropsTotal;
@@ -282,8 +283,16 @@ public sealed class LiveWin32DebuggerV2
         try { if (writer != null) { writer.Flush(); writer.Dispose(); } } catch { }
     }
 
+    // True once the debug loop for this pid ended on the target's exit: the pid may be reused by a relaunched process.
+    public bool ProcessExited(int pid)
+    {
+        return _exitedPids.ContainsKey(pid);
+    }
+
     public Thread AttachAsync(int pid, string label)
     {
+        bool ignored;
+        _exitedPids.TryRemove(pid, out ignored);
         var thread = new Thread(() => RunDebugLoop((uint)pid, label))
         {
             IsBackground = true,
@@ -370,6 +379,7 @@ public sealed class LiveWin32DebuggerV2
             }
             if (exitProcess)
             {
+                _exitedPids[(int)pid] = true;
                 return;
             }
         }
@@ -377,8 +387,9 @@ public sealed class LiveWin32DebuggerV2
 }
 "@
 
-# The type outlives this script in the session (pwsh -NoExit), and Add-Type of the same name fails; a changed C# body needs a new type name.
-if (-not ('LiveWin32DebuggerV2' -as [type])) { Add-Type -TypeDefinition $code -Language CSharp }
+# The type outlives this script in the session (pwsh -NoExit). Add-Type of identical source re-adds quietly; changed source under the same
+# type name fails loudly ("type name already exists"), so a change to the C# body must rename the type (LiveWin32DebuggerV3, ...).
+Add-Type -TypeDefinition $code -Language CSharp
 [LiveWin32DebuggerV2]::DisableQuickEdit()
 $debugLog = [LiveWin32DebuggerV2]::new($LogPath)   # per run: its own queues, writer threads, log file and drop counters
 $threads = @()
@@ -391,10 +402,17 @@ if ($SupervisorPid) {
     $attempts = @{}
     # The supervisor itself is never attached: a stopped supervisor stops reading its Merged children's stdout, which blocks them all.
     # A reused PID is not the supervisor: remember its start time and treat a different one as gone.
-    $supervisorStart = (Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue).StartTime
+    function Get-ProcessStartTime($Process) { try { $Process.StartTime } catch { $null } }
+    $supervisorProcess = Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue
+    if (-not $supervisorProcess) {
+        $debugLog.Shutdown(1000)
+        throw "The supervisor (pid $SupervisorPid) exited before the debugger started."
+    }
+    $supervisorStart = Get-ProcessStartTime $supervisorProcess
+    if ($null -eq $supervisorStart) { $debugLog.Note('watch', "cannot read the start time of supervisor pid $SupervisorPid (an elevated process?); PID-reuse protection is off") }
     while ($true) {
         $supervisorProcess = Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue
-        $supervisorUp = $null -ne $supervisorProcess -and $supervisorProcess.StartTime -eq $supervisorStart
+        $supervisorUp = $null -ne $supervisorProcess -and ($null -eq $supervisorStart -or (Get-ProcessStartTime $supervisorProcess) -eq $supervisorStart)
         foreach ($gonePid in @($attempts.Keys) + @($attached.Keys) | Select-Object -Unique) {
             if (-not $attached.ContainsKey($gonePid) -or -not $attached[$gonePid].IsAlive) {
                 if (-not (Get-Process -Id $gonePid -ErrorAction SilentlyContinue)) { $attempts.Remove($gonePid); $attached.Remove($gonePid) }
@@ -408,7 +426,10 @@ if ($SupervisorPid) {
                 if ($childPid -eq $SupervisorPid) { continue }
                 $known = $attached.ContainsKey($childPid)
                 if ($known -and $attached[$childPid].IsAlive) { continue }
-                if ($known -and -not (Get-Process -Id $childPid -ErrorAction SilentlyContinue)) { $attached.Remove($childPid); $known = $false }
+                # A debug thread that ended on the target's exit: the pid may already belong to a relaunched child, which gets fresh retries.
+                if ($known -and ($debugLog.ProcessExited($childPid) -or -not (Get-Process -Id $childPid -ErrorAction SilentlyContinue))) {
+                    $attached.Remove($childPid); $attempts.Remove($childPid); $known = $false
+                }
                 $tries = if ($attempts.ContainsKey($childPid)) { $attempts[$childPid] } else { 0 }
                 if ($known -and $tries -ge 3) { continue }
                 $attempts[$childPid] = $tries + 1

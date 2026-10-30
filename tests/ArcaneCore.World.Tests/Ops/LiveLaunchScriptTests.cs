@@ -503,6 +503,34 @@ public sealed class LiveLaunchScriptTests : IDisposable
     }
 
     [PwshFact]
+    public void AttachDebugger_TypeSource_ReAddsQuietlyWhenIdentical_AndFailsLoudlyWhenChangedUnderTheSameName()
+    {
+        string source = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1"));
+        int begin = source.IndexOf("$code = @\"", StringComparison.Ordinal);
+        Assert.True(begin >= 0);
+        begin = source.IndexOf('\n', begin) + 1;
+        int end = source.IndexOf("\n\"@", begin, StringComparison.Ordinal);
+        string csharp = source[begin..end];
+        string probe = Path.Combine(_root, "type-probe.ps1");
+        File.WriteAllText(probe, "$code = @'\n" + csharp + "\n'@\n" + """
+            Add-Type -TypeDefinition $code -Language CSharp
+            Add-Type -TypeDefinition $code -Language CSharp
+            'identical: ok'
+            try { Add-Type -TypeDefinition $code.Replace('QueueCapacity = 8192', 'QueueCapacity = 4096') -Language CSharp; 'changed: no error' }
+            catch { "changed: $($_.Exception.Message)" }
+            """, new UTF8Encoding(false));
+        var start = NewPwsh();
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(probe);
+        (int code, string output) = Execute(start);
+        Assert.Equal(0, code);
+        Assert.Contains("identical: ok", output, StringComparison.Ordinal);
+        Assert.Contains("changed: ", output, StringComparison.Ordinal);
+        Assert.Contains("already exists", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("no error", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
     public void AttachDebugger_AnUnopenableLogFile_IsReportedOnTheConsole_AndItsLinesAreCountedAsDropped()
     {
         if (!OperatingSystem.IsWindows())
@@ -543,7 +571,9 @@ public sealed class LiveLaunchScriptTests : IDisposable
         // The only AttachAsync calls are the two daemon PIDs and the supervisor's children.
         Assert.DoesNotContain("AttachAsync($SupervisorPid", source, StringComparison.Ordinal);
         Assert.DoesNotContain("public static class", source, StringComparison.Ordinal); // per-run instance state, not statics that outlive the script
-        Assert.Contains("$supervisorProcess.StartTime -eq $supervisorStart", source, StringComparison.Ordinal);
+        Assert.Contains("(Get-ProcessStartTime $supervisorProcess) -eq $supervisorStart", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("-as [type]", source, StringComparison.Ordinal); // no guard: a changed body under the same type name must fail loudly
+        Assert.Contains("$debugLog.ProcessExited($childPid)", source, StringComparison.Ordinal);
         Assert.Contains("if ($childPid -eq $SupervisorPid) { continue }", source, StringComparison.Ordinal);
     }
 
