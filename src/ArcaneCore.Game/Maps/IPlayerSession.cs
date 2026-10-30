@@ -44,6 +44,12 @@ public interface IPlayerSession
     void Kick();
 
     /// <summary>
+    /// Close the connection and record <paramref name="reason"/>. Thread-safe and idempotent. The default closes without a reason;
+    /// <c>WorldSession</c> overrides it so a caller that knows why does not raise a no-reason kick anomaly.
+    /// </summary>
+    void Kick(string reason) => Kick();
+
+    /// <summary>
     /// The player left the world through a logout (not a disconnect): the client returns to
     /// the character screen (world thread; sends SMSG_LOGOUT_COMPLETE).
     /// </summary>
