@@ -2,8 +2,12 @@
 # started in the profile directory, with QuickEdit off (a stray click in the console would otherwise freeze its output and the daemon).
 #   pwsh -NoExit -File tools/ops/live/launch-daemon.ps1 -Role World [-LiveHome <dir>] [-Profile <dir>]
 # Uses ARCANECORE_LIVE_HOME and ARCANECORE_LIVE_PROFILE when the parameters are omitted (docs/ops/tooling.md).
+# The window title names the build in the live home's bin directory: "ArcaneCore.World (Debug, live)" (Debug, Release, Mixed or unknown; LiveLaunch.ps1).
+# -ClusterSupervisor (-Role World only; start-cluster.ps1 passes it) runs the World executable as the cluster host supervisor: the title
+# says so and the process writes logs\supervisor.debug.* instead of the World's file, which its child world owns.
 param(
     [Parameter(Mandatory)][ValidateSet('Realm', 'World')][string]$Role,
+    [switch]$ClusterSupervisor,
     [string]$LiveHome,
     [Alias('Profile')][string]$LiveProfile,
     # The machine memory load (percent) at which the GC turns aggressive, for either role. See below.
@@ -21,12 +25,16 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'LiveEnv.ps1')
 . (Join-Path $PSScriptRoot 'LiveDiagnostics.ps1')
+. (Join-Path $PSScriptRoot 'LiveLaunch.ps1')
+if ($ClusterSupervisor -and $Role -ne 'World') { throw '-ClusterSupervisor runs the World executable: use -Role World' }
 $LiveHome = Resolve-LiveHome $LiveHome
 $LiveProfile = Resolve-LiveProfile $LiveProfile
 $exe = Join-Path $LiveHome "bin\ArcaneCore.$Role.exe"
 if (-not (Test-Path -LiteralPath $exe)) { throw "$exe not found" }
 
-try { $Host.UI.RawUI.WindowTitle = "ArcaneCore.$Role (DEBUG live)" } catch { }
+$buildConfiguration = (Get-LiveBuildConfiguration -BinDir (Join-Path $LiveHome 'bin')).Configuration
+$titleName = if ($ClusterSupervisor) { "ArcaneCore.$Role supervisor" } else { "ArcaneCore.$Role" }
+try { $Host.UI.RawUI.WindowTitle = Get-LiveWindowTitle -Name $titleName -Configuration $buildConfiguration } catch { }
 Add-Type -Name ConsoleModeHelper -Namespace Win32 -MemberDefinition @'
 [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);
 [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
@@ -53,7 +61,7 @@ $env:DOTNET_ENVIRONMENT = 'Development'
 $env:ARCANECORE_LIVE_SERVER = '1'
 # Each daemon its own log (<LiveHome>\logs\<role>.debug.jsonl or .log by the configured Logging:ArcaneCore:Format): both read the profile's appsettings.json, and a log file has one
 # writer, so with one shared path the daemon started second (the World, in redeploy.ps1) would write a fallback name instead.
-Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome -LiveProfile $LiveProfile
+Set-LiveDaemonLogEnvironment -Role $Role -LiveHome $LiveHome -LiveProfile $LiveProfile -LogStem $(if ($ClusterSupervisor) { 'supervisor' } else { '' })
 # The GC turns aggressive (blocking compacting gen2, 2-15 s ticks) when the MACHINE's memory load passes its high-memory threshold
 # (default 90%). On a shared box the load comes from builds and tests, not the daemon, so compacting the daemon cannot relieve it.
 # Both roles: a Realm left at 90% compacts first and stalls logins (2026-10-25: Realm MemoryPressure at 88% while the World sat at 97%).

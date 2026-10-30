@@ -18,6 +18,9 @@
   The World executable also has a built-in opt-in supervisor with the same recovery rules (Cluster:Supervisor:Enabled; see docs/CLUSTERING_DESIGN.md);
   this script remains the supervisor for the live profile.
   Type console commands in the World and Realm windows (docs/areas/server-console.md); this window displays status (and supervises when -Supervise is passed).
+  Under the cluster host supervisor (tools/ops/live/start-cluster.ps1) pass -HeartbeatPath, the liveness file the supervised world writes
+  (it need not be the profile's Ops:Watchdog:Heartbeat:FilePath), and -WorldPort/-AuthPort of the supervised children; do not pass
+  -Supervise there, the cluster supervisor owns restarts. -WindowTitle replaces the console title.
 .EXAMPLE
   pwsh -NoExit -File tools/ops/diag/server-status.ps1 -Profile $env:ARCANECORE_LIVE_PROFILE -Supervise
 #>
@@ -30,7 +33,9 @@ param(
     [string] $RealmMetricsUrl = '',
     [switch] $Supervise,
     [int] $HangKillSeconds = 90,
-    [switch] $Once
+    [switch] $Once,
+    [string] $HeartbeatPath = '',
+    [string] $WindowTitle = ''
 )
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'OpsEnv.ps1')
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'live\LiveEnv.ps1')
@@ -38,7 +43,7 @@ if ([string]::IsNullOrWhiteSpace($ProfileDir)) {
     $ProfileDir = Get-OpsRequiredEnv -Name 'ARCANECORE_LIVE_PROFILE' -Purpose 'the live server profile directory that holds appsettings.json'
 }
 if (-not $Once) {
-    try { $Host.UI.RawUI.WindowTitle = if ($Supervise) { "ArcaneCore status [SUPERVISOR]" } else { "ArcaneCore status" } } catch { }
+    try { $Host.UI.RawUI.WindowTitle = if ($WindowTitle) { $WindowTitle } elseif ($Supervise) { "ArcaneCore status [SUPERVISOR]" } else { "ArcaneCore status" } } catch { }
     # One status console per World port: the newest wins, so each redeploy replaces the old window instead of adding another.
     # Only older pwsh processes running this script via -File for the same port are closed.
     $selfProc = Get-CimInstance Win32_Process -Filter "ProcessId = $PID" -ErrorAction SilentlyContinue
@@ -68,7 +73,7 @@ $watchdogSection = Get-JsonProp $opsSection 'Watchdog'
 $hbSection = Get-JsonProp $watchdogSection 'Heartbeat'
 $hbRelPath = [string](Get-JsonProp $hbSection 'FilePath')
 if ([string]::IsNullOrWhiteSpace($hbRelPath)) { $hbRelPath = 'logs/world.heartbeat' }
-$heartbeatPath = if ([System.IO.Path]::IsPathRooted($hbRelPath)) { $hbRelPath } else { Join-Path $ProfileDir $hbRelPath }
+$heartbeatPath = if ($HeartbeatPath) { $HeartbeatPath } elseif ([System.IO.Path]::IsPathRooted($hbRelPath)) { $hbRelPath } else { Join-Path $ProfileDir $hbRelPath }
 $supervisorLogPath = Join-Path $ProfileDir 'logs\supervisor.log'
 $deployLockPath = Join-Path $ProfileDir 'deploying.lock'
 $metaPath = Join-Path $ProfileDir 'standard-processes.json'

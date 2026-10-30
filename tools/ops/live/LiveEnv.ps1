@@ -120,16 +120,20 @@ function Get-LiveDaemonLogPath {
     .SYNOPSIS
       The log a live daemon writes: <LiveHome>\logs\<role>.debug.jsonl (Json) or .log (Text). launch-daemon.ps1 sets these per role.
       -Kind Auto (the default) follows the configured format (Get-LiveLogFormat); Text or Json forces one.
+      -LogStem names the file for a process that is neither role (the cluster supervisor: 'supervisor', a gateway child: 'gateway'); it
+      replaces the role in <stem>.debug.<ext>.
     #>
     param(
         [Parameter(Mandatory)][ValidateSet('Realm', 'World')][string]$Role,
         [Parameter(Mandatory)][string]$LiveHome,
         [ValidateSet('Auto', 'Text', 'Json')][string]$Kind = 'Auto',
-        [string]$LiveProfile
+        [string]$LiveProfile,
+        [string]$LogStem
     )
     if ($Kind -eq 'Auto') { $Kind = Get-LiveLogFormat -LiveProfile $LiveProfile }
     $extension = if ($Kind -eq 'Json') { 'jsonl' } else { 'log' }
-    return Join-Path (Join-Path $LiveHome 'logs') "$($Role.ToLowerInvariant()).debug.$extension"
+    $stem = if ($LogStem) { $LogStem } else { $Role.ToLowerInvariant() }
+    return Join-Path (Join-Path $LiveHome 'logs') "$stem.debug.$extension"
 }
 
 function Set-LiveDaemonLogEnvironment {
@@ -147,14 +151,15 @@ function Set-LiveDaemonLogEnvironment {
       (environment, else the profile's appsettings.json; otherwise Json__Path is removed). They are distinct on purpose: the
       legacy resolution picks the right one for the enabled section, and an older daemon binary (a snapshot rollback) that rejected
       File:Path equal to Json:Path with both enabled still starts. Neither Format nor Enabled is set: whether logging is on, and in
-      which format, stays the profile's (or the operator's environment) choice.
+      which format, stays the profile's (or the operator's environment) choice. -LogStem gives a process that is not a plain role its own file
+      name (start-cluster.ps1: the supervisor writes supervisor.debug.*, each child its own).
     #>
-    param([Parameter(Mandatory)][ValidateSet('Realm', 'World')][string]$Role, [Parameter(Mandatory)][string]$LiveHome, [string]$LiveProfile)
+    param([Parameter(Mandatory)][ValidateSet('Realm', 'World')][string]$Role, [Parameter(Mandatory)][string]$LiveHome, [string]$LiveProfile, [string]$LogStem)
     if (Get-LiveLogFormatSetting -LiveProfile $LiveProfile) {
-        $env:Logging__ArcaneCore__File__Path = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -Kind Auto -LiveProfile $LiveProfile
+        $env:Logging__ArcaneCore__File__Path = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -Kind Auto -LiveProfile $LiveProfile -LogStem $LogStem
         Remove-Item Env:Logging__ArcaneCore__Json__Path -ErrorAction SilentlyContinue
     } else {
-        $env:Logging__ArcaneCore__File__Path = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -Kind Text
+        $env:Logging__ArcaneCore__File__Path = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -Kind Text -LogStem $LogStem
         # Json__Path only when the legacy Json section is visibly on: it is the only case that needs a per-role JSON path, and a Format
         # set in a layer this script cannot see (appsettings.{Environment}.json, .conf) would otherwise get a deprecated key to warn about.
         $jsonOn = Get-OpsEnv 'Logging__ArcaneCore__Json__Enabled'
@@ -164,7 +169,7 @@ function Set-LiveDaemonLogEnvironment {
         }
         $parsed = $false
         if ($null -ne $jsonOn -and [bool]::TryParse(([string]$jsonOn).Trim(), [ref]$parsed) -and $parsed) {
-            $env:Logging__ArcaneCore__Json__Path = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -Kind Json
+            $env:Logging__ArcaneCore__Json__Path = Get-LiveDaemonLogPath -Role $Role -LiveHome $LiveHome -Kind Json -LogStem $LogStem
         } else {
             Remove-Item Env:Logging__ArcaneCore__Json__Path -ErrorAction SilentlyContinue
         }
