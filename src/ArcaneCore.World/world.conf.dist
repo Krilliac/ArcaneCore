@@ -20054,15 +20054,16 @@ World.Social.AllowTwoSideGuild = false
 #        Description: ArcaneCore hardening: the longest channel name (characters) a join accepts; a
 #                     longer one gets INVALID_NAME and no channel is created. 0 = no cap. vmangos
 #                     has none and the stock client's limit is UNVERIFIED (not captured from a real
-#                     client). The default (255) assumes a chat edit box of that length, which is
-#                     unconfirmed; if the client allows longer names, raise it or set 0.
+#                     client). A custom name is normalized to at most 128 characters (vmangos
+#                     normalizePlayerName(m_name, 128)), so a longer one is always refused: the
+#                     default is 128 and a larger value or 0 is still held to 128.
 #        Type: int
-#        Default: 255
+#        Default: 128
 #        Allowed: a whole number, -2147483648 to 2147483647
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldsocial
 #
-World.Social.MaxChannelNameLength = 255
+World.Social.MaxChannelNameLength = 128
 
 #
 #    World.Social.MaxChannelPassphraseLength
