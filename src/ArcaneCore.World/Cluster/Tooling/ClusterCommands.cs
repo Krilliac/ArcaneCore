@@ -585,7 +585,13 @@ public sealed class ClusterCommands : ICommandGroup
             {
                 pendingTransfers = await transfers.CountUnresolvedAsync().ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            catch (OperationCanceledException)
+            {
+                // A cancelled count ends this task Canceled, which the OnlyOnFaulted continuation never sees: reply and release here.
+                PostAndRelease(world, hold, () => context.Reply("Cluster diagnostics unavailable: the pending transfer count read was cancelled."));
+                return;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("cluster.diag-count", ex);
                 logger?.LogWarning(ex, "cluster diag could not read the unresolved transfer count"); // logged here, not from the posted action: a stopped world never runs it
@@ -600,6 +606,7 @@ public sealed class ClusterCommands : ICommandGroup
                 Exception ex = t.Exception!.GetBaseException();
                 if (ex is OperationCanceledException or OutOfMemoryException)
                 {
+                    hold.Dispose(); // no reply is possible, but the command must still settle (Dispose is idempotent)
                     return;
                 }
 

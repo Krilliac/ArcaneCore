@@ -262,7 +262,16 @@ public sealed class GatewaySessionLinkTests
 
         await host.DisposeAsync(); // cancels the token the in-flight open is awaiting on
         await acceptor.Cancelled.Task.WaitAsync(cts.Token);
-        await Task.Delay(500, cts.Token); // the host's catch runs right after the acceptor rethrows
+        // The host's catch runs right after the acceptor rethrows and answers Refused; wait for that outcome (the link may also drop first) instead of sleeping.
+        try
+        {
+            GatewaySessionOpenReply reply = await open.WaitAsync(cts.Token);
+            Assert.False(reply.Accepted);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && ex is not Xunit.Sdk.XunitException)
+        {
+            // The link closed with the host before the refusal arrived: the open still settled, which is all the fault check needs.
+        }
 
         Assert.Empty(faults.Notices);
     }

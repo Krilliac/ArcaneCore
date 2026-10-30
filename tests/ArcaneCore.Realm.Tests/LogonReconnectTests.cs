@@ -174,7 +174,7 @@ public sealed class LogonReconnectTests : IAsyncLifetime
     [Fact]
     public async Task ReconnectChallenge_AnswersSuspendedForATemporaryAccountBan()
     {
-        // Retail (AuthSocket.cpp:464-476): a temporary ban is FAIL_SUSPENDED, the same as the normal logon challenge.
+        // Applies the logon-challenge ban rule (vmangos AuthSocket.cpp logon path) to reconnect, beyond the references: a temporary ban is FAIL_SUSPENDED.
         var accounts = new InMemoryAccountStore();
         Account account = await accounts.CreateAsync(new Account { Username = "RECONNECT", Salt = [1], Verifier = [2], SessionKey = new byte[40] });
         var bans = new InMemoryBanStore();

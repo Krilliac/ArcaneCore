@@ -874,8 +874,9 @@ public sealed class LogonSession(
         }
 
         Account? account = await accountStore.FindByUsernameAsync(username, cancellationToken).ConfigureAwait(false);
-        // The same ban rules as the logon challenge (AuthSocket.cpp:464-476): the status column is an always-honoured Banned, a
-        // permanent ban row answers FAIL_BANNED and a temporary one FAIL_SUSPENDED.
+        // Applies the logon-challenge ban rule (vmangos AuthSocket.cpp logon path) to reconnect as well, which goes beyond the references
+        // (neither checks bans on reconnect): the status column is an always-honoured Banned, then Suspended, then a permanent ban
+        // row answers FAIL_BANNED and a temporary one FAIL_SUSPENDED.
         AccountBanRecord? ban = account is not null && _banStore is not null
             ? await _banStore.GetActiveAccountBanAsync(account.Id, cancellationToken).ConfigureAwait(false)
             : null;
@@ -884,8 +885,10 @@ public sealed class LogonSession(
             || accountBanned
             || account.SessionKey is not { Length: 40 } sessionKey)
         {
-            AuthResult result = account?.Status == AccountStatus.Banned || ban is { IsPermanent: true } ? AuthResult.Banned
-                : ban is not null || account?.Status == AccountStatus.Suspended ? AuthResult.Suspended : AuthResult.UnknownAccount;
+            AuthResult result = account?.Status == AccountStatus.Banned ? AuthResult.Banned
+                : account?.Status == AccountStatus.Suspended ? AuthResult.Suspended
+                : ban is { IsPermanent: true } ? AuthResult.Banned
+                : ban is not null ? AuthResult.Suspended : AuthResult.UnknownAccount;
             RecordFailure();
             await SendReconnectFailureAsync(result, cancellationToken).ConfigureAwait(false);
             return;

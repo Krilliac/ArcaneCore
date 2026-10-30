@@ -243,6 +243,33 @@ public sealed class ClusterCommandTests
         Assert.Contains("xferPending=3", Assert.Single(replies), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ClusterDiag_WhenTheCountIsCancelled_ReleasesTheHoldInsteadOfHangingTheCaller()
+    {
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(new CancelledCountTransferStore()));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMC", "Admcancel");
+        WorldSession session = await host.OnWorldAsync(() => host.World.OnlinePlayers.Select(p => p.Session).OfType<WorldSession>().First());
+        var replies = new ConcurrentQueue<string>();
+
+        CommandContext context = await host.OnWorldAsync(() =>
+        {
+            CommandContext ctx = CommandContext.ForConsole(session, ChatCommands.CreateTable(), replies.Enqueue);
+            Assert.True(ClusterCommands.Diag(ctx, string.Empty));
+            ctx.Complete();
+            return ctx;
+        });
+
+        await context.WhenSettled.WaitAsync(TimeSpan.FromSeconds(10)); // a leaked hold would make RA and the control pipe wait their full timeouts
+        Assert.Contains("Cluster diagnostics unavailable", Assert.Single(replies), StringComparison.Ordinal);
+    }
+
+    /// <summary>A decision store whose count is cancelled (a shutdown or a caller token), which ends the pool task Canceled, not Faulted.</summary>
+    private sealed class CancelledCountTransferStore : UncountableTransferStore
+    {
+        public override Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default)
+            => Task.FromCanceled<int>(new CancellationToken(true));
+    }
+
     /// <summary>A decision store whose count completes when the test says so.</summary>
     private sealed class GatedCountTransferStore(Task<int> count) : UncountableTransferStore
     {
