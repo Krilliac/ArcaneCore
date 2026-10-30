@@ -72,4 +72,7 @@ internal sealed class QuestJournalAdapter(IServiceProvider services, WorldRuntim
 
     public void GameObjectUsed(Player player, uint entry, ObjectGuid guid)
         => Quests?.CastedCreatureOrGo(player, entry, guid, isCreature: false, spellId: 0);
+
+    public void GameObjectUsed(Player member, uint entry, ObjectGuid guid, bool originalCaster)
+        => Quests?.CastedCreatureOrGo(member, entry, guid, isCreature: false, spellId: 0, originalCaster);
 }

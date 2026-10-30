@@ -32,7 +32,19 @@ internal sealed class FakeQuestJournal : ILootQuestJournal
 
     public void MoneyLooted(Player player) => MoneyEvents.Add(player.Guid);
 
-    public void GameObjectUsed(Player player, uint entry, ObjectGuid guid) => Used.Add((player.Guid, entry, guid));
+    /// <summary>Every credit the group fan-out handed out: the member, the object entry and whether the member used the object.</summary>
+    public List<(ObjectGuid Player, uint Entry, bool OriginalCaster)> Credits { get; } = [];
+
+    public void GameObjectUsed(Player player, uint entry, ObjectGuid guid) => GameObjectUsed(player, entry, guid, originalCaster: true);
+
+    public void GameObjectUsed(Player player, uint entry, ObjectGuid guid, bool originalCaster)
+    {
+        Credits.Add((player.Guid, entry, originalCaster));
+        if (originalCaster)
+        {
+            Used.Add((player.Guid, entry, guid));
+        }
+    }
 }
 
 internal sealed class FakeGroups : ILootGroups
