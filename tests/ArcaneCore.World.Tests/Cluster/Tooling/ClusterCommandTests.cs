@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
@@ -10,6 +11,8 @@ using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Cluster.Tooling;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Clustering;
+using ArcaneCore.World.Commands;
+using ArcaneCore.World.Net;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -213,6 +216,37 @@ public sealed class ClusterCommandTests
         Assert.Contains("xferPending=5", lines[0], StringComparison.Ordinal);
         Assert.NotEqual(0, store.CountThread);
         Assert.NotEqual(worldThread, store.CountThread);
+    }
+
+    [Fact]
+    public async Task ClusterDiag_HoldsTheCommandOpenUntilTheReportWasPosted()
+    {
+        var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using WorldTestHost host = StartWithClusterServices(more: services => services.AddSingleton<ITransferDecisionStore>(new GatedCountTransferStore(gate.Task)));
+        await using WorldTestClient admin = await Staff(host, AccountSecurity.Administrator, "ADMH", "Admhold");
+        WorldSession session = await host.OnWorldAsync(() => host.World.OnlinePlayers.Select(p => p.Session).OfType<WorldSession>().First());
+        var replies = new ConcurrentQueue<string>();
+
+        CommandContext context = await host.OnWorldAsync(() =>
+        {
+            CommandContext ctx = CommandContext.ForConsole(session, ChatCommands.CreateTable(), replies.Enqueue);
+            Assert.True(ClusterCommands.Diag(ctx, string.Empty));
+            ctx.Complete(); // what CommandTable.Execute does when the handler returns
+            return ctx;
+        });
+
+        Assert.False(context.WhenSettled.IsCompleted, "the command settled while the count was still running: RA and the control pipe would report done before the report");
+        Assert.Empty(replies);
+
+        gate.SetResult(3);
+        await context.WhenSettled.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Contains("xferPending=3", Assert.Single(replies), StringComparison.Ordinal);
+    }
+
+    /// <summary>A decision store whose count completes when the test says so.</summary>
+    private sealed class GatedCountTransferStore(Task<int> count) : UncountableTransferStore
+    {
+        public override Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default) => count;
     }
 
     /// <summary>A decision store that answers the count and records the thread it was asked on.</summary>
