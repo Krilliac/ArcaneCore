@@ -166,7 +166,9 @@ public sealed class ManualTickBarrierTests
                 await world.InvokeAsync(() => i); // each wake runs a zero-diff tick
             }
 
-            Assert.True(world.Clock.TickNumber >= tickBefore + 10);
+            // At least one tick ran. Not one per wake: RunCommands drains everything queued, so a command posted while the world
+            // thread is still draining joins that tick.
+            Assert.True(world.Clock.TickNumber > tickBefore);
             Assert.All(diffs, d => Assert.Equal(0u, d));
             Assert.Equal(777u, world.NowMs);
             Assert.Equal(777L, world.Clock.ElapsedMs);
