@@ -133,7 +133,7 @@ public sealed partial class PetController
             case ActionType.Disabled:
             case ActionType.Passive:
             case ActionType.Enabled:
-                CastFromBar(player, pet, request);
+                CastFromBar(player, pet, charm, request);
                 break;
         }
     }
@@ -345,7 +345,7 @@ public sealed partial class PetController
     }
 
     /// <summary>The spell buttons of CMSG_PET_ACTION (PetHandler.cpp:96-163): ACT_DISABLED, ACT_PASSIVE and ACT_ENABLED.</summary>
-    private void CastFromBar(Player player, Creature pet, PetActionRequest request)
+    private void CastFromBar(Player player, Creature pet, CharmInfo charm, PetActionRequest request)
     {
         if (_spells() is not { } spells || spells.Store.Get(request.Action) is not { } spell)
         {
@@ -358,8 +358,9 @@ public sealed partial class PetController
             return;
         }
 
-        // do not cast not learned spells
-        if (pet.Summon?.Charm?.HasSpell(spell.Id) != true || spell.IsPassive)
+        // do not cast not learned spells. The charm info is the resolved one (GetCharmInfo): a charmed or possessed creature has no
+        // SummonLinks, its CharmInfo lives in the unit control state (vmangos only asks Creature::HasSpell, PetHandler.cpp:96-163).
+        if (!charm.HasSpell(spell.Id) || spell.IsPassive)
         {
             SendCastFailed(player, spell.Id, SpellCastResult.NotKnown);
             return;
@@ -565,13 +566,17 @@ public sealed partial class PetController
     /// <summary>vmangos HandlePetNameQueryOpcode / SendPetNameQuery (PetHandler.cpp:167-185): only when the pet number matches.</summary>
     public void HandleNameQuery(Player player, uint petNumber, ObjectGuid petGuid)
     {
-        if (player.Map?.FindObject(petGuid) is not Creature { Summon.Charm: { } charm } pet || charm.PetNumber != petNumber)
+        // vmangos SendPetNameQuery asks pet->GetCharmInfo(), which also covers a charmed unit (an enslaved demon gets a pet number,
+        // CharmService), and answers with the unit's own name. A summon keeps the name and stamp it was given (rename).
+        if (player.Map?.FindObject(petGuid) is not Creature pet || pet.GetCharmInfo() is not { } charm || charm.PetNumber != petNumber)
         {
             return;
         }
 
-        player.Session.Send(WorldOpcode.SmsgPetNameQueryResponse,
-            PetPackets.BuildNameQueryResponse(petNumber, charm.Name, charm.NameTimestamp));
+        (string name, uint stamp) = pet.Summon?.Charm is null
+            ? (pet.Template.Name, pet.GetUInt32(UpdateFields.UnitFieldPetNameTimestamp))
+            : (charm.Name, charm.NameTimestamp);
+        player.Session.Send(WorldOpcode.SmsgPetNameQueryResponse, PetPackets.BuildNameQueryResponse(petNumber, name, stamp));
     }
 
     public void HandleRename(Player player, PetRenameRequest request)
@@ -615,7 +620,9 @@ public sealed partial class PetController
             return;
         }
 
-        if (player.Map?.FindObject(petGuid) is not Creature pet || pet.OwnerGuid != player.Guid || pet.GetCharmInfo() is null)
+        // The owner check is CharmerOrOwnerGuid, like OwnedPet: a charmed unit has a charmer but no summoner (UNIT_FIELD_SUMMONEDBY), so an
+        // OwnerGuid test would make the charm release below unreachable.
+        if (OwnedPet(player, petGuid) is not var (pet, _))
         {
             return;
         }

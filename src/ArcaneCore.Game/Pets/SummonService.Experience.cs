@@ -27,7 +27,9 @@ public sealed partial class SummonService
     public int GivePetXp(Creature pet, uint xp)
     {
         ArgumentNullException.ThrowIfNull(pet);
-        if (xp == 0 || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet, Charm: not null } || pet.GetOwner() is not Player owner)
+        // Pet::GivePetXP: only a hunter's pet gains experience (vmangos returns for any pet that is not a hunter pet); a warlock's demon is
+        // a SummonKind.Pet too but follows its owner's level, and PetLoyalty.GivePetLevel would move its training points.
+        if (xp == 0 || !pet.IsAlive || pet.Summon is not { Kind: SummonKind.Pet, Charm: not null } || pet.GetOwner() is not Player { Class: Class.Hunter } owner)
         {
             return 0;
         }
@@ -68,7 +70,12 @@ public sealed partial class SummonService
     public void GivePetLevel(Creature pet, Player owner, int level)
     {
         PetLoyalty.GivePetLevel(pet, level, PetXpForLevel((uint)level));
-        PetInitializer.InitStatsForLevel(pet, owner, level, Content); // clears the unit flags and sets the level again, as vmangos
+        // InitStatsForLevel clears the unit flags (vmangos Pet::InitStatsForLevel) and copies only the owner's player-controlled and PvP bits.
+        // A live pet that levels up keeps its other flags: the unused rename and the abandon button (re-added by vmangos' load path after the
+        // same call), combat and the like. Nothing in retail takes the unused rename away at a level-up.
+        UnitFlags before = pet.UnitFlags;
+        PetInitializer.InitStatsForLevel(pet, owner, level, Content);
+        pet.UnitFlags |= before & ~(UnitFlags.PlayerControlled | UnitFlags.Pvp);
     }
 
     /// <summary>

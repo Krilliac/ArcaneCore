@@ -126,8 +126,6 @@ public sealed partial class SummonService
             return null;
         }
 
-        InitTeachSpells(owner, pet, target.Entry); // Pet::InitPetCreateSpells AddTeachSpell
-
         // SpellEffects.cpp:3151-3154: new pets start Rebellious (Pet::CreateBaseAtCreature) and are raised to the configured default loyalty.
         PetLoyalty.InitNew(pet);
 
