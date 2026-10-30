@@ -158,7 +158,7 @@ public sealed partial class SpellSystem
     private Dictionary<SpellEffectName, SpellEffectHandler> CreateEffectHandlers() => new()
     {
         [SpellEffectName.SchoolDamage] = EffectSchoolDamage,
-        [SpellEffectName.Dummy] = static _ => { },
+        [SpellEffectName.Dummy] = StartDbSpellScript, // no generic behaviour: scripts hook it, else the spell's DB script (SpellSystem.DbSpellScripts.cs)
         [SpellEffectName.SendEvent] = EffectSendEvent,
         [SpellEffectName.TeleportUnits] = EffectTeleportUnits,
         [SpellEffectName.ApplyAura] = EffectApplyAura,
@@ -176,6 +176,7 @@ public sealed partial class SpellSystem
         [SpellEffectName.InterruptCast] = EffectInterruptCast,
         [SpellEffectName.Summon] = EffectSummon,
         [SpellEffectName.ApplyAreaAuraParty] = EffectApplyAreaAuraParty,
+        [SpellEffectName.ApplyAreaAuraEnemy] = EffectApplyAreaAuraEnemy,
         [SpellEffectName.Parry] = static context => (context.Target as Player)?.StatState.SetCanParry(true),
         [SpellEffectName.Block] = static context => (context.Target as Player)?.StatState.SetCanBlock(true),
         [SpellEffectName.DualWield] = static context => (context.Target as Player)?.StatState.SetCanDualWield(true),

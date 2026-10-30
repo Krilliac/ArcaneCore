@@ -1174,6 +1174,7 @@ public static partial class ContentImporterCli
                 (DbScriptDataModule.GossipTable, await db.Set<GossipScriptRow>().CountAsync(ct).ConfigureAwait(false)),
                 (DbScriptDataModule.EventTable, await db.Set<EventScriptRow>().CountAsync(ct).ConfigureAwait(false)),
                 (DbScriptDataModule.CreatureMovementTable, await db.Set<CreatureMovementScriptRow>().CountAsync(ct).ConfigureAwait(false)),
+                (DbScriptDataModule.SpellTable, await db.Set<SpellScriptRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_script_target", await db.Set<SpellScriptTargetRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_linking", await db.Set<CreatureLinkRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_linking_template", await db.Set<CreatureTemplateLinkRow>().CountAsync(ct).ConfigureAwait(false)),
@@ -1212,6 +1213,7 @@ public static partial class ContentImporterCli
                 ("pet_levelstats", await db.Set<PetLevelStatsRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("petcreateinfo_spell", await db.Set<PetCreateSpellRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("spell_template", await db.Set<SpellTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
+                (SpellEffectModDataModule.Table, await db.Set<SpellEffectModRow>().CountAsync(ct).ConfigureAwait(false)),
             };
             foreach ((string table, int count) in counts)
             {

@@ -158,6 +158,35 @@ public sealed class AttackSpeedTests
         Assert.Equal((uint)Hasten(2800f, 20f), Field(player, WeaponAttackType.RangedAttack));
     }
 
+    /// <summary>
+    /// Slice and Dice 6434 shape (+30 aura 138 on a 2000 ms swing): multiply-then-divide in float32 leaves 1999.9998, which the
+    /// truncating send made a permanent 1999 ms swing (spell sweep b.state-not-restored base-attack-time0). With the last mod gone the
+    /// field is the unhasted time again, exactly, and the multiplier exactly 1.
+    /// </summary>
+    [Theory]
+    [InlineData(30)]
+    [InlineData(10)]
+    [InlineData(3)]
+    [InlineData(-36)]
+    [InlineData(-45)]
+    public void AHasteAuraOnAndOff_LeavesTheExactSwingTime(int percent)
+    {
+        SpellInfo melee = Buff(940010, percent, AuraType.ModMeleeHaste);
+        using var kit = new SpellTestKit(melee);
+        (Player player, _) = kit.AddPlayer(1, 0);
+        player.SetUInt32(UpdateFields.UnitFieldBaseattacktime, 2000);
+        player.SetUInt32(UpdateFields.UnitFieldBaseattacktime + 1, 1500);
+        for (int round = 0; round < 3; round++)
+        {
+            Cast(kit, player, melee.Id);
+            Assert.NotEqual(2000u, Field(player, WeaponAttackType.BaseAttack));
+            kit.System.RemoveAuras(player, melee.Id);
+            Assert.Equal(2000u, Field(player, WeaponAttackType.BaseAttack));
+            Assert.Equal(1500u, Field(player, WeaponAttackType.OffAttack));
+            Assert.Equal(1.0f, player.Combat.GetAttackSpeedPct(WeaponAttackType.BaseAttack));
+        }
+    }
+
     [Fact]
     public void TwoHasteAuras_Multiply_AndRemovalOrderDoesNotMatter()
     {

@@ -613,12 +613,12 @@ public sealed partial class Player : Unit
         int powerIndex = (int)appearance.PowerType;
         SetUInt32(UpdateFields.UnitFieldMaxpower1 + powerIndex, appearance.MaxPower);
         SetUInt32(UpdateFields.UnitFieldPower1 + powerIndex, appearance.StartPower);
-        if (Class == Game.Class.Druid)
-        {
-            // vmangos UpdateAllStats gives every class all maxima; restricted to druids here, the only class that
-            // ever uses rage/energy without it as its create power (other classes would only gain invisible fields).
-            Spells.Druid.PowerTypeSwitch.EnsureFeralPowerCaps(this);
-        }
+        // Every player gets the rage and energy maxima whatever the class: Player::InitStatsForLevel runs
+        // SetMaxPower(i, GetCreatePowers(i)) for all powers (vmangos Player.cpp:3367-3368), and Unit::GetCreatePowers
+        // returns 1000 rage and 100 energy for any unit (Unit.cpp:8253-8260; mangos-classic Unit.cpp:9380-9382 returns them
+        // for any player). The maxima are public update fields, so the create block carries them for every class, and
+        // a shapeshift (a druid's form, a warrior stance applied by an item) never has to raise them.
+        Spells.Druid.PowerTypeSwitch.EnsureFeralPowerCaps(this);
 
         SetUInt32(UpdateFields.PlayerNextLevelXp, appearance.NextLevelXp);
         Money = c.Money;

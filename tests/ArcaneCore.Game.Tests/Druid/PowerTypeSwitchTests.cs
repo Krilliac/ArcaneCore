@@ -95,6 +95,9 @@ public class PowerTypeSwitchTests
     public void EnsureFeralPowerCaps_SetsMaximaButNeverLowersOrTouchesCurrentValues()
     {
         Player druid = CreateDruid(Class.Mage);
+        // A player is created with both maxima since the create-powers fix (vmangos Player.cpp:3367-3368); clear them to test the raise.
+        druid.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Rage, 0);
+        druid.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Energy, 0);
         Assert.Equal(0u, MapCombat.GetMaxPower(druid, PowerType.Rage));
 
         PowerTypeSwitch.EnsureFeralPowerCaps(druid);
@@ -121,8 +124,9 @@ public class PowerTypeSwitchTests
     [Fact]
     public void RewardRage_OnDruidWithoutCaps_ClampsToZero_Baseline()
     {
-        // Baseline for a class created without caps (the druid constructor wiring prevents this): with no rage maximum every write clamps to 0.
+        // Baseline for a unit without a rage maximum (no created player is one since the create-powers fix): with no rage maximum every write clamps to 0.
         Player druid = CreateDruid(Class.Mage);
+        druid.SetUInt32(UpdateFields.UnitFieldMaxpower1 + (int)PowerType.Rage, 0); // created players have the maximum; this is the no-maximum edge
         MapCombat.SetPower(druid, PowerType.Rage, 500);
         Assert.Equal(0u, MapCombat.GetPower(druid, PowerType.Rage));
     }
@@ -130,11 +134,26 @@ public class PowerTypeSwitchTests
     [Fact]
     public void NewPlayer_AlreadyHasRageAndEnergyMaxima_WithoutAnyFormSwitch()
     {
-        // Wired at player creation (vmangos Player::UpdateAllStats sets every power maximum for every class).
+        // Wired at player creation for every class (vmangos Player::InitStatsForLevel, Player.cpp:3367-3368).
         Player druid = CreateDruid();
 
         Assert.Equal(PowerTypeSwitch.MaxRage, MapCombat.GetMaxPower(druid, PowerType.Rage));
         Assert.Equal(PowerTypeSwitch.MaxEnergy, MapCombat.GetMaxPower(druid, PowerType.Energy));
         Assert.Equal(500u, MapCombat.GetMaxPower(druid, PowerType.Mana));
+    }
+
+    [Fact]
+    public void NewPlayerOfAnyClass_HasRageAndEnergyMaxima_AndTheyStayAfterTheFormIsLeft()
+    {
+        // Unit::GetCreatePowers gives every player 1000 rage and 100 energy (Unit.cpp:8253-8260) and SetPowerType(MANA) never lowers them (Unit.cpp:4405-4407).
+        Player mage = CreateDruid(Class.Mage);
+        Assert.Equal(1000u, MapCombat.GetMaxPower(mage, PowerType.Rage));
+        Assert.Equal(100u, MapCombat.GetMaxPower(mage, PowerType.Energy));
+
+        Player druid = CreateDruid();
+        PowerTypeSwitch.SetPowerType(druid, PowerType.Rage);
+        PowerTypeSwitch.SetPowerType(druid, PowerType.Mana);
+        Assert.Equal(1000u, MapCombat.GetMaxPower(druid, PowerType.Rage));
+        Assert.Equal(100u, MapCombat.GetMaxPower(druid, PowerType.Energy));
     }
 }

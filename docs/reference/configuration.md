@@ -25,6 +25,7 @@ How to read the tables:
 - [`CharacterCreation`](#charactercreation)
 - [`ClientData`](#clientdata)
 - [`Cluster:Fencing`](#clusterfencing)
+- [`Cluster:Node`](#clusternode)
 - [`Cluster:NodeBridge`](#clusternodebridge)
 - [`Cluster:Supervisor`](#clustersupervisor)
 - [`Cluster:Worker`](#clusterworker)
@@ -308,6 +309,14 @@ How to read the tables:
 | `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. |
 | `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
 | `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
+
+## `Cluster:Node`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Node:AuthorityLeaseRenewSeconds` | `int` | `10` | - | How often a held lease is renewed (1 to a third of the TTL). A node that cannot renew in time stops itself rather than run a singleton without the lease. Only used when Role is not Combined. |
+| `Cluster:Node:AuthorityLeaseTtlSeconds` | `int` | `30` | - | How long a realm singleton lease stays valid without a renewal (5 to 600). A node that dies releases its singletons to another node after this long. Only used when Role is not Combined. |
+| `Cluster:Node:Role` | `ClusterNodeRole` | `Combined` | - | The role this World process runs as: `Combined` (the default) runs every feature here. `MapWorker` needs Cluster:Worker:Enabled = true; the realm-wide singletons (the auction house bot and AutoBroadcast) then run on this node only while it holds their database lease. `Social`, `Economy` and `Gateway` are refused on a World process: the shared auction, mail and presence state they would need does not exist yet. Values: `Combined`, `Gateway`, `MapWorker`, `Social`, `Economy`. |
 
 ## `Cluster:NodeBridge`
 
@@ -1570,6 +1579,8 @@ How to read the tables:
 | `World:Playerbots:Chat:Voice:Enabled` | `bool` | `true` | live | Let bots voice their goals and needs (on by default). Off: no topic is produced and no LFG or trade whisper is answered here. |
 | `World:Playerbots:Chat:Voice:GeneralSharePercent` | `int` | `25` | live | The share of LFG and trade calls said in General instead (LFG outside a capital, trade outside a capital; 0..100). |
 | `World:Playerbots:Chat:Voice:GroupCalls` | `bool` | `true` | live | Party and raid needs (on by default), each once per fight, death or stop: "oom" (a mana user below 10% in a fight), "need heals" (below 30% with a healer in the group), "rez pls" (dead, a resurrecting class alive in the group), "inc &lt;n&gt;" (a bot group's tank pulling more than one), "&lt;mob&gt; on me" (a creature on a bot that is not the tank), "brb" (the bot stops to drink, vendor or train), "ty" (after a resurrection or a long buff from a group member), "ding" (a level up), "gz" (a real player's "ding"), a quest share request in a bot group, and "first time here" (a zone the bot had never explored). |
+| `World:Playerbots:Chat:Voice:LfgMaxTravelSeconds` | `int` | `600` | live | The longest planned trip, in seconds, from which a bot still advertises a place under `LfgNearDungeonOnly` (0..7200; 0 = only the same or a bordering zone, or a summon). |
+| `World:Playerbots:Chat:Voice:LfgNearDungeonOnly` | `bool` | `true` | live | A bot advertises a dungeon, raid or group quest in chat only when it is near the place (on by default): in the same or a bordering zone, within `LfgMaxTravelSeconds` of travel by the planner (flight paths, hearthstone, mage portals, ships), or when a warlock waiting for the same goal can summon it. Otherwise the bot keeps quiet and another waiting bot may post. Off: the bot that waited longest always posts. |
 | `World:Playerbots:Chat:Voice:LinesPerPass` | `int` | `4` | live | The most lines the voice hands to the chat service in one social pass, every topic together (1..100). |
 | `World:Playerbots:Chat:Voice:LookingForGroup` | `bool` | `true` | live | LFG and LFM calls (on by default): a bot waiting for partners for a dungeon, raid or elite quest posts "LFG &lt;dungeon&gt;, &lt;lvl&gt; &lt;class&gt;" (alone) or "LFM &lt;dungeon&gt; need &lt;role&gt;" (the oldest of several waiting for the same goal) in LookingForGroup, or now and then in General (`GeneralSharePercent`); a real player who whispers the poster "inv" is matched into the group. |
 | `World:Playerbots:Chat:Voice:LookingForGroupRepeatSeconds` | `int` | `180` | live | The least seconds between two LFG or LFM calls of one bot (30..3600). |
@@ -1648,6 +1659,7 @@ How to read the tables:
 | `World:Playerbots:Groups:Cooperation:RefusalMemoryMinutes` | `int` | `10` | live | How long a candidate's refusal of a waiting group is remembered, in minutes (1..1440, default 10). The refusal is stored with its time: the candidate is not asked again until this long after it, and then rolls afresh (when the group is still waiting). The roll is made once per window of this length, with windows shifted by a phase hashed from the (candidate, group) pair, so different pairs do not all turn over together. |
 | `World:Playerbots:Groups:Cooperation:RefuseAffinity` | `int` | `-40` | live | A candidate whose affinity toward the group's caller is at or below this never joins (-100..0). |
 | `World:Playerbots:Groups:Cooperation:SameGoalMeetingRadiusYards` | `int` | `150` | live | How far from a dungeon's entrance (the group's meeting point), in yards, a player on the same continent still counts as on the dungeon goal of a bot that waits for a group (10..1500). A player inside the dungeon's instance always counts. Quest goals are unaffected. |
+| `World:Playerbots:Groups:DungeonOutOfBandNeedsReason` | `bool` | `true` | live | A bot whose level is outside a dungeon's level band (the catalogue band, else the 1.12 recommended levels with two levels of slack) waits for a group there only with a reason: a quest that is not grey for it, an attunement or key step, a gear upgrade the dungeon drops, a guildmate or friend already waiting, or a forming group of its level (on by default). Off: every dungeon holding the objective is allowed, still ranked in-band first, then nearest band. |
 | `World:Playerbots:Groups:DungeonRuns:BandAboveBoss` | `int` | `3` | live | Levels above the strongest boss the level band ends (0..20). |
 | `World:Playerbots:Groups:DungeonRuns:BandBelowBoss` | `int` | `3` | live | Levels below the weakest boss the level band starts (0..20): the band's lower end is the higher of the entrance level and the weakest boss's level minus this. |
 | `World:Playerbots:Groups:DungeonRuns:Enabled` | `bool` | `true` | live | Let free bots start dungeon runs (on by default). Off: no new run starts; running ones finish. Raid runs also need `PlayerbotRaidRunOptions.Enabled`. |
@@ -1998,6 +2010,7 @@ How to read the tables:
 | `World:Playerbots:Qa:GitHub:AutoCloseQuietMultiple` | `int` | `0` | - | Close an open issue as completed when its finding has stopped: it was last seen on an older build, the running build is newer and has not met it, and it has been quiet (since the later of its last sighting and the reporter's start) for this many times its usual gap between occurrences ((last seen - first seen) / (count - 1)) and at least `AutoCloseMinQuietHours`. One comment says why; a recurrence on any later build counts as a regression of the build it was last seen on and reopens it (`ReopenOnRegression`). 0 (default) is off (0..1000). Quiet is not proof: a finding the bots simply stopped visiting looks the same. |
 | `World:Playerbots:Qa:GitHub:CloseAbsorbedDuplicates` | `bool` | `false` | - | When findings are merged into one (the same problem met in several places) and each had its own issue, comment on the absorbed issue with a link to the surviving one and close it as not planned (a duplicate). Off (the default, so the first start after an upgrade can be checked: the start-up log lists every issue it would close, each with the surviving issue) keeps the absorbed issue open and untouched; the merge is recorded in the store either way. |
 | `World:Playerbots:Qa:GitHub:CommentIntervalHours` | `int` | `24` | - | At most one comment per finding in this many hours (1..720). |
+| `World:Playerbots:Qa:GitHub:CreateWithinHours` | `int` | `24` | - | A new issue is opened only for a finding met since this start-up, or last seen within this many hours (0..8760; 0 = only findings met since this start-up). A finding known only from history (loaded at start-up, last seen earlier than that) never opens one, and is not looked up; an issue it already holds (by number) is still updated. |
 | `World:Playerbots:Qa:GitHub:Enabled` | `bool` | `false` | - | Report findings to GitHub (off by default). Enabled without `Publish` is a dry run: no network call is made. |
 | `World:Playerbots:Qa:GitHub:GhPassToken` | `bool` | `false` | - | For `GhCli` only: hand the token from `TokenEnvironmentVariable` to `gh` as `GH_TOKEN` (off by default: `GITHUB_TOKEN` and `GH_TOKEN` are removed from the child so `gh` uses its own login). |
 | `World:Playerbots:Qa:GitHub:GhPath` | `string` | `"gh"` | - | The `gh` executable for `Transport` = `GhCli`: a file name looked up on PATH (`gh`) or a full path (1..260 characters). |

@@ -184,6 +184,7 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
             }
 
             percent = SpellBonusFormulas.MultiplicativePercent(Amounts(caster, AuraType.ModHealingDonePercent, null));
+            flat = OverrideClassScriptHealingBonus(caster, spell);
         }
         else
         {
@@ -255,6 +256,46 @@ public sealed class SpellBonusModule(SpellSystem spells) : ISpellAmountModifier
 
                         break;
                     }
+                }
+            }
+        }
+
+        return bonus;
+    }
+
+    /// <summary>
+    /// vmangos SpellCaster::SpellHealingBonusDone (SpellCaster.cpp:1486-1505): SPELL_AURA_OVERRIDE_CLASS_SCRIPTS on the caster (or its owner)
+    /// whose spell affects the healing spell adds its amount outside the coefficient for 4415 (Increased Rejuvenation Healing, the Idol of
+    /// Rejuvenation: the amount per tick, so a quarter of it, whole numbers) and 3736 (Increased Lesser Healing Wave, the Totem of Life and
+    /// the Totem of Sustaining).
+    /// </summary>
+    private float OverrideClassScriptHealingBonus(Unit caster, SpellInfo spell)
+    {
+        Unit owner = Pets.OwnerLinks.GetOwner(caster) ?? caster;
+        float bonus = 0f;
+        foreach (SpellAuraHolder holder in spells.GetAuras(owner))
+        {
+            if (holder.IsRemoved || holder.Spell.SpellFamilyName != spell.SpellFamilyName)
+            {
+                continue;
+            }
+
+            foreach (SpellAura? aura in holder.Auras)
+            {
+                if (aura is null || aura.Type != AuraType.OverrideClassScripts
+                    || (spells.AffectMask(holder.Spell, aura.EffectIndex) & spell.SpellFamilyFlags) == 0)
+                {
+                    continue;
+                }
+
+                switch (aura.MiscValue)
+                {
+                    case 4415: // Increased Rejuvenation Healing, "4 ticks"
+                        bonus += aura.Amount / 4;
+                        break;
+                    case 3736: // Increased Lesser Healing Wave
+                        bonus += aura.Amount;
+                        break;
                 }
             }
         }

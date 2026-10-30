@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Net.Sockets;
 using System.Text;
 using ArcaneCore.Cryptography;
+using ArcaneCore.Game;
 using ArcaneCore.Kernel;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -159,7 +160,11 @@ internal sealed class WorldTestClient : IAsyncDisposable
                 return packets;
             }
 
-            packets.Add(await ReadAsync());
+            (WorldOpcode op, byte[] payload) = await ReadRawAsync();
+            if (!IgnoreEnergyRegenUpdates || !IsEnergyRegenUpdate(op, payload))
+            {
+                packets.Add((op, payload));
+            }
         }
     }
 
@@ -339,8 +344,14 @@ internal sealed class WorldTestClient : IAsyncDisposable
         }
     }
 
+    private long _sentPackets;
+
+    /// <summary>Packets this client has written to the server (counted before the write, so a barrier never under-waits).</summary>
+    public long SentPackets => Interlocked.Read(ref _sentPackets);
+
     public async Task SendAsync(WorldOpcode opcode, byte[] payload)
     {
+        Interlocked.Increment(ref _sentPackets);
         byte[] frame = new byte[WorldHeaderCrypt.IncomingHeaderLength + payload.Length];
         BinaryPrimitives.WriteUInt16BigEndian(frame.AsSpan(0, 2), (ushort)(payload.Length + 4));
         BinaryPrimitives.WriteUInt32LittleEndian(frame.AsSpan(2, 4), (uint)opcode);
@@ -349,7 +360,58 @@ internal sealed class WorldTestClient : IAsyncDisposable
         await _stream.WriteAsync(frame);
     }
 
-    public async Task<(WorldOpcode Opcode, byte[] Payload)> ReadAsync(TimeSpan? readTimeout = null)
+    /// <summary>
+    /// When set, the reads skip the values update that carries only a player's UNIT_FIELD_POWER4 (energy). vmangos regenerates energy for every
+    /// player (Player.cpp:2283), so a class that does not use it (the test characters are warriors) gets a short burst of those hidden updates
+    /// after login, until the energy reaches its maximum. A test about something else sets this; it never hides any other packet.
+    /// </summary>
+    internal bool IgnoreEnergyRegenUpdates { get; set; }
+
+    public Task<(WorldOpcode Opcode, byte[] Payload)> ReadAsync(TimeSpan? readTimeout = null) => ReadFilteredAsync(readTimeout);
+
+    private async Task<(WorldOpcode Opcode, byte[] Payload)> ReadFilteredAsync(TimeSpan? readTimeout)
+    {
+        while (true)
+        {
+            (WorldOpcode op, byte[] payload) = await ReadRawAsync(readTimeout);
+            if (!IgnoreEnergyRegenUpdates || !IsEnergyRegenUpdate(op, payload))
+            {
+                return (op, payload);
+            }
+        }
+    }
+
+    /// <summary>A plain SMSG_UPDATE_OBJECT of one values block whose only changed field is UNIT_FIELD_POWER1 + energy.</summary>
+    internal static bool IsEnergyRegenUpdate(WorldOpcode op, byte[] payload)
+    {
+        if (op != WorldOpcode.SmsgUpdateObject)
+        {
+            return false;
+        }
+
+        var reader = new PacketReader(payload);
+        if (reader.ReadUInt32() != 1 || reader.ReadByte() != 0 || reader.ReadByte() != (byte)ObjectUpdateType.Values)
+        {
+            return false;
+        }
+
+        reader.ReadPackedGuid();
+        int blocks = reader.ReadByte();
+        int energy = UpdateFields.UnitFieldPower1 + (int)PowerType.Energy;
+        for (int i = 0; i < blocks; i++)
+        {
+            uint mask = reader.ReadUInt32();
+            uint expected = (energy >> 5) == i ? 1u << (energy & 31) : 0u;
+            if (mask != expected)
+            {
+                return false;
+            }
+        }
+
+        return (energy >> 5) < blocks;
+    }
+
+    private async Task<(WorldOpcode Opcode, byte[] Payload)> ReadRawAsync(TimeSpan? readTimeout = null)
     {
         // Bounded so a test expecting a packet the server never sends fails instead of hanging.
         using var timeout = new CancellationTokenSource(readTimeout ?? ReadTimeout);
@@ -397,6 +459,12 @@ internal sealed class WorldTestClient : IAsyncDisposable
     public async Task AssertSilentAsync(TimeSpan window)
     {
         await Task.Delay(window);
+        while (IgnoreEnergyRegenUpdates && _client.Available > 0)
+        {
+            (WorldOpcode op, byte[] payload) = await ReadRawAsync();
+            Assert.True(IsEnergyRegenUpdate(op, payload), $"expected silence, got {WorldOpcodeNames.GetName(op)}");
+        }
+
         Assert.Equal(0, _client.Available);
     }
 

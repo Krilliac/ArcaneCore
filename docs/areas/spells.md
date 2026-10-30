@@ -333,6 +333,24 @@ the melee slot in `SpellSystem.NextSwing.cs`.
 - **Not covered**: indoor and outdoor (terrain), underwater and above-water, battleground, mounted and taxi, target level limits,
   the other target flags, and the explicit-target mask check.
 
+## Inferred behaviour (not verified against a retail capture)
+
+The spell research of 2026-10-29 found seven spells whose behaviour no reference core (vmangos, cmangos, mangoszero) or public source states.
+Four are implemented as the best reading of the evidence, and three are kept inert on purpose. None of it has been compared with a retail
+capture, so each handler carries a comment that says "inferred, not verified against a retail capture" and cites the evidence below; a capture
+can overturn any of it. The tests are in `tests/ArcaneCore.Game.Tests/Spells/Researched/InferredSpellScriptTests.cs`.
+
+| Spell | Handler | Behaviour | Evidence |
+|---|---|---|---|
+| 26127 Enigma Blizzard Bonus (Enigma Vestments 3-piece, item set 503) | `src/ArcaneCore.Game/Spells/Mage/EnigmaBlizzardBonus.cs`, flag read in `SpellSystem.Pushback.cs` | When a caster that holds the aura starts a Blizzard channel (any rank, found by the aura's class mask against the spell's family flags), one roll of 30% is made. On a win the channel ignores INTERRUPT_CAST effects (Kick, Counterspell, Earth Shock: no cancel, no school lockout) and damage pushback until it ends. Movement, stun, silence, fear, death and a cancel request still end it. No roll is drawn without the aura or for another spell. | Spell.dbc 5875: OVERRIDE_CLASS_SCRIPTS aura, misc 4235, class mask 0x80 (Blizzard's family bit, vmangos `SpellClassMask.h` `CF_MAGE_BLIZZARD`); tooltip "Your Blizzard spell has a 30% chance to be uninterruptible."; no core reads misc 4235 |
+| 30176 ToWoW - Sillithus PvP Flag | `src/ArcaneCore.Game/Spells/Generic/Researched/InferredSpellScripts.cs` | On each tick a player carrier who is not PvP flagged is flagged (the call the hostile-area rule makes). A flagged player and a non-player are left alone. | Spell.dbc: DUMMY on self, the 15 s periodic trigger of the Silithyst carrier aura 29519; the name |
+| 31247 Silithyst Cap Reward | same file | The turn-in gives the player +10 Cenarion Circle (609) reputation through the same call as the reputation spell effect, so the Diplomacy aura and the spell rate apply. Effect 122 itself keeps no meaning and stays unhandled for every other spell. | Spell.dbc: SCRIPT_EFFECT plus effect 122, misc 609, value 10; vmangos `OutdoorPvPSI.cpp:250` casts it on turn-in ("Cenarian faction"), `SpellEffects.cpp:182` treats effect 122 as unused |
+| 25153 Agro Drones Effect | same file | Every living, idle Vekniss Drone (creature 15300) within the spell's 30 yd radius of the casting Vekniss Soldier (15229) attacks the soldier's current victim; a drone that is dead, evading or in combat is left alone. | classic-db EventAI 1522901 (soldier casts 25152 on aggro, which triggers 25153 every second); Spell.dbc: DUMMY, caster position plus friendly units around it, radius index 10 = 30 yd; the name |
+
+Kept inert (listed in `src/ArcaneCore.Game/Spells/DeliberatelyInertSpells.Researched.cs`, because no source documents what they do):
+16372 Chromatic Protection (passive hidden aura of the Seal of Ascension key ring item), 17816 Sharp Dresser (the Tuxedo Jacket use spell) and
+20492 Resonite Crystal (the dummy cast by the Resonite Crystal trap game object).
+
 ## What's left
 
 `spell_script_target` rows now drive implicit unit targets 38 (nearest listed living creature/player or corpse) and 7 (source-area
@@ -351,4 +369,5 @@ stores the rows. Game object script targets and the other script target modes re
   the integration candidate; non-player transfers remain unsupported.
 - Trainers and the trainer spell list (the NPC area, through `SpellSystem.LearnSpell`).
 - The remaining effect and aura types, which are logged once as unsupported (see the ranking in "Handler modules and spell breadth").
+- Known gaps of the spell contract sweep (the `SpellContractSweepTests` ratchet): the four spells the sweep answers with `TargetIsPlayer` (1462 Beast Lore, 2650, 9455, 15057; `TargetIsPlayer` in the coverage file) have no contract checks, because the sweep casts them at a player target, which their creature-type mask refuses with that result before any check runs. A green sweep says nothing about these four.
 - Limits of the explicit hostile target gate (see "Implemented"). A triggered cast whose target the server chose on its own (procs, aura triggers, boss and instance scripts, casts from an aura holder) is not checked, although vmangos checks triggered casts too; this keeps server-internal triggers working. Script casts that do not receive the parent cast (for example from an aura or observer callback) do not inherit the client origin. `IsHostile` requires a living target, while vmangos calls `IsValidAttackTarget` with checkAlive=false, so a dead explicit target is refused here; for a game object caster the stand-in relation uses the same rule, which is stricter than vmangos. A client cast through `CMSG_USE_ITEM` for the later on-use spells is covered by a unit test of `CastSpell` with a parsed block, not by a packet-level test.

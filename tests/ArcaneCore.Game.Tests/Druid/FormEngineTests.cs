@@ -414,6 +414,7 @@ public sealed class FormEngineTests
         Assert.False(rig.Has(BearBoost));
         Assert.False(rig.Has(BearBoost2));
         Assert.Equal(rig.Player.NativeDisplayId, rig.Player.DisplayId);
+        Assert.Equal(1000u, rig.MaxPower(PowerType.Rage));              // a form leaves its maximum behind: SetPowerType(MANA) changes nothing (Unit.cpp:4405-4407)
     }
 
     [Fact]

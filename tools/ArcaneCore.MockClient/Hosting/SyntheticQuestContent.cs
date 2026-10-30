@@ -73,6 +73,9 @@ public static class SyntheticQuestContent
                 ArcaneCore.Data.World.Tuning.TuningDataModule.ValueTable, ArcaneCore.Data.World.Tuning.TuningDataModule.LootTable,
                 ArcaneCore.Data.World.Tuning.TuningDataModule.ShipTable, ArcaneCore.Data.World.Tuning.TuningDataModule.ElevatorTable,
                 ArcaneCore.Data.World.Tuning.TuningDataModule.TramTable,
+                // The shipped bot goal ladder (PlayerbotLadderSeed): goals, rules and their actions.
+                ArcaneCore.Data.World.Rules.PlayerbotGoalDataModule.Table, ArcaneCore.Data.World.Rules.RuleDataModule.RuleTable,
+                ArcaneCore.Data.World.Rules.RuleDataModule.ActionTable,
                 WorldDbContext.Schema.VersionTable,
             };
             var tables = db.Model.GetEntityTypes()

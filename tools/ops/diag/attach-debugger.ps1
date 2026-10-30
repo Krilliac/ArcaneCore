@@ -2,34 +2,56 @@
 # process exits with their exit code, and a count of CLR first-chance exceptions (0xE0434352; the first 10 and then every 500th are
 # logged). It never breaks into the daemons: every event is continued, and KillOnExit is off, so closing this console detaches.
 #   pwsh -NoExit -File tools/ops/diag/attach-debugger.ps1 [-RealmPid <pid>] [-WorldPid <pid>] [-LogPath <file>] [-LiveHome <dir>]
+#        [-SupervisorPid <pid> [-PollSeconds <n>]] [-WindowTitle <text>]
 # The PIDs default to the one running ArcaneCore.Realm / ArcaneCore.World; the log to <LiveHome>\logs\win32-debugger.log
 # (ARCANECORE_LIVE_HOME). The debugger sees only the exception code: name the CLR types with tools/ops/diag/exception-probe.
+# Watch mode (-SupervisorPid, used by tools/ops/live/start-cluster.ps1): follows the cluster host supervisor but NEVER attaches to it (a
+# stopped supervisor stops reading its Merged children's stdout, which blocks every child). Every -PollSeconds it lists the ArcaneCore.*
+# processes whose parent is the supervisor and attaches to each one it has not attached to yet, so a child the supervisor relaunches
+# after a crash, a hang kill or a restart request is picked up with its new PID. No default PID lookup happens in this mode
+# (Get-LiveDaemon would find the supervisor itself, which is a World executable). It ends when the supervisor and every attached process
+# are gone. -WindowTitle replaces the console title.
+# WARNING: while attached, a debug event stops the whole target until this script continues it (docs/ops/tooling.md). Each debug loop
+# continues its event at once and only enqueues its log line; the console and the log file are written by separate threads from bounded
+# queues, and lines are dropped (and counted: "N lines dropped") when a queue is full, so a stalled console (text selected in it, the
+# machine paging) does not hold any target stopped. The remaining risk: an exception-heavy target is slowed by one whole-process stop per
+# exception (about 0.2 ms each); under the cluster supervisor with HangCapture=Dump, a dump request for a child that is stopped by this
+# debugger can wait up to Cluster:Supervisor:HangCaptureTimeoutSeconds before the supervisor kills it.
 param(
     [int]$RealmPid,
     [int]$WorldPid,
     [string]$LogPath,
-    [string]$LiveHome
+    [string]$LiveHome,
+    [int]$SupervisorPid,
+    [ValidateRange(1, 60)][int]$PollSeconds = 2,
+    [string]$WindowTitle
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\live\LiveEnv.ps1')
 if (-not $LogPath) { $LogPath = Join-Path (Resolve-LiveHome $LiveHome) 'logs\win32-debugger.log' }
-if (-not $RealmPid) { $RealmPid = (Get-LiveDaemon Realm)?.Id ?? 0 }
-if (-not $WorldPid) { $WorldPid = (Get-LiveDaemon World)?.Id ?? 0 }
-if (-not $RealmPid -and -not $WorldPid) { throw 'Neither ArcaneCore.Realm nor ArcaneCore.World is running; pass -RealmPid/-WorldPid.' }
+if (-not $SupervisorPid) {
+    if (-not $RealmPid) { $RealmPid = (Get-LiveDaemon Realm)?.Id ?? 0 }
+    if (-not $WorldPid) { $WorldPid = (Get-LiveDaemon World)?.Id ?? 0 }
+    if (-not $RealmPid -and -not $WorldPid) { throw 'Neither ArcaneCore.Realm nor ArcaneCore.World is running; pass -RealmPid/-WorldPid.' }
+} elseif (-not (Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue)) {
+    throw "The supervisor (pid $SupervisorPid) is not running."
+}
 
-try { $Host.UI.RawUI.WindowTitle = "ArcaneCore Live Win32 Debugger [World PID $WorldPid + Realm PID $RealmPid]" } catch {}
-Write-Host "=== ArcaneCore Live Win32 Debugger (Attached to World PID $WorldPid & Realm PID $RealmPid) ===" -ForegroundColor Cyan
+$target = if ($SupervisorPid) { "the children of supervisor PID $SupervisorPid (not the supervisor itself)" } else { "World PID $WorldPid + Realm PID $RealmPid" }
+try { $Host.UI.RawUI.WindowTitle = if ($WindowTitle) { $WindowTitle } else { "ArcaneCore Live Win32 Debugger [$target]" } } catch {}
+Write-Host "=== ArcaneCore Live Win32 Debugger (Attached to $target) ===" -ForegroundColor Cyan
 Write-Host "Log file: $LogPath" -ForegroundColor Gray
 Write-Host "--------------------------------------------------------------------------------" -ForegroundColor DarkGray
 
 $code = @"
 using System;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-public static class LiveWin32Debugger
+public sealed class LiveWin32DebuggerV2
 {
     private const uint DBG_CONTINUE = 0x00010002;
     private const uint DBG_EXCEPTION_NOT_HANDLED = 0x80010001;
@@ -102,7 +124,25 @@ public static class LiveWin32Debugger
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
-    private static readonly object LogLock = new object();
+    // Logging never blocks a debug loop: Log only formats a line and TryAdd()s it to two bounded queues (console, file), each drained by its
+    // own writer thread, so a stalled console cannot stop the file log and neither can hold a target stopped. A full queue drops the line and
+    // counts it.
+    private const int QueueCapacity = 8192;
+    // All of this state belongs to one instance, created by one run of the script: the Add-Type'd type outlives the script in a
+    // 'pwsh -NoExit' window, so a second run must get its own queues, threads, log file and counters.
+    private readonly string _logFile;
+    private readonly BlockingCollection<string> _consoleQueue = new BlockingCollection<string>(QueueCapacity);
+    private readonly BlockingCollection<string> _fileQueue = new BlockingCollection<string>(QueueCapacity);
+    private readonly Thread _consoleThread;
+    private readonly Thread _fileThread;
+    private readonly ConcurrentDictionary<int, bool> _exitedPids = new ConcurrentDictionary<int, bool>();
+    private long _consolePendingDrops;
+    private long _filePendingDrops;
+    private long _consoleDropsTotal;
+    private long _fileDropsTotal;
+
+    public long ConsoleLinesDropped { get { return Interlocked.Read(ref _consoleDropsTotal); } }
+    public long FileLinesDropped { get { return Interlocked.Read(ref _fileDropsTotal); } }
 
     public static void DisableQuickEdit()
     {
@@ -117,20 +157,143 @@ public static class LiveWin32Debugger
         catch { }
     }
 
-    private static void Log(string logPath, string label, string message)
+    public LiveWin32DebuggerV2(string logPath)
     {
-        if (string.IsNullOrEmpty(logPath)) return;
-        string line = string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [{1}] {2}{3}", DateTime.UtcNow, label, message, Environment.NewLine);
-        lock (LogLock)
+        _logFile = string.IsNullOrEmpty(logPath) ? null : logPath;
+        _consoleThread = new Thread(ConsoleWriterLoop) { IsBackground = true, Name = "Win32Debugger-console" };
+        _fileThread = new Thread(FileWriterLoop) { IsBackground = true, Name = "Win32Debugger-file" };
+        _consoleThread.Start();
+        _fileThread.Start();
+    }
+
+    // Waits up to timeoutMs for each writer to drain what is queued (a stalled console is abandoned, not waited on), then records the
+    // drop totals in the log file.
+    public void Shutdown(int timeoutMs)
+    {
+        try { _fileQueue.CompleteAdding(); } catch { }
+        try { _consoleQueue.CompleteAdding(); } catch { }
+        _fileThread.Join(timeoutMs);
+        _consoleThread.Join(timeoutMs);
+        if (_logFile != null && (ConsoleLinesDropped > 0 || FileLinesDropped > 0))
         {
-            try { File.AppendAllText(logPath, line, Encoding.UTF8); } catch { }
-            try { Console.Write(line); } catch { }
+            try
+            {
+                File.AppendAllText(_logFile, string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [debugger] {1} console lines and {2} file lines dropped in total{3}",
+                    DateTime.UtcNow, ConsoleLinesDropped, FileLinesDropped, Environment.NewLine), new UTF8Encoding(false));
+            }
+            catch { }
         }
     }
 
-    public static Thread AttachAsync(int pid, string label, string logPath)
+    public void Note(string label, string message)
     {
-        var thread = new Thread(() => RunDebugLoop((uint)pid, label, logPath))
+        Log(label, message);
+    }
+
+    private void Enqueue(BlockingCollection<string> queue, string line, ref long pendingDrops, ref long dropsTotal)
+    {
+        try
+        {
+            if (queue.TryAdd(line)) return;
+        }
+        catch (InvalidOperationException)
+        {
+            return; // completed: shutting down
+        }
+        Interlocked.Increment(ref pendingDrops);
+        Interlocked.Increment(ref dropsTotal);
+    }
+
+    private void Log(string label, string message)
+    {
+        string line = string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [{1}] {2}{3}", DateTime.UtcNow, label, message, Environment.NewLine);
+        if (_logFile != null) Enqueue(_fileQueue, line, ref _filePendingDrops, ref _fileDropsTotal);
+        Enqueue(_consoleQueue, line, ref _consolePendingDrops, ref _consoleDropsTotal);
+    }
+
+    private static string DropNotice(long dropped, string what)
+    {
+        return string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [debugger] {1} lines dropped ({2}){3}", DateTime.UtcNow, dropped, what, Environment.NewLine);
+    }
+
+    private void ConsoleWriterLoop()
+    {
+        foreach (string line in _consoleQueue.GetConsumingEnumerable())
+        {
+            try
+            {
+                long dropped = Interlocked.Exchange(ref _consolePendingDrops, 0);
+                if (dropped > 0) Console.Write(DropNotice(dropped, "the console was not keeping up"));
+                Console.Write(line);
+            }
+            catch { }
+        }
+    }
+
+    private void FileWriterLoop()
+    {
+        StreamWriter writer = null;
+        if (_logFile != null)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(_logFile);
+                if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+                writer = new StreamWriter(new FileStream(_logFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite), new UTF8Encoding(false));
+            }
+            catch (Exception ex)
+            {
+                writer = null;
+                string notice = string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} [debugger] cannot open the log file {1} ({2}); its lines are counted as dropped{3}", DateTime.UtcNow, _logFile, ex.Message, Environment.NewLine);
+                try { _consoleQueue.TryAdd(notice); } catch (InvalidOperationException) { }
+            }
+        }
+        long reportedConsoleDrops = 0;
+        long lastReportTicks = Environment.TickCount64;
+        while (!_fileQueue.IsCompleted)
+        {
+            string line;
+            if (!_fileQueue.TryTake(out line, 500))
+            {
+                try { if (writer != null) writer.Flush(); } catch { }
+                continue;
+            }
+            try
+            {
+                if (writer == null)
+                {
+                    Interlocked.Increment(ref _fileDropsTotal);
+                    continue;
+                }
+                long dropped = Interlocked.Exchange(ref _filePendingDrops, 0);
+                if (dropped > 0) writer.Write(DropNotice(dropped, "the log file was not keeping up"));
+                writer.Write(line);
+                // The console writer cannot report while it is blocked, so the file says how many console lines were lost so far.
+                long consoleDrops = ConsoleLinesDropped;
+                if (consoleDrops != reportedConsoleDrops && Environment.TickCount64 - lastReportTicks >= 1000)
+                {
+                    writer.Write(DropNotice(consoleDrops - reportedConsoleDrops, "the console is not draining; not shown there"));
+                    reportedConsoleDrops = consoleDrops;
+                    lastReportTicks = Environment.TickCount64;
+                }
+                if (_fileQueue.Count == 0) writer.Flush();
+            }
+            catch { Interlocked.Increment(ref _fileDropsTotal); }
+        }
+        try { if (writer != null) { writer.Flush(); writer.Dispose(); } } catch { }
+    }
+
+    // True once the debug loop for this pid ended on the target's exit: the pid may be reused by a relaunched process.
+    public bool ProcessExited(int pid)
+    {
+        return _exitedPids.ContainsKey(pid);
+    }
+
+    public Thread AttachAsync(int pid, string label)
+    {
+        bool ignored;
+        _exitedPids.TryRemove(pid, out ignored);
+        var thread = new Thread(() => RunDebugLoop((uint)pid, label))
         {
             IsBackground = true,
             Name = "Win32Debugger-" + label
@@ -139,16 +302,16 @@ public static class LiveWin32Debugger
         return thread;
     }
 
-    private static void RunDebugLoop(uint pid, string label, string logPath)
+    private void RunDebugLoop(uint pid, string label)
     {
         if (!DebugActiveProcess(pid))
         {
             int err = Marshal.GetLastWin32Error();
-            Log(logPath, label, string.Format("Failed to attach to PID {0} (Win32 error {1})", pid, err));
+            Log(label, string.Format("Failed to attach to PID {0} (Win32 error {1})", pid, err));
             return;
         }
         DebugSetProcessKillOnExit(false);
-        Log(logPath, label, string.Format("Successfully attached Win32 debugger to PID {0} (KillOnExit=false)", pid));
+        Log(label, string.Format("Successfully attached Win32 debugger to PID {0} (KillOnExit=false)", pid));
 
         long clrFirstChanceCount = 0;
         while (true)
@@ -212,10 +375,11 @@ public static class LiveWin32Debugger
             ContinueDebugEvent(evt.dwProcessId, evt.dwThreadId, status);
             if (pendingMessage != null)
             {
-                Log(logPath, label, pendingMessage);
+                Log(label, pendingMessage);
             }
             if (exitProcess)
             {
+                _exitedPids[(int)pid] = true;
                 return;
             }
         }
@@ -223,11 +387,68 @@ public static class LiveWin32Debugger
 }
 "@
 
+# The type outlives this script in the session (pwsh -NoExit). Add-Type of identical source re-adds quietly; changed source under the same
+# type name fails loudly ("type name already exists"), so a change to the C# body must rename the type (LiveWin32DebuggerV3, ...).
 Add-Type -TypeDefinition $code -Language CSharp
-[LiveWin32Debugger]::DisableQuickEdit()
+[LiveWin32DebuggerV2]::DisableQuickEdit()
+$debugLog = [LiveWin32DebuggerV2]::new($LogPath)   # per run: its own queues, writer threads, log file and drop counters
 $threads = @()
-if ($RealmPid) { $threads += [LiveWin32Debugger]::AttachAsync($RealmPid, "Realm:$RealmPid", $LogPath) }
-if ($WorldPid) { $threads += [LiveWin32Debugger]::AttachAsync($WorldPid, "World:$WorldPid", $LogPath) }
-while (@($threads | Where-Object IsAlive).Count -gt 0) {
-    Start-Sleep -Seconds 5
+if ($RealmPid) { $threads += $debugLog.AttachAsync($RealmPid, "Realm:$RealmPid") }
+if ($WorldPid) { $threads += $debugLog.AttachAsync($WorldPid, "World:$WorldPid") }
+if ($SupervisorPid) {
+    # Watch mode. $attached maps a pid to its debug thread; a thread that ended while its process still runs (the attach was refused) is
+    # retried a few times, then left alone so a refusal does not spam the log every poll.
+    $attached = @{}
+    $attempts = @{}
+    # The supervisor itself is never attached: a stopped supervisor stops reading its Merged children's stdout, which blocks them all.
+    # A reused PID is not the supervisor: remember its start time and treat a different one as gone.
+    function Get-ProcessStartTime($Process) { try { $Process.StartTime } catch { $null } }
+    $supervisorProcess = Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue
+    if (-not $supervisorProcess) {
+        $debugLog.Shutdown(1000)
+        throw "The supervisor (pid $SupervisorPid) exited before the debugger started."
+    }
+    $supervisorStart = Get-ProcessStartTime $supervisorProcess
+    if ($null -eq $supervisorStart) { $debugLog.Note('watch', "cannot read the start time of supervisor pid $SupervisorPid (an elevated process?); PID-reuse protection is off") }
+    while ($true) {
+        $supervisorProcess = Get-Process -Id $SupervisorPid -ErrorAction SilentlyContinue
+        $supervisorUp = $null -ne $supervisorProcess -and ($null -eq $supervisorStart -or (Get-ProcessStartTime $supervisorProcess) -eq $supervisorStart)
+        foreach ($gonePid in @($attempts.Keys) + @($attached.Keys) | Select-Object -Unique) {
+            if (-not $attached.ContainsKey($gonePid) -or -not $attached[$gonePid].IsAlive) {
+                if (-not (Get-Process -Id $gonePid -ErrorAction SilentlyContinue)) { $attempts.Remove($gonePid); $attached.Remove($gonePid) }
+            }
+        }
+        if ($supervisorUp) {
+            $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$SupervisorPid" -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like 'ArcaneCore.*' })
+            foreach ($child in $children) {
+                $childPid = [int]$child.ProcessId
+                if ($childPid -eq $SupervisorPid) { continue }
+                $known = $attached.ContainsKey($childPid)
+                if ($known -and $attached[$childPid].IsAlive) { continue }
+                # A debug thread that ended on the target's exit: the pid may already belong to a relaunched child, which gets fresh retries.
+                if ($known -and ($debugLog.ProcessExited($childPid) -or -not (Get-Process -Id $childPid -ErrorAction SilentlyContinue))) {
+                    $attached.Remove($childPid); $attempts.Remove($childPid); $known = $false
+                }
+                $tries = if ($attempts.ContainsKey($childPid)) { $attempts[$childPid] } else { 0 }
+                if ($known -and $tries -ge 3) { continue }
+                $attempts[$childPid] = $tries + 1
+                $label = ($child.Name -replace '^ArcaneCore\.', '' -replace '\.exe$', '') + ":$childPid"
+                $attached[$childPid] = $debugLog.AttachAsync($childPid, $label)
+                $debugLog.Note('watch', "supervisor child $($child.Name) pid ${childPid}: attaching")
+            }
+        }
+        $live = @($attached.Values | Where-Object IsAlive)
+        if (-not $supervisorUp -and $live.Count -eq 0) { break }
+        Start-Sleep -Seconds $PollSeconds
+    }
+    $debugLog.Note('watch', 'the supervisor and every attached process are gone; detached.')
+} else {
+    while (@($threads | Where-Object IsAlive).Count -gt 0) {
+        Start-Sleep -Seconds 5
+    }
+}
+$debugLog.Shutdown(3000)
+if ($debugLog.ConsoleLinesDropped -gt 0 -or $debugLog.FileLinesDropped -gt 0) {
+    Write-Host "$($debugLog.ConsoleLinesDropped) console lines and $($debugLog.FileLinesDropped) log-file lines dropped in total (a queue was full)." -ForegroundColor Yellow
 }

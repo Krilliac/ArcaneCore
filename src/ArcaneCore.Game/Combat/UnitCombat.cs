@@ -253,17 +253,36 @@ public sealed partial class UnitCombat
     public void ApplyAttackTimePercentMod(WeaponAttackType type, float percent, bool apply)
     {
         float field = Field(type);
+        float stored;
         if (percent > 0)
         {
             _speedPct[(int)type] = PercentVar(_speedPct[(int)type], percent, !apply);
-            StoreField(type, PercentVar(field, percent, !apply, fieldGuard: true));
+            stored = PercentVar(field, percent, !apply, fieldGuard: true);
         }
         else
         {
             _speedPct[(int)type] = PercentVar(_speedPct[(int)type], -percent, apply);
-            StoreField(type, PercentVar(field, -percent, apply, fieldGuard: true));
+            stored = PercentVar(field, -percent, apply, fieldGuard: true);
         }
+
+        // vmangos multiplies on apply and divides on removal, so in float32 a removed mod can leave the multiplier at 0.99999994
+        // and the field at 1999.9998 (sent truncated as 1999, Object.cpp:752-756): every buff that ends would shorten the swing by
+        // a millisecond for good. With the last mod of a slot gone, nothing is left to multiply in: the multiplier is exactly 1 and the
+        // field is the unhasted time, a whole number of milliseconds (item delays and creature attack times are integers).
+        int slot = (int)type;
+        _speedMods[slot] += apply ? 1 : -1;
+        if (_speedMods[slot] <= 0)
+        {
+            _speedMods[slot] = 0;
+            _speedPct[slot] = 1.0f;
+            stored = MathF.Round(stored);
+        }
+
+        StoreField(type, stored);
     }
+
+    /// <summary>How many attack-time percent mods are applied per slot (<see cref="ApplyAttackTimePercentMod"/>).</summary>
+    private readonly int[] _speedMods = new int[3];
 
     private static float PercentVar(float value, float percent, bool apply, bool fieldGuard = false)
     {

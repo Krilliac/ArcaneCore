@@ -27,7 +27,7 @@ public static class CrashJournalPaths
 
     /// <summary>
     /// <c>crash-report.&lt;name&gt;.&lt;yyyyMMdd-HHmmss&gt;Z.txt</c> in <paramref name="directory"/>: the file the crash dialog
-    /// (<c>Diagnostics:CrashDialog</c>) writes its text and the full crash report to. Written only when that dialog is shown.
+    /// (<c>Diagnostics:CrashDialog</c>) writes its text and the full crash report to. Written when that dialog is shown, and by a supervised cluster child (which cannot show a box) so the supervisor's crash dialog can show it.
     /// </summary>
     public static string ReportPathFor(string directory, string processName, DateTime utc)
         => Path.Combine(directory, $"crash-report.{SafeName(processName)}.{utc.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture)}Z.txt");

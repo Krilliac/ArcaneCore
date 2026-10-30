@@ -52,6 +52,7 @@ public sealed class WorldStateWorldTests
         hooks.WorldStates.Add(provider);
 
         await using WorldTestClient client = await host.EnterWorldAsync("STATES", "States");
+        client.IgnoreEnergyRegenUpdates = true; // vmangos regenerates energy for every player (Player.cpp:2283); only that hidden update may arrive
         var login = new PacketReader(client.LoginPacket(WorldOpcode.SmsgInitWorldStates));
         Assert.Equal((0u, 12u, (ushort)2), (login.ReadUInt32(), login.ReadUInt32(), login.ReadUInt16()));
         Assert.Equal((0x0Au, 7), (login.ReadUInt32(), login.ReadInt32()));

@@ -34,7 +34,10 @@ public sealed class WorldHost(
     IServiceProvider? rootServices = null,
     IOptions<Cluster.Gateway.GatewayWorkerOptions>? workerOptions = null,
     Cluster.Gateway.WorkerAdmission? admission = null,
-    ShutdownDrain? drain = null) : IHostedService
+    ShutdownDrain? drain = null,
+    Cluster.Social.ClusterRoleFeatureFilter? roleFilter = null,
+    Cluster.Social.RealmAuthorityLeaseKeeper? leaseKeeper = null,
+    IOptions<Cluster.Social.ClusterNodeOptions>? nodeOptions = null) : IHostedService
 {
     private readonly CharacterFencingOptions _fencing = fencingOptions?.Value ?? new();
     private readonly Cluster.Gateway.GatewayWorkerOptions? _worker = workerOptions?.Value;
@@ -152,9 +155,19 @@ public sealed class WorldHost(
                     }
                 }
 
+                // A node with a cluster role (Cluster:Node:Role other than Combined) first takes the realm singleton leases it can get, then attaches
+                // only the features its role runs (the auction bot and AutoBroadcast only for a lease it holds). Combined attaches everything, as always.
+                Func<IWorldFeature, bool>? admit = null;
+                Cluster.Social.ClusterNodeRole role = nodeOptions?.Value.Role ?? Cluster.Social.ClusterNodeRole.Combined;
+                if (role != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
+                {
+                    await leaseKeeper.AcquireAtStartAsync(_incarnation, cancellationToken).ConfigureAwait(false);
+                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
+                }
+
                 // Features are singletons, so the scope hands out the same instances. Set first: a feature that attached before one that threw must still stop.
                 _attached = true;
-                scope.ServiceProvider.AttachWorldFeatures(world);
+                scope.ServiceProvider.AttachWorldFeatures(world, admit);
 
                 if (_fencing.Enabled && scope.ServiceProvider.GetService<IIdRangeReservationStore>() is not null)
                 {
@@ -166,6 +179,11 @@ public sealed class WorldHost(
             logger.LogInformation("Loaded {Count} character names", directory.Count);
             saveQueue.Start();
             world.Start();
+            if (nodeOptions?.Value.Role is { } startedRole && startedRole != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
+            {
+                LogNodeRole(startedRole, roleFilter, leaseKeeper);
+            }
+
             await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
             {
                 if (StartupWorkForTesting is { } startupWork)
@@ -180,6 +198,7 @@ public sealed class WorldHost(
         {
             // A stop requested while the bots are restored (Ctrl-C, StopApplication) cancels this start; WorldStartup turns it into an orderly stop.
             await StopClaimWatchAsync().ConfigureAwait(false);
+            await ReleaseLeasesAfterFailedStartAsync().ConfigureAwait(false);
             if (_attached) await StopAfterFailedStartAsync().ConfigureAwait(false);
             throw;
         }
@@ -187,9 +206,35 @@ public sealed class WorldHost(
         {
             FaultLedger.Shared.Record("world-host.start", ex);
             await StopClaimWatchAsync().ConfigureAwait(false);
+            await ReleaseLeasesAfterFailedStartAsync().ConfigureAwait(false);
             if (_attached) await StopAfterFailedStartAsync().ConfigureAwait(false);
             throw;
         }
+    }
+
+    /// <summary>
+    /// A start that failed before the features attached still holds the leases it acquired: give them back. Once features are attached the leases stay held
+    /// (their singletons, such as the auction bot timer, may be running) until <see cref="StopCoreAsync"/> has stopped the features and releases them itself.
+    /// </summary>
+    private async Task ReleaseLeasesAfterFailedStartAsync()
+    {
+        if (!_attached && leaseKeeper is not null)
+        {
+            await leaseKeeper.ReleaseAllAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>One start line for a node with a cluster role: which realm singletons run here and which node holds the others.</summary>
+    private void LogNodeRole(Cluster.Social.ClusterNodeRole role, Cluster.Social.ClusterRoleFeatureFilter filter, Cluster.Social.RealmAuthorityLeaseKeeper keeper)
+    {
+        string Describe(Type feature)
+        {
+            string scope = Cluster.Social.ClusterRoleFeatureFilter.LeaseScopeFor(feature)!;
+            return keeper.TokenFor(scope) is { } token ? $"{feature.Name} attached here (token {token})" : $"{feature.Name} not attached (lease held by another node)";
+        }
+
+        logger.LogInformation("Cluster node role {Role} as {Node}: {AutoBroadcast}; {AuctionBot}", role, keeper.NodeId,
+            Describe(typeof(ServerMail.AutoBroadcastFeature)), Describe(typeof(Economy.AuctionBotFeature)));
     }
 
     /// <summary>
@@ -407,6 +452,9 @@ public sealed class WorldHost(
             FaultLedger.Shared.Record("world-host.stop-features", ex);
             failures.Add(ex);
         }
+
+        // After the singletons stopped: another node may take the leases now. Never throws; a lease that cannot be released expires by itself.
+        if (leaseKeeper is not null) await leaseKeeper.ReleaseAllAsync().ConfigureAwait(false);
 
         ReportStopDrain(drain?.Features);
         drain?.Saves.Begin();

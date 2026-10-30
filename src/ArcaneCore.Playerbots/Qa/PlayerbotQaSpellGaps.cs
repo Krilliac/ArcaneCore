@@ -22,6 +22,11 @@ internal readonly record struct QaSpellGap(int EffectIndex, string Code, string 
 /// the spell's sole working effect (a DUMMY next to a damage effect is usually cosmetic; the mage teleports' empty SCRIPT_EFFECT is vmangos-exact).
 /// An implicit target the system cannot select is only known when a cast meets it (<see cref="ISpellCastObserver.OnUnsupported"/>).
 /// <para>
+/// Two explicit lists silence a gap with a stated reason, and neither changes behaviour: <see cref="DeliberatelyInertSpells"/> (no reference core
+/// implements the spell either, with a citation) and <see cref="QaSpellConsumers"/> (ArcaneCore consumes the spell in code the registries cannot
+/// see: a HasAura reader, an AI spell-hit handler, a use path, a direct packet send; the consumer file is named and checked by the tests).
+/// </para>
+/// <para>
 /// Read the registries after start-up (the modules and the spell script dispatcher register while the world starts); the script id sets are read
 /// once, on the first call. Not thread-safe: one instance per thread (the world thread's monitor, the QA task's coverage each own one).
 /// </para>
@@ -35,9 +40,18 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
     internal SpellSystem System => system;
 
     /// <summary>The gaps of <paramref name="spell"/>, in effect order; empty when it is fully handled.</summary>
-    internal QaSpellGap[] Of(SpellInfo spell)
+    internal QaSpellGap[] Of(SpellInfo spell) => Of(spell, honourExplicitLists: true);
+
+    /// <summary>
+    /// The gaps of <paramref name="spell"/>; with <paramref name="honourExplicitLists"/> false the gaps the two explicit lists
+    /// (<see cref="DeliberatelyInertSpells"/>, <see cref="QaSpellConsumers"/>) would silence are returned too, which is how a test proves an entry
+    /// still silences something.
+    /// </summary>
+    internal QaSpellGap[] Of(SpellInfo spell, bool honourExplicitLists)
     {
         ArgumentNullException.ThrowIfNull(spell);
+        InertSpell? inert = null;
+        bool silenced = honourExplicitLists && (DeliberatelyInertSpells.TryGet(spell.Id, out inert) | QaSpellConsumers.TryGet(spell.Id, out _));
         _spellScripts ??= system.Observers.OfType<SpellScriptDispatcher>().FirstOrDefault() is { } dispatcher ? [.. dispatcher.Registry.SpellIds] : [];
         _scriptEffects ??= [.. ScriptEffectRegistry.For(system).SpellIds];
         List<QaSpellGap>? gaps = null;
@@ -50,30 +64,53 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
             int value = effect.BasePoints + 1;
             if (!system.HasEffectHandler(effect.Effect))
             {
-                (gaps ??= []).Add(new QaSpellGap(i, QaSpellGaps.Effect, name, name, value, 0));
+                if (inert?.CoversUnhandled(name) != true) (gaps ??= []).Add(new QaSpellGap(i, QaSpellGaps.Effect, name, name, value, 0));
                 continue;
             }
 
             if (IsAuraEffect(effect.Effect) && effect.AuraType != AuraType.None)
             {
-                if (AuraGap(spell, effect, i) is { } code) (gaps ??= []).Add(new QaSpellGap(i, code, effect.AuraType.ToString(), name, value, (uint)effect.AuraType));
+                if (AuraGap(spell, effect, i) is { } code)
+                {
+                    string auraName = effect.AuraType.ToString();
+                    // A missing aura handler is covered only by an entry naming that aura type; a DUMMY or OVERRIDE_CLASS_SCRIPTS aura nothing reads, by any entry.
+                    bool covered = code == QaSpellGaps.Aura ? inert?.CoversUnhandled(auraName) == true : silenced;
+                    if (!covered) (gaps ??= []).Add(new QaSpellGap(i, code, auraName, name, value, (uint)effect.AuraType));
+                }
+
                 continue;
             }
 
             // Awaken Peon (19938) is handled on the target creature's AI hook (LazyPeonAI.OnSpellHit).
             bool scripted = _spellScripts.Contains(spell.Id)
                 || spell.Id == ArcaneCore.Game.Creatures.Scripts.LazyPeonAI.SpellAwakenPeon;
-            if (effect.Effect == SpellEffectName.Dummy && !scripted && !OtherEffectWorks(spell, i))
+            if (effect.Effect == SpellEffectName.Dummy && !scripted && !silenced && !OtherEffectWorks(spell, i))
             {
                 (gaps ??= []).Add(new QaSpellGap(i, QaSpellGaps.Dummy, name, name, value, 0));
             }
-            else if (effect.Effect == SpellEffectName.ScriptEffect && !scripted && !_scriptEffects.Contains(spell.Id) && !OtherEffectWorks(spell, i))
+            else if (effect.Effect == SpellEffectName.ScriptEffect && !scripted && !silenced && !_scriptEffects.Contains(spell.Id) && !OtherEffectWorks(spell, i))
             {
                 (gaps ??= []).Add(new QaSpellGap(i, QaSpellGaps.Script, name, name, value, 0));
             }
         }
 
         return gaps is null ? [] : [.. gaps];
+    }
+
+    /// <summary>
+    /// Why <paramref name="spellId"/> is not reported when it is in one of the explicit lists: the inert reason and its citation, or the consumer and
+    /// what it does; null when it is in neither.
+    /// </summary>
+    internal static string? SilencedBecause(uint spellId)
+    {
+        if (DeliberatelyInertSpells.TryGet(spellId, out InertSpell? inert))
+        {
+            return $"deliberately inert ({inert.Reason}): {inert.Why} [{inert.Citation}]";
+        }
+
+        return QaSpellConsumers.TryGet(spellId, out QaSpellConsumer? consumer)
+            ? $"consumed by {consumer.File} ({consumer.Kind}): {consumer.Why}"
+            : null;
     }
 
     /// <summary>The effects that carry an aura type (vmangos EffectApplyAura, EffectPersistentAA, EffectApplyAreaAura).</summary>

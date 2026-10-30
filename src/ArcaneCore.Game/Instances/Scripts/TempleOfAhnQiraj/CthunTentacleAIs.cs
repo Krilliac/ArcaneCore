@@ -31,7 +31,13 @@ public sealed class CthunTentacleAI(Creature creature) : CreatureAI(creature)
         DoCast(Me, 26262, triggered: true);
     }
 
-    public override void OnDeath(Unit? killer) => RemovePortal();
+    public override void OnDeath(Unit? killer)
+    {
+        // mangos-classic boss_cthun.cpp npc_giant_claw_tentacleAI::JustDied: the giant claw casts Despawn Tent Port (26404) at its portal
+        // (CthunDespawnTentPortScript). The direct removal stays for the other tentacles and for a cast that found no portal.
+        if (Me.Entry == 15728) DoCast(Me, CthunDespawnTentPortScript.DespawnTentPort, triggered: true);
+        RemovePortal();
+    }
     public override void OnEvade() => RemovePortal();
     public override void OnSummonedCreatureDespawn(Creature summoned)
     {

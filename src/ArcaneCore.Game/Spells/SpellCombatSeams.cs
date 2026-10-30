@@ -48,6 +48,12 @@ public static class SpellCastCheckOrder
     /// <summary>vmangos Spell.cpp:5353-5354 the stealth requirement (strict, non-triggered; after the shapeshift check).</summary>
     public const int Stealth = 150;
 
+    /// <summary>vmangos Spell.cpp:5463-5464 the spell's MaxTargetLevel cap (<see cref="SpellCheckPhase.Target"/>).</summary>
+    public const int TargetLevel = 40;
+
+    /// <summary>vmangos Spell.cpp:5578-5585 the target's creature type against the spell's TargetCreatureType (<see cref="SpellCheckPhase.Target"/>).</summary>
+    public const int TargetCreatureType = 60;
+
     /// <summary>vmangos Spell.cpp:5640-5649 behind/in-front facing of the target (<see cref="SpellCheckPhase.Target"/>).</summary>
     public const int Facing = 100;
 

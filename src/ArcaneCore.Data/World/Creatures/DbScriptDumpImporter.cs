@@ -1,5 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Npc;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.WorldData.Creatures;
@@ -24,6 +25,12 @@ public sealed class DbScriptDumpImporter
     private readonly HashSet<(uint Entry, uint PathId)> _rejectedPaths = [];
     private readonly Dictionary<uint, (uint Start, uint Complete)> _questScripts = [];
     private readonly Dictionary<(uint Entry, uint TextId, uint ConditionId), uint> _menuScripts = [];
+    private readonly Dictionary<uint, List<(SpellScriptRow Row, uint VmangosCondition)>> _vmangosSpellScripts = [];
+    private readonly Dictionary<uint, string> _vmangosSpellRejections = [];
+    private readonly HashSet<uint> _vmangosTouchedThisRead = [];
+    private readonly Dictionary<uint, ConditionRow> _vmangosConditions = [];
+    private readonly Dictionary<(int Type, uint V1, uint V2, uint V3, uint V4, byte Flags), uint> _cmangosConditions = [];
+    private readonly List<string> _warnings = [];
 
     /// <summary>Every script step read, with its namespace.</summary>
     public IReadOnlyCollection<(DbScriptKind Kind, RelayScriptStep Step)> Scripts
@@ -46,7 +53,20 @@ public sealed class DbScriptDumpImporter
     public IReadOnlyDictionary<(uint Entry, uint TextId, uint ConditionId), uint> MenuScripts => _menuScripts;
 
     /// <summary>Whether any script or <c>script_waypoint</c> row was read (the refresh replaces the tables only then).</summary>
-    public bool HasRows => _scripts.Count > 0 || _waypoints.Count > 0 || _rejectedPaths.Count > 0;
+    public bool HasRows => _scripts.Count > 0 || _waypoints.Count > 0 || _rejectedPaths.Count > 0 || _vmangosSpellScripts.Count > 0;
+
+    /// <summary>
+    /// The vmangos <c>spell_scripts</c> ids read that translate into the cmangos layout (<see cref="VmangosSpellScriptTranslator"/>). They are
+    /// written for the spells that classic-db's <c>dbscripts_on_spell</c> (the source of record) has no rows for, once their conditions
+    /// resolve (<see cref="InsertAllAsync"/>).
+    /// </summary>
+    public IReadOnlyCollection<uint> VmangosSpellScriptIds => _vmangosSpellScripts.Keys;
+
+    /// <summary>The vmangos <c>spell_scripts</c> ids refused whole, with the reason of their first refused row.</summary>
+    public IReadOnlyDictionary<uint, string> VmangosSpellScriptRejections => _vmangosSpellRejections;
+
+    /// <summary>What the last write left out: vmangos spell scripts whose condition did not resolve.</summary>
+    public IReadOnlyList<string> Warnings => _warnings;
 
     /// <summary>Rows to write per table.</summary>
     public IReadOnlyDictionary<string, int> Counts => new Dictionary<string, int>(StringComparer.Ordinal)
@@ -56,6 +76,8 @@ public sealed class DbScriptDumpImporter
         [DbScriptDataModule.GossipTable] = StepCount(DbScriptKind.Gossip),
         [DbScriptDataModule.EventTable] = StepCount(DbScriptKind.Event),
         [DbScriptDataModule.CreatureMovementTable] = StepCount(DbScriptKind.CreatureMovement),
+        [DbScriptDataModule.SpellTable] = StepCount(DbScriptKind.Spell)
+            + _vmangosSpellScripts.Where(pair => !_scripts.ContainsKey((DbScriptKind.Spell, pair.Key))).Sum(pair => pair.Value.Count),
         [DbScriptDataModule.WaypointTable] = WaypointRows().Count(),
     };
 
@@ -74,7 +96,11 @@ public sealed class DbScriptDumpImporter
     }
 
     /// <summary>Start a new input file (a script id is replaced per file, as in <see cref="Read"/>).</summary>
-    internal void BeginRead() => _touchedThisRead.Clear();
+    internal void BeginRead()
+    {
+        _touchedThisRead.Clear();
+        _vmangosTouchedThisRead.Clear();
+    }
 
     /// <summary>Take one dump row of a table this importer reads (other rows are ignored).</summary>
     internal void Accept(DumpRow row)
@@ -98,6 +124,17 @@ public sealed class DbScriptDumpImporter
         {
             case DbScriptDataModule.WaypointTable:
                 ReadWaypoint(row);
+                break;
+            case VmangosSpellScriptTranslator.Table:
+                // cmangos and classic-db have a spell_scripts table too: the script-name binding (Id, ScriptName), not DB script steps.
+                if (row.Has("command"))
+                {
+                    ReadVmangosSpellScript(row);
+                }
+
+                break;
+            case "conditions":
+                ReadCondition(row);
                 break;
             case "quest_template" when row.Has("StartScript") || row.Has("CompleteScript"):
             {
@@ -137,6 +174,142 @@ public sealed class DbScriptDumpImporter
     {
         await InsertRowsAsync(db, _scripts.Values.SelectMany(rows => rows), cancellationToken).ConfigureAwait(false);
         await InsertRowsAsync(db, WaypointRows(), cancellationToken).ConfigureAwait(false);
+        await InsertRowsAsync(db, await ResolveVmangosSpellScriptsAsync(db, cancellationToken).ConfigureAwait(false), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The translated vmangos spell script rows to write: those of the spells classic-db's own rows do not cover, with each vmangos
+    /// <c>condition_id</c> resolved. The vmangos id names a row of a <c>conditions</c> table without the cmangos <c>comments</c> column
+    /// (vmangos mangos.sql has none; cmangos mangos.sql and classic-db do). It resolves only when its type means the same in both cores,
+    /// which is checked for CONDITION_TEAM (6, value1 the team: vmangos Conditions.h:67 and Conditions.cpp:204-207, cmangos Conditions.h:39)
+    /// with flags and the other values 0, to the cmangos row of the same type and values (cmangos keeps them unique, mangos.sql
+    /// <c>unique_conditions</c>): a <c>conditions</c> row of the input that has a <c>comments</c> column first, else the world's own
+    /// <c>conditions</c> table. The ids differ between the databases (vmangos 2 and 3 are classic-db 3 and 4, Horde and Alliance), so an id is
+    /// never copied. A spell with a step whose condition does not resolve is left out whole and named in <see cref="Warnings"/>.
+    /// </summary>
+    private async Task<List<SpellScriptRow>> ResolveVmangosSpellScriptsAsync(WorldDbContext db, CancellationToken cancellationToken)
+    {
+        _warnings.Clear();
+        var rows = new List<SpellScriptRow>();
+        foreach ((uint spellId, List<(SpellScriptRow Row, uint VmangosCondition)> steps) in _vmangosSpellScripts.OrderBy(pair => pair.Key))
+        {
+            if (_scripts.ContainsKey((DbScriptKind.Spell, spellId)))
+            {
+                continue; // classic-db's own rows win
+            }
+
+            var resolved = new List<SpellScriptRow>(steps.Count);
+            string? failure = null;
+            foreach ((SpellScriptRow row, uint vmangosCondition) in steps)
+            {
+                if (vmangosCondition != 0)
+                {
+                    uint? condition = await ResolveConditionAsync(db, vmangosCondition, cancellationToken).ConfigureAwait(false);
+                    if (condition is null)
+                    {
+                        failure = $"vmangos condition {vmangosCondition} has no cmangos equivalent here";
+                        break;
+                    }
+
+                    row.ConditionId = condition.Value;
+                }
+
+                resolved.Add(row);
+            }
+
+            if (failure is null)
+            {
+                rows.AddRange(resolved);
+            }
+            else
+            {
+                _warnings.Add($"spell_scripts {spellId} not imported: {failure}");
+            }
+        }
+
+        return rows;
+    }
+
+    private async Task<uint?> ResolveConditionAsync(WorldDbContext db, uint vmangosCondition, CancellationToken cancellationToken)
+    {
+        const int Team = 6;
+        if (!_vmangosConditions.TryGetValue(vmangosCondition, out ConditionRow? vm) || vm.Type != Team || vm.Flags != 0
+            || vm.Value2 != 0 || vm.Value3 != 0 || vm.Value4 != 0)
+        {
+            return null;
+        }
+
+        if (_cmangosConditions.TryGetValue((vm.Type, vm.Value1, 0, 0, 0, 0), out uint entry))
+        {
+            return entry;
+        }
+
+        List<uint> entries = await db.Set<ConditionRow>()
+            .Where(c => c.Type == vm.Type && c.Value1 == vm.Value1 && c.Value2 == 0 && c.Value3 == 0 && c.Value4 == 0 && c.Flags == 0)
+            .Select(c => c.ConditionEntry).ToListAsync(cancellationToken).ConfigureAwait(false);
+        return entries.Count == 0 ? null : entries.Min();
+    }
+
+    /// <summary>One vmangos <c>spell_scripts</c> row: a later input's rows replace an id it carries; one refused row refuses its id.</summary>
+    private void ReadVmangosSpellScript(DumpRow row)
+    {
+        uint id = U32(row, "id");
+        if (_vmangosTouchedThisRead.Add(id))
+        {
+            _vmangosSpellScripts.Remove(id);
+            _vmangosSpellRejections.Remove(id);
+        }
+
+        if (_vmangosSpellRejections.ContainsKey(id))
+        {
+            return;
+        }
+
+        if (!_vmangosSpellScripts.TryGetValue(id, out List<(SpellScriptRow Row, uint VmangosCondition)>? steps))
+        {
+            steps = [];
+            _vmangosSpellScripts[id] = steps;
+        }
+
+        VmangosSpellScriptStep step = VmangosSpellScriptTranslator.Translate(row, (uint)steps.Count);
+        if (step.Row is null)
+        {
+            _vmangosSpellScripts.Remove(id);
+            _vmangosSpellRejections[id] = step.Rejection!;
+            return;
+        }
+
+        steps.Add((step.Row, step.VmangosConditionId));
+    }
+
+    /// <summary>A <c>conditions</c> row, kept only to resolve vmangos spell script conditions (the conditions importer writes the table).</summary>
+    private void ReadCondition(DumpRow row)
+    {
+        var parsed = new ConditionRow
+        {
+            ConditionEntry = U32(row, "condition_entry"),
+            Type = I32(row, "type"),
+            // vmangos conditions.value1..4 are signed int(11) (mangos.sql); ConditionRow stores them as uint, so a negative keeps its
+            // two's-complement bits. Only TEAM rows with value2..4 = 0 are ever resolved, and no such row is negative-valued.
+            Value1 = ConditionValue(row, "value1"),
+            Value2 = ConditionValue(row, "value2"),
+            Value3 = ConditionValue(row, "value3"),
+            Value4 = ConditionValue(row, "value4"),
+            Flags = (byte)U32(row, "flags"),
+        };
+        if (row.Has("comments"))
+        {
+            var key = (parsed.Type, parsed.Value1, parsed.Value2, parsed.Value3, parsed.Value4, parsed.Flags);
+            if (!_cmangosConditions.TryGetValue(key, out uint known) || parsed.ConditionEntry < known)
+            {
+                _cmangosConditions[key] = parsed.ConditionEntry;
+            }
+        }
+        else
+        {
+            _vmangosConditions[parsed.ConditionEntry] = parsed;
+        }
     }
 
     /// <summary>Empty the four script tables and <c>script_waypoint</c>.</summary>
@@ -147,6 +320,7 @@ public sealed class DbScriptDumpImporter
         await db.Set<GossipScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<EventScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CreatureMovementScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await db.Set<SpellScriptRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<ScriptWaypointRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -256,6 +430,7 @@ public sealed class DbScriptDumpImporter
             DbScriptDataModule.GossipTable => (true, DbScriptKind.Gossip),
             DbScriptDataModule.EventTable => (true, DbScriptKind.Event),
             DbScriptDataModule.CreatureMovementTable => (true, DbScriptKind.CreatureMovement),
+            DbScriptDataModule.SpellTable => (true, DbScriptKind.Spell),
             _ => (false, default(DbScriptKind)),
         };
         return known;
@@ -292,6 +467,12 @@ public sealed class DbScriptDumpImporter
     private static uint U32(DumpRow row, string name)
         => row.TryGet(out string? value, name) && !string.IsNullOrWhiteSpace(value)
             ? uint.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture)
+            : 0;
+
+    /// <summary>A conditions value: signed in vmangos, unsigned in classic-db; either range keeps its 32 bits (a negative wraps).</summary>
+    private static uint ConditionValue(DumpRow row, string name)
+        => row.TryGet(out string? value, name) && !string.IsNullOrWhiteSpace(value)
+            ? unchecked((uint)long.Parse(value, NumberStyles.Integer, CultureInfo.InvariantCulture))
             : 0;
 
     private static int I32(DumpRow row, string name)

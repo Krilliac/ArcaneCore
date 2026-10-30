@@ -32,6 +32,17 @@ public sealed class PlayerbotVoiceOptions
     public int LookingForGroupRepeatSeconds { get; set; } = 180;
 
     /// <summary>
+    /// A bot advertises a dungeon, raid or group quest in chat only when it is near the place (on by default): in the same or a bordering
+    /// zone, within <see cref="LfgMaxTravelSeconds"/> of travel by the planner (flight paths, hearthstone, mage portals, ships), or when a
+    /// warlock waiting for the same goal can summon it. Otherwise the bot keeps quiet and another waiting bot may post. Off: the bot that
+    /// waited longest always posts.
+    /// </summary>
+    public bool LfgNearDungeonOnly { get; set; } = true;
+
+    /// <summary>The longest planned trip, in seconds, from which a bot still advertises a place under <see cref="LfgNearDungeonOnly"/> (0..7200; 0 = only the same or a bordering zone, or a summon).</summary>
+    public int LfgMaxTravelSeconds { get; set; } = 600;
+
+    /// <summary>
     /// Trade calls (on by default): WTS for tradeable surplus in the bot's bags (no grey, no bind-on-pickup or bound item, no quest item,
     /// nothing it would wear itself) at <see cref="PriceMultiplier"/> times the vendor price, and WTB for the reagents of the recipes it
     /// wants; in Trade in a capital, now and then in General elsewhere (<see cref="GeneralSharePercent"/>). A real player who whispers the
@@ -94,6 +105,7 @@ public sealed class PlayerbotVoiceOptions
         Check(BotsPerPass, 1, 1000, nameof(BotsPerPass));
         Check(LinesPerPass, 1, 100, nameof(LinesPerPass));
         Check(LookingForGroupRepeatSeconds, 30, 3600, nameof(LookingForGroupRepeatSeconds));
+        Check(LfgMaxTravelSeconds, 0, 7200, nameof(LfgMaxTravelSeconds));
         Check(TradeRepeatSeconds, 60, 86_400, nameof(TradeRepeatSeconds));
         Check(PriceMultiplier, 1, 50, nameof(PriceMultiplier));
         Check(MinSellCopper, 0, 1_000_000, nameof(MinSellCopper));

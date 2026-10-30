@@ -165,13 +165,13 @@ public sealed class PlayerbotRepairFanOutTests
         {
             int first = think(2, beginThink: false).Distinct().Count();
             Assert.True(first >= Bound);
-            Thread.Sleep(25);
-            Assert.True(think(2, beginThink: false).Distinct().Count() > 0, "the second think planned to nothing: the first think's budget never came back");
-        }, manualClock: false);
+        }, manualClock: false, afterTicks: (player, goals, think) =>
+            Assert.True(think(2, beginThink: false).Distinct().Count() > 0, "the second think planned to nothing: the first think's budget never came back"));
     }
 
     /// <summary>Runs <paramref name="body"/> on the world thread; <c>think(updates)</c> opens a think, calls Update that many times, and returns the destinations planned to.</summary>
-    private static async Task Run(ScriptedPathfinder path, Action<Player, PlayerbotTownGoals, Think> body, bool manualClock = true)
+    private static async Task Run(
+        ScriptedPathfinder path, Action<Player, PlayerbotTownGoals, Think> body, bool manualClock = true, Action<Player, PlayerbotTownGoals, Think>? afterTicks = null)
     {
         var items = new ItemTestContent();
         items.Templates.Templates.Add(Boots(9212, durability: 20));
@@ -188,6 +188,21 @@ public sealed class PlayerbotRepairFanOutTests
             var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
             try
             {
+                Think think = (updates, beginThink) =>
+                {
+                    Player player = session.Player!;
+                    path.Ends.Clear();
+                    if (beginThink) goals.BeginThink();
+                    for (int i = 0; i < updates; i++)
+                    {
+                        PlayerbotMotion.ElapseForTests(player, 500);
+                        session.ManagedBudget = new ManagedActionBudget(1);
+                        goals.Update(player, 500);
+                    }
+
+                    path.AllEnds.AddRange(path.Ends);
+                    return [.. path.Ends];
+                };
                 await host.OnWorldAsync(() =>
                 {
                     Player player = session.Player!;
@@ -195,22 +210,16 @@ public sealed class PlayerbotRepairFanOutTests
                     PlayerbotEquipmentTests.EquipFromBags(player, 9212);
                     player.Inventory.GetItem(InventorySlots.Bag0, InventorySlots.Feet)!.Durability = 0;
                     player.Money = 100;
-                    body(player, goals, (updates, beginThink) =>
-                    {
-                        path.Ends.Clear();
-                        if (beginThink) goals.BeginThink();
-                        for (int i = 0; i < updates; i++)
-                        {
-                            PlayerbotMotion.ElapseForTests(player, 500);
-                            session.ManagedBudget = new ManagedActionBudget(1);
-                            goals.Update(player, 500);
-                        }
-
-                        path.AllEnds.AddRange(path.Ends);
-                        return [.. path.Ends];
-                    });
+                    body(player, goals, think);
                     return true;
                 });
+                if (afterTicks is not null)
+                {
+                    // The real clock reads the tick start, so time moves on only between world commands: let a few ticks pass (5 ms each).
+                    long tickBefore = host.World.Clock.TickNumber;
+                    await WorldTestHost.WaitForAsync(() => host.World.Clock.TickNumber >= tickBefore + 3 && host.World.Clock.ElapsedMs > 0, "world ticks");
+                    await host.OnWorldAsync(() => afterTicks(session.Player!, goals, think));
+                }
             }
             finally { session.Kick(); await session.ManagedClosed; }
         }

@@ -671,6 +671,7 @@ public sealed partial class SpellSystem
                 cast.State = SpellCastState.Casting;
                 cast.Timer = duration;
                 cast.ElapsedMs = 0;
+                cast.Uninterruptible = Mage.EnigmaBlizzardBonus.RollAtChannelStart(this, cast); // Enigma Vestments 3-piece 26127: one roll per Blizzard channel
                 SealModScope(cast); // vmangos Spell.cpp:3834: a channel ends its mods when it starts, not when it ends
                 cast.RememberCastPosition(); // vmangos Spell.cpp:4108-4110: the channel's movement check starts here
                 if (caster is Player player)
@@ -803,6 +804,7 @@ public sealed partial class SpellSystem
             }
             entry.Miss = objectOnly ? SpellMissInfo.None
                 : entry.EffectMask == 0 ? SpellMissInfo.Immune2
+                : !ReferenceEquals(target, caster) && !ReferenceEquals(target, cast.MagnetTarget) && !CheckTargetCreatureType(spell, target) ? SpellMissInfo.Immune // Spell.cpp:1003; the magnet already passed the check, and its 8179 holder is consumed by the redirect
                 : ReferenceEquals(target, caster)
                     ? (Rules.Immunity.ImmunityRules.IsImmuneToSpell(this, target, spell, castOnSelf: true) ? SpellMissInfo.Immune : SpellMissInfo.None)
                     : CombatRules.RollHit(this, caster, target, spell);

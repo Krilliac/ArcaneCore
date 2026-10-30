@@ -32,6 +32,7 @@ public sealed class CrashDialogTests : IDisposable
     {
         CrashDialog.Presenter = null!;
         CrashDialog.EnvironmentProbe = null!;
+        CrashDialog.SupervisedChildProbe = static () => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(ArcaneCore.Kernel.Ops.ServerConsole.SupervisedChildDrain.EnvironmentVariable));
         CrashDialog.ReportDirectory = null;
         CrashDialog.LogFilePath = null;
         CrashHandler.Current?.Dispose();
@@ -187,6 +188,53 @@ public sealed class CrashDialogTests : IDisposable
         Assert.Equal(CrashDialogOutcome.NotInteractive, CrashDialog.TryShowFatal(true, CrashKind.Unhandled, new InvalidOperationException("x"), false, "Diagnostics:OnUnhandled = Exit", "unhandled", "id", "report"));
         Assert.Empty(_presenter.Shown);
         Assert.False(Directory.Exists(_directory));
+    }
+
+    [Fact]
+    public void TryShowFatal_InASupervisedChildThatCannotShowABox_WritesTheReportFileOnly()
+    {
+        CrashDialog.EnvironmentProbe = static () => Interactive with { InputRedirected = true, OutputRedirected = true, ErrorRedirected = true };
+        CrashDialog.SupervisedChildProbe = static () => true;
+        Exception exception = Thrown(new InvalidOperationException("child probe"));
+
+        CrashDialogOutcome outcome = CrashDialog.TryShowFatal(true, CrashKind.Unhandled, exception, false, "Diagnostics:OnUnhandled = Exit", "unhandled", "feedfacecafebeef", "==== the crash report ====");
+
+        Assert.Equal(CrashDialogOutcome.ReportOnly, outcome);
+        Assert.Empty(_presenter.Shown);
+        string file = Assert.Single(Directory.GetFiles(_directory, "crash-report.*Z.txt"));
+        string written = File.ReadAllText(file);
+        Assert.Contains("Message: child probe", written, StringComparison.Ordinal);
+        Assert.Contains("Full report: " + file, written, StringComparison.Ordinal);
+        Assert.EndsWith("==== the crash report ====\n", written, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryShowFatal_InASupervisedChild_WithTheOptionOff_WritesNothing()
+    {
+        CrashDialog.EnvironmentProbe = static () => Interactive with { OutputRedirected = true };
+        CrashDialog.SupervisedChildProbe = static () => true;
+
+        Assert.Equal(CrashDialogOutcome.Disabled, CrashDialog.TryShowFatal(false, CrashKind.Unhandled, new InvalidOperationException("x"), false, "Diagnostics:OnUnhandled = Exit", "unhandled", "id", "report"));
+        Assert.False(Directory.Exists(_directory));
+    }
+
+    [Fact]
+    public void TryShowFatal_InASupervisedChild_WhenTheFileCannotBeWritten_RecordsTheFailure_AndShowsNothing()
+    {
+        CrashDialog.EnvironmentProbe = static () => Interactive with { OutputRedirected = true };
+        CrashDialog.SupervisedChildProbe = static () => true;
+        Directory.CreateDirectory(Path.GetDirectoryName(_directory)!);
+        File.WriteAllText(_directory, "not a directory");
+        try
+        {
+            Assert.Equal(CrashDialogOutcome.Failed, CrashDialog.TryShowFatal(true, CrashKind.Unhandled, new InvalidOperationException("x"), false, "Diagnostics:OnUnhandled = Exit", "unhandled", "id", "report"));
+            Assert.Empty(_presenter.Shown);
+            Assert.Contains(FaultLedger.Shared.Snapshot(), f => f.Site == CrashDialog.FailureSite);
+        }
+        finally
+        {
+            File.Delete(_directory);
+        }
     }
 
     [Fact]

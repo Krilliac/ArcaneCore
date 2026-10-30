@@ -4,6 +4,7 @@ using ArcaneCore.Game.Spells.Druid;
 using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Spells.Rules;
 using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Spells.Shaman;
 using ArcaneCore.Game.Spells.Warlock;
 using ArcaneCore.Game.Stats;
 using ArcaneCore.Kernel.Talents;
@@ -169,9 +170,27 @@ public static class TalentEffectCoverage
         new(ExternalReaderKind.DummySpell, 20375, 0, "Spells/Paladin/PaladinSpellScripts.cs",
             @"holder\.Auras\[JudgementEffectIndex\] is not \{ Type: AuraType\.Dummy \}"),
 
+        // Healing Way (29203, the stacking DUMMY aura the talent puts on a healed target): HealingWayRules multiplies the healing taken from Healing Wave
+        // (vmangos Unit::SpellHealingBonusTaken; cmangos Shaman.cpp HealingWay OnDamageCalculate).
+        new(ExternalReaderKind.DummySpell, HealingWayRules.HealingWayAura, 0, "Spells/Shaman/HealingWayRules.cs", @"holder\.Spell\.Id != HealingWayAura\b"),
+
         // Spirit of Redemption (20711): the killing blow on a priest with the talent aura makes the spirit (vmangos Unit::Kill, Unit.cpp:1108-1140).
         new(ExternalReaderKind.DummySpell, SpellSystem.SpiritOfRedemptionTalent, 0, "Spells/SpellSystem.SpiritOfRedemption.cs",
             @"HasAura\(priest, SpiritOfRedemptionTalent\)"),
+
+        // Healing done bonus of the totems and idols (SpellBonusModule.OverrideClassScriptHealingBonus, vmangos SpellCaster.cpp:1497-1500).
+        new(ExternalReaderKind.ClassScript, 3736, 0, "Spells/Casters/Bonus/SpellBonusModule.cs", @"case 3736: // Increased Lesser Healing Wave"),
+        new(ExternalReaderKind.ClassScript, 4415, 0, "Spells/Casters/Bonus/SpellBonusModule.cs", @"case 4415: // Increased Rejuvenation Healing"),
+
+        // Loatheb's Corrupted Mind (CorruptedMindCastCheck, vmangos Spell.cpp:5412) and Nefarian's Berserk (BerserkNoShapeshiftCheck, Spell.cpp:6435).
+        new(ExternalReaderKind.ClassScript, 4327, 0, "Spells/Checks/CorruptedMindCastCheck.cs", @"MiscValue: CorruptedMindClassScript"),
+        new(ExternalReaderKind.ClassScript, 3654, 0, "Spells/Generic/NefarianAndIllusionAuras.cs", @"HasAura\(context\.Caster, NefarianBerserkModule\.Berserk\)"),
+
+        // Evil Twin: the summon player effect refuses the player who has it (GameObjectSpellEffects.EffectSummonPlayer, SpellEffects.cpp:4791).
+        new(ExternalReaderKind.DummySpell, 23445, 0, "GameObjects/GameObjectSpellEffects.cs", @"HasAura\(target, EvilTwin\)"),
+        // Mind Exhaustion (23958): the Orb of Domination refuses a player who carries it (vmangos GOHello_go_orb_of_domination).
+        new(ExternalReaderKind.DummySpell, 23958, 0, "Instances/Scripts/BlackwingLair/BlackwingLairInstance.Events.cs",
+            @"HasAura\(player, MindExhaustion\)"),
 
         // Demonic Sacrifice: removed when a demon is summoned (SummonService) and kept through death (ResurrectEffects).
         new(ExternalReaderKind.ClassScript, (uint)DemonicSacrificeScript.ClassScriptMisc, 0, "Pets/SummonService.Demons.cs",

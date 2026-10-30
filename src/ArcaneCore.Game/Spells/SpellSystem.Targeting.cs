@@ -420,7 +420,6 @@ public sealed partial class SpellSystem
 
     private List<(Unit Unit, float Multiplier)> Area(SpellCast cast, SpellEffectInfo effect, float x, float y, float z, float radius, Func<Unit, bool> filter, bool cone)
     {
-        _ = effect;
         Unit caster = cast.Caster;
         if (caster.Map is not { } map || radius <= 0)
         {
@@ -430,7 +429,7 @@ public sealed partial class SpellSystem
         var found = new List<Unit>();
         foreach (Unit unit in UnitsInRadius(map, x, y, z, radius))
         {
-            if (!filter(unit))
+            if (!filter(unit) || !PassesTargetCreatureType(cast.Spell, effect, unit))
             {
                 continue;
             }
@@ -501,7 +500,7 @@ public sealed partial class SpellSystem
             SpellImplicitTarget.UnitEnemyNearCaster => IsEnemy(caster, u),
             SpellImplicitTarget.UnitFriendNearCaster => IsFriend(cast, u),
             _ => u.IsAlive && !ReferenceEquals(u, caster),
-        } && IsInLineOfSight(cast.Spell, caster, u)).ToList();
+        } && IsInLineOfSight(cast.Spell, caster, u) && PassesTargetCreatureType(cast.Spell, effect, u)).ToList();
         int count = Math.Max(1, ChainTargetsOf(cast, effect));
         if (MaxTargetsOf(cast.Spell) > 0)
         {
@@ -557,7 +556,7 @@ public sealed partial class SpellSystem
             float best = float.MaxValue;
             foreach (Unit unit in UnitsInRadius(map, last.X, last.Y, last.Z, jumpRadius))
             {
-                if (used.Contains(unit) || !(hostile ? IsEnemy(caster, unit) : IsFriend(cast, unit)) || !IsInLineOfSight(cast.Spell, last, unit))
+                if (used.Contains(unit) || !(hostile ? IsEnemy(caster, unit) : IsFriend(cast, unit)) || !IsInLineOfSight(cast.Spell, last, unit) || !PassesTargetCreatureType(cast.Spell, effect, unit))
                 {
                     continue;
                 }

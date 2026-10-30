@@ -97,7 +97,7 @@ public sealed class ThermapluggAi(Creature creature, GnomereganInstance instance
         if (_activateMs >= diffMs) _activateMs -= diffMs;
         else if (DoCast(Me, _phaseTwo ? ActivateBombB : ActivateBombA) == CreatureCastResult.Ok)
         {
-            instance.ActivateBombFace(Random.Shared.Next(6));
+            // The face is activated by the spell's DUMMY (ThermapluggActivateBombScript).
             _activateMs = (uint)(Random.Shared.Next(_phaseTwo ? 6 : 12, _phaseTwo ? 13 : 18) * 1000);
             if (Random.Shared.Next(6) == 0) System?.SayText(Me, -1090026);
         }

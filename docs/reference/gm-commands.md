@@ -15,8 +15,8 @@ ArcaneCore stores four account levels. The vmangos levels are 0-7 (player, moder
 |---|---|---|
 | `Player` | 0 | 8 |
 | `Moderator` | 1 | 27 |
-| `GameMaster` | 3 | 402 |
-| `Administrator` | 6 | 602 |
+| `GameMaster` | 3 | 403 |
+| `Administrator` | 6 | 603 |
 
 The counts include the development-only commands below, which exist only when `HotReload:Commands` (for `.reload`) or the `World:HotCode` switches (for `.hotcode`, `.worldport`, `.hotmodule` and `.feature`) are on; all of those default to off.
 
@@ -664,10 +664,11 @@ A group (`...`) may also have a handler of its own that serves arguments naming 
 | `.rates reset` | 6 | Administrator | stored level through the map | Syntax: .rates reset [$name\|all] Put one rate (or all of them, the default) back to its configured value. |
 | `.rates history` | 3 | GameMaster | stored level through the map | Syntax: .rates history [#n] The last n rate changes (set, reset, reload), newest first, with who and why (25 by default, at most 25; the server keeps the last 100). |
 | `.rates overrides` | 3 | GameMaster | stored level through the map | Syntax: .rates overrides The .rates set lines that recreate every overridden rate, with the configured value each one would return to. |
-| `.rules` ... | 3 | GameMaster | stored level through the map | Syntax: .rules check [host] [owner_id] \| vocab [host] \| trace [guid] — rule engine tools for rule authors. |
+| `.rules` ... | 3 | GameMaster | stored level through the map | Syntax: .rules check [host] [owner_id] \| vocab [host] \| trace [guid] \| stats [host] — rule engine tools for rule authors. |
 | `.rules check` | 3 | GameMaster | stored level through the map | Syntax: .rules check [host] [owner_id] — what is loaded and every rule row that was rejected, with its reason (narrowed to a host and owner). |
 | `.rules vocab` | 3 | GameMaster | stored level through the map | Syntax: .rules vocab [host] — every event, action and target id with its parameters (a host's own plus the shared ones). |
 | `.rules trace` | 3 | GameMaster | stored level through the map | Syntax: .rules trace [guid] — start or stop tracing every rule evaluation of a subject (decimal or 0x guid); without a guid, show who is traced and the latest traced evaluations. |
+| `.rules stats` | 3 | GameMaster | stored level through the map | Syntax: .rules stats [host] — the evaluator counters of the running rule hosts: rules fired, actions run and failed, dropped runs, depth-limited starts, refused re-entrant firings, lost invokers and caught faults. |
 | `.hotcode` ... (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Code hot reload (development runner). |
 | `.hotcode status` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode status — generation, frozen/degraded state and whether the process differs from the build. |
 | `.hotcode refresh` (development only; added at start when `World:HotCode:Enabled` is true) | 6 | Administrator | stored level through the map | Syntax: .hotcode refresh — rescan opcode handlers, chat commands and default map updaters now. |

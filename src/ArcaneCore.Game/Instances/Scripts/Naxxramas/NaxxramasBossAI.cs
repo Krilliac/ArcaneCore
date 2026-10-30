@@ -166,6 +166,9 @@ public sealed class NaxxramasBossAI : RaidCreatureAI
     {
         // mangos-classic boss_anubrekhanAI::EnterEvadeMode: the summoned guards go first (Reset despawns them, SPELL_DESPAWN_GUARDS
         // 29379), then the linked database guards come back (FLAG_RESPAWN_ON_EVADE): dead or exploded ones respawn, living ones evade.
+        // Noth: mangos-classic boss_nothAI::EnterEvadeMode casts Despawn Summons (30228) first, the same way.
+        if (_entry == 15956) Cast(NaxxramasDespawnSummonsScript.DespawnCryptGuards, Me, triggered: true);
+        else if (_entry == 15954) Cast(NaxxramasDespawnSummonsScript.DespawnSummons, Me, triggered: true);
         base.OnEvade(); // resets and marks the encounter failed unless it is done
         if (_entry != 15956 || System is not { } system) return;
         foreach (Creature guard in StaticGuards())

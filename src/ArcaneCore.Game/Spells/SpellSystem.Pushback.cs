@@ -48,6 +48,11 @@ public sealed partial class SpellSystem
         }
         else if (cast.State == SpellCastState.Casting)
         {
+            if (cast.Uninterruptible)
+            {
+                return; // Enigma Blizzard Bonus: neither the pushback nor the damage cancel touches this channel (inferred, not verified against a retail capture)
+            }
+
             uint flags = (uint)cast.Spell.ChannelInterruptFlags;
             if ((flags & SpellChannelInterruptFlags.Delay) != 0)
             {
@@ -185,6 +190,11 @@ public sealed partial class SpellSystem
         if (!target.IsAlive || GetState(target.Guid) is not { CurrentCast: { } cast } state || !ReferenceEquals(state.Unit, target))
         {
             return;
+        }
+
+        if (cast.Uninterruptible)
+        {
+            return; // Enigma Blizzard Bonus: the interrupt effect finds nothing to interrupt and so locks no school (inferred, not verified against a retail capture)
         }
 
         bool channel = cast.State == SpellCastState.Casting;

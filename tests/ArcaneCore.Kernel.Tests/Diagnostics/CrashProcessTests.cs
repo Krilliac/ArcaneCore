@@ -172,6 +172,21 @@ public sealed class CrashProcessTests
         Assert.Empty(Directory.GetFiles(directory.Path));
     }
 
+    [Fact]
+    public async Task CrashDialog_InASupervisedChild_WritesTheReportFile_WithoutABox_AndExits70AsBefore()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync(new Dictionary<string, string> { [ArcaneCore.Kernel.Ops.ServerConsole.SupervisedChildDrain.EnvironmentVariable] = "world" }, "unhandled-dialog-live", directory.Path);
+
+        Assert.Equal(ExitCodes.UnhandledException, result.ExitCode);
+        AssertReport(result.StandardError, "unhandled exception (AppDomain.UnhandledException)", "probe-unhandled-message");
+        Assert.DoesNotContain("crash dialog:", result.StandardError, StringComparison.Ordinal);
+        string file = Assert.Single(Directory.GetFiles(directory.Path, "crash-report.*Z.txt"));
+        string written = File.ReadAllText(file);
+        Assert.Contains("Message: probe-unhandled-message", written, StringComparison.Ordinal);
+        Assert.Contains("==== end of crash report ====", written, StringComparison.Ordinal);
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()
@@ -211,7 +226,9 @@ public sealed class CrashProcessTests
         Assert.Contains("==== end of crash report ====", stderr, StringComparison.Ordinal);
     }
 
-    private static async Task<ProbeResult> RunProbeAsync(string scenario, params string[] extra)
+    private static Task<ProbeResult> RunProbeAsync(string scenario, params string[] extra) => RunProbeAsync(null, scenario, extra);
+
+    private static async Task<ProbeResult> RunProbeAsync(IReadOnlyDictionary<string, string>? environment, string scenario, params string[] extra)
     {
         var start = new ProcessStartInfo(DotNetHost())
         {
@@ -230,6 +247,10 @@ public sealed class CrashProcessTests
 
         // No dump on the FailFast paths; the test only wants the exit status and the text.
         start.Environment["DOTNET_DbgEnableMiniDump"] = "0";
+        foreach ((string key, string value) in environment ?? new Dictionary<string, string>())
+        {
+            start.Environment[key] = value;
+        }
 
         using var process = Process.Start(start) ?? throw new InvalidOperationException("could not start the probe process");
         Task<string> stdout = process.StandardOutput.ReadToEndAsync();

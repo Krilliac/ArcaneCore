@@ -121,13 +121,13 @@ public sealed class RuleSubjectState
     }
 }
 
-/// <summary>A delayed remainder of an action sequence: run <see cref="Actions"/> from <see cref="Next"/> once the clock reaches <see cref="DueMs"/>.</summary>
+/// <summary>A delayed remainder of an action sequence: run <see cref="Actions"/> from <see cref="Next"/> once the clock reaches <see cref="DueMs"/>. It holds the invoker's guid, never the invoker (0 = none); the evaluator resolves it again on resume.</summary>
 internal struct PendingRun
 {
     public CompiledAction[]? Actions;
     public CompiledRuleList? List;
     public int Next;
     public long DueMs;
-    public IRuleSubject? Invoker;
+    public ulong InvokerGuid;
     public int RuleId;
 }

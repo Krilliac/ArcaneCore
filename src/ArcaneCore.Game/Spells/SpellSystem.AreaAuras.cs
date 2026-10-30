@@ -22,6 +22,25 @@ public sealed partial class SpellSystem
         EffectApplyAura(context);
     }
 
+    /// <summary>
+    /// SPELL_EFFECT_APPLY_AREA_AURA_ENEMY (vmangos Spell::EffectApplyAreaAura, AreaAura constructor SpellAuras.cpp:441-445): like the party effect, the
+    /// caster alone holds the source, and its aura does nothing on itself (type NONE, which is why it also takes no period). <see cref="UpdateAreaAuras"/>
+    /// puts the real aura on every enemy within the effect radius and takes it away from those that leave it.
+    /// </summary>
+    private void EffectApplyAreaAuraEnemy(SpellEffectContext context)
+    {
+        if (!ReferenceEquals(context.Target, context.Caster))
+        {
+            return;
+        }
+
+        EffectApplyAura(context);
+        if (context.PendingHolder?.Auras[context.EffectIndex] is { } real)
+        {
+            context.PendingHolder.SetAura(new SpellAura(real.EffectIndex, AuraType.None, real.Amount, 0, real.MiscValue, context.Target.PowerType));
+        }
+    }
+
     // Scratch collections for the per-area-source, per-tick update. Each has an in-use flag: AddAuraHolder/RemoveHolder can recurse into
     // another area-aura update, and the outer frame is still iterating its scratch, so a nested acquire gets a fresh local instead.
     // World thread only. Always cleared on release so no references are retained.
@@ -109,7 +128,7 @@ public sealed partial class SpellSystem
         IReadOnlyList<SpellEffectInfo> effects = source.Spell.Effects;
         for (int i = 0; i < effects.Count; i++)
         {
-            if (effects[i].Effect == SpellEffectName.ApplyAreaAuraParty && (!anyRadius || effects[i].Radius > radius || float.IsNaN(radius)))
+            if (effects[i].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraEnemy && (!anyRadius || effects[i].Radius > radius || float.IsNaN(radius)))
             {
                 radius = effects[i].Radius;
                 anyRadius = true;
@@ -117,6 +136,7 @@ public sealed partial class SpellSystem
         }
 
         // vmangos AreaAura::AreaAura (SpellAuras.cpp:420-422): SPELLMOD_RADIUS of the caster on the area radius.
+        bool enemyArea = source.Spell.HasEffect(SpellEffectName.ApplyAreaAuraEnemy);
         radius = radius > 0 ? ModFloat(state.Unit, source.Spell, SpellModOp.Radius, radius) : radius;
         bool inRangeOwned = !_areaInRangeScratchInUse;
         HashSet<ObjectGuid> inRange = inRangeOwned ? _areaInRangeScratch : [];
@@ -130,7 +150,22 @@ public sealed partial class SpellSystem
                 _areaMemberScratchInUse |= membersOwned;
                 try
                 {
-                    Groups.AppendGroupMembers(state.Unit, raid: false, members);
+                    if (enemyArea)
+                    {
+                        // vmangos AreaAura::Update, AREA_AURA_ENEMY (SpellAuras.cpp:689-695): every valid AoE target around the caster.
+                        foreach (Unit unit in UnitsInRadius(map, state.Unit.X, state.Unit.Y, state.Unit.Z, radius))
+                        {
+                            if (!ReferenceEquals(unit, state.Unit) && IsEnemy(state.Unit, unit))
+                            {
+                                members.Add(unit.Guid);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        Groups.AppendGroupMembers(state.Unit, raid: false, members);
+                    }
+
                     for (int m = 0; m < members.Count; m++)
                     {
                         ObjectGuid guid = members[m];
@@ -156,7 +191,7 @@ public sealed partial class SpellSystem
 
                         // vmangos AreaAura::Update (SpellAuras.cpp:750-790): a member gets the rank its level allows (SelectAuraRankForLevel), with
                         // that rank's simple effect value, and nothing when even the first rank is too high or the aura is for players only.
-                        if (SelectAuraRankForLevel(source.Spell, member.Level) is not { } actual
+                        if ((enemyArea ? source.Spell : SelectAuraRankForLevel(source.Spell, member.Level)) is not { } actual
                             || ((actual.AttributesEx3 & AreaAuraOnlyOnPlayer) != 0 && member is not Player))
                         {
                             continue;
@@ -186,8 +221,17 @@ public sealed partial class SpellSystem
                         };
                         foreach (SpellAura? aura in source.AuraSpan)
                         {
-                            if (aura is not null && source.Spell.Effects[aura.EffectIndex].Effect == SpellEffectName.ApplyAreaAuraParty)
+                            if (aura is not null && source.Spell.Effects[aura.EffectIndex].Effect is SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraEnemy)
                             {
+                                if (enemyArea)
+                                {
+                                    // The source on the caster carries no aura type (vmangos SpellAuras.cpp:443-444); the child takes the effect's own.
+                                    SpellEffectInfo effectInfo = source.Spell.Effects[aura.EffectIndex];
+                                    child.SetAura(new SpellAura(aura.EffectIndex, effectInfo.AuraType, aura.Amount,
+                                        ModifiedAmplitude(state.Unit, source.Spell, effectInfo), effectInfo.MiscValue, member.PowerType));
+                                    continue;
+                                }
+
                                 uint amplitude = aura.Type == AuraType.ModPowerRegen
                                     ? source.Spell.Effects[aura.EffectIndex].Amplitude : aura.Amplitude;
                                 int amount = lowerRank ? actual.Effects[aura.EffectIndex].BasePoints + actual.Effects[aura.EffectIndex].BaseDice : aura.Amount;

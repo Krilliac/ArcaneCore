@@ -15,9 +15,12 @@ public interface ICrashDialogPresenter
 }
 
 /// <summary>
-/// The Win32 <c>MessageBoxW</c> (user32.dll): an error icon, an OK button, top-most and brought to the foreground. No WinForms or WPF
-/// dependency; on any other platform <see cref="Show"/> throws <see cref="PlatformNotSupportedException"/> (the caller never gets there,
-/// see <see cref="CrashDialog.ShouldShow"/>). Ctrl+C in a message box copies its whole text to the clipboard.
+/// The Win32 crash box: a comctl32 <c>TaskDialogIndirect</c> with an error icon, a <b>Copy</b> button that copies the box's title and full
+/// text to the clipboard and leaves the box open, and an OK button that closes it; top-most and brought to the foreground. comctl32
+/// version 6 is activated for the call at run time (no manifest on the exes, see <see cref="CrashDialogTaskDialog"/>). When that or the
+/// task dialog fails before the box appears, it falls back to the Win32 <c>MessageBoxW</c> (user32.dll: an error icon and OK, where Ctrl+C
+/// copies the text) and says why on standard error. No WinForms or WPF dependency; on any other platform <see cref="Show"/> throws
+/// <see cref="PlatformNotSupportedException"/> (the caller never gets there, see <see cref="CrashDialog.ShouldShow"/>).
 /// </summary>
 public sealed class MessageBoxCrashDialogPresenter : ICrashDialogPresenter
 {
@@ -42,10 +45,30 @@ public sealed class MessageBoxCrashDialogPresenter : ICrashDialogPresenter
             throw new PlatformNotSupportedException("the crash dialog is a Win32 message box and exists only on Windows");
         }
 
+        if (CrashDialogTaskDialog.TryShow(title, text, out string? failure))
+        {
+            return;
+        }
+
+        ReportFallback(failure);
+
         // MessageBoxW returns 0 when it could not create the box (no desktop, a non-interactive window station).
         if (MessageBoxW(IntPtr.Zero, text, title, MbOk | MbIconError | MbSetForeground | MbTopMost) == 0)
         {
             throw new Win32Exception(Marshal.GetLastPInvokeError());
+        }
+    }
+
+    private static void ReportFallback(string? failure)
+    {
+        try
+        {
+            Console.Error.WriteLine("crash dialog: no Copy button, using a plain message box: " + (failure ?? "unknown reason"));
+            Console.Error.Flush();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Standard error is gone; the plain message box still opens.
         }
     }
 
@@ -182,6 +205,9 @@ public enum CrashDialogOutcome
 
     /// <summary>The dialog (or its report file) failed; the failure was recorded and the crash path went on.</summary>
     Failed,
+
+    /// <summary>The session cannot show a dialog, but this is a supervised child (<see cref="CrashDialog.SupervisedChildProbe"/>): the report file was written for the supervisor's crash dialog and no box was shown.</summary>
+    ReportOnly,
 }
 
 /// <summary>
@@ -226,6 +252,9 @@ public static class CrashDialog
         set => Volatile.Write(ref s_environmentProbe, value ?? CrashDialogEnvironment.Detect);
     }
 
+    /// <summary>Whether this process is a supervised cluster child (the supervisor sets <see cref="Ops.ServerConsole.SupervisedChildDrain.EnvironmentVariable"/>); tests substitute a fixed answer.</summary>
+    public static Func<bool> SupervisedChildProbe { get; set; } = static () => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Ops.ServerConsole.SupervisedChildDrain.EnvironmentVariable));
+
     /// <summary>Where the crash report file is written; null is <see cref="AppContext.BaseDirectory"/>, next to the crash journal.</summary>
     public static string? ReportDirectory { get; set; }
 
@@ -249,7 +278,8 @@ public static class CrashDialog
 
         try
         {
-            if (!ShouldShow(enabled, EnvironmentProbe()))
+            bool canShow = ShouldShow(enabled, EnvironmentProbe());
+            if (!canShow && !SupervisedChildProbe())
             {
                 return CrashDialogOutcome.NotInteractive;
             }
@@ -271,6 +301,12 @@ public static class CrashDialog
                 failed = true;
                 RecordFailure(ex, "could not write the crash report file " + path);
                 text = Compose(facts with { ReportPath = null, ReportError = ex.GetType().Name + ": " + ex.Message });
+            }
+
+            if (!canShow)
+            {
+                // A supervised child's streams are redirected, so no box: the file is for the supervisor's crash dialog, which shows it.
+                return failed ? CrashDialogOutcome.Failed : CrashDialogOutcome.ReportOnly;
             }
 
             Presenter.Show(text.Title, text.BoxText);
@@ -493,7 +529,8 @@ public static class CrashDialog
         return "the runtime writes one when the process aborts: " + (string.IsNullOrEmpty(name) ? "the runtime's default location (the temp directory)" : name);
     }
 
-    private static string Fit(string text, string? fullTextPath)
+    /// <summary>Cuts <paramref name="text"/> to <see cref="MaxBoxLines"/> lines of <see cref="MaxBoxLineLength"/> characters, naming <paramref name="fullTextPath"/> when lines were dropped.</summary>
+    public static string Fit(string text, string? fullTextPath)
     {
         string[] lines = text.Split('\n');
         var sb = new StringBuilder(Math.Min(text.Length, MaxBoxLines * (MaxBoxLineLength + 2)));

@@ -93,21 +93,39 @@ public sealed partial class WorldSession
     /// </summary>
     private async ValueTask<bool> DispatchFromClientAsync(WorldOpcode opcode, byte[] payload, CancellationToken token)
     {
-        if (_dispatchGate is not { } gate)
-        {
-            return await DispatchAsync(opcode, payload).ConfigureAwait(false);
-        }
-
-        await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            return await DispatchAsync(opcode, payload).ConfigureAwait(false);
+            if (_dispatchGate is not { } gate)
+            {
+                return await DispatchAsync(opcode, payload).ConfigureAwait(false);
+            }
+
+            await gate.WaitAsync(token).ConfigureAwait(false);
+            try
+            {
+                return await DispatchAsync(opcode, payload).ConfigureAwait(false);
+            }
+            finally
+            {
+                gate.Release();
+            }
         }
         finally
         {
-            gate.Release();
+            Interlocked.Increment(ref _inboundDispatched);
         }
     }
+
+    private long _inboundDispatched;
+
+    /// <summary>
+    /// Client packets this session has finished dispatching (queued for the world thread, answered by the read loop or dropped), whatever the
+    /// outcome. Lets a test host tell that everything a client sent has arrived before it steps the world. Thread-safe.
+    /// </summary>
+    internal long InboundDispatched => Interlocked.Read(ref _inboundDispatched);
+
+    /// <summary>Packets queued for the world thread and not yet handled (the inbound world queue depth). Thread-safe.</summary>
+    internal int InboundWorldQueueDepth => Volatile.Read(ref _queuedPackets);
 
     /// <summary>
     /// Hand <paramref name="payload"/> to the session's dispatcher as if its client had just sent <paramref name="opcode"/>: the same

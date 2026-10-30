@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Creatures;
+using ArcaneCore.Data.GameObjects;
 using ArcaneCore.Data.Loot;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Instances;
@@ -90,6 +91,9 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
 
         // The dead creatures of a reset instance come back with it (vmangos MapPersistentState deletes its creature_respawn rows).
         await db.Set<CreatureRespawnRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+
+        // Its looted chests and mined nodes too (vmangos MapPersistentState deletes its gameobject_respawn rows, Maps/MapPersistentStateMgr.cpp:272).
+        await db.Set<GameObjectRespawnRow>().Where(r => r.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
         // A body in the instance stays (vmangos DeleteInstanceFromDB leaves the corpse table alone) but stops naming it: the id
         // can be handed out again after a restart. No new instance map adopts an instance-0 body; only a login inside an instance of

@@ -274,7 +274,7 @@ public sealed class PersistenceProbeRegistryTests
 
         PersistenceProbeRegistry registry = WorldPersistenceProbes.CreateRegistry(services);
 
-        Assert.Equal(19, registry.Count);
+        Assert.Equal(20, registry.Count);
         Assert.Empty(registry.Snapshot()); // nothing is loaded in an empty container: every queue is skipped, none throws
     }
 }

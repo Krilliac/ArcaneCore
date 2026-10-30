@@ -1746,6 +1746,52 @@ Cluster.Fencing.Enabled = false
 # Cluster.Fencing.TakeoverIncarnation =
 
 #----------------------------------------------------------------------------
+# Cluster:Node
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Node.AuthorityLeaseRenewSeconds
+#        Description: How often a held lease is renewed (1 to a third of the TTL). A node that
+#                     cannot renew in time stops itself rather than run a singleton without the
+#                     lease. Only used when Role is not Combined.
+#        Type: int
+#        Default: 10
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternode
+#
+Cluster.Node.AuthorityLeaseRenewSeconds = 10
+
+#
+#    Cluster.Node.AuthorityLeaseTtlSeconds
+#        Description: How long a realm singleton lease stays valid without a renewal (5 to 600). A
+#                     node that dies releases its singletons to another node after this long. Only
+#                     used when Role is not Combined.
+#        Type: int
+#        Default: 30
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternode
+#
+Cluster.Node.AuthorityLeaseTtlSeconds = 30
+
+#
+#    Cluster.Node.Role
+#        Description: The role this World process runs as: Combined (the default) runs every feature
+#                     here. MapWorker needs Cluster:Worker:Enabled = true; the realm-wide singletons
+#                     (the auction house bot and AutoBroadcast) then run on this node only while it
+#                     holds their database lease. Social, Economy and Gateway are refused on a World
+#                     process: the shared auction, mail and presence state they would need does not
+#                     exist yet. Values: Combined, Gateway, MapWorker, Social, Economy.
+#        Type: ClusterNodeRole
+#        Default: Combined
+#        Allowed: Combined | Gateway | MapWorker | Social | Economy
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusternode
+#
+Cluster.Node.Role = Combined
+
+#----------------------------------------------------------------------------
 # Cluster:NodeBridge
 #----------------------------------------------------------------------------
 
@@ -13873,6 +13919,35 @@ World.Playerbots.Chat.Voice.GeneralSharePercent = 25
 World.Playerbots.Chat.Voice.GroupCalls = true
 
 #
+#    World.Playerbots.Chat.Voice.LfgMaxTravelSeconds
+#        Description: The longest planned trip, in seconds, from which a bot still advertises a
+#                     place under LfgNearDungeonOnly (0..7200; 0 = only the same or a bordering
+#                     zone, or a summon).
+#        Type: int
+#        Default: 600
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.LfgMaxTravelSeconds = 600
+
+#
+#    World.Playerbots.Chat.Voice.LfgNearDungeonOnly
+#        Description: A bot advertises a dungeon, raid or group quest in chat only when it is near
+#                     the place (on by default): in the same or a bordering zone, within
+#                     LfgMaxTravelSeconds of travel by the planner (flight paths, hearthstone, mage
+#                     portals, ships), or when a warlock waiting for the same goal can summon it.
+#                     Otherwise the bot keeps quiet and another waiting bot may post. Off: the bot
+#                     that waited longest always posts.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Chat.Voice.LfgNearDungeonOnly = true
+
+#
 #    World.Playerbots.Chat.Voice.LinesPerPass
 #        Description: The most lines the voice hands to the chat service in one social pass, every
 #                     topic together (1..100).
@@ -14877,6 +14952,22 @@ World.Playerbots.Groups.Cooperation.RefuseAffinity = -40
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Groups.Cooperation.SameGoalMeetingRadiusYards = 150
+
+#
+#    World.Playerbots.Groups.DungeonOutOfBandNeedsReason
+#        Description: A bot whose level is outside a dungeon's level band (the catalogue band, else
+#                     the 1.12 recommended levels with two levels of slack) waits for a group there
+#                     only with a reason: a quest that is not grey for it, an attunement or key
+#                     step, a gear upgrade the dungeon drops, a guildmate or friend already waiting,
+#                     or a forming group of its level (on by default). Off: every dungeon holding
+#                     the objective is allowed, still ranked in-band first, then nearest band.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Groups.DungeonOutOfBandNeedsReason = true
 
 #
 #    World.Playerbots.Groups.DungeonRuns.BandAboveBoss
@@ -19299,6 +19390,21 @@ World.Playerbots.Qa.GitHub.CloseAbsorbedDuplicates = false
 #        Docs: docs/reference/configuration.md#worldplayerbotsqa
 #
 World.Playerbots.Qa.GitHub.CommentIntervalHours = 24
+
+#
+#    World.Playerbots.Qa.GitHub.CreateWithinHours
+#        Description: A new issue is opened only for a finding met since this start-up, or last seen
+#                     within this many hours (0..8760; 0 = only findings met since this start-up). A
+#                     finding known only from history (loaded at start-up, last seen earlier than
+#                     that) never opens one, and is not looked up; an issue it already holds (by
+#                     number) is still updated.
+#        Type: int
+#        Default: 24
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#worldplayerbotsqa
+#
+World.Playerbots.Qa.GitHub.CreateWithinHours = 24
 
 #
 #    World.Playerbots.Qa.GitHub.Enabled

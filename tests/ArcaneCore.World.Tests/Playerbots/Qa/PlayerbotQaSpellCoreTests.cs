@@ -134,7 +134,9 @@ public sealed class PlayerbotQaSpellCoreTests : IDisposable
         configure?.Invoke(options.GitHub);
         var github = new FakeGitHub();
         var time = new ManualTime(QaData.T0);
-        var aggregator = new PlayerbotQaAggregator(1000, 5);
+        // The findings are stamped with the build the publisher runs, as on a server (both read the assembly version): a gap met by this
+        // build may open an issue however long ago (GitHub:CreateWithinHours bounds only findings the running build has not met).
+        var aggregator = new PlayerbotQaAggregator(1000, 5, build: "test-build");
         var publisher = new PlayerbotQaPublisher(options, _directory, aggregator, new PlayerbotQaRedactor(), new ListLogger(), _ => QaData.FakeToken,
             token => new PlayerbotQaGitHubClient(github.Http, QaData.Repo, token, options.GitHub, (_, _) => Task.CompletedTask, null, () => time.GetUtcNow()),
             time, "test-build", null, (_, _) => Task.CompletedTask);

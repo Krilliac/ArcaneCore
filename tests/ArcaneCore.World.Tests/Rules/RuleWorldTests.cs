@@ -79,7 +79,7 @@ public sealed class RuleWorldTests
 
         Assert.Single(f.Rules.Catalog.Texts);
         RuleRejection rejection = Assert.Single(f.Rules.Catalog.Rejected);
-        Assert.Equal("rule 5: host 3 is not registered (registered: 2 creature, 5 world_event)", rejection.ToString());
+        Assert.Equal("rule 5: host 3 is not registered (registered: 1 bot, 2 creature, 5 world_event)", rejection.ToString());
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public sealed class RuleWorldTests
 
         Assert.Equal(ReloadStatus.Rejected, result.Status);
         Assert.Same(before, f.Rules.Catalog);
-        Assert.Contains("rule 5: host 3 is not registered (registered: 2 creature, 5 world_event)", result.Notes);
+        Assert.Contains("rule 5: host 3 is not registered (registered: 1 bot, 2 creature, 5 world_event)", result.Notes);
     }
 
     [Fact]

@@ -10,8 +10,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | Component | Current version | Version-1 base tables |
 |---|---|---|
 | `auth` | 7 | `account`, `realmlist` |
-| `characters` | 66 | `characters` |
-| `world` | 63 | `player_create_info`, `race_info`, `class_info` |
+| `characters` | 68 | `characters` |
+| `world` | 66 | `player_create_info`, `race_info`, `class_info` |
 
 ## `auth`
 
@@ -93,6 +93,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 64 | `Characters.Playerbots.PlayerbotRelationDataModule` | creates `playerbot_relation` | yes |
 | 65 | `Characters.Transfers.ClusterTransferStateIndexDataModule` | repairs the model's indexes of `cluster_transfer_decision` | yes |
 | 66 | `Characters.Playerbots.PlayerbotTradeRecordDataModule` | creates `playerbot_trade_record` | yes |
+| 67 | `Characters.Cluster.RealmAuthorityLeaseDataModule` | creates `realm_authority_lease` | yes |
+| 68 | `GameObjects.GameObjectRespawnDataModule` | creates `gameobject_respawn` | yes |
 
 ## `world`
 
@@ -160,5 +162,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 61 | `World.Creatures.CreatureImmunityDataModule` | creates `creature_immunities`; adds columns `creature_template.MechanicImmuneMask`, `creature_template.SchoolImmuneMask` |
 | 62 | `World.WorldState.HolidayFlavourDataModule` | creates `holiday_flavour` |
 | 63 | `World.Tuning.TuningDataModule` | creates `auction_bot_value`, `auction_bot_loot`, `playerbot_ship_route`, `playerbot_elevator_region`, `playerbot_tram_network` |
+| 64 | `World.Rules.PlayerbotLadderDataModule` | no changes |
+| 65 | `World.Creatures.DbSpellScriptDataModule` | creates `dbscripts_on_spell` |
+| 66 | `Content.Spells.SpellEffectModDataModule` | creates `spell_effect_mod` |
 
 The last column is `yes` when the owning module implements or registers an `ICharacterDataCleanup` (it runs inside the character-deletion transaction); `no` means the module registers none; `-` is a step owned by the database context itself.

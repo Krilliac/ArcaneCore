@@ -12,6 +12,9 @@ internal enum DbScriptUniqueness
     SourceAndTarget,
     Source,
     Target,
+
+    /// <summary>cmangos SCRIPT_EXEC_PARAM_NONE (Maps/Map.h:235): start regardless of a run already scheduled (the spell scripts).</summary>
+    None,
 }
 
 /// <summary>A scheduled step of a running relay script (cmangos ScriptAction in Map::m_scriptSchedule).</summary>
@@ -39,7 +42,7 @@ internal sealed class RelayScriptRunner
     /// the object the execution parameter leaves out).
     /// </summary>
     public bool IsRunning(uint scriptId, ObjectGuid source, ObjectGuid target, DbScriptUniqueness unique = DbScriptUniqueness.SourceAndTarget)
-        => _pending.Exists(p => p.Step.Id == scriptId
+        => unique != DbScriptUniqueness.None && _pending.Exists(p => p.Step.Id == scriptId
             && (unique == DbScriptUniqueness.Target || p.Source == source)
             && (unique == DbScriptUniqueness.Source || p.Target == target));
 
