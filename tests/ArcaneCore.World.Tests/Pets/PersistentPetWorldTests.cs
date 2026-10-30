@@ -1,4 +1,11 @@
+using System.Runtime.CompilerServices;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.TestSupport;
+using ArcaneCore.World.Net;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -33,6 +40,36 @@ public sealed class PersistentPetWorldTests
 
         Assert.Equal(loggedIn - 1, Subscribers(host.World, "PlayerLoggedIn"));
         Assert.Equal(loggingOut - 1, Subscribers(host.World, "PlayerLoggingOut"));
+    }
+
+    [Fact]
+    public async Task ALoginThatNeverEntersTheWorld_DoesNotPinItsPlayer()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+            services.AddSingleton<IPersistentPetStore>(new MemoryPetStore()));
+        var feature = host.WorldServices.GetRequiredService<ArcaneCore.World.Pets.PersistentPetFeature>();
+        await using AsyncServiceScope scope = host.WorldServices.CreateAsyncScope();
+        using var stream = new MemoryStream();
+        var session = new WorldSession(stream, "127.0.0.1:41100", scope.ServiceProvider, host.Opcodes, host.World, host.Registry,
+            new WorldSessionOptions(), NullLogger.Instance);
+
+        WeakReference weak = await LoadAndAbandonAsync(feature, session);   // the login aborts: PlayerLoggedIn never fires
+        for (int i = 0; i < 5 && weak.IsAlive; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
+        Assert.False(weak.IsAlive);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<WeakReference> LoadAndAbandonAsync(ArcaneCore.World.Pets.PersistentPetFeature feature, WorldSession session)
+    {
+        var record = new CharacterRecord { Id = 77, AccountId = 1, Name = "Aborted", Race = 1, Class = (byte)Class.Hunter, Level = 10 };
+        var player = new Player(record, new PlayerAppearance(49, 1, PowerType.Mana, 60, 0, 60, 100, 100, 100), new NullPlayerSession());
+        await feature.OnPlayerLoadingAsync(session, record, player);
+        return new WeakReference(player);
     }
 
     // A field-like event's backing field carries the event's name; its invocation list is the subscriber count.

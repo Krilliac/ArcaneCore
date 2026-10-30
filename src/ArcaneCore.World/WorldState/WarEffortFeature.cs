@@ -277,7 +277,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             },
             ex =>
             {
-                if (_queuedPhase == phase) _queuedPhase = null;
+                // Keep _queuedPhase: the phase write is idempotent and the next five-second refresh relaunches it (like the pending
+                // boss deaths). Clearing it lost the Gathering start, and that refresh then saw Disabled and stopped event 120.
                 foreach (int done in result.FlushedBossDeaths) _pendingBossDeaths.Remove(done);
                 FaultLedger.Shared.Record("world-event.war-effort", ex);
                 AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"refresh-store error={ex.GetType().Name}: {ex.Message}");
