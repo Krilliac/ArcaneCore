@@ -107,7 +107,7 @@ internal static class CopyValues
         string or long or double or byte[] => value,
         bool b => b ? 1L : 0L,
         sbyte or byte or short or ushort or int or uint => System.Convert.ToInt64(value, CultureInfo.InvariantCulture),
-        ulong u => u <= long.MaxValue ? (long)u : u.ToString(CultureInfo.InvariantCulture),
+        ulong u => unchecked((long)u), // SQLite has no unsigned 64-bit integer: EF Core and Microsoft.Data.Sqlite store the same bits as a signed one
         float f => (double)f,
         decimal d => d.ToString(CultureInfo.InvariantCulture),
         DateTime t => t.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFF", CultureInfo.InvariantCulture),
@@ -228,56 +228,34 @@ internal static class CopyValues
         _ => throw new InvalidCastException($"a {value.GetType().Name} is not a GUID"),
     };
 
+
     /// <summary>
-    /// A text that is equal for equal values whatever engine they came from, for a value already passed through <see cref="Convert"/>:
-    /// the content check hashes it. Each part carries a type tag, and a string its length, so no two different rows share a text.
+    /// A raw value as the model's CLR type <paramref name="clr"/> before it is converted to a target column: the one case the raw value does not
+    /// already carry is a <see cref="ulong"/>, which SQLite stores as the same 64 bits read as a signed integer (a GUID such as 0xF130000000000001
+    /// reads back negative), PostgreSQL as numeric(20,0) (a decimal) and MariaDB as bigint unsigned (a ulong).
     /// </summary>
-    public static void AppendCanonical(StringBuilder text, object value)
+    public static object Lift(object? raw, Type? clr)
     {
-        switch (value)
+        if (raw is null or DBNull)
         {
-            case DBNull:
-                text.Append('N');
-                break;
-            case string s:
-                text.Append('s').Append(s.Length.ToString(CultureInfo.InvariantCulture)).Append(':').Append(s);
-                break;
-            case bool b:
-                text.Append(b ? "b1" : "b0");
-                break;
-            case long l:
-                text.Append('i').Append(l.ToString(CultureInfo.InvariantCulture));
-                break;
-            case ulong u:
-                text.Append('i').Append(u.ToString(CultureInfo.InvariantCulture));
-                break;
-            case decimal d:
-                text.Append('d').Append((d / 1.0000000000000000000000000000m).ToString(CultureInfo.InvariantCulture));
-                break;
-            case double f:
-                text.Append('f').Append(f.ToString("R", CultureInfo.InvariantCulture));
-                break;
-            case DateTime t:
-                text.Append('t').Append(t.Ticks.ToString(CultureInfo.InvariantCulture));
-                break;
-            case DateOnly o:
-                text.Append('D').Append(o.DayNumber.ToString(CultureInfo.InvariantCulture));
-                break;
-            case TimeSpan s:
-                text.Append('T').Append(s.Ticks.ToString(CultureInfo.InvariantCulture));
-                break;
-            case Guid g:
-                text.Append('g').Append(g.ToString("D", CultureInfo.InvariantCulture));
-                break;
-            case byte[] bytes:
-                text.Append('x').Append(System.Convert.ToHexString(bytes));
-                break;
-            default:
-                // Reached only when the target column type is not one the copy knows (CopyKind.Native on a server): any primitive is read back as itself.
-                text.Append('o').Append(System.Convert.ToString(value, CultureInfo.InvariantCulture));
-                break;
+            return DBNull.Value;
         }
 
-        text.Append('\u001f');
+        if (clr != typeof(ulong))
+        {
+            return raw;
+        }
+
+        return raw switch
+        {
+            ulong => raw,
+            long l => unchecked((ulong)l),
+            decimal d => (ulong)d,
+            sbyte or byte or short or ushort or int or uint => unchecked((ulong)System.Convert.ToInt64(raw, CultureInfo.InvariantCulture)),
+            string s => long.TryParse(s.Trim(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long signed)
+                ? unchecked((ulong)signed)
+                : ulong.Parse(s.Trim(), NumberStyles.None, CultureInfo.InvariantCulture),
+            _ => throw new FormatException($"{raw.GetType().Name} value cannot be read as an unsigned 64-bit integer"),
+        };
     }
 }

@@ -5,6 +5,7 @@ using ArcaneCore.Data.ClientData;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Import;
+using ArcaneCore.Data.Schema.Upgrade.Copy;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -89,10 +90,13 @@ public static partial class DbUpgradeCli
     public static Task<int> RunAsync(
         string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, CancellationToken cancellationToken)
         => RunAsync(args, database, output, error, dbcDirectory, environment: null, cancellationToken);
-
     /// <summary>As above, with the environment lookup <c>copy</c> reads its ARCANE_DB_TARGET_* variables through (null: the process environment); a seam for tests.</summary>
-    public static async Task<int> RunAsync(
+    public static Task<int> RunAsync(
         string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, Func<string, string?>? environment, CancellationToken cancellationToken)
+        => RunAsync(args, database, output, error, dbcDirectory, environment, hooks: null, cancellationToken);
+
+    internal static async Task<int> RunAsync(
+        string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, Func<string, string?>? environment, DbCopyHooks? hooks, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(database);
@@ -113,7 +117,7 @@ public static partial class DbUpgradeCli
         if (args.Length >= 2 && args[0] == "dbc" && args[1] == "dump")
             return await DbcDump.RunAsync(args[2..], dbcDirectory, output, error).ConfigureAwait(false);
 
-        var run = new Run(database, output, error) { DbcDirectory = dbcDirectory, Environment = environment ?? System.Environment.GetEnvironmentVariable };
+        var run = new Run(database, output, error) { DbcDirectory = dbcDirectory, Environment = environment ?? System.Environment.GetEnvironmentVariable, Hooks = hooks };
         try
         {
             DbUpgradeArguments arguments = DbUpgradeArguments.Parse(args);

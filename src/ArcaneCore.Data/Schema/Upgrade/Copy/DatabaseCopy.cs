@@ -24,13 +24,13 @@ internal sealed record CopyTableResult(string Table, long SourceRows, long Targe
 /// emptiness check, the row copy in one target transaction, the sequence reset and the verification. Stateless; every method takes
 /// the two contexts. A context is owned by one thread at a time (the caller awaits each call before the next).
 /// </summary>
-internal static class DatabaseCopy
+internal static partial class DatabaseCopy
 {
     /// <summary>Most rows in one INSERT.</summary>
     public const int MaxBatchRows = 500;
 
     private const int MaxBatchParameters = 20000;
-    private const int MaxBatchBytes = 4_000_000;
+    internal const int DefaultMaxBatchBytes = 4_000_000;
     private const string SqliteProvider = "Microsoft.EntityFrameworkCore.Sqlite";
     private const string PomeloProvider = "Pomelo.EntityFrameworkCore.MySql";
     private const string NpgsqlProvider = "Npgsql.EntityFrameworkCore.PostgreSQL";
@@ -45,7 +45,8 @@ internal static class DatabaseCopy
                 t.Name,
                 [.. t.Columns.Select(c => c.Name)],
                 t.PrimaryKey is null ? [] : [.. t.PrimaryKey.Columns.Select(c => c.Name)],
-                [.. t.ForeignKeyConstraints.Select(f => f.PrincipalTable.Name).Distinct(StringComparer.OrdinalIgnoreCase)]))
+                [.. t.ForeignKeyConstraints.Select(f => f.PrincipalTable.Name).Distinct(StringComparer.OrdinalIgnoreCase)],
+                [.. t.Columns.Select(ModelClrType)]))
             .OrderBy(t => t.Name, StringComparer.Ordinal)];
     }
 
@@ -178,202 +179,6 @@ internal static class DatabaseCopy
         return result;
     }
 
-    /// <summary>
-    /// Copy every table of <paramref name="ordered"/> (parents first) from <paramref name="source"/> to <paramref name="target"/> in ONE target
-    /// transaction: the component's tables are emptied in reverse order, then filled in order, and the transaction commits only when all of it
-    /// succeeded (a failure leaves the target as it was). Then the sequences are reset and every table is verified.
-    /// </summary>
-    public static async Task<IReadOnlyList<CopyTableResult>> CopyAsync(
-        DbContext source, DbContext target, IReadOnlyList<CopyTable> ordered, IProgress<string>? progress, CancellationToken ct)
-    {
-        Dictionary<string, Dictionary<string, CopyKind>> kinds = await ReadKindsAsync(target, ordered, ct).ConfigureAwait(false);
-        ISqlGenerationHelper sourceSql = source.GetService<ISqlGenerationHelper>();
-        ISqlGenerationHelper targetSql = target.GetService<ISqlGenerationHelper>();
-        var sourceDigests = new Dictionary<string, TableDigest>(StringComparer.OrdinalIgnoreCase);
-
-        await source.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
-        await target.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
-        try
-        {
-            DbConnection sourceConnection = source.Database.GetDbConnection();
-            DbConnection targetConnection = target.Database.GetDbConnection();
-            if (target.Database.ProviderName == PomeloProvider)
-            {
-                // Without it MariaDB turns an explicit 0 in an AUTO_INCREMENT column into the next id.
-                await using DbCommand mode = targetConnection.CreateCommand();
-                mode.CommandText = "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_AUTO_VALUE_ON_ZERO')";
-                await mode.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-
-            await using IDbContextTransaction transaction = await target.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
-            DbTransaction dbTransaction = transaction.GetDbTransaction();
-            for (int i = ordered.Count - 1; i >= 0; i--)
-            {
-                await using DbCommand delete = targetConnection.CreateCommand();
-                delete.Transaction = dbTransaction;
-                delete.CommandText = "DELETE FROM " + targetSql.DelimitIdentifier(ordered[i].Name);
-                await delete.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-            }
-
-            foreach (CopyTable table in ordered)
-            {
-                CopyKind[] columnKinds = [.. table.Columns.Select(c => kinds.TryGetValue(table.Name, out var byColumn) && byColumn.TryGetValue(c, out CopyKind k) ? k : CopyKind.Native)];
-                var digest = new TableDigest();
-                sourceDigests[table.Name] = digest;
-                await CopyTableAsync(sourceConnection, sourceSql, targetConnection, dbTransaction, targetSql, table, columnKinds, digest, ct).ConfigureAwait(false);
-                progress?.Report($"{table.Name}: {digest.Rows} row(s)");
-            }
-
-            await transaction.CommitAsync(ct).ConfigureAwait(false);
-        }
-        finally
-        {
-            await target.Database.CloseConnectionAsync().ConfigureAwait(false);
-            await source.Database.CloseConnectionAsync().ConfigureAwait(false);
-        }
-
-        await ResetSequencesAsync(target, ordered, ct).ConfigureAwait(false);
-
-        var results = new List<CopyTableResult>();
-        foreach (CopyTable table in ordered)
-        {
-            long sourceRows = await CountAsync(source, table.Name, ct).ConfigureAwait(false);
-            (long targetRows, TableDigest targetDigest) = await ReadBackAsync(target, targetSql, table, kinds[table.Name], ct).ConfigureAwait(false);
-            TableDigest copied = sourceDigests[table.Name];
-            results.Add(new CopyTableResult(table.Name, sourceRows, targetRows, copied.Equals(targetDigest) && sourceRows == copied.Rows));
-        }
-
-        return results;
-    }
-
-    private static async Task CopyTableAsync(
-        DbConnection sourceConnection, ISqlGenerationHelper sourceSql, DbConnection targetConnection, DbTransaction transaction,
-        ISqlGenerationHelper targetSql, CopyTable table, CopyKind[] kinds, TableDigest digest, CancellationToken ct)
-    {
-        string columnList = string.Join(", ", table.Columns.Select(targetSql.DelimitIdentifier));
-        await using DbCommand select = sourceConnection.CreateCommand();
-        select.CommandText = $"SELECT {string.Join(", ", table.Columns.Select(sourceSql.DelimitIdentifier))} FROM {sourceSql.DelimitIdentifier(table.Name)}";
-        await using DbDataReader reader = await select.ExecuteReaderAsync(ct).ConfigureAwait(false);
-
-        int perBatch = Math.Max(1, Math.Min(MaxBatchRows, MaxBatchParameters / Math.Max(1, table.Columns.Count)));
-        var batch = new List<object[]>(perBatch);
-        long bytes = 0;
-        var canonical = new StringBuilder();
-        while (await reader.ReadAsync(ct).ConfigureAwait(false))
-        {
-            var row = new object[kinds.Length];
-            canonical.Clear();
-            for (int i = 0; i < row.Length; i++)
-            {
-                try
-                {
-                    row[i] = CopyValues.Convert(reader.IsDBNull(i) ? null : reader.GetValue(i), kinds[i]);
-                }
-                catch (FormatException ex)
-                {
-                    throw new CopyDataException($"table '{table.Name}', column '{table.Columns[i]}': {ex.Message}", ex);
-                }
-
-                CopyValues.AppendCanonical(canonical, row[i]);
-                bytes += row[i] switch { string s => s.Length * 2L, byte[] b => b.Length, _ => 8 };
-            }
-
-            digest.Add(canonical.ToString());
-            batch.Add(row);
-            if (batch.Count >= perBatch || bytes >= MaxBatchBytes)
-            {
-                await InsertBatchAsync(targetConnection, transaction, targetSql, table, columnList, batch, ct).ConfigureAwait(false);
-                batch.Clear();
-                bytes = 0;
-            }
-        }
-
-        if (batch.Count > 0)
-        {
-            await InsertBatchAsync(targetConnection, transaction, targetSql, table, columnList, batch, ct).ConfigureAwait(false);
-        }
-    }
-
-    private static async Task InsertBatchAsync(
-        DbConnection connection, DbTransaction transaction, ISqlGenerationHelper sql, CopyTable table, string columnList,
-        List<object[]> rows, CancellationToken ct)
-    {
-        await using DbCommand command = connection.CreateCommand();
-        command.Transaction = transaction;
-        var text = new StringBuilder("INSERT INTO ").Append(sql.DelimitIdentifier(table.Name)).Append(" (").Append(columnList).Append(") VALUES ");
-        int p = 0;
-        for (int r = 0; r < rows.Count; r++)
-        {
-            text.Append(r == 0 ? "(" : ", (");
-            for (int c = 0; c < rows[r].Length; c++)
-            {
-                string name = "@p" + p++;
-                text.Append(c == 0 ? string.Empty : ", ").Append(name);
-                DbParameter parameter = command.CreateParameter();
-                parameter.ParameterName = name;
-                parameter.Value = rows[r][c];
-                command.Parameters.Add(parameter);
-            }
-
-            text.Append(')');
-        }
-
-        command.CommandText = text.ToString();
-        try
-        {
-            await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-        }
-        catch (DbException ex)
-        {
-            throw new CopyDataException($"table '{table.Name}': inserting a batch of {rows.Count} row(s) failed: {ex.Message}", ex);
-        }
-    }
-
-    private static async Task<long> CountAsync(DbContext db, string table, CancellationToken ct)
-    {
-        await db.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
-        try
-        {
-            await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
-            command.CommandText = "SELECT COUNT(*) FROM " + db.GetService<ISqlGenerationHelper>().DelimitIdentifier(table);
-            return System.Convert.ToInt64(await command.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture);
-        }
-        finally
-        {
-            await db.Database.CloseConnectionAsync().ConfigureAwait(false);
-        }
-    }
-
-    private static async Task<(long Rows, TableDigest Digest)> ReadBackAsync(
-        DbContext db, ISqlGenerationHelper sql, CopyTable table, Dictionary<string, CopyKind> kinds, CancellationToken ct)
-    {
-        var digest = new TableDigest();
-        CopyKind[] columnKinds = [.. table.Columns.Select(c => kinds.TryGetValue(c, out CopyKind k) ? k : CopyKind.Native)];
-        await db.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
-        try
-        {
-            await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
-            command.CommandText = $"SELECT {string.Join(", ", table.Columns.Select(sql.DelimitIdentifier))} FROM {sql.DelimitIdentifier(table.Name)}";
-            await using DbDataReader reader = await command.ExecuteReaderAsync(ct).ConfigureAwait(false);
-            var canonical = new StringBuilder();
-            while (await reader.ReadAsync(ct).ConfigureAwait(false))
-            {
-                canonical.Clear();
-                for (int i = 0; i < columnKinds.Length; i++)
-                {
-                    CopyValues.AppendCanonical(canonical, CopyValues.Convert(reader.IsDBNull(i) ? null : reader.GetValue(i), columnKinds[i]));
-                }
-
-                digest.Add(canonical.ToString());
-            }
-        }
-        finally
-        {
-            await db.Database.CloseConnectionAsync().ConfigureAwait(false);
-        }
-
-        return (digest.Rows, digest);
-    }
 
     /// <summary>Each target column's kind from the target's catalog types; a SQLite target takes native primitives.</summary>
     public static async Task<Dictionary<string, Dictionary<string, CopyKind>>> ReadKindsAsync(DbContext target, IReadOnlyList<CopyTable> tables, CancellationToken ct)
@@ -416,71 +221,6 @@ internal static class DatabaseCopy
         return result;
     }
 
-    /// <summary>
-    /// Move each auto-generated key counter past the largest copied key: PostgreSQL <c>setval</c> on the column's identity or serial sequence,
-    /// MariaDB/MySQL <c>AUTO_INCREMENT</c>. SQLite counts from the largest rowid by itself. Returns how many counters were set.
-    /// </summary>
-    public static async Task<int> ResetSequencesAsync(DbContext target, IReadOnlyList<CopyTable> tables, CancellationToken ct)
-    {
-        ISqlGenerationHelper sql = target.GetService<ISqlGenerationHelper>();
-        int set = 0;
-        await target.Database.OpenConnectionAsync(ct).ConfigureAwait(false);
-        try
-        {
-            DbConnection connection = target.Database.GetDbConnection();
-            foreach (CopyTable table in tables.Where(t => t.PrimaryKey.Count == 1))
-            {
-                string column = table.PrimaryKey[0];
-                string quotedTable = sql.DelimitIdentifier(table.Name);
-                string quotedColumn = sql.DelimitIdentifier(column);
-                if (target.Database.ProviderName == NpgsqlProvider)
-                {
-                    // Asked first and alone: only an identity or serial column has a sequence, and MAX of a text key must not be parsed into setval.
-                    await using DbCommand find = connection.CreateCommand();
-                    find.CommandText = "SELECT pg_get_serial_sequence(@table, @column)";
-                    AddParameter(find, "@table", quotedTable);
-                    AddParameter(find, "@column", column);
-                    if (await find.ExecuteScalarAsync(ct).ConfigureAwait(false) is not string sequence)
-                    {
-                        continue;
-                    }
-
-                    await using DbCommand command = connection.CreateCommand();
-                    command.CommandText =
-                        $"SELECT setval(@sequence::regclass, COALESCE((SELECT MAX({quotedColumn}) FROM {quotedTable}), 1), (SELECT MAX({quotedColumn}) FROM {quotedTable}) IS NOT NULL)";
-                    AddParameter(command, "@sequence", sequence);
-                    await command.ExecuteScalarAsync(ct).ConfigureAwait(false);
-                    set++;
-                }
-                else if (target.Database.ProviderName == PomeloProvider)
-                {
-                    await using DbCommand probe = connection.CreateCommand();
-                    probe.CommandText = "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = @table " +
-                        "AND column_name = @column AND extra LIKE '%auto_increment%'";
-                    AddParameter(probe, "@table", table.Name);
-                    AddParameter(probe, "@column", column);
-                    if (System.Convert.ToInt64(await probe.ExecuteScalarAsync(ct).ConfigureAwait(false), CultureInfo.InvariantCulture) == 0)
-                    {
-                        continue;
-                    }
-
-                    await using DbCommand max = connection.CreateCommand();
-                    max.CommandText = $"SELECT COALESCE(MAX({quotedColumn}), 0) + 1 FROM {quotedTable}";
-                    object? next = await max.ExecuteScalarAsync(ct).ConfigureAwait(false);
-                    await using DbCommand alter = connection.CreateCommand();
-                    alter.CommandText = $"ALTER TABLE {quotedTable} AUTO_INCREMENT = {System.Convert.ToUInt64(next, CultureInfo.InvariantCulture).ToString(CultureInfo.InvariantCulture)}";
-                    await alter.ExecuteNonQueryAsync(ct).ConfigureAwait(false);
-                    set++;
-                }
-            }
-        }
-        finally
-        {
-            await target.Database.CloseConnectionAsync().ConfigureAwait(false);
-        }
-
-        return set;
-    }
 
     private static void AddParameter(DbCommand command, string name, object value)
     {
@@ -522,4 +262,16 @@ internal static class DatabaseCopy
 }
 
 /// <summary>A row the copy could not convert or insert; the message names the table and column and never holds a connection string.</summary>
-internal sealed class CopyDataException(string message, Exception inner) : Exception(message, inner);
+internal sealed class CopyDataException(string message, Exception? inner = null) : Exception(message, inner);
+
+internal static partial class DatabaseCopy
+{
+    /// <summary>The CLR type the model stores a column as (the value converter's provider type when there is one, an enum as its integer, never nullable).</summary>
+    internal static Type ModelClrType(IColumn column)
+    {
+        IProperty property = column.PropertyMappings[0].Property;
+        Type type = property.GetValueConverter()?.ProviderClrType ?? property.ClrType;
+        type = Nullable.GetUnderlyingType(type) ?? type;
+        return type.IsEnum ? Enum.GetUnderlyingType(type) : type;
+    }
+}

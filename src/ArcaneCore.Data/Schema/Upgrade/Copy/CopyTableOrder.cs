@@ -5,7 +5,9 @@ namespace ArcaneCore.Data.Schema.Upgrade.Copy;
 /// <param name="Columns">Every column, in model order.</param>
 /// <param name="PrimaryKey">The primary key columns (empty for a keyless table).</param>
 /// <param name="Parents">The tables its foreign keys reference (itself included when it references itself).</param>
-internal sealed record CopyTable(string Name, IReadOnlyList<string> Columns, IReadOnlyList<string> PrimaryKey, IReadOnlyList<string> Parents);
+/// <param name="ColumnTypes">The model CLR type of each column, parallel to <paramref name="Columns"/> (null: unknown, values are not lifted).</param>
+internal sealed record CopyTable(
+    string Name, IReadOnlyList<string> Columns, IReadOnlyList<string> PrimaryKey, IReadOnlyList<string> Parents, IReadOnlyList<Type>? ColumnTypes = null);
 
 /// <summary>The foreign keys form a cycle (or a table references itself), so no insert order satisfies them; the message names the cycle.</summary>
 internal sealed class CopyCycleException(string message) : InvalidOperationException(message);

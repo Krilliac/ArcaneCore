@@ -15,6 +15,9 @@ public static partial class DbUpgradeCli
         /// <summary>Where <c>copy</c> reads ARCANE_DB_TARGET_* from; the process environment unless a test supplies one.</summary>
         public Func<string, string?> Environment { get; init; } = System.Environment.GetEnvironmentVariable;
 
+        /// <summary>Test seams (<see cref="DbCopyHooks"/>); null in production.</summary>
+        public DbCopyHooks? Hooks { get; init; }
+
         private sealed record CopyEnd(DatabaseConnectionOptions Resolved, Target Target);
 
         private sealed record CopyJob(Spec Spec, CopyEnd Source, CopyEnd Target, IReadOnlyList<CopyTable> Tables, IReadOnlyList<CopyTable> Ordered);
@@ -129,7 +132,7 @@ public static partial class DbUpgradeCli
                     return DbUpgradeExitCodes.Drift;
                 }
 
-                await _out.WriteLineAsync("copy complete: every table verified (row counts and content). Switch Database:<Component>:Provider and ConnectionString to the target, then start the daemons.").ConfigureAwait(false);
+                await _out.WriteLineAsync("copy complete: every table matched (row counts and every value compared through the model column types). Switch Database:<Component>:Provider and ConnectionString to the target, then start the daemons.").ConfigureAwait(false);
                 return DbUpgradeExitCodes.Ok;
             }
             finally
@@ -203,9 +206,26 @@ public static partial class DbUpgradeCli
                 return false;
             }
 
-            return left.Connection.Provider == DatabaseProvider.Sqlite
-                ? string.Equals(Path.GetFullPath(BackupAdvisor.Describe(left.Connection).Database), Path.GetFullPath(BackupAdvisor.Describe(right.Connection).Database), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
-                : string.Equals(left.Description, right.Description, StringComparison.OrdinalIgnoreCase);
+            BackupAdvisor.BackupInstructions a = BackupAdvisor.Describe(left.Connection);
+            BackupAdvisor.BackupInstructions b = BackupAdvisor.Describe(right.Connection);
+            if (left.Connection.Provider == DatabaseProvider.Sqlite)
+            {
+                return string.Equals(Path.GetFullPath(a.Database), Path.GetFullPath(b.Database), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+            }
+
+            int defaultPort = left.Connection.Provider == DatabaseProvider.PostgreSql ? 5432 : 3306;
+            return string.Equals(LoopbackName(a.Host), LoopbackName(b.Host), StringComparison.OrdinalIgnoreCase)
+                && (a.Port ?? defaultPort) == (b.Port ?? defaultPort)
+                && string.Equals(a.Database, b.Database, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>One name for every spelling of this machine (localhost, 127.0.0.1, ::1, the dot), so the same database through two names is still caught.</summary>
+        private static string LoopbackName(string? host)
+        {
+            string name = (host ?? string.Empty).Trim().Trim('[', ']');
+            return name.Equals("localhost", StringComparison.OrdinalIgnoreCase) || name is "127.0.0.1" or "::1" or "." or "0.0.0.0" || name.StartsWith("127.", StringComparison.Ordinal)
+                ? "localhost"
+                : name;
         }
 
         /// <summary>Read-only checks of one component; a problem is added to <paramref name="refusals"/> and the job is not returned.</summary>
@@ -336,16 +356,22 @@ public static partial class DbUpgradeCli
                     return DbUpgradeExitCodes.Refused;
                 }
 
-                IReadOnlyList<CopyTableResult> results;
+                CopyOutcome outcome;
                 try
                 {
-                    results = await DatabaseCopy.CopyAsync(sdb, tdb, job.Ordered, progress: null, ct).ConfigureAwait(false);
+                    outcome = await DatabaseCopy.CopyAsync(sdb, tdb, job.Ordered, Hooks, ct).ConfigureAwait(false);
                 }
                 catch (CopyDataException ex)
                 {
                     throw new ComponentFailure(DbUpgradeExitCodes.Failure, $"{name}: the copy failed and was rolled back (the target holds none of this component's rows): {Scrub(ex.Message)}");
                 }
+                catch (System.Data.Common.DbException ex)
+                {
+                    // Inside the copy's transaction the connection was open: this is a failed statement, not an unreachable server.
+                    throw new ComponentFailure(DbUpgradeExitCodes.Failure, $"{name}: the copy failed and was rolled back (the target holds none of this component's rows): {Scrub(ex.Message)}");
+                }
 
+                IReadOnlyList<CopyTableResult> results = outcome.Results;
                 await _out.WriteLineAsync($"  {"table",-44} {"source",12} {"target",12}  content").ConfigureAwait(false);
                 foreach (CopyTableResult result in results)
                 {
@@ -353,15 +379,20 @@ public static partial class DbUpgradeCli
                         (result.IsOk ? "ok" : result.SourceRows != result.TargetRows ? "ROW COUNT DIFFERS" : "CONTENT DIFFERS")).ConfigureAwait(false);
                 }
 
-                long total = results.Sum(r => r.TargetRows);
-                if (results.Any(r => !r.IsOk))
+                if (!outcome.Committed)
                 {
-                    await _err.WriteLineAsync($"error: {name}: verification failed for {results.Count(r => !r.IsOk)} table(s); the target is not safe to use. " +
-                        "Fix the cause and run the copy again with --replace.").ConfigureAwait(false);
+                    await _err.WriteLineAsync($"error: {name}: verification failed for {results.Count(r => !r.IsOk)} table(s); the copy was rolled back and the target is as it was. " +
+                        "Fix the cause and run the copy again.").ConfigureAwait(false);
                     return DbUpgradeExitCodes.CopyVerifyFailed;
                 }
 
-                await _out.WriteLineAsync($"  {name}: {results.Count} table(s), {total} row(s) copied and verified").ConfigureAwait(false);
+                if (outcome.PostCommitProblem is { } problem)
+                {
+                    await _err.WriteLineAsync($"error: {name}: {Scrub(problem)}. Run the copy again with --replace.").ConfigureAwait(false);
+                    return DbUpgradeExitCodes.Failure;
+                }
+
+                await _out.WriteLineAsync($"  {name}: {results.Count} table(s), {results.Sum(r => r.TargetRows)} row(s) copied; row counts and every value, read back inside the transaction through the model's column types, matched the source; {outcome.CountersSet} key counter(s) reset").ConfigureAwait(false);
                 return DbUpgradeExitCodes.Ok;
             })).ConfigureAwait(false);
         }
