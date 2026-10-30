@@ -38,16 +38,17 @@ public sealed class ClusterSqliteConfigChecksTests
 
     public static IEnumerable<object[]> ClusteredModes() =>
     [
-        ["worker", "Cluster:Worker:Enabled", Worker()],
-        ["standby", "Cluster:Worker:Enabled", StandbyWorker()],
-        ["mapworker", "Cluster:Node:Role", MapWorker()],
-        ["supervisor", "Cluster:Supervisor:Processes", Supervisor("realm", "worker", "worker")],
-        ["supervisor-combined", "Cluster:Supervisor:Processes", Supervisor("combined", "Worker")],
+        ["Cluster:Worker:Enabled", Worker()],
+        ["Cluster:Worker:Enabled", StandbyWorker()],
+        ["Cluster:Node:Role", MapWorker()],
+        ["Cluster:Supervisor:Processes", Supervisor("realm", "worker", "worker")],
+        ["Cluster:Supervisor:Processes", Supervisor("realm", "gateway", "worker")],
+        ["Cluster:Supervisor:Processes", Supervisor("combined", "Worker")],
     ];
 
     [Theory]
     [MemberData(nameof(ClusteredModes))]
-    public void SqliteCharacters_AreRefused_InEveryModeWithSeveralWorldProcesses(string mode, string key, (string, string?)[] settings)
+    public void SqliteCharacters_AreRefused_InEveryClusterMode(string key, (string, string?)[] settings)
     {
         ConfigIssue issue = Assert.Single(Run("Sqlite", settings));
 
@@ -57,17 +58,15 @@ public sealed class ClusterSqliteConfigChecksTests
         Assert.Contains("one writer process", issue.Problem, StringComparison.Ordinal);
         Assert.Contains("concurrently", issue.Problem, StringComparison.Ordinal);
         Assert.Contains("PostgreSQL or MariaDB", issue.Fix, StringComparison.Ordinal);
-        Assert.Contains("Moving from SQLite to PostgreSQL or MariaDB", issue.Fix, StringComparison.Ordinal);
-        Assert.False(string.IsNullOrEmpty(mode));
+        Assert.DoesNotContain("Moving from", issue.Fix + issue.Problem, StringComparison.Ordinal); // no reference to a runbook section that may not exist
     }
 
     [Theory]
     [MemberData(nameof(ClusteredModes))]
-    public void ServerCharacters_AreAllowed_InEveryMode(string mode, string key, (string, string?)[] settings)
+    public void ServerCharacters_AreAllowed_InEveryMode(string key, (string, string?)[] settings)
     {
-        Assert.Empty(Run("PostgreSql", settings));
-        Assert.Empty(Run("MariaDb", settings));
-        Assert.False(string.IsNullOrEmpty(mode + key));
+        Assert.True(Run("PostgreSql", settings).Length == 0, $"{key} must be allowed on PostgreSQL");
+        Assert.True(Run("MariaDb", settings).Length == 0, $"{key} must be allowed on MariaDB");
     }
 
     [Fact]

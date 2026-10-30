@@ -268,9 +268,14 @@ public sealed class WorldHost(
         // world is alive it still holds it, and the promotion is refused with the standby untouched (nothing held, still a standby, retryable).
         bool lockedHere;
         try { lockedHere = writerGuard?.AcquireForPromotion() == true; }
-        catch (Exception ex) when (ex is Data.Characters.Ownership.CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
+        catch (Data.Characters.Ownership.CharacterDatabaseAlreadyOwnedException ex)
         {
             throw new InvalidOperationException($"the characters database writer lock is held elsewhere (the old world is still running); refusing to promote, the standby stays a standby: {ex.Message}", ex);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Data.Common.DbException)
+        {
+            // Not contention: the lock could not be created, or the database server could not be asked for it. Nothing is held; the standby stays a standby.
+            throw new InvalidOperationException($"the characters database writer lock could not be taken ({ex.GetType().Name}: {ex.Message}); refusing to promote, the standby stays a standby", ex);
         }
 
         try

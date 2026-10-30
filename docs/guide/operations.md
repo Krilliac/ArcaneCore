@@ -31,13 +31,18 @@ Before it restores any playerbot the world also checks that `World:Port` can be 
 taken fails the start before a single bot is logged in.
 MariaDB, MySQL and PostgreSQL databases have no file, so the world takes the same process-lifetime exclusive lock as a session-level advisory lock held on one dedicated, unpooled
 connection (MariaDB/MySQL `GET_LOCK(name, 0)`, PostgreSQL `pg_try_advisory_lock(key)`), in the same place and order as the SQLite lock: before the schema initializers, whether or not
-`Cluster:Fencing:Enabled` is on, released last with the container. The lock is keyed on the name of the characters database from `Database:Characters` (lock name `arcanecore.world.writer:<database name>`,
-replaced by the prefix and 32 hex characters of the name's SHA-256 when longer than MariaDB's 64-character limit; the PostgreSQL key is the first 8 bytes of the SHA-256 of that name), so different realms'
-databases do not collide and two worlds configured with the same database name on the same server do. A second world gets the same exit code and message shape as for SQLite, naming the advisory lock instead of a file,
-having read and written nothing. The server releases the lock when the connection ends, so a crash leaves nothing to clean up. Limits: a server restart or a network partition that drops the connection silently drops the
-lock (the fencing claim below is still the guard then); the MariaDB/MySQL session's `wait_timeout` is raised to about 24 days so an idle server does not end it; the lock connection needs the same host and login as the
-characters database but no database to exist yet (on PostgreSQL it connects to the characters database, or to `postgres` before the first bootstrap has created it, and a world started in that window is not excluded);
-an unreachable server is retried and reported like the schema step (`Resilience:Database:Bootstrap`, exit code for an unreachable database). A standby worker takes the lock (SQLite or server) when it is promoted,
+`Cluster:Fencing:Enabled` is on, released last with the container. The lock is keyed on the name of the characters database from `Database:Characters`: the MariaDB/MySQL lock name is
+`arcanecore.world.writer:<lower-cased database name>` (lower-cased because the server folds database-name case on case-insensitive file systems, `lower_case_table_names`; replaced by the prefix and 32 hex
+characters of the name's SHA-256 when longer than MariaDB's 64-character limit) and the PostgreSQL key is the first 8 bytes of the SHA-256 of `arcanecore.world.writer:<database name>`, so different realms'
+databases do not collide and two worlds configured with the same database name on the same server do. PostgreSQL scopes advisory locks to the database a session is connected to, so every world takes
+the lock in one fixed maintenance database, `postgres` unless `Database:WriterLockDatabase` (or `Database:Characters:WriterLockDatabase`) names another; it must exist and the login needs CONNECT on it. MariaDB
+and MySQL need no database for `GET_LOCK`, so the lock works before the characters database has been created. A second world gets the exit code `Refused` at once, with the same message shape as for SQLite
+naming the advisory lock instead of a file, having read and written nothing; a server that cannot be reached is retried and reported like the schema step (`Resilience:Database:Bootstrap`, exit code for an
+unreachable database). The server releases the lock when the connection ends, so a process crash leaves nothing to clean up. Limits: the lock lives in a server session. A periodic check (every 30 s, on the lock
+connection) logs at Critical when the lock is lost (server restart, dropped connection, killed session); after that this world no longer excludes a second one, and the fencing claim below is the remaining guard.
+The opposite failure also exists: a host that died or a network partition can leave the server holding the dead session, so a new world is refused until the server notices (TCP timeouts, `wait_timeout`); clear it
+with `SELECT pg_terminate_backend(pid)` (PostgreSQL, the pid is in `pg_locks` for `locktype = 'advisory'`) or `KILL <id>` (MariaDB/MySQL, the id is `SELECT IS_USED_LOCK('<lock name>')`). The MariaDB/MySQL
+session's `wait_timeout` is raised to about 24 days so an idle server does not end it. A standby worker takes the lock (SQLite or server) when it is promoted,
 see [the gateway](../areas/gateway.md#standby-worker-tier-3b-groundwork).
 The `Cluster:Fencing` claim, which an unfenced world checks at start and then every
 `Cluster:Fencing:ClaimWatchIntervalSeconds`, and that fence (`CharacterWriteFenceInterceptor`) remain the guard against a lost lock and the thing that bounds character autosaves and session-close saves of a
@@ -49,8 +54,8 @@ The older world stands down and the intruder keeps running on purpose: neither w
 
 A clustered realm must keep its characters on a server database. A SQLite characters database allows one writer process, and the world processes of a cluster write it concurrently, so the config check
 (`--check-config`; start-up as well, whatever `Startup:Strict` says) is an error, exit code 78, when the characters provider is SQLite and any of these is set: `Cluster:Worker:Enabled` (a gateway worker, a standby
-included), `Cluster:Node:Role` = MapWorker, or `Cluster:Supervisor:Enabled` with more than one world-type child (role `combined` or `worker`) under `Cluster:Supervisor:Processes`. The message names the setting and
-the provider and points at "Moving from SQLite to PostgreSQL or MariaDB" in [database upgrade](../ops/database-upgrade.md). The supervisor refuses before it launches any child. A supervisor with exactly one world child is
+included), `Cluster:Node:Role` = MapWorker, or `Cluster:Supervisor:Enabled` with a gateway-worker child (role `worker`) or more than one world-type child (role `combined` or `worker`) under `Cluster:Supervisor:Processes`. `tools/ops/live/start-cluster.ps1 -Gateway` makes the world a gateway worker, so it needs a server database for `Database:Characters`. The message names the setting and
+the provider and says to use PostgreSQL or MariaDB for `Database:Characters` (moving a SQLite realm: [database upgrade](../ops/database-upgrade.md)). The supervisor refuses before it launches any child. A supervisor with exactly one combined world child is
 still allowed on SQLite (one writer), with a warning that the realm cannot grow beyond one world on SQLite. The provider checked is the one the process's own configuration resolves for `Database:Characters`
 (for a supervisor, its own; its children are expected to share it).
 

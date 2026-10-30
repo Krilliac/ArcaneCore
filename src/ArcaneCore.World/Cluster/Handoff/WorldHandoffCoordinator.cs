@@ -32,6 +32,11 @@ public interface IWorldHandoffSource
     /// <summary>
     /// After the epoch takeover and before B is promoted: give up the characters database's process-lifetime writer lock (SQLite sidecar file or server advisory lock), which B's promotion
     /// takes and refuses to promote without. A is fenced out of the database by then, so it writes nothing more. Idempotent. A source that holds no such lock (the default) does nothing.
+    /// <para>
+    /// The window between this release and B's promotion taking the lock is guarded by the ownership row, not by the lock: the takeover has already made B's incarnation the owner, so a third
+    /// world that starts in the window cannot claim the characters (fencing is mandatory in worker mode and the claim is refused), and A's own late writes are refused by the fence. A failed
+    /// promotion leaves the lock free; it is not re-taken for A.
+    /// </para>
     /// </summary>
     Task ReleaseWriterLockAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

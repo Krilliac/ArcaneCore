@@ -13,15 +13,16 @@ namespace ArcaneCore.World.Cluster.Handoff;
 /// online player's save as at logout (the settlement path, which bypasses and then sets a save hold, so no later ordinary snapshot of that player is
 /// written by A), then keeps the simulation thread parked until the handoff resumes A (abort) or A is disposed. A retired A stays frozen: after the
 /// epoch takeover any write it still attempted would be refused by the characters fence anyway. A player with a quest settlement in flight is not
-/// quiescent, so the freeze refuses (the handoff aborts and A resumes).
+/// quiescent, so the freeze refuses (the handoff aborts and A resumes). After the epoch takeover the source also gives up A's characters database
+/// writer lock (<paramref name="writerGuard"/>, A's own guard, required) so B's promotion can take it; see <see cref="ReleaseWriterLockAsync"/>.
 /// </summary>
 public sealed class LocalWorldHandoffSource(
     WorkerNodeId workerId,
     WorldRuntime world,
     CharacterSaveQueue saveQueue,
     WorkerAdmission admission,
-    CharacterPersistenceBarrier? barrier = null,
-    WorldWriterGuard? writerGuard = null) : IWorldHandoffSource, IDisposable
+    WorldWriterGuard writerGuard,
+    CharacterPersistenceBarrier? barrier = null) : IWorldHandoffSource, IDisposable
 {
     /// <summary>The admission closed reason while A drains.</summary>
     public const string DrainingReason = "draining";
@@ -138,7 +139,7 @@ public sealed class LocalWorldHandoffSource(
     /// <summary>Gives up A's characters database writer lock (the guard of A's container) so the promoted standby can take it; A is fenced out by the epoch takeover. Idempotent.</summary>
     public Task ReleaseWriterLockAsync(CancellationToken cancellationToken)
     {
-        writerGuard?.Dispose();
+        writerGuard.Dispose();
         return Task.CompletedTask;
     }
 

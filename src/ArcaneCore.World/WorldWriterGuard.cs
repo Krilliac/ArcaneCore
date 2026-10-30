@@ -40,7 +40,8 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
         lock (_gate)
         {
             if (_lock is not null || databaseOptions?.Value is not { } options) return false;
-            _lock = CharacterDatabaseWriterLock.TryAcquire(options.Resolve(DatabaseComponent.Characters));
+            _lock = CharacterDatabaseWriterLock.TryAcquire(options.Resolve(DatabaseComponent.Characters),
+                reason => logger?.LogCritical("The characters database writer lock was LOST: {Reason}. This world no longer excludes a second world writer on the same database; stop it or restart this world.", reason));
             if (_lock is null) return false;
             logger?.LogInformation("Holding the characters database writer lock {LockPath}", _lock.Path);
             return true;

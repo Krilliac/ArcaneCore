@@ -20,26 +20,34 @@ internal static class WorldStartup
     /// <returns>0 when ready, otherwise the exit code the process should return.</returns>
     public static async Task<int> PrepareDatabasesAsync(IServiceProvider services, Func<Task> initialize, TextWriter error)
     {
-        try
+        if (services.GetService<WorldWriterGuard>() is { } guard)
         {
-            if (services.GetService<WorldWriterGuard>() is { } guard)
+            // Through the same start-up wrapper as the schema step, so a MariaDB/MySQL/PostgreSQL server that is not reachable yet gets the Resilience:Database:Bootstrap backoff and the
+            // "database unreachable" exit code. An ownership refusal is NEVER retried or classified as unreachable (a CharacterDatabaseAlreadyOwnedException wraps an IOException, which the
+            // transience classifier would call transient): it is captured inside the wrapped step and reported as the refusal, at once, on every provider. So is a lock that cannot be created
+            // (permissions, a full disk): its own message, not "owned by another world".
+            Exception? refusal = null;
+            int lockCode = await DatabaseStartup.InitializeAsync(() =>
             {
-                // Through the same start-up wrapper as the schema step: a MariaDB/MySQL/PostgreSQL server that is not reachable yet gets the Resilience:Database:Bootstrap
-                // backoff and the "database unreachable" exit code, as it does for the initializers. A held lock is not transient and surfaces as the refusal below.
-                int lockCode = await DatabaseStartup.InitializeAsync(() =>
+                try
                 {
                     guard.Acquire();
-                    return Task.CompletedTask;
-                }, services, error).ConfigureAwait(false);
-                if (lockCode != 0) return lockCode;
-            }
-        }
-        catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
-        {
-            await error.WriteLineAsync($"database refused: {DatabaseStartup.Scrub(ex.Message, services)}").ConfigureAwait(false);
-            return DbUpgradeExitCodes.Refused;
-        }
+                }
+                catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
+                {
+                    refusal = ex;
+                }
 
+                return Task.CompletedTask;
+            }, services, error).ConfigureAwait(false);
+            if (refusal is not null)
+            {
+                await error.WriteLineAsync($"database refused: {DatabaseStartup.Scrub(refusal.Message, services)}").ConfigureAwait(false);
+                return DbUpgradeExitCodes.Refused;
+            }
+
+            if (lockCode != 0) return lockCode;
+        }
         return await DatabaseStartup.InitializeAsync(initialize, services, error).ConfigureAwait(false);
     }
 

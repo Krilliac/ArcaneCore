@@ -133,4 +133,115 @@ public sealed class CharacterDatabaseWriterLockTests
         Assert.Null(ServerAdvisoryWriterLock.DatabaseNameOf(new DatabaseConnectionOptions { Provider = DatabaseProvider.MariaDb, ConnectionString = "Server=h;User=u" }));
         Assert.Null(ServerAdvisoryWriterLock.DatabaseNameOf(new DatabaseConnectionOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = "Data Source=x.db" }));
     }
+
+    private static async Task CreateDatabaseAsync(DatabaseConnectionOptions options)
+    {
+        var builder = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<Microsoft.EntityFrameworkCore.DbContext>();
+        DataServiceCollectionExtensions.ConfigureProvider(builder, options);
+        await using var db = new Microsoft.EntityFrameworkCore.DbContext(builder.Options);
+        await db.Database.EnsureCreatedAsync();
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheLockTakenBeforeTheDatabaseExists_StillExcludesAWorldStartedAfterItIsCreated(DatabaseProvider provider)
+    {
+        // The first bootstrap: world A locks while the characters database does not exist, the schema step then creates it, and world B starts later.
+        // PostgreSQL scopes advisory locks to the database of the session, so both must lock in the same fixed maintenance database.
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        using CharacterDatabaseWriterLock first = CharacterDatabaseWriterLock.TryAcquire(options)!;
+        Assert.NotNull(first);
+
+        await CreateDatabaseAsync(options);
+
+        Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => CharacterDatabaseWriterLock.TryAcquire(options));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheLockTakenAfterTheDatabaseExists_ExcludesASecondWorld_AndAWorldFromBeforeItExisted(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        await CreateDatabaseAsync(options);
+
+        using CharacterDatabaseWriterLock first = CharacterDatabaseWriterLock.TryAcquire(options)!;
+        Assert.NotNull(first);
+        Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => CharacterDatabaseWriterLock.TryAcquire(options));
+    }
+
+    public static IEnumerable<object[]> ServerProviders()
+    {
+        bool any = false;
+        foreach (object[] row in TestDatabases.AvailableProviders())
+        {
+            if ((DatabaseProvider)row[0] == DatabaseProvider.Sqlite) continue;
+            any = true;
+            yield return row;
+        }
+
+        // Without a server in the environment the theory has no data; hand it SQLite, whose case returns at once (the SQLite lock has no connection to lose).
+        if (!any) yield return [DatabaseProvider.Sqlite];
+    }
+
+    [Theory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task ALostLockConnection_IsDetectedByTheHealthCheck_AndReportedOnce(DatabaseProvider provider)
+    {
+        if (provider == DatabaseProvider.Sqlite) return;
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        string name = ServerAdvisoryWriterLock.DatabaseNameOf(options)!;
+        var lost = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        int reports = 0;
+        using ServerAdvisoryWriterLock held = ServerAdvisoryWriterLock.TryAcquire(options, name, reason =>
+        {
+            Interlocked.Increment(ref reports);
+            lost.TrySetResult(reason);
+        }, TimeSpan.FromMilliseconds(200));
+        Assert.True(held.IsHeld());
+
+        await KillLockSessionAsync(options, name);
+
+        string reason = await lost.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Contains(held.Description, reason);
+        await Task.Delay(700);
+        Assert.Equal(1, Volatile.Read(ref reports));
+        Assert.False(held.IsHeld());
+    }
+
+    private static async Task KillLockSessionAsync(DatabaseConnectionOptions options, string databaseName)
+    {
+        if (options.Provider == DatabaseProvider.PostgreSql)
+        {
+            long key = ServerAdvisoryWriterLock.PostgresLockKey(databaseName);
+            var builder = new Npgsql.NpgsqlConnectionStringBuilder(options.ConnectionString) { Pooling = false, Database = CharacterDatabaseWriterLock.DefaultPostgresLockDatabase };
+            await using var connection = new Npgsql.NpgsqlConnection(builder.ConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT pg_terminate_backend(pid) FROM pg_locks WHERE locktype = 'advisory' AND objsubid = 1 AND classid::bigint = @hi AND objid::bigint = @lo";
+            command.Parameters.AddWithValue("hi", (long)(uint)(key >> 32));
+            command.Parameters.AddWithValue("lo", (long)(uint)key);
+            Assert.NotNull(await command.ExecuteScalarAsync());
+        }
+        else
+        {
+            var builder = new MySqlConnector.MySqlConnectionStringBuilder(options.ConnectionString) { Pooling = false, Database = string.Empty };
+            await using var connection = new MySqlConnector.MySqlConnection(builder.ConnectionString);
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT IS_USED_LOCK(@name)";
+            command.Parameters.AddWithValue("@name", ServerAdvisoryWriterLock.MySqlLockName(databaseName));
+            object? id = await command.ExecuteScalarAsync();
+            Assert.NotNull(id);
+            await using var kill = connection.CreateCommand();
+            kill.CommandText = "KILL " + Convert.ToInt64(id, System.Globalization.CultureInfo.InvariantCulture);
+            await kill.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    public void TheMariaDbLockName_IsCaseFolded()
+        => Assert.Equal(ServerAdvisoryWriterLock.MySqlLockName("Characters_R1"), ServerAdvisoryWriterLock.MySqlLockName("characters_r1"));
 }

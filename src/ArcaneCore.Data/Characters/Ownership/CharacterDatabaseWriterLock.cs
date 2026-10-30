@@ -23,6 +23,9 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
 {
     public const string Suffix = ".world.lock";
 
+    /// <summary>The PostgreSQL maintenance database the advisory lock is taken in unless <see cref="DatabaseConnectionOptions.WriterLockDatabase"/> says otherwise.</summary>
+    public const string DefaultPostgresLockDatabase = "postgres";
+
     private IDisposable? _holder;
 
     private CharacterDatabaseWriterLock(string path, IDisposable holder)
@@ -67,13 +70,13 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
     /// Throws <see cref="CharacterDatabaseAlreadyOwnedException"/> when another process (or another lock object in this one) holds it. A server database that cannot be reached
     /// propagates the driver's <see cref="System.Data.Common.DbException"/>.
     /// </summary>
-    public static CharacterDatabaseWriterLock? TryAcquire(DatabaseConnectionOptions options)
+    public static CharacterDatabaseWriterLock? TryAcquire(DatabaseConnectionOptions options, Action<string>? onLost = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (options.Provider != DatabaseProvider.Sqlite)
         {
             if (ServerAdvisoryWriterLock.DatabaseNameOf(options) is not { } name) return null;
-            ServerAdvisoryWriterLock advisory = ServerAdvisoryWriterLock.TryAcquire(options, name);
+            ServerAdvisoryWriterLock advisory = ServerAdvisoryWriterLock.TryAcquire(options, name, onLost);
             return new CharacterDatabaseWriterLock(advisory.Description, advisory);
         }
 

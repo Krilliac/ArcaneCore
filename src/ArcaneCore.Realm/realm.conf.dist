@@ -305,6 +305,22 @@ Database.Auth.Provider = MariaDb
 # Database.Auth.SqliteSynchronous =
 
 #
+#    Database.Auth.WriterLockDatabase
+#        Description: PostgreSQL only: the existing maintenance database the single-writer advisory
+#                     lock is taken in (overrides Database:WriterLockDatabase; unset inherits it,
+#                     default postgres). PostgreSQL scopes advisory locks to the database a session
+#                     is connected to, so every world must take the lock in the same database, and
+#                     it must exist before the characters database does. The login needs CONNECT on
+#                     it. MariaDB, MySQL and SQLite ignore it.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Auth.WriterLockDatabase =
+
+#
 #    Database.ConnectionString
 #        Description: The connection string for any component that has no Database:<Component>
 #                     sub-section of its own. The shipped Realm file uses this single-database form.
@@ -532,6 +548,23 @@ Database.Upgrade.Policy = Always
 #        Docs: docs/reference/configuration.md#database
 #
 Database.Upgrade.ValidateOnly = false
+
+#
+#    Database.WriterLockDatabase
+#        Description: PostgreSQL only: the existing maintenance database (default postgres) in which
+#                     the world takes its single-writer advisory lock. PostgreSQL scopes advisory
+#                     locks to the database the session is connected to, so all worlds of one
+#                     characters database must lock in the same database, one that exists before the
+#                     characters database is created. The login needs CONNECT on it. Each component
+#                     may override it with a Database:Characters WriterLockDatabase key. MariaDB,
+#                     MySQL and SQLite ignore it (docs/guide/operations.md).
+#        Type: string
+#        Default: "postgres"
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.WriterLockDatabase = "postgres"
 
 ###############################################################################
 # DIAGNOSTICS

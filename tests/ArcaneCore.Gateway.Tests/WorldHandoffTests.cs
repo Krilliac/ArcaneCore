@@ -299,7 +299,7 @@ public sealed class WorldHandoffTests
 
     private static LocalWorldHandoffSource Source(SyntheticArcaneServer a) => new(
         new WorkerNodeId("a"), a.World, a.Services.GetRequiredService<CharacterSaveQueue>(), a.Services.GetRequiredService<WorkerAdmission>(),
-        a.Services.GetRequiredService<CharacterPersistenceBarrier>(), a.Services.GetRequiredService<WorldWriterGuard>());
+        a.Services.GetRequiredService<WorldWriterGuard>(), a.Services.GetRequiredService<CharacterPersistenceBarrier>());
 
     private static WorldHandoffCoordinator Coordinator(SyntheticArcaneServer a, SyntheticArcaneServer b, IWorldHandoffSource source, IWorldHandoffRouter router)
         => new(Store(a), source, new StandbyWorldHandoffTarget(new WorkerNodeId("b"), Host(b)), router);
