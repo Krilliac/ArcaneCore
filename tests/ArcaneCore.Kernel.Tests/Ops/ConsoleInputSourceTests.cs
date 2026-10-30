@@ -3,63 +3,42 @@ using Xunit;
 
 namespace ArcaneCore.Kernel.Tests.Ops;
 
-/// <summary><see cref="ConsoleInputSource.Default"/> takes the supervisor token from the environment once and removes it from the process environment.</summary>
+/// <summary>
+/// <see cref="ConsoleInputSource.Default"/> reads the supervisor token and leaves the environment variable in place: the World's cross-realm
+/// lifecycle channel reads it from the live environment later, so clearing it would disable that channel under supervision.
+/// </summary>
 [Collection(ProcessGlobalStateCollection.Name)]
 public sealed class ConsoleInputSourceTests
 {
     private static readonly string Variable = SupervisorProtocol.TokenEnvironmentVariable;
 
     [Fact]
-    public void Default_CapturesTheSupervisorToken_AndClearsTheEnvironmentVariable()
+    public void Default_ReadsTheSupervisorToken_AndLeavesTheEnvironmentVariableForLaterReaders()
     {
         string? previous = Environment.GetEnvironmentVariable(Variable);
         try
         {
-            ConsoleInputSource.ResetCapturedTokenForTests();
             Environment.SetEnvironmentVariable(Variable, "secret-run-token");
 
-            ConsoleInputSource source = ConsoleInputSource.Default();
-
-            Assert.Equal("secret-run-token", source.SupervisorToken);
-            Assert.Null(Environment.GetEnvironmentVariable(Variable));
-        }
-        finally
-        {
-            ConsoleInputSource.ResetCapturedTokenForTests();
-            Environment.SetEnvironmentVariable(Variable, previous);
-        }
-    }
-
-    [Fact]
-    public void Default_CalledAgain_ReturnsTheCachedToken_EvenThoughTheVariableIsGone()
-    {
-        string? previous = Environment.GetEnvironmentVariable(Variable);
-        try
-        {
-            ConsoleInputSource.ResetCapturedTokenForTests();
-            Environment.SetEnvironmentVariable(Variable, "first-token");
             ConsoleInputSource first = ConsoleInputSource.Default();
+            ConsoleInputSource second = ConsoleInputSource.Default();
 
-            ConsoleInputSource second = ConsoleInputSource.Default(); // the variable was cleared by the first call
-
-            Assert.Equal("first-token", first.SupervisorToken);
-            Assert.Equal("first-token", second.SupervisorToken);
-            Assert.Null(Environment.GetEnvironmentVariable(Variable));
+            Assert.Equal("secret-run-token", first.SupervisorToken);
+            Assert.Equal("secret-run-token", second.SupervisorToken);
+            Assert.Equal("secret-run-token", Environment.GetEnvironmentVariable(Variable));
         }
         finally
         {
-            ConsoleInputSource.ResetCapturedTokenForTests();
             Environment.SetEnvironmentVariable(Variable, previous);
         }
     }
 
     [Fact]
-    public void Default_WithoutAToken_HasNoToken_AndLeavesTheVariableUnset()
+    public void Default_WithoutAToken_HasNoToken()
     {
         string? previous = Environment.GetEnvironmentVariable(Variable);
         try
         {
-            ConsoleInputSource.ResetCapturedTokenForTests();
             Environment.SetEnvironmentVariable(Variable, null);
 
             ConsoleInputSource source = ConsoleInputSource.Default();
@@ -69,7 +48,6 @@ public sealed class ConsoleInputSourceTests
         }
         finally
         {
-            ConsoleInputSource.ResetCapturedTokenForTests();
             Environment.SetEnvironmentVariable(Variable, previous);
         }
     }

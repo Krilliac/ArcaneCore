@@ -13,10 +13,12 @@ shutdown token is cancelled.
 
 ## The per-run token
 
-`ARCANECORE_SUPERVISOR_TOKEN` is the supervisor's per-run secret. `ConsoleInputSource.Default()` reads it once, keeps it on the source, and
-removes the variable from the process environment so children of the child do not inherit it. The host's environment configuration
-provider copies the environment when the builder is built; `Default()` runs later (from a DI singleton factory), so the configuration
-still holds a copy under the raw variable name. Nothing binds that key.
+`ARCANECORE_SUPERVISOR_TOKEN` is the supervisor's per-run secret. `ConsoleInputSource.Default()` reads it and keeps it on the source. The
+variable stays in the process environment on purpose: the World's `SupervisorProtocolChannel.Process` reads it from the live environment the
+first time a GM runs a cross-realm `.server restart|shutdown`, and clearing it earlier would make that command report that the process is not
+supervised. As a consequence, processes the child starts inherit the token, and the host's environment configuration provider also holds a copy
+under the raw variable name (nothing binds that key). Removing the variable is possible only after every consumer takes the token from one
+captured place; that change spans the World supervisor files and is a follow-up.
 
 ## Authentication limits
 
