@@ -88,6 +88,11 @@ public sealed class SupervisorProtocolTests
     [Theory]
     [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive\r")]
     [InlineData("x\rheartbeat 2026-10-29T10:00:00.000Z pid=1 alive")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive\n")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1\talive")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive\0")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 alive\u001b[0m")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z\npid=1 alive")]
     public void Heartbeat_WithEmbeddedControlCharacters_IsRejected(string line)
         => Assert.False(SupervisorProtocol.TryParseHeartbeat(line, out _));
 
