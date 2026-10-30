@@ -78,6 +78,7 @@ public static class WorldServiceCollectionExtensions
         services.AddSingleton(sp => new CommandTableSource(sp.GetRequiredService<CommandTable>()));
         services.AddWorldFeatures();
         services.AddSingleton<Cluster.Social.IRealmSingletonHalt>(sp => sp.GetRequiredService<Economy.AuctionBotFeature>()); // halted when the economy realm authority lease is lost
+        services.AddSingleton<Cluster.Social.IRealmSingletonHalt>(sp => sp.GetRequiredService<ServerMail.AutoBroadcastFeature>()); // halted when the social realm authority lease is lost
         services.AddSingleton<CharacterDirectory>();
         services.AddSingleton<CharacterDeletionReconciler>();
         services.TryAddSingleton<IAccountSessionClaimStore, InMemoryAccountSessionClaimStore>();
