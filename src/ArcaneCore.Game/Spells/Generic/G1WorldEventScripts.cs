@@ -46,9 +46,9 @@ public sealed class TowerCaptureTestScript : ISpellScript
         }
 
         bool pvpRealm = WorldStateHooks.For(map.World).Zones.PvpRealmMode != PvpRealmMode.Normal;
-        foreach (Player player in map.World.OnlinePlayers.ToArray())
+        foreach (Player player in map.Players.ToArray())
         {
-            if (!ReferenceEquals(player.Map, map) || WorldDummyHelpers.Dist(caster, player) > Range
+            if (WorldDummyHelpers.Dist(caster, player) > Range
                 || !context.System.Relations.IsFriendly(caster, player) || !OutdoorPvPActive(context.System, player, pvpRealm))
             {
                 continue;

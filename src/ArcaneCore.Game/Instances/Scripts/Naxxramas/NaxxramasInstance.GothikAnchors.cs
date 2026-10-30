@@ -35,6 +35,29 @@ public sealed partial class NaxxramasInstance
 
     private readonly HashSet<ObjectGuid> _gothikCorpseTriggers = [];
 
+    /// <summary>How many corpse triggers are still tracked (they are pruned when the creature is gone and at the encounter's end).</summary>
+    internal int GothikCorpseTriggerCount => _gothikCorpseTriggers.Count;
+
+    /// <summary>
+    /// Drops the tracked corpse triggers whose creature is no longer on the map (the 15-second timed despawn, a forced despawn), so the set
+    /// does not grow for the life of the instance. With <paramref name="all"/> the set is emptied (the encounter ended: the triggers are
+    /// despawned first).
+    /// </summary>
+    private void PruneGothikCorpseTriggers(CreatureMapSystem system, bool all)
+    {
+        if (_gothikCorpseTriggers.Count == 0) return;
+        if (all)
+        {
+            foreach (Creature trigger in system.Creatures.Where(c => c.Entry == GothikTrigger && _gothikCorpseTriggers.Contains(c.Guid)).ToArray())
+                system.ForcedDespawn(trigger, 0);
+            _gothikCorpseTriggers.Clear();
+            return;
+        }
+
+        HashSet<ObjectGuid> live = [.. system.Creatures.Where(c => c.Entry == GothikTrigger).Select(c => c.Guid)];
+        _gothikCorpseTriggers.RemoveWhere(guid => !live.Contains(guid));
+    }
+
     /// <summary>
     /// The first spell of the chain for a living-side add (vmangos SPELL_A/B/C_TO_ANCHOR_1), or 0 for any other creature.
     /// </summary>
@@ -55,6 +78,7 @@ public sealed partial class NaxxramasInstance
         if (spell == 0 || Instance.FindUpdater<CreatureMapSystem>() is not { } system
             || system.Content.FindTemplate(GothikTrigger) is not { } template
             || ClosestGothikAnchor(dead, livingSide: true) is not { } anchor) return;
+        PruneGothikCorpseTriggers(system, all: false);
         Creature trigger = system.SpawnTemporary(template, dead.X, dead.Y, dead.Z, dead.Orientation);
         _gothikCorpseTriggers.Add(trigger.Guid);
         system.MarkTimedDespawn(trigger, GothikCorpseTriggerMs);

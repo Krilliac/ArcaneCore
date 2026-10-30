@@ -121,6 +121,9 @@ public sealed class DespawnCreatureScript : ISpellScript
 {
     private static readonly uint[] s_drakonids = [14261, 14262, 14263, 14264, 14265, 14302];
 
+    /// <summary>The wild kodos the Kombobulator takes and the Tamed Kodo they become (Aged, Dying, Ancient 4700-4702; Tamed 11627).</summary>
+    private static readonly uint[] s_kodos = [4700, 4701, 4702, 11627];
+
     public void OnEffectExecute(SpellEffectContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -130,12 +133,34 @@ public sealed class DespawnCreatureScript : ISpellScript
             25792 => [15621u],
             23484 => s_drakonids,
             24342 => [15117u],
+            18269 => s_kodos,
             _ => [],
         };
-        if (OtherCoresCasts.CreatureOf(context.Target, entries) is { } creature)
+        if (OtherCoresCasts.CreatureOf(context.Target, entries) is not { } creature
+            || (entries.Length == 0 && !IsListedScriptTarget(context, creature)))
         {
-            WorldDummyCasts.Despawn(creature, context.Spell.Id == 17678 ? 3000u : 0u);
+            return;
         }
+
+        WorldDummyCasts.Despawn(creature, context.Spell.Id == 17678 ? 3000u : 0u);
+    }
+
+    /// <summary>
+    /// 17678, 26264, 26585 and 29336 name no entry in their reference scripts: the spell's script-target selection (spell_script_target) decides
+    /// who is hit. A world without those rows would otherwise despawn every creature in the area, so the target must match a row (a creature or dead-creature
+    /// row for its entry).
+    /// </summary>
+    private static bool IsListedScriptTarget(SpellEffectContext context, Creature creature)
+    {
+        foreach (SpellStore.ScriptTarget row in context.System.Store.GetScriptTargets(context.Spell.Id))
+        {
+            if (row.TargetEntry == creature.Entry && row.Type is 1 or 2)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
@@ -351,7 +376,7 @@ public sealed class HateReductionScript : ISpellScript
 }
 
 /// <summary>
-/// Trigger Teslas 28359 (cmangos boss_thaddius.cpp TriggerTeslas): the target loses all its auras and casts Shock Overload 28159 (not triggered). The
+/// Trigger Teslas 28359 (cmangos boss_thaddius.cpp TriggerTeslas): the target (only a Tesla Coil 16218, its spell_script_target) loses all its auras and casts Shock Overload 28159 (not triggered). The
 /// overload emote (broadcast text 12178) is not sent: no broadcast-text seam exists for a spell script.
 /// </summary>
 [SpellScript(28359)]
@@ -361,6 +386,11 @@ public sealed class TriggerTeslasScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         Unit target = context.Target;
+        if (target is not Creature { Entry: 16218 })
+        {
+            return;
+        }
+
         foreach (SpellAuraHolder holder in context.System.GetAuras(target).ToArray())
         {
             context.System.RemoveAuras(target, holder.Spell.Id);
@@ -372,7 +402,7 @@ public sealed class TriggerTeslasScript : ISpellScript
 
 /// <summary>
 /// Teleport Trigger 29499 (cmangos boss_heigan.cpp TeleportTrigger): each target casts Teleport Players 29273 on itself. The reference also caps the
-/// spell at 3 affected targets (SetMaxAffectedTargets); that cap is a target-selection property this script cannot set.
+/// spell at 3 affected targets (SetMaxAffectedTargets): <see cref="HeiganTeleportTriggerModule"/> registers it.
 /// </summary>
 [SpellScript(29499)]
 public sealed class HeiganTeleportTriggerScript : ISpellScript
@@ -381,6 +411,16 @@ public sealed class HeiganTeleportTriggerScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         OtherCoresCasts.Cast(context, context.Target, context.Target, 29273);
+    }
+}
+
+/// <summary>cmangos boss_heigan.cpp TeleportTrigger::OnInit: spell->SetMaxAffectedTargets(3).</summary>
+public sealed class HeiganTeleportTriggerModule : ISpellHandlerModule
+{
+    public void Register(SpellSystem system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        system.RegisterSpellMaxTargetsOverride(29499, 3);
     }
 }
 
