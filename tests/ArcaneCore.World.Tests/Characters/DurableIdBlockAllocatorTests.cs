@@ -137,6 +137,38 @@ public sealed class DurableIdBlockAllocatorTests
     }
 
     [Fact]
+    public async Task Allocator_RecoversAfterLastPrefetchFails_WhenStoreComesBack()
+    {
+        int calls = 0;
+        bool storeUp = false;
+        var allocator = new DurableIdBlockAllocator(
+            IdRangeScopes.Item,
+            blockSize: 4,
+            lowWatermark: 2,
+            reserveBlockAsync: (scope, count, ct) =>
+            {
+                Interlocked.Increment(ref calls);
+                if (!storeUp && calls > 1)
+                    throw new InvalidOperationException("db down");
+                return Task.FromResult(new IdRangeBlock(scope, 500, 500 + count - 1));
+            });
+
+        await allocator.ReserveAndEnqueueAsync();
+        for (int i = 0; i < 4; i++)
+        {
+            allocator.Next();
+            await allocator.WaitForPendingPrefetchAsync();
+        }
+
+        // Block spent, last prefetch failed: fail closed, but the store is back now.
+        storeUp = true;
+        Assert.Throws<IdRangeExhaustedException>(() => allocator.Next());
+        await allocator.WaitForPendingPrefetchAsync();
+
+        Assert.Equal(500u, allocator.Next());
+    }
+
+    [Fact]
     public async Task WorldHost_PrimeDurableIdAllocatorsAsync_ReservesDisjointBlocksAcrossRestarts()
     {
         var sharedStore = new InMemoryIdRangeReservationStore();
