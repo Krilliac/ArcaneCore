@@ -34,4 +34,7 @@ public static class DbUpgradeExitCodes
 
     /// <summary><c>upgrade</c> with pending steps and no confirmed backup (or a backup that could not be made); nothing was changed.</summary>
     public const int BackupNotConfirmed = 8;
+
+    /// <summary><c>copy</c>: the rows were copied but a table differs from its source (row count or content digest); the target is not safe to use.</summary>
+    public const int CopyVerifyFailed = 9;
 }

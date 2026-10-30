@@ -26,7 +26,7 @@ namespace ArcaneCore.Data.Schema.Upgrade.Cli;
 /// <see cref="ConnectionStringRedactor"/>: a password never reaches the output.
 /// </para>
 /// </summary>
-public static class DbUpgradeCli
+public static partial class DbUpgradeCli
 {
     public const string Usage = """
         usage: arcane-db <command> [options]
@@ -44,6 +44,8 @@ public static class DbUpgradeCli
           dbc           check the client DBC directory (each file against the vmangos layout) and the world database's
                         references into it (spell, map, area, faction, display ... ids no DBC row has); read-only
           dbc dump <File> [--id N] [--json]   print named fields from a build-5875 DBC with WoWDBDefs signedness (no database connection)
+          copy          move a component's rows to another database (SQLite to PostgreSQL or MariaDB, or any pair): creates the target schema, copies every
+                        table, resets the key counters, verifies row counts and content, then runs check on the target
 
         options:
           --component auth|characters|world|all   which component(s) to act on (default all)
@@ -53,10 +55,15 @@ public static class DbUpgradeCli
           --apply                                 migrate-codex: migrate (without it the command is a read-only dry run)
           --confirm-backup                        upgrade, migrate-codex: you have a backup of every database with pending steps
           --backup-dir <directory>                upgrade, migrate-codex: also write a verified copy of each SQLite database there
-          --allow-active-sessions                 upgrade, migrate-codex: do not refuse when other sessions are connected
-          --lock-timeout <seconds>                upgrade, migrate-codex: how long to wait for another process's schema lock (default 60)
+          --allow-active-sessions                 upgrade, migrate-codex, copy: do not refuse when other sessions are connected
+          --lock-timeout <seconds>                upgrade, migrate-codex, copy: how long to wait for another process's schema lock (default 60)
           --dbc-dir <directory>                   dbc: the build-5875 DBC directory (default ClientData:DbcDirectory)
           --out <directory>                       export-updates: the update root to write (normally sql/updates)
+          --source-provider sqlite|mariadb|mysql|postgresql   copy: the source engine (default: the configured Database section); with --source-connection
+          --source-connection <connection string> copy: the source database (one component only; prefer the configured Database section, a flag shows in the process list)
+          --target-provider <engine>              copy: the target engine (or ARCANE_DB_TARGET_PROVIDER)
+          --target-connection <connection string> copy: the target database (one component only; or ARCANE_DB_TARGET_<AUTH|CHARACTERS|WORLD>_CONNECTION, ARCANE_DB_TARGET_CONNECTION)
+          --replace                               copy: empty the target component's tables first (without it a target that holds rows is refused)
 
         configuration: the Database section (appsettings.json, environment variables such as
         Database__Characters__ConnectionString); a host option --config <file> names another JSON file.
@@ -64,7 +71,7 @@ public static class DbUpgradeCli
 
         exit codes: 0 ok, 1 unexpected failure, 2 usage or configuration, 3 upgrade pending (status, plan),
         4 refused (newer database, unknown state, blocker, active sessions), 5 drift (dbc: a dangling id or bad DBC), 6 database unreachable,
-        7 schema lock timeout, 8 backup not confirmed
+        7 schema lock timeout, 8 backup not confirmed, 9 copy verification failed
         """;
 
     /// <summary>The commands the tool accepts (the closed set the argument parser enforces; the runbook must name each).</summary>
@@ -79,8 +86,13 @@ public static class DbUpgradeCli
         => RunAsync(args, database, output, error, dbcDirectory: null, cancellationToken);
 
     /// <summary>Run one command line; <paramref name="dbcDirectory"/> is <c>ClientData:DbcDirectory</c>, the default of <c>dbc --dbc-dir</c>.</summary>
-    public static async Task<int> RunAsync(
+    public static Task<int> RunAsync(
         string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, CancellationToken cancellationToken)
+        => RunAsync(args, database, output, error, dbcDirectory, environment: null, cancellationToken);
+
+    /// <summary>As above, with the environment lookup <c>copy</c> reads its ARCANE_DB_TARGET_* variables through (null: the process environment); a seam for tests.</summary>
+    public static async Task<int> RunAsync(
+        string[] args, DatabaseOptions database, TextWriter output, TextWriter error, string? dbcDirectory, Func<string, string?>? environment, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(args);
         ArgumentNullException.ThrowIfNull(database);
@@ -101,7 +113,7 @@ public static class DbUpgradeCli
         if (args.Length >= 2 && args[0] == "dbc" && args[1] == "dump")
             return await DbcDump.RunAsync(args[2..], dbcDirectory, output, error).ConfigureAwait(false);
 
-        var run = new Run(database, output, error) { DbcDirectory = dbcDirectory };
+        var run = new Run(database, output, error) { DbcDirectory = dbcDirectory, Environment = environment ?? System.Environment.GetEnvironmentVariable };
         try
         {
             DbUpgradeArguments arguments = DbUpgradeArguments.Parse(args);
@@ -115,6 +127,7 @@ public static class DbUpgradeCli
                 "backup-info" => run.BackupInfo(arguments),
                 "export-updates" => await run.ExportUpdatesAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "dbc" => await run.DbcAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "copy" => await run.CopyAsync(arguments, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
         }
@@ -153,7 +166,7 @@ public static class DbUpgradeCli
 
     private sealed record Target(Spec Spec, DatabaseConnectionOptions Connection, string Description);
 
-    private sealed class Run
+    private sealed partial class Run
     {
         private static readonly Spec[] s_specs =
         [
@@ -165,7 +178,7 @@ public static class DbUpgradeCli
         private readonly DatabaseOptions _database;
         private readonly TextWriter _out;
         private readonly TextWriter _err;
-        private readonly string[] _secrets;
+        private string[] _secrets;
 
         public Run(DatabaseOptions database, TextWriter output, TextWriter error)
         {
