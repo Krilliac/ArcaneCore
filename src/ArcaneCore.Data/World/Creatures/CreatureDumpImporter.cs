@@ -441,6 +441,9 @@ public sealed class CreatureDumpImporter
                 case DbScriptDataModule.QuestEndTable:
                 case DbScriptDataModule.GossipTable:
                 case DbScriptDataModule.CreatureMovementTable:
+                case DbScriptDataModule.SpellTable:
+                case VmangosSpellScriptTranslator.Table:
+                case "conditions": // read only to resolve the conditions of vmangos spell_scripts (the conditions importer writes the table)
                     _dbScripts.Accept(row);
                     break;
                 case DbScriptDataModule.WaypointTable:
@@ -553,6 +556,15 @@ public sealed class CreatureDumpImporter
                 await InsertBatchedAsync(db, _relaySteps.Values.SelectMany(rows => rows), ct).ConfigureAwait(false);
                 await InsertBatchedAsync(db, _relayTemplates.Values, ct).ConfigureAwait(false);
                 await _dbScripts.InsertAllAsync(db, ct).ConfigureAwait(false);
+                foreach (string warning in _dbScripts.Warnings)
+                {
+                    Warn(warning);
+                }
+
+                foreach ((uint spellId, string why) in _dbScripts.VmangosSpellScriptRejections.OrderBy(pair => pair.Key))
+                {
+                    Warn($"spell_scripts {spellId} not imported: {why}");
+                }
             }
             finally
             {

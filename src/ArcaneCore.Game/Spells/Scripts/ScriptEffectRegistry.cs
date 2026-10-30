@@ -8,7 +8,7 @@ public delegate void ScriptEffectHandler(SpellEffectContext context);
 /// the spell family and id). A spell system has exactly one handler for the effect (<see cref="ScriptEffectModule"/>,
 /// because handler modules may not replace each other, see <see cref="SpellSystem.RegisterModules(IEnumerable{Type})"/>);
 /// every area that needs a script effect adds its spell id here from its own module instead of registering the effect again.
-/// A script effect of a spell with no entry does nothing, as in vmangos.
+/// A script effect of a spell with no entry starts the spell's DB script, if it has one, as in vmangos (SpellSystem.DbSpellScripts.cs).
 /// </summary>
 public sealed class ScriptEffectRegistry
 {
@@ -41,6 +41,11 @@ public sealed class ScriptEffectRegistry
         if (_handlers.TryGetValue(context.Spell.Id, out ScriptEffectHandler? handler))
         {
             handler(context);
+        }
+        else
+        {
+            // vmangos EffectScriptEffect falls through its id switch to the spell_scripts table (SpellEffects.cpp:4565-4571).
+            context.System.StartDbSpellScript(context);
         }
     }
 }

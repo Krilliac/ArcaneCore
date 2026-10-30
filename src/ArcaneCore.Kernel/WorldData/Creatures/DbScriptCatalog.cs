@@ -5,6 +5,9 @@ public enum DbScriptKind : byte
 {
     QuestEnd = 0,
     QuestStart = 1,
+
+    /// <summary>cmangos <c>dbscripts_on_spell</c> (SCRIPT_TYPE_SPELL), also fed by vmangos <c>spell_scripts</c>: keyed by spell id.</summary>
+    Spell = 2,
     Event = 5,
     Gossip = 6,
     CreatureMovement = 8,

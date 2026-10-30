@@ -77,6 +77,13 @@ public sealed class EventScriptRow : DbScriptRow;
 public sealed class CreatureMovementScriptRow : DbScriptRow;
 
 /// <summary>
+/// <c>dbscripts_on_spell</c>: run by a spell's DUMMY or SCRIPT_EFFECT effect, keyed by spell id (world schema step
+/// <see cref="DbSpellScriptDataModule"/>). classic-db z2815 rows import as they are; vmangos <c>spell_scripts</c> rows are translated into
+/// this layout (<see cref="VmangosSpellScriptTranslator"/>).
+/// </summary>
+public sealed class SpellScriptRow : DbScriptRow;
+
+/// <summary>
 /// One <c>script_waypoint</c> row (ScriptDev2's escort paths; mangos-classic <c>Entry, PathId, Point, PositionX/Y/Z, Orientation, WaitTime,
 /// ScriptId, Comment</c>; SystemMgr::LoadScriptWaypoints, AI/ScriptDevAI/system/system.cpp:63-121). The comment is not kept.
 /// classic-db z2815: 1,523 rows on 61 entries.
@@ -126,6 +133,9 @@ public sealed class DbScriptDataModule : IDataModule
 
     public const string WaypointTable = "script_waypoint";
     public const string CreatureMovementTable = "dbscripts_on_creature_movement";
+
+    /// <summary>cmangos <c>dbscripts_on_spell</c> (world schema <see cref="DbSpellScriptDataModule.Version"/>).</summary>
+    public const string SpellTable = "dbscripts_on_spell";
 
     public DatabaseComponent Component => DatabaseComponent.World;
 
@@ -183,6 +193,7 @@ public sealed class DbScriptDataModule : IDataModule
         GossipScriptRow => DbScriptKind.Gossip,
         EventScriptRow => DbScriptKind.Event,
         CreatureMovementScriptRow => DbScriptKind.CreatureMovement,
+        SpellScriptRow => DbScriptKind.Spell,
         _ => throw new ArgumentOutOfRangeException(nameof(row), row.GetType().Name, "not a DB script table row"),
     };
 
@@ -194,6 +205,7 @@ public sealed class DbScriptDataModule : IDataModule
         DbScriptKind.Gossip => new GossipScriptRow(),
         DbScriptKind.Event => new EventScriptRow(),
         DbScriptKind.CreatureMovement => new CreatureMovementScriptRow(),
+        DbScriptKind.Spell => new SpellScriptRow(),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "the relay scripts have their own table (RelayScriptDataModule)"),
     };
 

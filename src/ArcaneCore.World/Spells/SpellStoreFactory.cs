@@ -24,10 +24,13 @@ public static class SpellStoreFactory
         Dictionary<uint, SpellRangeRow> ranges = content.Ranges.ToDictionary(r => r.Id);
         Dictionary<uint, SpellRadiusRow> radii = content.Radii.ToDictionary(r => r.Id);
 
+        ILookup<uint, SpellEffectModRow> effectMods = content.EffectMods.ToLookup(m => m.Id);
+        float Radius(uint index) => radii.TryGetValue(index, out SpellRadiusRow? radius) ? radius.Radius : 0f;
         var spells = new List<SpellInfo>(content.Spells.Count);
         foreach (SpellTemplateRow row in content.Spells)
         {
-            spells.Add(ToSpellInfo(row, castTimes, durations, ranges, radii));
+            // vmangos spell_effect_mod over the built spell (SpellEffectMods: only into an effect slot the spell leaves empty).
+            spells.Add(SpellEffectMods.Apply(ToSpellInfo(row, castTimes, durations, ranges, radii), effectMods[row.Id], Radius, logger));
         }
 
         var known = spells.Select(s => s.Id).ToHashSet();

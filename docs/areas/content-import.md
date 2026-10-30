@@ -34,6 +34,46 @@ World schema v53 adds `npc_vendor_template` and `creature_template.VendorTemplat
 
 ## Delivered
 
+### Spell DB scripts and `spell_effect_mod` (2026-10-29; world 65 `DbSpellScriptDataModule`, world 66 `SpellEffectModDataModule`)
+
+**`dbscripts_on_spell` (world 65).** A spell's DB script runs when its DUMMY or SCRIPT_EFFECT effect hits and no code script claims the
+spell, as cmangos `Spell::EffectDummy` / `EffectScriptEffect` fall through to `ScriptsStart(SCRIPT_TYPE_SPELL, ...)`
+(`Spells/SpellEffects.cpp:1517-1532`, `:4176-4191`) and vmangos `EffectScriptEffect` to `spell_scripts` (`SpellEffects.cpp:4565-4571`).
+Only the effect of the highest priority starts it (SCRIPT_EFFECT 10, DUMMY 9; cmangos `ScriptMgr::CanSpellEffectStartDBScript`,
+`DBScripts/ScriptMgr.cpp:67-106`), on every hit. The steps run on the map's DB script executor (`SpellSystem.DbSpellScripts.cs`); a map
+gets that executor when it has creature spawns, as the event scripts of SEND_EVENT need too.
+
+Sources, in `refresh` (and `import`, through the creature importer):
+
+- classic-db `dbscripts_on_spell`, as it is (cmangos layout).
+- vmangos `spell_scripts`, translated by `VmangosSpellScriptTranslator` only where both cores mean the same: CAST_SPELL (CF_TRIGGERED
+  becomes TRIGGERED_OLD_TRIGGERED), CREATE_ITEM and the self-despawn, with `target_type` 0 and the swap/target-self flags mapped to
+  cmangos' REVERSE_DIRECTION and SOURCE_TARGETS_SELF. One refused row refuses its whole spell; every refusal is a warning line.
+  classic-db's rows win for a spell both have. A vmangos `condition_id` is resolved by meaning, never copied: only CONDITION_TEAM rows,
+  to the cmangos row of the same type and values (from a `conditions` table with a `comments` column in the input, else the world's own
+  `conditions`). vmangos 2/3 are classic-db 3/4 (Horde/Alliance), so copying the ids would swap the teams.
+
+Operator flow: `refresh` with the classic-db dump and a vmangos extract that holds only `spell_scripts`, `spell_effect_mod` and
+`conditions` (the spell script importer tells the vmangos `conditions` rows apart by their missing `comments` column; `refresh` never writes
+`conditions`). Give the vmangos extract to `refresh` only: `import` would also hand its `conditions` rows to the conditions importer,
+whose vmangos guard looks for missing `value3`/`value4` columns that current vmangos dumps have, so they would be written with their
+vmangos ids. The vmangos dump is GPL data and is never committed.
+
+**`spell_effect_mod` (world 66).** vmangos corrects Spell.dbc effects column by column (`SpellModMgr::LoadSpellMods`,
+`Spells/SpellModMgr.cpp:195-262`; -1 keeps a value, `:48-70`). `SpellStoreFactory` applies the rows when it builds the spell table, but
+only into an effect slot the world's `spell_template` leaves empty. The vmangos dump (db-4641790) has 371 rows: 291 rewrite effects
+classic-db defines, 27 name spells classic-db lacks, and 53 fill empty slots, most of them vmangos' way of implementing spells ArcaneCore
+implements in code (Bloodthirst's heal trigger, Blade Flurry). `refresh` therefore writes only the spells in
+`SpellEffectModDumpImporter.ReviewedSpells` (16468 Mother's Milk: a 12 s periodic trigger of 15474 Web Explosion) and names every
+other spell in a warning line. A spell joins the list once its row is checked against both cores and ArcaneCore's own scripts.
+
+Limits:
+- **Not translated:** TALK (vmangos broadcast text ids), RESPAWN_GAMEOBJECT and the buddy targets (vmangos spawn guids), TELEPORT_TO and
+  every other command, plus `target_type` searches. vmangos `creature_ai_events` / `creature_ai_scripts` (EventAI on dbscript-format
+  actions, with vmangos text and spawn ids) are not imported.
+- The cmangos TRIGGER_SPELL / TRIGGER_MISSILE start of a spell script (priorities 5 and 4, for a trigger spell missing from the DBC) is
+  not hooked: no imported row needs it, and vmangos starts its table from SCRIPT_EFFECT only.
+
 ### Content gaps: game-event orphans and four relay commands (2026-10-10; wave 17, branch `grok/content-gaps`; no schema change)
 
 **Game-event game objects "without a spawn" (wave 10: 1126).** Cause, measured on z2815: neither a missing import table nor a mapping

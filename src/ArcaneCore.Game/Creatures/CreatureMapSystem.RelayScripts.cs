@@ -43,6 +43,7 @@ public sealed partial class CreatureMapSystem
         [DbScriptKind.Gossip] = new(),
         [DbScriptKind.Event] = new(),
         [DbScriptKind.CreatureMovement] = new(),
+        [DbScriptKind.Spell] = new(),
     };
     private readonly Dictionary<Creature, (uint RelayId, ObjectGuid Target)> _arrivalRelays = [];
     private readonly List<(Creature Creature, long AtMs)> _scriptDespawns = [];
@@ -88,7 +89,10 @@ public sealed partial class CreatureMapSystem
 
         // TYPEMASK_CREATURE_OR_GAMEOBJECT is TYPEMASK_UNIT | TYPEMASK_GAMEOBJECT (ObjectGuid.h:45-52), and a player carries
         // TYPEMASK_UNIT too, so a player-started event is unique by its player, not by the object it used.
-        DbScriptUniqueness unique = kind != DbScriptKind.Event ? DbScriptUniqueness.SourceAndTarget
+        // A spell script starts on every hit (cmangos Spell::EffectDummy / EffectScriptEffect call ScriptsStart with the default
+        // SCRIPT_EXEC_PARAM_NONE, Spells/SpellEffects.cpp:1529-1531 and :4188-4190).
+        DbScriptUniqueness unique = kind == DbScriptKind.Spell ? DbScriptUniqueness.None
+            : kind != DbScriptKind.Event ? DbScriptUniqueness.SourceAndTarget
             : source is Unit or GameObjects.GameObject ? DbScriptUniqueness.Source
             : target is Unit or GameObjects.GameObject ? DbScriptUniqueness.Target
             : DbScriptUniqueness.SourceAndTarget;
@@ -604,8 +608,7 @@ public sealed partial class CreatureMapSystem
             {
                 if (source is not Creature caster)
                 {
-                    ReportRelay(step, "CAST_SPELL by a non-creature");
-                    return false;
+                    return CastSpellByNonCreature(step, source, target);
                 }
 
                 int filled = step.DataInts.TakeWhile(i => i != 0).Count();

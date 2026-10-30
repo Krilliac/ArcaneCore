@@ -105,6 +105,9 @@ public sealed record SpellContent(
     IReadOnlyList<SpellTargetPositionRow> TargetPositions)
 {
     public IReadOnlyList<ArcaneCore.Data.World.Creatures.SpellScriptTargetRow> ScriptTargets { get; init; } = [];
+
+    /// <summary>The vmangos effect corrections of <c>spell_effect_mod</c> (world 66), applied when the spell table is built.</summary>
+    public IReadOnlyList<SpellEffectModRow> EffectMods { get; init; } = [];
     public static SpellContent Empty { get; } = new([], [], [], [], [], [], []);
 }
 

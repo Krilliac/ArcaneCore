@@ -158,7 +158,7 @@ public sealed partial class SpellSystem
     private Dictionary<SpellEffectName, SpellEffectHandler> CreateEffectHandlers() => new()
     {
         [SpellEffectName.SchoolDamage] = EffectSchoolDamage,
-        [SpellEffectName.Dummy] = static _ => { },
+        [SpellEffectName.Dummy] = StartDbSpellScript, // no generic behaviour: scripts hook it, else the spell's DB script (SpellSystem.DbSpellScripts.cs)
         [SpellEffectName.SendEvent] = EffectSendEvent,
         [SpellEffectName.TeleportUnits] = EffectTeleportUnits,
         [SpellEffectName.ApplyAura] = EffectApplyAura,
