@@ -38,10 +38,10 @@ public sealed class PersistentPetOffThreadTests
             };
 
             // Comparing thread ids would be flaky: the test itself runs on a pool thread that the queued store can reuse.
-            // Inline, the call below would sit in the blocked store for the whole wait, and the test would never get past it.
+            // Run inline, the call below would sit in the blocked store until the HangBound wait ends, then return with the store done and the flush complete.
             kit.Service.QueueCurrentPetSave(player);
             Task flush = kit.Service.FlushCharacterAsync(1);
-            Assert.False(flush.IsCompleted, "the call returned while the store was still blocked, so the flush has not completed");
+            Assert.False(flush.IsCompleted, "QueueCurrentPetSave did not return until the blocked store call finished: the save ran on the calling thread");
             await entered.Task.WaitAsync(HangBound);
             Assert.False(flush.IsCompleted);
             release.Set();
