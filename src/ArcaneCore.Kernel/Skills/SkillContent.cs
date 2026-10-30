@@ -70,11 +70,11 @@ public sealed class SpellLearnSkillTable
 
 /// <summary>
 /// Rank links the client DBC lacks for the trainer-sold higher ranks of single-rank talent abilities (Pyroblast, Holy Shield, ...).
-/// Talent.dbc lists one spell for these talents and SkillLineAbility.dbc has forward_spellid 0 on every rank, so the DBC chain stops
-/// at rank 1. The reference servers keep the link in spell_chain prev_spell (mangos-classic sql/archive/0.6/2875_spell_chain.sql,
+/// Talent.dbc lists one spell for these talents and SkillLineAbility.dbc has forward_spellid 0 on these ranks, so the DBC chain stops
+/// at rank 1 (Nature's Grasp is DBC-linked only from rank 1 to 2). The reference servers keep the link in spell_chain prev_spell (mangos-classic sql/archive/0.6/2875_spell_chain.sql,
 /// e.g. <c>('12505','11366','11366','2')</c>; vmangos SpellMgr::LoadSpellChains merges those rows over the DBC chains). With the link a
 /// trainer refuses the rank until the player knows the talent spell (Player::GetTrainerSpellState) and a respec walks up to the
-/// purchased ranks. A link the DBC provides always wins; Mortal Strike, Bloodthirst and Shield Slam are chained by the DBC already.
+/// purchased ranks. A link the DBC provides always wins; Mortal Strike, Bloodthirst, Shield Slam and Hemorrhage are chained by the DBC already.
 /// </summary>
 public static class TalentAbilityRankLinks
 {
@@ -125,8 +125,10 @@ public static class TalentAbilityRankLinks
         (20912, 20911), (20913, 20912), (20914, 20913),
         // Holy Shield
         (20927, 20925), (20928, 20927),
-        // Hemorrhage
-        (17347, 16511), (17348, 17347),
+        // Consecration
+        (20116, 26573), (20922, 20116), (20923, 20922), (20924, 20923),
+        // Nature's Grasp (the DBC only links rank 1 -> 2)
+        (16811, 16810), (16812, 16811), (16813, 16812), (17329, 16813),
     ];
 }
 

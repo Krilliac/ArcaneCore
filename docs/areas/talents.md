@@ -169,7 +169,7 @@ numbers; run the server with the talent DBCs configured and read them.
   `content:` step before the bot changes.
 - **No supersede packets** for trainer-learned ranks (`SMSG_SUPERCEDED_SPELL`): a disabled rank returns with `SMSG_LEARNED_SPELL` only.
 - **Rank chain source.** vmangos walks `spell_chain`; this area walks SkillLineAbility.dbc forward links
-  (`SkillLineRankChain`, via the NPC services' DBC path). They agree for trainer-learnable ranks. Without that DBC no higher rank
+  (`SkillLineRankChain`, via the NPC services' DBC path). `TalentAbilityRankLinks` supplements the DBC with the `spell_chain` prev_spell links of single-rank talent abilities (Pyroblast, Consecration, Nature's Grasp, ...), which the DBC lacks. Without that DBC no higher rank
   is disabled (the talent itself is still removed) and the startup log says so.
 - **Not atomic across stores.** A respec writes money (character row), the spellbook and the talent state through three independent
   queues. The disabled row is enqueued before the spell removal, but the queues have no cross-order, so a crash can lose an ability

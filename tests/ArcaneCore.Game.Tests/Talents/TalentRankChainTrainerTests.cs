@@ -1,6 +1,13 @@
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Talents;
+using ArcaneCore.Game.Tests.Npc;
+using ArcaneCore.Game.Tests.Spells;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.Skills;
+using ArcaneCore.Kernel.Talents;
+using ArcaneCore.Protocol;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Talents;
@@ -67,5 +74,115 @@ public sealed class TalentRankChainTrainerTests
         var catalog = new SkillLineAbilityCatalog(Rows(Pyroblast2));
 
         Assert.Equal(0u, catalog.PreviousRank(Pyroblast2));
+    }
+
+    private const uint Consecration1 = 26573;
+    private const uint Consecration2 = 20116;
+    private const uint Consecration5 = 20924;
+    private const uint NaturesGrasp2 = 16689;
+    private const uint NaturesGrasp3 = 16811;
+    private const uint NaturesGrasp6 = 17329;
+    private const uint TeachPyroblast2 = 9900;
+
+    [Fact]
+    public void ConsecrationAndNaturesGraspRanksLinkTheTalentSpell()
+    {
+        var catalog = new SkillLineAbilityCatalog(Rows(Consecration1, Consecration2, 20922, 20923, Consecration5));
+        Assert.Equal(Consecration1, catalog.PreviousRank(Consecration2));
+        Assert.Equal(20923u, catalog.PreviousRank(Consecration5));
+
+        // Rank 3 and later have no DBC link; the DBC only links 16810 -> 16689.
+        var grasp = new SpellRankChains(Rows(16810, NaturesGrasp2, NaturesGrasp3, 16812, 16813, NaturesGrasp6));
+        Assert.Equal(16810u, grasp.Previous(NaturesGrasp3));
+        Assert.Equal(16813u, grasp.Previous(NaturesGrasp6));
+    }
+
+    private sealed class TrainerRig : IDisposable
+    {
+        public TrainerRig()
+        {
+            SpellInfo[] spells =
+            [
+                SpellTestKit.Spell(Pyroblast1), SpellTestKit.Spell(Pyroblast2),
+                SpellTestKit.Spell(TeachPyroblast2, SpellTestKit.Effect(SpellEffectName.LearnSpell, 1, trigger: Pyroblast2)),
+            ];
+            var system = new SpellSystem(new SpellStore(spells, [], []), () => 0u, spellbook: Book);
+            var learner = new SpellSystemLearner(() => system, new SkillLineAbilityCatalog(Rows(Pyroblast1, Pyroblast2)));
+            NpcContent content = NpcContent.Empty with
+            {
+                TrainerSpells = [new TrainerSpell { Entry = NpcServiceTestKit.Entry, Spell = TeachPyroblast2, SpellCost = 10 }],
+            };
+            Kit = new NpcServiceTestKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
+                new QuestNpcDependencies(Spells: learner, Reputation: new NpcVendorServiceTests.FixedReputation(1f)));
+            Kit.Npc = Kit.Npc with { TrainerType = TrainerType.TradeSkills, TrainerClass = 0 };
+            Kit.Player.Level = 24;
+            Kit.Player.Money = 100;
+        }
+
+        public MemorySpellbook Book { get; } = new();
+
+        public NpcServiceTestKit Kit { get; }
+
+        public byte State()
+        {
+            Kit.Drain();
+            Kit.Services.TrainerList(Kit.Player, Kit.Npc.Guid);
+            var r = new PacketReader(Kit.Single(WorldOpcode.SmsgTrainerList));
+            r.ReadUInt64();
+            r.ReadUInt32();
+            Assert.Equal(1u, r.ReadUInt32());
+            Assert.Equal(TeachPyroblast2, r.ReadUInt32());
+            return r.ReadByte();
+        }
+
+        public void Dispose() => Kit.Dispose();
+    }
+
+    [Fact]
+    public void TrainerRefusesPyroblastRank2WithoutTheTalentSpell()
+    {
+        using var rig = new TrainerRig();
+        Assert.Equal((byte)TrainerSpellState.Red, rig.State());
+
+        rig.Kit.Services.BuyTrainerSpell(rig.Kit.Player, rig.Kit.Npc.Guid, TeachPyroblast2);
+        Assert.False(rig.Book.HasSpell(rig.Kit.Player, Pyroblast2));
+        Assert.Equal(100u, rig.Kit.Player.Money);
+
+        rig.Book.LearnSpell(rig.Kit.Player, Pyroblast1);
+        Assert.Equal((byte)TrainerSpellState.Green, rig.State());
+        rig.Kit.Services.BuyTrainerSpell(rig.Kit.Player, rig.Kit.Npc.Guid, TeachPyroblast2);
+        Assert.True(rig.Book.HasSpell(rig.Kit.Player, Pyroblast2));
+    }
+
+    [Fact]
+    public void RespecWithTheRealChainRemovesThePurchasedPyroblastRank()
+    {
+        using var kit = new SpellTestKit(
+        [
+            .. TalentRig.Spells(), TalentRig.ActiveSpell(Pyroblast1), TalentRig.ActiveSpell(Pyroblast2),
+        ]);
+        var session = new FakeSession(1, AccountSecurity.Player);
+        var player = TestWorld.CreatePlayer(1, 0, 0, session);
+        player.Level = 20;
+        kit.World.AddPlayer(player);
+        kit.World.RunTick(0);
+        player.Money = 100 * TalentRig.Gold;
+        TalentCatalog catalog = new(
+            [new TalentTabRecord(1, 1u << 0, 0)],
+            [new TalentRecord(5, 1, 0, 0, [Pyroblast1, 0, 0, 0, 0], 0, 0, 0)]);
+        using var service = new TalentService(catalog, kit.System, new TalentOptions(), () => TalentRig.Now)
+        {
+            Sink = new RecordingTalentSink(),
+            RankChain = new SkillLineRankChain(new SkillLineAbilityCatalog(Rows(Pyroblast1, Pyroblast2))),
+            KnownSpells = p => kit.Spellbook.Spells.GetValueOrDefault(p.Guid) ?? [],
+        };
+        service.InitTalentForLevel(player);
+        Assert.True(service.LearnTalent(player, 5, 0));
+        kit.Spellbook.Teach(player, Pyroblast2);
+
+        Assert.True(service.ResetTalents(player, noCost: true));
+
+        Assert.False(kit.Spellbook.HasSpell(player, Pyroblast1));
+        Assert.False(kit.Spellbook.HasSpell(player, Pyroblast2));
     }
 }
