@@ -504,25 +504,25 @@ public sealed class PlayerbotMotionTests
     }
 
     [Fact]
-    public async Task Pump_WhenNavigatedMeshRiseIsJustOverTheStepsRun_IsRefused()
+    public async Task Pump_WhenNavigatedMeshRiseIsSteeperThanTheStepsRun_IsRefusedEvenUnderTheRiseCap()
     {
         await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
         WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
         try
         {
             using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
-            // The step from 3.5 yd (one heartbeat at MoveSpeed 7) to 7 yd runs 3.5 yd; the mesh rises 4 over it: steeper than 45 degrees.
-            const float rise = 4f;
+            // A MoveSpeed under the base run speed walks at 2.5 yd/s: a heartbeat steps 1.25 yd, so the step across the wall (at 2 yd) runs 1.25 yd. The mesh rises 2.5 over it: over the step height, well under the 3.5 yd cap, steeper than 45 degrees.
+            const float rise = 2.5f;
             float wallX = 0f;
             List<(float X, float Z)> steps = await WalkNavigatedRouteAsync(host, session, x0 =>
             {
-                wallX = x0 + 5f;
+                wallX = x0 + 2f;
                 WorldCollision.Of(host.World).Install(
                     lineOfSight: new NoFloorLineOfSight(wallX),
                     pathfinder: new StoreyMeshPathfinder(wallX, Floor, Floor + rise));
-            }, endRise: rise, pumps: 4);
+            }, endRise: rise, pumps: 4, moveSpeed: 6.0f);
 
-            Assert.All(steps, s => Assert.True(s.Z <= Floor + PlayerbotMoveCheck.DirectStepMaxStepUpYards, $"bot climbed to z {s.Z} at x {s.X}"));
+            Assert.All(steps, s => Assert.True(s.X <= wallX, $"bot climbed past the wall to x {s.X} (z {s.Z})"));
             Assert.True(capture.Count(Key(Code.RouteBlocked)) >= 1, "the refused step must be reported as route-blocked");
         }
         finally { session.Kick(); await session.ManagedClosed; }
@@ -570,6 +570,54 @@ public sealed class PlayerbotMotionTests
             }, endRise: rise, pumps: 2, heartbeatsPerPump: 3);
 
             Assert.All(steps, s => Assert.True(s.Z <= Floor + PlayerbotMoveCheck.DirectStepMaxStepUpYards, $"bot climbed to z {s.Z} at x {s.X}"));
+            Assert.True(capture.Count(Key(Code.RouteBlocked)) >= 1, "the refused step must be reported as route-blocked");
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task Pump_WhenAClimbingStepHasNoMeshSurfaceAndNoFloor_IsRefused()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
+            float wallX = 0f;
+            // Past the wall the mesh walk fails and there is no floor query answer: no mesh surface, so the step keeps the route's own
+            // straight-line height, which climbs 2.1 yd per step (12 yd over the 20 yd route), over the step height. Nothing sees across.
+            List<(float X, float Z)> steps = await WalkNavigatedRouteAsync(host, session, x0 =>
+            {
+                wallX = x0 + 5f;
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new NoFloorLineOfSight(wallX),
+                    pathfinder: new UnconnectedMeshPathfinder(wallX, Floor, Floor + 3f, answersFloorQuery: false));
+            }, endRise: 12f, pumps: 4);
+
+            Assert.All(steps, s => Assert.True(s.X <= wallX, $"bot crossed the wall to x {s.X} (z {s.Z})"));
+            Assert.True(capture.Count(Key(Code.RouteBlocked)) >= 1, "the refused step must be reported as route-blocked");
+        }
+        finally { session.Kick(); await session.ManagedClosed; }
+    }
+
+    [Fact]
+    public async Task Pump_WhenTheMeshWalkDropsAStoreyHeightStepWithNoFloorOrSightLine_IsRefused()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: s => s.AddSingleton<IWorldFeature, H1AnomalyKit.ManualClock>());
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            using AnomalyCapture capture = H1AnomalyKit.CaptureFor(session.Player!);
+            const float drop = 3f; // over the step height, within the run and the stair cap: only the direction refuses it
+            List<(float X, float Z)> steps = await WalkNavigatedRouteAsync(host, session, x0 =>
+            {
+                float wallX = x0 + 5f;
+                WorldCollision.Of(host.World).Install(
+                    lineOfSight: new NoFloorLineOfSight(wallX),
+                    pathfinder: new StoreyMeshPathfinder(wallX, Floor, Floor - drop));
+            }, endRise: -drop, pumps: 4);
+
+            Assert.All(steps, s => Assert.True(s.Z >= Floor - PlayerbotMoveCheck.DirectStepMaxStepUpYards, $"bot dropped to z {s.Z} at x {s.X}"));
             Assert.True(capture.Count(Key(Code.RouteBlocked)) >= 1, "the refused step must be reported as route-blocked");
         }
         finally { session.Kick(); await session.ManagedClosed; }
@@ -627,7 +675,7 @@ public sealed class PlayerbotMotionTests
     }
 
     /// <summary>The mesh walks west of <paramref name="wallX"/> (surface <paramref name="westFloor"/>); a walk past it fails, and only a floor query under the point answers <paramref name="eastFloor"/>.</summary>
-    private sealed class UnconnectedMeshPathfinder(float wallX, float westFloor, float eastFloor) : IPathfinder, IMeshPointQuery, IMeshFloorQuery
+    private sealed class UnconnectedMeshPathfinder(float wallX, float westFloor, float eastFloor, bool answersFloorQuery = true) : IPathfinder, IMeshPointQuery, IMeshFloorQuery
     {
         public bool Enabled => true;
         public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
@@ -643,7 +691,7 @@ public sealed class PlayerbotMotionTests
         {
             // Only the symmetric window of the bot's vertical search answers: the floor probe asks for a drop below and a small offset above, and finds nothing.
             height = x >= wallX ? eastFloor : westFloor;
-            return MathF.Abs(below - above) < 1e-3f;
+            return answersFloorQuery && MathF.Abs(below - above) < 1e-3f;
         }
     }
 
@@ -663,9 +711,9 @@ public sealed class PlayerbotMotionTests
     /// <paramref name="install"/> set the collision up for the bot's x, then pumps once per heartbeat and returns the bot's x and z after each.
     /// </summary>
     private static async Task<List<(float X, float Z)>> WalkNavigatedRouteAsync(
-        WorldTestHost host, WorldSession session, Action<float> install, float endRise, int pumps, int heartbeatsPerPump = 1)
+        WorldTestHost host, WorldSession session, Action<float> install, float endRise, int pumps, int heartbeatsPerPump = 1, float moveSpeed = 7.0f)
     {
-        var options = new PlayerbotOptions { Enabled = true, MoveSpeed = 7.0f };
+        var options = new PlayerbotOptions { Enabled = true, MoveSpeed = moveSpeed };
         bool started = await host.OnWorldAsync(() =>
         {
             Player player = session.Player!;
