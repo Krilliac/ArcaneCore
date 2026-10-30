@@ -47,7 +47,9 @@ public sealed class SystemSupervisorCrashFiles : ISupervisorCrashFiles
     {
         try
         {
-            using var reader = new StreamReader(path, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            // ReadWrite|Delete: the child may still hold the file it wrote (or the OS its handle) when the supervisor reads it.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
             var buffer = new char[maxChars + 1];
             int read = reader.ReadBlock(buffer, 0, buffer.Length);
             return read > maxChars ? (new string(buffer, 0, maxChars), true) : (new string(buffer, 0, read), false);
@@ -71,6 +73,7 @@ public sealed class SystemSupervisorCrashFiles : ISupervisorCrashFiles
 /// <param name="WorkingDirectory">The child's configured working directory, or null.</param>
 /// <param name="HangSilence">Set when the supervisor killed the child after a hang: how long it had sent no world tick heartbeat.</param>
 /// <param name="HangCaptureNote">What the hang capture produced and where, or why it did not; null when none was taken.</param>
+/// <param name="HangExitedOnDrain">The hung child exited by itself when the supervisor asked it to drain, so the supervisor did not kill it.</param>
 public sealed record SupervisorChildExit(
     string Name,
     string Role,
@@ -82,7 +85,8 @@ public sealed record SupervisorChildExit(
     string Arguments,
     string? WorkingDirectory,
     TimeSpan? HangSilence = null,
-    string? HangCaptureNote = null);
+    string? HangCaptureNote = null,
+    bool HangExitedOnDrain = false);
 
 /// <summary>
 /// The crash dialog of the cluster supervisor. A supervised child's standard streams are always redirected, so its own crash dialog
@@ -238,7 +242,8 @@ public sealed class SupervisorCrashDialog
     public static string Title(SupervisorChildExit exit)
     {
         ArgumentNullException.ThrowIfNull(exit);
-        return exit.Name + (exit.HangSilence is null ? " crashed" : " hung and was killed") + " (exit code " + exit.ExitCode.ToString(CultureInfo.InvariantCulture) + ")";
+        string state = exit.HangSilence is null ? " crashed" : exit.HangExitedOnDrain ? " hung and exited" : " hung and was killed";
+        return exit.Name + state + " (exit code " + exit.ExitCode.ToString(CultureInfo.InvariantCulture) + ")";
     }
 
     /// <summary>
@@ -273,7 +278,7 @@ public sealed class SupervisorCrashDialog
             .Append(exit.ProcessId.ToString(CultureInfo.InvariantCulture)).Append(") ");
         if (exit.HangSilence is { } silence)
         {
-            sb.Append("was killed by the supervisor after a hang of ").Append(silence.TotalSeconds.ToString("0", CultureInfo.InvariantCulture))
+            sb.Append(exit.HangExitedOnDrain ? "exited when the supervisor asked it to drain after a hang of " : "was killed by the supervisor after a hang of ").Append(silence.TotalSeconds.ToString("0", CultureInfo.InvariantCulture))
                 .Append(" s (no world tick heartbeat); exit code ").Append(code).Append(" (0x").Append(hex).Append(").\n");
         }
         else
@@ -296,8 +301,8 @@ public sealed class SupervisorCrashDialog
         {
             sb.Append("Full report: none").Append(directory is null ? " (its report directory could not be determined)" : " in " + directory).Append('\n');
             sb.Append(exit.HangSilence is null
-                ? "A native crash, a stack overflow or Environment.FailFast ends the process before a report is written.\n"
-                : "A hung process is killed from outside, so it writes no crash report.\n");
+                ? "No crash report from this run was found: the child writes one for an unhandled exception when its Diagnostics:CrashDialog is on, so this may be a native crash, a stack overflow, Environment.FailFast, or that option being off in the child.\n"
+                : "A hang is not an exception, so a crash report is not expected.\n");
             sb.Append("See the supervisor log and the child's own log for its last output.");
             if (!string.IsNullOrEmpty(_dumpNote))
             {

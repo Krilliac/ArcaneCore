@@ -1251,6 +1251,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                             action = WatchAction.Hang;
                             entry.KillKind = SupervisorKillKind.Hang;
                             entry.State = SupervisedProcessState.Hung;
+                            entry.HangSilence = silence; // with the kill kind, so an early self-exit is never shown as a hang of 0 s
                         }
                         else
                         {
@@ -1334,11 +1335,6 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             $"ERROR: Process '{config.Name}' (pid {process.ProcessId}) sent no world tick heartbeat for {silence.TotalSeconds:0} s (hang timeout {config.HangTimeoutSeconds} s); draining and restarting it.",
             isStdErr: true);
         AnomalyLedger.Shared.Report("cluster", "supervisor-hang", config.Name, $"pid={process.ProcessId} silent={silence.TotalSeconds:0}s", AnomalySeverity.Error);
-        lock (_gate)
-        {
-            if (ReferenceEquals(entry.Process, process))
-                entry.HangSilence = silence;
-        }
 
         if (config.HangCapture != SupervisedHangCaptureMode.None && _hangCapture is not null)
         {
@@ -1361,6 +1357,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
         if (!exited)
         {
+            lock (_gate)
+            {
+                entry.HangKillIssued = true; // before the kill: the monitor only sees the exit after it, so it can tell a kill from a self-exit
+            }
+
             await Task.Run(process.KillOwnedProcess).ConfigureAwait(false);
         }
 
@@ -1652,7 +1653,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private static SupervisorChildExit NewCrashExit(ManagedEntry entry, ISupervisedProcess process, int exitCode, string decision)
         => new(entry.Config.Name, entry.Config.Role, process.ProcessId, exitCode, entry.LaunchUtc, decision,
             entry.Config.ExecutablePath, entry.Config.Arguments, entry.Config.WorkingDirectory,
-            entry.KillKind == SupervisorKillKind.Hang ? entry.HangSilence ?? TimeSpan.Zero : null, entry.KillKind == SupervisorKillKind.Hang ? entry.HangCaptureNote : null);
+            entry.KillKind == SupervisorKillKind.Hang ? entry.HangSilence ?? TimeSpan.Zero : null, entry.KillKind == SupervisorKillKind.Hang ? entry.HangCaptureNote : null, entry.KillKind == SupervisorKillKind.Hang && !entry.HangKillIssued);
 
     /// <summary>Hands an unexpected exit to the crash dialog, which starts its own thread and never throws; nothing here may delay the restart.</summary>
     private void OfferToCrashDialog(SupervisorChildExit exit)
@@ -1660,14 +1661,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         if (_crashDialog is null || (exit.ExitCode == 0 && exit.HangSilence is null))
             return;
 
-        try
-        {
-            _crashDialog.OnChildExited(exit);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            FaultLedger.Shared.Record(SupervisorCrashDialog.FaultSite, ex);
-        }
+        _crashDialog.OnChildExited(exit); // never throws: its own failures are recorded there with LogFault
     }
 
     /// <summary>
@@ -1823,6 +1817,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public DateTimeOffset LaunchUtc { get; set; }
         public TimeSpan? HangSilence { get; set; }
         public string? HangCaptureNote { get; set; }
+        public bool HangKillIssued { get; set; }
         public bool Armed { get; set; }
         public bool GraceWarned { get; set; }
         public long? StopAnnouncedTimestamp { get; set; }
@@ -1850,6 +1845,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             KillKind = SupervisorKillKind.None;
             HangSilence = null;
             HangCaptureNote = null;
+            HangKillIssued = false;
             _wake = NewSignal();
         }
 

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Cluster.Supervision;
 using Xunit;
@@ -341,6 +342,88 @@ public sealed class SupervisorCrashDialogTests
         Assert.False(rig.Supervisor.GetSnapshot("world").LastExitCode is 0);
     }
 
+    [Fact]
+    public async Task StopGraceKill_WithAFailureIntent_ShowsNoBox()
+    {
+        var presenter = new FakePresenter();
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(configure: c => c.DrainTimeoutMs = 30_000), launcher, holdAllDelays: true, crashDialog: NewDialog(presenter, new FakeFiles()));
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess stopping = launcher.Last;
+        stopping.Beat();
+        stopping.Emit(SupervisorProtocol.FormatStopping(stopping.Token!, SupervisorStopIntent.Failure, 70));
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(35));
+        await rig.Delays.ReleaseUntilAsync(() => stopping.Kills == 1, "the stuck stop to be killed");
+        await rig.Delays.ReleaseUntilAsync(() => launcher.Launches >= 2, "the relaunch with backoff");
+
+        Assert.Equal(SupervisedExitDisposition.RelaunchWithBackoff, rig.Supervisor.GetSnapshot("world").LastDisposition);
+        Assert.True(presenter.Shown.IsEmpty);
+    }
+
+    [Theory]
+    [InlineData(ExitCodes.InvalidConfiguration)]
+    [InlineData(ExitCodes.Usage)]
+    public async Task FaultExit_ShowsABoxSayingItIsNotRestarted(int code)
+    {
+        var presenter = new FakePresenter();
+        await using SupervisorRig rig = NewRig(NewDialog(presenter, new FakeFiles()));
+        await rig.Supervisor.StartProcessAsync("world");
+
+        rig.Launcher.Last.ExitWith(code);
+        await TestWait.UntilAsync(() => !presenter.Shown.IsEmpty, "the crash dialog");
+
+        presenter.Shown.TryPeek(out (string Title, string Text) box);
+        Assert.Contains("not restarting it", box.Text, StringComparison.Ordinal);
+        Assert.Contains("exit code " + code, box.Text, StringComparison.Ordinal);
+        Assert.Equal(1, rig.Launcher.Launches);
+    }
+
+    [Fact]
+    public async Task HangChildThatExitsWhenAskedToDrain_IsShownAsExitedNotKilled()
+    {
+        var presenter = new FakePresenter();
+        var launcher = new ScriptedLauncher { Configure = (_, p) => { p.Drain = DrainBehaviour.ExitsOnDrain; p.DrainExitCode = 5; } };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(configure: c => c.ExecutablePath = Path.Combine(ChildDirectory, "ArcaneCore.World.exe")), launcher, holdAllDelays: true, crashDialog: NewDialog(presenter, new FakeFiles()));
+        await rig.Supervisor.StartProcessAsync("world");
+        launcher.Last.Beat();
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(121));
+        await rig.Delays.ReleaseUntilAsync(() => !presenter.Shown.IsEmpty, "the hang box");
+
+        presenter.Shown.TryPeek(out (string Title, string Text) box);
+        Assert.Contains("hung and exited", box.Title, StringComparison.Ordinal);
+        Assert.Contains("exited when the supervisor asked it to drain after a hang of 121 s", box.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("was killed", box.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadText_RealFile_CutsAtTheLimit_SkipsTheBom_AndReadsAFileAnotherWriterHolds()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "arcane-sup-files-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string path = Path.Combine(directory, "crash-report.ArcaneCore.World.20261029-010203Z.txt");
+            File.WriteAllText(path, new string('a', 50), new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+            (string Text, bool Truncated)? cut = SystemSupervisorCrashFiles.Instance.ReadText(path, 20);
+            Assert.Equal((new string('a', 20), true), cut);
+            Assert.Equal((new string('a', 50), false), SystemSupervisorCrashFiles.Instance.ReadText(path, 50));
+
+            using var writer = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+            Assert.Equal((new string('a', 50), false), SystemSupervisorCrashFiles.Instance.ReadText(path, 100));
+            Assert.Null(SystemSupervisorCrashFiles.Instance.ReadText(Path.Combine(directory, "missing.txt"), 10));
+
+            IReadOnlyList<SupervisorCrashReportFile> found = SystemSupervisorCrashFiles.Instance.FindReports(directory, "ArcaneCore.World");
+            Assert.Equal(path, Assert.Single(found).Path);
+            Assert.Empty(SystemSupervisorCrashFiles.Instance.FindReports(directory, "ArcaneCore.Realm"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
     [Theory]
     [InlineData("ArcaneCore.World.exe", "", "ArcaneCore.World")]
     [InlineData("ArcaneCore.World", "", "ArcaneCore.World")]

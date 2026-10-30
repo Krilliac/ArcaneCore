@@ -35,6 +35,7 @@
   supervisor, so heartbeats and the hang watch work unchanged); it does not enable dialogs, which is why the default stays Merged.
   Instead, with Diagnostics:CrashDialog on for the SUPERVISOR (e.g. Diagnostics__CrashDialog=true in its console), the supervisor opens
   the crash dialog itself when a child exits unexpectedly with a nonzero code (SupervisorCrashDialog; docs/ops/invariants.md).
+  Children inherit the console environment, so the same variable makes each child write its crash-report file (no box) for the supervisor to show.
   A second World (a standby worker, several map workers) is not started: all worlds of a realm share one characters database and one
   writer lock, so only a worker, the standby handoff target, can coexist, and that is not hosted by a launcher yet.
 

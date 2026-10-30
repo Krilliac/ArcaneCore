@@ -182,6 +182,9 @@ public enum CrashDialogOutcome
 
     /// <summary>The dialog (or its report file) failed; the failure was recorded and the crash path went on.</summary>
     Failed,
+
+    /// <summary>The session cannot show a dialog, but this is a supervised child (<see cref="CrashDialog.SupervisedChildProbe"/>): the report file was written for the supervisor's crash dialog and no box was shown.</summary>
+    ReportOnly,
 }
 
 /// <summary>
@@ -226,6 +229,9 @@ public static class CrashDialog
         set => Volatile.Write(ref s_environmentProbe, value ?? CrashDialogEnvironment.Detect);
     }
 
+    /// <summary>Whether this process is a supervised cluster child (the supervisor sets <see cref="Ops.ServerConsole.SupervisedChildDrain.EnvironmentVariable"/>); tests substitute a fixed answer.</summary>
+    public static Func<bool> SupervisedChildProbe { get; set; } = static () => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Ops.ServerConsole.SupervisedChildDrain.EnvironmentVariable));
+
     /// <summary>Where the crash report file is written; null is <see cref="AppContext.BaseDirectory"/>, next to the crash journal.</summary>
     public static string? ReportDirectory { get; set; }
 
@@ -249,7 +255,8 @@ public static class CrashDialog
 
         try
         {
-            if (!ShouldShow(enabled, EnvironmentProbe()))
+            bool canShow = ShouldShow(enabled, EnvironmentProbe());
+            if (!canShow && !SupervisedChildProbe())
             {
                 return CrashDialogOutcome.NotInteractive;
             }
@@ -271,6 +278,12 @@ public static class CrashDialog
                 failed = true;
                 RecordFailure(ex, "could not write the crash report file " + path);
                 text = Compose(facts with { ReportPath = null, ReportError = ex.GetType().Name + ": " + ex.Message });
+            }
+
+            if (!canShow)
+            {
+                // A supervised child's streams are redirected, so no box: the file is for the supervisor's crash dialog, which shows it.
+                return failed ? CrashDialogOutcome.Failed : CrashDialogOutcome.ReportOnly;
             }
 
             Presenter.Show(text.Title, text.BoxText);
