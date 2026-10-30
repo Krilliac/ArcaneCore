@@ -133,7 +133,8 @@ public sealed class ClusterSupervisorAuditTests : IDisposable
         await rig.Supervisor.DrainProcessAsync("world");
 
         Assert.Equal(1, launcher.Last.Kills);
-        Assert.Equal(before + 1, AnomalyLedger.Shared.CountOf(AnomalyLedger.KeyOf("cluster", "supervisor-drain-timeout-kill")));
+        // The ledger is process-wide and other supervisor tests drain children that ignore the drain in parallel, so only a lower bound is race-free.
+        Assert.True(AnomalyLedger.Shared.CountOf(AnomalyLedger.KeyOf("cluster", "supervisor-drain-timeout-kill")) >= before + 1);
         Assert.Contains("did not exit within its drain timeout", rig.ConsoleText, StringComparison.Ordinal);
     }
 
