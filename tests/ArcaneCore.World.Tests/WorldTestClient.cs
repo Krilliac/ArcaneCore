@@ -45,7 +45,7 @@ internal sealed class WorldTestClient : IAsyncDisposable
         {
             try
             {
-                return _client.Client?.LocalEndPoint?.ToString();
+                return EndpointKey(_client.Client?.LocalEndPoint);
             }
             catch (ObjectDisposedException)
             {
@@ -53,6 +53,10 @@ internal sealed class WorldTestClient : IAsyncDisposable
             }
         }
     }
+
+    /// <summary>An endpoint as one string whichever way the socket reports it: a dual-mode client shows a loopback peer as <c>[::ffff:127.0.0.1]:port</c>, the server as <c>127.0.0.1:port</c>.</summary>
+    internal static string? EndpointKey(System.Net.EndPoint? endpoint)
+        => endpoint is System.Net.IPEndPoint ip ? $"{ip.Address.MapToIPv4()}:{ip.Port}" : endpoint?.ToString();
 
     /// <summary>Bytes received but not yet read.</summary>
     public int Available => _client.Available;

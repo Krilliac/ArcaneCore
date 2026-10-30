@@ -562,7 +562,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
         {
             if (Interlocked.Exchange(ref _acceptGate, null) is { } gate) await gate();
             TcpClient client = await _listener.AcceptTcpClientAsync(_stop.Token);
-            var entry = new SessionEntry { Endpoint = client.Client.RemoteEndPoint?.ToString() };
+            var entry = new SessionEntry { Endpoint = WorldTestClient.EndpointKey(client.Client.RemoteEndPoint) };
             Task session = Task.Run(async () =>
             {
                 using (client)
