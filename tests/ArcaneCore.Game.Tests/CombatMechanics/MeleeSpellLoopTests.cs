@@ -179,9 +179,9 @@ public sealed class MeleeSpellLoopTests
 
         rig.Tick(50);
 
+        Assert.Equal(1, rig.WhiteSwings);
         Assert.Null(rig.Kit.System.GetState(rig.Caster.Guid)?.MeleeCast);
         Assert.True(rig.Target.Health < 60u);
-        Assert.Equal(1, rig.WhiteSwings);
         Assert.Equal((byte)SpellCastResult.NoPower, Packets(rig.CasterSession, WorldOpcode.SmsgCastResult).Single()[5]);
     }
 

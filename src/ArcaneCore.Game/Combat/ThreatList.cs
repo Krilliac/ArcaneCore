@@ -427,7 +427,8 @@ public sealed partial class ThreatList
             bool allowLowPriority = attempt == 1;
             // The current victim is judged up front: a valid rival ranked ahead of it within 110% would otherwise end the walk
             // ("nobody overtook it") before the loop reaches the victim's own entry, returning an invalid or second-choice victim.
-            // vmangos never holds such a ref in the walk (invalid refs are off its online list); its second-choice check is per entry.
+            // vmangos never holds such a ref in the walk (invalid refs are off its online list). The low-priority half deliberately follows
+            // cmangos ThreatManager.cpp:391 (hostile-state comparison), not vmangos (316-339), which keeps a second-choice victim in the 100-110% band.
             if (current is not null && (!isValid(state, current.Target) || (!allowLowPriority && isLowPriority is not null && isLowPriority(current.Target))))
             {
                 current = null;

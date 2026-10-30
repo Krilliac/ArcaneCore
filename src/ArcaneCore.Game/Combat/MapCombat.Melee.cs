@@ -352,9 +352,9 @@ public sealed partial class MapCombat
                     c.ResetAttackTimer(WeaponAttackType.BaseAttack);
                 }
 
-                if (PvpActor(attacker) is { } pvpActor)
+                if (player is not null)
                 {
-                    TogglePlayerPvpFlagOnAttackVictim(pvpActor, victim);
+                    TogglePlayerPvpFlagOnAttackVictim(player, victim);
                 }
 
                 if (!extraAttackPerformed && c.IsAttackReady(WeaponAttackType.BaseAttack))
@@ -1167,10 +1167,10 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// The player whose PvP flag a unit's hostile act touches: the unit itself for a player, else the player behind a pet, guardian, totem or
-    /// charmed unit (vmangos Unit::GetAffectingPlayer, used by TogglePlayerPvPFlagOnAttackVictim and SetInCombatWithAggressor, Unit.cpp:5959-6053).
+    /// The player whose PvP flag a unit's hostile act touches: the player behind the unit, so a pet, guardian, totem or charmed unit (or a
+    /// mind-controlled player) resolves to its owner or charmer (the per-swing pulse in the melee loop stays player-only, Unit.cpp:432-433; (vmangos Unit::GetAffectingPlayer, used by TogglePlayerPvPFlagOnAttackVictim and SetInCombatWithAggressor, Unit.cpp:5959-6053).
     /// </summary>
-    private static Player? PvpActor(Unit unit) => unit as Player ?? DuelRules.ControllingPlayer(unit);
+    private static Player? PvpActor(Unit unit) => DuelRules.ControllingPlayer(unit);
 
     /// <summary>vmangos Unit::SetOutOfCombatWithVictim: flag the attacker, do not enter combat (touchOnly).</summary>
     private static void SetOutOfCombatWithVictim(Unit attacker, Unit victim)
@@ -1190,7 +1190,7 @@ public sealed partial class MapCombat
     {
         // Duel opponents do not pulse each other (vmangos Unit.cpp:5973, !IsInDuelWith).
         // Both sides resolve to the player behind them (vmangos Unit.cpp:5959-5975 reads GetAffectingPlayer), so a pet's or totem's hit
-        // pulses its owner's PvP combat too.
+        // pulses its owner's PvP combat too. The owner's flag stands in as the pet's PvP state (pets copy it only when created).
         if (PvpActor(aggressor) is { } pa && (pa.UnitFlags & UnitFlags.Pvp) != 0 && PvpActor(victim) is { } pv && !ReferenceEquals(pv, pa)
             && !DuelRules.IsInDuelWith(pv, pa))
         {

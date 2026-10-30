@@ -142,6 +142,23 @@ public sealed class DuelHostilityTests
     }
 
     [Fact]
+    public void PetOfADuelist_IsHostileToTheOpponent_ByIsHostileTo()
+    {
+        // Totem/trap/charm target pickers use IsHostileTo; vmangos IsHostileTo goes through GetReactionTo, duel clause first.
+        var (world, map, _, a, b, _, _) = DuelTestKit.TwoPlayers();
+        using WorldRuntime w = world;
+        CombatHooks hooks = Hooks(map, "faction");
+        DuelTestKit.Link(a, b, startTime: 100);
+        var pet = new OwnedUnit { Owner = a };
+        pet.Spawn(map, 11, 10);
+        pet.FactionTemplate = a.FactionTemplate;
+
+        Assert.True(hooks.IsHostileTo(pet, b));
+        Assert.True(hooks.IsHostileTo(b, pet));
+        Assert.False(hooks.IsHostileTo(pet, a));
+    }
+
+    [Fact]
     public void DuelOpponents_DoNotPulseThePvpFlag_ButAThirdPartyStillDoes()
     {
         var (world, map, _, a, b, _, _) = DuelTestKit.TwoPlayers();
