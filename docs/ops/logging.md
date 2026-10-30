@@ -164,8 +164,13 @@ JSON lines (the file when `Format=Json`; one object per event, keys stable, abse
 ```
 
 Strings are escaped per RFC 8259 (control characters as `\uXXXX`), numbers, booleans and null in the state are JSON
-values, anything else its invariant string. Both formats cap a line at 256 KiB characters and mark the cut
-(` ...[truncated]`), so a pathological exception cannot pin memory per event.
+values, anything else its invariant string. Both formats cap a line at 256 KiB characters so a pathological exception
+cannot pin memory per event. The text format marks the cut (` ...[truncated]`, with colour a reset first, then the
+newline). A cut JSON record cannot be closed in place, so it is replaced by a short valid record: `ts`, `level`,
+`category`, `eventId`/`eventName` when present, the `message` (first 1024 characters, with ` ...[truncated]` appended only
+when the message itself was cut) and `exceptionType` (the exception's type name) when there was an exception; `template`,
+`props`, `scopes` and the exception text are dropped. If even that does not fit, the line is `{"truncated":true}`.
+Rolled segments are ordered by date, then by roll number as a number, so retention keeps the newest after roll 999.
 
 **Colour decision** (`ConsoleColorSupport`): colour only when `Console:Mode=Color`, stdout is not redirected,
 `NO_COLOR` is unset or empty, and on Windows `SetConsoleMode(ENABLE_VIRTUAL_TERMINAL_PROCESSING)` succeeds (three
