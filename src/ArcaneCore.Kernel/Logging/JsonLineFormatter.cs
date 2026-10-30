@@ -98,7 +98,7 @@ public static class JsonLineFormatter
         for (int i = 0; i < text.Length; i++)
         {
             char c = text[i];
-            if (c >= 0x20 && c != '"' && c != '\\' && !(c >= 0x7F && c <= 0x9F) && c != (char)0x2028 && c != (char)0x2029)
+            if (c != '"' && c != '\\' && !LogLineFormatter.NeedsEscape(c))
             {
                 continue;
             }

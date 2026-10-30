@@ -75,6 +75,19 @@ public sealed class LogSinkFollowupTests
         Assert.Equal("a" + expected + "b", Escaped("a" + c + "b"));
     }
 
+    [Theory]
+    [InlineData('\u202E', "\\u202e")]
+    [InlineData('\u200B', "\\u200b")]
+    [InlineData('\uFEFF', "\\ufeff")]
+    public void JsonWriteString_EscapesUnicodeFormatCharacters(char c, string expected)
+    {
+        var buffer = new LogBuffer(stackalloc char[16]);
+        JsonLineFormatter.WriteString(ref buffer, "a" + c + "b");
+        string result = buffer.Written.ToString();
+        buffer.Dispose();
+        Assert.Equal("\"a" + expected + "b\"", result);
+    }
+
     [Fact]
     public void AppendEscaped_PlainAsciiAndOrdinaryUnicode_AreCopiedUnchanged()
     {

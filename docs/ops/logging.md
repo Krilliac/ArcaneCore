@@ -6,7 +6,7 @@ both daemons, selectable from configuration, with a colour console, a plain cons
 is either text or JSON lines (`Logging:ArcaneCore:Format`). A daemon never writes two log files. Per-category minimum levels stay where they were (`Logging:LogLevel`). `LogSafe` (CWE-117 escaping of
 client-controlled text, plus truncation) is unchanged and still the caller's job where truncation is wanted; the sinks themselves escape control and
 format characters (C0/C1 controls, U+2028/U+2029, bidi overrides, zero-width characters and the byte order mark) as visible `\uXXXX` escapes through
-`LogLineFormatter.AppendEscaped`, so no message can forge a line or reorder the log text.
+`LogLineFormatter.AppendEscaped` (text and console sinks) or the same `LogLineFormatter.NeedsEscape` test inside `JsonLineFormatter.WriteString` (JSON sink, which also escapes `"` and `\`), so no message can forge a line or reorder the log text.
 
 No third-party package is used. Serilog or NLog would have given the file and JSON sinks for free, but the repo has no
 third-party logging or resilience dependency and the hot-path requirement (no per-event allocation on the world thread)
