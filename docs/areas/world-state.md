@@ -269,8 +269,36 @@ quests and mails, and the cmangos `schedule_type` dialect that classic-db uses (
 13 Easter, the Darkmoon types 2-9; the lunar type needs an unverified moon-phase port). They depend on
 content-import-full's `game_event*` tables and spawn gate, which that lane owns.
 
+### War Mode (non-retail)
+
+`World:WarMode` is a server-wide world-PvP switch. It is a deliberate deviation from 1.12.1 and nothing like retail War Mode: there is no phasing, no
+per-player toggle and no bonus XP or reputation, and it is **off by default**. It applies to every player and every bot alike, with no opt-out.
+While `World:WarMode:Enabled` is on:
+
+- **Always flagged.** Every player is PvP-flagged everywhere except an *exempt area*, and the flag does not lapse: `MapCombat.UpdatePvpFlagTimer`
+  flags a player who is not flagged (through `UpdatePvp(player, true)`, within one combat tick of the player being placed by `PvpAreaTracker`) and holds the
+  300 s timer full. An exempt area is one whose flags include Capital (0x100) or City (0x200) and whose owning team is the player's own team or no team (a
+  neutral town such as Booty Bay), or an arena (`WarModeAreas.IsExempt`, kept per player by `PvpAreaTracker` as `PvpAreaState.IsWarModeExempt`); an
+  enemy-faction capital is not exempt. Inside an exempt area the normal timer applies and the flag lapses as in retail. Battlegrounds and arenas keep
+  their own rules. The sanctuary area flag is not used: it does not exist in 1.12.1 (vmangos `Database/DBCEnums.h:55-64` stops at 0x200).
+  Switching War Mode off returns players to the normal rules; the flag then lapses by its normal 5-minute timer unless the player wants it.
+- **Honour.** `HonorKillRewards.RewardHonorOnDeath` multiplies each share by `World:WarMode:HonorMultiplier` before the share is cut to a whole number,
+  so the integer rounding is the retail one and a multiplier of 1 gives exactly the War-Mode-off honour.
+- **Death has a durability cost.** An open-world PvP death (not a battleground) costs `World:WarMode:PvpDeathDurabilityLoss` of every equipped item's
+  durability through the same `DurabilityLossAll` call a creature death uses; 0 turns the cost off, and `Items:DurabilityLossEnable = false` still turns all
+  durability loss off. With War Mode off a PvP death costs none, as in retail.
+- **Bots.** The bots read the same switch (`World:Playerbots:Social:WarMode` only tunes their memory and hunt): see
+  [Playerbot social memory](playbots-social.md) (War Mode, Helping, the hunt).
+
+| Key | Default | Meaning |
+|---|---|---|
+| `World:WarMode:Enabled` | `false` | The switch. Live. |
+| `World:WarMode:HonorMultiplier` | `1.5` | 1 to 10. Live. |
+| `World:WarMode:PvpDeathDurabilityLoss` | `0.10` | 0 to 1. Live. |
+
 ## Deviations from retail (all documented, none silent)
 
+- War Mode (`World:WarMode:Enabled`, off by default) is not retail; see its section above.
 - `ClientZoneTrust=Auto` is a development-world allowance, not retail. Retail is `Never`.
   With `Auto`, a world that has both area data and terrain behaves exactly like retail.
 - Fallback to the stored zone: a position that resolves to no zone before any zone was accepted

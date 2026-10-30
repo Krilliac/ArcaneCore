@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Playerbots;
@@ -14,7 +15,7 @@ namespace ArcaneCore.World.Reload;
 /// the social rules (<see cref="SocialOptions"/>), the playerbot options (<see cref="PlayerbotOptions"/>) and the movement rules
 /// (<see cref="LocomotionOptions"/>, whose player speed rates are live). A side that is not known reads as null.
 /// </summary>
-public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null, PlayerbotOptions? Playerbots = null, LocomotionOptions? Locomotion = null);
+public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null, PlayerbotOptions? Playerbots = null, LocomotionOptions? Locomotion = null, WarModeOptions? WarMode = null);
 
 /// <summary>
 /// One option under the <c>World</c> section and what <c>.reload config</c> does with it. A live
@@ -766,12 +767,13 @@ public static class WorldConfigKeys
             v => v is >= -500 and <= 500 ? null : "must be -500..500"),
         LivePlayerbotsValue("Social:Memory:TrustPerTradeScam", o => o.Social.Memory.TrustPerTradeScam, (o, v) => o.Social.Memory.TrustPerTradeScam = v,
             v => v is >= -500 and <= 500 ? null : "must be -500..500"),
-        LivePlayerbots("Social:WarMode:Enabled", o => o.Social.WarMode.Enabled, (o, v) => o.Social.WarMode.Enabled = v),
         LivePlayerbotsValue("Social:WarMode:NegativeMultiplier", o => o.Social.WarMode.NegativeMultiplier, (o, v) => o.Social.WarMode.NegativeMultiplier = v,
             v => float.IsFinite(v) && v is >= 1f and <= 10f ? null : "must be 1..10"),
         LivePlayerbots("Social:WarMode:NeverForget", o => o.Social.WarMode.NeverForget, (o, v) => o.Social.WarMode.NeverForget = v),
         LivePlayerbots("Social:WarMode:RemoveCaps", o => o.Social.WarMode.RemoveCaps, (o, v) => o.Social.WarMode.RemoveCaps = v),
         LivePlayerbots("Social:WarMode:ClearOnDisable", o => o.Social.WarMode.ClearOnDisable, (o, v) => o.Social.WarMode.ClearOnDisable = v),
+        LivePlayerbotsValue("Social:WarMode:HuntRadiusYards", o => o.Social.WarMode.HuntRadiusYards, (o, v) => o.Social.WarMode.HuntRadiusYards = v,
+            v => v is >= Playerbots.BotSocial.PlayerbotWarModeOptions.MinHuntRadiusYards and <= Playerbots.BotSocial.PlayerbotWarModeOptions.MaxHuntRadiusYards ? null : $"must be {Playerbots.BotSocial.PlayerbotWarModeOptions.MinHuntRadiusYards}..{Playerbots.BotSocial.PlayerbotWarModeOptions.MaxHuntRadiusYards}"),
 
         // Not vmangos keys: bots using the faction auction house (docs/areas/playbots-economy.md). PlayerbotEconomy reads the shared
         // PlayerbotOptions.Economy at every decision.
@@ -884,6 +886,12 @@ public static class WorldConfigKeys
         LivePlayerbots("Chat:Safety:RequireOptIn", o => o.Chat.Safety.RequireOptIn, (o, v) => o.Chat.Safety.RequireOptIn = v),
         LivePlayerbots("Chat:Safety:StripPersonalData", o => o.Chat.Safety.StripPersonalData, (o, v) => o.Chat.Safety.StripPersonalData = v),
 
+        // War Mode (non-retail, off by default): the switch and its two costs. Every reader (MapCombat, HonorKillRewards, the playerbot pack) reads the
+        // shared WorldStateHooks.WarMode object at each use, so a reload takes effect at the next tick, kill or death.
+        LiveWarMode("Enabled", o => o.Enabled, (o, v) => o.Enabled = v, null),
+        LiveWarMode("HonorMultiplier", o => o.HonorMultiplier, (o, v) => o.HonorMultiplier = v, WarModeOptions.CheckHonorMultiplier),
+        LiveWarMode("PvpDeathDurabilityLoss", o => o.PvpDeathDurabilityLoss, (o, v) => o.PvpDeathDurabilityLoss = v, WarModeOptions.CheckPvpDeathDurabilityLoss),
+
         // The player speed rates (non-retail when not 1; the MaNGOS Zero fork's Movement.*SpeedRate): UnitSpeed.SetRate reads them through the
         // player's copy, which the reload refreshes for every online player (ConfigContentReloadable re-sends the speeds after these keys).
         LiveSpeedRate("PlayerSpeedRate", o => o.PlayerSpeedRate, (o, v) => o.PlayerSpeedRate = v),
@@ -910,6 +918,13 @@ public static class WorldConfigKeys
             v => (float)v! is >= LocomotionOptions.MinSpeedRate and <= LocomotionOptions.MaxSpeedRate
                 ? null
                 : $"must be between {LocomotionOptions.MinSpeedRate.ToString(CultureInfo.InvariantCulture)} and {LocomotionOptions.MaxSpeedRate.ToString(CultureInfo.InvariantCulture)}");
+
+    private static WorldConfigKey LiveWarMode<T>(string path, Func<WarModeOptions, T> get, Action<WarModeOptions, T> set, Func<T, string?>? check)
+        => new(
+            $"{WarModeOptions.SectionName}:{path}",
+            v => v.WarMode is { } warMode ? get(warMode) : null,
+            (view, v) => set(view.WarMode!, (T)v!),
+            check is null ? null : v => check((T)v!));
 
     private static string? NonNegative<T>(T value) where T : struct, IComparable<T>
         => value.CompareTo(default) < 0 ? "must not be negative" : null;

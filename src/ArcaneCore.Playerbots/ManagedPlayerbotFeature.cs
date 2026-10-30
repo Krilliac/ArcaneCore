@@ -473,6 +473,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         ArgumentNullException.ThrowIfNull(subscriptions);
         _ = PlayerbotAnomalyHistory.Shared; // the bot anomaly history hears the anomaly ledger from now on (the core no longer touches it)
         _options.Validate();
+        // The bots read the one War Mode switch (World:WarMode:Enabled) live; Social:WarMode only tunes their memory and hunt.
+        _options.Social.WarMode.Link(ArcaneCore.Game.WorldState.WorldStateHooks.For(world).WarMode);
         // A service still running is kept, not replaced: a quiesce that failed before it stopped them is undone by a detach and
         // re-attach in one tick (FeatureHost), and a second policy engine, navigation worker or chat service would leak beside the first.
         if (_options.Policy.Enabled && _policy is null) StartPolicy();

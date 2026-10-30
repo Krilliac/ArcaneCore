@@ -108,6 +108,7 @@ How to read the tables:
 - [`World:Stealth`](#worldstealth)
 - [`World:Time`](#worldtime)
 - [`World:Transports`](#worldtransports)
+- [`World:WarMode`](#worldwarmode)
 - [`World:Weather`](#worldweather)
 - [`World:WorldStates`](#worldworldstates)
 - [`World:Zones`](#worldzones)
@@ -1971,7 +1972,7 @@ How to read the tables:
 | `World:Playerbots:Social:Trading:ScamMemoryDays` | `int` | `30` | live | The days a bot refuses every trade and gift from a partner who scammed it (0..365, default 30; 0 forgets at once, the scam still costs affinity and trust). |
 | `World:Playerbots:Social:Trading:TradeTimeoutSeconds` | `int` | `45` | live | The seconds one trade may take from the initiate to the close, a running settlement not counted (10..300, default 45). |
 | `World:Playerbots:Social:WarMode:ClearOnDisable` | `bool` | `false` | live | Wipe the war layer of every bot, running or not, at the first checkpoint after War Mode is switched off, and write every bot it changed once (off by default: the layer stays dormant and comes back when War Mode is switched on again). |
-| `World:Playerbots:Social:WarMode:Enabled` | `bool` | `false` | live | Hold grudges harder and longer (off by default). |
+| `World:Playerbots:Social:WarMode:HuntRadiusYards` | `int` | `60` | live | While War Mode is on, an idle bot hunts the nearest flagged enemy-faction player or bot within this many yards that its war layer marks Rival, outside the exempt areas (10 to 150). |
 | `World:Playerbots:Social:WarMode:NegativeMultiplier` | `float` | `3` | live | While enabled, every negative affinity change is multiplied by this (1..10); positive changes are untouched. |
 | `World:Playerbots:Social:WarMode:NeverForget` | `bool` | `true` | live | In the war layer negative affinity never drifts back toward 0 and the war Rival flag is never cleared by drift, only by positive events that lift the war affinity back over the threshold. |
 | `World:Playerbots:Social:WarMode:RemoveCaps` | `bool` | `true` | live | In the war layer the daily affinity gain cap and the one-apology-a-day limit are lifted, and a relation a full memory drops from the normal layer stays for the war layer when the war layer holds a grudge against it (a war-only entry: the normal layer, and War Mode while it is off, never see it). |
@@ -2109,6 +2110,14 @@ How to read the tables:
 |---|---|---|---|---|
 | `World:Transports:Enabled` | `bool` | `false` | - | Master switch. Set it to true once the content is present: the gameobject_template type 15 rows and the transports periods (tools/content/refresh-world-content.ps1 writes both) and a build-5875 TaxiPathNode.dbc through `NpcServices:TaxiPathNodeDbcPath`; the world then logs "Transports: 9 routes, 9 ships sailing". Off (the default), no ship is built or spawned and a client that claims to stand on a transport is treated as standing on nothing. vmangos always runs its ships (World.cpp:1451 LoadTransportTemplates). |
 | `World:Transports:Entries` | `List<uint>` | `[]` | - | Only these `gameobject_template` entries become ships; empty (the default) means every type 15 row with a usable path. A switch for bringing routes up one at a time. |
+
+## `World:WarMode`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `World:WarMode:Enabled` | `bool` | `false` | live | Switch War Mode on for every player and bot, with no opt-out. Default false (retail). Switching it off returns the flags to the normal rules: a flag then lapses by its 5-minute timer unless the player wants it. |
+| `World:WarMode:HonorMultiplier` | `float` | `1.5` | live | While War Mode is on, the honour of an honourable kill is multiplied by this (1 to 10, default 1.5). 1 gives the same honour as with War Mode off. |
+| `World:WarMode:PvpDeathDurabilityLoss` | `float` | `0.1` | live | While War Mode is on, the fraction of every equipped item's durability a player loses when killed by another player outside a battleground (0 to 1, default 0.10). 0 costs nothing. Retail, and War Mode off: a PvP death costs no durability. `Items:DurabilityLossEnable` = false still turns all durability loss off. |
 
 ## `World:Weather`
 

@@ -18926,15 +18926,17 @@ World.Playerbots.Social.Trading.TradeTimeoutSeconds = 45
 World.Playerbots.Social.WarMode.ClearOnDisable = false
 
 #
-#    World.Playerbots.Social.WarMode.Enabled
-#        Description: Hold grudges harder and longer (off by default).
-#        Type: bool
-#        Default: false
-#        Allowed: true | false
+#    World.Playerbots.Social.WarMode.HuntRadiusYards
+#        Description: While War Mode is on, an idle bot hunts the nearest flagged enemy-faction
+#                     player or bot within this many yards that its war layer marks Rival, outside
+#                     the exempt areas (10 to 150).
+#        Type: int
+#        Default: 60
+#        Allowed: 10 to 150
 #        Reload: Live (.reload config applies it to the running server)
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
-World.Playerbots.Social.WarMode.Enabled = false
+World.Playerbots.Social.WarMode.HuntRadiusYards = 60
 
 #
 #    World.Playerbots.Social.WarMode.NegativeMultiplier
@@ -20236,6 +20238,50 @@ World.Transports.Enabled = false
 #
 # Empty by default.
 # World.Transports.Entries.0 =
+
+#----------------------------------------------------------------------------
+# World:WarMode
+#----------------------------------------------------------------------------
+
+#
+#    World.WarMode.Enabled
+#        Description: Switch War Mode on for every player and bot, with no opt-out. Default false
+#                     (retail). Switching it off returns the flags to the normal rules: a flag then
+#                     lapses by its 5-minute timer unless the player wants it.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldwarmode
+#
+World.WarMode.Enabled = false
+
+#
+#    World.WarMode.HonorMultiplier
+#        Description: While War Mode is on, the honour of an honourable kill is multiplied by this
+#                     (1 to 10, default 1.5). 1 gives the same honour as with War Mode off.
+#        Type: float
+#        Default: 1.5
+#        Allowed: 1 to 10
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldwarmode
+#
+World.WarMode.HonorMultiplier = 1.5
+
+#
+#    World.WarMode.PvpDeathDurabilityLoss
+#        Description: While War Mode is on, the fraction of every equipped item's durability a
+#                     player loses when killed by another player outside a battleground (0 to 1,
+#                     default 0.10). 0 costs nothing. Retail, and War Mode off: a PvP death costs no
+#                     durability. Items:DurabilityLossEnable = false still turns all durability loss
+#                     off.
+#        Type: float
+#        Default: 0.1
+#        Allowed: 0 to 1
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldwarmode
+#
+World.WarMode.PvpDeathDurabilityLoss = 0.1
 
 #----------------------------------------------------------------------------
 # World:Weather

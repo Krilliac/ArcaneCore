@@ -4,6 +4,7 @@ using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Tests.CombatCore;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -190,6 +191,124 @@ public sealed class PlayerDeathDurabilityTests
 
             Assert.Equal(20u, sword.Durability);
             Assert.True(Told(session));
+        }
+    }
+
+    private static void WarModeOn(WorldRuntime world, float loss = 0.10f)
+    {
+        WarModeOptions war = WorldStateHooks.For(world).WarMode;
+        war.Enabled = true;
+        war.PvpDeathDurabilityLoss = loss;
+    }
+
+    [Fact]
+    public void WarModeOff_AnOpenWorldPlayerKill_StillTakesNothing()
+    {
+        (WorldRuntime world, Player victim, FakeSession session, Item sword) = Setup();
+        using (world)
+        {
+            Assert.False(WorldStateHooks.For(world).WarMode.Enabled);
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+
+            victim.Map!.Combat.Kill(killer, victim);
+
+            Assert.Equal(20u, sword.Durability);
+            Assert.False(Told(session));
+        }
+    }
+
+    [Fact]
+    public void WarModeOn_AnOpenWorldPlayerKill_TakesTheConfiguredFractionOfTheWornItems()
+    {
+        (WorldRuntime world, Player victim, FakeSession session, Item sword) = Setup();
+        using (world)
+        {
+            WarModeOn(world, loss: 0.5f);
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+
+            victim.Map!.Combat.Kill(killer, victim);
+
+            Assert.Equal(10u, sword.Durability); // int(20 x 0.5)
+            Assert.Single(session.Sent, p => p.Opcode == WorldOpcode.SmsgDurabilityDamageDeath);
+        }
+    }
+
+    [Fact]
+    public void WarModeOn_TheDefaultLossIsTenPercent_AndAPetKillCountsAsAPlayerKill()
+    {
+        (WorldRuntime world, Player victim, _, Item sword) = Setup();
+        using (world)
+        {
+            WarModeOn(world, loss: new WarModeOptions().PvpDeathDurabilityLoss);
+            Player owner = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+
+            victim.Map!.Combat.Kill(new PetStandIn(owner), victim);
+
+            Assert.Equal(18u, sword.Durability); // max(1, int(20 x 0.10)) = 2
+        }
+    }
+
+    [Fact]
+    public void WarModeOn_ALossOfZero_CostsNothing_AndSendsNoNotice()
+    {
+        (WorldRuntime world, Player victim, FakeSession session, Item sword) = Setup();
+        using (world)
+        {
+            WarModeOn(world, loss: 0f);
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+
+            victim.Map!.Combat.Kill(killer, victim);
+
+            Assert.Equal(20u, sword.Durability);
+            Assert.False(Told(session));
+        }
+    }
+
+    [Fact]
+    public void WarModeOn_InABattleground_APlayerKillStillCostsNothing()
+    {
+        (WorldRuntime world, Player victim, FakeSession session, Item sword) = Setup(mapId: 30);
+        using (world)
+        {
+            WarModeOn(world, loss: 0.5f);
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2), mapId: 30);
+
+            victim.Map!.Combat.Kill(killer, victim);
+
+            Assert.Equal(20u, sword.Durability);
+            Assert.False(Told(session));
+        }
+    }
+
+    [Fact]
+    public void WarModeOn_DurabilityLossDisabled_StillTurnsEveryLossOff()
+    {
+        (WorldRuntime world, Player victim, _, Item sword) = Setup();
+        using (world)
+        {
+            WarModeOn(world, loss: 0.5f);
+            victim.Inventory.Options.DurabilityLossEnable = false;
+            Player killer = CombatTestKit.AddPlayer(world, 2, 101, 100, new FakeSession(2));
+
+            victim.Map!.Combat.Kill(killer, victim);
+
+            Assert.Equal(20u, sword.Durability);
+        }
+    }
+
+    [Fact]
+    public void WarModeOn_ACreatureKill_IsStillTheRetailTenPercent()
+    {
+        (WorldRuntime world, Player victim, _, Item sword) = Setup();
+        using (world)
+        {
+            WarModeOn(world, loss: 0.5f);
+            var creature = new CombatTestUnit();
+            creature.Spawn(world.GetMap(0), 100, 101);
+
+            victim.Map!.Combat.Kill(creature, victim);
+
+            Assert.Equal(18u, sword.Durability);
         }
     }
 }

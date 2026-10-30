@@ -9,6 +9,7 @@ using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Tests.CombatCore;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -30,6 +31,7 @@ public sealed class HonorKillRewardsTests : IDisposable
     private readonly FixedHonorClock _clock = new(Today);
     private readonly HonorService _honor;
     private readonly HonorKillRewards _rewards;
+    private readonly WarModeOptions _warMode = new();
     private readonly Dictionary<ulong, RewardGroup> _groups = [];
     private readonly HashSet<Unit> _honorless = [];
     private readonly Player _a;
@@ -41,7 +43,7 @@ public sealed class HonorKillRewardsTests : IDisposable
         _output = output;
         (_world, _map, _, _) = CombatTestKit.CreateWorld();
         _honor = new HonorService(new HonorOptions(), _clock, () => 19_997);
-        _rewards = new HonorKillRewards(_honor, p => _groups.GetValueOrDefault(p.Guid.Value), noPvpCredit: u => _honorless.Contains(u));
+        _rewards = new HonorKillRewards(_honor, p => _groups.GetValueOrDefault(p.Guid.Value), noPvpCredit: u => _honorless.Contains(u), warMode: _warMode);
         _rewards.Attach(_map.Combat);
         _a = AddHuman(1, 0);
         _victim = AddPlayer(2, 2, Race.Orc);
@@ -200,6 +202,60 @@ public sealed class HonorKillRewardsTests : IDisposable
         Assert.Equal(new HonorCpRecord(4, 2, 188f, Today, (byte)HonorKind.Honorable), row);
         Assert.Equal(188, BinaryPrimitives.ReadInt32LittleEndian(LastCredit(_a)));
         Assert.Empty(RowsOf(_victim));
+    }
+
+    [Fact]
+    public void WarModeOff_TheHonorOfAKillIsUnchanged_WhateverTheMultiplier()
+    {
+        _warMode.HonorMultiplier = 10f;
+
+        Hit(_a, _victim, 5000);
+
+        Assert.Equal(188f, Assert.Single(RowsOf(_a)).Cp);
+    }
+
+    [Fact]
+    public void WarModeOn_TheHonorOfAKillIsTheMultiplierTimesTheShare_TruncatedOnce()
+    {
+        _warMode.Enabled = true; // the default multiplier is 1.5
+        Assert.Equal(1.5f, _warMode.HonorMultiplier);
+
+        Hit(_a, _victim, 5000);
+
+        Assert.Equal(282f, Assert.Single(RowsOf(_a)).Cp); // uint(188.3 * 1.0 * 1.5)
+    }
+
+    [Fact]
+    public void WarModeOn_AMultiplierOfOne_GivesExactlyTheWarModeOffHonor()
+    {
+        _warMode.Enabled = true;
+        _warMode.HonorMultiplier = 1f;
+
+        Hit(_a, _victim, 5000);
+
+        Assert.Equal(188f, Assert.Single(RowsOf(_a)).Cp);
+    }
+
+    [Fact]
+    public void WarModeOn_EveryShareIsScaledBeforeItIsTruncated_ForLoneAttackersAndGroups()
+    {
+        _warMode.Enabled = true;
+        _warMode.HonorMultiplier = 2f;
+        Player other = AddHuman(3, -2);
+        Player b = AddHuman(4, -3);
+        Player c = AddHuman(5, -4);
+        Group(b, c);
+        _world.RunTick(1);
+
+        Hit(other, _victim, 300);
+        Hit(_a, _victim, 400);
+        Hit(b, _victim, 300); // exactly lethal; b and c are one group with 300 of the 1000 damage
+
+        Assert.Equal(112f, Assert.Single(RowsOf(other)).Cp); // uint(188.3 * 300 / 1000 * 2)
+        Assert.Equal(150f, Assert.Single(RowsOf(_a)).Cp);    // uint(188.3 * 400 / 1000 * 2)
+        // a group of two: damage 300/1000 * GroupRate(2) / 2 per member, doubled
+        Assert.Equal(Assert.Single(RowsOf(b)).Cp, Assert.Single(RowsOf(c)).Cp);
+        Assert.True(RowsOf(b)[0].Cp > 0f);
     }
 
     [Fact]

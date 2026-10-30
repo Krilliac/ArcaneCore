@@ -831,9 +831,27 @@ public sealed partial class MapCombat
     }
 
     /// <summary>vmangos Player::UpdatePvPFlagTimer: the linger counts down while not desired and not in PvP combat.</summary>
-    private static void UpdatePvpFlagTimer(Player player, uint diff)
+    private void UpdatePvpFlagTimer(Player player, uint diff)
     {
         UnitCombat c = player.Combat;
+
+        // War Mode (not retail; World:WarMode:Enabled): outside an exempt area the flag is forced on and its timer is held full, so it
+        // does not lapse, and switching War Mode off leaves the normal 5-minute linger. Inside an exempt area the normal rules below apply.
+        if (WorldState.WorldStateHooks.For(_world).WarMode.Enabled && WorldState.Zones.PvpAreaState.IsWarModeKnown(player)
+            && !WorldState.Zones.PvpAreaState.IsWarModeExempt(player))
+        {
+            if ((player.UnitFlags & UnitFlags.Pvp) == 0)
+            {
+                UpdatePvp(player, true);
+            }
+            else if (c.PvpFlagTimer != CombatConstants.PvpFlagTimerMs)
+            {
+                c.PvpFlagTimer = CombatConstants.PvpFlagTimerMs;
+            }
+
+            return;
+        }
+
         if ((player.UnitFlags & UnitFlags.Pvp) == 0)
         {
             return;

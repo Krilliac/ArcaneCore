@@ -3,6 +3,7 @@ using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Reload;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Gm.ServerConfig;
@@ -87,6 +88,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         var social = new SocialOptions();
         var playerbots = new PlayerbotOptions();
         var locomotion = new LocomotionOptions();
+        var warMode = new WarModeOptions();
         var antiCheat = new AntiCheatOptions();
         IConfigurationRoot snapshot = fresh.Build();
         IConfiguration modules;
@@ -103,6 +105,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             snapshot.GetSection(SocialOptions.SectionName).Bind(social);
             PlayerbotOptions.ApplyConfiguration(playerbots, snapshot);
             snapshot.GetSection(LocomotionOptions.SectionName).Bind(locomotion);
+            snapshot.GetSection(WarModeOptions.SectionName).Bind(warMode);
             snapshot.GetSection(AntiCheatOptions.SectionName).Bind(antiCheat);
         }
         finally
@@ -120,7 +123,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
             substitutions.Add($"{LocomotionOptions.SectionName}:{clamped} is out of range and was corrected.");
         }
 
-        var candidateView = new WorldConfigView(runtime, listener, social, playerbots, locomotion);
+        var candidateView = new WorldConfigView(runtime, listener, social, playerbots, locomotion, warMode);
         var defaults = new WorldConfigView(new WorldRuntimeOptions(), null);
         if (ReloadPolicy.Resolve(services).NegativeNumbers == InvalidNumberPolicy.Retail)
         {
@@ -188,7 +191,7 @@ public sealed class ConfigContentReloadable(IServiceProvider services) : IConten
         public override void Commit(WorldRuntime world, ReloadTransaction transaction)
         {
             LocomotionOptions? liveLocomotion = LocomotionEnvironment.RegisteredOptions(world);
-            var live = new WorldConfigView(world.Options, liveListener, liveSocial, livePlayerbots, liveLocomotion);
+            var live = new WorldConfigView(world.Options, liveListener, liveSocial, livePlayerbots, liveLocomotion, WorldStateHooks.For(world).WarMode);
             foreach (string substitution in substitutions)
             {
                 transaction.Note(substitution);

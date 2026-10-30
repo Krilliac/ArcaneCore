@@ -2,9 +2,11 @@ using System.Reflection;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Grid;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Configuration.Conf;
 using ArcaneCore.Kernel.Reload;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Characters;
@@ -167,6 +169,100 @@ public sealed class ConfigReloadTests : IDisposable
         Assert.Equal("original", _options.Motd);
         Assert.False(_options.Respawn.Dynamic.Enabled);
         Assert.Empty(_options.Respawn.Dynamic.Problems());
+    }
+
+    [Fact]
+    public async Task WarMode_TheSwitchAndBothCosts_AreAppliedLive_AndTheSharedObjectIsTheOneTheWorldReads()
+    {
+        WarModeOptions warMode = WorldStateHooks.For(_world).WarMode;
+        Assert.False(warMode.Enabled);
+        string path = Write("""{ "World": { "WarMode": { "Enabled": true, "HonorMultiplier": 2.5, "PvpDeathDurabilityLoss": 0.3 } } }""");
+        ReloadCoordinator coordinator = Reloader(FromFile(path));
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Applied, result.Status);
+        Assert.Same(warMode, WorldStateHooks.For(_world).WarMode);
+        Assert.True(warMode.Enabled);
+        Assert.Equal(2.5f, warMode.HonorMultiplier);
+        Assert.Equal(0.3f, warMode.PvpDeathDurabilityLoss);
+
+        // and back off, live
+        File.WriteAllText(path, """{ "World": { "WarMode": { "Enabled": false, "HonorMultiplier": 1, "PvpDeathDurabilityLoss": 0 } } }""");
+        ReloadResult off = await coordinator.ReloadAsync("config");
+        Assert.Equal(ReloadStatus.Applied, off.Status);
+        Assert.False(warMode.Enabled);
+        Assert.Equal(1f, warMode.HonorMultiplier);
+        Assert.Equal(0f, warMode.PvpDeathDurabilityLoss);
+    }
+
+    [Theory]
+    [InlineData("HonorMultiplier", "0.5")]
+    [InlineData("HonorMultiplier", "11")]
+    [InlineData("PvpDeathDurabilityLoss", "-0.1")]
+    [InlineData("PvpDeathDurabilityLoss", "1.5")]
+    public async Task WarMode_OutOfRangeValue_RejectsTheWholeReload(string key, string value)
+    {
+        WarModeOptions warMode = WorldStateHooks.For(_world).WarMode;
+        string path = Write($$"""{ "World": { "Motd": "Rejected", "WarMode": { "Enabled": true, "{{key}}": {{value}} } } }""");
+        ReloadCoordinator coordinator = Reloader(FromFile(path));
+
+        ReloadResult result = await coordinator.ReloadAsync("config");
+
+        Assert.Equal(ReloadStatus.Rejected, result.Status);
+        Assert.Equal("original", _options.Motd);
+        Assert.False(warMode.Enabled);
+        warMode.Validate();
+    }
+
+    [Fact]
+    public void WarMode_TheKeysBindFromConfiguration_AndTheOldMemoryLayerSwitchIsNoKeyAnyMore()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:WarMode:Enabled"] = "true",
+            ["World:WarMode:HonorMultiplier"] = "3",
+            ["World:WarMode:PvpDeathDurabilityLoss"] = "0.25",
+            ["World:Playerbots:Social:WarMode:HuntRadiusYards"] = "80",
+        }).Build();
+        var warMode = new WarModeOptions();
+        configuration.GetSection(WarModeOptions.SectionName).Bind(warMode);
+        var hunt = new PlayerbotWarModeOptions();
+        configuration.GetSection(PlayerbotOptions.SectionName + ":Social:WarMode").Bind(hunt);
+
+        Assert.True(warMode.Enabled);
+        Assert.Equal(3f, warMode.HonorMultiplier);
+        Assert.Equal(0.25f, warMode.PvpDeathDurabilityLoss);
+        Assert.Equal(80, hunt.HuntRadiusYards);
+        warMode.Validate();
+        hunt.Validate();
+
+        // The memory layer no longer has its own switch: the old key is unknown to the catalog (the loader warns, "not a key the world daemon reads"; it fails start-up only under Startup:Strict).
+        Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:WarMode:Enabled", ConfigDaemon.World).Status);
+        Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:Playerbots:Social:WarMode:HuntRadiusYards", ConfigDaemon.World).Status);
+        Assert.Equal(ConfKeyStatus.Unknown, ConfCatalog.Embedded.Classify("World:Playerbots:Social:WarMode:Enabled", ConfigDaemon.World).Status);
+        Assert.DoesNotContain(WorldConfigKeys.All, k => k.Path == "World:Playerbots:Social:WarMode:Enabled");
+    }
+
+    [Theory]
+    [InlineData(9)]
+    [InlineData(151)]
+    [InlineData(-5)]
+    public void TheHuntRadius_OutsideTenToOneFifty_IsRejected(int yards)
+        => Assert.Throws<InvalidOperationException>(() => new PlayerbotWarModeOptions { HuntRadiusYards = yards }.Validate());
+
+    [Fact]
+    public void TheBotsReadTheOneSwitch_ThroughTheSharedWarModeOptions()
+    {
+        var shared = new WarModeOptions();
+        var bots = new PlayerbotWarModeOptions();
+        Assert.False(bots.Enabled);
+
+        bots.Link(shared);
+        shared.Enabled = true;
+        Assert.True(bots.Enabled);
+        shared.Enabled = false;
+        Assert.False(bots.Enabled);
     }
 
     [Fact]
@@ -1019,6 +1115,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chaos.PlayerbotChaosOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Chaos)}:{property.Name}");
+        }
+
+        // War Mode: the switch and its two costs are live key by key (docs/areas/world-state.md, War Mode).
+        foreach (PropertyInfo property in typeof(WarModeOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{WarModeOptions.SectionName}:{property.Name}");
         }
 
         // Of the Locomotion section only the player speed rates are reload keys (the rest is read at start; docs/areas/rates.md).
