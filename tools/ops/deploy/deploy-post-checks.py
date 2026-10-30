@@ -2,7 +2,7 @@
 
 Reads the run's report.json and the live databases (mode=ro only), runs the same checks deploy-live.py runs after the world starts,
 and, only if they all pass, marks the report healthy, records the new PIDs in the profile's standard-processes.json and opens the
-status console. It never starts, stops or signals a process.
+status console (supervising, as deploy-live.py does, and only when none runs for the port yet). It never starts, stops or signals a process.
 
 Usage: py -3 tools/ops/deploy/deploy-post-checks.py --label live-w37-r1 [--deploy-dir DIR] [--status-console PS1] [--no-transports] [--no-optional-data] [--no-elevators]
 """
@@ -13,6 +13,7 @@ from contextlib import closing
 import datetime
 import json
 from pathlib import Path
+import os
 import sqlite3
 import subprocess
 import sys
@@ -26,6 +27,28 @@ def require(condition: object, message: object) -> None:
     """A safety gate: stop before anything is marked healthy when the condition is false. Not `assert`, which `python -O` compiles out."""
     if not condition:
         sys.exit(f"deploy-post-checks: {message}")
+
+
+def status_console_launch(console: str, profile: Path, world_port: int, auth_port: int) -> tuple[list[str], dict[str, str]]:
+    """The command line and environment for the status console, the same as deploy-live.py opens: -Supervise and ARCANECORE_LIVE_SERVER=1.
+
+    Without -Supervise the console is read-only, and server-status.ps1 closes every older console for the same World port, so a read-only
+    one would silently replace a supervising console and the live servers would lose crash and hang recovery.
+    """
+    env = dict(os.environ)
+    env["ARCANECORE_LIVE_SERVER"] = "1"
+    argv = ["pwsh", "-NoProfile", "-NoExit", "-File", console, "-Profile", str(profile),
+            "-WorldPort", str(world_port), "-AuthPort", str(auth_port), "-Supervise"]
+    return argv, env
+
+
+def console_running_script(world_port: int) -> str:
+    """PowerShell that prints how many pwsh/powershell processes run server-status.ps1 for the World port (the port defaults to 8085 there)."""
+    port = int(world_port)
+    return ("(Get-CimInstance Win32_Process -Filter \"Name='pwsh.exe' OR Name='powershell.exe'\" | Where-Object { "
+            + r"$_.CommandLine -match 'server-status\.ps1' -and "
+            + r"$(if ($_.CommandLine -match '-WorldPort\s+(\d+)') { [int]$Matches[1] } else { 8085 }) -eq "
+            + str(port) + " } | Measure-Object).Count")
 
 
 def port_of(config: dict, section: str) -> int:
@@ -119,9 +142,13 @@ def main() -> int:
         meta["qualification"] = args.label
         meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     if args.status_console:
-        subprocess.Popen(["pwsh", "-NoProfile", "-NoExit", "-File", args.status_console, "-Profile", str(profile),
-                          "-WorldPort", str(world_port), "-AuthPort", str(auth_port)],
-                         creationflags=subprocess.CREATE_NEW_CONSOLE)
+        # Never replace a console that is already running for this World port: it may be the supervisor (server-status.ps1 closes older ones).
+        running = ps(console_running_script(world_port)).stdout.strip()
+        if running and running != "0":
+            print(f"deploy-post-checks: a status console is already running for World port {world_port}; left in place", file=sys.stderr)
+        else:
+            argv, status_env = status_console_launch(args.status_console, profile, world_port, auth_port)
+            subprocess.Popen(argv, close_fds=True, env=status_env, creationflags=subprocess.CREATE_NEW_CONSOLE)
     print(json.dumps(dict(healthy=True, world=world_pid, realm=realm_pid, started_bots=started, enabled_bots=enabled, max_bots=max_bots,
                           missing_log_lines=missing, log_counts=report["world_log_counts"])))
     return 0

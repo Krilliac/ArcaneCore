@@ -307,7 +307,7 @@ internal sealed class PublicHub
             return false;
         }
 
-        if (message is null || !TryParse(message, out JsonObject? root) || root["op"]?.GetValue<string>() != "auth"
+        if (message is null || !TryParse(message, out JsonObject? root) || !(root["op"] is JsonValue opValue && opValue.TryGetValue(out string? op) && op == "auth")
             || !state.Session.CsrfMatches(root["csrf"] is JsonValue v && v.TryGetValue(out string? csrf) ? csrf : null))
         {
             await CloseAsync(state, (WebSocketCloseStatus)4401, "unauthorized").ConfigureAwait(false);
