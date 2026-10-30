@@ -163,6 +163,8 @@ internal sealed class SpellSweepRig : IDisposable
             ["Combat:ShapeshiftFormDbcPath"] = Dbc("SpellShapeshiftForm"),
             ["Talents:TalentDbcPath"] = Dbc("Talent"),
             ["Talents:TalentTabDbcPath"] = Dbc("TalentTab"),
+            // Without it EnchantingFeature installs the refusing guard and no enchant effect has a handler (the daemon configures it).
+            ["Enchanting:SpellItemEnchantmentDbcPath"] = Dbc("SpellItemEnchantment"),
         };
     }
 
