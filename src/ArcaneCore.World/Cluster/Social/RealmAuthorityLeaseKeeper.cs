@@ -97,7 +97,15 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
                 if (wait > TimeSpan.Zero)
                 {
                     _logger.LogInformation("The {Scope} lease is held by a previous incarnation of this node; waiting {Seconds:F0} s for it to expire", scope, wait.TotalSeconds);
+                }
+
+                // A timer counts whole milliseconds off a tick clock that can be coarser than the wall clock (CLOCK_MONOTONIC_COARSE on Linux), so
+                // a delay can end a millisecond or more before the lease lapses, and the store would still see the lease as live. Wait until the
+                // clock itself has passed the expiry.
+                while (wait > TimeSpan.Zero)
+                {
                     await Task.Delay(wait, _time, cancellationToken).ConfigureAwait(false);
+                    wait = holder.ExpiresAtUtc - _time.GetUtcNow();
                 }
 
                 result = await TryAcquireAsync(scope).ConfigureAwait(false);

@@ -26,6 +26,19 @@ public sealed class OtherCoresScriptTests
             Duration = new SpellDuration(30_000, 0, 30_000),
         });
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a script's non-triggered cast (cmangos casts these the same way, and vmangos batches them)
+    /// is held until the next window boundary: advance the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static SpellTestKit Kit(params SpellInfo[] spells)
     {
         var kit = new SpellTestKit(spells);
@@ -256,6 +269,7 @@ public sealed class OtherCoresScriptTests
         Assert.True(kit.System.AddAura(player, 90020));
 
         CastSelf(kit, player, 28359);
+        FlushSpellBatch(kit); // Shock Overload is cast not triggered, so batching holds it
 
         Assert.False(kit.System.HasAura(player, 90020));
         Assert.True(kit.System.HasAura(player, 28159));

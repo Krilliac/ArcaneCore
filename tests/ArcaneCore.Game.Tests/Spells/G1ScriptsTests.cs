@@ -14,6 +14,19 @@ public sealed class G1ScriptsTests
 {
     private static SpellInfo Instant(SpellInfo spell) => spell with { StartRecoveryCategory = 0, StartRecoveryTime = 0, SpellVisual = 1 };
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a script's non-triggered cast (vmangos casts these the same way, and it batches them)
+    /// is held until the next window boundary: advance the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(SpellTestKit kit)
+    {
+        uint window = kit.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Advance(window - (kit.Now % window));
+        }
+    }
+
     private static SpellTestKit Kit(params SpellInfo[] spells)
     {
         var kit = new SpellTestKit(spells);
@@ -175,6 +188,7 @@ public sealed class G1ScriptsTests
         (Player player, _) = kit.AddPlayer(1);
 
         kit.System.CastSpell(player, kitSpell, SpellCastTargets.ForSelf(), triggered: true);
+        FlushSpellBatch(kit); // the kit casts the real summon not triggered, so batching holds it
 
         Assert.True(kit.System.HasAura(player, summon));
     }
@@ -228,6 +242,7 @@ public sealed class G1ScriptsTests
         using SpellTestKit kit = Kit(Script(29313));
         (Player gm, _) = kit.AddPlayer(1, security: AccountSecurity.GameMaster);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(gm, SpellTestKit.CooldownSpell, SpellCastTargets.ForSelf(), triggered: false));
+        FlushSpellBatch(kit); // the cooldown starts at the go, which batching holds to the boundary
         Assert.NotEmpty(kit.System.GetActiveCooldowns(gm));
 
         kit.System.CastSpell(gm, 29313, SpellCastTargets.ForSelf(), triggered: true);

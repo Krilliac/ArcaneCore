@@ -29,6 +29,19 @@ public sealed class G1CreatureScriptTests
             Range = new SpellRange(0, 40),
         });
 
+    /// <summary>
+    /// With spell batching on (<c>ARCANECORE_TEST_SPELL_BATCH_MS</c>) a creature's non-triggered cast is held until the next window boundary
+    /// (<c>SpellBatchCreatures</c>): advance the clock to it so the held go resolves. A no-op with the window at 0.
+    /// </summary>
+    private static void FlushSpellBatch(PetTestKit kit)
+    {
+        uint window = kit.Spells.System.SpellBatchWindowMs;
+        if (window != 0)
+        {
+            kit.Spells.Advance(window - (kit.Spells.Now % window));
+        }
+    }
+
     private static PetTestKit Kit(params SpellInfo[] spells)
     {
         var kit = new PetTestKit(spells);
@@ -59,6 +72,7 @@ public sealed class G1CreatureScriptTests
         stalagg.Combat.Threat.AddThreat(player, 100f);
 
         kit.Spells.System.CastSpell(coil, 28098, SpellCastTargets.ForUnit(stalagg.Guid), triggered: true);
+        FlushSpellBatch(kit); // the add casts its chain not triggered, so batching holds it
 
         Assert.False(kit.Spells.System.HasAura(stalagg, 28097)); // Stalagg Tesla Passive removed
         Assert.True(stalagg.Combat.Threat.IsEmpty);              // threat list deleted

@@ -49,6 +49,44 @@ public sealed class RealmAuthorityLeaseKeeperTests
     }
 
     [Fact]
+    public async Task AcquireAtStart_WhenTheOperatingSystemTimerFiresEarly_WaitsOutTheRestOfTheLease()
+    {
+        // The wait is a Task.Delay, whose timer counts whole milliseconds off a coarse tick clock (on Linux, CLOCK_MONOTONIC_COARSE) and can fire a
+        // millisecond or more before the wall clock reaches the lease's expiry. The store still sees the lease as live then, so one retry is not enough.
+        _inner.TryAcquire(RealmAuthorityScopes.Social, Node, Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
+        var early = new EarlyTimerTimeProvider(_time, TimeSpan.FromMilliseconds(1));
+        await using RealmAuthorityLeaseKeeper keeper = new(_inner,
+            Options.Create(new ClusterNodeOptions { Role = ClusterNodeRole.MapWorker, AuthorityLeaseTtlSeconds = 30, AuthorityLeaseRenewSeconds = 10 }),
+            Options.Create(new GatewayWorkerOptions { Enabled = true, NodeId = Node }),
+            NullLogger<RealmAuthorityLeaseKeeper>.Instance,
+            _lifetime,
+            early,
+            _ => { });
+
+        Task acquire = keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await WaitUntilAsync(() => _time.PendingTimers > 0);
+        _time.Advance(TimeSpan.FromMilliseconds(29_999)); // the early timer fires here, 1 ms before the lease lapses
+        for (int step = 0; step < 200 && !acquire.IsCompleted; step++)
+        {
+            _time.Advance(TimeSpan.FromMilliseconds(1));
+            await Task.Delay(5);
+        }
+
+        await acquire.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(2, keeper.TokenFor(RealmAuthorityScopes.Social));
+    }
+
+    /// <summary>A clock whose one-shot timers fire <c>early</c> before they are due, as an operating-system timer on a coarse tick clock can.</summary>
+    private sealed class EarlyTimerTimeProvider(ManualTimeProvider inner, TimeSpan early) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+            => inner.CreateTimer(callback, state, period == Timeout.InfiniteTimeSpan && dueTime > early ? dueTime - early : dueTime, period);
+    }
+
+    [Fact]
     public async Task AcquireAtStart_HoldsFreeScopes_SkipsHeldByOtherNode()
     {
         _inner.TryAcquire(RealmAuthorityScopes.Economy, "worker-b", Guid.NewGuid(), TimeSpan.FromSeconds(30), _time.GetUtcNow());
