@@ -18,10 +18,49 @@ public sealed record ConsoleInputSource(TextReader Input, TextWriter Output, boo
     /// <summary>Whether a reader may be started on this source.</summary>
     public bool IsInteractive => !IsInputRedirected && IsUserInteractive;
 
-    /// <summary>The process console: <see cref="Console.In"/> and a synchronized <see cref="Console.Out"/>.</summary>
+    private static readonly object TokenGate = new();
+    private static bool _tokenCaptured;
+    private static string? _capturedToken;
+
+    /// <summary>
+    /// The process console: <see cref="Console.In"/> and a synchronized <see cref="Console.Out"/>. The supervisor token is taken from the environment
+    /// the first time this runs and the variable is then removed from the process environment, so it is not inherited by processes this one starts nor
+    /// readable from a diagnostic dump of the environment; later calls reuse the captured value (the variable is gone by then).
+    /// <para>
+    /// Ordering: callers resolve this lazily from a DI singleton factory, which runs after the host builder was created. The builder's environment-variable
+    /// configuration provider copies the environment when it is built, so the token is still present in the host's <c>IConfiguration</c> (under its raw
+    /// variable name, which nothing binds) even though it is gone from the process environment. This clears the process environment only; it does not
+    /// scrub configuration providers that already copied it.
+    /// </para>
+    /// </summary>
     public static ConsoleInputSource Default()
         => new(Console.In, TextWriter.Synchronized(Console.Out), Console.IsInputRedirected, Environment.UserInteractive,
             !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(SupervisedChildDrain.EnvironmentVariable)),
             ServerConsole.SupervisorProtocol.IsEnabled(),
-            Environment.GetEnvironmentVariable(ServerConsole.SupervisorProtocol.TokenEnvironmentVariable));
+            CaptureSupervisorToken());
+
+    private static string? CaptureSupervisorToken()
+    {
+        lock (TokenGate)
+        {
+            if (!_tokenCaptured)
+            {
+                _capturedToken = Environment.GetEnvironmentVariable(ServerConsole.SupervisorProtocol.TokenEnvironmentVariable);
+                Environment.SetEnvironmentVariable(ServerConsole.SupervisorProtocol.TokenEnvironmentVariable, null);
+                _tokenCaptured = true;
+            }
+
+            return _capturedToken;
+        }
+    }
+
+    /// <summary>Forgets the captured token so the next <see cref="Default"/> reads the environment again. For tests only.</summary>
+    internal static void ResetCapturedTokenForTests()
+    {
+        lock (TokenGate)
+        {
+            _tokenCaptured = false;
+            _capturedToken = null;
+        }
+    }
 }
