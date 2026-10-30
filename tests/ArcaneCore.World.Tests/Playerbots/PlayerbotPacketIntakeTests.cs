@@ -68,10 +68,10 @@ public sealed class PlayerbotPacketIntakeTests
         {
             Assert.False(bot.WantsUpdateObjects);
             bot.DrainManagedPackets();
-            long packetsBefore = BotLeanStats.RingPackets;
+            long skippedBefore = bot.LeanRingPacketsSkipped; // per session: BotLeanStats.RingPackets is process-wide and other tests' lean bots bump it
             bot.Send(WorldOpcode.SmsgNotification, Notification);
             bot.Send(WorldOpcode.SmsgLootResponse, LootResponse);
-            Assert.True(BotLeanStats.RingPackets > packetsBefore, "the skipped packet is counted");
+            Assert.Equal(skippedBefore + 1, bot.LeanRingPacketsSkipped); // the notification, and only it, was counted as skipped
             Assert.Equal(WorldOpcode.SmsgLootResponse, Assert.Single(bot.DrainManagedPackets()).Opcode);
 
             // An observer sees everything, and the map builds update blocks for the bot again.
