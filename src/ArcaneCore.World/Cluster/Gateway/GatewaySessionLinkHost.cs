@@ -83,6 +83,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     private readonly GatewayWardenManifestVerifier? _wardenVerifier;
     private readonly Lock _sourceGate = new();
     private readonly Dictionary<ClusterWardenVerdictSource, int> _openLinksBySource = [];
+    // Newest incarnation admitted per node id. A gateway process keeps one incarnation for life and reconnects with it, so
+    // an incarnation is only superseded (and retirable) once a different incarnation of its node id has been admitted.
+    private readonly Dictionary<string, Guid> _newestIncarnationByNode = [];
     private readonly LogGate _dropGate = new(TimeSpan.FromSeconds(10));
     private Task? _acceptTask;
     private int _nextLinkId;
@@ -238,6 +241,18 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                             {
                                 _openLinksBySource[source] = _openLinksBySource.GetValueOrDefault(source) + 1;
                                 link.Source = source;
+                                if (_newestIncarnationByNode.TryGetValue(source.NodeId, out Guid previous) && previous != source.NodeIncarnation)
+                                {
+                                    // The previous incarnation is now superseded: retire it at once if it has no open link,
+                                    // else ReleaseSource retires it when its last link goes.
+                                    var superseded = new ClusterWardenVerdictSource(source.NodeId, previous);
+                                    if (!_openLinksBySource.ContainsKey(superseded))
+                                    {
+                                        _wardenVerifier?.RetireSource(superseded);
+                                    }
+                                }
+
+                                _newestIncarnationByNode[source.NodeId] = source.NodeIncarnation;
                             }
 
                             link.Admitted = true;
@@ -345,7 +360,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
     /// <summary>
     /// Drops this link's hold on its (node, incarnation). The verifier retires the source only when the last open link of that
-    /// exact incarnation is gone, so a newer incarnation of the same node id never retires an older one that still has links.
+    /// exact incarnation is gone AND a different incarnation of the same node id has been admitted (see admission), so a live
+    /// gateway that drops its only link and reconnects with the same incarnation keeps its verdicts, and a newer incarnation
+    /// never retires an older one that still has links.
     /// Runs once per link from the receive loop's finally block (every close path: clean, protocol fault, cancellation, dispose).
     /// </summary>
     private void ReleaseSource(Link link)
@@ -366,7 +383,10 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             }
 
             _openLinksBySource.Remove(source);
-            _wardenVerifier?.RetireSource(source);
+            if (_newestIncarnationByNode.TryGetValue(source.NodeId, out Guid newest) && newest != source.NodeIncarnation)
+            {
+                _wardenVerifier?.RetireSource(source);
+            }
         }
     }
 

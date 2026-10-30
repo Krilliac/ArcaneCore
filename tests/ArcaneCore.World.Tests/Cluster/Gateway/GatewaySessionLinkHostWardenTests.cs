@@ -11,7 +11,7 @@ namespace ArcaneCore.World.Tests.Cluster.Gateway;
 
 /// <summary>
 /// The link host keys Warden verdicts by the admitted peer's (node id, incarnation) and retires an incarnation in the verifier
-/// only when its last open link is gone, on every close path.
+/// only when its last open link is gone and a different incarnation of the same node id has been admitted, on every close path.
 /// </summary>
 public sealed class GatewaySessionLinkHostWardenTests
 {
@@ -99,7 +99,7 @@ public sealed class GatewaySessionLinkHostWardenTests
     }
 
     [Fact]
-    public async Task ClosingTheLastLinkOfAnIncarnation_RetiresIt()
+    public async Task ClosingTheLastLinkOfASupersededIncarnation_RetiresIt()
     {
         using var cts = new CancellationTokenSource(Deadline);
         GatewayWardenManifestVerifier verifier = NewVerifier();
@@ -108,6 +108,7 @@ public sealed class GatewaySessionLinkHostWardenTests
         var source = new ClusterWardenVerdictSource("gateway-a", incarnation);
         GatewaySessionLinkClient client = await ConnectAsync(host, "gateway-a", incarnation, 1, cts.Token);
         Assert.True(host.TryAcceptWardenVerdict(Assert.Single(host.AdmittedLinkIds()), Verdict(1200UL, 243), 1, OwnerEpoch, out string? reason), reason);
+        await using GatewaySessionLinkClient newer = await ConnectAsync(host, "gateway-a", Guid.NewGuid(), 1, cts.Token);
 
         await client.DisposeAsync();
         await WaitUntilAsync(() => host.OpenLinkCount(source) == 0, cts.Token);
@@ -118,7 +119,48 @@ public sealed class GatewaySessionLinkHostWardenTests
     }
 
     [Fact]
-    public async Task ClosingOneOfTwoLinks_DoesNotRetire_AndClosingTheSecondDoes()
+    public async Task ASupersededIncarnationWithNoOpenLink_IsRetiredWhenTheNewerOneIsAdmitted()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        await using GatewaySessionLinkHost host = StartHost(verifier);
+        Guid incarnation = Guid.NewGuid();
+        var source = new ClusterWardenVerdictSource("gateway-a", incarnation);
+        GatewaySessionLinkClient client = await ConnectAsync(host, "gateway-a", incarnation, 1, cts.Token);
+        await client.DisposeAsync();
+        await WaitUntilAsync(() => host.OpenLinkCount(source) == 0, cts.Token);
+        Assert.True(verifier.TryAcceptVerdict(Verdict(1200UL, 243), source, 1, OwnerEpoch, out string? stillLive), stillLive);
+
+        await using GatewaySessionLinkClient newer = await ConnectAsync(host, "gateway-a", Guid.NewGuid(), 1, cts.Token);
+
+        Assert.False(verifier.TryAcceptVerdict(Verdict(1200UL, 244), source, 1, OwnerEpoch, out string? retired));
+        Assert.Contains("retired gateway incarnation", retired, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReconnectingWithTheSameIncarnation_KeepsVerdictsLive_AndReplaysStayRefused()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        GatewayWardenManifestVerifier verifier = NewVerifier();
+        await using GatewaySessionLinkHost host = StartHost(verifier);
+        Guid incarnation = Guid.NewGuid();
+        var source = new ClusterWardenVerdictSource("gateway-a", incarnation);
+        GatewaySessionLinkClient first = await ConnectAsync(host, "gateway-a", incarnation, 1, cts.Token);
+        ClusterWardenVerdict verdict = Verdict(1200UL, 243);
+        Assert.True(host.TryAcceptWardenVerdict(Assert.Single(host.AdmittedLinkIds()), verdict, 1, OwnerEpoch, out string? reason), reason);
+
+        await first.DisposeAsync();
+        await WaitUntilAsync(() => host.OpenLinkCount(source) == 0, cts.Token);
+        await using GatewaySessionLinkClient second = await ConnectAsync(host, "gateway-a", incarnation, 1, cts.Token);
+        int linkId = Assert.Single(host.AdmittedLinkIds());
+
+        Assert.True(host.TryAcceptWardenVerdict(linkId, Verdict(1200UL, 244), 1, OwnerEpoch, out string? fresh), fresh);
+        Assert.False(host.TryAcceptWardenVerdict(linkId, verdict, 1, OwnerEpoch, out string? replay));
+        Assert.Contains("duplicate Warden verdict", replay, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ClosingOneOfTwoLinks_DoesNotRetire_AndClosingTheSecondDoesOnceSuperseded()
     {
         using var cts = new CancellationTokenSource(Deadline);
         GatewayWardenManifestVerifier verifier = NewVerifier();
@@ -127,13 +169,12 @@ public sealed class GatewaySessionLinkHostWardenTests
         var source = new ClusterWardenVerdictSource("gateway-a", incarnation);
         GatewaySessionLinkClient first = await ConnectAsync(host, "gateway-a", incarnation, 1, cts.Token);
         GatewaySessionLinkClient second = await ConnectAsync(host, "gateway-a", incarnation, 2, cts.Token);
+        await using GatewaySessionLinkClient newer = await ConnectAsync(host, "gateway-a", Guid.NewGuid(), 1, cts.Token);
 
         await first.DisposeAsync();
         await WaitUntilAsync(() => host.OpenLinkCount(source) == 1, cts.Token);
 
-        int remaining = Assert.Single(host.AdmittedLinkIds());
-        Assert.True(host.TryAcceptWardenVerdict(remaining, Verdict(1200UL, 243), 1, OwnerEpoch, out string? reason), reason);
-        Assert.True(host.TryAcceptWardenVerdict(remaining, Verdict(1200UL, 244), 1, OwnerEpoch, out string? reason2), reason2);
+        Assert.True(verifier.TryAcceptVerdict(Verdict(1200UL, 243), source, 1, OwnerEpoch, out string? reason), reason);
 
         await second.DisposeAsync();
         await WaitUntilAsync(() => host.OpenLinkCount(source) == 0, cts.Token);
@@ -151,12 +192,11 @@ public sealed class GatewaySessionLinkHostWardenTests
         Guid newIncarnation = Guid.NewGuid();
         var oldSource = new ClusterWardenVerdictSource("gateway-a", oldIncarnation);
         var newSource = new ClusterWardenVerdictSource("gateway-a", newIncarnation);
-        await using GatewaySessionLinkClient oldClient = await ConnectAsync(host, "gateway-a", oldIncarnation, 1, cts.Token);
+        GatewaySessionLinkClient oldClient = await ConnectAsync(host, "gateway-a", oldIncarnation, 1, cts.Token);
         GatewaySessionLinkClient newClient = await ConnectAsync(host, "gateway-a", newIncarnation, 1, cts.Token);
-        int oldLink = host.AdmittedLinkIds().Length == 2 ? host.AdmittedLinkIds().Min() : -1;
-        Assert.NotEqual(-1, oldLink); // the old incarnation connected first, so it holds the lower link id
+        int oldLink = host.AdmittedLinkIds().Min(); // the old incarnation connected first, so it holds the lower link id
 
-        // Closing the new incarnation's only link retires the new one and leaves the old one fully live.
+        // Closing the newest incarnation's only link retires nothing: it may reconnect, and the old one is fully live.
         await newClient.DisposeAsync();
         await WaitUntilAsync(() => host.OpenLinkCount(newSource) == 0, cts.Token);
         Assert.Equal(1, host.OpenLinkCount(oldSource));
@@ -166,7 +206,12 @@ public sealed class GatewaySessionLinkHostWardenTests
         Assert.True(host.TryAcceptWardenVerdict(oldLink, verdict, 1, OwnerEpoch, out string? reason), reason);
         Assert.False(host.TryAcceptWardenVerdict(oldLink, verdict, 1, OwnerEpoch, out string? replay));
         Assert.Contains("duplicate Warden verdict", replay, StringComparison.OrdinalIgnoreCase);
-        Assert.False(verifier.TryAcceptVerdict(Verdict(1200UL, 244), newSource, 1, OwnerEpoch, out string? retired));
+        Assert.True(verifier.TryAcceptVerdict(Verdict(1200UL, 244), newSource, 1, OwnerEpoch, out string? newLive), newLive);
+
+        // Only when the superseded old incarnation's last link goes is it retired.
+        await oldClient.DisposeAsync();
+        await WaitUntilAsync(() => host.OpenLinkCount(oldSource) == 0, cts.Token);
+        Assert.False(verifier.TryAcceptVerdict(Verdict(1200UL, 245), oldSource, 1, OwnerEpoch, out string? retired));
         Assert.Contains("retired gateway incarnation", retired, StringComparison.OrdinalIgnoreCase);
     }
 
