@@ -529,8 +529,6 @@ a.unhandled-other	28617	script:ScriptEffect
 a.unhandled-other	28749	dummy:Dummy
 a.unhandled-other	28781	dummy:Dummy
 a.unhandled-other	28797	dummy:Dummy
-a.unhandled-other	29284	dummy:Dummy
-a.unhandled-other	29286	dummy:Dummy
 a.unhandled-other	29357	dummy:Dummy
 a.unhandled-other	29422	dummy:Dummy
 a.unhandled-other	29682	dummy:Dummy
