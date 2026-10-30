@@ -252,6 +252,47 @@ public sealed class ConfigReloadTests : IDisposable
         => Assert.Throws<InvalidOperationException>(() => new PlayerbotWarModeOptions { HuntRadiusYards = yards }.Validate());
 
     [Fact]
+    public void PvpInitiate_DefaultsAreOffWithTheSpecifiedWindow_BindAndAreLiveKeys()
+    {
+        var defaults = new PlayerbotPvpInitiateOptions();
+        Assert.False(defaults.Enabled);
+        Assert.Equal((30, 5, 3, 60), (defaults.RadiusYards, defaults.MaxLevelBelow, defaults.MaxLevelAbove, defaults.MinHealthPct));
+        new PlayerbotPvpOptions().Validate();
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:Playerbots:Pvp:Initiate:Enabled"] = "true",
+            ["World:Playerbots:Pvp:Initiate:RadiusYards"] = "45",
+            ["World:Playerbots:Pvp:Initiate:MaxLevelBelow"] = "2",
+            ["World:Playerbots:Pvp:Initiate:MaxLevelAbove"] = "1",
+            ["World:Playerbots:Pvp:Initiate:MinHealthPct"] = "80",
+        }).Build();
+        var pvp = new PlayerbotPvpOptions();
+        configuration.GetSection(PlayerbotOptions.SectionName + ":Pvp").Bind(pvp);
+        Assert.True(pvp.Initiate.Enabled);
+        Assert.Equal((45, 2, 1, 80), (pvp.Initiate.RadiusYards, pvp.Initiate.MaxLevelBelow, pvp.Initiate.MaxLevelAbove, pvp.Initiate.MinHealthPct));
+
+        foreach (string key in new[] { "Enabled", "RadiusYards", "MaxLevelBelow", "MaxLevelAbove", "MinHealthPct" })
+        {
+            Assert.Contains(WorldConfigKeys.All, k => k.Path == "World:Playerbots:Pvp:Initiate:" + key && k.Live);
+            Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:Playerbots:Pvp:Initiate:" + key, ConfigDaemon.World).Status);
+        }
+    }
+
+    [Theory]
+    [InlineData(4, 0, 0, 0)]
+    [InlineData(101, 0, 0, 0)]
+    [InlineData(30, -1, 0, 0)]
+    [InlineData(30, 0, 61, 0)]
+    [InlineData(30, 0, 0, 101)]
+    [InlineData(30, 0, 0, -1)]
+    public void PvpInitiate_OutOfRangeValues_AreRejected(int radius, int below, int above, int health)
+        => Assert.Throws<InvalidOperationException>(() => new PlayerbotPvpOptions
+        {
+            Initiate = new PlayerbotPvpInitiateOptions { RadiusYards = radius, MaxLevelBelow = below, MaxLevelAbove = above, MinHealthPct = health },
+        }.Validate());
+
+    [Fact]
     public void TheBotsReadTheOneSwitch_ThroughTheSharedWarModeOptions()
     {
         var shared = new WarModeOptions();
@@ -899,6 +940,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(PlayerbotKiteOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Combat)}:{nameof(PlayerbotCombatOptions.Kite)}:{property.Name}");
+        }
+
+        // Bots starting PvP fights are live key by key (docs/areas/playbots-combat.md, Starting a PvP fight).
+        foreach (PropertyInfo property in typeof(PlayerbotPvpInitiateOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Pvp)}:{nameof(PlayerbotPvpOptions.Initiate)}:{property.Name}");
         }
 
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties()

@@ -33,6 +33,12 @@ internal enum PlayerbotEngageReason : byte
 
     /// <summary>War Mode is on and the bot bears the player a grudge (its war layer marks it Rival): the hunt. Never into a War Mode exempt area.</summary>
     Grudge,
+
+    /// <summary>
+    /// <c>World:Playerbots:Pvp:Initiate</c> is on and an idle bot starts on a flagged enemy near it. Never into a War Mode exempt area. The level window, health
+    /// and numbers are the caller's (<c>PlayerbotBrain.TryInitiate</c>); this only names the reason.
+    /// </summary>
+    Initiate,
 }
 
 /// <summary>
@@ -58,14 +64,16 @@ internal static class PlayerbotHostility
     /// it attacks a member of the bot's group or is the victim of the group's leader (<see cref="PlayerbotEngageReason.GroupProvoked"/>), or
     /// <paramref name="granted"/> is an initiating reason (<see cref="PlayerbotEngageReason.Ordered"/>, <see cref="PlayerbotEngageReason.Defend"/>,
     /// <see cref="PlayerbotEngageReason.Siege"/>), or it helps a victim (<see cref="PlayerbotEngageReason.Help"/>) or holds a grudge while War Mode is on
-    /// (<see cref="PlayerbotEngageReason.Grudge"/>, <paramref name="warMode"/> enabled), both outside the exempt areas. Real players and bots share this rule.
+    /// (<see cref="PlayerbotEngageReason.Grudge"/>, <paramref name="warMode"/> enabled) or starts on it unprovoked (<see cref="PlayerbotEngageReason.Initiate"/>,
+    /// <paramref name="initiate"/> enabled), all three outside the exempt areas. Real players and bots share this rule.
     /// </summary>
-    internal static bool MayEngage(Player self, Player other, PlayerbotEngageReason granted, GroupManager? groups, WarModeOptions? warMode = null)
+    internal static bool MayEngage(Player self, Player other, PlayerbotEngageReason granted, GroupManager? groups, WarModeOptions? warMode = null,
+        PlayerbotPvpInitiateOptions? initiate = null)
     {
         if (!IsHostilePlayer(self, other)) return false;
         // Help and the War Mode hunt never reach into an exempt area (a capital or neutral town of the player's own side, a battleground, an arena).
-        if (granted is PlayerbotEngageReason.Help or PlayerbotEngageReason.Grudge)
-            return (granted == PlayerbotEngageReason.Help || warMode is { Enabled: true }) && !PvpAreaState.IsWarModeExempt(other);
+        if (granted is PlayerbotEngageReason.Help or PlayerbotEngageReason.Grudge or PlayerbotEngageReason.Initiate)
+            return (granted switch { PlayerbotEngageReason.Help => true, PlayerbotEngageReason.Grudge => warMode is { Enabled: true }, _ => initiate is { Enabled: true } }) && !PvpAreaState.IsWarModeExempt(other);
         if (granted is PlayerbotEngageReason.Ordered or PlayerbotEngageReason.Defend or PlayerbotEngageReason.Siege) return true;
         if (IsProvokedBy(self, other)) return true;
         return groups is not null && IsGroupProvokedBy(self, other, groups);

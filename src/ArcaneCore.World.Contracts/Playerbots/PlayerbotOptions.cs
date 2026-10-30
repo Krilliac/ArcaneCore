@@ -269,6 +269,9 @@ public sealed class PlayerbotOptions
     /// <summary>Kiting (<c>World:Playerbots:Combat</c>; live).</summary>
     public PlayerbotCombatOptions Combat { get; set; } = new();
 
+    /// <summary>World PvP: whether idle bots start fights (<c>World:Playerbots:Pvp</c>; live; docs/areas/playbots-combat.md).</summary>
+    public PlayerbotPvpOptions Pvp { get; set; } = new();
+
     /// <summary>Chests, gathering nodes and rare creatures a bot weighs against their guards and goes for when worth it (<c>World:Playerbots:Opportunities</c>; live; docs/areas/playbots-opportunities.md).</summary>
     public PlayerbotOpportunityOptions Opportunities { get; set; } = new();
 
@@ -395,6 +398,8 @@ public sealed class PlayerbotOptions
         Risk.Validate();
         if (Combat is null) throw new InvalidOperationException($"{SectionName}:Combat is missing.");
         Combat.Validate();
+        if (Pvp is null) throw new InvalidOperationException($"{SectionName}:Pvp is missing.");
+        Pvp.Validate();
         if (Opportunities is null) throw new InvalidOperationException($"{SectionName}:Opportunities is missing.");
         Opportunities.Validate();
         if (Chat is null) throw new InvalidOperationException($"{SectionName}:Chat is missing.");

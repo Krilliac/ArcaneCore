@@ -772,6 +772,12 @@ public static class WorldConfigKeys
         LivePlayerbots("Social:WarMode:NeverForget", o => o.Social.WarMode.NeverForget, (o, v) => o.Social.WarMode.NeverForget = v),
         LivePlayerbots("Social:WarMode:RemoveCaps", o => o.Social.WarMode.RemoveCaps, (o, v) => o.Social.WarMode.RemoveCaps = v),
         LivePlayerbots("Social:WarMode:ClearOnDisable", o => o.Social.WarMode.ClearOnDisable, (o, v) => o.Social.WarMode.ClearOnDisable = v),
+        // Bots starting PvP fights (non-retail, off by default): read at the bot's next think.
+        LivePlayerbots("Pvp:Initiate:Enabled", o => o.Pvp.Initiate.Enabled, (o, v) => o.Pvp.Initiate.Enabled = v),
+        LivePlayerbotsValue("Pvp:Initiate:RadiusYards", o => o.Pvp.Initiate.RadiusYards, (o, v) => o.Pvp.Initiate.RadiusYards = v, PlayerbotPvpInitiateOptions.CheckRadius),
+        LivePlayerbotsValue("Pvp:Initiate:MaxLevelBelow", o => o.Pvp.Initiate.MaxLevelBelow, (o, v) => o.Pvp.Initiate.MaxLevelBelow = v, PlayerbotPvpInitiateOptions.CheckLevels),
+        LivePlayerbotsValue("Pvp:Initiate:MaxLevelAbove", o => o.Pvp.Initiate.MaxLevelAbove, (o, v) => o.Pvp.Initiate.MaxLevelAbove = v, PlayerbotPvpInitiateOptions.CheckLevels),
+        LivePlayerbotsValue("Pvp:Initiate:MinHealthPct", o => o.Pvp.Initiate.MinHealthPct, (o, v) => o.Pvp.Initiate.MinHealthPct = v, PlayerbotPvpInitiateOptions.CheckHealth),
         LivePlayerbotsValue("Social:WarMode:HuntRadiusYards", o => o.Social.WarMode.HuntRadiusYards, (o, v) => o.Social.WarMode.HuntRadiusYards = v,
             v => v is >= Playerbots.BotSocial.PlayerbotWarModeOptions.MinHuntRadiusYards and <= Playerbots.BotSocial.PlayerbotWarModeOptions.MaxHuntRadiusYards ? null : $"must be {Playerbots.BotSocial.PlayerbotWarModeOptions.MinHuntRadiusYards}..{Playerbots.BotSocial.PlayerbotWarModeOptions.MaxHuntRadiusYards}"),
 

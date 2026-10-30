@@ -17065,6 +17065,64 @@ World.Playerbots.Population.ZoneLevelSlack = 4
 World.Playerbots.Population.ZoneLevelSlackMaxFloor = 12
 
 #
+#    World.Playerbots.Pvp.Initiate.Enabled
+#        Description: Let idle bots start PvP fights (off by default: not retail behaviour).
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Pvp.Initiate.Enabled = false
+
+#
+#    World.Playerbots.Pvp.Initiate.MaxLevelAbove
+#        Description: A bot leaves a target alone that is more than this many levels above it (0 to
+#                     60).
+#        Type: int
+#        Default: 3
+#        Allowed: 0 to 60
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Pvp.Initiate.MaxLevelAbove = 3
+
+#
+#    World.Playerbots.Pvp.Initiate.MaxLevelBelow
+#        Description: A bot leaves a target alone that is more than this many levels below it (0 to
+#                     60).
+#        Type: int
+#        Default: 5
+#        Allowed: 0 to 60
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Pvp.Initiate.MaxLevelBelow = 5
+
+#
+#    World.Playerbots.Pvp.Initiate.MinHealthPct
+#        Description: A bot starts a fight only with at least this percent of its health (0 to 100).
+#        Type: int
+#        Default: 60
+#        Allowed: 0 to 100
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Pvp.Initiate.MinHealthPct = 60
+
+#
+#    World.Playerbots.Pvp.Initiate.RadiusYards
+#        Description: A bot looks for a target within this many yards, and counts the friends and
+#                     enemies around it within the same radius (5 to 100).
+#        Type: int
+#        Default: 30
+#        Allowed: 5 to 100
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.Pvp.Initiate.RadiusYards = 30
+
+#
 #    World.Playerbots.RestoreOnStartup
 #        Description: Log the saved managed bots back in when the world starts.
 #        Type: bool
