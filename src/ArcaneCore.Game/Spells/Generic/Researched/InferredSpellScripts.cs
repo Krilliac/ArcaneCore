@@ -6,7 +6,7 @@ using ArcaneCore.Game.Spells.Scripts;
 
 namespace ArcaneCore.Game.Spells.Generic.Researched;
 
-// Three spells that no reference core (vmangos, cmangos, mangoszero) and no public source documents. Nathan decided on 2026-10-29 to implement the
+// Three spells that no reference core (vmangos, cmangos, mangoszero) and no public source documents. The maintainer decided on 2026-10-29 to implement the
 // best-evidence behaviour for them. Every behaviour below is inferred, not verified against a retail capture; the evidence is Spell.dbc 5875 (effect
 // types, targets, radius, periodic trigger chains), the spell names and tooltips, and the classic-db / vmangos rows named on each class. They are listed
 // as inferred in docs/areas/spells.md. The fourth spell of the same decision, Enigma Blizzard Bonus 26127, is a channel rule and lives in
@@ -17,8 +17,8 @@ namespace ArcaneCore.Game.Spells.Generic.Researched;
 /// <para>
 /// Evidence: Spell.dbc gives 30176 one DUMMY effect on the caster. It is the periodic trigger (EffectTriggerSpell 30176, amplitude 15000 ms, target
 /// self) of the Silithyst carrier aura 29519 (the third effect of 29519, which the clicker takes from Silithus Flag Click 29518, vmangos
-/// SpellEffects.cpp:1404-1411). The name says it is the Silithus PvP flag. Every 15 s the carrier is therefore flagged for PvP when it is not: a player
-/// cannot carry Silithyst unflagged. A flagged player and any non-player carrier are left alone, so the flag's own 5-minute timer is not refreshed here.
+/// SpellEffects.cpp:1404-1411). The name says it is the Silithus PvP flag. Every 15 s the carrier is therefore flagged for PvP when it is not, so a carrier
+/// who is not flagged is flagged within 15 s. A flagged player and any non-player carrier are left alone, so the flag's own 5-minute timer is not refreshed here.
 /// </para>
 /// The flag goes through <see cref="MapCombat.UpdatePvp"/>, the call the hostile-area rule (<c>PvpAreaTracker.OnZoneChanged</c>) makes.
 /// </summary>
