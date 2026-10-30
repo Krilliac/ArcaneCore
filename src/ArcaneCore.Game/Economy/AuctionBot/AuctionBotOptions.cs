@@ -278,6 +278,9 @@ public sealed class AuctionBotOptions
         return values;
     }
 
+    /// <summary>Upper bound on the template draws one sell pass makes (and the magnitude of a negative minimum), so a bad value cannot stall the world thread.</summary>
+    public const int MaxTemplatesPerSell = 10_000;
+
     /// <summary>
     /// Clamp the options as cMaNGOS GetMinMaxConfig does (an out-of-range value takes its default) and order the min/max pairs
     /// (Bid.Min and Time.Min fall to the max). Returns one line per correction.
@@ -330,6 +333,18 @@ public sealed class AuctionBotOptions
         {
             fixes.Add($"{SectionName}:{nameof(StackPercentMin)} must be at most {nameof(StackPercentMax)}; using {StackPercentMax}.");
             StackPercentMin = StackPercentMax;
+        }
+
+        if (TemplatesPerSellMax > MaxTemplatesPerSell)
+        {
+            fixes.Add($"{SectionName}:{nameof(TemplatesPerSellMax)} must be at most {MaxTemplatesPerSell}; using {MaxTemplatesPerSell}.");
+            TemplatesPerSellMax = MaxTemplatesPerSell;
+        }
+
+        if (TemplatesPerSellMin < -MaxTemplatesPerSell)
+        {
+            fixes.Add($"{SectionName}:{nameof(TemplatesPerSellMin)} must be at least {-MaxTemplatesPerSell}; using {-MaxTemplatesPerSell}.");
+            TemplatesPerSellMin = -MaxTemplatesPerSell;
         }
 
         if (TemplatesPerSellMin > TemplatesPerSellMax)
