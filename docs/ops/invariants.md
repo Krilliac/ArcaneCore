@@ -100,7 +100,7 @@ the box is closed. Exit 70 stays exit 70 and `FailFast` still aborts.
 **Where it opens.** A dialog opens only when every one of these holds; otherwise the crash path is exactly what it was without the
 key (nothing is probed and no file is written):
 
-- the platform is Windows (the dialog is a Win32 `MessageBoxW` from user32.dll: no WinForms, no WPF, nothing that affects the Linux build);
+- the platform is Windows (the dialog is a Win32 task dialog (comctl32, with a plain `MessageBoxW` from user32.dll as fallback): no WinForms, no WPF, nothing that affects the Linux build);
 - `Environment.UserInteractive` is true (a Windows service is not);
 - none of standard input, output or error is redirected (a test runner, a launcher script, `> file` or `| tee`);
 - neither `CI` nor `TF_BUILD` is set in the environment.
@@ -114,7 +114,10 @@ thread's id and name; the time in UTC and local time; the fault-ledger site and 
 restart, from the crash journal); the paths of the crash report file, the crash journal (`crash-faults.<daemon>.jsonl`), the log file
 when `Logging:ArcaneCore:File:Enabled` is on, and the dump location when `DOTNET_DbgEnableMiniDump=1` is set; then the full stack
 trace, outer exception first and every inner exception after it. The box shows at most 40 lines of 400 characters, so its OK button
-stays on the screen; Ctrl+C in the box copies its text. Before the box opens, its full text and the whole crash report are written to
+stays on the screen. The box has a **Copy** button, which puts the box's title and text on the clipboard and leaves the box open, and an
+OK button, which closes it (Esc closes it too). comctl32 version 6, which the task dialog needs and the daemons' exes carry no manifest
+for, is activated for the call at run time; if that or the task dialog fails, a line goes to standard error and the plain message box
+opens instead (no Copy button there, but Ctrl+C in it copies its text). Before the box opens, its full text and the whole crash report are written to
 `crash-report.<daemon>.<yyyyMMdd-HHmmss>Z.txt` next to the daemon (beside the crash journal); the file is written only when a dialog
 opens.
 
@@ -140,6 +143,8 @@ it: from `tests/ArcaneCore.Kernel.Tests/bin/Release/net11.0` in a console window
 `dotnet ArcaneCore.Kernel.Tests.dll --diagnostics-probe unhandled-dialog-live`. It installs the hooks with the crash dialog on and
 `OnUnhandled` `Exit`, throws on a thread named `probe-thrower`, shows the box, and exits 70 when it is closed. Run with redirected
 output (as `CrashProcessTests` does) it opens nothing and exits 70.
+`dotnet ArcaneCore.Kernel.Tests.dll --diagnostics-probe fault-dialog-live` does the same for the new-fault box: it records one caught
+fault with `Diagnostics:FaultDialog` on and waits until the box (Copy and OK buttons) is closed.
 
 ## Every invariant, and why it holds
 
@@ -255,7 +260,7 @@ The write queues (`CharacterSaveQueue`, the social write queue) live in `src/Arc
   daemons) to bind the section. `ArcaneCore.Cryptography` and `ArcaneCore.Protocol` gained a project reference to the Kernel (which
   references no project) for `Invariant`; their csproj comments say so.
 - Pure C#: `Debugger.Break`, `Environment.FailFast`, `GC`, `Process` and `RuntimeInformation` are cross-platform. The one
-  P/Invoke is the opt-in crash dialog's `MessageBoxW` (user32.dll), reached only behind `OperatingSystem.IsWindows()`.
+  P/Invoke is the opt-in crash dialog's `TaskDialogIndirect` (comctl32, with `MessageBoxW` from user32.dll as fallback) and the clipboard and activation-context calls it needs, reached only behind `OperatingSystem.IsWindows()`.
 
 ## Limits
 

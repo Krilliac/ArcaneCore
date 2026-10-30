@@ -15,9 +15,12 @@ public interface ICrashDialogPresenter
 }
 
 /// <summary>
-/// The Win32 <c>MessageBoxW</c> (user32.dll): an error icon, an OK button, top-most and brought to the foreground. No WinForms or WPF
-/// dependency; on any other platform <see cref="Show"/> throws <see cref="PlatformNotSupportedException"/> (the caller never gets there,
-/// see <see cref="CrashDialog.ShouldShow"/>). Ctrl+C in a message box copies its whole text to the clipboard.
+/// The Win32 crash box: a comctl32 <c>TaskDialogIndirect</c> with an error icon, a <b>Copy</b> button that copies the box's title and full
+/// text to the clipboard and leaves the box open, and an OK button that closes it; top-most and brought to the foreground. comctl32
+/// version 6 is activated for the call at run time (no manifest on the exes, see <see cref="CrashDialogTaskDialog"/>). When that or the
+/// task dialog fails before the box appears, it falls back to the Win32 <c>MessageBoxW</c> (user32.dll: an error icon and OK, where Ctrl+C
+/// copies the text) and says why on standard error. No WinForms or WPF dependency; on any other platform <see cref="Show"/> throws
+/// <see cref="PlatformNotSupportedException"/> (the caller never gets there, see <see cref="CrashDialog.ShouldShow"/>).
 /// </summary>
 public sealed class MessageBoxCrashDialogPresenter : ICrashDialogPresenter
 {
@@ -42,10 +45,30 @@ public sealed class MessageBoxCrashDialogPresenter : ICrashDialogPresenter
             throw new PlatformNotSupportedException("the crash dialog is a Win32 message box and exists only on Windows");
         }
 
+        if (CrashDialogTaskDialog.TryShow(title, text, out string? failure))
+        {
+            return;
+        }
+
+        ReportFallback(failure);
+
         // MessageBoxW returns 0 when it could not create the box (no desktop, a non-interactive window station).
         if (MessageBoxW(IntPtr.Zero, text, title, MbOk | MbIconError | MbSetForeground | MbTopMost) == 0)
         {
             throw new Win32Exception(Marshal.GetLastPInvokeError());
+        }
+    }
+
+    private static void ReportFallback(string? failure)
+    {
+        try
+        {
+            Console.Error.WriteLine("crash dialog: no Copy button, using a plain message box: " + (failure ?? "unknown reason"));
+            Console.Error.Flush();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            // Standard error is gone; the plain message box still opens.
         }
     }
 
