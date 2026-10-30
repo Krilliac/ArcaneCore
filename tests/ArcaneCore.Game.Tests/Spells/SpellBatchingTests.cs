@@ -282,7 +282,8 @@ public sealed class SpellBatchingTests
         kit.Spellbook.Teach(caster, Zap);
         kit.System.RegisterEffect(SpellEffectName.SchoolDamage, c => throw new BatchProbeFault("spell-batch-probe-1"));
         string type = typeof(BatchProbeFault).FullName!;
-        long Count(string site) => FaultLedger.Shared.Snapshot().Where(s => s.Site == site && s.ExceptionType == type).Sum(s => s.Count);
+        // The batch catch used to record under "spell.batch" and again, through LogFault, under "spell-batch": count both spellings.
+        long Count(string site) => FaultLedger.Shared.Snapshot().Where(s => s.ExceptionType == type && (s.Site == site || (site == "spell.batch" && s.Site == "spell-batch"))).Sum(s => s.Count);
 
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(caster, Zap, SpellCastTargets.ForUnit(target.Guid)));
         Assert.Equal(1, kit.System.PendingBatchedGoes);
