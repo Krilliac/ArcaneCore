@@ -41,6 +41,7 @@ public sealed class SpellContractSweepTests(ITestOutputHelper output)
         output.WriteLine($"coverage: {coverageChanged.Length} swept spells changed which checks ran");
         if (Environment.GetEnvironmentVariable(SpellSweepBaseline.WriteVariable) == "1")
         {
+            Assert.False(SpellSweepCatalog.IdsRequested, $"{SpellSweepBaseline.WriteVariable}=1 refuses to run with {SpellSweepCatalog.IdsVariable} set: it overrides {SpellSweepCatalog.FullVariable}, so the sweep covers only the listed spells and would drop every other spell's lines; unset {SpellSweepCatalog.IdsVariable}");
             Assert.True(full, $"{SpellSweepBaseline.WriteVariable}=1 needs {SpellSweepCatalog.FullVariable}=1: a partial sweep would drop the other spells' lines");
             baseline.Write(result.Violations);
             coverage.Write(result.Outcomes);

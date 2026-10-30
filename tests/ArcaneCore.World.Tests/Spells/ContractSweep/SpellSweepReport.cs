@@ -44,6 +44,8 @@ internal static class SpellSweepReport
         text.AppendLine();
         text.AppendLine($"Selection: {(result.Full ? "full" : "default (player-castable + seeded sample)")}. Spell.dbc rows: {result.RowsTotal}, swept: {result.Outcomes.Count}, not selected: {result.RowsTotal - result.Outcomes.Count}. Time: {result.Elapsed.TotalSeconds:F0} s.");
         text.AppendLine($"Against the baseline: {newKeys.Count} new, {fixedKeys.Count} fixed.");
+        string batchWindow = Environment.GetEnvironmentVariable("ARCANECORE_TEST_SPELL_BATCH_MS") is { Length: > 0 } window ? window : "unset";
+        text.AppendLine($"Selection source: {SpellSweepCatalog.SelectionSource}. Spell batch window (ARCANECORE_TEST_SPELL_BATCH_MS): {batchWindow}.");
         text.AppendLine();
         text.AppendLine("## Cast results");
         text.AppendLine();

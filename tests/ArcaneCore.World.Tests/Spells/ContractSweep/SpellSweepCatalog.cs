@@ -46,6 +46,14 @@ internal sealed class SpellSweepCatalog
     /// <summary>The OR of the SkillLineAbility.dbc class masks of each spell that has a row with a non-zero class mask.</summary>
     public IReadOnlyDictionary<uint, uint> ClassMasks { get; }
 
+    /// <summary>Where the selection comes from, for the report: the id list (which overrides everything), the full sweep, or the default sample.</summary>
+    public static string SelectionSource => Environment.GetEnvironmentVariable(IdsVariable) is { Length: > 0 } ids
+        ? $"{IdsVariable}={ids}"
+        : FullRequested ? $"{FullVariable}=1" : "default";
+
+    /// <summary>Whether <see cref="IdsVariable"/> narrows the selection (it wins over <see cref="FullVariable"/>).</summary>
+    public static bool IdsRequested => Environment.GetEnvironmentVariable(IdsVariable) is { Length: > 0 };
+
     public static bool FullRequested => Environment.GetEnvironmentVariable(FullVariable) == "1";
 
     public static SpellSweepCatalog Load(string directory)

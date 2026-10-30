@@ -925,9 +925,10 @@ internal sealed class SpellSweepRunner
             return;
         }
 
-        // vmangos Spell::CheckRange (Spell.cpp:6882) lets a next-swing spell through at any distance: the melee swing itself only fires
-        // within reach (Unit::AttackerStateUpdate), so the cast has no range refusal to check.
-        if (spell.IsNextMeleeSwing)
+        // vmangos Spell::CheckRange (Spell.cpp:6878-6882) lets a next-swing spell through at any distance only for the combat range
+        // (RangeIndex 2): the melee swing itself then fires only within reach (Unit::AttackerStateUpdate), so the cast has no range
+        // refusal to check. A next-swing spell with another range index is range-checked like any other.
+        if (spell.IsNextMeleeSwing && spell.RangeIndex == SpellConstants.RangeIndexCombat)
         {
             _sceneOrdinal++; // the scene the check used to build: later scenes keep their seeds (and so their rolls)
             Checked('g', "not-run:next-swing");
