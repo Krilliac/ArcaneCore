@@ -3,6 +3,10 @@
 # runs the gate once per case and checks its exit code and the lines that decide it. Run: bash tools/ops/ci/test-stages-selftest.sh
 # Exit 0 = every case behaved, 1 = a case did not (each one is printed). Needs only bash and coreutils; no dotnet, no build.
 set -u
+# Every case sets the knobs it tests. A gate that runs this self-test (TestStagesScriptTests) exports its own GATE_* settings, e.g.
+# GATE_WRAP="timeout ..." on Node1 (the killedjob stub's parent becomes timeout, so the job lives on to write rc 137) or a local
+# GATE_SUITE_BUDGET_MIN / GATE_TIME_BUDGETS=off (every budget case passes for the wrong reason). None of them may reach the cases.
+while read -r v; do unset "$v"; done < <(compgen -e | grep '^GATE_')
 here=$(cd "$(dirname "$0")" && pwd)
 gate=$here/test-stages.sh
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
