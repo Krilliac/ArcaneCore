@@ -24,6 +24,9 @@ public sealed class RocknotAI(Creature creature, BlackrockDepthsInstance instanc
     public const float InitialOrientation = 3.21141f;
     private const uint EmoteOneShotCheer = 4;
 
+    /// <summary>He stays at his last point (point 9 or 34) once the escort is paused or stopped there, instead of ending the path and leaving.</summary>
+    protected override bool HoldAtEndWhilePaused => true;
+
     private uint _breakKegMs;
     private uint _breakDoorMs;
     private uint _emoteMs;
@@ -91,8 +94,8 @@ public sealed class RocknotAI(Creature creature, BlackrockDepthsInstance instanc
                 DoCast(Me, SpellDrunkenRage);
                 _breakKegMs = 2000;
                 break;
-            case 9: // back home
-                SetEscortPaused(true);
+            case 9: // back home: the escort ends here (beyond the reference cores, which only pause and leave him to end the path)
+                Stop();
                 System?.SetFacingTo(Me, InitialOrientation);
                 break;
             case 10: // start of the alternate path used with Nagmara: she follows him
@@ -135,7 +138,7 @@ public sealed class RocknotAI(Creature creature, BlackrockDepthsInstance instanc
         if (instance.GetData(BlackrockDepthsInstance.TypeNagmara) == EncounterState.Special)
         {
             instance.SetData(BlackrockDepthsInstance.TypeNagmara, EncounterState.InProgress);
-            Start(run: false);
+            Start(run: false, instantRespawn: true);
             return;
         }
 

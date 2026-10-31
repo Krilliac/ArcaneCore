@@ -21,8 +21,8 @@ public sealed class BlackrockDepthsRocknotTests
             [BlackrockDepthsInstance.NpcRocknot, BlackrockDepthsInstance.NpcNagmara, BlackrockDepthsInstance.NpcPhalanx],
             [BlackrockDepthsInstance.NpcNagmara, BlackrockDepthsInstance.NpcPhalanx, BlackrockDepthsInstance.NpcRocknot],
             null, null,
-            [.. Enumerable.Range(1, 3).Select(i => (BlackrockDepthsInstance.NpcRocknot, EscortAI.EscortPathId,
-                new CreatureWaypoint((uint)i, -16f + i, -383f, 61.78f, 0, 0)))],
+            [.. Enumerable.Range(1, 34).Select(i => (BlackrockDepthsInstance.NpcRocknot, EscortAI.EscortPathId,
+                new CreatureWaypoint((uint)i, -16f + i * 0.1f, -383f, 61.78f, 0, 0)))],
             null);
 
     [Fact]
@@ -81,5 +81,59 @@ public sealed class BlackrockDepthsRocknotTests
         Assert.Equal(1, ai.Phase);
         Assert.Equal(0u, nagmara.NpcFlags & ((uint)NpcFlags.Gossip | (uint)NpcFlags.QuestGiver));
         Assert.Equal(0u, rocknot.NpcFlags & (uint)NpcFlags.QuestGiver);
+    }
+
+    private static void Reach(RocknotAI ai, params uint[] pointIds)
+    {
+        foreach (uint id in pointIds)
+        {
+            ai.OnMovementInform(MovementGeneratorType.Point, id);
+        }
+    }
+
+    [Fact]
+    public void AleEscort_AtPoint9_StopsAndRocknotStaysAtTheBar()
+    {
+        using DungeonScriptHarness h = Harness();
+        Creature rocknot = h.Creature(BlackrockDepthsInstance.NpcRocknot);
+        var ai = Assert.IsType<RocknotAI>(rocknot.AI);
+        for (int i = 0; i < 3; i++)
+        {
+            ai.OnQuestRewarded(h.Player, RocknotAI.QuestAle);
+        }
+
+        h.Tick(2000);
+        Assert.True(ai.HasEscortState(EscortAI.EscortState.Escorting));
+
+        Reach(ai, 1, 2, 3, 4, 5, 6, 7, 8, 9);
+        Assert.False(ai.HasEscortState(EscortAI.EscortState.Escorting)); // the escort ends at point 9
+        h.Tick(2500);
+
+        Assert.True(rocknot.IsInWorld);
+        Assert.Contains(h.Creatures.Creatures, c => c.Template.Entry == BlackrockDepthsInstance.NpcRocknot);
+    }
+
+    [Fact]
+    public void PotionOfLoveEscort_AfterPoint34_RocknotStaysPausedInPlace()
+    {
+        using DungeonScriptHarness h = Harness();
+        var instance = (BlackrockDepthsInstance)h.Data;
+        Creature rocknot = h.Creature(BlackrockDepthsInstance.NpcRocknot);
+        var ai = Assert.IsType<RocknotAI>(rocknot.AI);
+
+        instance.SetData(BlackrockDepthsInstance.TypeNagmara, EncounterState.Special);
+        h.Tick(50);
+        Assert.Equal(EncounterState.InProgress, instance.GetData(BlackrockDepthsInstance.TypeNagmara));
+        Assert.True(ai.HasEscortState(EscortAI.EscortState.Escorting));
+
+        Reach(ai, 1);
+        Reach(ai, [.. Enumerable.Range(10, 25).Select(i => (uint)i)]);
+        Assert.True(ai.HasEscortState(EscortAI.EscortState.Paused));
+        h.Tick(2500);
+
+        Assert.True(rocknot.IsInWorld);
+        Assert.Contains(h.Creatures.Creatures, c => c.Template.Entry == BlackrockDepthsInstance.NpcRocknot);
+        Assert.True(ai.HasEscortState(EscortAI.EscortState.Escorting));
+        Assert.True(ai.HasEscortState(EscortAI.EscortState.Paused));
     }
 }
