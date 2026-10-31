@@ -8,7 +8,8 @@ namespace ArcaneCore.Data.Tests;
 /// <summary>
 /// Hands out throw-away databases per provider and drops them afterwards. SQLite is always
 /// available; MariaDB and PostgreSQL need a server connection string (without a database
-/// name) in <c>ARCANECORE_TEST_MARIADB</c> / <c>ARCANECORE_TEST_POSTGRES</c>.
+/// name) in <c>ARCANECORE_TEST_MARIADB</c> / <c>ARCANECORE_TEST_POSTGRES</c>. The PostgreSQL server must be
+/// version 13 or later (the drop uses <c>DROP DATABASE ... WITH (FORCE)</c>).
 /// </summary>
 internal sealed class TestDatabases : IAsyncDisposable
 {

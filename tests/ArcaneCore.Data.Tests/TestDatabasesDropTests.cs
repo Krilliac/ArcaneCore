@@ -24,7 +24,11 @@ public sealed class TestDatabasesDropTests
         {
             using var sqlite = new SqliteConnection(db.ConnectionString);
             sqlite.Open();
+            string path = new SqliteConnectionStringBuilder(db.ConnectionString).DataSource;
+            Assert.True(File.Exists(path));
+            sqlite.Close();
             await databases.ReleaseAsync(db);
+            Assert.False(File.Exists(path));
             return;
         }
 
