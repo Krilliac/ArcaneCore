@@ -319,6 +319,24 @@ public sealed class G1ScriptsTests
     }
 
     [Fact]
+    public void TowerCaptureTest_ScansOnlyTheCastersMapPlayers()
+    {
+        using SpellTestKit kit = Kit(Script(30882), Marker(TowerCaptureTestScript.TowerCapture));
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player here, _) = kit.AddPlayer(2, 5);
+        here.Flags |= PlayerFlags.PvpDesired;
+        Player elsewhere = TestWorld.CreatePlayer(3, 5, 0, new FakeSession(3), 1);
+        elsewhere.Flags |= PlayerFlags.PvpDesired;
+        kit.World.AddPlayer(elsewhere);
+        kit.World.RunTick(0);
+
+        kit.System.CastSpell(caster, 30882, SpellCastTargets.ForSelf(), triggered: true);
+
+        Assert.True(kit.System.HasAura(here, TowerCaptureTestScript.TowerCapture));
+        Assert.False(kit.System.HasAura(elsewhere, TowerCaptureTestScript.TowerCapture)); // same range, another map
+    }
+
+    [Fact]
     public void CreateHouse_HasAHandler()
     {
         using SpellTestKit kit = Kit();

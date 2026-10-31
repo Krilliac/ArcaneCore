@@ -246,6 +246,11 @@ public sealed partial class InstanceManager
         {
             reason = TransferAbortReason.NotFound;
         }
+        else if (template.IsRaid && !player.IsGameMaster && player.IsAlive && GroupInCombatInside(player, map))
+        {
+            // vmangos DungeonMap::CanEnter (Map.cpp:2148-2166, patch 1.11.0): no corpse-running back into a live boss fight.
+            reason = TransferAbortReason.ZoneInCombat;
+        }
 
         if (reason is { } abort && sendErrors)
         {
@@ -253,6 +258,25 @@ public sealed partial class InstanceManager
         }
 
         return reason;
+    }
+
+    /// <summary>vmangos <c>InstanceData::IsEncounterInProgress</c> plus <c>Group::InCombatToInstance</c>: a fight is live and another member of the entrant's group is in combat on that map.</summary>
+    private bool GroupInCombatInside(Player player, Map map)
+    {
+        if (map.FindUpdater<InstanceData>() is not { IsEncounterInProgress: true } || GroupOf(player.Guid) is not { } group)
+        {
+            return false;
+        }
+
+        foreach (Player member in map.Players)
+        {
+            if (!ReferenceEquals(member, player) && member.Combat.IsInCombat && GroupOf(member.Guid)?.Id == group.Id)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private InstanceSave CreateSave(MapTemplate template)

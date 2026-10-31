@@ -83,7 +83,7 @@ internal sealed class InMemoryTavernStore : IAreaTriggerTavernStore
 /// The at-login flags and the rename over the host's in-memory characters: the same rules as <see cref="EfCharacterRenameStore"/>
 /// (account ownership, flag, case-insensitive name check; the Data tests run the real store on every engine).
 /// </summary>
-internal sealed class InMemoryRenameStore(InMemoryCharacterStore characters) : ICharacterRenameStore
+internal sealed class InMemoryRenameStore(ICharacterStore characters) : ICharacterRenameStore
 {
     private readonly ConcurrentDictionary<int, uint> _flags = new();
 
@@ -150,7 +150,7 @@ internal sealed class RestTestServices : IWorldTestServices
         services.AddSingleton<ICharacterRestStore>(sp => sp.GetRequiredService<InMemoryRestStore>());
         services.AddSingleton<InMemoryTavernStore>();
         services.AddSingleton<IAreaTriggerTavernStore>(sp => sp.GetRequiredService<InMemoryTavernStore>());
-        services.AddSingleton(sp => new InMemoryRenameStore((InMemoryCharacterStore)sp.GetRequiredService<ICharacterStore>()));
+        services.AddSingleton(sp => new InMemoryRenameStore(sp.GetRequiredService<ICharacterStore>()));
         services.AddSingleton<ICharacterRenameStore>(sp => sp.GetRequiredService<InMemoryRenameStore>());
     }
 }

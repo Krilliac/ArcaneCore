@@ -331,6 +331,25 @@ public sealed class PetMapSystem : IMapUpdater
         }
     }
 
+    /// <summary>
+    /// vmangos Pet::SetDeathState(CORPSE) (Pet.cpp:642-645): a hunter pet that dies loses one happiness level, except on a battleground map.
+    /// </summary>
+    internal void LoseHappinessOnDeath(Creature pet, Player owner)
+    {
+        if (owner.Class != Class.Hunter || pet.Summon is not { Kind: SummonKind.Pet })
+        {
+            return;
+        }
+
+        if (Maps.Templates.WorldMaps.Of(_map.World).Registry.Find(_map.MapId) is { IsBattleground: true })
+        {
+            return;
+        }
+
+        uint happiness = pet.GetUInt32(UpdateFields.UnitFieldPower5);
+        pet.SetUInt32(UpdateFields.UnitFieldPower5, happiness > SummonService.HappinessLevelSize ? happiness - SummonService.HappinessLevelSize : 0);
+    }
+
     internal void SaveCurrentPet(Player owner) => _service?.QueueCurrentPetSave(owner);
 
     /// <summary>

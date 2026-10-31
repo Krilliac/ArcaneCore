@@ -1,7 +1,16 @@
+using ArcaneCore.Game.Tests.GameObjects;
+using ArcaneCore.Game.Tests.Reputation;
+using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Reputation;
 using ArcaneCore.Game.Progression;
+using ArcaneCore.Game.Combat;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -30,6 +39,91 @@ public sealed class KillRewardsTests
         var group = new RewardGroup([killer.Guid, near.Guid, far.Guid, otherMap.Guid, new ObjectGuid(5)], false);
         IReadOnlyList<Player> recipients = KillRewards.Recipients(killer, kit.Victim, group, 74);
         Assert.Equal([killer, near], recipients);
+    }
+
+    [Fact]
+    public void AMemberOnAHill_70YardsAwayIn2D_IsInRange_Though3DIsOver74()
+    {
+        // vmangos IsWithinLootXPDist is 2D (Object.cpp:1738-1752): a 40 yd height difference does not push a member out.
+        using var kit = new Kit();
+        Player killer = kit.AddPlayer(1, 5, 0);
+        Player hill = kit.AddPlayer(2, 70, 0);
+        hill.Z = kit.Victim.Z + 40f; // 3D distance is about 80.6
+        var group = new RewardGroup([killer.Guid, hill.Guid], false);
+        Assert.Equal([killer, hill], KillRewards.Recipients(killer, kit.Victim, group, 74));
+        Assert.Equal([killer, hill], KillRewards.TapRecipients(killer, kit.Victim, group, 74));
+    }
+
+    [Fact]
+    public void AMemberExactlyAtTheLimit_IsOut_JustInsideIsIn()
+    {
+        // The limit is 74 plus both bounding radii and strict (Object.cpp:1738-1752).
+        using var kit = new Kit();
+        Player killer = kit.AddPlayer(1, 5, 0);
+        Player edge = kit.AddPlayer(2, 0, 0);
+        float limit = 74f + edge.BoundingRadius + kit.Victim.BoundingRadius;
+        var group = new RewardGroup([killer.Guid, edge.Guid], false);
+        edge.Relocate(limit - 0.05f, 0, kit.Victim.Z, 0, 0);
+        Assert.Equal([killer, edge], KillRewards.Recipients(killer, kit.Victim, group, 74));
+        edge.Relocate(limit, 0, kit.Victim.Z, 0, 0);
+        Assert.Equal([killer], KillRewards.Recipients(killer, kit.Victim, group, 74));
+    }
+
+    [Fact]
+    public void ARaidMember_500YardsAway_GetsCredit()
+    {
+        // Object.cpp:1482-1483: a raid map has no reward distance limit.
+        using var kit = new Kit(victimMapId: 409);
+        Player killer = kit.AddPlayer(1, 5, 0, mapId: 409);
+        Player far = kit.AddPlayer(2, 500, 0, mapId: 409);
+        var group = new RewardGroup([killer.Guid, far.Guid], true);
+        Assert.Equal([killer, far], KillRewards.Recipients(killer, kit.Victim, group, 74));
+    }
+
+    [Fact]
+    public void ADeadMember_WhoseCorpseIsInRange_GetsCredit_ALivingFarOneDoesNot()
+    {
+        // Player::IsAtGroupRewardDistance (Player.cpp:20034-20050): a dead player counts through his corpse.
+        using var kit = new Kit();
+        Player killer = kit.AddPlayer(1, 5, 0);
+        Player ghost = kit.AddPlayer(2, 20, 0);
+        Player livingFar = kit.AddPlayer(3, 20, 0);
+        ghost.Combat.Corpse = Corpse.CreateFor(ghost, pvpDeath: false);
+        livingFar.Combat.Corpse = Corpse.CreateFor(livingFar, pvpDeath: false);
+        ghost.Relocate(300, 0, kit.Victim.Z, 0, 0);
+        livingFar.Relocate(300, 0, kit.Victim.Z, 0, 0);
+        ghost.Combat.DeathState = DeathState.Dead;
+        var group = new RewardGroup([killer.Guid, ghost.Guid, livingFar.Guid], false);
+        Assert.Equal([killer, ghost], KillRewards.Recipients(killer, kit.Victim, group, 74));
+    }
+
+    [Fact]
+    public void KillRewardRecipients_PickTheSameRecipientsAsTheCorpseMoneySplit()
+    {
+        using var kit = new Kit();
+        Player killer = kit.AddPlayer(1, 5, 0);
+        Player hill = kit.AddPlayer(2, 70, 0);
+        hill.Z = kit.Victim.Z + 40f;
+        Player edge = kit.AddPlayer(3, 0, 0);
+        edge.Relocate(74f + edge.BoundingRadius + kit.Victim.BoundingRadius, 0, kit.Victim.Z, 0, 0);
+        Player far = kit.AddPlayer(4, 80, 0);
+        Player ghost = kit.AddPlayer(5, 20, 0);
+        ghost.Combat.Corpse = Corpse.CreateFor(ghost, pvpDeath: false);
+        ghost.Relocate(300, 0, kit.Victim.Z, 0, 0);
+        ghost.Combat.DeathState = DeathState.Dead;
+        Player[] members = [killer, hill, edge, far, ghost];
+
+        var groups = new FakeGroups();
+        groups.Create(LootMethod.FreeForAll, members);
+        var loot = new LootService(new LootContent([], [])) { Groups = groups };
+        List<Player> sharers = loot.RecipientsFor(killer, kit.Victim, out _);
+        Assert.Equal([killer, hill, ghost], sharers);
+
+        var group = new RewardGroup([.. members.Select(m => m.Guid)], false);
+        Assert.Equal(sharers, KillRewards.Recipients(killer, kit.Victim, group, 74));
+        Assert.Equal(sharers, KillRewards.TapRecipients(killer, kit.Victim, group, 74));
+        var service = new ReputationService(ReputationFixtures.Factions, [], roll: () => 0.0);
+        Assert.Equal(sharers, ReputationKillCredit.Award(service, killer, kit.Victim, group, 74));
     }
 
     [Fact]
@@ -136,10 +230,18 @@ public sealed class KillRewardsTests
     {
         private readonly Dictionary<uint, FakeSession> _sessions = [];
 
-        public Kit(byte creatureLevel = 10, uint rank = 0, uint staticFlags1 = 0)
+        private readonly uint _victimMapId;
+
+        public Kit(byte creatureLevel = 10, uint rank = 0, uint staticFlags1 = 0, uint victimMapId = 0)
         {
+            _victimMapId = victimMapId;
+            WorldMaps.Of(World).Load(new MapContent(
+                [
+                    new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+                    new MapTemplate(409, 0, MapType.Raid, 0, 40, 7, 0, 0, 0, "Molten Core", ""),
+                ], [], [], [], []));
             var template = new CreatureTemplate { Entry = 90, Name = "Victim", Faction = 2, MinLevel = creatureLevel, MaxLevel = creatureLevel, Rank = rank, StaticFlags1 = staticFlags1 };
-            Victim = new Creature(900100, template, new CreatureSpawn { Guid = 900100, Entry = 90, MapId = 0, X = 0, Y = 0, Z = 83.5f },
+            Victim = new Creature(900100, template, new CreatureSpawn { Guid = 900100, Entry = 90, MapId = victimMapId, X = 0, Y = 0, Z = 83.5f },
                 CreatureContent.Empty, new Random(1));
             Victim.Level = creatureLevel;
         }
@@ -157,7 +259,7 @@ public sealed class KillRewardsTests
             Player player = TestWorld.CreatePlayer(guid, x, y, session, mapId);
             player.Level = level;
             World.AddPlayer(player);
-            if (Victim.Map is null && mapId == 0)
+            if (Victim.Map is null && mapId == _victimMapId)
             {
                 player.Map!.AddObject(Victim);
             }

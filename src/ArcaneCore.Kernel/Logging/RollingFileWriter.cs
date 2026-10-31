@@ -129,9 +129,24 @@ public sealed class RollingFileWriter : ILineWriter
             }
         }
 
-        files.Sort(StringComparer.Ordinal);
-        files.Reverse();
+        // Newest first by (date, numeric roll number): an ordinal sort would put roll 1000 below 999 and retention would prune the newest.
+        files.Sort((a, b) => CompareSegments(Path.GetFileName(b), Path.GetFileName(a)));
         return files;
+    }
+
+    private int CompareSegments(string a, string b)
+    {
+        int dateStart = _stem.Length + 1;
+        int byDate = string.CompareOrdinal(a, dateStart, b, dateStart, 8);
+        if (byDate != 0)
+        {
+            return byDate;
+        }
+
+        // Digits only (IsOwnSegment): the longer number after leading zeros is larger, equal lengths compare ordinally.
+        ReadOnlySpan<char> x = a.AsSpan(dateStart + 9, a.Length - dateStart - 9 - _extension.Length).TrimStart('0');
+        ReadOnlySpan<char> y = b.AsSpan(dateStart + 9, b.Length - dateStart - 9 - _extension.Length).TrimStart('0');
+        return x.Length != y.Length ? x.Length.CompareTo(y.Length) : x.CompareTo(y, StringComparison.Ordinal);
     }
 
     private bool IsOwnSegment(string fileName)

@@ -24,6 +24,7 @@ public enum SmartEvent : byte
     TimedEventTriggered = 59,
     Update = 60,
     Link = 61,
+    GossipSelect = 62,
     JustCreated = 63,
     GossipHello = 64,
 }

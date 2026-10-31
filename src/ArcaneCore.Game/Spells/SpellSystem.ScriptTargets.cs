@@ -19,11 +19,14 @@ public sealed partial class SpellSystem
     /// (SPELL_FAILED_BAD_TARGETS); here the effect only gets no unit.
     /// </summary>
     /// <para>
+    /// <paramref name="cone"/> (TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60) fills the caster's frontal cone (<see cref="SpellConstants.ConeArc"/>) instead of a circle.
+    /// </para>
+    /// <para>
     /// TARGET_ENUM_UNITS_SCRIPT_AOE_AT_DEST_LOC (8, Spell.cpp:2405-2470) is the same area fill around the destination (<paramref name="destination"/>)
     /// that keeps the caster: a persistent area aura selects nobody (its dynamic object does), and a summon effect acts on the caster.
     /// </para>
     private List<(Unit Unit, float Multiplier)> SelectScriptTargets(
-        SpellCast cast, SpellEffectInfo effect, int effectIndex, bool nearest, Unit? explicitTarget, (float X, float Y, float Z)? destination = null)
+        SpellCast cast, SpellEffectInfo effect, int effectIndex, bool nearest, Unit? explicitTarget, (float X, float Y, float Z)? destination = null, bool cone = false)
     {
         if (cast.Caster.Map is not { } map) return [];
         IReadOnlyList<SpellStore.ScriptTarget> rows = Store.GetScriptTargets(cast.Spell.Id);
@@ -34,12 +37,15 @@ public sealed partial class SpellSystem
         if (radius <= 0) return [];
         // mangos-classic Spell::CheckScriptTargeting bounds the "anywhere" range (50000) of an entry search to 200 yards.
         if (nearest && radius >= 50_000f) radius = 200f;
-        (float x, float y, float z) = nearest ? (cast.Caster.X, cast.Caster.Y, cast.Caster.Z) : destination ?? SourceCentre(cast, effect);
+        (float x, float y, float z) = nearest || cone ? (cast.Caster.X, cast.Caster.Y, cast.Caster.Z) : destination ?? SourceCentre(cast, effect);
 
         bool Matches(Unit unit)
         {
             if (!nearest && destination is null && ReferenceEquals(unit, cast.Caster)) return false;
-            if (rows.Count == 0) return unit.IsAlive;
+            // TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60 (Spell.cpp:2702-2740): the caster's frontal cone; with no rows a SCRIPT_EFFECT takes every
+            // living unit in it and any other effect the enemies (the AoE damage targets).
+            if (cone && (ReferenceEquals(unit, cast.Caster) || !Combat.MapCombat.HasInArc(cast.Caster, unit, SpellConstants.ConeArc))) return false;
+            if (rows.Count == 0) return unit.IsAlive && (!cone || effect.Effect == SpellEffectName.ScriptEffect || IsEnemy(cast.Caster, unit));
             return rows.Any(row => (row.InverseEffectMask & (1u << effectIndex)) == 0
                 && (row.TargetEntry == 0 && row.Type == ScriptTargetPlayer && unit is Player
                     || unit is Creature creature && creature.Entry == row.TargetEntry)

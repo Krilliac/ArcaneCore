@@ -287,7 +287,11 @@ public sealed class PetCharmFixesTests
         warlock.Level = 30;
         Assert.Equal(SpellCastResult.CastOk, kit.Cast(warlock, SummonImpSpell));
         Creature demon = Assert.Single(kit.Creatures.Creatures, c => c.Guid == warlock.PetGuid);
+        // A demon takes no loyalty or training points from a level-up (GivePetLevel only moves a hunter pet's); seed a non-default value so the
+        // unchanged assertion below can fail if that ever drifts.
+        PetLoyalty.SetTrainingPoints(demon, 7);
         int training = demon.Summon!.Charm!.TrainingPoints;
+        Assert.Equal(7, training);
 
         warlock.Level = 35;
         kit.Service.SynchronizeLevelWithOwner(warlock);

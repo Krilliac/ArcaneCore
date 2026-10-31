@@ -64,13 +64,14 @@ public sealed partial class SpellSystem
                 continue;
             }
 
-            SpellImplicitTarget selector = IsLocationTarget(effect.TargetA) && effect.TargetB != SpellImplicitTarget.None && !IsLocationTarget(effect.TargetB)
-                ? effect.TargetB
-                : effect.TargetA;
+            SpellImplicitTarget selector = SelectorOf(effect);
             // Location32 also prepares the destination when target B selects the units.
             if (selector != effect.TargetA && effect.TargetA == SpellImplicitTarget.LocationUnitMinionPosition
                 && effect.Effect != SpellEffectName.Duel)
                 SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, MathF.PI * 0.25f);
+            // Target B 48/49/50 names a caster-relative place while target A picks the unit (Blink 29209-29211: A caster, B back/left/right).
+            if (selector != effect.TargetB && SpellTargetSelectors.CasterSideAngle(effect.TargetB) is { } sideAngle)
+                SpellTargetSelectors.SelectCasterRelativeLocation(cast, effect, sideAngle);
             // TARGET_UNIT_ENEMY updates the explicit target for later effects too, including
             // UNIT / NONE selectors. Arcane Missiles' caster-selector exception leaves it alone.
             if (cast.MagnetTarget is { } magnet && cast.Targets.Unit == magnet.Guid)
@@ -260,6 +261,11 @@ public sealed partial class SpellSystem
                     u => IsAliveGroupMember(cast, centre, u, raid: false), cone: false);
             }
 
+            case (SpellImplicitTarget)SpellTargetSelectors.UnitsScriptInCone:
+                // vmangos Spell.cpp:2702-2740: a spell-specific selector still wins; otherwise the cone fill of the spell_script_target rows.
+                return _spellTargetSelectors.TryGetValue((spell.Id, selector), out SpellTargetSelectorHandler? coneHandler)
+                    ? coneHandler(this, cast, effect, unitTarget)
+                    : SelectScriptTargets(cast, effect, effectIndex, nearest: false, unitTarget, cone: true);
             case SpellImplicitTarget.EnumUnitsEnemyInCone24:
             case SpellImplicitTarget.EnumUnitsEnemyInCone54:
                 return Area(cast, effect, caster.X, caster.Y, caster.Z, AreaRadius(cast, effect, effectIndex, selector), u => IsEnemy(caster, u), cone: true);

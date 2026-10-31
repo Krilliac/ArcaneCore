@@ -70,6 +70,11 @@ public sealed partial class CreatureMapSystem
         uint respawnDelay = ScheduledRespawnDelay(creature, creature.TakeRespawnDelaySeconds(), scriptedDelay); // a script's one-shot delay first (cmangos SetRespawnDelay(d, true))
         creature.RespawnAtMs = respawnDelay == Creature.RespawnNeverSeconds ? long.MaxValue : _clockMs + (respawnDelay * 1000L);
         SaveRespawnOnDeath(creature);
+        if (creature.Summon is { Kind: SummonKind.Pet } && creature.GetOwner() is Player happyOwner)
+        {
+            Map.Pets?.LoseHappinessOnDeath(creature, happyOwner); // before the save below, so the snapshot carries it
+        }
+
         // Capture the current pet while its corpse still belongs to the map.
         // After decay, the owner's pet GUID no longer resolves to the removed object.
         if (creature.Summon is { Kind: SummonKind.Pet } && creature.GetOwner() is Player owner)

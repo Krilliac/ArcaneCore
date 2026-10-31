@@ -1,6 +1,9 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Instances;
+using ArcaneCore.Game.Instances.Scripts;
+using ArcaneCore.Game.Instances.Scripts.Classic;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Protocol;
@@ -117,5 +120,94 @@ public sealed class EntryRulesTests
         f.ClearAll();
         Assert.False(f.EnterDungeon(gm));
         Assert.Equal((byte)TransferAbortReason.NotFound, Assert.Single(f.Sent(gm, WorldOpcode.SmsgTransferAborted))[0]);
+    }
+
+    private static (Player Inside, Player Outside) RaidInFight(InstanceFixture f, bool gmOutside = false, bool encounter = true, bool combat = true)
+    {
+        Player a = f.AddPlayer(1), b = f.AddPlayer(2, gm: gmOutside);
+        f.RaidGroup(a, b);
+        Assert.True(f.EnterRaid(a));
+        if (encounter)
+        {
+            a.Map!.FindUpdater<InstanceData>()!.SetData(0, EncounterState.InProgress);
+        }
+
+        if (combat)
+        {
+            a.UnitFlags |= UnitFlags.InCombat;
+        }
+
+        f.ClearAll();
+        return (a, b);
+    }
+
+    [Fact]
+    public void RaidEncounterInProgress_WithGroupInCombatInside_RefusesWithZoneInCombat()
+    {
+        using var f = new InstanceFixture();
+        (_, Player b) = RaidInFight(f);
+        Assert.False(f.EnterRaid(b));
+        Assert.Equal((byte)TransferAbortReason.ZoneInCombat, Assert.Single(f.Sent(b, WorldOpcode.SmsgTransferAborted))[0]);
+    }
+
+    [Fact]
+    public void RaidEntry_IsAllowedWhenNobodyInsideIsInCombat()
+    {
+        using var f = new InstanceFixture();
+        (_, Player b) = RaidInFight(f, combat: false);
+        Assert.True(f.EnterRaid(b));
+    }
+
+    [Fact]
+    public void RaidEntry_IsAllowedWhenNoEncounterIsInProgress()
+    {
+        using var f = new InstanceFixture();
+        (_, Player b) = RaidInFight(f, encounter: false);
+        Assert.True(f.EnterRaid(b));
+    }
+
+    [Fact]
+    public void RaidEntry_IsAllowedForAGhost()
+    {
+        using var f = new InstanceFixture();
+        (_, Player b) = RaidInFight(f);
+        b.Combat.DeathState = DeathState.Dead;
+        Assert.True(f.Manager.CanEnter(b, InstanceFixture.Raid));
+        Assert.Empty(f.Sent(b, WorldOpcode.SmsgTransferAborted));
+    }
+
+    [Fact]
+    public void RaidEntry_IsAllowedForAGameMaster()
+    {
+        using var f = new InstanceFixture();
+        (_, Player gm) = RaidInFight(f, gmOutside: true);
+        Assert.True(f.EnterRaid(gm));
+    }
+
+    [Fact]
+    public void DungeonEntry_IsNotRefusedForCombat()
+    {
+        using var f = new InstanceFixture();
+        Player a = f.AddPlayer(1), b = f.AddPlayer(2);
+        f.Party(a, b);
+        Assert.True(f.EnterDungeon(a));
+        a.UnitFlags |= UnitFlags.InCombat;
+        Assert.True(f.EnterDungeon(b));
+    }
+
+    [Fact]
+    public void ZulGurub_EncounterInProgress_CountsInProgressAndSpecialOnly()
+    {
+        using var f = new InstanceFixture();
+        Player a = f.AddPlayer(1);
+        var zg = new ZulGurubInstance(a.Map!);
+        Assert.False(zg.IsEncounterInProgress);
+        zg.SetData(6, EncounterState.Done);
+        Assert.False(zg.IsEncounterInProgress);
+        zg.SetData(6, EncounterState.InProgress);
+        Assert.True(zg.IsEncounterInProgress);
+        zg.SetData(6, EncounterState.NotStarted);
+        zg.SetData(7, EncounterState.Special);
+        Assert.True(zg.IsEncounterInProgress);
     }
 }

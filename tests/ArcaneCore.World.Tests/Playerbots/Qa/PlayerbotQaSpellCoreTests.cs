@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Playerbots.Qa;
@@ -239,6 +240,21 @@ public sealed class PlayerbotQaSpellCoreTests : IDisposable
         Assert.Contains("GitHub:MaxSpellIssuesPerPass must be 0..100", new PlayerbotQaGitHubOptions { MaxSpellIssuesPerPass = 101 }.Validate());
         Assert.Contains("GitHub:MaxSpellIssuesPerDay must be 0..1000", new PlayerbotQaGitHubOptions { MaxSpellIssuesPerDay = -1 }.Validate());
         Assert.Empty(new PlayerbotQaGitHubOptions().Validate());
+    }
+
+    /// <summary>The static gap check names an implicit target the spell system cannot select (59) and stays silent for one it can (48: caster back).</summary>
+    [Fact]
+    public void TheGapAnalyzer_ListsAnUnselectableImplicitTarget_AndNoneForCasterBack()
+    {
+        SpellInfo gap59 = QaSpellKit.Spell(990059, QaSpellKit.Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)59));
+        SpellInfo back48 = QaSpellKit.Spell(990048, QaSpellKit.Effect(SpellEffectName.Dummy, 0, (SpellImplicitTarget)48));
+        var system = new SpellSystem(new SpellStore([gap59, back48], [], []), () => 0);
+        new ScriptEffectModule().Register(system);
+        var analyzer = new PlayerbotQaSpellGapAnalyzer(system);
+
+        QaSpellGap listed = Assert.Single(analyzer.Of(gap59), g => g.Code == QaSpellGaps.Target);
+        Assert.Equal("59 (59)", listed.Detail);
+        Assert.DoesNotContain(analyzer.Of(back48), g => g.Code == QaSpellGaps.Target);
     }
 
     private static Player RealPlayer()

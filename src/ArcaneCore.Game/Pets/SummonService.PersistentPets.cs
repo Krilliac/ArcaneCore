@@ -781,7 +781,9 @@ public sealed partial class SummonService
             {
                 creature.UnitFlags &= ~UnitFlags.PetRename;
             }
-            PetInitializer.InitStatsForLevel(creature, owner, snapshot.Level, Content);
+            // LoadPetFromDB ends with SynchronizeLevelWithOwner (Pet.cpp:413); a HUNTER_PET above its owner drops to the owner's level (Pet.cpp:2353-2356).
+            int loadLevel = owner.Class == Class.Hunter ? Math.Min((int)snapshot.Level, (int)owner.Level) : snapshot.Level;
+            PetInitializer.InitStatsForLevel(creature, owner, loadLevel, Content);
             creature.SetUInt32(UpdateFields.UnitFieldPetnextlevelexp, PetXpForLevel(creature.Level)); // ObjectMgr::GetXPForPetLevel
             creature.SetUInt32(UpdateFields.UnitFieldPetNameTimestamp, snapshot.NameTimestamp);
             creature.SetUInt32(UpdateFields.UnitFieldPetexperience, snapshot.Experience);
@@ -795,6 +797,20 @@ public sealed partial class SummonService
                 reactCharm.ReactState = (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2);
             }
             PetLoyalty.Restore(creature, snapshot.LoyaltyLevel, snapshot.LoyaltyPoints, snapshot.TrainingPoints);
+            if (loadLevel < snapshot.Level && creature.Summon.Charm is { } clampCharm)
+            {
+                // Pet::GivePetLevel (Pet.cpp:1198-1211), run by the clamp after LoadPetFromDB restored XP (Pet.cpp:286) and TP (Pet.cpp:380):
+                // experience restarts and the pet earns loyalty level minus one training points (as PetLoyalty.GivePetLevel does in the world).
+                creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
+                PetLoyalty.SetTrainingPoints(creature, clampCharm.TrainingPoints + (PetLoyalty.Level(creature) - 1));
+                // GivePetLevel -> InitStatsForLevel ends with SetHealth(GetMaxHealth()) and SetPower(POWER_MANA, max) (Pet.cpp:1484-1485), after the restore
+                // (Pet.cpp:367-368), so a living pet comes back full; a dead one (no saved health) stays dead (JUST_DIED, Pet.cpp:415) unless it is being revived.
+                if (snapshot.Health > 0 || revive)
+                {
+                    creature.Health = creature.MaxHealth;
+                    creature.SetUInt32(UpdateFields.UnitFieldPower1, creature.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+                }
+            }
             return new CreatureHome(owner.X, owner.Y, owner.Z, owner.Orientation);
         }, snapshot.PetNumber);
 

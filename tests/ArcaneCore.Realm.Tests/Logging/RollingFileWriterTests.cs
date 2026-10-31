@@ -282,6 +282,41 @@ public sealed class RollingFileWriterTests : IDisposable
         Assert.Equal("line 004\n", ReadShared(kept[0]));
     }
 
+    [Fact]
+    public void RolledSegments_OrderTheSequenceNumerically_PastThreeDigits()
+    {
+        Directory.CreateDirectory(_dir);
+        foreach (string name in new[] { "world-20261004-999.log", "world-20261004-001.log", "world-20261004-1000.log", "world-20261003-1500.log" })
+        {
+            File.WriteAllText(Path.Combine(_dir, name), "x\n");
+        }
+
+        using RollingFileWriter writer = Writer(rollSizeBytes: 10, daily: false, retain: 0);
+        Assert.Equal(
+            ["world-20261004-1000.log", "world-20261004-999.log", "world-20261004-001.log", "world-20261003-1500.log"],
+            writer.RolledSegments().Select(f => Path.GetFileName(f)).ToArray());
+    }
+
+    [Fact]
+    public void Retention_PastRoll999_KeepsTheNewestSegments()
+    {
+        Directory.CreateDirectory(_dir);
+        foreach (string name in new[] { "world-20261004-001.log", "world-20261004-999.log", "world-20261004-1000.log" })
+        {
+            File.WriteAllText(Path.Combine(_dir, name), "x\n");
+        }
+
+        using RollingFileWriter writer = Writer(rollSizeBytes: 10, daily: false, retain: 2);
+        writer.Write(Line(0));
+        writer.Write(Line(1)); // rolls the first line into the next segment, then prunes beyond two
+
+        string[] left = Directory.GetFiles(_dir, "world-*.log").Select(f => Path.GetFileName(f)).Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(2, left.Length);
+        Assert.DoesNotContain("world-20261004-001.log", left);
+        Assert.DoesNotContain("world-20261004-999.log", left);
+        Assert.Contains("world-20261004-1000.log", left);
+    }
+
     /// <summary>
     /// Prune must only touch the writer's own name-yyyyMMdd-NNN segments: an operator's saved copy, or another daemon's world-bots
     /// file next to world.log, matches the glob but is neither counted toward Retain nor deleted.

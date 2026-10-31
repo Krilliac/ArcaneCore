@@ -366,6 +366,12 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        if (!await CharacterRename.MayLogInAsync(session, character).ConfigureAwait(false))
+        {
+            session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+            return;
+        }
+
         RaceInfo? raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false);
         ClassInfo? classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false);
         var home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);

@@ -44,14 +44,22 @@ public sealed partial class Map
         SendToObservers(observers, source, except, opcode, payload);
     }
 
-    /// <summary>Send to every observer but the source and <paramref name="except"/>. Plain HashSet foreach (struct enumerator, no allocation); takes no gate and touches no outbox.</summary>
-    private static void SendToObservers(HashSet<Player> observers, WorldObject source, Player? except, WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    /// <summary>Send to every observer but the source and <paramref name="except"/>. Plain HashSet foreach (struct enumerator, no allocation; a recipient that throws is recorded and skipped); takes no gate and touches no outbox.</summary>
+    private void SendToObservers(HashSet<Player> observers, WorldObject source, Player? except, WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
         foreach (Player other in observers)
         {
             if (!ReferenceEquals(other, source) && !ReferenceEquals(other, except))
             {
-                other.Session.Send(opcode, payload);
+                try
+                {
+                    other.Session.Send(opcode, payload);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    // One recipient's fault must not drop the packet for the observers after it (nor, in a flush, the packets after this one).
+                    _logger.LogFault("map.observer-send", ex, "map {MapId} instance {InstanceId} send to an observer failed; the other observers still get {Opcode}", MapId, InstanceId, opcode);
+                }
             }
         }
     }
@@ -75,15 +83,20 @@ public sealed partial class Map
             return;
         }
 
-        foreach (OutboxPacket packet in _outbox)
+        try
         {
-            if (_observers.TryGetValue(packet.Source.Guid, out HashSet<Player>? observers))
+            foreach (OutboxPacket packet in _outbox)
             {
-                SendToObservers(observers, packet.Source, packet.Except, packet.Opcode, packet.Payload);
+                if (_observers.TryGetValue(packet.Source.Guid, out HashSet<Player>? observers))
+                {
+                    SendToObservers(observers, packet.Source, packet.Except, packet.Opcode, packet.Payload);
+                }
             }
         }
-
-        _outbox.Clear();
+        finally
+        {
+            _outbox.Clear(); // whatever threw, a packet must not fail every later flush as well
+        }
     }
 
     /// <summary>

@@ -166,6 +166,9 @@ public enum SpellAttributesCombat : uint
     /// <summary>SPELL_ATTR_NOT_SHAPESHIFT (bit 16): cannot be cast while shapeshifted.</summary>
     NotShapeshift = 0x00010000,
 
+    /// <summary>SPELL_ATTR_CANCELS_AUTO_ATTACK_COMBAT (bit 20): stops the attack after use (a pet holds such a spell while it has a victim).</summary>
+    CancelsAutoAttackCombat = 0x00100000,
+
     /// <summary>SPELL_ATTR_NO_ACTIVE_DEFENSE (bit 21): cannot be dodged, parried or blocked.</summary>
     NoActiveDefense = 0x00200000,
 

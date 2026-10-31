@@ -326,6 +326,141 @@ public sealed class CharacterRenameTests
         Assert.Equal("Staffname", (await host.Characters.GetByIdAsync(1))!.Name);
     }
 
+    // --- login gate (vmangos Player::LoadFromDB, Player.cpp:14612-14626) ---------------------------
+
+    private const byte LoginFailedCode = 0x41; // CHAR_LOGIN_FAILED
+
+    private static async Task<byte[]> TryLoginAsync(WorldTestClient client, ulong guid)
+    {
+        var login = new PacketWriter(8);
+        login.WriteUInt64(guid);
+        await client.SendAsync(WorldOpcode.CmsgPlayerLogin, login.ToArray());
+        return await client.ReadUntilAsync(WorldOpcode.SmsgCharacterLoginFailed);
+    }
+
+    private static async Task<uint> EnumFlagsAsync(WorldTestClient client, ulong guid)
+    {
+        await client.SendAsync(WorldOpcode.CmsgCharEnum, []);
+        var reader = new PacketReader(await client.ReadUntilAsync(WorldOpcode.SmsgCharEnum));
+        int count = reader.ReadByte();
+        for (int i = 0; i < count; i++)
+        {
+            ulong id = reader.ReadUInt64();
+            reader.ReadCString();
+            for (int b = 0; b < 9; b++)
+            {
+                reader.ReadByte();
+            }
+
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadSingle();
+            reader.ReadSingle();
+            reader.ReadSingle();
+            reader.ReadUInt32();
+            uint flags = reader.ReadUInt32();
+            if (id == guid)
+            {
+                return flags;
+            }
+
+            reader.ReadByte();
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            reader.ReadUInt32();
+            for (int slot = 0; slot < 20; slot++)
+            {
+                reader.ReadUInt32();
+                reader.ReadByte();
+            }
+        }
+
+        throw new InvalidOperationException("character not listed");
+    }
+
+    [Fact]
+    public async Task AFlaggedCharacter_CannotLogIn_AndNeverEntersTheWorld()
+    {
+        // vmangos LoadFromDB returns false for CHARACTER_FLAG_RENAME (Player.cpp:14612-14618) and HandlePlayerLogin kicks (CharacterHandler.cpp:485-487);
+        // here the client gets SMSG_CHARACTER_LOGIN_FAILED (CHAR_LOGIN_FAILED) and stays on the character screen.
+        await using WorldTestHost host = WorldTestHost.Start();
+        (WorldTestClient client, _) = await AccountWithAsync(host, "RENAMEL1", "Flagged");
+        await using (client)
+        {
+            await Flags(host).SetFlagAsync(1, CharacterAtLoginFlags.Rename);
+
+            Assert.Equal(Code(LoginFailedCode), await TryLoginAsync(client, 1));
+            Assert.Equal(0, host.World.OnlinePlayerCount);
+            Assert.Equal(0x4000u, await EnumFlagsAsync(client, 1));
+        }
+    }
+
+    [Fact]
+    public async Task AStoredNameThatFailsTheRules_IsFlagged_RefusedAtLogin_AndLogsInAfterTheRename()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        (WorldTestClient client, _) = await AccountWithAsync(host, "RENAMEL2", "Okname");
+        await using (client)
+        {
+            (await host.Characters.GetByIdAsync(1))!.Name = "Abc1"; // a digit written straight to the store
+
+            Assert.Equal(Code(LoginFailedCode), await TryLoginAsync(client, 1));
+            Assert.Equal(0, host.World.OnlinePlayerCount);
+            Assert.Equal(CharacterAtLoginFlags.Rename, Flags(host).FlagsOf(1));
+            Assert.Equal(0x4000u, await EnumFlagsAsync(client, 1));
+
+            Assert.Equal(0, (await RenameAsync(client, 1, "Fixedname"))[0]);
+            await client.LoginAsync(1);
+            Assert.Equal(1, host.World.OnlinePlayerCount);
+        }
+    }
+
+    [Fact]
+    public async Task AReservedStoredName_RefusesAPlayer_ButStaffMayLogInOnASqlReservedName()
+    {
+        // vmangos Player.cpp:14620-14621: CheckPlayerName fails for everyone, IsReservedName only for SEC_PLAYER.
+        await using WorldTestHost host = WorldTestHost.Start();
+        UseNameCatalog(host);
+        (WorldTestClient player, _) = await AccountWithAsync(host, "RENAMEL3", "Plain");
+        byte[] key = await host.AddAccountAsync("RENAMEL4", AccountSecurity.GameMaster);
+        await using WorldTestClient gm = await host.ConnectAsync();
+        await gm.AuthenticateAsync("RENAMEL4", key);
+        await gm.CreateCharacterAsync("Staffer");
+        await using (player)
+        {
+            (await host.Characters.GetByIdAsync(1))!.Name = "Staffname";
+
+            Assert.Equal(Code(LoginFailedCode), await TryLoginAsync(player, 1));
+            Assert.Equal(CharacterAtLoginFlags.Rename, Flags(host).FlagsOf(1));
+
+            (await host.Characters.GetByIdAsync(2))!.Name = "Staffname"; // reserved_name only
+            await gm.LoginAsync(2); // reserved_name only: staff may play it
+            Assert.Equal(0u, Flags(host).FlagsOf(2));
+        }
+
+        // A DBC-reserved name is refused for staff too.
+        await using WorldTestClient gm2 = await host.ConnectAsync();
+        byte[] key2 = await host.AddAccountAsync("RENAMEL5", AccountSecurity.GameMaster);
+        await gm2.AuthenticateAsync("RENAMEL5", key2);
+        await gm2.CreateCharacterAsync("Staffthree");
+        (await host.Characters.GetByIdAsync(3))!.Name = "Adminx";
+        Assert.Equal(Code(LoginFailedCode), await TryLoginAsync(gm2, 3));
+        Assert.Equal(CharacterAtLoginFlags.Rename, Flags(host).FlagsOf(3));
+    }
+
+    [Fact]
+    public async Task AFailingFlagRead_IsLogged_AndTheLoginGoesOn()
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        (WorldTestClient client, _) = await AccountWithAsync(host, "RENAMEL6", "Outage");
+        await using (client)
+        {
+            Flags(host).FailFlagReads = true;
+            await client.LoginAsync(1);
+            Assert.Equal(1, host.World.OnlinePlayerCount);
+        }
+    }
+
     // --- .character rename ---------------------------------------------------------------
 
     private static string Link(string name) => $"|cffffffff|Hplayer:{name}|h[{name}]|h|r";

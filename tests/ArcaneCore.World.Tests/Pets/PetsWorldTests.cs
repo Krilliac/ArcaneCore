@@ -1,4 +1,11 @@
+using ArcaneCore.Game;
+using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.World.Progression;
+using ArcaneCore.World.Tests.Creatures;
 using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
@@ -101,5 +108,56 @@ public sealed class PetsWorldTests
         ping.WriteUInt32(0);
         await client.SendAsync(WorldOpcode.CmsgPing, ping.ToArray());
         Assert.NotEmpty(await client.ReadUntilAsync(WorldOpcode.SmsgPong));
+    }
+
+    /// <summary>Pins the PetsFeature LevelChanged subscription: a level gained through PlayerProgression reaches a summoned warlock demon.</summary>
+    [Fact]
+    public async Task OwnerLevelUp_ThroughPlayerProgression_CarriesTheSummonedWarlockDemon()
+    {
+        var template = new CreatureTemplate
+        {
+            Entry = PetTestServices.Entry, Name = "Level Follower", MinLevel = 1, MaxLevel = 1,
+            DisplayIds = [903], MinLevelHealth = PetTestServices.Health, MaxLevelHealth = PetTestServices.Health, Faction = 35,
+        };
+        CreatureTestStore.Current.Value = new CreatureTestContext(new CreatureContent([template], [], [], [], []));
+        WorldTestHost prepared;
+        try { prepared = WorldTestHost.Start(); }
+        finally { CreatureTestStore.Current.Value = null; }
+        await using WorldTestHost host = prepared;
+        await using WorldTestClient client = await host.EnterWorldAsync("DEMONLVL", "Demonlvl");
+        const uint summonSpell = 991002;
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Demonlvl")!;
+            player.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Warlock);
+            SpellFeature feature = host.WorldServices.GetRequiredService<SpellFeature>();
+            feature.System.Store = new SpellStore([.. feature.System.Store.All, new SpellInfo
+            {
+                Id = summonSpell, Name = "Summon level follower", Effects = [new SpellEffectInfo
+                {
+                    Effect = SpellEffectName.SummonPet, MiscValue = (int)PetTestServices.Entry, TargetA = SpellImplicitTarget.UnitCaster,
+                    BasePoints = 0, BaseDice = 1, DieSides = 1,
+                }],
+            }], [], []);
+            feature.Spellbook.LearnSpell(player, summonSpell);
+            return true;
+        });
+        await client.CollectAsync();
+        var writer = new PacketWriter();
+        writer.WriteUInt32(summonSpell);
+        writer.WriteUInt16(0);
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, writer.ToArray());
+        await client.ReadUntilAsync(WorldOpcode.SmsgPetSpells);
+
+        await host.OnWorldAsync(() =>
+        {
+            Player player = host.World.FindOnlinePlayer("Demonlvl")!;
+            Creature demon = Assert.IsType<Creature>(player.Map!.FindObject(player.PetGuid));
+            Assert.Equal(player.Level, demon.Level);
+            host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.GiveLevel(player, 12);
+            Assert.Equal(12, (int)player.Level);
+            Assert.Equal(12, (int)demon.Level);
+            return true;
+        });
     }
 }

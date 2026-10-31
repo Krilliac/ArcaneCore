@@ -6930,8 +6930,10 @@ Pets.Names.StrictPetNames = 0
 
 #
 #    Progression.GroupXpDistance
-#        Description: MaxGroupXPDistance (yards, 3D): group members farther from the victim get no
-#                     XP or kill credit.
+#        Description: MaxGroupXPDistance (yards): the reward distance for XP, quest kill credit and
+#                     kill reputation, measured by GroupRewardRange (2D, strict less-than, widened
+#                     by both bounding radii, +150 yards for world bosses, unlimited on raid maps, a
+#                     dead member counts through his corpse).
 #        Type: float
 #        Default: 74
 #        Allowed: a number, '.' is the decimal point

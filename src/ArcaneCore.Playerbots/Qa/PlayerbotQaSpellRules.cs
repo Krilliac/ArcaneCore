@@ -21,7 +21,7 @@ internal static class QaSpellGaps
     /// <summary>A SCRIPT_EFFECT with no script-effect or spell script, on a spell with no other working effect: the spell does nothing.</summary>
     internal const string Script = "script";
 
-    /// <summary>An implicit target type the spell system cannot select (seen only while a bot casts it).</summary>
+    /// <summary>An implicit target type the spell system cannot select (<see cref="SpellSystem.CanSelectImplicitTarget"/>; also seen while a bot casts it).</summary>
     internal const string Target = "target";
 
     /// <summary>

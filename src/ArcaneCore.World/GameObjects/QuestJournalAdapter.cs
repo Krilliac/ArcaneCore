@@ -51,7 +51,9 @@ internal sealed class QuestJournalAdapter(IServiceProvider services, WorldRuntim
             return null;
         }
 
-        return context.Groups.GetGroup(player.Guid)?.IsRaid == true;
+        // vmangos Player::HasQuestForItem (Player.cpp:14287-14289) hides non-raid quest items from raid members only
+        // when !InBattleGround(); a battleground participant sits in the per-team battleground raid, so it is exempt.
+        return context.Groups.GetGroup(player.Guid) is { IsRaid: true, IsBattlegroundGroup: false };
     }
     public bool IsQuestIncomplete(Player player, uint questId)
         => Quests?.StateOf(player) is { Loaded: true } state && state.Quests.GetStatus(questId) == QuestStatus.Incomplete;

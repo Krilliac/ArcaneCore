@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Totems;
 
@@ -135,7 +136,7 @@ public static class KillRewards
         }
 
         var recipients = new List<Player>(group.Members.Count);
-        float maxSq = distance * distance;
+        var range = new GroupRewardOptions { Distance = distance };
         foreach (ObjectGuid guid in group.Members)
         {
             Player? member = guid == actor.Guid ? actor : source.Map?.FindPlayer(guid);
@@ -144,10 +145,7 @@ public static class KillRewards
                 continue;
             }
 
-            float dx = member.X - source.X;
-            float dy = member.Y - source.Y;
-            float dz = member.Z - source.Z;
-            if ((dx * dx) + (dy * dy) + (dz * dz) <= maxSq)
+            if (GroupRewardRange.IsAtGroupRewardDistance(member, source, range))
             {
                 recipients.Add(member);
             }

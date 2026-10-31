@@ -43,6 +43,7 @@ public sealed class PetTeleportScenarioTests
             await context.StepAsync("make the bot a hunter", () => context.ReadAsync(() =>
             {
                 hunterPlayer.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+                hunterPlayer.Level = 5; // the pet's level: a hunter pet loaded above its owner drops to the owner's level at full health
                 return hunterPlayer.Class;
             }));
 

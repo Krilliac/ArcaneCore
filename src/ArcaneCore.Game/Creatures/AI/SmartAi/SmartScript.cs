@@ -249,20 +249,20 @@ public sealed class SmartScript
     /// AzerothCore ProcessEventsFor: LINK rows are skipped here (they run from the row that links them, unchecked); every other row of the event
     /// type is condition-checked before it is processed (SmartScript.cpp:157-180).
     /// </summary>
-    public void ProcessEventsFor(SmartEvent type, Unit? invoker = null, uint var0 = 0, SpellInfo? spell = null)
+    public void ProcessEventsFor(SmartEvent type, Unit? invoker = null, uint var0 = 0, SpellInfo? spell = null, uint var1 = 0)
     {
         if (type == SmartEvent.Link) return;
         foreach (SmartHolder e in _events.ToArray())
         {
             if (e.Event != type || !ConditionsHold(e, invoker)) continue;
-            ProcessEvent(e, invoker, var0, spell);
+            ProcessEvent(e, invoker, var0, spell, var1);
         }
 
         foreach (SmartHolder e in _stored.ToArray())
-            if (e.Event == type) ProcessEvent(e, invoker, var0, spell);
+            if (e.Event == type) ProcessEvent(e, invoker, var0, spell, var1);
     }
 
-    private void ProcessEvent(SmartHolder e, Unit? invoker, uint var0 = 0, SpellInfo? spell = null)
+    private void ProcessEvent(SmartHolder e, Unit? invoker, uint var0 = 0, SpellInfo? spell = null, uint var1 = 0)
     {
         try
         {
@@ -375,6 +375,11 @@ public sealed class SmartScript
                 case SmartEvent.AreaTriggerOnTrigger:
                     // SmartScript.cpp:4743-4749: param1 0 matches any trigger, else the trigger id (var0).
                     if (r.EventParam1 == 0 || r.EventParam1 == var0) ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.GossipSelect:
+                    // SmartScript.cpp:4780-4787: param1 the gossip menu id (var0) and param2 the option id (var1) must both match.
+                    if (r.EventParam1 != var0 || r.EventParam2 != var1) return;
+                    ProcessAction(e, invoker);
                     break;
                 case SmartEvent.GossipHello:
                     // SmartScript.cpp:4499-4520: filter 0 always, 1 not when var0 (report use) is set, 2 only then. var0 is 0 on 1.12.

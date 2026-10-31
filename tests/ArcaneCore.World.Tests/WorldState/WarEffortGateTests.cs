@@ -21,8 +21,14 @@ public sealed class WarEffortGateTests
         public WarEffortSnapshot State { get; set; } = WarEffortSnapshot.Disabled;
         public Task<WarEffortSnapshot> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(State);
 
+        public bool FailFirstPhaseWrite { get; set; }
+        public int PhaseAttempts { get; private set; }
+        public int PhaseWrites { get; private set; }
+
         public Task SetPhaseAsync(WarEffortPhase phase, long phaseEndsAtUnix, CancellationToken cancellationToken = default)
         {
+            if (FailFirstPhaseWrite && PhaseAttempts++ == 0) throw new InvalidOperationException("injected phase write failure");
+            PhaseWrites++;
             State = State with { Phase = phase, PhaseEndsAtUnix = phaseEndsAtUnix };
             return Task.CompletedTask;
         }
@@ -136,6 +142,33 @@ public sealed class WarEffortGateTests
         late.War.UtcNowUnix = () => Rung + WarEffortFeature.ChampionAnnounceWindowSeconds + 1;
         late.World.RunTick(5_000);
         Assert.Null(late.War.LastChampionAnnouncement);
+    }
+
+    [Fact]
+    public async Task StopWritesAQueuedPhaseWhoseInFlightWriteFailed()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        rig.Store.FailFirstPhaseWrite = true;
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false); // launches the write, which throws
+        Assert.Equal(0, rig.Store.PhaseWrites);
+        Assert.Equal(WarEffortPhase.Disabled, rig.Store.State.Phase);
+
+        await rig.War.StopAsync(); // shutdown before the next five-second refresh relaunches it
+
+        Assert.Equal(1, rig.Store.PhaseWrites);
+        Assert.Equal(WarEffortPhase.Gathering, rig.Store.State.Phase);
+    }
+
+    [Fact]
+    public async Task StopDoesNotRewriteAPhaseTheInFlightJobAlreadyPersisted()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false);
+        Assert.Equal(1, rig.Store.PhaseWrites);
+
+        await rig.War.StopAsync();
+
+        Assert.Equal(1, rig.Store.PhaseWrites);
     }
 
     private sealed class Rig : IDisposable

@@ -4,6 +4,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
+using ArcaneCore.Kernel.WorldData.Pets;
 using System.Collections.Concurrent;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -313,5 +314,34 @@ public sealed class PersistentPetTests
         Creature pet = Assert.IsType<Creature>(kit.Service.RestoreCurrentPet(owner, snapshot));
         Assert.Contains(kit.Spells.System.GetActiveCooldowns(pet), c => c.SpellId == PetTestKit.PetBiteSpell);
         Assert.DoesNotContain(kit.Spells.System.GetActiveCooldowns(pet), c => c.SpellId == 999_999);
+    }
+
+    // Pet.cpp:413 (LoadPetFromDB) -> SynchronizeLevelWithOwner (Pet.cpp:2353-2356): a hunter pet saved above its owner loads at the owner's level.
+    [Theory]
+    [InlineData(25, 20, 20u, 200u, 200u, 50u, 50u, 0u, 12)]
+    [InlineData(20, 20, 20u, 200u, 90u, 50u, 7u, 500u, 10)]
+    [InlineData(5, 20, 5u, 100u, 90u, 10u, 7u, 500u, 10)]
+    public void CachedRestore_ClampsAHunterPetToTheOwnersLevel(byte savedLevel, byte ownerLevel, uint expectedLevel, uint expectedMaxHealth, uint expectedHealth, uint expectedMaxMana, uint expectedMana, uint expectedExperience, int expectedTrainingPoints)
+    {
+        var content = new PetContent(
+            [
+                new PetLevelStats(PetTestKit.PetEntry, 1, 50, 5, 5, 1, 2, 3, 4, 5, 6, 7),
+                new PetLevelStats(PetTestKit.PetEntry, 5, 100, 10, 5, 1, 2, 3, 4, 5, 6, 7),
+                new PetLevelStats(PetTestKit.PetEntry, 20, 200, 50, 5, 1, 2, 3, 4, 5, 6, 7),
+                new PetLevelStats(PetTestKit.PetEntry, 25, 300, 60, 5, 1, 2, 3, 4, 5, 6, 7),
+            ], []);
+        using PetTestKit kit = new(petContent: content);
+        (Player owner, _) = kit.AddPlayer(1);
+        owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
+        owner.Level = ownerLevel;
+        var snapshot = new PersistentPetSnapshot(1, 88, PetTestKit.PetEntry, savedLevel, 500, 90, 7, 0, 1, [], [], LoyaltyLevel: 3, TrainingPoints: 10);
+        Creature pet = Assert.IsType<Creature>(kit.Service.RestoreCurrentPet(owner, snapshot));
+        Assert.Equal(expectedLevel, (uint)pet.Level);
+        Assert.Equal(expectedMaxHealth, pet.MaxHealth);
+        Assert.Equal(expectedHealth, pet.Health);
+        Assert.Equal(expectedMaxMana, pet.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+        Assert.Equal(expectedMana, pet.GetUInt32(UpdateFields.UnitFieldPower1));
+        Assert.Equal(expectedExperience, pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
+        Assert.Equal(expectedTrainingPoints, pet.Summon!.Charm!.TrainingPoints);
     }
 }

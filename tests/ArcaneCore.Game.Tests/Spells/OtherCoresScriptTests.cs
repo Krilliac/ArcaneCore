@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -262,17 +263,143 @@ public sealed class OtherCoresScriptTests
     }
 
     [Fact]
-    public void TriggerTeslas_StripsAurasThenCastsShockOverload()
+    public void TriggerTeslas_StripsAurasThenCastsShockOverload_OnATeslaCoil()
+    {
+        using SpellTestKit kit = Kit(Dummy(28359), Marker(28159), Marker(90020));
+        kit.AddPlayer(1); // a map with no player does not update, so the spawn would never appear
+        Creature coil = MakeCreature(kit, 16218);
+        Assert.True(kit.System.AddAura(coil, 90020));
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(coil, 28359, SpellCastTargets.ForSelf(), triggered: true));
+        FlushSpellBatch(kit); // Shock Overload is cast not triggered, so batching holds it
+
+        Assert.False(kit.System.HasAura(coil, 90020));
+        Assert.True(kit.System.HasAura(coil, 28159));
+    }
+
+    [Fact]
+    public void TriggerTeslas_LeavesANonCoilTargetAlone()
     {
         using SpellTestKit kit = Kit(Dummy(28359), Marker(28159), Marker(90020));
         (Player player, _) = kit.AddPlayer(1);
+        Creature wolf = MakeCreature(kit);
         Assert.True(kit.System.AddAura(player, 90020));
+        Assert.True(kit.System.AddAura(wolf, 90020));
 
         CastSelf(kit, player, 28359);
-        FlushSpellBatch(kit); // Shock Overload is cast not triggered, so batching holds it
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(wolf, 28359, SpellCastTargets.ForSelf(), triggered: true));
+        FlushSpellBatch(kit);
 
-        Assert.False(kit.System.HasAura(player, 90020));
-        Assert.True(kit.System.HasAura(player, 28159));
+        Assert.True(kit.System.HasAura(player, 90020));
+        Assert.True(kit.System.HasAura(wolf, 90020));
+        Assert.False(kit.System.HasAura(wolf, 28159));
+    }
+
+    private static SpellTestKit KitWithTargets(SpellStore.ScriptTarget[] targets, params SpellInfo[] spells)
+    {
+        SpellTestKit kit = Kit(spells);
+        kit.System.Store = new SpellStore([.. SpellTestKit.DefaultSpells(), .. spells], [(1, 1, SpellTestKit.Passive), (1, 1, SpellTestKit.InstantHeal)], [], targets);
+        return kit;
+    }
+
+    [Theory]
+    [InlineData(17678u)]
+    [InlineData(26585u)]
+    [InlineData(29336u)]
+    public void DespawnSpells_KeepACreatureNoScriptTargetRowNamesAlive(uint spell)
+    {
+        using SpellTestKit noRows = KitWithTargets([], ScriptEffect(spell));
+        noRows.AddPlayer(1);
+        Creature unlisted = MakeCreature(noRows);
+        Assert.Equal(SpellCastResult.CastOk, noRows.System.CastSpell(unlisted, spell, SpellCastTargets.ForSelf(), triggered: true));
+        noRows.World.RunTick(5000);
+        Assert.True(unlisted.IsAlive);
+
+        using SpellTestKit otherRow = KitWithTargets([new SpellStore.ScriptTarget(spell, 1, 99999, 0)], ScriptEffect(spell));
+        otherRow.AddPlayer(1);
+        Creature other = MakeCreature(otherRow);
+        Assert.Equal(SpellCastResult.CastOk, otherRow.System.CastSpell(other, spell, SpellCastTargets.ForSelf(), triggered: true));
+        otherRow.World.RunTick(5000);
+        Assert.True(other.IsAlive);
+    }
+
+    [Theory]
+    [InlineData(26585u)]
+    [InlineData(29336u)]
+    public void DespawnSpells_DespawnTheCreatureTheScriptTargetRowNames(uint spell)
+    {
+        using SpellTestKit kit = KitWithTargets([new SpellStore.ScriptTarget(spell, 1, CreatureTestKit.WolfEntry, 0)], ScriptEffect(spell));
+        kit.AddPlayer(1);
+        Creature wolf = MakeCreature(kit);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(wolf, spell, SpellCastTargets.ForSelf(), triggered: true));
+
+        Assert.False(wolf.IsAlive);
+    }
+
+    /// <summary>Lets a player aim an enemy-selector spell at a creature in the kit, which has no factions.</summary>
+    private sealed class EveryoneHostile : ISpellTargetRelations
+    {
+        public bool IsHostile(Unit caster, Unit target) => true;
+
+        public bool IsFriendly(Unit caster, Unit target) => false;
+    }
+
+    [Fact]
+    public void Despawn26264_DespawnsTheCasterWithNoScriptTargetRow()
+    {
+        using SpellTestKit kit = Kit(ScriptEffect(26264));
+        kit.AddPlayer(1);
+        Creature wolf = MakeCreature(kit);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(wolf, 26264, SpellCastTargets.ForSelf(), triggered: true));
+
+        Assert.False(wolf.IsAlive);
+    }
+
+    [Fact]
+    public void Despawn26264_KeepsACreatureThatIsNotTheCaster()
+    {
+        SpellInfo spell = Instant(Spell(26264, Effect(SpellEffectName.ScriptEffect, 0, SpellImplicitTarget.UnitEnemy)));
+        using SpellTestKit kit = Kit(spell);
+        kit.System.Units = new MapObjectResolver();
+        kit.System.Relations = new EveryoneHostile();
+        (Player player, _) = kit.AddPlayer(1);
+        Creature wolf = MakeCreature(kit);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, 26264, SpellCastTargets.ForUnit(wolf.Guid), triggered: true));
+        kit.World.RunTick(5000);
+
+        Assert.True(wolf.IsAlive);
+    }
+
+    [Fact]
+    public void KodoKombobulatorDespawn_KeepsANonKodoCreatureAlive()
+    {
+        using SpellTestKit kit = Kit(ScriptEffect(18269));
+        kit.AddPlayer(1);
+        Creature wolf = MakeCreature(kit);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(wolf, 18269, SpellCastTargets.ForSelf(), triggered: true));
+        kit.World.RunTick(5000);
+
+        Assert.True(wolf.IsAlive);
+    }
+
+    [Fact]
+    public void HeiganTeleportTrigger_HitsAtMostThreeOfFiveEligiblePlayers()
+    {
+        SpellInfo trigger = Instant(Spell(29499, Effect(SpellEffectName.ScriptEffect, 0, SpellImplicitTarget.LocationCasterDest,
+            targetB: SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc) with { Radius = 50f }));
+        using SpellTestKit kit = Kit(trigger, Marker(29273));
+        (Player caster, _) = kit.AddPlayer(1);
+        Player[] players = [caster, .. Enumerable.Range(2, 5).Select(i => kit.AddPlayer((uint)i, i, 0).Player)];
+
+        CastSelf(kit, caster, 29499);
+
+        int hit = players.Count(p => kit.System.HasAura(p, 29273));
+        Assert.Equal(3, hit);
+        Assert.Equal(3u, kit.System.MaxTargetsOf(trigger));
     }
 
     [Fact]
@@ -302,14 +429,14 @@ public sealed class OtherCoresScriptTests
     }
 
     /// <summary>A wolf spawned into the kit's map (threat needs both units in the same map).</summary>
-    private static Creature MakeCreature(SpellTestKit kit)
+    private static Creature MakeCreature(SpellTestKit kit, uint entry = CreatureTestKit.WolfEntry)
     {
-        CreatureTemplate template = CreatureTestKit.Template(CreatureTestKit.WolfEntry, t =>
+        CreatureTemplate template = CreatureTestKit.Template(entry, t =>
         {
             t.MinLevelHealth = 100;
             t.MaxLevelHealth = 100;
         });
-        CreatureSpawn spawn = CreatureTestKit.Spawn(77, CreatureTestKit.WolfEntry, 3, 0);
+        CreatureSpawn spawn = CreatureTestKit.Spawn(77, entry, 3, 0);
         var system = new CreatureMapSystem(kit.World.GetMap(0), CreatureTestKit.Content([template], [spawn]), null, random: new Random(1));
         kit.World.GetMap(0).AddUpdater(system);
         kit.World.RunTick(50);
