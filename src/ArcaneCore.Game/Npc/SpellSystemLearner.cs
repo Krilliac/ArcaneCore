@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Npc;
 /// Player::GetTrainerSpellState, a skill a SkillRaceClassInfo row marks not trainable or above the player's
 /// level is not offered, and buying casts the teaching spell through the spell system so its effects
 /// (LEARN_SPELL, SKILL_STEP) run. Without it every skill value reads 0 and no primary-profession points exist.
-/// The spell_chain req_spell column is read from <see cref="SpellChainRequirements"/> (the two Greater Blessings); the talent-dependent ranks are gated through prev_spell, which
+/// The spell_chain req_spell column is read from <see cref="SpellChainRequirements"/> (the 14 reference rows: Greater Blessings and Nature's Grasp); the talent-dependent ranks are gated through prev_spell, which
 /// <see cref="TalentAbilityRankLinks"/> merges into the rank chains.
 /// </remarks>
 /// <param name="spells">The spell system (resolved lazily: features attach in name order).</param>

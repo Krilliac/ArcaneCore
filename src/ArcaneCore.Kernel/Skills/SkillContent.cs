@@ -131,16 +131,17 @@ public static class TalentAbilityRankLinks
         (20116, 26573), (20922, 20116), (20923, 20922), (20924, 20923),
         // Nature's Grasp (the DBC only links rank 1 -> 2)
         (16811, 16810), (16812, 16811), (16813, 16812), (17329, 16813),
-        // Mana Tide Totem. Neither reference chains these ranks; retail trains rank 2 and 3 only after rank 1, so this follows retail beyond the references.
+        // Mana Tide Totem (vmangos-db spell_chain: (17354,16190,16190,2), (17359,17354,16190,3))
         (17354, 16190), (17359, 17354),
     ];
 }
 
 /// <summary>
-/// The spell_chain req_spell column for the trainer-sold spells that carry one (mangos-classic sql/base/mangos.sql spell_chain rows
-/// <c>(25898,0,25898,1,20217)</c> and <c>(25899,0,25899,1,20914)</c>): Greater Blessing of Kings needs Blessing of Kings and Greater
-/// Blessing of Sanctuary needs Blessing of Sanctuary rank 4. Trainers refuse the spell until the player knows the required spell
-/// (Player::GetTrainerSpellState) and send it as the first chain node of the trainer list. No other 1.12 row has a req_spell.
+/// The spell_chain req_spell column for the trainer-sold spells that carry one: the 14 non-zero req_spell rows of mangos-classic
+/// sql/base/mangos.sql spell_chain (identical in vmangos-db for build 5875). Greater Blessing of Kings (25898) needs Blessing of Kings,
+/// Greater Blessing of Sanctuary (25899) needs Blessing of Sanctuary rank 4, the other Greater Blessings, Nature's Grasp ranks 1-6 need
+/// the matching Entangling Roots rank. Trainers refuse the spell until the player knows the required spell in addition to prev_spell
+/// (Player::GetTrainerSpellState; vmangos Player.cpp:4267) and send it as the first chain node of the trainer list.
 /// </summary>
 public static class SpellChainRequirements
 {
@@ -148,6 +149,18 @@ public static class SpellChainRequirements
     {
         [25898] = 20217,
         [25899] = 20914,
+        [25782] = 19838,
+        [25916] = 25291,
+        [25895] = 1038,
+        [25890] = 19979,
+        [25894] = 19854,
+        [25918] = 25290,
+        [16689] = 339,
+        [16810] = 1062,
+        [16811] = 5195,
+        [16812] = 5196,
+        [16813] = 9852,
+        [17329] = 9853,
     }.ToFrozenDictionary();
 
     /// <summary>The spell the player must know before <paramref name="spellId"/> is trainable, 0 when none.</summary>

@@ -191,11 +191,11 @@ public sealed class TalentRankChainTrainerTests
     }
 
     [Theory]
-    [InlineData(20116u, 26573u, new[] { 26573u, 20116u, 20922u, 20923u, 20924u })]
-    [InlineData(16811u, 16810u, new[] { 16810u, 16689u, 16811u, 16812u, 16813u, 17329u })]
-    [InlineData(27681u, 14752u, new[] { 14752u, 14818u, 27681u })]
-    [InlineData(17354u, 16190u, new[] { 16190u, 17354u, 17359u })]
-    public void TrainerSellsTalentAbilityRankOnlyAfterTheTalentSpell(uint rank, uint required, uint[] abilities)
+    [InlineData(20116u, new[] { 26573u }, new[] { 26573u, 20116u, 20922u, 20923u, 20924u })]
+    [InlineData(16811u, new[] { 16810u, 5195u }, new[] { 16810u, 16689u, 16811u, 16812u, 16813u, 17329u, 5195u })]
+    [InlineData(27681u, new[] { 14752u }, new[] { 14752u, 14818u, 27681u })]
+    [InlineData(17354u, new[] { 16190u }, new[] { 16190u, 17354u, 17359u })]
+    public void TrainerSellsTalentAbilityRankOnlyAfterTheTalentSpell(uint rank, uint[] required, uint[] abilities)
     {
         using var rig = new ChainRig(rank, abilities);
         Assert.Equal((byte)TrainerSpellState.Red, rig.State());
@@ -203,7 +203,14 @@ public sealed class TalentRankChainTrainerTests
         Assert.False(rig.Book.HasSpell(rig.Kit.Player, rank));
         Assert.Equal(100u, rig.Kit.Player.Money);
 
-        rig.Know(required);
+        // prev_spell and req_spell must both be known (Player::GetTrainerSpellState); every one but the last stays Red.
+        for (int i = 0; i < required.Length - 1; i++)
+        {
+            rig.Know(required[i]);
+            Assert.Equal((byte)TrainerSpellState.Red, rig.State());
+        }
+
+        rig.Know(required[^1]);
         Assert.Equal((byte)TrainerSpellState.Green, rig.State());
         rig.Buy();
         Assert.True(rig.Book.HasSpell(rig.Kit.Player, rank));
@@ -212,6 +219,18 @@ public sealed class TalentRankChainTrainerTests
     [Theory]
     [InlineData(25898u, 20217u)]
     [InlineData(25899u, 20914u)]
+    [InlineData(25782u, 19838u)]
+    [InlineData(25916u, 25291u)]
+    [InlineData(25895u, 1038u)]
+    [InlineData(25890u, 19979u)]
+    [InlineData(25894u, 19854u)]
+    [InlineData(25918u, 25290u)]
+    [InlineData(16689u, 339u)]
+    [InlineData(16810u, 1062u)]
+    [InlineData(16811u, 5195u)]
+    [InlineData(16812u, 5196u)]
+    [InlineData(16813u, 9852u)]
+    [InlineData(17329u, 9853u)]
     public void TrainerHonoursSpellChainReqSpell(uint spell, uint required)
     {
         using var rig = new ChainRig(spell, spell);
