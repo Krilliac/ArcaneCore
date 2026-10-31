@@ -296,7 +296,7 @@ public sealed class PlayerbotBattlegroundCoordinator(IServiceProvider services, 
 
     /// <summary>
     /// Test hook, not for production code: make the next tick scan the free bots (world thread), so a test can line an event up with a scan
-    /// (PlayerbotBattlegroundWorldTests.PartyBot_OfARealPlayer_BesideTheBattlemaster_NeverQueues). The coordinator itself never calls it.
+    /// (PlayerbotBattlegroundRealPlayerWorldTests.PartyBot_OfARealPlayer_BesideTheBattlemaster_NeverQueues). The coordinator itself never calls it.
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]
     internal void ScanAtNextTick() => _scanElapsed = ScanMs;
