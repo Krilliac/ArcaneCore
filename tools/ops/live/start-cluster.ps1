@@ -11,12 +11,13 @@
       parameters; no configuration file is edited):
         realm    Role realm,    StartOrder 0   ArcaneCore.Realm
         world    Role combined, StartOrder 1   ArcaneCore.World, RealmId -RealmId
+      Every world child (with or without -Gateway) is given Cluster:Fencing:Enabled=true: an unfenced world skips the durable id allocator
+      priming and collides on in-memory id counters once a second world exists.
       Each child runs from <LiveHome>\bin in the profile directory with its own log (logs\<name>.debug.*), Console = -ChildConsole
       (Merged by default: the supervisor window shows the children's output prefixed [realm], [world], ...), and a hang timeout of
       -HangTimeoutSeconds. MinClusterProcesses defaults to the number of children.
     - With -Gateway: also ArcaneCore.Gateway (Role gateway, StartOrder 2; client port -GatewayPort), and the world child becomes a gateway
-      worker (Role worker; Cluster:Worker:Enabled, BindAddress -WorkerAddress, Port -WorkerPort, Cluster:Fencing:Enabled, which worker mode
-      requires; docs/areas/gateway.md). The realm list row must name the gateway port (SQL; this script does not touch databases).
+      worker (Role worker; Cluster:Worker:Enabled, BindAddress -WorkerAddress, Port -WorkerPort; docs/areas/gateway.md). The realm list row must name the gateway port (SQL; this script does not touch databases).
       -MapWorker additionally sets Cluster:Node:Role=MapWorker on that world (realm-wide singletons then run only while it holds their
       lease; docs/areas/gateway.md, "Node role and realm authority leases").
       The link secret (at least 16 characters) comes from -LinkSecret or the ARCANECORE_CLUSTER_LINK_SECRET environment variable, never a
@@ -188,11 +189,12 @@ $realmArgs = @()
 if ($PSBoundParameters.ContainsKey('AuthPort')) { $realmArgs += "--Auth:Port=$AuthPort" }
 Add-Child 'realm' 'realm' 'ArcaneCore.Realm.exe' 0 $realmArgs 0
 
-$worldArgs = @('--Cluster:Supervisor:Enabled=false', '--Ops:Watchdog:Heartbeat:Mode=File', "--Ops:Watchdog:Heartbeat:FilePath=$HeartbeatPath")
+$worldArgs = @('--Cluster:Supervisor:Enabled=false', '--Ops:Watchdog:Heartbeat:Mode=File', "--Ops:Watchdog:Heartbeat:FilePath=$HeartbeatPath",
+    '--Cluster:Fencing:Enabled=true')
 if ($PSBoundParameters.ContainsKey('WorldPort')) { $worldArgs += "--World:Port=$WorldPort" }
 if ($Gateway) {
     $worldArgs += @('--Cluster:Worker:Enabled=true', "--Cluster:Worker:BindAddress=$WorkerAddress", "--Cluster:Worker:Port=$WorkerPort",
-        "--Cluster:Worker:RealmId=$RealmId", '--Cluster:Fencing:Enabled=true')
+        "--Cluster:Worker:RealmId=$RealmId")
     if ($MapWorker) { $worldArgs += '--Cluster:Node:Role=MapWorker' }
 }
 Add-Child 'world' $(if ($Gateway) { 'worker' } else { 'combined' }) 'ArcaneCore.World.exe' 1 $worldArgs $RealmId
