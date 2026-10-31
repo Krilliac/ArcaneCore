@@ -7,6 +7,8 @@ namespace ArcaneCore.Game.Spells;
 /// implementation code, effect possible used as marker or client inform"). The 1.12 Spell.dbc has one user, Evade (DND) (108).</item>
 /// <item>SPELL_EFFECT_NOSTALRIUS (131; vmangos <c>EffectNostalrius</c>, SpellEffects.cpp:5916-5919, which only writes a debug log line). No 1.12 Spell.dbc
 /// spell uses it.</item>
+/// <item>SPELL_EFFECT_122 (<see cref="SpellEffectName.Unk122"/>; vmangos <c>EffectUnused</c>, SpellEffects.cpp:182). Silithyst Cap
+/// Reward (31247) carries it, and its reputation is given by its script (<c>Generic/Researched/InferredSpellScripts.cs</c>); the effect itself does nothing.</item>
 /// </list>
 /// SPELL_EFFECT_126 and 127 are <c>EffectUnused</c> and 132 and 133 are past the end of vmangos's table, so they stay unregistered.
 /// </summary>
@@ -17,5 +19,6 @@ public sealed class MarkerEffects : ISpellHandlerModule
         ArgumentNullException.ThrowIfNull(system);
         system.RegisterEffect(SpellEffectName.Evade, static _ => { });
         system.RegisterEffect(SpellEffectName.Nostalrius, static _ => { });
+        system.RegisterEffect(SpellEffectName.Unk122, static _ => { });
     }
 }

@@ -1,5 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
+using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -70,5 +72,88 @@ public sealed partial class SpellSystem
 
         CapTargets(units, MaxTargetsOf(cast.Spell));
         return [.. units.Select(unit => (unit, 1f))];
+    }
+
+    /// <summary>Whether an effect of <paramref name="spell"/> selects with target 46 through the generic selector while the spell has no spell_script_target row.</summary>
+    private bool HasScriptLocationTargetWithoutRows(SpellInfo spell)
+    {
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (!effect.IsEmpty && SelectorOf(effect) == SpellImplicitTarget.LocationScriptNearCaster
+                && !_spellTargetSelectors.ContainsKey((spell.Id, SpellImplicitTarget.LocationScriptNearCaster))
+                && Store.GetScriptTargets(spell.Id).Count == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// TARGET_LOCATION_SCRIPT_NEAR_CASTER (46; vmangos Spell::CheckScriptTargeting, Spell.cpp:446-600, and Spell::SetTargetMap :2848-2860): the
+    /// object of the nearest spell_script_target row within the effect radius (else the spell's maximum range, 200 yd for an "anywhere" range)
+    /// becomes the destination. Row type 0 is a game object, 1 a living creature, 2 a dead creature, 3 a player; a valid explicit unit is preferred
+    /// to the nearest one. The found object is also a target of the effect only when target A is 46 and the effect is not a persistent area aura
+    /// (Spell.cpp:566-585): a unit is the effect's unit, a game object is its object target with the caster as carrier. Nothing within range leaves
+    /// the destination alone and selects nothing; a spell with no rows at all is refused at cast time (<c>CheckCast</c>, SPELL_FAILED_BAD_TARGETS).
+    /// </summary>
+    private List<(Unit Unit, float Multiplier)> SelectScriptLocationTarget(SpellCast cast, SpellEffectInfo effect, int effectIndex, Unit? explicitTarget)
+    {
+        Unit caster = cast.Caster;
+        if (caster.Map is not { } map) return [];
+        SpellStore.ScriptTarget[] rows = [.. Store.GetScriptTargets(cast.Spell.Id).Where(row => (row.InverseEffectMask & (1u << effectIndex)) == 0)];
+        if (rows.Length == 0) return [];
+
+        float radius = TargetMapRadius(cast.Spell, effect, effectIndex);
+        if (radius <= 0) radius = cast.Spell.Range.Max;
+        if (radius >= 50_000f) radius = 200f; // CheckScriptTargeting bounds the "anywhere" range of an entry search
+        if (radius <= 0) return [];
+
+        float DistanceSquared(WorldObject target)
+        {
+            float dx = target.X - caster.X, dy = target.Y - caster.Y, dz = target.Z - caster.Z;
+            return dx * dx + dy * dy + dz * dz;
+        }
+
+        bool UnitListed(Unit unit) => rows.Any(row => row.Type switch
+        {
+            ScriptTargetCreature => unit is Creature creature && unit.IsAlive && creature.Entry == row.TargetEntry,
+            ScriptTargetDead => unit is Creature dead && !unit.IsAlive && dead.Entry == row.TargetEntry,
+            ScriptTargetPlayer => unit is Player && unit.IsAlive && row.TargetEntry == 0,
+            _ => false,
+        });
+
+        Unit? chosenUnit = explicitTarget is not null && UnitListed(explicitTarget) && DistanceSquared(explicitTarget) <= radius * radius
+            ? explicitTarget
+            : UnitsInRadius(map, caster.X, caster.Y, caster.Z, radius).Where(UnitListed)
+                .OrderBy(DistanceSquared).ThenBy(unit => unit.Guid.Value).FirstOrDefault();
+        GameObject? chosenObject = null;
+        if (explicitTarget is null || chosenUnit is null || !ReferenceEquals(chosenUnit, explicitTarget))
+        {
+            HashSet<uint> objectEntries = [.. rows.Where(row => row.Type == 0 && row.TargetEntry != 0).Select(row => row.TargetEntry)];
+            if (objectEntries.Count > 0 && map.FindUpdater<GameObjectMapSystem>() is { } objects)
+            {
+                chosenObject = objects.GameObjects.Where(go => go.IsSpawned && objectEntries.Contains(go.Entry)
+                        && DistanceSquared(go) <= (radius + go.BoundingRadius) * (radius + go.BoundingRadius))
+                    .OrderBy(DistanceSquared).ThenBy(go => go.Guid.Value).FirstOrDefault();
+            }
+        }
+
+        // The nearest of the two kinds wins, as the shrinking search radius of CheckScriptTargeting makes it; an explicit unit always wins.
+        if (chosenUnit is not null && chosenObject is not null && !ReferenceEquals(chosenUnit, explicitTarget)
+            && DistanceSquared(chosenObject) < DistanceSquared(chosenUnit))
+        {
+            chosenUnit = null;
+        }
+
+        WorldObject? found = chosenUnit is not null ? chosenUnit : chosenObject;
+        if (found is null) return [];
+        cast.Targets.Dest = (found.X, found.Y, found.Z);
+        cast.Targets.Mask |= SpellCastTargetFlags.DestLocation;
+        if (effect.TargetA != SpellImplicitTarget.LocationScriptNearCaster || effect.Effect == SpellEffectName.PersistentAreaAura) return [];
+        if (chosenUnit is not null) return [(chosenUnit, 1f)];
+        cast.ObjectTargetsByEffect[effectIndex] = [chosenObject!.Guid];
+        return [(caster, 1f)]; // the caster carries the object effect through the unit-effect pipeline
     }
 }

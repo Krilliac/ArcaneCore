@@ -111,8 +111,8 @@ public sealed class PlayerbotQaSpellInertRegistryTests
     [Fact]
     public void ADeliberatelyInertSpell_IsNotATargetGap_ButTheSameSpellUnderAnotherIdIs()
     {
-        // Implicit target 46 (location script near caster) has no selector in a bare system.
-        const SpellImplicitTarget unselectable = (SpellImplicitTarget)46;
+        // Implicit target 63 has no selector in a bare system.
+        const SpellImplicitTarget unselectable = (SpellImplicitTarget)63;
         InertSpell entry = DeliberatelyInertSpells.All.First(e => e.Reason == InertSpellReason.Marker);
         SpellInfo listed = Spell(entry.SpellId, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy, targetA: unselectable));
         SpellInfo unlisted = Spell(Unlisted, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy, targetA: unselectable));
