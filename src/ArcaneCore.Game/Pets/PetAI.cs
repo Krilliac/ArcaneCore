@@ -19,15 +19,16 @@ namespace ArcaneCore.Game.Pets;
 /// <c>SelectNextTarget</c>, <c>KilledUnit</c>, <c>AttackedBy</c>, <c>OwnerAttackedBy</c>,
 /// <c>OwnerAttacked</c>, <c>MovementInform</c>, <c>MoveInLineOfSight</c> (an aggressive pet attacks a hostile unit that comes into
 /// its aggro radius; the creature area's relocation notify brings it creatures as well as players), crowd-control checks
-/// (<c>HasAuraPetShouldAvoidBreaking</c>) and the imp's lack of a melee attack. Not ported (each needs data or primitives another area
-/// owns, docs/integration/pets.md): positive and ally autocast (<c>Spell::CanAutoCast</c>, <c>UpdateAllies</c>), taunt, and the
+/// (<c>HasAuraPetShouldAvoidBreaking</c>) and the imp's lack of a melee attack. Positive and ally autocast (<c>Spell::CanAutoCast</c>, <c>UpdateAllies</c>) is in PetAI.Allies.cs.
+/// Not ported (each needs data or primitives another area
+/// owns, docs/integration/pets.md): taunt, and the
 /// threat-list retarget of creature-owned pets. It also drives a charmed or possessed creature (docs/areas/unit-control.md):
 /// the charm info and master come from the charm when the creature is not a pet, and while a player possesses it (UNIT_FLAG_POSSESSED)
 /// only the melee part runs (no return movement, no autocast), as in vmangos <c>PetAI::UpdateAI</c>.
 /// </para>
 /// <para>Thread affinity: world thread.</para>
 /// </summary>
-public sealed class PetAI : CreatureAI
+public sealed partial class PetAI : CreatureAI
 {
     /// <summary>
     /// The generic pet AI that drives <paramref name="ai"/>'s creature: <paramref name="ai"/> itself, or the one a scripted pet AI keeps for
@@ -134,6 +135,7 @@ public sealed class PetAI : CreatureAI
         // the spline seen here: this tick runs before the motion update, and a pet that cannot move (casting) has not arrived.
         if (Me.IsAlive && Charm is not null)
         {
+            _allyRefreshMs = _allyRefreshMs > diffMs ? _allyRefreshMs - diffMs : 0;
             Autocast(charm);
         }
     }
@@ -605,28 +607,45 @@ public sealed class PetAI : CreatureAI
     // --- autocast -----------------------------------------------------------------------------------------------------
 
     /// <summary>
-    /// The harmful half of vmangos' autocast loop (PetAI.cpp:226-330): while the pet fights, a spell
-    /// with autocast on that is harmful, ready and not a non-combat spell goes at the victim; one is
-    /// picked at random when several qualify, the pet turns to its target and the owner hears the aggro
-    /// growl (or, 10% of the time for a summoned pet, its special-spell talk).
+    /// vmangos' autocast loop (PetAI.cpp:215-330): a spell with autocast on that is ready goes at the victim when harmful (while the pet
+    /// fights), and on the pet or an ally when positive (<see cref="TryPickPositiveTarget"/>). One is picked at random when several qualify,
+    /// the pet turns to its target and the owner hears the aggro growl (or, 10% of the time for a summoned pet, its special-spell talk).
     /// </summary>
     private void Autocast(CharmInfo charm)
     {
-        if (_spells() is not { } spells || spells.GetState(Me.Guid)?.CurrentCast is not null
-            || Me.Combat.Victim is not { IsAlive: true } victim || !CanAttack(victim, charm))
+        if (_spells() is not { } spells || spells.GetState(Me.Guid)?.CurrentCast is not null)
         {
             return;
         }
 
-        List<SpellInfo>? candidates = null;
+        Unit? victim = Me.Combat.Victim is { IsAlive: true } alive && CanAttack(alive, charm) ? alive : null;
+        bool fighting = Me.Combat.Victim is { IsAlive: true };
+        List<(SpellInfo Spell, Unit Target)>? candidates = null;
         foreach ((uint spellId, bool autocast) in charm.PetSpells)
         {
-            if (!autocast || spells.Store.Get(spellId) is not { IsPassive: false, IsPositive: false } spell || !spells.IsSpellReady(Me, spell))
+            if (!autocast || spells.Store.Get(spellId) is not { IsPassive: false } spell || !spells.IsSpellReady(Me, spell))
             {
                 continue;
             }
 
-            (candidates ??= []).Add(spell);
+            Unit? target;
+            if (spell.IsPositive)
+            {
+                if (!TryPickPositiveTarget(spells, spell, fighting, out target))
+                {
+                    continue;
+                }
+            }
+            else if (victim is not null)
+            {
+                target = victim;
+            }
+            else
+            {
+                continue;
+            }
+
+            (candidates ??= []).Add((spell, target));
         }
 
         if (candidates is null)
@@ -634,16 +653,16 @@ public sealed class PetAI : CreatureAI
             return;
         }
 
-        SpellInfo chosen = candidates[_random.Next(candidates.Count)];
-        if (!MapCombat.HasInArc(Me, victim, MathF.PI))
+        (SpellInfo chosen, Unit chosenTarget) = candidates[_random.Next(candidates.Count)];
+        if (!ReferenceEquals(chosenTarget, Me) && !MapCombat.HasInArc(Me, chosenTarget, MathF.PI))
         {
-            Me.Orientation = Creature.NormalizeOrientation(MathF.Atan2(victim.Y - Me.Y, victim.X - Me.X));
+            Me.Orientation = Creature.NormalizeOrientation(MathF.Atan2(chosenTarget.Y - Me.Y, chosenTarget.X - Me.X));
         }
 
-        if (spells.CastSpell(Me, chosen.Id, SpellCastTargets.ForUnit(victim.Guid), triggered: false) == SpellCastResult.CastOk
+        if (spells.CastSpell(Me, chosen.Id, SpellCastTargets.ForUnit(chosenTarget.Guid), triggered: false) == SpellCastResult.CastOk
             && Owner is Player owner)
         {
-            if (Me.Summon?.Kind == SummonKind.Pet && _random.Next(0, 101) < 10)
+            if (Me.Summon?.Kind == SummonKind.Pet && !ReferenceEquals(chosenTarget, Me) && _random.Next(0, 101) < 10)
             {
                 owner.Session.Send(WorldOpcode.SmsgPetActionSound, PetPackets.BuildActionSound(Me.Guid, PetTalk.SpecialSpell));
             }
