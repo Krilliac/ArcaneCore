@@ -146,8 +146,11 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         }
 
         // The orange roll belongs to the landing check: vmangos tests it only while the spell is its caster's current
-        // spell, which a cast is only once prepare() has finished (Spell.cpp:3403 before :3482).
-        return !context.Strict && check.SkillId is SkillIds.Herbalism or SkillIds.Mining or SkillIds.Lockpicking
+        // spell, which a cast is only once prepare() has finished (Spell.cpp:3403 before :3482). A triggered cast that is not
+        // channelled never becomes the current spell (m_selfContainer stays null, Spell.cpp:3480-3482), so it never rolls
+        // (the trade-commit Pick Lock, Spell.cpp:6050-6052).
+        return !context.Strict && !(context.Triggered && !context.Spell.IsChanneled)
+            && check.SkillId is SkillIds.Herbalism or SkillIds.Mining or SkillIds.Lockpicking
             && GatheringRules.OrangeGatherFails(check.SkillId, check.SkillValue, check.RequiredSkill, ConfigMaxSkill, context.System.Random)
             ? SpellCastResult.TryAgain
             : SpellCastResult.CastOk;
