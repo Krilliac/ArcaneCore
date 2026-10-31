@@ -342,6 +342,10 @@ public sealed class ClusterHostSupervisorRecoveryTests
 
         Assert.Equal(1, launcher.Launches);
         Assert.True(launcher.Last.Kills >= 1);
+
+        // FaultIfStillAlive publishes Faulted under the supervisor lock and writes the FATAL line after releasing it (the console write stays out of the lock),
+        // so the state can be seen a moment before the text. Wait for the text rather than racing it.
+        await TestWait.UntilAsync(() => rig.ConsoleText.Contains("still running", StringComparison.Ordinal), "the FATAL still-running line");
         Assert.Contains("still running", rig.ConsoleText, StringComparison.Ordinal);
     }
 
