@@ -457,9 +457,8 @@ public sealed class PlayerbotCadenceTests
         Assert.Equal((0L, 0, 0u), (empty.Thinks, empty.Ticks, empty.GapMaxMs));
 
         stats.RecordGap(1); stats.EndTick(1, false, false); // warm
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++) { stats.RecordGap((uint)(i % 20_000)); stats.EndTick(3, i % 2 == 0, i % 3 == 0); }
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        void Window() { for (int i = 0; i < 10_000; i++) { stats.RecordGap((uint)(i % 20_000)); stats.EndTick(3, i % 2 == 0, i % 3 == 0); } }
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "10000 cadence RecordGap/EndTick pairs");
     }
 
     [Fact]

@@ -867,13 +867,11 @@ public sealed class EventScenarioEngineTests
         FarBot(rig.Host, "Ucltopaa");
         rig.Engine.EventChanged(77, active: true); // a running event that has no scenario
         rig.Engine.Tick();
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++) rig.Engine.Tick();
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        void Window() { for (int i = 0; i < 10_000; i++) rig.Engine.Tick(); }
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "10000 idle engine ticks");
 
         Assert.Equal(0, rig.Host.RosterCalls);
         Assert.Empty(rig.Host.Teleports);
-        Assert.Equal(0, allocated);
     }
 
     [Fact]

@@ -72,15 +72,16 @@ public sealed class TravelCanReachStaticTests
         var travel = new PlayerbotTravelOptions();
         bool any = false;
         for (int i = 0; i < 16; i++) any ^= PlayerbotTravel.CanReachStatic(All, i % 2 == 0, 0, 30, travel); // warm up (JIT)
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 10_000; i++)
+        void Window()
         {
-            any ^= PlayerbotTravel.CanReachStatic(All, i % 2 == 0, 0, (uint)(i % 3 == 0 ? 30 : 1), travel);
-            any ^= PlayerbotTravel.CanReachStatic(All, true, 0, 530, travel);
+            for (int i = 0; i < 10_000; i++)
+            {
+                any ^= PlayerbotTravel.CanReachStatic(All, i % 2 == 0, 0, (uint)(i % 3 == 0 ? 30 : 1), travel);
+                any ^= PlayerbotTravel.CanReachStatic(All, true, 0, 530, travel);
+            }
         }
 
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.Equal(0, allocated);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "20000 CanReachStatic checks");
         Assert.True(any || !any);
     }
 

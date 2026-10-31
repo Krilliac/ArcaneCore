@@ -329,17 +329,20 @@ public sealed class PerfLogAggregatorTests
             aggregator.FlushIfDue();
         }
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 2000; i++)
+        long micros = 0;
+        void Window()
         {
-            clock.Micros = i; // the interval does not end
-            aggregator.CountFrame();
-            aggregator.RecordWorldFrame(300_000); // over the detail bar: the limiter path
-            aggregator.RecordMapUpdate(1, 0, 250_000, diagnostics, gc);
-            aggregator.FlushIfDue();
+            for (int i = 0; i < 2000; i++)
+            {
+                clock.Micros = micros++; // the interval does not end; the clock only moves forward across windows
+                aggregator.CountFrame();
+                aggregator.RecordWorldFrame(300_000); // over the detail bar: the limiter path
+                aggregator.RecordMapUpdate(1, 0, 250_000, diagnostics, gc);
+                aggregator.FlushIfDue();
+            }
         }
 
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(Window, 0, "2000 limited-path aggregator frames");
     }
 
     [Fact]

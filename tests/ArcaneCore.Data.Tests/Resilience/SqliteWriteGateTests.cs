@@ -157,6 +157,7 @@ public sealed class SqliteWriteGateTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ATransactionRolledBackBehindEfsBack_IsReleasedByTheNextWaiter_WithinAboutASecond()
     {
         string connection = ConnectionString("behind.db");

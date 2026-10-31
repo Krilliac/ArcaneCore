@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.WorldState;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,14 +29,25 @@ public sealed class StateSaveQueueTests
 
         queue.Save(1, (1, 10)); // taken by the drain, then stuck
         Assert.True(entered.Wait(TimeSpan.FromSeconds(10)));
-        var clock = Stopwatch.StartNew();
-        for (int i = 0; i < 100; i++)
+        // The store stays stuck until gate.Set() below, so a Save that waited for it would never return: completing at all is the
+        // proof, and the generous bound only turns a hang into a failure (no tight wall-clock bound that load could trip).
+        Task saves = Task.Run(() =>
         {
-            queue.Save(2, (2, i));
-            queue.Save(1, (1, 100 + i));
+            for (int i = 0; i < 100; i++)
+            {
+                queue.Save(2, (2, i));
+                queue.Save(1, (1, 100 + i));
+            }
+        });
+        try
+        {
+            await saves.WaitAsync(TimeSpan.FromSeconds(30));
         }
-
-        Assert.True(clock.ElapsedMilliseconds < 500, $"Save waited {clock.ElapsedMilliseconds} ms for the store");
+        catch (TimeoutException)
+        {
+            gate.Set(); // release the stuck store so the abandoned task cannot leak
+            Assert.Fail("Save waited for the stuck store");
+        }
         gate.Set();
         await queue.FlushAsync();
         lock (written)
@@ -92,9 +102,18 @@ public sealed class StateSaveQueueTests
             new GameEventFeature(provider, NullLogger<GameEventFeature>.Instance));
         feature.PreviousWinTime = feature.NowUnix() - (2 * 86400);
 
-        var clock = Stopwatch.StartNew();
-        feature.ResetIfStale(); // npc_riggle_bassbaitAI's constructor, on the world thread
-        Assert.True(clock.ElapsedMilliseconds < 500, $"the reset waited {clock.ElapsedMilliseconds} ms for the store");
+        // The store is gated until store.Gate.Set() below, so a reset that waited for it would never return; the 30 s bound only turns a
+        // hang into a failure.
+        Task reset = Task.Run(feature.ResetIfStale); // npc_riggle_bassbaitAI's constructor, on the world thread
+        try
+        {
+            await reset.WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        catch (TimeoutException)
+        {
+            store.Gate.Set();
+            Assert.Fail("the reset waited for the store");
+        }
         Assert.True(feature.AnnounceBegin); // memory is the state at once
         Assert.Null(store.Saved);
 
