@@ -58,9 +58,9 @@ public sealed partial class CreatureMapSystem
     internal const int PathJobReanchorMaxSkips = 4;
 
     /// <summary>
-    /// A job still queued or running this long (ms) after it was submitted is dropped and asked again when its creature asks for it, so
-    /// a search stuck in a worker cannot hold a creature forever (live queue waits are milliseconds; <see cref="PathJobUnclaimedMs"/>
-    /// is the finished-job sweep).
+    /// A job a worker has been running this long (ms), counted from when the map first saw it started (<see cref="NavJob.IsStarted"/>),
+    /// is dropped and asked again when its creature asks for it, so a search stuck in a worker cannot hold a creature forever. Time in
+    /// the queue does not count: on a busy pool a queued job keeps its place (<see cref="PathJobUnclaimedMs"/> is the finished-job sweep).
     /// </summary>
     internal const long PathJobPendingTimeoutMs = 5_000;
 
@@ -211,7 +211,13 @@ public sealed partial class CreatureMapSystem
             bool carried = sameKey && !startFits && mayCarry && RanOnAlongItsSpline(creature, key.Spline, job.Start, start);
             bool sameRequest = sameKey && (startFits || carried);
             bool done = job.IsDone; // read once: a worker may publish between two reads
-            bool overdue = !done && _clockMs - job.SubmittedAtMs > PathJobPendingTimeoutMs;
+            if (!done && job.StartedSeenAtMs < 0 && job.IsStarted)
+            {
+                job.StartedSeenAtMs = _clockMs;
+            }
+
+            // Only a job a worker is running times out: time in the queue does not count, so a busy pool's queue is never cycled.
+            bool overdue = !done && job.StartedSeenAtMs >= 0 && _clockMs - job.StartedSeenAtMs > PathJobPendingTimeoutMs;
             bool destinationFits = anyDestination
                 || Vector3.DistanceSquared(job.Destination, destination) <= destinationTolerance * destinationTolerance;
 
@@ -360,21 +366,23 @@ public sealed partial class CreatureMapSystem
         IReadOnlyList<Vector3> points = found.Points;
         int last = points.Count - 1;
         int first = 1;
+        bool firstLegWalked = false; // the leg to points[first] was already walked by the skip below
         for (int skipped = 0; first < last && skipped < PathJobReanchorMaxSkips; skipped++)
         {
             Vector3 corner = points[first];
-            bool passed = Vector3.DistanceSquared(corner, here) <= TargetedMovementGenerator.ArrivedEpsilon * TargetedMovementGenerator.ArrivedEpsilon
-                || OnStretchRun(corner, jobStart, here)
-                || (mesh is not null && LegWalks(mesh, creature, here, points[first + 1], options));
-            if (!passed)
+            bool behind = Vector3.DistanceSquared(corner, here) <= TargetedMovementGenerator.ArrivedEpsilon * TargetedMovementGenerator.ArrivedEpsilon
+                || OnStretchRun(corner, jobStart, here);
+            bool nextWalks = !behind && mesh is not null && LegWalks(mesh, creature, here, points[first + 1], options);
+            if (!behind && !nextWalks)
             {
                 break;
             }
 
             first++;
+            firstLegWalked = nextWalks;
         }
 
-        if (mesh is not null && !LegWalks(mesh, creature, here, points[first], options))
+        if (mesh is not null && !firstLegWalked && !LegWalks(mesh, creature, here, points[first], options))
         {
             return false;
         }

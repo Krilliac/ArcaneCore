@@ -2820,7 +2820,10 @@ Creatures.Movement.PathJobThreads = 4
 #                     answer is the same search over the same loaded tiles; the creature starts the
 #                     move on a later update, as it does today when the per-update search budget is
 #                     spent (a chaser already running takes its answer mid-spline only with
-#                     PathJobsFollow on too). Follow and formation searches join the pool only with
+#                     PathJobsFollow on too). A search a worker has been running for 5 s
+#                     (CreatureMapSystem.PathJobPendingTimeoutMs) is dropped and asked again; time a
+#                     job waits in the pool's queue does not count, so a busy pool keeps its queue
+#                     in order. Follow and formation searches join the pool only with
 #                     PathJobsFollow; flee, confused and flier searches and a pet's other moves stay
 #                     synchronous. Off by default; read when the map's creature system starts.
 #        Type: bool

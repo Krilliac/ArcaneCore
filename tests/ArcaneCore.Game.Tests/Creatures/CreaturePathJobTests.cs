@@ -27,8 +27,15 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
     private class RecordingPathfinder : IPathfinder, ISharedPathSearch
     {
         private int _syncCalls;
+        private int _entered;
 
         public ConcurrentBag<int> SharedThreads { get; } = [];
+
+        /// <summary>Worker searches that have started (entered, before the gate).</summary>
+        public int Entered => Volatile.Read(ref _entered);
+
+        /// <summary>The options the last worker search was given (the job's own).</summary>
+        public PathOptions? LastSharedOptions { get; private set; }
 
         public ManualResetEventSlim Gate { get; } = new(true);
 
@@ -50,6 +57,8 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
 
         public PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options)
         {
+            LastSharedOptions = options;
+            Interlocked.Increment(ref _entered);
             Gate.Wait(TimeSpan.FromSeconds(10));
             SharedThreads.Add(Environment.CurrentManagedThreadId);
             PathSearchCounters.RecordSearch(1, 1, capped: false);
@@ -70,6 +79,9 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
 
         public int Walks { get; private set; }
 
+        /// <summary>The options of every walk, in order.</summary>
+        public List<PathOptions?> WalkOptions { get; } = [];
+
         public bool TryGetRandomPointAround(uint mapId, Vector3 center, float radius, Random random, PathOptions? options, out Vector3 point)
         {
             point = center;
@@ -79,6 +91,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         public MeshRaycastResult Raycast(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
         {
             Walks++;
+            WalkOptions.Add(options);
             return Walk(start, end);
         }
     }
@@ -467,6 +480,13 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
 
         Assert.Equal((1L, 0L), (applied, stale));
         Assert.True(mesh.Walks > walks, "the re-anchored first leg was not walked on the mesh");
+
+        // The leg is walked with the job's own options (the follow path's: no steep-slope exclusion), not the wander/flee mesh options
+        // that keep off slopes and would place a creature on a ramp on some other polygon.
+        PathOptions jobOptions = Assert.IsType<PathOptions>(s.Paths.LastSharedOptions);
+        PathOptions? legOptions = mesh.WalkOptions[walks];
+        Assert.Same(jobOptions, legOptions);
+        Assert.Equal(NavTerrain.Empty, legOptions!.ExcludeFlags & NavTerrain.SteepSlopes);
     }
 
     [Fact]
@@ -625,12 +645,13 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
     [Fact]
     public void AJobStuckInAWorker_IsDroppedAfterTheTimeout_AndAskedAgain()
     {
-        // A standing creature waits for its queued job; one still not answered PathJobPendingTimeoutMs after it was submitted is dropped
+        // A standing creature waits for its job; one a worker has been running for PathJobPendingTimeoutMs without answering is dropped
         // and asked again, so a search stuck in a worker cannot hold the creature forever.
         using Scene s = Start(movementType: 0);
         s.Paths.Gate.Reset();
         s.System.MoveTo(s.Wolf, 15, 0, 83.5f, run: false, finalOrientation: null);
         Assert.Equal(1, s.System.PathJobsSubmitted);
+        Assert.True(SpinWait.SpinUntil(() => s.Paths.Entered == 1, TimeSpan.FromSeconds(10)), "no worker took the job");
         for (int i = 0; i < 45; i++)
         {
             s.World.RunTick(100);
@@ -645,6 +666,40 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         Assert.Equal(1, s.System.PathJobsStale);
         Assert.Equal(2, s.System.PathJobsSubmitted);
         s.Paths.Gate.Set();
+    }
+
+    [Fact]
+    public void AJobWaitingInABusyPoolsQueue_IsNotDroppedByTheTimeout()
+    {
+        // Every worker is busy with another map's long search: the creature's job waits in the queue past PathJobPendingTimeoutMs. Queue
+        // time does not count, so it keeps its place (dropping it would requeue it at the back, over and over) and is taken once a
+        // worker is free.
+        using Scene s = Start(movementType: 0);
+        var busy = new RecordingPathfinder();
+        busy.Gate.Reset();
+        for (int i = 0; i < 2; i++)
+        {
+            Assert.True(s.Jobs!.TrySubmit(new NavJob(busy, 0, new Vector3(0, 0, 83.5f), new Vector3(30, 0, 83.5f), new PathOptions(), urgent: true)));
+        }
+
+        Assert.True(SpinWait.SpinUntil(() => busy.Entered == 2, TimeSpan.FromSeconds(10)), "the two workers did not take the long searches");
+        s.System.MoveTo(s.Wolf, 15, 0, 83.5f, run: false, finalOrientation: null);
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+        for (int i = 0; i < 60; i++)
+        {
+            s.World.RunTick(100);
+        }
+
+        Assert.Equal(0, s.Paths.Entered);
+        Assert.Equal(0, s.System.PathJobsStale);
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+
+        busy.Gate.Set();
+        WaitForPool(s, 3);
+        s.World.RunTick(100);
+
+        Assert.Equal(1, s.System.PathJobsApplied);
+        Assert.True(s.Wolf.IsMoving, "the queued job was not applied once a worker took it");
     }
 
     [Fact]

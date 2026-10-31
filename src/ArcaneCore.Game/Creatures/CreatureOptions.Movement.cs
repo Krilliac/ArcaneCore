@@ -67,7 +67,9 @@ public sealed class CreatureMovementOptions
     /// moves, evade/home returns of walkers) and of chases (in or out of combat, a pet's included) on a pool of path-job threads instead
     /// of the map's update (multithreading plan W5). The answer is the same search over the same loaded tiles; the creature starts the
     /// move on a later update, as it does today when the per-update search budget is spent (a chaser already running takes its answer
-    /// mid-spline only with <see cref="PathJobsFollow"/> on too). Follow and formation searches join the pool only with <see cref="PathJobsFollow"/>; flee, confused and flier searches and a pet's other moves stay synchronous. Off by
+    /// mid-spline only with <see cref="PathJobsFollow"/> on too). A search a worker has been running for 5 s
+    /// (<c>CreatureMapSystem.PathJobPendingTimeoutMs</c>) is dropped and asked again; time a job waits in the pool's queue does not count,
+    /// so a busy pool keeps its queue in order. Follow and formation searches join the pool only with <see cref="PathJobsFollow"/>; flee, confused and flier searches and a pet's other moves stay synchronous. Off by
     /// default; read when the map's creature system starts.
     /// </summary>
     public bool PathJobs { get; set; }
