@@ -26,6 +26,22 @@ public sealed class AutoPatchTests : IDisposable
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 
     [Fact]
+    public void Catalog_UnreadablePatchFile_OffersNoPatchInsteadOfThrowing()
+    {
+        string file = Path.Combine(_dir, "5464enUS.mpq");
+        File.WriteAllBytes(file, [1, 2, 3]);
+        var catalog = new PatchCatalog(() => new AutoPatchOptions { Enabled = true, Directory = _dir });
+
+        using (new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            // A writer or scanner holds the file: no patch is offered, so the client is answered VersionInvalid.
+            Assert.Null(catalog.Find(5464, "enUS"));
+        }
+
+        Assert.NotNull(catalog.Find(5464, "enUS")); // nothing was cached from the failed read
+    }
+
+    [Fact]
     public void Catalog_IsOffByDefault_AndHonoursEntriesPatternAndFolderBounds()
     {
         File.WriteAllBytes(Path.Combine(_dir, "5464enUS.mpq"), [1, 2, 3]);

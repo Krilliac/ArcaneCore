@@ -46,10 +46,10 @@ public sealed class AuctionBotOptions
     /// <summary>Percent chance a buy action buys anything (cMaNGOS AuctionHouseBot.Chance.Buy, 0-100, default 10).</summary>
     public uint BuyChance { get; set; } = 10;
 
-    /// <summary>Fewest item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession first value: 80).</summary>
+    /// <summary>Fewest item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession first value: 80); at least -10000 (a negative value makes an empty draw likelier).</summary>
     public int TemplatesPerSellMin { get; set; } = 80;
 
-    /// <summary>Most item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession second value: 90).</summary>
+    /// <summary>Most item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession second value: 90); at most 10000.</summary>
     public int TemplatesPerSellMax { get; set; } = 90;
 
     /// <summary>Smallest stack as a percent of the item's stack size (cMaNGOS Items.Profession third value: 0; at least one item).</summary>
@@ -278,9 +278,13 @@ public sealed class AuctionBotOptions
         return values;
     }
 
+    /// <summary>Upper bound on the template draws one sell pass makes (and the magnitude of a negative minimum), so a bad value cannot stall the world thread.</summary>
+    public const int MaxTemplatesPerSell = 10_000;
+
     /// <summary>
     /// Clamp the options as cMaNGOS GetMinMaxConfig does (an out-of-range value takes its default) and order the min/max pairs
-    /// (Bid.Min and Time.Min fall to the max). Returns one line per correction.
+    /// (Bid.Min and Time.Min fall to the max). The template draw range is the exception: it is clamped to ±<see cref="MaxTemplatesPerSell"/>
+    /// rather than reset to its default. Returns one line per correction.
     /// </summary>
     public IReadOnlyList<string> Normalize()
     {
@@ -330,6 +334,18 @@ public sealed class AuctionBotOptions
         {
             fixes.Add($"{SectionName}:{nameof(StackPercentMin)} must be at most {nameof(StackPercentMax)}; using {StackPercentMax}.");
             StackPercentMin = StackPercentMax;
+        }
+
+        if (TemplatesPerSellMax > MaxTemplatesPerSell)
+        {
+            fixes.Add($"{SectionName}:{nameof(TemplatesPerSellMax)} must be at most {MaxTemplatesPerSell}; using {MaxTemplatesPerSell}.");
+            TemplatesPerSellMax = MaxTemplatesPerSell;
+        }
+
+        if (TemplatesPerSellMin < -MaxTemplatesPerSell)
+        {
+            fixes.Add($"{SectionName}:{nameof(TemplatesPerSellMin)} must be at least {-MaxTemplatesPerSell}; using {-MaxTemplatesPerSell}.");
+            TemplatesPerSellMin = -MaxTemplatesPerSell;
         }
 
         if (TemplatesPerSellMin > TemplatesPerSellMax)

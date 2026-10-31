@@ -63,7 +63,9 @@ public sealed class InsightModule : IAtlasModule
         {
             return context.Services.Get<IClientFileSource>() is { } files ? SpellNames.TryLoad(files) : null;
         }
-        catch (Exception e) when (e is InvalidDataException or IOException)
+        // NotSupportedException: a patch archive stores Spell.dbc with a compression method the MPQ reader has no code for (IClientFileSource.Read's
+        // contract). The Lazy caches a factory exception for the life of the process, so it must fall back to "no spell names" here.
+        catch (Exception e) when (e is InvalidDataException or IOException or NotSupportedException)
         {
             context.ReportProblem($"insight: spell names are not available: {e.Message}");
             return null;

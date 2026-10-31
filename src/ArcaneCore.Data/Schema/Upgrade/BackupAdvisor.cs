@@ -73,7 +73,7 @@ public static class BackupAdvisor
             case DatabaseProvider.Sqlite:
                 return new BackupInstructions(
                     connection.Provider, null, null, new SqliteConnectionStringBuilder(connection.ConnectionString).DataSource, null, null,
-                    "arcane-db backup writes a consistent copy (VACUUM INTO) into the directory given with --backup-dir.");
+                    "arcane-db upgrade (or migrate-codex) --backup-dir <directory> writes a verified consistent copy (VACUUM INTO) of the database file into that directory before it applies anything.");
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(connection));

@@ -589,13 +589,16 @@ public sealed class Channel
         }
     }
 
+    /// <summary>The longest custom channel name vmangos normalizes (normalizePlayerName(m_name, 128)); a longer one would create an unusable INVALIDCHANNEL.</summary>
+    public const int MaxCustomNameLength = 128;
+
     /// <summary>
     /// vmangos normalizePlayerName(m_name, 128) only changes case; it does not trim. ChannelManager keys the channel on
     /// the lowered request text, so trimming here would announce a name ("Foo") that no longer finds the channel ("foo ").
     /// </summary>
     private static string NormalizeCustomName(string name)
     {
-        if (name.Length == 0 || name.Length > 128)
+        if (name.Length == 0 || name.Length > MaxCustomNameLength)
         {
             return string.Empty;
         }

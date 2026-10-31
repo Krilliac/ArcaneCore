@@ -489,12 +489,9 @@ public static partial class ContentImporterCli
                     await relays.RefreshCreatureLinksAsync(db, token).ConfigureAwait(false);
                     await dbScripts.ReplaceAsync(db, token).ConfigureAwait(false);
                     warnings.AddRange(dbScripts.Warnings);
-                    warnings.AddRange(dbScripts.VmangosSpellScriptRejections.OrderBy(pair => pair.Key)
-                        .Select(pair => $"spell_scripts {pair.Key} not imported: {pair.Value}"));
                     if (effectMods.HasRows)
                     {
                         await effectMods.ReplaceAsync(db, token).ConfigureAwait(false);
-                        warnings.Add(effectMods.Describe());
                     }
 
                     await UpsertScriptedGossipOptionsAsync(db, scriptedOptions, token).ConfigureAwait(false);
@@ -658,6 +655,14 @@ public static partial class ContentImporterCli
             {
                 throw DatabaseError(ex, target);
             }
+        }
+
+        // What the dump read said about these is known from the read alone, so a dry run reports it too (dbScripts.Warnings needs the database).
+        warnings.AddRange(dbScripts.VmangosSpellScriptRejections.OrderBy(pair => pair.Key)
+            .Select(pair => $"spell_scripts {pair.Key} not imported: {pair.Value}"));
+        if (effectMods.HasRows)
+        {
+            warnings.Add(effectMods.Describe());
         }
 
         o.WriteLine(dryRun ? "would replace:" : "replaced:");
@@ -888,11 +893,12 @@ public static partial class ContentImporterCli
         IQueryable<AreaTemplateRow> areas = db.Set<AreaTemplateRow>();
         if (await areas.AnyAsync(ct).ConfigureAwait(false))
         {
-            List<uint> zones = await db.Set<GraveyardZoneRow>().Where(g => !areas.Any(a => a.Entry == g.GhostZone)).Select(g => g.GhostZone)
-                .Distinct().OrderBy(id => id).ToListAsync(ct).ConfigureAwait(false);
-            if (zones.Count > 0)
+            // (id, ghost_zone) is the key, so several rows can name one zone: count the rows, list the distinct zones.
+            List<uint> zoneRows = await db.Set<GraveyardZoneRow>().Where(g => !areas.Any(a => a.Entry == g.GhostZone)).Select(g => g.GhostZone)
+                .ToListAsync(ct).ConfigureAwait(false);
+            if (zoneRows.Count > 0)
             {
-                checks.Add($"{zones.Count} game_graveyard_zone row(s) name a zone with no area_template row: {Ids(zones)}");
+                checks.Add($"{zoneRows.Count} game_graveyard_zone row(s) name a zone with no area_template row: {Ids([.. zoneRows.Distinct().Order()])}");
             }
         }
 
@@ -906,11 +912,12 @@ public static partial class ContentImporterCli
         }
 
         IQueryable<GameObjectTemplateRow> objects = db.Set<GameObjectTemplateRow>();
-        List<uint> ships = await db.Set<TransportRow>().Where(t => !objects.Any(g => g.Entry == t.Entry && g.Type == 15)).Select(t => t.Entry)
-            .Distinct().OrderBy(id => id).ToListAsync(ct).ConfigureAwait(false);
-        if (ships.Count > 0)
+        // (entry, build) is the key: count the rows, list the distinct entries.
+        List<uint> shipRows = await db.Set<TransportRow>().Where(t => !objects.Any(g => g.Entry == t.Entry && g.Type == 15)).Select(t => t.Entry)
+            .ToListAsync(ct).ConfigureAwait(false);
+        if (shipRows.Count > 0)
         {
-            checks.Add($"{ships.Count} transports row(s) name no gameobject_template of type 15: {Ids(ships)}");
+            checks.Add($"{shipRows.Count} transports row(s) name no gameobject_template of type 15: {Ids([.. shipRows.Distinct().Order()])}");
         }
 
         if (taxiPathNodes is not null)

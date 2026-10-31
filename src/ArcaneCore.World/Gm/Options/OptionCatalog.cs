@@ -201,12 +201,20 @@ public sealed class OptionCatalog
     }
 
     /// <summary>Puts <paramref name="key"/> back to its baseline. False when it was not overridden (or its owner is gone).</summary>
-    public bool Reset(OptionScope scope, OptionKey key, string actor)
+    public bool Reset(OptionScope scope, OptionKey key, string actor) => Reset(scope, key, actor, force: false, out _);
+
+    /// <summary>
+    /// As <see cref="Reset(OptionScope, OptionKey, string)"/>; <paramref name="refusal"/> says why a tracked key (a rate whose restore would cross
+    /// its pair) was not reset, and <paramref name="force"/> overrides that refusal.
+    /// </summary>
+    public bool Reset(OptionScope scope, OptionKey key, string actor, bool force, out string? refusal)
     {
         ArgumentNullException.ThrowIfNull(key);
+        refusal = null;
         if (key.Tracking is { } tracking)
         {
-            return tracking.Reset(scope, actor);
+            (bool done, refusal) = tracking.Reset(scope, actor, force);
+            return done;
         }
 
         OptionStatus status = Describe(scope, key);
@@ -225,18 +233,37 @@ public sealed class OptionCatalog
         return true;
     }
 
-    /// <summary>Resets every overridden key; returns how many went back.</summary>
+    /// <summary>
+    /// Resets every overridden key; returns how many went back. A restore the owner refuses (a rate that would cross its pair) waits for
+    /// another pass; what is still refused when a pass makes no progress is restored regardless.
+    /// </summary>
     public int ResetAll(OptionScope scope, string actor)
     {
         int count = 0;
-        foreach (OptionStatus status in Diff(scope))
+        for (bool force = false; ;)
         {
-            if (Reset(scope, status.Key, actor))
+            int before = count;
+            foreach (OptionStatus status in Diff(scope))
             {
-                count++;
+                if (Reset(scope, status.Key, actor, force, out _))
+                {
+                    count++;
+                }
+            }
+
+            if (count == before)
+            {
+                if (force)
+                {
+                    return count;
+                }
+
+                force = true;
+            }
+            else
+            {
+                force = false;
             }
         }
-
-        return count;
     }
 }

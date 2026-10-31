@@ -87,8 +87,18 @@ public sealed class PacketCapture : IDisposable
             writer.Write(0); // optional header data
         }
 
-        _stream.Write(header.GetBuffer(), 0, (int)header.Length);
-        _stream.Flush();
+        try
+        {
+            _stream.Write(header.GetBuffer(), 0, (int)header.Length);
+            _stream.Flush();
+        }
+        catch
+        {
+            // The half-built object is unreachable and only the writer loop closes the stream: release the handle (and the file's share lock) here.
+            _stream.Dispose();
+            throw;
+        }
+
         Live[this] = 0;
         _writer = Task.Run(WriteLoopAsync);
     }

@@ -458,6 +458,14 @@ public sealed partial class GuildManager(SocialContext context)
             return;
         }
 
+        if (member.CharacterId == oldSlot.CharacterId)
+        {
+            // Beyond vmangos, which has no self check: handing leadership to oneself would demote the leader to an officer
+            // (SetLeader then ChangeRank on the same member), the state Load repairs.
+            SendResult(player, GuildCommand.Invite, string.Empty, GuildCommandError.NameInvalid);
+            return;
+        }
+
         SetLeader(guild, member);
         ChangeRank(guild, oldSlot, Guild.OfficerRank);
         Save(guild);

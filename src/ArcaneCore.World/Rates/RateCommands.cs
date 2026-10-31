@@ -136,9 +136,9 @@ public sealed class RateCommands : ICommandGroup
             return true;
         }
 
-        if (!rates.Reset(scope, rate, context.InvokerName))
+        if (!rates.TryReset(scope, rate, context.InvokerName, RateChangeKind.Reset, out string? refused))
         {
-            context.Reply($"{rate.Name} is not overridden.");
+            context.Reply(refused ?? $"{rate.Name} is not overridden.");
             return true;
         }
 

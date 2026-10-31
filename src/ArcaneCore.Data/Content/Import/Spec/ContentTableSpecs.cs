@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using ArcaneCore.Data.Npc;
+using ArcaneCore.Data.World.WorldState;
 
 namespace ArcaneCore.Data.Content.Import;
 
@@ -295,6 +296,21 @@ public static class ContentTableSpecs
         // pet_levelstats: classic-db keys it by creature_entry, vmangos by entry (PetDumpImporter).
         new("pet_levelstats", [new KeyColumn("entry", "creature_entry"), new KeyColumn("level")], [], [], PetDumpImporter.ReadsLevelColumn),
         new("petcreateinfo_spell", [new KeyColumn("entry")], [], [], PetDumpImporter.ReadsSpellColumn),
+        // The world-state tables (WorldStateDumpImporter reads game_weather and exploration_basexp by name), the seven game-event tables
+        // (GameEventDumpImporter, keyed as it keys its own maps), the ship periods (TransportDumpImporter; a missing build reads as 0) and
+        // the inns (AreaTriggerTavernDumpImporter reads only id). Without a spec `plan` listed them as read by no importer and the scan
+        // checked no key.
+        new("game_weather", [new KeyColumn("zone")], WorldStateDumpImporter.WeatherColumns, []),
+        new("exploration_basexp", [new KeyColumn("level")], ["basexp"], []),
+        new("game_event", [new KeyColumn("entry")], [], [], c => GameEventDumpImporter.ReadsColumn("game_event", c)),
+        new("game_event_time", [new KeyColumn("entry")], [], [], c => GameEventDumpImporter.ReadsColumn("game_event_time", c)),
+        new("game_event_creature", [new KeyColumn("guid"), new KeyColumn("event")], [], [], c => GameEventDumpImporter.ReadsColumn("game_event_creature", c)),
+        new("game_event_gameobject", [new KeyColumn("guid"), new KeyColumn("event")], [], [], c => GameEventDumpImporter.ReadsColumn("game_event_gameobject", c)),
+        new("game_event_creature_data", [new KeyColumn("guid"), new KeyColumn("event")], [], [], c => GameEventDumpImporter.ReadsColumn("game_event_creature_data", c)),
+        new("game_event_quest", [new KeyColumn("quest"), new KeyColumn("event")], [], [], c => GameEventDumpImporter.ReadsColumn("game_event_quest", c)),
+        new("game_event_mail", [new KeyColumn("event"), new KeyColumn("raceMask"), new KeyColumn("quest")], [], [], c => GameEventDumpImporter.ReadsColumn("game_event_mail", c)),
+        new("transports", [new KeyColumn("entry"), new KeyColumn("build") { Optional = true }], ["name", "period"], []),
+        new("areatrigger_tavern", [new KeyColumn("id")], [], []),
     ];
 
     private static readonly FrozenDictionary<string, TableSpec> s_byTable =

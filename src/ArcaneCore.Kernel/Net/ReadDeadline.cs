@@ -9,7 +9,7 @@ namespace ArcaneCore.Kernel.Net;
 /// </summary>
 public sealed class ReadDeadline : IDisposable
 {
-    private readonly CancellationTokenSource _source;
+    private CancellationTokenSource _source;
     private readonly CancellationToken _outer;
     private readonly TimeSpan _timeout;
 
@@ -41,6 +41,9 @@ public sealed class ReadDeadline : IDisposable
     {
         if (Enabled)
         {
+            // A timer that fired after the previous frame's last read (before or after Disarm) left the source cancelled for good;
+            // CancelAfter on a cancelled source does nothing, so this frame would start already expired.
+            ReplaceIfTimerFired();
             _source.CancelAfter(_timeout);
         }
     }
@@ -51,6 +54,23 @@ public sealed class ReadDeadline : IDisposable
         if (Enabled)
         {
             _source.CancelAfter(System.Threading.Timeout.InfiniteTimeSpan);
+            ReplaceIfTimerFired();
+        }
+    }
+
+    /// <summary>
+    /// When the timer (not the outer token) cancelled the source, swap in a fresh linked source so the cancellation cannot carry into
+    /// the next frame and <see cref="Expired"/> reads false for a frame that completed. Only the owning read task calls this, with no read
+    /// pending on the old token (every read of the frame has completed), so nothing observes the disposed source. A pending
+    /// read that captured the old token is unaffected by the swap.
+    /// </summary>
+    private void ReplaceIfTimerFired()
+    {
+        if (_source.IsCancellationRequested && !_outer.IsCancellationRequested)
+        {
+            CancellationTokenSource fresh = CancellationTokenSource.CreateLinkedTokenSource(_outer);
+            _source.Dispose();
+            _source = fresh;
         }
     }
 

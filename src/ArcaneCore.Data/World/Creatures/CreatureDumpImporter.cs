@@ -121,6 +121,10 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<(uint Entry, uint Map), CreatureTemplateLinkRow> _templateLinks = [];
     private readonly Dictionary<(uint Entry, uint PathId, uint Point), CreatureMovementTemplateRow> _movementTemplates = [];
     private readonly HashSet<(uint Entry, uint PathId, uint Point)> _scriptWaypointKeys = [];
+
+    // script_waypoint paths ScriptDev2 refuses (a point 0 rejects the whole path of that entry, LoadScriptWaypoints system.cpp:92-96, 113-114),
+    // as DbScriptDumpImporter drops them from the world-42 table: raw (entry, path id), before the namespace bit.
+    private readonly HashSet<(uint Entry, uint PathId)> _rejectedScriptWaypointPaths = [];
     private readonly HashSet<(uint Entry, uint PathId, uint Point)> _waypointPathKeys = [];
     private readonly HashSet<(uint Owner, uint Path, uint Point)> _scriptedNodes = [];
     private readonly Dictionary<(uint SpawnGuid, uint Entry), CreatureSpawnEntryRow> _spawnEntries = [];
@@ -1117,6 +1121,26 @@ public sealed class CreatureDumpImporter
         {
             Warn($"{row.Table} PathId {pathId} collides with the path namespace bits; skipped");
             return;
+        }
+
+        if (scriptWaypoint)
+        {
+            uint entry = U32(row, "Entry");
+            if (U32(row, "Point") == 0 && _rejectedScriptWaypointPaths.Add((entry, pathId)))
+            {
+                uint rejectedPath = pathId | CreatureContent.ScriptWaypointPathBit;
+                foreach (var key in _movementTemplates.Keys.Where(k => k.Entry == entry && k.PathId == rejectedPath).ToArray())
+                {
+                    _movementTemplates.Remove(key);
+                    _scriptWaypointKeys.Remove(key);
+                    _scriptedNodes.Remove((key.Entry, key.PathId + 1, key.Point));
+                }
+            }
+
+            if (_rejectedScriptWaypointPaths.Contains((entry, pathId)))
+            {
+                return;
+            }
         }
 
         var point = new CreatureMovementTemplateRow

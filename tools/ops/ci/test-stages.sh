@@ -5,7 +5,7 @@
 #                                    [--selftest] TARGET...
 #
 # TARGET is a solution, solution filter or test project, already built (dotnet test --no-build).
-#   stage main   : every target with Category!=Timing, test collections in parallel as usual.
+#   stage main   : every target with Category!=Timing, all targets at once, test collections in parallel as usual.
 #   stage timing : every target with Category=Timing, serially (no parallel collections). A test that fails gets exactly one
 #                  isolated rerun: passing it prints "FLAKY (passed on rerun): <test>" and appends it to <logs>/flake-ledger.txt
 #                  (the gate still passes); failing it again fails the gate.
@@ -13,7 +13,22 @@
 # A run without --filter whose timing stage executes 0 tests FAILS: an empty filter must never read green. With --filter EXPR
 # (ANDed with each stage's category) the rule is instead that the stages together executed at least one test.
 # Exit 0 = pass, 1 = fail, 2 = usage. Env: GATE_WRAP prefixes every dotnet test (e.g. "timeout -k 60 3600"), GATE_WRAP_DATA
-# additionally prefixes a target named Data.slnf (e.g. a flock), GATE_CONFIGURATION (default Release).
+# additionally prefixes a target named Data.slnf (e.g. a flock), GATE_CONFIGURATION (default Release), GATE_MAIN_SERIAL=1 runs
+# the main stage's targets one after another.
+# Time budgets (0 turns a knob off; GATE_TIME_BUDGETS=off turns all of them off for slow hardware and keeps the timings as info):
+#   GATE_SUITE_BUDGET_MIN (default 20)  HARD STOP, per test assembly (each project of a target is its own VSTest session, so each
+#       gets the full budget): an assembly still running after this many minutes is aborted by VSTest (RunConfiguration.
+#       TestSessionTimeout: kills the testhost, still writes the .trx of what finished) and the gate FAILS naming the target, the
+#       budget and the tests still running; that target's counts are marked partial. Applies with --filter too. The wall-clock check
+#       of a target (without --filter) times only the dotnet part, not the wait in GATE_WRAP/GATE_WRAP_DATA (e.g. a flock).
+# GATE_BUDGET_MINUTE_SEC (1..60, default 60) is a test hook: the self-test shrinks a budget "minute" so it runs in seconds.
+# Numeric knobs must be whole numbers within range (GATE_SUITE_BUDGET_MIN <= 1440, GATE_CLASS_BUDGET_SEC <= 86400,
+# GATE_LONG_TEST_SEC 1..3600; else exit 2); GATE_TIME_BUDGETS is on or off. Two targets with the same name are exit 2.
+#   GATE_CLASS_BUDGET_SEC (default 900) fails a target whose test class's tests add up to more than that (xunit runs a class's tests
+#       one after another, so the slowest class sets the floor of the run time). Not applied with --filter.
+#   GATE_LONG_TEST_SEC (default 60) a test running longer is reported by xunit as "[Long Running Test]" and named in the summary.
+# GATE_ASSEMBLY_PARALLEL=0 runs a target's test assemblies one after another (-m:1) in the main stage too; the timing stage always does.
+# The summary lists the slowest classes and tests of a target that hit a budget.
 set -u
 
 stage=all logs=gate-logs results= filter= commit= selftest=0
@@ -26,7 +41,7 @@ while [ $# -gt 0 ]; do
     --filter) filter=${2:-}; shift 2 ;;
     --commit) commit=${2:-}; shift 2 ;;
     --selftest) selftest=1; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
     --*) echo "test-stages: unknown option $1" >&2; exit 2 ;;
     *) targets+=("$1"); shift ;;
   esac
@@ -39,23 +54,52 @@ mkdir -p "$logs" || exit 2
 ledger=$logs/flake-ledger.txt
 : >> "$ledger"
 config=${GATE_CONFIGURATION:-Release}
+suite_budget_min=${GATE_SUITE_BUDGET_MIN:-20}
+class_budget_sec=${GATE_CLASS_BUDGET_SEC:-900}
+long_test_sec=${GATE_LONG_TEST_SEC:-60}
+time_budgets=${GATE_TIME_BUDGETS:-on}
+case "$time_budgets" in on|off) ;; *) echo "test-stages: GATE_TIME_BUDGETS must be on or off, not '$time_budgets'" >&2; exit 2 ;; esac
+minute_sec=${GATE_BUDGET_MINUTE_SEC:-60}   # test hook: the self-test shrinks a budget "minute" so it can run in seconds
+for knob in GATE_BUDGET_MINUTE_SEC=$minute_sec GATE_SUITE_BUDGET_MIN=$suite_budget_min GATE_CLASS_BUDGET_SEC=$class_budget_sec GATE_LONG_TEST_SEC=$long_test_sec; do
+  [[ "${knob#*=}" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "test-stages: ${knob%%=*} must be a whole number, not '${knob#*=}'" >&2; exit 2; }
+done
+# Ranges keep every product below inside bash's 64-bit arithmetic and inside an int of VSTest's millisecond timeout.
+[ "$long_test_sec" -ge 1 ] && [ "$long_test_sec" -le 3600 ] || { echo "test-stages: GATE_LONG_TEST_SEC must be 1..3600" >&2; exit 2; }
+[ "$minute_sec" -ge 1 ] && [ "$minute_sec" -le 60 ] || { echo "test-stages: GATE_BUDGET_MINUTE_SEC must be 1..60" >&2; exit 2; }
+[ "$suite_budget_min" -le 1440 ] || { echo "test-stages: GATE_SUITE_BUDGET_MIN must be at most 1440" >&2; exit 2; }
+[ "$class_budget_sec" -le 86400 ] || { echo "test-stages: GATE_CLASS_BUDGET_SEC must be at most 86400" >&2; exit 2; }
+if [ "$time_budgets" = off ]; then suite_budget_min=0 class_budget_sec=0; fi
 read -r -a wrap <<< "${GATE_WRAP:-}"
 read -r -a wrap_data <<< "${GATE_WRAP_DATA:-}"
 # Serial for the timing stage: no parallel collections, one thread, and xunit's diagnostic messages so the log shows it.
-serial=(-- RunConfiguration.DisableParallelization=true xUnit.ParallelizeTestCollections=false xUnit.MaxParallelThreads=1 xUnit.DiagnosticMessages=true)
+serial=(RunConfiguration.DisableParallelization=true xUnit.ParallelizeTestCollections=false xUnit.MaxParallelThreads=1 xUnit.DiagnosticMessages=true)
+# Main stage: xunit's long-running-test lines ("[Long Running Test] 'name', Elapsed: ...", needs DiagnosticMessages) name what is slow.
+main_settings=(xUnit.DiagnosticMessages=true "xUnit.LongRunningTestSeconds=$long_test_sec")
 
 reasons=()
 summary=()
 fail() { reasons+=("$1"); }
 
-# run_test <log> <trx dir> <filter> <serial 0|1> <target>; returns dotnet's exit code.
+# run_test <log> <trx dir> <filter> <serial 0|1> <target> [session timeout ms, main stage only]; returns dotnet's exit code.
+# One `--` carries every runsettings argument, serial or not.
 run_test() {
-  local log=$1 trx=$2 flt=$3 ser=$4 target=$5 pre=("${wrap[@]}")
+  local log=$1 trx=$2 flt=$3 ser=$4 target=$5 tmo=${6:-0} pre=("${wrap[@]}")
   [ "$(basename "$target")" = Data.slnf ] && pre=("${wrap_data[@]}" "${wrap[@]}")
-  local cmd=("${pre[@]}" dotnet test "$target" -c "$config" --no-build -m:1 --verbosity normal --logger trx --results-directory "$trx" --filter "$flt")
-  [ "$ser" = 1 ] && cmd+=("${serial[@]}")
+  local cmd=("${pre[@]}" dotnet test "$target" -c "$config" --no-build --verbosity normal --logger trx --results-directory "$trx" --filter "$flt")
+  # -m:1 runs a suite's test assemblies one after another; the main stage drops it unless GATE_ASSEMBLY_PARALLEL=0.
+  if [ "$ser" = 1 ] || [ "${GATE_ASSEMBLY_PARALLEL:-1}" = 0 ]; then cmd+=(-m:1); fi
+  if [ "$ser" = 1 ]; then cmd+=(-- "${serial[@]}")
+  else
+    cmd+=(-- "${main_settings[@]}")
+    [ "$tmo" -gt 0 ] && cmd+=("RunConfiguration.TestSessionTimeout=$tmo")
+  fi
   # stdin from /dev/null: the rerun loop below reads failed-test names from its stdin, and a child that read it would swallow them.
-  "${cmd[@]}" > "$log" 2>&1 < /dev/null
+  # The marker holds the epoch second at which dotnet itself starts (after any GATE_WRAP / GATE_WRAP_DATA prefix has let it through,
+  # e.g. a flock wait), so a run's time is the dotnet part only. bash -c is the innermost command of the wrapped line. Main stage only:
+  # the timing stage and its reruns are not timed.
+  local n=${#pre[@]} full=()
+  if [ "$ser" = 0 ]; then full=("${cmd[@]:0:n}" bash -c 'date +%s > "$0"; exec "$@"' "$log.start" "${cmd[@]:n}"); else full=("${cmd[@]}"); fi
+  "${full[@]}" > "$log" 2>&1 < /dev/null
 }
 
 # counts <log> -> "passed failed skipped" summed over every test run block in the log.
@@ -69,7 +113,55 @@ failed_names() {
   grep -E '^[[:space:]]+Failed [A-Za-z_]' "$1" | sed -E 's/^[[:space:]]+Failed ([^ (]+).*/\1/'
 }
 
+# class_times <trx dir> -> "<seconds> <class>" per test class, slowest first, summed from every result's duration.
+class_times() {
+  find "$1" -name '*.trx' -exec cat {} + 2>/dev/null | awk '
+    { while (match($0, /<UnitTestResult [^>]*>/)) {
+        tag = substr($0, RSTART, RLENGTH); $0 = substr($0, RSTART + RLENGTH)
+        if (!match(tag, /testName="[^"]*"/)) continue; n = substr(tag, RSTART + 10, RLENGTH - 11)
+        if (!match(tag, /duration="[^"]*"/)) continue; d = substr(tag, RSTART + 10, RLENGTH - 11)
+        sub(/\(.*/, "", n); sub(/\.[^.]*$/, "", n); split(d, a, ":"); t[n] += a[1] * 3600 + a[2] * 60 + a[3] } }
+    END { for (c in t) printf "%d %s\n", t[c], c }' | sort -rn
+}
+
+# test_times <trx dir> -> "<seconds> <test>" for every result, slowest first.
+test_times() {
+  find "$1" -name '*.trx' -exec cat {} + 2>/dev/null | awk '
+    { while (match($0, /<UnitTestResult [^>]*>/)) {
+        tag = substr($0, RSTART, RLENGTH); $0 = substr($0, RSTART + RLENGTH)
+        if (!match(tag, /testName="[^"]*"/)) continue; n = substr(tag, RSTART + 10, RLENGTH - 11)
+        if (!match(tag, /duration="[^"]*"/)) continue; d = substr(tag, RSTART + 10, RLENGTH - 11)
+        split(d, a, ":"); printf "%.1f %s\n", a[1] * 3600 + a[2] * 60 + a[3], n } }' | sort -rn
+}
+
+# still_running <log> -> the "[Long Running Test]" tests (with elapsed) that never printed a Passed/Failed/Skipped line, comma-separated.
+still_running() {
+  awk '
+    /^[[:space:]]+(Passed|Failed|Skipped) / { n = $0; sub(/^[[:space:]]+[A-Za-z]+ /, "", n); sub(/ \[[^]]*\]$/, "", n); done[n] = 1 }
+    { if (match($0, /\[Long Running Test\] .*, Elapsed: [0-9:.]+/)) {
+        l = substr($0, RSTART + 21, RLENGTH - 21); i = index(l, ", Elapsed: "); nm = substr(l, 1, i - 1)
+        gsub(/^\047|\047$/, "", nm); el[nm] = substr(l, i + 11); if (!(nm in ord)) { ord[nm] = ++c; names[c] = nm } } }
+    END { for (k = 1; k <= c; k++) if (!(names[k] in done)) { printf "%s%s (%s)", sep, names[k], el[names[k]]; sep = ", " } }' "$1"
+}
+
+# main_run <target> <label> <filter> <session timeout ms>: one main-stage target; writes <logs>/main-<label>.{log,rc,secs}.
+# Nothing of an earlier run in the same folders may be read as this one's: its rc, time and trx files are removed first, so a job that
+# dies before writing its rc reads as rc 255 (failed), never as a leftover 0.
+main_run() {
+  local rc st st0
+  st0=$(date +%s)
+  rm -f "$logs/main-$2.rc" "$logs/main-$2.secs" "$logs/main-$2.log.start"; rm -rf "${results:?}/$2"
+  run_test "$logs/main-$2.log" "$results/$2" "$3" 0 "$1" "$4"; rc=$?
+  st=$(cat "$logs/main-$2.log.start" 2>/dev/null || echo "$st0")   # no marker: dotnet never started; time from the job's start, never 0
+  echo $(( $(date +%s) - st )) > "$logs/main-$2.secs.tmp"; mv "$logs/main-$2.secs.tmp" "$logs/main-$2.secs"
+  echo $rc > "$logs/main-$2.rc.tmp"; mv "$logs/main-$2.rc.tmp" "$logs/main-$2.rc"
+}
+
 label() { basename "$1" | sed -E 's/\.(slnf|slnx|sln|csproj)$//'; }
+# Each target's logs, trx folder and rc file are named by its label: two with the same label would overwrite each other.
+dups=$(for t in "${targets[@]}"; do label "$t"; done | sort | uniq -d)
+for t in "${targets[@]}"; do [ -n "$(label "$t")" ] || { echo "test-stages: target '$t' has an empty name" >&2; exit 2; }; done
+[ -z "$dups" ] || { echo "test-stages: targets share the name(s): $(echo $dups) (their logs and results would collide)" >&2; exit 2; }
 
 a_exec=0 a_pass=0 a_fail=0 a_skip=0 b_exec=0 b_pass=0 b_fail=0 b_skip=0
 selftest_line="not run"
@@ -80,15 +172,61 @@ serial_seen=0
 if [ "$stage" != timing ]; then
   flt='Category!=Timing'; [ -n "$filter" ] && flt="($filter)&Category!=Timing"
   summary+=("stage main (parallel, $flt):")
+  [ "$time_budgets" = off ] && summary+=("  time budgets: OFF (GATE_TIME_BUDGETS=off): timings are info only, no hard stop")
+  # The targets run at the same time (GATE_MAIN_SERIAL=1 runs them one after another), each with its own .trx folder so two
+  # runs that start in the same second cannot overwrite each other's file; the results are then read in target order.
+  pids=()
+  hard_ms=$((suite_budget_min * minute_sec * 1000))
   for t in "${targets[@]}"; do
-    log=$logs/main-$(label "$t").log
-    run_test "$log" "$results" "$flt" 0 "$t"; rc=$?
+    l=$(label "$t")
+    if [ "${GATE_MAIN_SERIAL:-0}" = 1 ]; then main_run "$t" "$l" "$flt" "$hard_ms"
+    else main_run "$t" "$l" "$flt" "$hard_ms" & pids+=($!); fi
+  done
+  for pid in "${pids[@]}"; do wait "$pid"; done
+  for t in "${targets[@]}"; do
+    l=$(label "$t"); log=$logs/main-$l.log
+    rc=$(cat "$logs/main-$l.rc" 2>/dev/null || echo 255)
+    secs=$(cat "$logs/main-$l.secs" 2>/dev/null || echo 0)
     read -r p f s < <(counts "$log"); e=$((p + f))
     a_exec=$((a_exec + e)) a_pass=$((a_pass + p)) a_fail=$((a_fail + f)) a_skip=$((a_skip + s))
-    echo "main $t rc=$rc executed $e (passed $p, failed $f), skipped $s"
-    summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s")
-    if [ $rc -ne 0 ] || [ "$f" -gt 0 ]; then fail "main $t rc=$rc failed=$f"; failed_names "$log" | sort -u | head -30 | sed 's/^/  Failed /'; fi
+    # VSTest's own line when the session timeout fires: "Aborting test run: test run timeout of N milliseconds exceeded."
+    timedout=0; grep -q 'test run timeout of [0-9]* milliseconds exceeded' "$log" && timedout=1
+    part=; [ $timedout = 1 ] && part=" (partial: stopped at budget)"
+    echo "main $t rc=$rc executed $e (passed $p, failed $f), skipped $s$part"
+    summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s$part")
+    over=$timedout
+    running=$(still_running "$log")
+    if [ $timedout = 1 ]; then
+      fail "main $t was stopped at its ${suite_budget_min}m time budget (GATE_SUITE_BUDGET_MIN): still running: ${running:-nothing reported (each under ${long_test_sec}s)}"
+    fi
     grep -q 'Test Run Aborted' "$log" && fail "main $t: test run aborted"
+    if [ $rc -ne 0 ] || [ "$f" -gt 0 ]; then
+      fail "main $t rc=$rc failed=$f"
+      failed_names "$log" | sort -u | head -30 | sed 's/^/  Failed /'
+    fi
+    summary+=("    run time $((secs / 60))m$((secs % 60))s")
+    # Budgets that fail the gate: not with --filter (a subset's times say nothing about the suite) and not when switched off.
+    if [ -z "$filter" ] && [ $timedout = 0 ] && [ "$suite_budget_min" -gt 0 ] && [ "$secs" -gt $((suite_budget_min * minute_sec)) ]; then
+      fail "main $t took $((secs / 60))m, over its ${suite_budget_min}m budget"; over=1
+    fi
+    classes=$(class_times "$results/$l")
+    if [ -z "$filter" ] && [ "$class_budget_sec" -gt 0 ]; then
+      while read -r cs cn; do
+        [ -n "$cn" ] && [ "$cs" -gt "$class_budget_sec" ] || continue
+        fail "main $t: test class $cn adds up to ${cs}s, over the ${class_budget_sec}s class budget (split it)"; over=1
+      done <<< "$classes"
+    fi
+    # What is slow: listed when a budget was hit, and as info when the budgets are off or the run is filtered.
+    if [ $over = 1 ] || [ "$time_budgets" = off ] || [ -n "$filter" ]; then
+      [ -n "$running" ] && summary+=("    still running at the end: $running")
+      lr=$(grep -h -o '\[Long Running Test\] .*' "$log" | sort -u | head -10)
+      [ -n "$lr" ] && summary+=("    long-running tests reported by xunit:" "$(sed 's/^/      /' <<< "$lr")")
+      st=$(test_times "$results/$l" | head -10)
+      [ -n "$st" ] && summary+=("    slowest completed tests (s):" "$(sed 's/^/      /' <<< "$st")")
+      [ -n "$classes" ] && summary+=("    slowest classes (s):" "$(head -5 <<< "$classes" | sed 's/^/      /')")
+    else
+      summary+=("    slowest class (s): $(head -1 <<< "${classes:-none}")")
+    fi
     [ -z "$filter" ] && [ "$e" -eq 0 ] && fail "main $t executed 0 tests"
   done
   summary[0]="stage main (parallel, $flt): executed $a_exec (passed $a_pass, failed $a_fail), skipped $a_skip"
