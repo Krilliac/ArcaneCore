@@ -22,6 +22,7 @@ public sealed partial class NoQuietWindowEmptyAssertTests
     {
         string root = Path.Combine(RepositorySource.RequireRoot(), "tests");
         var offenders = new List<string>();
+        var scanned = new List<string>();
         foreach (string file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
         {
             string relative = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
@@ -30,6 +31,7 @@ public sealed partial class NoQuietWindowEmptyAssertTests
                 continue;
             }
 
+            scanned.Add(relative);
             string text = File.ReadAllText(file);
             foreach (Match match in QuietEmptyAssert().Matches(text))
             {
@@ -37,6 +39,11 @@ public sealed partial class NoQuietWindowEmptyAssertTests
                 offenders.Add($"tests/{relative}:{line}");
             }
         }
+
+        // A wrong root or enumeration would scan nothing and pass vacuously: the scan must have reached known files.
+        Assert.True(scanned.Count > 100, $"the scan visited only {scanned.Count} files under {root}");
+        Assert.Contains("ArcaneCore.World.Tests/WorldTestClient.cs", scanned);
+        Assert.Contains("ArcaneCore.World.Tests/Teleport/TeleportRequirementWorldTests.cs", scanned);
 
         Assert.True(offenders.Count == 0,
             "Replace the fixed quiet-window emptiness assertion with WorldTestClient.AssertNoPacketsAsync(opcodes) or CollectThroughBarrierAsync: "
