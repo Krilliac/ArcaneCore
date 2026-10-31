@@ -54,8 +54,7 @@ public sealed partial class NaxxramasInstance
             return;
         }
 
-        HashSet<ObjectGuid> live = [.. system.Creatures.Where(c => c.Entry == GothikTrigger).Select(c => c.Guid)];
-        _gothikCorpseTriggers.RemoveWhere(guid => !live.Contains(guid));
+        _gothikCorpseTriggers.RemoveWhere(guid => system.Creatures.All(c => c.Guid != guid || c.Entry != GothikTrigger));
     }
 
     /// <summary>

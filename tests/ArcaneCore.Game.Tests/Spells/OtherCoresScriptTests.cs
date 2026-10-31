@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
+using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -303,7 +304,6 @@ public sealed class OtherCoresScriptTests
 
     [Theory]
     [InlineData(17678u)]
-    [InlineData(26264u)]
     [InlineData(26585u)]
     [InlineData(29336u)]
     public void DespawnSpells_KeepACreatureNoScriptTargetRowNamesAlive(uint spell)
@@ -324,7 +324,6 @@ public sealed class OtherCoresScriptTests
     }
 
     [Theory]
-    [InlineData(26264u)]
     [InlineData(26585u)]
     [InlineData(29336u)]
     public void DespawnSpells_DespawnTheCreatureTheScriptTargetRowNames(uint spell)
@@ -336,6 +335,42 @@ public sealed class OtherCoresScriptTests
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(wolf, spell, SpellCastTargets.ForSelf(), triggered: true));
 
         Assert.False(wolf.IsAlive);
+    }
+
+    /// <summary>Lets a player aim an enemy-selector spell at a creature in the kit, which has no factions.</summary>
+    private sealed class EveryoneHostile : ISpellTargetRelations
+    {
+        public bool IsHostile(Unit caster, Unit target) => true;
+
+        public bool IsFriendly(Unit caster, Unit target) => false;
+    }
+
+    [Fact]
+    public void Despawn26264_DespawnsTheCasterWithNoScriptTargetRow()
+    {
+        using SpellTestKit kit = Kit(ScriptEffect(26264));
+        kit.AddPlayer(1);
+        Creature wolf = MakeCreature(kit);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(wolf, 26264, SpellCastTargets.ForSelf(), triggered: true));
+
+        Assert.False(wolf.IsAlive);
+    }
+
+    [Fact]
+    public void Despawn26264_KeepsACreatureThatIsNotTheCaster()
+    {
+        SpellInfo spell = Instant(Spell(26264, Effect(SpellEffectName.ScriptEffect, 0, SpellImplicitTarget.UnitEnemy)));
+        using SpellTestKit kit = Kit(spell);
+        kit.System.Units = new MapObjectResolver();
+        kit.System.Relations = new EveryoneHostile();
+        (Player player, _) = kit.AddPlayer(1);
+        Creature wolf = MakeCreature(kit);
+
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, 26264, SpellCastTargets.ForUnit(wolf.Guid), triggered: true));
+        kit.World.RunTick(5000);
+
+        Assert.True(wolf.IsAlive);
     }
 
     [Fact]
@@ -363,7 +398,7 @@ public sealed class OtherCoresScriptTests
         CastSelf(kit, caster, 29499);
 
         int hit = players.Count(p => kit.System.HasAura(p, 29273));
-        Assert.InRange(hit, 1, 3);
+        Assert.Equal(3, hit);
         Assert.Equal(3u, kit.System.MaxTargetsOf(trigger));
     }
 

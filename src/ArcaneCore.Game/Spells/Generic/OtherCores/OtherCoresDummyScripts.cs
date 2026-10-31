@@ -111,10 +111,11 @@ public sealed class SilithusAncientsScript : ISpellScript
 
 /// <summary>
 /// Creatures that go away when a script spell hits them (ForcedDespawn): Despawn Spectral Combatants 17678 after 3 s (cmangos SpellEffects.cpp:650-660),
-/// Despawn 26264 (:3980-3988) and Despawn Toxic Slimes 26585 (boss_viscidus.cpp ViscidusDespawnAdds) any creature at once, Despawn Shades of Taerar 24886
-/// (:1166-1177, entry 15302), Despawn Brood 25792 (:1126-1132, Yauj brood 15621), Dispel Drakonids 23484 (:1062-1078, Nefarian's drakonids 14261-14265 and
-/// 14302), Despawn Chained Spirits 24342 (boss_mandokir.cpp DespawnChainedSpirits, Chained Spirit 15117), and the Kodo Kombobulator 18269 (mangoszero
-/// SpellEffectDummy.cpp:531-546) on any non-player target, and Despawn Buffet 29336 (boss_sapphiron.cpp DespawnBuffet) on any creature.
+/// Despawn Toxic Slimes 26585 (boss_viscidus.cpp ViscidusDespawnAdds) and Despawn Buffet 29336 (boss_sapphiron.cpp DespawnBuffet) at once, each only
+/// for a creature its spell_script_target row names; Despawn 26264 (:3980-3988, self-targeted: 'Despawn Self' 26268/26270) the caster itself;
+/// Despawn Shades of Taerar 24886 (:1166-1177, entry 15302), Despawn Brood 25792 (:1126-1132, Yauj brood 15621), Dispel Drakonids 23484 (:1062-1078,
+/// Nefarian's drakonids 14261-14265 and 14302), Despawn Chained Spirits 24342 (boss_mandokir.cpp DespawnChainedSpirits, Chained Spirit 15117), and the
+/// Kodo Kombobulator 18269 (mangoszero SpellEffectDummy.cpp:531-546, self-targeted on the Tamed Kodo 11627) for the kodo entries 4700-4702 and 11627.
 /// </summary>
 [SpellScript(17678, 26264, 26585, 24886, 25792, 23484, 24342, 18269, 29336)]
 public sealed class DespawnCreatureScript : ISpellScript
@@ -136,8 +137,14 @@ public sealed class DespawnCreatureScript : ISpellScript
             18269 => s_kodos,
             _ => [],
         };
-        if (OtherCoresCasts.CreatureOf(context.Target, entries) is not { } creature
-            || (entries.Length == 0 && !IsListedScriptTarget(context, creature)))
+        if (OtherCoresCasts.CreatureOf(context.Target, entries) is not { } creature)
+        {
+            return;
+        }
+
+        // 26264 is self-targeted (TARGET_SELF, triggered by Despawn Self 26268/26270) and has no spell_script_target row: only the caster goes.
+        bool selfOnly = context.Spell.Id == 26264;
+        if (selfOnly ? !ReferenceEquals(creature, context.Caster) : entries.Length == 0 && !IsListedScriptTarget(context, creature))
         {
             return;
         }
@@ -146,7 +153,7 @@ public sealed class DespawnCreatureScript : ISpellScript
     }
 
     /// <summary>
-    /// 17678, 26264, 26585 and 29336 name no entry in their reference scripts: the spell's script-target selection (spell_script_target) decides
+    /// 17678, 26585 and 29336 name no entry in their reference scripts: the spell's script-target selection (spell_script_target) decides
     /// who is hit. A world without those rows would otherwise despawn every creature in the area, so the target must match a row (a creature or dead-creature
     /// row for its entry).
     /// </summary>
