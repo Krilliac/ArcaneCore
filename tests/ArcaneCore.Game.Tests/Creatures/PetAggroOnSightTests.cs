@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -37,10 +38,31 @@ public sealed class PetAggroOnSightTests
         public Creature SpawnMob(float x, float y) => System.SpawnTemporary(Template(MobEntry) with { ExtraFlags = 0x02 }, x, y, 83.5f, 0);
     }
 
-    private static Yard Start(ReactState react)
+    /// <summary>The pet's first swing misses (a table roll of 0 is inside the miss band), every later roll comes from a fixed seed.</summary>
+    private sealed class FirstSwingMisses(int seed) : ICombatRandom
+    {
+        private readonly SeededCombatDice _rest = new(seed);
+        private bool _spent;
+
+        public int Next(int minInclusive, int maxInclusive)
+        {
+            if (_spent)
+            {
+                return _rest.Next(minInclusive, maxInclusive);
+            }
+
+            _spent = true;
+            return minInclusive;
+        }
+
+        public float NextFloat(float min, float max) => _rest.NextFloat(min, max);
+    }
+
+    private static Yard Start(ReactState react, int seed = 1, ICombatRandom? dice = null)
     {
         CreatureContent content = Content([Template(PetEntry), Template(MobEntry)], []);
-        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new CreaturesOnly() });
+        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new CreaturesOnly() },
+            combatRandom: dice, combatSeed: seed);
         (Player owner, FakeSession session) = AddPlayer(runtime, 1, 0, 0);
 
         Creature pet = system.SpawnTemporary(Template(PetEntry), 2, 0, 83.5f, 0);
@@ -55,10 +77,15 @@ public sealed class PetAggroOnSightTests
         return new Yard(runtime, map, system, owner, session, pet);
     }
 
-    [Fact]
-    public void AnAggressivePet_AttacksAHostileCreatureThatComesIntoRange_AndTheOwnerHearsIt()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void AnAggressivePet_AttacksAHostileCreatureThatComesIntoRange_AndTheOwnerHearsIt(int seed)
     {
-        using Yard y = Start(ReactState.Aggressive);
+        using Yard y = Start(ReactState.Aggressive, seed);
         Creature mob = y.SpawnMob(12, 0);
 
         Run(y.World, 1100); // the mob's relocation notify reaches the pet
@@ -74,6 +101,21 @@ public sealed class PetAggroOnSightTests
         Assert.True(y.Pet.Combat.IsInCombat);
         Assert.True(mob.Health < mob.MaxHealth, "the pet never struck");
         Assert.Null(y.Owner.Combat.Victim);
+    }
+
+    [Fact]
+    public void AnAggressivePetWhoseFirstSwingMisses_StillStrikesWithinOneAttackSpeed()
+    {
+        using Yard y = Start(ReactState.Aggressive, dice: new FirstSwingMisses(1));
+        Creature mob = y.SpawnMob(12, 0);
+
+        Run(y.World, 1100);
+        Assert.Same(mob, y.Pet.Combat.Victim);
+        Assert.Equal(mob.MaxHealth, mob.Health);
+
+        // Chase and first (missed) swing take about 3 s as in the test above; the next swing is one attack speed (2 s) later.
+        Run(y.World, 5000);
+        Assert.True(mob.Health < mob.MaxHealth, "the pet never struck within the attack-speed bound after its first swing missed");
     }
 
     [Theory]
