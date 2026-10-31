@@ -1,20 +1,41 @@
 using System.Collections.Concurrent;
 using ArcaneCore.World.Cluster.Supervision;
-using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Supervision;
 
 /// <summary>Polls for a condition that another thread makes true; the bound only matters when the test is already failing.</summary>
 internal static class TestWait
 {
-    public static async Task UntilAsync(Func<bool> condition, string what, int timeoutMs = 15_000)
+    public static Task UntilAsync(Func<bool> condition, string what, int timeoutMs = 15_000)
     {
-        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (!condition())
+        // A dedicated thread polls, so thread-pool starvation under a loaded gate cannot stall it; the bound is a count of passes
+        // (about timeoutMs / 2 of them), not a wall-clock deadline that a starved run would trip while the condition is about to hold.
+        int maxPasses = Math.Max(1, timeoutMs / 2);
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        new Thread(() =>
         {
-            Assert.True(DateTime.UtcNow < deadline, "timed out waiting for " + what);
-            await Task.Delay(2);
-        }
+            try
+            {
+                for (int i = 0; i < maxPasses; i++)
+                {
+                    if (condition())
+                    {
+                        done.SetResult();
+                        return;
+                    }
+
+                    Thread.Sleep(2);
+                }
+
+                done.SetException(new Xunit.Sdk.XunitException("gave up waiting for " + what));
+            }
+            catch (Exception ex)
+            {
+                done.SetException(ex);
+            }
+        })
+        { IsBackground = true, Name = "supervision-wait-until" }.Start();
+        return done.Task;
     }
 }
 
@@ -418,7 +439,9 @@ internal static class ManualDelaysExtensions
     {
         // A dedicated thread polls, so thread-pool starvation under a loaded gate cannot stall the loop, and the bound is a count of
         // releases rather than a wall-clock deadline (it only matters when the test is already failing).
-        const int MaxReleases = 100_000;
+        // 10,000 passes is about 20 s with precise sleeps and about 160 s at the default 15.6 ms Windows timer: a real regression reports a named
+        // assertion well inside the node-ci per-class budget.
+        const int MaxReleases = 10_000;
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         new Thread(() =>
         {
