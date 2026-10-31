@@ -1,4 +1,3 @@
-using System.Diagnostics.Metrics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
@@ -61,25 +60,6 @@ public abstract class PlayerbotRunWorldTestBase
         RequiredCondition: NaxxramasCondition);
 
     // --- bot QA and metrics ------------------------------------------------------------------------------------------
-
-    private protected static (List<string> Outcomes, MeterListener Listener) ListenToRuns()
-    {
-        var outcomes = new List<string>();
-        var listener = new MeterListener
-        {
-            InstrumentPublished = (instrument, l) =>
-            {
-                if (instrument.Meter.Name == "ArcaneCore.Playerbots.Runs" && instrument.Name == "arcanecore.playerbot.runs") l.EnableMeasurementEvents(instrument);
-            },
-        };
-        listener.SetMeasurementEventCallback<long>((_, _, tags, _) =>
-        {
-            foreach (KeyValuePair<string, object?> tag in tags)
-                if (tag.Key == "outcome") lock (outcomes) outcomes.Add((string)tag.Value!);
-        });
-        listener.Start();
-        return (outcomes, listener);
-    }
 
     private protected static Task<GroupTestWorld> StartWithQaAsync(PlayerbotQaSignalBus bus, Action<PlayerbotOptions>? configure = null)
         => GroupTestWorld.StartAsync([], configure, dungeon: true, services =>

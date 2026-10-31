@@ -81,6 +81,11 @@ public sealed partial class PlayerbotGroupCoordinator
     /// <summary>The runs completed and given up so far (status and tests).</summary>
     internal (int Completed, int GivenUp) RunTotals => (_runsCompleted, _runsGivenUp);
 
+    private readonly int[] _runOutcomes = new int[3];
+
+    /// <summary>How many runs of this coordinator ended with <paramref name="outcome"/> (a <see cref="PlayerbotRunMeters"/> label), counted beside the process-wide runs metric, which every coordinator in the process feeds.</summary>
+    internal int RunOutcomeCount(string outcome) => Volatile.Read(ref _runOutcomes[PlayerbotRunMeters.IndexOf(outcome)]);
+
     /// <summary>
     /// The encounters in force (<see cref="InstanceEncounterCatalog"/>): the <c>instance_encounter</c> table as read when this
     /// coordinator first attached, or by the last <c>.reload instance_encounter</c>.
@@ -523,7 +528,9 @@ public sealed partial class PlayerbotGroupCoordinator
         if (group.Run is not { } run) return;
         if (group.Succeeded && run.Step == PlayerbotRunStep.Leave) run.Apply(PlayerbotRunSignal.Left);
         string? reason = run.Complete ? null : run.Reason ?? group.Reason ?? "disbanded";
-        PlayerbotRunMeters.Count(PlayerbotRunMeters.OutcomeOf(run.Complete, reason));
+        string outcome = PlayerbotRunMeters.OutcomeOf(run.Complete, reason);
+        PlayerbotRunMeters.Count(outcome);
+        Interlocked.Increment(ref _runOutcomes[PlayerbotRunMeters.IndexOf(outcome)]);
         if (run.Complete) _runsCompleted++;
         else
         {

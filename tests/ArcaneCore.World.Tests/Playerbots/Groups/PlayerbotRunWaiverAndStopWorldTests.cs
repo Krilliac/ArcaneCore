@@ -1,4 +1,3 @@
-using System.Diagnostics.Metrics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
@@ -129,14 +128,13 @@ public sealed class PlayerbotRunWaiverAndStopWorldTests : PlayerbotRunWorldTestB
     public async Task AnOperatorStop_CountsAsAGivenUpRun_ButReportsNothingToBotQa()
     {
         var bus = new PlayerbotQaSignalBus(64);
-        (List<string> outcomes, MeterListener listener) = ListenToRuns();
-        using MeterListener _ = listener;
         await using GroupTestWorld world = await StartWithQaAsync(bus);
         await AddPartyAsync(world, "Qaz");
         world.Coordinator.RunRoll = () => 0d;
         Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
+        Assert.Equal(0, world.Coordinator.RunOutcomeCount(PlayerbotRunMeters.GivenUp)); // negative control: nothing counted before the stop
 
         // A GM stop, a scale-down, a shutdown or a controller taking over ends a run through Forget: not a finding about content or code.
         await world.OnWorldAsync(() =>
@@ -150,6 +148,6 @@ public sealed class PlayerbotRunWaiverAndStopWorldTests : PlayerbotRunWorldTestB
         bus.Drain(signals, 16);
         Assert.Empty(signals);
         Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
-        lock (outcomes) Assert.Contains("given_up", outcomes);
+        Assert.Equal(1, world.Coordinator.RunOutcomeCount(PlayerbotRunMeters.GivenUp));
     }
 }
