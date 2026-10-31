@@ -135,6 +135,11 @@ public static class DiagnosticsProbe
                 o.CrashDump.MaxFiles = int.Parse(rest[3], System.Globalization.CultureInfo.InvariantCulture);
             }
 
+            if (how == "invariant")
+            {
+                o.OnInvariant = InvariantPolicy.FailFast;
+            }
+
             o.OnUnhandled = how == "exit" ? UnhandledExceptionPolicy.Exit : UnhandledExceptionPolicy.FailFast;
             o.OnUnobservedTask = how switch
             {
@@ -144,6 +149,13 @@ public static class DiagnosticsProbe
             };
         });
         CrashHandler.Install(options, StandardErrorCrashSink.Instance, [new ProbeContext()]);
+        if (how == "invariant")
+        {
+            Invariant.Configure(options, logger: null);
+            Invariant.Check(false, "probe-invariant");
+            return Survive(); // FailFast never returns
+        }
+
         if (how.StartsWith("unobserved", StringComparison.Ordinal))
         {
             DropFaultedTask();

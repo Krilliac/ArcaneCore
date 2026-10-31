@@ -205,6 +205,20 @@ public sealed class CrashProcessTests
     }
 
     [Fact]
+    public async Task CrashDump_Mini_ForAnInvariantFailFast_WritesADumpBeforeTheProcessAborts()
+    {
+        using var directory = new TempDirectory();
+        ProbeResult result = await RunProbeAsync("dump", "invariant", "Mini", directory.Path);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.NotEqual(ExitCodes.UnhandledException, result.ExitCode);
+        string dump = Assert.Single(DumpFiles(directory.Path));
+        Assert.True(new FileInfo(dump).Length > 0, "the dump file is empty");
+        Assert.Contains("Invariant violated at", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("crash dump: written " + dump, result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CrashDump_Mini_UnderExitPolicy_WritesADump_AndStillExits70()
     {
         using var directory = new TempDirectory();

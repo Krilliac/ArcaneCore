@@ -36,7 +36,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($WorkDir.Length -gt 247) { [Console]::Error.WriteLine("[$Lane] refusing WorkDir of $($WorkDir.Length) characters (max 247): native commands cannot start when the child's cwd is over 260 characters, and the gate would pass silently."); exit 1 }
 . (Join-Path $PSScriptRoot '..\OpsEnv.ps1')
-if (-not $LanesRoot) { $LanesRoot = Get-OpsRequiredEnv 'ARCANECORE_LANES_ROOT' 'the root that holds lane worktrees, slot-locks and slot-logs' }
+if (-not $LanesRoot) { $LanesRoot = Get-OpsRequiredEnv 'ARCANECORE_LANES_ROOT' 'the root that holds lane worktrees, slot-locks and slot-logs' 'LanesRoot' }
 $root = Join-Path $LanesRoot 'slot-locks'
 $logs = Join-Path $LanesRoot 'slot-logs'
 New-Item -ItemType Directory -Force $root, $logs | Out-Null

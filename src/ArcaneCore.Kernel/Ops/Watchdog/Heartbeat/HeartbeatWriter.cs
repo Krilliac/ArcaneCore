@@ -27,7 +27,7 @@ public sealed record HeartbeatPlan(IHeartbeatSink Sink, int IntervalSeconds, str
 
         // A child of the cluster host supervisor (SupervisorProtocol) beats on stdout as well, whatever the operator configured: the supervisor
         // reads its hang signal from there. The operator's own sink and interval stay; with none configured (interval 0) the beat is every 10 s.
-        var supervisor = new TextWriterHeartbeatSink(stdout, processId, "stdout (supervisor)");
+        var supervisor = new TextWriterHeartbeatSink(stdout, processId, "stdout (supervisor)", supervisorToken: environment(SupervisorProtocol.TokenEnvironmentVariable));
         int interval = configured.IntervalSeconds > 0 ? configured.IntervalSeconds : 10;
         IHeartbeatSink sink = configured.Sink is NullHeartbeatSink ? supervisor : new CompositeHeartbeatSink([configured.Sink, supervisor]);
         return new HeartbeatPlan(sink, interval, configured.Note);
@@ -70,7 +70,7 @@ public sealed record HeartbeatPlan(IHeartbeatSink Sink, int IntervalSeconds, str
                 return new HeartbeatPlan(new FileHeartbeatSink(Path.IsPathRooted(options.FilePath) ? options.FilePath : Path.Combine(contentRoot, options.FilePath), processId), interval, null);
 
             case HeartbeatMode.Stdout:
-                return new HeartbeatPlan(new TextWriterHeartbeatSink(stdout, processId), interval, null);
+                return new HeartbeatPlan(new TextWriterHeartbeatSink(stdout, processId, supervisorToken: environment(SupervisorProtocol.TokenEnvironmentVariable)), interval, null);
 
             case HeartbeatMode.None:
             case HeartbeatMode.Auto:

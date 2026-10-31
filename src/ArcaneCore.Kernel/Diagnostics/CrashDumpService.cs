@@ -152,13 +152,26 @@ public sealed class CrashDumpService
         }
 
         string lastError = "no attempt was made";
+        // The maximum is for the whole chain (what the supervisors' grace and the announced max= are sized from), not for each attempt: a fallback shares what is left.
+        TimeSpan maxWait = TimeSpan.FromSeconds(MaxWaitSeconds(options));
+        long chainStart = Stopwatch.GetTimestamp();
         announceDumping?.Invoke(MaxWaitSeconds(options));
         for (; attempt >= CrashDumpMode.Mini; attempt--)
         {
+            TimeSpan left = maxWait - Stopwatch.GetElapsedTime(chainStart);
+            if (left <= TimeSpan.Zero)
+            {
+                lastError = "the " + (int)maxWait.TotalSeconds + " s limit for the whole dump was used up before the " + attempt + " attempt";
+                log(LogLevel.Error, "crash dump: " + lastError);
+                RestrictToOwner(path, log);
+                break;
+            }
+
+            TimeSpan attemptTimeout = timeout < left ? timeout : left;
             log(LogLevel.Critical, string.Create(CultureInfo.InvariantCulture,
-                $"crash dump: writing a {attempt} dump to {path}. The process is suspended while it is written (a Full dump takes about a minute at 7 GB); waiting up to {(int)timeout.TotalSeconds} s for the runtime to answer, and for as long as the file keeps growing up to {MaxWaitSeconds(options)} s."));
+                $"crash dump: writing a {attempt} dump to {path}. The process is suspended while it is written (a Full dump takes about a minute at 7 GB); waiting up to {(int)attemptTimeout.TotalSeconds} s for the runtime to answer, and for as long as the file keeps growing, {(int)maxWait.TotalSeconds} s in total for the whole dump."));
             long start = Stopwatch.GetTimestamp();
-            AttemptResult result = Attempt(attempt, path, timeout, MaxWaitSeconds(options));
+            AttemptResult result = Attempt(attempt, path, attemptTimeout, chainStart, maxWait);
             TimeSpan took = Stopwatch.GetElapsedTime(start);
             if (result.Error is null)
             {
@@ -186,12 +199,12 @@ public sealed class CrashDumpService
         return new CrashDumpOutcome(null, CrashDumpMode.Off, "the in-process dump failed (" + lastError + "); see the log");
     }
 
-    /// <summary>The most seconds the crash path waits for a dump in total: the answer timeout, then as long as the file grows, capped at three times the timeout. The heartbeat grace of the supervisors is sized from this.</summary>
+    /// <summary>The most seconds the crash path waits for a dump in total, across every attempt of the fallback chain: the answer timeout, then as long as the file grows, capped at three times the timeout. The heartbeat grace of the supervisors is sized from this.</summary>
     public static int MaxWaitSeconds(CrashDumpOptions options) => checked(3 * Math.Max(1, options.TimeoutSeconds));
 
     private readonly record struct AttemptResult(string? Error, bool StopChain);
 
-    private AttemptResult Attempt(CrashDumpMode mode, string path, TimeSpan timeout, int maxWaitSeconds)
+    private AttemptResult Attempt(CrashDumpMode mode, string path, TimeSpan timeout, long chainStart, TimeSpan maxWait)
     {
         Exception? failure = null;
         var thread = new Thread(() =>
@@ -214,8 +227,7 @@ public sealed class CrashDumpService
         if (!thread.Join(timeout))
         {
             // The runtime suspends the waiting thread too, so a long dump can outlast the timeout and still be completing. Only a file that
-            // is missing, empty or no longer growing is a failure; one that grows is waited for, up to the cap.
-            DateTime capAt = DateTime.UtcNow + TimeSpan.FromSeconds(maxWaitSeconds) - timeout;
+            // is missing, empty or no longer growing is a failure; one that grows is waited for, up to the cap of the whole chain.
             long last = SizeOf(path);
             while (true)
             {
@@ -224,7 +236,14 @@ public sealed class CrashDumpService
                     return new AttemptResult("no answer within " + (int)timeout.TotalSeconds + " s and no file was started", StopChain: true);
                 }
 
-                if (thread.Join(TimeSpan.FromSeconds(3)))
+                TimeSpan left = maxWait - Stopwatch.GetElapsedTime(chainStart);
+                if (left <= TimeSpan.Zero)
+                {
+                    return new AttemptResult("still writing after " + (int)maxWait.TotalSeconds + " s (" + last + " bytes); not waiting any longer", StopChain: true);
+                }
+
+                TimeSpan poll = TimeSpan.FromSeconds(3);
+                if (thread.Join(left < poll ? left : poll))
                 {
                     break;
                 }
@@ -233,11 +252,6 @@ public sealed class CrashDumpService
                 if (now <= last)
                 {
                     return new AttemptResult("no answer within " + (int)timeout.TotalSeconds + " s and the file stopped growing at " + now + " bytes", StopChain: true);
-                }
-
-                if (DateTime.UtcNow >= capAt)
-                {
-                    return new AttemptResult("still writing after " + maxWaitSeconds + " s (" + now + " bytes); not waiting any longer", StopChain: true);
                 }
 
                 last = now;
@@ -251,13 +265,14 @@ public sealed class CrashDumpService
     /// <summary>Whether <paramref name="ex"/> says the diagnostics endpoint cannot be reached or did not answer, which a smaller dump type cannot fix (E_INVALIDARG and the like can).</summary>
     public static bool IsEndpointFailure(Exception ex) => ex is ServerNotAvailableException or TimeoutException;
 
-    private static long SizeOf(string path)
+    /// <summary>The size of the file at <paramref name="path"/>, or 0 when it is missing or cannot be read (the file is still being written by the runtime, which can hold it or restrict it). <paramref name="measure"/> replaces the file system in tests.</summary>
+    internal static long SizeOf(string path, Func<string, long>? measure = null)
     {
         try
         {
-            return File.Exists(path) ? new FileInfo(path).Length : 0;
+            return measure is not null ? measure(path) : File.Exists(path) ? new FileInfo(path).Length : 0;
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return 0;
         }
@@ -274,8 +289,16 @@ public sealed class CrashDumpService
         return path;
     }
 
-    private static void EnsureDirectory(string directory, Action<LogLevel, string> log)
+    /// <summary>
+    /// Create <paramref name="directory"/> (and its missing parents) the way every dump directory is created: owner-only (a protected DACL for the current user,
+    /// SYSTEM and Administrators on Windows; mode 700 on Unix). An existing directory is left as it is, with a warning on Unix when others can read or write it.
+    /// Shared by the crash dump and by <c>.debug dump</c>. Throws <see cref="IOException"/>, <see cref="UnauthorizedAccessException"/> and the other
+    /// <see cref="Directory"/> exceptions when it cannot be created; the caller decides what that means.
+    /// </summary>
+    public static void EnsureDirectory(string directory, Action<LogLevel, string> log)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentNullException.ThrowIfNull(log);
         if (Directory.Exists(directory))
         {
             WarnIfReadableByOthers(directory, log);

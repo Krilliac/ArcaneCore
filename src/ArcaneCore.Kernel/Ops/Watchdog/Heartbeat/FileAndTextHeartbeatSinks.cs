@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using ArcaneCore.Kernel.Ops.ServerConsole;
 
 namespace ArcaneCore.Kernel.Ops.Watchdog.Heartbeat;
 
@@ -64,18 +65,25 @@ public sealed class FileHeartbeatSink : IHeartbeatSink
         => now.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture) + " pid=" + processId.ToString(CultureInfo.InvariantCulture) + " " + state + "\n";
 }
 
-/// <summary>One <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; &lt;state&gt;</c> line per beat on a text writer (standard output for a supervisor that reads the console).</summary>
+/// <summary>
+/// One <c>heartbeat &lt;UTC&gt; pid=&lt;pid&gt; &lt;state&gt;</c> line per beat on a text writer (standard output for a supervisor that reads the console).
+/// The <c>dumping</c> line reads <c>dumping max=&lt;seconds&gt; token=&lt;token&gt;</c>, authenticated with the supervisor's per-run token (the one the
+/// <c>lifecycle stopping</c> line carries) because child output also holds text a player or GM can influence.
+/// </summary>
 public sealed class TextWriterHeartbeatSink : IHeartbeatSink
 {
     private readonly TextWriter _writer;
     private readonly int _processId;
     private readonly Func<DateTimeOffset> _now;
+    private readonly string? _supervisorToken;
 
-    public TextWriterHeartbeatSink(TextWriter writer, int processId, string description = "stdout", Func<DateTimeOffset>? now = null)
+    /// <param name="supervisorToken">The supervisor's per-run token (<c>ARCANECORE_SUPERVISOR_TOKEN</c>) for the authenticated <c>dumping</c> line; null or empty writes it without one.</param>
+    public TextWriterHeartbeatSink(TextWriter writer, int processId, string description = "stdout", Func<DateTimeOffset>? now = null, string? supervisorToken = null)
     {
         _writer = writer;
         _processId = processId;
         _now = now ?? (() => DateTimeOffset.UtcNow);
+        _supervisorToken = supervisorToken;
         Description = description;
     }
 
@@ -89,7 +97,7 @@ public sealed class TextWriterHeartbeatSink : IHeartbeatSink
 
     public bool Stopping(string status) => Write("stopping");
 
-    public bool Dumping(string status, int maxSeconds) => Write("dumping");
+    public bool Dumping(string status, int maxSeconds) => Write(SupervisorProtocol.FormatDumpingState(maxSeconds, _supervisorToken));
 
     public void Dispose()
     {

@@ -23,7 +23,7 @@ captured place; that change spans the World supervisor files and is a follow-up.
 ## Authentication limits
 
 `lifecycle` lines (requests, results and the `stopping` announcement) carry the token. A `heartbeat` line does not: it is
-`heartbeat <UTC> pid=<pid> ready|alive|stopping` and nothing else.
+`heartbeat <UTC> pid=<pid> ready|alive|stopping` and nothing else. The one exception is the `dumping` line a child writes before its in-process crash dump, `heartbeat <UTC> pid=<pid> dumping max=<seconds> token=<token>`, which carries the token like a `lifecycle` line (a forged one would otherwise delay the hang watch by the whole dump grace).
 
 Child output also carries logged text that a player or GM can influence. If such text contains a bare LF, the part after it becomes a line
 of its own and could match the heartbeat shape. The parser rejects any line with a control character, so a forged line cannot smuggle a

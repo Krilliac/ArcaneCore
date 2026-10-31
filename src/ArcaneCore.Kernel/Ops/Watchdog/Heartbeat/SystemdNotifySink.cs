@@ -40,8 +40,11 @@ public sealed class SystemdNotifySink : IHeartbeatSink
     public bool Stopping(string status) => Send(Encoding.UTF8.GetBytes("STOPPING=1\nSTATUS=" + Sanitize(status) + "\n"));
 
     /// <summary>A beat that also resets the watchdog timeout to <paramref name="maxSeconds"/> plus a minute (sd_notify WATCHDOG_USEC=), so systemd does not kill the process in the middle of its crash dump.</summary>
-    public bool Dumping(string status, int maxSeconds)
-        => Send(Encoding.UTF8.GetBytes("WATCHDOG=1\nWATCHDOG_USEC=" + ((long)(Math.Max(1, maxSeconds) + 60) * 1_000_000L).ToString(System.Globalization.CultureInfo.InvariantCulture) + "\nSTATUS=" + Sanitize(status) + "\n"));
+    public bool Dumping(string status, int maxSeconds) => Send(DumpingMessage(status, maxSeconds));
+
+    /// <summary>The datagram of <see cref="Dumping"/>: <c>WATCHDOG=1</c>, <c>WATCHDOG_USEC=</c> (<paramref name="maxSeconds"/> plus a minute, in microseconds) and the status.</summary>
+    internal static byte[] DumpingMessage(string status, int maxSeconds)
+        => Encoding.UTF8.GetBytes("WATCHDOG=1\nWATCHDOG_USEC=" + ((long)(Math.Max(1, maxSeconds) + 60) * 1_000_000L).ToString(System.Globalization.CultureInfo.InvariantCulture) + "\nSTATUS=" + Sanitize(status) + "\n");
 
     /// <summary>Send an arbitrary notification (e.g. <c>STATUS=...</c>); for the status updates of other lanes.</summary>
     public bool Notify(string message) => Send(Encoding.UTF8.GetBytes(message.EndsWith('\n') ? message : message + "\n"));

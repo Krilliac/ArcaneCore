@@ -182,6 +182,36 @@ public sealed class CrashDumpServiceTests : IDisposable
     }
 
     [Fact]
+    public void Run_TheMaximumAppliesToTheWholeChain_NotToEachAttempt()
+    {
+        // Every attempt grows its file for 2.5 s and then fails with a refused type. With TimeoutSeconds = 1 the whole dump may take 3 s; a per-attempt
+        // maximum would let Full, Heap and Mini each run 2.5 s (7.5 s) while the supervisors were told to wait only 3 s.
+        var writer = new FakeWriter { GrowFor = TimeSpan.FromSeconds(2.5), FailAfterGrow = true };
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            CrashDumpOutcome? outcome = Run(new CrashDumpService(writer, static _ => null), new CrashDumpOptions { Mode = CrashDumpMode.Full, TimeoutSeconds = 1 });
+            clock.Stop();
+
+            Assert.Null(outcome!.Path);
+            Assert.DoesNotContain(CrashDumpMode.Mini, writer.Attempts);
+            Assert.InRange(clock.Elapsed.TotalSeconds, 0, 6);
+        }
+        finally
+        {
+            writer.Halt = true;
+        }
+    }
+
+    [Fact]
+    public void SizeOf_TreatsAnUnreadableFileLikeAMissingOne()
+    {
+        Assert.Equal(0, CrashDumpService.SizeOf("x", static _ => throw new UnauthorizedAccessException("denied")));
+        Assert.Equal(0, CrashDumpService.SizeOf("x", static _ => throw new IOException("locked")));
+        Assert.Equal(5, CrashDumpService.SizeOf("x", static _ => 5));
+    }
+
+    [Fact]
     public void Run_ANameThatAlreadyExists_GetsASuffix()
     {
         Directory.CreateDirectory(_directory);
@@ -248,6 +278,12 @@ public sealed class CrashDumpServiceTests : IDisposable
 
         public TimeSpan GrowFor { get; init; }
 
+        /// <summary>With <see cref="GrowFor"/>: throw a refused-type error when the growth ends instead of finishing the file.</summary>
+        public bool FailAfterGrow { get; init; }
+
+        /// <summary>Set by the test to end a growing write early.</summary>
+        public volatile bool Halt;
+
         public List<CrashDumpMode> Attempts
         {
             get
@@ -276,11 +312,16 @@ public sealed class CrashDumpServiceTests : IDisposable
             {
                 using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
                 DateTime until = DateTime.UtcNow + GrowFor;
-                while (DateTime.UtcNow < until)
+                while (DateTime.UtcNow < until && !Halt)
                 {
                     stream.Write(new byte[4096]);
                     stream.Flush();
                     Thread.Sleep(200);
+                }
+
+                if (FailAfterGrow)
+                {
+                    throw new InvalidOperationException("E_INVALIDARG " + mode);
                 }
 
                 return;

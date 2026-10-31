@@ -1142,6 +1142,14 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 return;
             }
 
+            // The dumping announcement is authenticated like the stop announcement: an unauthenticated one could be forged from logged text to keep
+            // a hung child from being drained for the whole dump grace, so a token-less or wrong-token line is ordinary output.
+            if (SupervisorProtocol.TryParseDumping(line, out _, out string dumpingToken) && TokenMatches(dumpingToken))
+            {
+                RecordDumping(entry, process);
+                return;
+            }
+
             // The stop announcement is authenticated like a request: child output includes logged text a player or GM influences, so a token-less
             // (or wrong-token) stopping line is ordinary output and never starts the stop grace or sets the announced intent.
             if (SupervisorProtocol.TryParseStopping(line, out string stoppingToken, out SupervisorStopIntent intent, out _) && TokenMatches(stoppingToken))
@@ -1169,14 +1177,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             // A heartbeat is liveness only, whatever state it names: the authenticated stopping line is what suspends the hang watch.
             entry.LastBeatTimestamp = _time.GetTimestamp();
-            if (beat == SupervisorHeartbeatState.Dumping)
-            {
-                // The child is writing its own crash dump and is about to end: give it the dump grace instead of draining and killing it
-                // for the silence that follows, which would truncate the dump (and a second capture of ours would only compete with it).
-                entry.DumpingTimestamp ??= entry.LastBeatTimestamp;
-                entry.WakeWatcher();
-            }
-            else if (beat == SupervisorHeartbeatState.Alive)
+            if (beat == SupervisorHeartbeatState.Alive)
             {
                 entry.DumpingTimestamp = null;
             }
@@ -1186,6 +1187,21 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 entry.Armed = true; // the first world-tick beat arms the hang watch (ready is sent before the world ticks)
                 entry.WakeWatcher();
             }
+        }
+    }
+
+    // An authenticated dumping line: the child is writing its own crash dump and is about to end. Give it the dump grace instead of draining and killing it
+    // for the silence that follows, which would truncate the dump (and a second capture of ours would only compete with it).
+    private void RecordDumping(ManagedEntry entry, ISupervisedProcess process)
+    {
+        lock (_gate)
+        {
+            if (!ReferenceEquals(entry.Process, process))
+                return; // a line from an incarnation that has been replaced
+
+            entry.LastBeatTimestamp = _time.GetTimestamp();
+            entry.DumpingTimestamp ??= entry.LastBeatTimestamp;
+            entry.WakeWatcher();
         }
     }
 

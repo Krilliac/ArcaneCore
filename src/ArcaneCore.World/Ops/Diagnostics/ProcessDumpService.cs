@@ -151,7 +151,8 @@ public sealed class ProcessDumpService
 
             try
             {
-                System.IO.Directory.CreateDirectory(_directory);
+                // The same owner-only creation as the crash dump (a dump holds every secret in memory).
+                CrashDumpService.EnsureDirectory(_directory, (level, message) => _logger.Log(level, "{Message}", message));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
             {

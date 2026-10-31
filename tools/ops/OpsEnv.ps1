@@ -20,9 +20,13 @@ function Get-OpsRequiredEnv {
     <#
     .SYNOPSIS
       The value of an environment variable; throws a message naming the variable and what it is for when it is unset.
+      -Parameter is the name of the script parameter that supplies the same value; the message then names it ("or pass -LanesRoot").
     #>
-    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Purpose)
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Purpose, [string]$Parameter)
     $value = Get-OpsEnv $Name
-    if ($null -eq $value) { throw "$Name is not set ($Purpose). Set it, or pass the matching parameter; see docs/ops/tooling.md." }
+    if ($null -eq $value) {
+        $instead = if ([string]::IsNullOrWhiteSpace($Parameter)) { 'Set it' } else { "Set it, or pass -$Parameter" }
+        throw "$Name is not set ($Purpose). $instead; see docs/ops/tooling.md."
+    }
     return $value
 }
