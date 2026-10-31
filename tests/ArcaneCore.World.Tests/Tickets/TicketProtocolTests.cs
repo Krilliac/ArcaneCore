@@ -56,6 +56,6 @@ public sealed class TicketProtocolTests
 
         await client.SendAsync(WorldOpcode.CmsgGmticketSystemstatus, [1]);
 
-        Assert.Empty(await client.CollectAsync(TimeSpan.FromMilliseconds(250)));
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgGmticketSystemstatus);
     }
 }

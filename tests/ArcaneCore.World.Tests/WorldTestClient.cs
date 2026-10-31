@@ -475,6 +475,18 @@ internal sealed class WorldTestClient : IAsyncDisposable
         return body;
     }
 
+    /// <summary>
+    /// Assert that none of the packets the server sends for what this client has already sent has one of <paramref name="opcodes"/>:
+    /// <see cref="CollectRepliesAsync"/> (the barrier, then a short quiet tail), filtered to the opcodes under test. Unlike
+    /// <c>Assert.Empty(await CollectAsync(quiet))</c> it does not fail on an unrelated packet that enter-world delivers late
+    /// (SMSG_CLEAR_FAR_SIGHT, an update, an area packet) and it does not pass because the answer was merely slower than a fixed window.
+    /// </summary>
+    public async Task AssertNoPacketsAsync(params WorldOpcode[] opcodes)
+    {
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await CollectRepliesAsync(TimeSpan.FromMilliseconds(100));
+        Assert.Empty(packets.Where(p => Array.IndexOf(opcodes, p.Opcode) >= 0).Select(p => WorldOpcodeNames.GetName(p.Opcode)));
+    }
+
     /// <summary>Assert the server sends nothing more within <paramref name="window"/>.</summary>
     public async Task AssertSilentAsync(TimeSpan window)
     {

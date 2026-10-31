@@ -49,7 +49,7 @@ public sealed class ChatRestrictionEndToEndTests
         }
 
         Assert.Equal(Enumerable.Range(1, 11).Select(i => "spam " + i), heard); // the twelfth was consumed by the gate
-        await listener.AssertSilentAsync(TimeSpan.FromMilliseconds(200));
+        await listener.AssertNoPacketsAsync(WorldOpcode.SmsgMessagechat);
 
         // Ten seconds later the speaker may talk again.
         clock.Advance(TimeSpan.FromSeconds(11));
@@ -82,11 +82,11 @@ public sealed class ChatRestrictionEndToEndTests
 
         await muted.SendChatAsync(ChatType.Guild, Language.Common, "hello guild");
         Assert.Equal("You must wait 5 Minutes  before speaking again.", await NotificationAsync(muted)); // secsToTimeString(300): "5 Minutes " then the format's own space
-        await friend.AssertSilentAsync(TimeSpan.FromMilliseconds(200));
+        await friend.AssertNoPacketsAsync(WorldOpcode.SmsgMessagechat);
 
         await muted.SendChatAsync(ChatType.Whisper, Language.Common, "help me", "Friend");
         Assert.Equal("You must wait 5 Minutes  before speaking again.", await NotificationAsync(muted));
-        await friend.AssertSilentAsync(TimeSpan.FromMilliseconds(200));
+        await friend.AssertNoPacketsAsync(WorldOpcode.SmsgMessagechat);
 
         await muted.SendChatAsync(ChatType.Whisper, Language.Common, "help me", "Keeper");
         ChatMessage whisper = await gm.ReadChatAsync();

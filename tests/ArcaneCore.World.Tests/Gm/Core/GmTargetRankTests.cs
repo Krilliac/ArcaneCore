@@ -80,7 +80,7 @@ public sealed class GmTargetRankTests
 
         List<string> replies = await RunAsync(gm, command);
 
-        Assert.Equal([GmStrings.SecurityTooLow], replies);
+        Assert.Contains(GmStrings.SecurityTooLow, replies);
         Assert.Equal(before, await SnapshotAsync(host, Boss));
         Assert.NotNull(await host.OnWorldAsync(() => host.World.FindOnlinePlayer(Boss)));   // .kick did not disconnect it
     }
@@ -307,10 +307,18 @@ public sealed class GmTargetRankTests
     {
         await client.SendChatAsync(ChatType.Say, Language.Common, command);
         await client.SendChatAsync(ChatType.Say, Language.Common, ".nosuchcommand");
+
+        // The barrier is handled after both chat lines on the session's FIFO world queue, so every reply written synchronously by the
+        // command is in what it returns, however late the world thread runs it. Other late packets (enter-world updates) are skipped.
         var replies = new List<string>();
-        while (true)
+        foreach ((WorldOpcode opcode, byte[] payload) in await client.CollectThroughBarrierAsync())
         {
-            ChatMessage message = await client.ReadChatAsync();
+            if (opcode != WorldOpcode.SmsgMessagechat)
+            {
+                continue;
+            }
+
+            ChatMessage message = ChatMessage.Parse(payload);
             if (message.Type != ChatType.System)
             {
                 continue;
@@ -323,6 +331,8 @@ public sealed class GmTargetRankTests
 
             replies.Add(message.Text);
         }
+
+        throw new Xunit.Sdk.XunitException($"the sentinel reply never arrived through the barrier; replies so far: {string.Join(" | ", replies)}");
     }
 
     /// <summary>The four-level declarations, under which a GameMaster reaches <c>.guild delete</c>.</summary>

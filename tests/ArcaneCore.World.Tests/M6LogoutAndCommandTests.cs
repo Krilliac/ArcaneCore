@@ -25,6 +25,7 @@ public sealed class M6LogoutAndCommandTests
     {
         await using var host = WorldTestHost.Start(configure: o => o.LogoutDelayMs = 300);
         await using WorldTestClient leaver = await host.EnterWorldAsync("LEAVER", "Leaver");
+        leaver.IgnoreEnergyRegenUpdates = true; // a 2 s energy-regen SMSG_UPDATE_OBJECT could land in place of SmsgStandstateUpdate
         await using WorldTestClient watcher = await host.EnterWorldAsync("WATCHER", "Watcher");
         await Drain(leaver, watcher);
         int savesBefore = host.Characters.SaveCount;
@@ -64,8 +65,8 @@ public sealed class M6LogoutAndCommandTests
         AssertPacket(WorldOpcode.SmsgForceMoveUnroot, (byte[])[.. PackedGuid1, 1, 0, 0, 0], await client.ReadAsync()); // counter advanced
         AssertPacket(WorldOpcode.SmsgStandstateUpdate, new byte[] { (byte)StandState.Stand }, await client.ReadAsync());
 
-        await Task.Delay(600);
-        Assert.DoesNotContain(await client.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgLogoutComplete);
+        // The cancel is already acknowledged, so the countdown's state is settled: no sleep, the state check below is the proof.
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgLogoutComplete);
         Assert.False(await host.PlayerStateAsync("Stayer", p => p.IsLoggingOut || (p.UnitFlags & UnitFlags.Stunned) != 0));
     }
 
@@ -394,7 +395,7 @@ public sealed class M6LogoutAndCommandTests
         Assert.Equal("Player saved.", (await player.ReadChatAsync()).Text);
         Assert.Equal("Player saved.", (await player.ReadChatAsync()).Text);
         await WorldTestHost.WaitForAsync(() => host.Characters.SaveCount == saves + 1, "one save");
-        Assert.Empty(await player.CollectAsync());
+        await player.AssertNoPacketsAsync(WorldOpcode.SmsgMessagechat); // no third "saved" line
 
         Assert.Equal("Player saved.", await CommandAsync(gm, ".save"));
         Assert.Equal("All players saved.", await CommandAsync(gm, ".saveall"));
