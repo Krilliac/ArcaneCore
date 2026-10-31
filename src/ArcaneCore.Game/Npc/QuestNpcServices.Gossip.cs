@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Protocol;
 
@@ -131,6 +132,7 @@ public sealed partial class QuestNpcServices
 
         InteractingCancels?.Invoke(player);
         PauseInteractionMovement(player, npc);
+        RaiseCreatureAiHook(player, npc, "npc.gossip-hello-ai", ai => ai.OnGossipHello(player));
         if ((npc.NpcFlags & NpcFlags.SpiritGuide) != 0)
         {
             player.Session.Send(WorldOpcode.SmsgAreaSpiritHealerTime,
@@ -156,6 +158,27 @@ public sealed partial class QuestNpcServices
         PrepareGossipMenu(s, npc, npc.GossipMenuId);
         SendPreparedGossip(s, npc);
         Flush(s);
+    }
+
+    /// <summary>
+    /// Runs a creature AI gossip hook (AzerothCore CreatureAI::sGossipHello / sGossipSelect). A fault is recorded once in the
+    /// <see cref="FaultLedger"/> and logged; the gossip reply carries on.
+    /// </summary>
+    private void RaiseCreatureAiHook(Player player, NpcInfo npc, string site, Action<Creatures.CreatureAI> hook)
+    {
+        if (npc.IsGameObject || player.Map?.FindObject(npc.Guid) is not Creatures.Creature { AI: { } ai })
+        {
+            return;
+        }
+
+        try
+        {
+            hook(ai);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault(site, ex, "{Site} hook of AI {Ai} failed (creature entry {Entry}); the gossip reply carries on", site, ai.GetType().Name, npc.Entry);
+        }
     }
 
     /// <summary>
@@ -300,7 +323,7 @@ public sealed partial class QuestNpcServices
             {
                 string text = gmSkipCondition ? option.OptionText + GmOnSuffix : option.OptionText;
                 menu.AddGossipItem(new GossipMenuItem(option.OptionIcon, text, option.BoxCoded != 0, (GossipOption)option.OptionId,
-                    option.BoxText, option.ActionMenuId, option.ActionPoiId) { ActionScript = option.ActionScriptId });
+                    option.BoxText, option.ActionMenuId, option.ActionPoiId) { ActionScript = option.ActionScriptId, MenuId = menuId, MenuOptionId = option.Id });
             }
         }
 
@@ -360,6 +383,10 @@ public sealed partial class QuestNpcServices
 
         Player p = s.Quests.Player;
         GossipMenuItem item = menu.GossipItems[(int)listId];
+        if (!npc.IsGameObject && item.MenuId is { } shownMenu)
+        {
+            RaiseCreatureAiHook(p, npc, "npc.gossip-select-ai", ai => ai.OnGossipSelect(p, shownMenu, item.MenuOptionId));
+        }
 
         // A game object only offers plain gossip and the quest list (Player.cpp:12185-12192).
         if (npc.IsGameObject && item.OptionId > GossipOption.QuestGiver)

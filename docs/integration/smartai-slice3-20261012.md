@@ -89,9 +89,18 @@ Deviations:
   reset, then RESPAWN only, as before this slice.
 - **RANDOM_EMOTE and players.** As PLAY_EMOTE, player targets are skipped.
 
+## Creature gossip (branch `claude/ux-smartai-creature-gossip`, 2026-10-30)
+
+- **Event 64 GOSSIP_HELLO now fires for creatures.** `QuestNpcServices.GossipHello` raises `CreatureAI.OnGossipHello` after the interaction pause and
+  before the menu is prepared; `CreatureSmartAI` forwards it as event 64 with the player as invoker (AzerothCore `SmartAI::sGossipHello`,
+  SmartAI.cpp:1202-1205). The menu is not suppressed, so the gossip packet is unchanged.
+- **Event 62 GOSSIP_SELECT delivered.** `OnGossipSelect` raises `CreatureAI.OnGossipSelect(player, menuId, optionId)` for lines that came from
+  `gossip_menu_option` (`GossipMenuItem.MenuId` / `MenuOptionId`, additive init properties); a row runs only when param1 equals the shown menu id and
+  param2 the option id (SmartAI.cpp:1207-1210; SmartScript.cpp:4780-4787). A script's own lines carry no menu id and do not raise it.
+- A throwing hook is recorded once (sites `npc.gossip-hello-ai`, `npc.gossip-select-ai`) and the reply still goes out.
+
 ## Still open (slice 3e and later)
 
-By the same count, the largest single blockers left are event 38 DATA_SET (205 rows that need nothing else), 40 WAYPOINT_REACHED (160), 62
-GOSSIP_SELECT (132), 106 and 105 (AzerothCore-only ids, 98 and 84), action 50 SUMMON_GO (97), event 20 REWARD_QUEST (80), 52 TEXT_OVER (76) and action 34
+By the same count, the largest single blockers left are event 38 DATA_SET (205 rows that need nothing else), 40 WAYPOINT_REACHED (160), 106 and 105 (AzerothCore-only ids, 98 and 84), action 50 SUMMON_GO (97), event 20 REWARD_QUEST (80), 52 TEXT_OVER (76) and action 34
 SET_INST_DATA (75). Also open: MOVEMENTINFORM (34, needs the AC motion-type numbering mapped), the remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending the area-trigger handler when a
 script ran.

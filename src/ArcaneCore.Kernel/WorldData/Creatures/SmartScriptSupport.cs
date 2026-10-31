@@ -12,7 +12,7 @@ public static class SmartScriptSupport
 {
     // ---- events the engine runs ----
 
-    private static readonly FrozenSet<byte> CreatureEvents = new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 17, 21, 22, 25, 59, 60, 61 }.ToFrozenSet();
+    private static readonly FrozenSet<byte> CreatureEvents = new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 17, 21, 22, 25, 59, 60, 61, 62, 64 }.ToFrozenSet();
 
     // GO: UPDATE_OOC, AI_INIT, TIMED_EVENT_TRIGGERED, UPDATE, LINK, JUST_CREATED, GOSSIP_HELLO (the ArcaneCore GO hooks: Update and OnUse).
     private static readonly FrozenSet<byte> GameObjectEvents = new byte[] { 1, 37, 59, 60, 61, 63, 64 }.ToFrozenSet();

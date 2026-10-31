@@ -26,6 +26,12 @@ public sealed record GossipMenuItem(
     /// GossipMenuItemData::m_gAction_script); 0 none.
     /// </summary>
     public uint ActionScript { get; init; }
+
+    /// <summary>The gossip_menu id this line came from (a SmartAI GOSSIP_SELECT's param1); null for a script's own line.</summary>
+    public uint? MenuId { get; init; }
+
+    /// <summary>The line's gossip_menu_option.id inside <see cref="MenuId"/> (a SmartAI GOSSIP_SELECT's param2).</summary>
+    public uint MenuOptionId { get; init; }
 }
 
 /// <summary>One prepared quest entry (vmangos GossipDef.h QuestMenuItem).</summary>
