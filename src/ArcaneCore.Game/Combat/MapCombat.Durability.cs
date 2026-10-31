@@ -9,17 +9,13 @@ public sealed partial class MapCombat
     private const float DurabilityChancePercentScale = 100f;
 
     /// <summary>
-    /// Armor wear on a hit taken (mangosserver Unit::DealDamage, "random durability for items (HIT TAKEN)", Unit.cpp:1093-1098):
-    /// when a player victim survives a damage event, <c>Items:DurabilityLossChanceDamage</c> percent of the time one worn piece
-    /// of armor with durability is picked uniformly and loses one point. The reference rolls <c>urand(0, EQUIPMENT_SLOT_END - 1)</c>
-    /// over all 19 slots with equal weight (Unit.cpp:1096) and lets an empty slot (PlayerDurability.cpp:253-259) or an item without
-    /// durability (PlayerDurability.cpp:213-228) absorb the roll; no reference core weights the slots. Here the pool is the worn
-    /// armor only (<see cref="PlayerInventory.CollectWornArmorWithDurability"/>: no empty slot, no neck, ring, trinket, shirt or
-    /// tabard, no weapon, since the weapon wears on the hit done), still uniform within the pool, so every successful percent roll
-    /// wears a piece of armor (docs/areas/items.md, deliberate difference). Nothing is drawn when no armor is worn. Called from
-    /// <see cref="DealDamage"/> on the survivor path only, so the killing blow wears nothing and the 10% death penalty
-    /// (<see cref="ApplyDeathDurability"/>) is untouched. Self damage (environment) counts as taken damage here as it does in
-    /// the reference. World thread only; allocation free (one float roll, a stack-allocated slot list, one integer roll on a hit).
+    /// Wear on a hit taken (vmangos Unit::DealDamage, "random durability for items (HIT TAKEN)", Unit.cpp:879-884; mangos-classic Unit.cpp:1244):
+    /// when a player victim survives a damage event, <c>Items:DurabilityLossChanceDamage</c> percent of the time one of the 19 equipment slots is
+    /// rolled with <c>urand(0, EQUIPMENT_SLOT_END - 1)</c> and the item in it loses one point. An empty slot, an item without durability, a
+    /// weapon, a ring or a neck piece absorbs the roll, as in both reference cores. Called from <see cref="DealDamage"/> on the survivor path
+    /// only, so the killing blow wears nothing and the 10% death penalty (<see cref="ApplyDeathDurability"/>) is untouched. Self damage
+    /// (environment) counts as taken damage here as it does in the reference. World thread only; allocation free (one float roll and one
+    /// integer roll on a hit, the integer roll drawn after the percent roll).
     /// </summary>
     private void RollHitTakenDurability(Unit victim)
     {
@@ -28,8 +24,11 @@ public sealed partial class MapCombat
             return;
         }
 
-        WearRandomArmorPiece(player);
+        player.Inventory.DurabilityPointLossForEquipSlot(RollEquipmentSlot());
     }
+
+    /// <summary>vmangos <c>EquipmentSlots(urand(0, EQUIPMENT_SLOT_END - 1))</c>: one of the 19 equipment slots with equal weight.</summary>
+    private byte RollEquipmentSlot() => (byte)Random.Next(0, InventorySlots.EquipmentEnd - 1);
 
     /// <summary>
     /// Picks one worn armor piece with durability uniformly and takes one point off it. Draws nothing when no armor is worn,
@@ -48,12 +47,12 @@ public sealed partial class MapCombat
     }
 
     /// <summary>
-    /// Weapon wear on a hit done: after a white swing of a player attacker connects for damage and the victim survives, the
-    /// same <c>Items:DurabilityLossChanceDamage</c> roll takes one point off the weapon of the swinging hand (main hand for
-    /// <see cref="WeaponAttackType.BaseAttack"/>, off hand for <see cref="WeaponAttackType.OffAttack"/>). vmangos picks a random
-    /// slot for a hit done as well (Unit.cpp:1103-1108); the weapon-specific slot is the documented deviation that makes a
-    /// weapon wear with the hits it lands (docs/areas/items.md). A missed, dodged or parried swing deals nothing and wears nothing.
-    /// World thread only; allocation free.
+    /// Wear on a hit done (vmangos Unit::DealDamage "random durability for items (HIT DONE)", Unit.cpp:888-894; mangos-classic Unit.cpp:1228):
+    /// after a white swing of a player attacker connects for damage and the victim survives, the same
+    /// <c>Items:DurabilityLossChanceDamage</c> roll takes one point off the item in a uniformly rolled one of the 19 equipment slots (the
+    /// weapon of the swinging hand is only one of them, 1 in 19). A missed, dodged or parried swing deals nothing and wears nothing. The
+    /// reference rolls this in DealDamage for every damage a player deals, spells included; here only the white swing reaches it (the spell
+    /// damage path is not wired). World thread only; allocation free.
     /// </summary>
     private void RollHitDoneDurability(MeleeDamageInfo info, uint dealt)
     {
@@ -63,8 +62,7 @@ public sealed partial class MapCombat
             return;
         }
 
-        byte slot = info.AttackType == WeaponAttackType.OffAttack ? InventorySlots.OffHand : InventorySlots.MainHand;
-        player.Inventory.DurabilityPointLossForEquipSlot(slot);
+        player.Inventory.DurabilityPointLossForEquipSlot(RollEquipmentSlot());
     }
 
     /// <summary>
