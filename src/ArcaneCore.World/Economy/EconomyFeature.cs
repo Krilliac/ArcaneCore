@@ -499,4 +499,45 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             _logger.LogFault("economy.sweep-mails", ex, "mail expiry sweep failed");
         }
     }
+
+    /// <summary>
+    /// World thread: mail <paramref name="count"/> of <paramref name="itemEntry"/> to a character from the creature <paramref name="senderEntry"/>
+    /// (MAIL_CREATURE), as vmangos BattleGround::SendRewardMarkByMail does for the part of a mark the bags could not take
+    /// (BattleGround.cpp:849-882: <c>SendMailTo(..., MAIL_CHECK_MASK_COPIED, 15 * MINUTE, 1 * DAY)</c>: delivered after 15 minutes,
+    /// expiring a day after that). The item is created new straight into escrow in one economy operation. <paramref name="finished"/>
+    /// gets true once the letter is committed; false when the economy store is off, the template is unknown or the commit failed.
+    /// </summary>
+    public void SendCreatureItemMail(int receiverId, uint senderEntry, string subject, string body, uint itemEntry, uint count,
+        Action<bool>? finished = null)
+    {
+        ArgumentNullException.ThrowIfNull(subject);
+        ArgumentNullException.ThrowIfNull(body);
+        List<MailView>? built = senderEntry == 0 ? null : BuildLetters(receiverId, senderEntry, 0, subject, body, 0, [new ServerMailItem(itemEntry, count)]);
+        if (built is not { Count: 1 })
+        {
+            finished?.Invoke(false);
+            return;
+        }
+
+        long deliver = Now + BattlegroundMarkMailDelaySeconds;
+        MailView letter = built[0] with
+        {
+            Mail = built[0].Mail with { DeliverTime = deliver, ExpireTime = deliver + BattlegroundMarkMailExpirySeconds },
+        };
+        var changes = new List<EconomyChange>();
+        if (letter.Item is { } escrow) changes.Add(new CreateEscrowItem(escrow));
+        changes.Add(new InsertMail(letter.Mail, letter.Body));
+        if (!Start([], changes, outcome =>
+            {
+                bool ok = outcome == EconomyOutcome.After;
+                if (ok) Deliver(letter);
+                finished?.Invoke(ok);
+            }))
+        {
+            finished?.Invoke(false);
+        }
+    }
+
+    private const long BattlegroundMarkMailDelaySeconds = 15 * 60;
+    private const long BattlegroundMarkMailExpirySeconds = 24 * 60 * 60;
 }

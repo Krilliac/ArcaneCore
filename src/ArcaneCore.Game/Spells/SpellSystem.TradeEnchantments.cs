@@ -11,7 +11,8 @@ public sealed record TradeEnchantmentPlan(ItemInstanceData UpdatedRecipientItem,
     CharacterLife? CasterLifeAfter = null,
     uint PowerCost = 0,
     SpellInfo? SpellSnapshot = null,
-    TradeItemCastContext? ItemCast = null);
+    TradeItemCastContext? ItemCast = null,
+    bool CastOnCommit = false);
 
 /// <summary>Immutable provenance captured while planning a deferred item cast.</summary>
 public sealed record TradeItemCastContext(
@@ -64,10 +65,21 @@ public sealed partial class SpellSystem
             return SpellCastResult.ItemNotReady;
         }
 
-        SpellCastResult imageResult = TryBuildTradeEnchantmentAfterImage(caster, target, spell,
-            out ItemInstanceData? updatedRecipientItem);
-        if (imageResult != SpellCastResult.CastOk)
-            return imageResult;
+        // vmangos Spell.cpp:6455-6477 stores any spell aimed at the non-traded slot and casts it when the trade completes
+        // (TradeHandler.cpp:347-416). A pure open-lock spell (Pick Lock on a partner's lockbox) changes nothing in the recipient's item
+        // image: it is cast for real once the trade committed. Other non-enchant spells stay refused.
+        bool castOnCommit = IsOpenLockOnly(spell);
+        ItemInstanceData? updatedRecipientItem;
+        if (castOnCommit)
+        {
+            updatedRecipientItem = target.ToData();
+        }
+        else
+        {
+            SpellCastResult imageResult = TryBuildTradeEnchantmentAfterImage(caster, target, spell, out updatedRecipientItem);
+            if (imageResult != SpellCastResult.CastOk)
+                return imageResult;
+        }
 
         if (!CollectReagents(spell, out IReadOnlyList<InventoryRewardGrant> reagents))
             return SpellCastResult.ItemNotReady;
@@ -91,8 +103,22 @@ public sealed partial class SpellSystem
             return check;
 
         plan = new TradeEnchantmentPlan(updatedRecipientItem!,
-            Array.AsReadOnly(reagents.ToArray()), powerCost == 0 ? null : lifeAfter, powerCost, spell with { });
+            Array.AsReadOnly(reagents.ToArray()), powerCost == 0 ? null : lifeAfter, powerCost, spell with { },
+            CastOnCommit: castOnCommit);
         return SpellCastResult.CastOk;
+    }
+
+    /// <summary>Whether every non-empty effect of <paramref name="spell"/> is an open-lock effect (and there is at least one).</summary>
+    private static bool IsOpenLockOnly(SpellInfo spell)
+    {
+        bool any = false;
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.IsEmpty) continue;
+            if (effect.Effect is not (SpellEffectName.OpenLock or SpellEffectName.OpenLockItem)) return false;
+            any = true;
+        }
+        return any;
     }
 
     /// <summary>Builds the detached enchantment image shared by spellbook and item-cast trade plans.</summary>
