@@ -1485,7 +1485,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     {
         SupervisedProcessConfig config = entry.Config;
         string? tool = string.IsNullOrWhiteSpace(_options.StackCaptureTool) ? null : _options.StackCaptureTool;
-        var request = new SupervisedHangCaptureRequest(config.Name, process.ProcessId, config.HangCapture, _options.HangCaptureDirectory, tool);
+        var request = new SupervisedHangCaptureRequest(config.Name, process.ProcessId, config.HangCapture, _options.HangCaptureDirectory, tool,
+            TimeSpan.FromSeconds(_options.HangCaptureTimeoutSeconds));
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         Task capture = _hangCapture!.CaptureAsync(request, cts.Token);
         Task timeout = _delayAsync(TimeSpan.FromSeconds(_options.HangCaptureTimeoutSeconds), cts.Token);
