@@ -143,7 +143,7 @@ public sealed class DbCopyTests : IAsyncLifetime
         DbCopyTestSupport.ClearPool(target); // the test's own pooled sessions must not count as a running daemon
 
         (int refused, _, string error) = await RunCopyAsync(source, component, target);
-        Assert.Equal(DbUpgradeExitCodes.Refused, refused);
+        Assert.True(refused == DbUpgradeExitCodes.Refused, $"exit {refused}\n{error}");
         Assert.Contains("is not empty", error, StringComparison.Ordinal);
         Assert.Contains("--replace", error, StringComparison.Ordinal);
         Assert.Contains("nothing was changed", error, StringComparison.Ordinal);
@@ -189,7 +189,7 @@ public sealed class DbCopyTests : IAsyncLifetime
         DatabaseConnectionOptions target = await _databases.CreateAsync(DatabaseProvider.Sqlite);
         (int code, _, string error) = await RunCopyAsync(source, "auth", target);
 
-        Assert.Equal(DbUpgradeExitCodes.Refused, code);
+        Assert.True(code == DbUpgradeExitCodes.Refused, $"exit {code}\n{error}");
         Assert.Contains("not at the current schema version", error, StringComparison.Ordinal);
         Assert.Contains("arcane-db upgrade", error, StringComparison.Ordinal);
         Assert.False(File.Exists(UpgradeTestSupport.SqlitePath(target)));
@@ -207,7 +207,7 @@ public sealed class DbCopyTests : IAsyncLifetime
         DatabaseConnectionOptions target = await _databases.CreateAsync(DatabaseProvider.Sqlite);
         (int code, _, string error) = await RunCopyAsync(source, "auth", target);
 
-        Assert.Equal(DbUpgradeExitCodes.Refused, code);
+        Assert.True(code == DbUpgradeExitCodes.Refused, $"exit {code}\n{error}");
         Assert.Contains("table 'account'", error, StringComparison.Ordinal);
         Assert.Contains("Nickname", error, StringComparison.Ordinal);
         Assert.False(File.Exists(UpgradeTestSupport.SqlitePath(target)));
@@ -225,7 +225,7 @@ public sealed class DbCopyTests : IAsyncLifetime
         DatabaseConnectionOptions target = await _databases.CreateAsync(DatabaseProvider.Sqlite);
         (int code, _, string error) = await RunCopyAsync(source, "auth", target);
 
-        Assert.Equal(DbUpgradeExitCodes.Refused, code);
+        Assert.True(code == DbUpgradeExitCodes.Refused, $"exit {code}\n{error}");
         Assert.Contains("realmlist", error, StringComparison.Ordinal);
         Assert.Contains("Category", error, StringComparison.Ordinal);
     }
@@ -242,7 +242,7 @@ public sealed class DbCopyTests : IAsyncLifetime
         DatabaseConnectionOptions target = await _databases.CreateAsync(DatabaseProvider.Sqlite);
         (int code, _, string error) = await RunCopyAsync(source, "auth", target);
 
-        Assert.Equal(DbUpgradeExitCodes.Refused, code);
+        Assert.True(code == DbUpgradeExitCodes.Refused, $"exit {code}\n{error}");
         Assert.Contains("operator_notes", error, StringComparison.Ordinal);
     }
 
@@ -255,7 +255,7 @@ public sealed class DbCopyTests : IAsyncLifetime
 
         (int code, _, string error) = await RunCopyAsync(source, "characters", target);
 
-        Assert.Equal(DbUpgradeExitCodes.Refused, code);
+        Assert.True(code == DbUpgradeExitCodes.Refused, $"exit {code}\n{error}");
         Assert.Contains("world process", error, StringComparison.Ordinal);
         Assert.False(File.Exists(UpgradeTestSupport.SqlitePath(target)));
 
@@ -270,7 +270,7 @@ public sealed class DbCopyTests : IAsyncLifetime
 
         (int code, _, string error) = await RunCopyAsync(source, "auth", source, "--replace");
 
-        Assert.Equal(DbUpgradeExitCodes.Usage, code);
+        Assert.True(code == DbUpgradeExitCodes.Usage, $"exit {code}\n{error}");
         Assert.Contains("same database", error, StringComparison.Ordinal);
     }
 
@@ -300,7 +300,7 @@ public sealed class DbCopyTests : IAsyncLifetime
 
         (int code, string output, string error) = await RunCopyAsync(source, "auth", target);
 
-        Assert.Equal(DbUpgradeExitCodes.Unreachable, code);
+        Assert.True(code == DbUpgradeExitCodes.Unreachable, $"exit {code}\n{error}");
         Assert.DoesNotContain(Marker, output + error, StringComparison.Ordinal);
     }
 
