@@ -166,6 +166,13 @@
         "resolved": "9.0.21",
         "contentHash": "Z7gAKa1nD2O92t8mI+/74HDAxRIFHh9qgsNqGfPhblGy1Xp9qeU7ToMwZL2BQg0FA3Q92djSW5gU1Mi7hTJVlw=="
       },
+      "arcanecore.cluster.protocol": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Kernel": "[1.0.0, )",
+          "ArcaneCore.Protocol": "[1.0.0, )"
+        }
+      },
       "arcanecore.cryptography": {
         "type": "Project",
         "dependencies": {
@@ -234,6 +241,7 @@
       "arcanecore.world": {
         "type": "Project",
         "dependencies": {
+          "ArcaneCore.Cluster.Protocol": "[1.0.0, )",
           "ArcaneCore.Cryptography": "[1.0.0, )",
           "ArcaneCore.Data": "[1.0.0, )",
           "ArcaneCore.Game": "[1.0.0, )",

@@ -42,9 +42,9 @@ public enum ClusterSessionDetachReason : byte
 
 /// <summary>
 /// Transport seam between a session-owning Gateway and an authoritative map Worker (<c>docs/CLUSTERING_DESIGN.md</c> §4).
-/// In <see cref="ClusterRole.Combined"/> mode this is backed by <see cref="LocalGatewayWorkerTransport"/> with zero sockets;
+/// In <see cref="ClusterRole.Combined"/> mode this is backed by <c>LocalGatewayWorkerTransport</c> with zero sockets;
 /// in split <see cref="ClusterRole.Gateway"/> / <see cref="ClusterRole.Worker"/> mode it runs over framed RPC
-/// (<see cref="LoopbackGatewayWorkerClient"/> / <see cref="LoopbackGatewayWorkerHost"/>).
+/// (<c>LoopbackGatewayWorkerClient</c> / <c>LoopbackGatewayWorkerHost</c>).
 /// </summary>
 public interface IGatewayWorkerTransport : IAsyncDisposable
 {

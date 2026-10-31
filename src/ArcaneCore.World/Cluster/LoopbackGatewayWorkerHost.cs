@@ -16,7 +16,7 @@ namespace ArcaneCore.World.Cluster;
 /// </summary>
 public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
 {
-    public const int MaxFrameBytes = WorldSession.MaxServerPayload + 256;
+    public const int MaxFrameBytes = GatewayLinkFraming.MaxFrameBytes;
     private const int OutboundQueueCapacity = 1024;
 
     private readonly ClusterNodeManifest _workerManifest;
@@ -445,61 +445,11 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         _cts.Dispose();
     }
 
-    internal static async ValueTask WriteFrameAsync(NetworkStream stream, byte[] payload, CancellationToken ct)
-    {
-        if (payload.Length > MaxFrameBytes)
-        {
-            throw new InvalidOperationException($"frame payload ({payload.Length} B) exceeds MaxFrameBytes ({MaxFrameBytes} B)");
-        }
+    internal static ValueTask WriteFrameAsync(NetworkStream stream, byte[] payload, CancellationToken ct) =>
+        GatewayLinkFraming.WriteFrameAsync(stream, payload, ct);
 
-        byte[] header = new byte[4];
-        BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
-        await stream.WriteAsync(header, ct).ConfigureAwait(false);
-        await stream.WriteAsync(payload, ct).ConfigureAwait(false);
-        await stream.FlushAsync(ct).ConfigureAwait(false);
-    }
-
-    internal static async ValueTask<byte[]?> ReadFrameAsync(NetworkStream stream, CancellationToken ct)
-    {
-        byte[] header = new byte[4];
-        int read = await ReadExactlyOrEofAsync(stream, header, ct).ConfigureAwait(false);
-        if (read == 0)
-        {
-            return null;
-        }
-
-        int length = BinaryPrimitives.ReadInt32LittleEndian(header);
-        if (length <= 0 || length > MaxFrameBytes)
-        {
-            throw new InvalidOperationException($"invalid gateway–worker frame length: {length}");
-        }
-
-        byte[] body = new byte[length];
-        await stream.ReadExactlyAsync(body, ct).ConfigureAwait(false);
-        return body;
-    }
-
-    private static async ValueTask<int> ReadExactlyOrEofAsync(NetworkStream stream, Memory<byte> buffer, CancellationToken ct)
-    {
-        int total = 0;
-        while (total < buffer.Length)
-        {
-            int n = await stream.ReadAsync(buffer[total..], ct).ConfigureAwait(false);
-            if (n == 0)
-            {
-                if (total == 0)
-                {
-                    return 0;
-                }
-
-                throw new EndOfStreamException("truncated frame header on gateway–worker stream");
-            }
-
-            total += n;
-        }
-
-        return total;
-    }
+    internal static ValueTask<byte[]?> ReadFrameAsync(NetworkStream stream, CancellationToken ct) =>
+        GatewayLinkFraming.ReadFrameAsync(stream, ct);
 
     internal static byte[] BuildHelloRegisterFrame(ClusterNodeManifest manifest)
     {
@@ -612,42 +562,9 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         return buf;
     }
 
-    internal static void WriteSessionPacketBody(Span<byte> span, ClusterSessionPacket packet)
-    {
-        BinaryPrimitives.WriteInt64LittleEndian(span[..8], packet.SessionGeneration);
-        BinaryPrimitives.WriteInt32LittleEndian(span.Slice(8, 4), packet.AccountId);
-        BinaryPrimitives.WriteUInt64LittleEndian(span.Slice(12, 8), packet.CharacterGuid);
-        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(20, 8), packet.OwnerEpoch);
-        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(28, 8), packet.Sequence);
-        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(36, 4), packet.Opcode);
-        BinaryPrimitives.WriteInt32LittleEndian(span.Slice(40, 4), packet.Payload.Length);
-        packet.Payload.Span.CopyTo(span[44..]);
-    }
+    internal static void WriteSessionPacketBody(Span<byte> span, ClusterSessionPacket packet) => GatewayLinkFraming.WriteSessionPacketBody(span, packet);
 
-    /// <summary>Bytes of the envelope header that precedes the payload (<see cref="WriteSessionPacketBody"/>).</summary>
-    internal const int SessionPacketHeaderBytes = 44;
+    internal const int SessionPacketHeaderBytes = GatewayLinkFraming.SessionPacketHeaderBytes;
 
-    internal static ClusterSessionPacket DeserializeSessionPacket(ReadOnlyMemory<byte> memory)
-    {
-        ReadOnlySpan<byte> span = memory.Span;
-        if (span.Length < SessionPacketHeaderBytes)
-        {
-            throw new InvalidDataException($"truncated session packet envelope ({span.Length} B)");
-        }
-
-        long gen = BinaryPrimitives.ReadInt64LittleEndian(span[..8]);
-        int accountId = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(8, 4));
-        ulong guid = BinaryPrimitives.ReadUInt64LittleEndian(span.Slice(12, 8));
-        long epoch = BinaryPrimitives.ReadInt64LittleEndian(span.Slice(20, 8));
-        long seq = BinaryPrimitives.ReadInt64LittleEndian(span.Slice(28, 8));
-        uint opcode = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(36, 4));
-        int len = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(40, 4));
-        if (len < 0 || len > span.Length - SessionPacketHeaderBytes)
-        {
-            throw new InvalidDataException($"session packet payload length {len} does not fit the {span.Length} B envelope");
-        }
-
-        ReadOnlyMemory<byte> payload = memory.Slice(SessionPacketHeaderBytes, len);
-        return new ClusterSessionPacket(gen, accountId, guid, epoch, seq, opcode, payload);
-    }
+    internal static ClusterSessionPacket DeserializeSessionPacket(ReadOnlyMemory<byte> memory) => GatewayLinkFraming.DeserializeSessionPacket(memory);
 }
