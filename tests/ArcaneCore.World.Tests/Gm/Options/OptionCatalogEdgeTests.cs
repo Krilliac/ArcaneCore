@@ -334,7 +334,20 @@ public sealed class OptionCatalogEdgeTests
         await admin.SendChatAsync(ChatType.Say, Language.Common, bots0 ? ".packetcheck bots on" : ".packetcheck bots off");
         await admin.SendChatAsync(ChatType.Say, Language.Common, staff0 ? ".packetcheck staff on" : ".packetcheck staff off");
         await admin.SendChatAsync(ChatType.Say, Language.Common, enabled0 ? ".packetcheck off" : ".packetcheck on");
-        await admin.CollectAsync(TimeSpan.FromMilliseconds(600));
+        await admin.CollectAsync(TimeSpan.FromMilliseconds(100));
+
+        string[] ReadTracked()
+        {
+            OptionScope scope = Scope(host);
+            return OptionCatalog.Create(scope).Diff(scope).Select(s => s.Key.Path).OrderBy(p => p, StringComparer.Ordinal).ToArray();
+        }
+
+        // The three commands are handled on the world thread; poll (bounded) until all three keys are present instead of guessing a fixed delay.
+        DateTime deadline = DateTime.UtcNow.AddSeconds(10);
+        while ((await host.OnWorldAsync(ReadTracked)).Length < 3 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
 
         string[] tracked = await host.OnWorldAsync(() =>
         {
