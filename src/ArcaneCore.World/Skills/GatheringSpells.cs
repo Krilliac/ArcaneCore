@@ -80,7 +80,9 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
     }
 
     private static Item? FindItem(Player player, SpellCastTargets targets)
-        => (targets.Mask & (SpellCastTargetFlags.Item | SpellCastTargetFlags.TradeItem)) != 0 && !targets.Item.IsEmpty
+        => (targets.Mask & SpellCastTargetFlags.TradeItem) != 0 && targets.ServerValidatedTradeItem is { } traded
+            ? traded
+            : (targets.Mask & (SpellCastTargetFlags.Item | SpellCastTargetFlags.TradeItem)) != 0 && !targets.Item.IsEmpty
             ? player.Inventory.GetItemByGuid(targets.Item)
             : null;
 
@@ -241,7 +243,10 @@ internal sealed class GatheringSpells(IServiceProvider services, SkillsFeature s
         {
             // vmangos marks the item ITEM_DYNFLAG_UNLOCKED, then sends its loot.
             item.DynamicFlags |= ItemDynFlags.Unlocked;
-            Objects?.FindSystem(player.Map!)?.Loot?.OpenItem(player, item);
+            if (item.OwnerGuid == player.Guid)
+            {
+                Objects?.FindSystem(player.Map!)?.Loot?.OpenItem(player, item);
+            }
         }
 
         // An item gets one roll per open.

@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
+using ArcaneCore.Game.Crafting;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Death;
 using ArcaneCore.Game.Entities;
@@ -19,6 +20,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Economy;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Graveyards;
 using ArcaneCore.World.Instances;
@@ -170,6 +172,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             spells.System.HolderRemoved += OnAuraHolderRemoved;
             spells.System.HolderAdded += OnAuraHolderAdded;
             RegisterBannerTriggers(spells.System);
+            CreateItemSpells.SetBattlegroundMarkMailer(spells.System, MailRewardMarkRemainder);
         }
 
         InstallMatchHooks();
@@ -251,6 +254,37 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
                 PlayerSkinRefLootId = row.PlayerSkinRefLootId,
             });
         }
+    }
+
+    /// <summary>
+    /// vmangos <c>BattleGround::SendRewardMarkByMail</c> (BattleGround.cpp:849-882): the part of a mark the bags could not take arrives by mail
+    /// from the battlemaster of that battleground (<c>GetBattlemasterEntry</c>, 14623 WS, 14879 AB, 15972 AV), titled with the item name. The
+    /// body wording is our own. World thread.
+    /// </summary>
+    private void MailRewardMarkRemainder(Player player, uint spellId, uint itemEntry, uint count)
+    {
+        (BattlegroundType type, uint battlemaster) = spellId switch
+        {
+            24950 or 24951 => (BattlegroundType.WarsongGulch, 14623u),
+            24952 or 24953 => (BattlegroundType.ArathiBasin, 14879u),
+            24954 or 24955 => (BattlegroundType.AlteracValley, 15972u),
+            _ => (default, 0u),
+        };
+        if (battlemaster == 0 || _manager is not { } manager || player.Inventory.Templates.Find(itemEntry) is not { } template
+            || services.GetService<EconomyFeature>() is not { } economy)
+        {
+            return;
+        }
+
+        string name = manager.TemplateOf(type)?.Name ?? type.ToString();
+        string body = $"Your bags were full when the battle in {name} ended. The rest of your reward for {name} is attached.";
+        economy.SendCreatureItemMail(checked((int)player.Guid.Low), battlemaster, template.Name, body, itemEntry, count, ok =>
+        {
+            if (!ok)
+            {
+                _logger.LogWarning("battleground mark {Item} x{Count} for {Player} could not be mailed", itemEntry, count, player.Name);
+            }
+        });
     }
 
     // ------------------------------------------------------------------ the tick

@@ -4,6 +4,9 @@ using ArcaneCore.Game.Spells;
 
 namespace ArcaneCore.Game.Crafting;
 
+/// <summary>Mails the part of a battleground mark the bags could not take (vmangos BattleGround::SendRewardMarkByMail).</summary>
+public delegate void BattlegroundMarkMailer(Player player, uint spellId, uint itemEntry, uint count);
+
 /// <summary>
 /// SPELL_EFFECT_CREATE_ITEM (crafting lane): the single handler of the server for the 1,159 tradeskill crafts and the
 /// non-tradeskill create-item spells (conjures, quest and item spells). Installed by <see cref="Install"/> (the world feature
@@ -81,7 +84,44 @@ public static class CreateItemSpells
     public static void Handle(SpellEffectContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
+        if (IsBattlegroundMarkSpell(context.Spell.Id))
+        {
+            DoCreateBattlegroundMark(context);
+            return;
+        }
+
         DoCreateItem(context.Target, context.Spell, context.Effect.ItemType, context.Value, grantSkillUp: true);
+    }
+
+    /// <summary>The battleground mark spells (vmangos SpellEffects.cpp:1897-1921 bgType: AV 24954/24955, WS 24950/24951, AB 24952/24953).</summary>
+    public static bool IsBattlegroundMarkSpell(uint spellId) => spellId is >= 24950 and <= 24955;
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SpellSystem, System.Runtime.CompilerServices.StrongBox<BattlegroundMarkMailer?>> MarkMailers = new();
+
+    /// <summary>
+    /// Install (or clear with null) the mailer of the battleground mark remainder for <paramref name="system"/>. World thread, at feature
+    /// attach; without one a mark that does not fit the bags is lost, as before.
+    /// </summary>
+    public static void SetBattlegroundMarkMailer(SpellSystem system, BattlegroundMarkMailer? mailer)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        MarkMailers.GetOrCreateValue(system).Value = mailer;
+    }
+
+    // SpellEffects.cpp:1962-1977: a mark is pushed without the created flag, never grants a craft skill-up, and what the bags could
+    // not take is mailed from the battlemaster.
+    private static void DoCreateBattlegroundMark(SpellEffectContext context)
+    {
+        if (context.Target is not Player player)
+        {
+            return;
+        }
+
+        player.Inventory.CreateItemFromSpell(context.Effect.ItemType, context.Value, out _, out _, out uint noSpace, battlegroundMark: true);
+        if (noSpace > 0 && MarkMailers.TryGetValue(context.System, out System.Runtime.CompilerServices.StrongBox<BattlegroundMarkMailer?>? box) && box.Value is { } mailer)
+        {
+            mailer(player, context.Spell.Id, context.Effect.ItemType, noSpace);
+        }
     }
 
     /// <summary>
