@@ -55,7 +55,7 @@ public static partial class ConnectionStringRedactor
         return SecretPairPattern().Replace(text, "$1=" + Mask);
     }
 
-    [GeneratedRegex(@"(?i)\b(password|pwd|passwd)\s*=\s*(?:'[^']*'|""[^""]*""|[^;\s]*)")]
+    [GeneratedRegex(@"(?i)\b(password|pwd|passwd)\s*=\s*(?:'(?:[^']|'')*'|""(?:[^""]|"""")*""|[^;\s]*)")]
     private static partial Regex SecretPairPattern();
 
     /// <summary>Segments of a connection string split on <c>;</c> outside quotes: key, unquoted value, original text.</summary>
@@ -148,7 +148,8 @@ public static partial class ConnectionStringRedactor
         string value = segment[(equals + 1)..].Trim();
         if (value.Length >= 2 && value[0] is '\'' or '"' && value[^1] == value[0])
         {
-            value = value[1..^1];
+            char quote = value[0];
+            value = value[1..^1].Replace(new string(quote, 2), new string(quote, 1), StringComparison.Ordinal);
         }
 
         return (segment[..equals].Trim(), value, segment);

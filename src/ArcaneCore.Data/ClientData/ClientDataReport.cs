@@ -225,7 +225,7 @@ public sealed class ClientDataReport
         foreach (IGrouping<string, ClientDbcResolution> file in Resolutions.GroupBy(r => r.Consumer.File, StringComparer.OrdinalIgnoreCase).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
         {
             // Keys that share a file share a line only while they resolved alike: one blocked by its group (not used) must not read as in use.
-            foreach (var byPath in file.GroupBy(r => (Path: r.Check?.Path?.ToUpperInvariant(), r.Source, r.Note)))
+            foreach (var byPath in file.GroupBy(r => string.Join('\u001F', r.Check?.Path ?? "\0", r.Source.ToString(), r.Note ?? "\0"), StringComparer.OrdinalIgnoreCase))
             {
                 ClientDbcResolution first = byPath.First();
                 string keys = string.Join(", ", byPath.Select(r => r.Consumer.Key));

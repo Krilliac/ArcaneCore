@@ -1451,19 +1451,43 @@ public static partial class ContentImporterCli
 
         if (dataSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
         {
-            dataSource = dataSource["file:".Length..];
-            int query = dataSource.IndexOf('?', StringComparison.Ordinal);
-            if (query >= 0)
+            string rest = dataSource["file:".Length..];
+            string query = string.Empty;
+            int q = rest.IndexOf('?', StringComparison.Ordinal);
+            if (q >= 0)
             {
-                dataSource = dataSource[..query];
+                query = rest[(q + 1)..];
+                rest = rest[..q];
             }
 
-            if (dataSource.StartsWith("//", StringComparison.Ordinal))
+            foreach (string pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
             {
-                dataSource = dataSource[2..];
+                if (pair.Equals("mode=memory", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
             }
 
-            dataSource = Uri.UnescapeDataString(dataSource);
+            if (rest.StartsWith("//", StringComparison.Ordinal))
+            {
+                // file://<authority>/<path>: the authority must be empty or localhost.
+                int slash = rest.IndexOf('/', 2);
+                string authority = slash < 0 ? rest[2..] : rest[2..slash];
+                if (authority.Length != 0 && !authority.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                rest = slash < 0 ? string.Empty : rest[slash..];
+            }
+
+            rest = Uri.UnescapeDataString(rest);
+            if (rest.Length >= 3 && rest[0] == '/' && char.IsAsciiLetter(rest[1]) && rest[2] == ':')
+            {
+                rest = rest[1..]; // /C:/dir/file.db -> C:/dir/file.db
+            }
+
+            dataSource = rest;
         }
 
         if (mode == SqliteOpenMode.Memory || dataSource.Length == 0 || dataSource == ":memory:")

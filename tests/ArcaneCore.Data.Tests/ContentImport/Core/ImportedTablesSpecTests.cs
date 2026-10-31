@@ -1,3 +1,4 @@
+using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Data.Content.Import;
 using Xunit;
 
@@ -62,5 +63,33 @@ public sealed class ImportedTablesSpecTests
     {
         Assert.Throws<ImportSchemaException>(() => ContentScanner.Scan([DumpInput.Text("c.sql",
             "INSERT INTO `game_weather` (`id`,`spring_rain_chance`) VALUES (1,5),(2,6);")]));
+    }
+
+    [Fact]
+    public void SpecKeyReader_ReadsAnOptionalKeyPartTheDumpLacksAsZero()
+    {
+        var row = new DumpRow("transports", ["entry", "name", "period"], ["7", "a", "10"]);
+
+        uint[] key = new SpecKeyReader().Read(row, "transports");
+
+        Assert.Equal([7u, 0u], key);
+    }
+
+    [Fact]
+    public void Scan_KeysAMissingOptionalPartLikeAnExplicitZero()
+    {
+        ScanResult scan = ContentScanner.Scan([DumpInput.Text("d.sql",
+            "INSERT INTO `transports` (`entry`,`name`,`period`) VALUES (1,'a',10);\n" +
+            "INSERT INTO `transports` (`entry`,`name`,`period`,`build`) VALUES (1,'a',11,0),(2,'b',12,0);")]);
+
+        Assert.Equal(2, scan.Tables["transports"].DistinctKeys);
+        Assert.Equal(1, scan.Tables["transports"].DuplicateKeys);
+    }
+
+    [Fact]
+    public void Scan_RejectsGameEventMailWithoutRaceMaskAndQuest()
+    {
+        Assert.Throws<ImportSchemaException>(() => ContentScanner.Scan([DumpInput.Text("e.sql",
+            "INSERT INTO `game_event_mail` (`event`,`mailTemplateId`,`senderEntry`) VALUES (1,2,3);")]));
     }
 }

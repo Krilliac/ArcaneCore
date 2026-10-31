@@ -1037,6 +1037,34 @@ public sealed class ContentImporterCliTests : IDisposable
     }
 
     [Fact]
+    public async Task ProviderSqliteVerify_WithAFileUri_OpensTheExistingDatabase()
+    {
+        string database = Db("world.db");
+        Assert.Equal(ExitCodes.Ok, (await RunAsync("import", WriteDump("cmangos.sql", CMangosDump), "--database", database)).Code);
+        (int expected, _, _) = await RunAsync("verify", "--database", database);
+
+        string uri = new Uri(Path.GetFullPath(database)).AbsoluteUri;
+        (int code, _, string err) = await RunAsync("verify", "--provider", "sqlite", "--connection-string", $"Data Source={uri}");
+
+        Assert.NotEqual(ExitCodes.Io, code);
+        Assert.DoesNotContain("does not exist", err, StringComparison.Ordinal);
+        Assert.Equal(expected, code);
+    }
+
+    [Fact]
+    public async Task ProviderSqliteVerify_WithAMemoryFileUri_IsNotTreatedAsAFile()
+    {
+        string path = Path.Combine(_directory, "mem.db");
+        string uri = new Uri(Path.GetFullPath(path)).AbsoluteUri + "?mode=memory";
+
+        (int code, _, string err) = await RunAsync("verify", "--provider", "sqlite", "--connection-string", $"Data Source={uri}");
+
+        Assert.NotEqual(ExitCodes.Io, code);
+        Assert.DoesNotContain("does not exist", err, StringComparison.Ordinal);
+        Assert.False(File.Exists(path));
+    }
+
+    [Fact]
     public async Task ReportInsideAGitWorkTree_IsRefusedToo()
     {
         string repo = Path.Combine(_directory, "repo");
