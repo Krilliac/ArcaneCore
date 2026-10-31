@@ -162,6 +162,8 @@ public sealed class RemoteAdminServerTests
             await admin.SendAsync("RAADMIN");
             Assert.Equal("Password:", await admin.ReadLineAsync());
             await admin.SendAsync("secret");
+            Assert.Equal("Code:", await admin.ReadLineAsync());
+            await admin.SendAsync(string.Empty);
             Assert.Equal("+Logged in as RAADMIN (Administrator).", await admin.ReadLineAsync());
             await admin.SendAsync("@auto on");
             await admin.ReadUntilAsync("#done");
