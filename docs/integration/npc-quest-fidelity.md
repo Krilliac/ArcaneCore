@@ -315,8 +315,8 @@ shared reader without a count, so un-applied classic-db `Updates` are visible on
 
 ### Limits
 
-* Battlegrounds exempt raid hiding in vmangos (`!InBattleGround()`); there is no battleground system, so the exemption is
-  not modelled.
+* Battlegrounds exempt raid hiding in vmangos (`!InBattleGround()`): a battleground raid member still sees non-raid quest
+  items (`QuestJournalAdapter.InRaidGroup` treats a battleground group as not raid). Kill credit has no exemption, as in vmangos.
 * The rest of design NQ5 (quest-slot item counters with 63-batched `SMSG_QUESTUPDATE_ADD_ITEM`, `ReqSource` / `SrcSpell`
   accept support and removing those `AcceptableQuest` refusals) is not delivered; such quests are still refused at accept.
 
@@ -333,5 +333,4 @@ Single list of every place this lane differs from vmangos/retail. "Switch" means
   works, vmangos data does not.
 * **Game object interaction ignores the display-bounds box**: no switch, see "Slice NQ7 / Limits".
 * **Honor-rank vendor restrictions fail closed**: pre-existing, no switch (see NQ11a limits).
-* **Battleground exemption from raid quest-item hiding** is not modelled (no battleground system).
 * `Quests:IgnoreRaid` is a switch, default 0 as in vmangos.
