@@ -190,25 +190,37 @@ public sealed class ManualTickBarrierTests
         {
             await world.InvokeAsync(() => 0);
             int ran = 0;
-            for (int i = 0; i < 50; i++)
+            var ranAtEachTick = new List<int>();
+            world.Updated += _ => ranAtEachTick.Add(ran);
+
+            // Queue the 50 slow commands from the world thread. Posted from outside, the world thread wakes and ticks while the test is
+            // still posting, so how many ticks run is a scheduling race. Posted from inside a command they all sit in the queue
+            // when the next tick starts, so that tick's drain sees every one of them.
+            await world.InvokeAsync(() =>
             {
-                world.Post(() =>
+                for (int i = 0; i < 50; i++)
                 {
-                    var spin = Stopwatch.StartNew();
-                    while (spin.Elapsed < TimeSpan.FromMilliseconds(0.2))
+                    world.Post(() =>
                     {
-                        // a slow command must not push the rest of the queue to a later tick
-                    }
+                        var spin = Stopwatch.StartNew();
+                        while (spin.Elapsed < TimeSpan.FromMilliseconds(2))
+                        {
+                            // 50 x 2 ms is far over CommandTimeBudgetMs; a slow command must not push the rest of the queue to a later tick
+                        }
 
-                    ran++;
-                });
-            }
+                        ran++;
+                    });
+                }
 
-            long tickBefore = world.Clock.TickNumber;
+                return 0;
+            });
             await world.AdvanceTicksAsync(0);
 
             Assert.Equal(50, ran);
-            Assert.True(world.Clock.TickNumber - tickBefore <= 2);
+            // Updated fires after each tick: the tick that drained the queue took all 50 despite MaxCommandsPerTick = 1 and the 1 ms budget.
+            int firstDrain = ranAtEachTick.FindIndex(n => n > 0);
+            Assert.True(firstDrain >= 0);
+            Assert.Equal(50, ranAtEachTick[firstDrain]);
 
             using WorldRuntime real = TestWorld.CreateRuntime();
             real.Options.MaxCommandsPerTick = 2;
