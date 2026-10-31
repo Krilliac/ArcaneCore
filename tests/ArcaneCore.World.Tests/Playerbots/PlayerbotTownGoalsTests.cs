@@ -1448,8 +1448,8 @@ public sealed class PlayerbotTownGoalsTests
             var goals = await host.OnWorldAsync(() => new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true }));
             ObjectGuid item = ObjectGuid.WithEntry(HighGuid.Item, 9002, 1);
             Assert.False(await host.OnWorldAsync(() => goals.IsUnsellable(item)));
-            await host.OnWorldAsync(() => { goals.NoteUnsellable(item, 50); return true; });
-            Assert.True(await host.OnWorldAsync(() => goals.IsUnsellable(item)));
+            // Note and check in one world-thread round trip, with a window long enough that a stalled runner cannot expire it between the two.
+            Assert.True(await host.OnWorldAsync(() => { goals.NoteUnsellable(item, 1500); return goals.IsUnsellable(item); }));
             await host.WaitForWorldAsync(() => !goals.IsUnsellable(item), "the refusal expires");
             await host.OnWorldAsync(() =>
             {
