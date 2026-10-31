@@ -275,7 +275,7 @@ public static class BuiltinCommands
         }
 
         context.Reply(GmStrings.CommandKickMessage(GmStrings.PlayerLink(target.Name)));
-        target.Session.Kick();
+        target.Session.Kick("kicked by a GM command");
         return true;
     }
 

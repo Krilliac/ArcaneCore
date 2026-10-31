@@ -241,12 +241,31 @@ public sealed class ServerConfigCommands : ICommandExtension
                 OptionCatalog catalog = OptionCatalog.Create(scope);
                 if (name is null || name.Equals("all", StringComparison.OrdinalIgnoreCase))
                 {
+                    // A restore a rate refuses (it would cross its Min/Max pair) waits for another pass; a pass with no progress forces the rest.
                     int count = 0;
-                    foreach (OptionStatus status in catalog.Diff(scope))
+                    for (bool force = false; ;)
                     {
-                        if (ResetAndRecord(context, scope, catalog, status.Key, actor) is not null)
+                        int before = count;
+                        foreach (OptionStatus status in catalog.Diff(scope))
                         {
-                            count++;
+                            if (ResetAndRecord(context, scope, catalog, status.Key, actor, force, out _) is not null)
+                            {
+                                count++;
+                            }
+                        }
+
+                        if (count == before)
+                        {
+                            if (force)
+                            {
+                                break;
+                            }
+
+                            force = true;
+                        }
+                        else
+                        {
+                            force = false;
                         }
                     }
 
@@ -256,9 +275,9 @@ public sealed class ServerConfigCommands : ICommandExtension
                 {
                     context.Reply($".server config reset: unknown option '{name}'. .server config list shows the names.");
                 }
-                else if (ResetAndRecord(context, scope, catalog, key, actor) is not { } now)
+                else if (ResetAndRecord(context, scope, catalog, key, actor, force: false, out string? refusal) is not { } now)
                 {
-                    context.Reply($"{key.Path} is not overridden.");
+                    context.Reply(refusal ?? $"{key.Path} is not overridden.");
                 }
                 else
                 {
@@ -270,10 +289,10 @@ public sealed class ServerConfigCommands : ICommandExtension
     }
 
     /// <summary>Resets <paramref name="key"/> and records the write (plan 1.5); returns the shown value now, or null when nothing was reset. World thread.</summary>
-    private static string? ResetAndRecord(CommandContext context, OptionScope scope, OptionCatalog catalog, OptionKey key, string actor)
+    private static string? ResetAndRecord(CommandContext context, OptionScope scope, OptionCatalog catalog, OptionKey key, string actor, bool force, out string? refusal)
     {
         string before = key.Format(catalog.Describe(scope, key).Current);
-        if (!catalog.Reset(scope, key, actor))
+        if (!catalog.Reset(scope, key, actor, force, out refusal))
         {
             return null;
         }

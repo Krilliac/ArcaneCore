@@ -1126,7 +1126,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Most item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession second value: 90).",
+      "meaning": "Most item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession second value: 90); at most 10000.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#auctionhousebot",
       "isCollection": false
@@ -1142,7 +1142,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Fewest item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession first value: 80).",
+      "meaning": "Fewest item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession first value: 80); at least -10000 (a negative value makes an empty draw likelier).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#auctionhousebot",
       "isCollection": false
@@ -24926,11 +24926,11 @@
       "kind": "scalar",
       "elementType": "int",
       "enumValues": null,
-      "default": "255",
+      "default": "128",
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is created. 0 = no cap. vmangos has none and the stock client's limit is UNVERIFIED (not captured from a real client). The default (255) assumes a chat edit box of that length, which is unconfirmed; if the client allows longer names, raise it or set 0.",
+      "meaning": "ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is created. vmangos has no cap and the stock client's limit is UNVERIFIED (not captured from a real client). A custom name is normalized to at most 128 characters (vmangos normalizePlayerName(m_name, 128)), so a longer one is always refused: the default is 128, and a larger value or 0 (no configured cap) is still held to 128.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldsocial",
       "isCollection": false
@@ -24946,7 +24946,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "ArcaneCore hardening: the longest channel password (characters) accepted on join or when set; over it a join gets WRONG_PASSWORD and a set is ignored. 0 = no cap. Default 255, as for `MaxChannelNameLength`.",
+      "meaning": "ArcaneCore hardening: the longest channel password (characters) accepted on join or when set; over it a join gets WRONG_PASSWORD and a set is ignored. 0 = no cap. Default 255 (unrelated to the 128-character name limit).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldsocial",
       "isCollection": false

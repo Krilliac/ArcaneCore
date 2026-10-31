@@ -261,6 +261,44 @@ public sealed class RealmStatusWorldTests
     }
 
     [Fact]
+    public async Task PopulationRequestsRacingTheWriterExit_NeverStrandTheNewestValue()
+    {
+        var store = new RealmRowStore(new RealmEntry { Id = 1, Name = "R", Address = "a" });
+        await using ServiceProvider services = Services(store, new RealmStatusOptions { Id = 1, PlayerLimit = 1_000_000 }, new HandClock());
+        WorldHost host = Host(services, out WorldRuntime world);
+        try
+        {
+            await services.GetRequiredService<RealmLivenessService>().StartAsync(CancellationToken.None);
+            await services.GetRequiredService<RealmLivenessService>().StartWrite;
+            await host.StartAsync(CancellationToken.None);
+            RealmStatusFeature feature = services.GetRequiredService<RealmStatusFeature>();
+
+            // Requests land in every gap between the writer's last look at the pending value and its task completing. A request that
+            // finds the writer "not completed" but already leaving used to be stored with no writer left, and froze the row for good.
+            var spin = new Random(7);
+            const int Last = 20_000;
+            for (int sessions = 1; sessions <= Last; sessions++)
+            {
+                feature.RequestPopulation(sessions);
+                Thread.SpinWait(spin.Next(0, 400));
+                if (sessions % 7 == 0)
+                {
+                    await Task.Yield();
+                }
+            }
+
+            float expected = RealmStatusFeature.Population(Last, 1_000_000);
+            await WaitAsync(() => store.Row.Population == expected, "the newest population to be written");
+            await host.StopAsync(CancellationToken.None);
+            Assert.Equal(expected, store.Row.Population);
+        }
+        finally
+        {
+            world.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task OnlineWithNoPopulationRequestYet_WritesNoPopulation()
     {
         var store = new RealmRowStore(new RealmEntry { Id = 1, Name = "R", Address = "a", Flags = RealmFlags.Offline });
