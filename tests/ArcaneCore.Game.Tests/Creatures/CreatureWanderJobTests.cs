@@ -173,6 +173,9 @@ public sealed class CreatureWanderJobTests
             options.Movement.PathJobsWander = true;
             configure?.Invoke(options);
             System = new CreatureMapSystem(Map, Content([Template()], spawns), options, random: new Random(seed), aiServices: new CreatureAiServices());
+            // The default path budget is wall-clock based (HasDrapeBudget); when it runs out a finished job's application is deferred,
+            // which moves when a wolf next draws from the shared Random and breaks run-to-run determinism.
+            System.PathBudget = CreaturePathBudget.Unlimited;
             Map.AddUpdater(System);
             WorldCollision.Of(World).Install(pathfinder: Mesh);
             Pool = new NavJobSystem(threads: 2);
