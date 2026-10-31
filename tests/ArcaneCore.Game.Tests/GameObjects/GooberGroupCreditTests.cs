@@ -35,6 +35,28 @@ public sealed class GooberGroupCreditTests
     }
 
     [Fact]
+    public void GooberUse_SkipsAReleasedGhost_ButCreditsADeadMemberWhoseBodyIsNotReleased()
+    {
+        // Player::RewardPlayerAndGroupAtCast (Player.cpp:20019-20040) credits a member that IsAlive() or is not PLAYER_FLAGS_GHOST.
+        GameObjectTypeRig rig = GameObjectTypeRig.Create([GoSpawn(1, EventGoober, 3, 0)]);
+        (Player user, _) = rig.Join(1);
+        (Player corpse, _) = rig.Join(2, 4, 0);
+        (Player ghost, _) = rig.Join(3, 5, 0);
+        var groups = new FakeGroups();
+        groups.Create(ArcaneCore.Game.Groups.LootMethod.FreeForAll, user, corpse, ghost);
+        rig.System.Loot!.Groups = groups;
+        corpse.Combat.DeathState = ArcaneCore.Game.Combat.DeathState.Dead;
+        ghost.Combat.DeathState = ArcaneCore.Game.Combat.DeathState.Dead;
+        ghost.Flags |= PlayerFlags.Ghost;
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(user, rig.Single(EventGoober).Guid));
+
+        Assert.Equal(
+            [(user.Guid, EventGoober, true), (corpse.Guid, EventGoober, false)],
+            rig.Quests.Credits.OrderBy(c => c.Player == user.Guid ? 0 : 1).ToList());
+    }
+
+    [Fact]
     public void GooberUse_ByAPlayerWithoutAGroup_CreditsOnlyThePlayer()
     {
         GameObjectTypeRig rig = GameObjectTypeRig.Create([GoSpawn(1, EventGoober, 3, 0)]);
