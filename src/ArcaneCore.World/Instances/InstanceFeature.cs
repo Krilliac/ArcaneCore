@@ -103,50 +103,64 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     /// <summary>Whether <see cref="Halt"/> was called (the instances realm authority lease was lost): the reset scheduler never runs again.</summary>
     public bool Halted => _halted;
 
-    /// <summary>Reset schedule ticks that were allowed to run so far (tests).</summary>
+    /// <summary>Reset schedule ticks that were queued on the world thread so far (tests).</summary>
     public long ScheduleRuns => Interlocked.Read(ref _scheduleRuns);
 
     /// <summary>
-    /// Whether this node runs the reset scheduler and the save-expiry sweep (<see cref="InstanceManager.UpdateSchedule"/>): the one node holding the
-    /// <see cref="RealmAuthorityScopes.Instances"/> lease in a cluster, every single-process (combined) world, never after <see cref="Halt"/>.
-    /// Instance ids come from durable id blocks, so the rest of the feature runs on every map worker.
+    /// Whether this node writes the realm-wide raid reset times: the one node holding the <see cref="RealmAuthorityScopes.Instances"/> lease in a cluster,
+    /// every single-process (combined) world, never after <see cref="Halt"/>. The reset schedule itself (warnings, unbind and teleport, local save resets)
+    /// runs on every node for the maps it hosts: it only touches this process's own memory, and instance ids come from durable id blocks.
     /// </summary>
-    public bool SchedulerRuns => !_halted && (_leaseKeeper is null || _leaseKeeper.TokenFor(RealmAuthorityScopes.Instances) is not null);
+    public bool HoldsScheduleAuthority => !_halted && (_leaseKeeper is null || _leaseKeeper.TokenFor(RealmAuthorityScopes.Instances) is not null);
 
-    /// <summary>Stop the reset scheduler for good (a lost instances realm authority lease). Safe from any thread.</summary>
+    /// <summary>Turn the 5 s schedule timer off (tests drive <see cref="RunScheduleTickAsync"/> themselves). Set before <see cref="Attach"/>.</summary>
+    public bool ScheduleTimerEnabled { get; init; } = true;
+
+    /// <summary>Stop the reset schedule for good (a lost instances realm authority lease: fail-stop like the other scopes). Safe from any thread.</summary>
     public void Halt()
     {
         if (_halted) return;
         _halted = true;
-        _logger.LogWarning("instance reset scheduler halted: the node no longer holds the instances realm authority lease");
+        _logger.LogWarning("instance reset schedule halted: the node no longer holds the instances realm authority lease");
     }
 
-    /// <summary>One timer tick: queue the reset schedule update on the world thread, unless this node does not own the scheduler. Public for tests.</summary>
-    public void RunScheduleTick()
+    /// <summary>One timer tick: queue the reset schedule update on the world thread. Public for tests.</summary>
+    public void RunScheduleTick() => _ = RunScheduleTickAsync();
+
+    /// <summary>
+    /// Queue the reset schedule update on the world thread; the task completes when it ran (false when it did not run: not attached or halted).
+    /// The realm-wide writes are made only while this node holds the instances lease, checked on the world thread when the update runs.
+    /// </summary>
+    public Task<bool> RunScheduleTickAsync()
     {
-        if (_world is not { } world || _manager is not { } manager || !SchedulerRuns)
+        if (_world is not { } world || _manager is not { } manager || _halted)
         {
-            return;
+            return Task.FromResult(false);
         }
 
         Interlocked.Increment(ref _scheduleRuns);
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         world.Post(() =>
         {
             if (_halted)
             {
+                done.SetResult(false);
                 return;
             }
 
             try
             {
-                manager.UpdateSchedule();
+                manager.UpdateSchedule(realmAuthority: HoldsScheduleAuthority);
+                done.SetResult(true);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("instance.feature", ex);
                 _logger.LogFault("instance.schedule-update", ex, "instance reset schedule update failed");
+                done.SetResult(false);
             }
         });
+        return done.Task;
     }
 
     /// <summary>The instance manager (world thread only; available after <see cref="Attach"/>).</summary>
@@ -282,7 +296,11 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
                 }
             }
         });
-        _scheduleTimer = new Timer(_ => RunScheduleTick(), null, ScheduleIntervalMs, ScheduleIntervalMs);
+        if (ScheduleTimerEnabled)
+        {
+            _scheduleTimer = new Timer(_ => RunScheduleTick(), null, ScheduleIntervalMs, ScheduleIntervalMs);
+        }
+
         _logger.LogInformation("instances: {Instances} stored, {Binds} character binds", snapshot.Instances.Count, snapshot.Binds.Count);
     }
 

@@ -233,8 +233,11 @@ public sealed class WorldHost(
             return keeper.TokenFor(scope) is { } token ? $"{feature.Name} attached here (token {token})" : $"{feature.Name} not attached (lease held by another node)";
         }
 
-        logger.LogInformation("Cluster node role {Role} as {Node}: {AutoBroadcast}; {AuctionBot}", role, keeper.NodeId,
-            Describe(typeof(ServerMail.AutoBroadcastFeature)), Describe(typeof(Economy.AuctionBotFeature)));
+        string instances = keeper.TokenFor(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Instances) is { } instancesToken
+            ? $"instance raid reset times written here (token {instancesToken})"
+            : "instance raid reset times written by another node";
+        logger.LogInformation("Cluster node role {Role} as {Node}: {AutoBroadcast}; {AuctionBot}; {Instances}", role, keeper.NodeId,
+            Describe(typeof(ServerMail.AutoBroadcastFeature)), Describe(typeof(Economy.AuctionBotFeature)), instances);
     }
 
     /// <summary>

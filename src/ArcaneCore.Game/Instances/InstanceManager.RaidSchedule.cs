@@ -30,8 +30,12 @@ public sealed partial class InstanceManager
     /// The instance reset schedule (vmangos <c>DungeonResetScheduler::Update</c>; the world
     /// feature runs it on a timer, tests call it directly): global raid warnings and resets,
     /// and the reset of normal dungeons whose time has come while they are empty.
+    /// <para>Every node runs the local effects on the maps it hosts (warnings to its players, unbind, teleport home and unload of its loaded
+    /// instances, reset of its own saves). <paramref name="realmAuthority"/> is true on the one node holding the instances realm authority
+    /// lease (and in a single-process world): only it writes the realm-wide raid reset times, so nodes do not race on that row.
+    /// Which node hosts an instance map is not known here, so a save without a local map is still reset on every node: the deletes are idempotent.</para>
     /// </summary>
-    public void UpdateSchedule()
+    public void UpdateSchedule(bool realmAuthority = true)
     {
         long now = Now;
         foreach ((uint mapId, RaidSchedule schedule) in _raidSchedules)
@@ -42,7 +46,7 @@ public sealed partial class InstanceManager
                 {
                     if (schedule.Stage == RaidEventOffsets.Length - 1)
                     {
-                        GlobalRaidReset(mapId, schedule);
+                        GlobalRaidReset(mapId, schedule, realmAuthority);
                         break;
                     }
 
@@ -118,7 +122,7 @@ public sealed partial class InstanceManager
     // whose map is loaded is deleted when that map unloads (ResetAfterUnload; vmangos removes the
     // state in ~Map), so players whose trip home is still pending or failed are not left in a
     // deleted instance; the homebind timer of the now invalid players retries the trip.
-    private void GlobalRaidReset(uint mapId, RaidSchedule schedule)
+    private void GlobalRaidReset(uint mapId, RaidSchedule schedule, bool realmAuthority)
     {
         foreach (InstanceSave save in _saves.Values.Where(s => s.MapId == mapId).ToArray())
         {
@@ -150,7 +154,11 @@ public sealed partial class InstanceManager
         schedule.ResetTime = next;
         schedule.Stage = 0;
         schedule.SkipPastEvents(now);
-        _persistence.RaidResetTimeChanged(mapId, next);
+        if (realmAuthority)
+        {
+            _persistence.RaidResetTimeChanged(mapId, next);
+        }
+
         _logger.LogInformation("global reset of raid map {Map}; next at {Next}", mapId, DateTimeOffset.FromUnixTimeSeconds(next));
     }
 

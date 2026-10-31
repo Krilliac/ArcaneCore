@@ -49,8 +49,9 @@ public sealed class ClusterRoleFeatureFilter
         => ShouldAttachFeature(featureType, role, nodeId, _ => fencingToken, nowUtc);
 
     /// <summary>
-    /// The lease scope whose holder runs <paramref name="featureType"/> (<see cref="RealmAuthorityScopes.Social"/> for AutoBroadcast,
-    /// <see cref="RealmAuthorityScopes.Economy"/> for the auction house bot, <see cref="RealmAuthorityScopes.Instances"/> for the instance reset scheduler), or null for a feature that is not a realm singleton.
+    /// The lease scope whose holder <em>attaches</em> <paramref name="featureType"/> (<see cref="RealmAuthorityScopes.Social"/> for AutoBroadcast,
+    /// <see cref="RealmAuthorityScopes.Economy"/> for the auction house bot), or null for a feature that is attached on every node.
+    /// See <see cref="ScheduleLeaseScopeFor"/> for a feature that is attached everywhere but gates part of its work on a lease.
     /// </summary>
     public static string? LeaseScopeFor(Type featureType)
     {
@@ -65,7 +66,16 @@ public sealed class ClusterRoleFeatureFilter
             return RealmAuthorityScopes.Economy;
         }
 
-        // InstanceFeature attaches on every map worker; the lease gates only its reset scheduler and save-expiry sweep (InstanceFeature.SchedulerRuns).
+        return null;
+    }
+
+    /// <summary>
+    /// The lease scope that gates part of the work of a feature attached on every map worker (<see cref="RealmAuthorityScopes.Instances"/> for
+    /// <see cref="Instances.InstanceFeature"/>: only its holder writes the realm-wide raid reset times), or null. Never decides attachment.
+    /// </summary>
+    public static string? ScheduleLeaseScopeFor(Type featureType)
+    {
+        ArgumentNullException.ThrowIfNull(featureType);
         return featureType == typeof(Instances.InstanceFeature) ? RealmAuthorityScopes.Instances : null;
     }
 
