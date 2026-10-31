@@ -742,7 +742,7 @@ through the entrance trigger into one instance bound to the group, the boss, out
 resurrected, the group gathered again one failure down; a raid quest for six converted to a raid with the tank and the healer in
 different subgroups; the formation timeout setting the goal aside; a real player's party bot left alone; `InvitePlayers` inviting a
 nearby player who declines; the GM commands; a server group of bots nobody leads left; a bot stranded in an instance, stopped and
-logged in again there (the login gate), walking out (`PlayerbotGroupWorldTests`, `PlayerbotGroupPlayerTests`). `ConfigReloadTests` checks every key is live and range-checked.
+logged in again there (the login gate), walking out (`PlayerbotGroup*WorldTests`, `PlayerbotGroupPlayer*WorldTests`). `ConfigReloadTests` checks every key is live and range-checked.
 `PlayerbotGroupStallTests`: a pair led by a priest healer without an attack spell pulls and completes, with no stall line; a pair whose
 objective no path reaches re-targets after one stall bound, dissolves after the next (`stalled`, the goal set aside for both) and logs a
 stall line `PlayerbotQaSignalParser` reads as goal `Group`; the watch's bounds, a healthy group never stalling, and a target dropped and
@@ -755,7 +755,7 @@ patrolling boss, a quest group's objective still judged by sight, and `.reload i
 catalogue following); `PlayerbotRunCatalogueTests` (wings, boss order, scripted encounters, bands, sizes, exclusions, over real classic-db rows in
 `RunFixtures`); `PlayerbotRunMachineTests` (travel, enter, clear, boss, wipe, retry, give up, complete, and the events each step
 ignores); `PlayerbotRunRouteTests` (`NextPull`: ordering, packs, passed points); `PlayerbotRunMatchingTests` (`RunRoleNeeds`, the raid
-quotas through `Match`); `PlayerbotRunWorldTests` on the scenario world (`GroupTestWorld` with the Deadmines, a boss and three raids
+quotas through `Match`); `PlayerbotRun*WorldTests` on the scenario world (`GroupTestWorld` with the Deadmines, a boss and three raids
 whose entrances copy the item, quest and condition requirements): a five-player run formed from bots in the band with a tank and a
 healer, the start roll, no run without a healer, the travel policy, a stopped follower and a stopped leader (`Forget`), a raid refused
 per requirement kind and formed with the quotas once every bot has the key item, the permanent-bind exclusion, `SkipPrerequisites`
@@ -763,7 +763,7 @@ matching and `Waives` (None for a real player, a bot outside the run, a dungeon 
 import is tested in `ArcaneCore.Data.Tests/InstanceEncounterImportTests`, the requirement check and waivers in
 `ArcaneCore.Game.Tests/Teleport/TeleportRequirementsTests`.
 
-`PlayerbotRunClearWorldTests` now drives five Horde bots through RFC trigger 2230 into one group-bound instance on the manual clock.
+`PlayerbotRunClear*WorldTests` now drives five Horde bots through RFC trigger 2230 into one group-bound instance on the manual clock.
 It checks the three-creature Ragefire Trogg/Shaman test pack dies before any boss engages, then forces three deaths during a pull and
 checks Wiped, Retry, Enter and Clear with the same dead trash still dead. A second case has no resurrection spell: its ghosts walk back
 to the RFC entrance and revive inside. The fixture uses classic-db z2815 entries, levels, bosses and teleports and build-5875 trigger
@@ -824,6 +824,6 @@ d3b26dcb):
   later follow the player.
 * A bot without a quest for the goal is not matched for it (sharing happens inside a group formed for the goal, below).
 
-Cooperation tests: `PlayerbotRecruitmentTests` (the pure chance, refusal, ordering and guild-bonus rules), `PlayerbotRecruitWorldTests`
-(recruiting, bot LFG answers, guild calls), `PlayerbotMentorWorldTests`, `PlayerbotRaidEscalationWorldTests`, and the player invites in
-`PlayerbotGroupPlayerTests`.
+Cooperation tests: `PlayerbotRecruitmentTests` (the pure chance, refusal, ordering and guild-bonus rules), `PlayerbotRecruit*WorldTests`
+(recruiting, bot LFG answers, guild calls), `PlayerbotMentor*WorldTests`, `PlayerbotRaidEscalationWorldTests`, and the player invites in
+`PlayerbotGroupPlayer*WorldTests`.
