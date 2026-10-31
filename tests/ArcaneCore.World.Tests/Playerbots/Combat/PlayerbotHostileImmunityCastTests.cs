@@ -2,6 +2,8 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Spells.Rules.Immunity;
 using ArcaneCore.Game.Totems;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.World.Features;
@@ -70,6 +72,84 @@ public sealed class PlayerbotHostileImmunityCastTests
             session.Kick();
             await session.ManagedClosed;
         }
+    }
+
+    private sealed class FixedMechanicImmunity(uint mechanicMask) : ICreatureImmunityProvider
+    {
+        public uint MechanicImmuneMask(Unit unit) => mechanicMask;
+
+        public uint SchoolImmuneMask(Unit unit) => 0;
+    }
+
+    private static SpellInfo Spell(uint id, string name, params SpellEffectInfo[] effects) => new()
+    {
+        Id = id,
+        Name = name,
+        RangeIndex = 4,
+        Range = new SpellRange(0, 30),
+        Effects = effects,
+    };
+
+    private static async Task RunAgainstAsync(bool asTotem, Action<SpellFeature, Player, RotationState> body, uint? mechanicMask = null)
+    {
+        await using WorldTestHost host = WorldTestHost.Start();
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            Creature target = null!;
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                target = Spawn(host, player, 8, 900041);
+                if (asTotem) TotemQuery.Add(new TotemInfo(target, player, TotemSlot.Earth, 0, 0, -1));
+                return true;
+            });
+            await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(target.Guid), "target visible");
+            await host.World.InvokeAsync(() =>
+            {
+                Player player = session.Player!;
+                SpellFeature feature = session.Services.GetRequiredService<SpellFeature>();
+                if (mechanicMask is { } mask) feature.System.CreatureImmunities = new FixedMechanicImmunity(mask);
+                RotationState state = PlayerbotCombatView.Build(session, feature, player, target, PlayerbotAbilities.Empty, PlayerbotRole.MeleeDps, static _ => false);
+                body(feature, player, state);
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
+    [Fact]
+    public async Task ABot_SkipsRend_OnACreatureImmuneToBleed_ButNotAnUnrelatedMechanic()
+    {
+        SpellInfo rend = DamageOverTime(900_821, "Rend") with { Mechanic = (uint)SpellMechanic.Bleed };
+        SpellInfo sting = DamageOverTime(900_822, "Serpent Sting");
+        await RunAgainstAsync(false, (_, _, state) =>
+        {
+            Assert.False(state.CanCast(rend, state.Victim!));
+            Assert.True(state.CanCast(sting, state.Victim!));
+        }, SpellMechanics.Mask(SpellMechanic.Bleed));
+    }
+
+    [Fact]
+    public async Task ABot_CastsASpellOnATotem_WhenOneEffectLands()
+    {
+        SpellInfo strike = Spell(900_831, "Damage and curse",
+            new SpellEffectInfo { Effect = SpellEffectName.SchoolDamage, BasePoints = 10, BaseDice = 1, DieSides = 1, TargetA = SpellImplicitTarget.UnitEnemy },
+            new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.PeriodicDamage, TargetA = SpellImplicitTarget.UnitEnemy, Amplitude = 3000 });
+        await RunAgainstAsync(true, (_, _, state) => Assert.True(state.CanCast(strike, state.Victim!)));
+    }
+
+    [Fact]
+    public async Task ABot_CastsASpellOnATotem_WhenAnotherEffectIsAimedAtTheCaster()
+    {
+        SpellInfo drawback = Spell(900_841, "Aura with a self drawback",
+            new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.PeriodicDamage, TargetA = SpellImplicitTarget.UnitEnemy, Amplitude = 3000 },
+            new SpellEffectInfo { Effect = SpellEffectName.ApplyAura, AuraType = AuraType.PeriodicDamage, TargetA = SpellImplicitTarget.UnitCaster, Amplitude = 3000 });
+        await RunAgainstAsync(true, (_, _, state) => Assert.True(state.CanCast(drawback, state.Victim!)));
     }
 
     private static Creature Spawn(WorldTestHost host, Player player, float xOffset, uint low)

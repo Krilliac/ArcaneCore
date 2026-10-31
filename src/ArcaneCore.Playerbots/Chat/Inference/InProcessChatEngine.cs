@@ -226,6 +226,7 @@ internal sealed class InProcessChatEngine : IDisposable
             FaultLedger.Shared.Record("playerbot.chat-inference", error);
             AnomalyLedger.Shared.Report("bot-chat", "inference-fault", "in-process chat engine", $"{error.GetType().Name}: {error.Message}");
             _stopping = true;
+            Interlocked.MemoryBarrier(); // publish _stopping before FailAll's final TryDequeue: a store-load reorder could miss a command a producer enqueued after reading _stopping == false
             FailAll(error);
             _loopExited = true;
             return;

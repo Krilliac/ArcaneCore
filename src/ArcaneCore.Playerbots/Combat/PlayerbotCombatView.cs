@@ -184,6 +184,10 @@ internal static class PlayerbotCombatView
                 && SpellSystem.IsExplicitUnitTarget(spell.Effects[0].TargetA)
                 && unit.Guid != combo.GetComboTarget(player))
                 return false;
+            // The cheap power, reagent and shapeshift refusals come before the immunity rules (independent refusals, same result).
+            if (!HasPower(player, spell)) return false;
+            if (spell.GetErrorAtShapeshiftedCast((uint)form, formFlags) != SpellCastResult.CastOk) return false;
+            if (!HasReagents(player, spell) || !HasEquippedItem(player, spell)) return false;
             // Hostile spells too (vmangos CanTryToCastSpell -> IsImmuneToSpell): a totem takes no negative aura and a creature's
             // mechanic or school immunity would waste the cast.
             if (ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(system, unit, spell, ReferenceEquals(unit, player))) return false;
@@ -191,9 +195,6 @@ internal static class PlayerbotCombatView
             // A crowd-control spell on a target at the immune diminishing level lands with no aura (vmangos Spell::DoSpellHitOnUnit): do not waste the cast.
             if (!spell.IsPositive && !ReferenceEquals(unit, player) && system.IsFullyDiminished is { } diminished && diminished(player, unit, spell)) return false;
             if (spell.Effects.Any(e => !e.IsEmpty && e.TargetA == SpellImplicitTarget.UnitCasterPet) && petStatus != RotationPetStatus.Alive) return false;
-            if (!HasPower(player, spell)) return false;
-            if (spell.GetErrorAtShapeshiftedCast((uint)form, formFlags) != SpellCastResult.CastOk) return false;
-            if (!HasReagents(player, spell) || !HasEquippedItem(player, spell)) return false;
             if (spell.HasEffect(SpellEffectName.EnchantItemTemporary)
                 && (mainHand is null || !ArcaneCore.Game.Crafting.Enchanting.ItemTargetRules.IsFit(spell, mainHand.Template)))
                 return false;
@@ -410,6 +411,8 @@ internal static class PlayerbotCombatView
         for (int i = 0; i < spell.Effects.Count; i++)
         {
             if (spell.Effects[i].IsEmpty) continue;
+            // An effect aimed at the caster or an area still lands elsewhere (vmangos Spell::AddUnitTarget drops immune effects per target).
+            if (!SpellSystem.IsExplicitUnitTarget(spell.Effects[i].TargetA)) return false;
             any = true;
             if (!ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpellEffect(system, target, spell, i, castOnSelf: false)) return false;
         }
