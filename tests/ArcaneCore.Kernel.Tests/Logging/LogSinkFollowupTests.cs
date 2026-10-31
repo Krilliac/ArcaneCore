@@ -190,4 +190,69 @@ public sealed class LogSinkFollowupTests
             Assert.True(Reference(text) == Escaped(text), $"U+{i:X4}");
         }
     }
+
+    // ---- Truncated record shape ----
+
+    private static readonly DateTime Stamp = new(2026, 10, 4, 12, 34, 56, 789, DateTimeKind.Utc);
+
+    private static string WriteJson(in LogEvent evt)
+    {
+        var buffer = new LogBuffer(stackalloc char[64]);
+        JsonLineFormatter.Write<object?>(ref buffer, in evt, null, null);
+        string line = buffer.Written.ToString();
+        buffer.Dispose();
+        return line;
+    }
+
+    [Fact]
+    public void JsonTruncated_ExceptionBulk_KeepsMessageUnmarkedAndNamesTheException()
+    {
+        var exception = new InvalidOperationException(new string('x', LogBuffer.MaxLength * 2));
+        var evt = new LogEvent(Stamp, Microsoft.Extensions.Logging.LogLevel.Error, "Cat", new Microsoft.Extensions.Logging.EventId(7, "Boom"), "short message", exception);
+
+        string line = WriteJson(in evt);
+
+        Assert.EndsWith("}\n", line, StringComparison.Ordinal);
+        Assert.Equal(1, line.Count(c => c == '\n'));
+        using var doc = System.Text.Json.JsonDocument.Parse(line);
+        System.Text.Json.JsonElement root = doc.RootElement;
+        Assert.Equal("short message", root.GetProperty("message").GetString());
+        Assert.Equal(7, root.GetProperty("eventId").GetInt32());
+        Assert.Equal("Boom", root.GetProperty("eventName").GetString());
+        Assert.Equal(typeof(InvalidOperationException).FullName, root.GetProperty("exceptionType").GetString());
+        Assert.False(root.TryGetProperty("exception", out _));
+    }
+
+    [Fact]
+    public void JsonTruncated_MessageCut_AppendsTheMarker()
+    {
+        var evt = new LogEvent(Stamp, Microsoft.Extensions.Logging.LogLevel.Information, "Cat", default, new string('a', LogBuffer.MaxLength * 2), null);
+
+        string line = WriteJson(in evt);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(line);
+        Assert.EndsWith(" ...[truncated]", doc.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.False(doc.RootElement.TryGetProperty("exceptionType", out _));
+    }
+
+    [Fact]
+    public void JsonTruncated_AbsurdCategory_FallsBackToTheMinimalRecord()
+    {
+        var evt = new LogEvent(Stamp, Microsoft.Extensions.Logging.LogLevel.Information, new string('c', LogBuffer.MaxLength * 2), default, "m", null);
+
+        Assert.Equal("{\"truncated\":true}\n", WriteJson(in evt));
+    }
+
+    [Fact]
+    public void TextTruncated_ColourMode_EndsWithResetAndNewline()
+    {
+        var evt = new LogEvent(Stamp, Microsoft.Extensions.Logging.LogLevel.Information, "Cat", default, new string('a', LogBuffer.MaxLength * 2), null);
+        var buffer = new LogBuffer(stackalloc char[64]);
+        LogLineFormatter.Write(ref buffer, in evt, null, color: true);
+        string line = buffer.Written.ToString();
+        buffer.Dispose();
+
+        Assert.EndsWith("\u001b[0m\n", line, StringComparison.Ordinal);
+        Assert.Equal(1, line.Count(c => c == '\n'));
+    }
 }

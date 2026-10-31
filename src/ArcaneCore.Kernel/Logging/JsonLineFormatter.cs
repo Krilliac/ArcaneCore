@@ -65,7 +65,8 @@ public static class JsonLineFormatter
     }
 
     // The cut left the record open (an unterminated string, object or escape), and the closing brace and newline were dropped, so the
-    // line would merge with the next event and be invalid NDJSON. Replace it with a short valid record that keeps the head of the message.
+    // line would merge with the next event and be invalid NDJSON. Replace it with a short valid record that keeps the event id, the head of
+    // the message (marked only when the message itself was cut) and the exception's type name.
     private static void WriteTruncatedRecord(ref LogBuffer buffer, in LogEvent evt)
     {
         const int KeptMessageLength = 1024;
@@ -76,15 +77,33 @@ public static class JsonLineFormatter
         buffer.Append(LogLineFormatter.LevelName(evt.Level));
         buffer.Append("\",\"category\":");
         WriteString(ref buffer, evt.Category);
+        if (evt.EventId.Id != 0)
+        {
+            buffer.Append(",\"eventId\":");
+            buffer.Append(evt.EventId.Id);
+        }
+
+        if (evt.EventId.Name is not null)
+        {
+            buffer.Append(",\"eventName\":");
+            WriteString(ref buffer, evt.EventId.Name);
+        }
+
         buffer.Append(",\"message\":");
         string message = evt.Message;
         if (message.Length > KeptMessageLength)
         {
             int keep = char.IsHighSurrogate(message[KeptMessageLength - 1]) ? KeptMessageLength - 1 : KeptMessageLength;
-            message = message[..keep];
+            message = message[..keep] + " ...[truncated]";
         }
 
-        WriteString(ref buffer, message + " ...[truncated]");
+        WriteString(ref buffer, message);
+        if (evt.Exception is not null)
+        {
+            buffer.Append(",\"exceptionType\":");
+            WriteString(ref buffer, evt.Exception.GetType().FullName ?? evt.Exception.GetType().Name);
+        }
+
         buffer.Append("}\n");
         if (buffer.Truncated)
         {
