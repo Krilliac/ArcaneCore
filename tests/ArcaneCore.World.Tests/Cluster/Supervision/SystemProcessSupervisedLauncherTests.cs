@@ -136,14 +136,18 @@ public sealed class SystemProcessSupervisedLauncherTests : IDisposable
         // Not a reproducer of the ownership bug: it pins the tree kill and idempotence.
         string pidFile = Path.Combine(_tempDir, "pids.txt");
         var launcher = new SystemProcessSupervisedLauncher();
-        using ISupervisedProcess p = launcher.Launch(FixtureConfig("tree", $"--spawn-child --pid-file \"{pidFile}\""));
-        var pids = new List<int> { p.ProcessId };
-        string[] lines = [];
-        for (int i = 0; i < 50 && lines.Length < 2; i++)
+        // The fixture writes both pid lines (closing the file each time) before it prints "ready", so "ready" is the latch: nothing reads the file while it is being written.
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ISupervisedProcess p = launcher.Launch(FixtureConfig("tree", $"--spawn-child --pid-file \"{pidFile}\""), (_, line, isStdErr) =>
         {
-            await Task.Delay(100);
-            lines = File.Exists(pidFile) ? File.ReadAllLines(pidFile).Where(l => l.Length > 0).ToArray() : [];
-        }
+            if (!isStdErr && line == "ready")
+            {
+                ready.TrySetResult();
+            }
+        });
+        var pids = new List<int> { p.ProcessId };
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(120)); // a backstop for a fixture that never starts, not a pacing wait
+        string[] lines = File.ReadAllLines(pidFile).Where(l => l.Length > 0).ToArray();
 
         Assert.Equal(2, lines.Length);
         pids.AddRange(lines.Select(l => int.Parse(l.Split(' ')[1], System.Globalization.CultureInfo.InvariantCulture)));

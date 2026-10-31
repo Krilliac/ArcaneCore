@@ -338,6 +338,7 @@ public sealed class ClusterHostSupervisorRecoveryTests
         launcher.Last.Beat();
 
         rig.Clock.Advance(Seconds121);
+        // The FATAL line is routed before Faulted is published, so a poll that sees the state may read the console text at once.
         await rig.Delays.ReleaseUntilAsync(() => Snap(rig).State == SupervisedProcessState.Faulted, "the unkillable hung child to be faulted");
 
         Assert.Equal(1, launcher.Launches);
@@ -353,10 +354,11 @@ public sealed class ClusterHostSupervisorRecoveryTests
         ClusterSupervisorOptions options = SupervisorRig.OneProcess(configure: c => c.HangCapture = SupervisedHangCaptureMode.Stacks, options: o => o.StackCaptureTool = "dotnet-stack");
         await using var rig = new SupervisorRig(options, launcher, holdAllDelays: true, capture: capture);
         await rig.Supervisor.StartProcessAsync("world");
-        launcher.Last.Beat();
+        ScriptedProcess hung = launcher.Last;
+        hung.Beat();
 
         rig.Clock.Advance(Seconds121);
-        await rig.Delays.ReleaseUntilAsync(() => launcher.Last.Kills == 1, "the hung child to be killed");
+        await rig.Delays.ReleaseUntilAsync(() => hung.Kills == 1, "the hung child to be killed");
 
         Assert.Equal(["capture:world", "drain:world", "kill:world"], launcher.Journal.ToArray());
         Assert.True(capture.Requests.TryPeek(out SupervisedHangCaptureRequest? request));
@@ -374,10 +376,11 @@ public sealed class ClusterHostSupervisorRecoveryTests
         var capture = new RecordingHangCapture(launcher.Journal) { Hangs = true };
         await using var rig = new SupervisorRig(SupervisorRig.OneProcess(configure: c => c.HangCapture = SupervisedHangCaptureMode.Dump), launcher, holdAllDelays: true, capture: capture);
         await rig.Supervisor.StartProcessAsync("world");
-        launcher.Last.Beat();
+        ScriptedProcess hung = launcher.Last;
+        hung.Beat();
 
         rig.Clock.Advance(Seconds121);
-        await rig.Delays.ReleaseUntilAsync(() => launcher.Last.Kills == 1, "the child to be killed although its capture never finished");
+        await rig.Delays.ReleaseUntilAsync(() => hung.Kills == 1, "the child to be killed although its capture never finished");
 
         Assert.Equal(["capture:world", "drain:world", "kill:world"], launcher.Journal.ToArray());
         Assert.Contains(TimeSpan.FromSeconds(300), rig.Delays.Requested); // HangCaptureTimeoutSeconds bounded the capture

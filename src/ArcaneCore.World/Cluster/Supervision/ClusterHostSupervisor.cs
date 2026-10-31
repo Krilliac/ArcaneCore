@@ -1538,15 +1538,25 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         {
             if (!ReferenceEquals(entry.Process, process) || entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
                 return;
+        }
+
+        // The line goes out before the state is published: whoever sees Faulted (a status poll, a test) can rely on the FATAL text being routed already.
+        // RouteLine stays outside _gate (as elsewhere in this class), so the entry can be relaunched or start draining between the two checks; then the
+        // line has been printed and the entry is deliberately not faulted. A line for a child that is still alive is the lesser harm than a lock held over console I/O.
+        _multiplexer.RouteLine(
+            entry.Config,
+            $"FATAL: Process '{entry.Config.Name}' (pid {process.ProcessId}) is still running after a drain request and a kill; not restarting it, and it remains in the owned set.",
+            isStdErr: true);
+
+        lock (_gate)
+        {
+            if (!ReferenceEquals(entry.Process, process) || entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
+                return;
 
             entry.State = SupervisedProcessState.Faulted;
             entry.LastDisposition = SupervisedExitDisposition.Fault;
         }
 
-        _multiplexer.RouteLine(
-            entry.Config,
-            $"FATAL: Process '{entry.Config.Name}' (pid {process.ProcessId}) is still running after a drain request and a kill; not restarting it, and it remains in the owned set.",
-            isStdErr: true);
         AnomalyLedger.Shared.Report("cluster", "supervisor-kill-failed", entry.Config.Name, $"pid={process.ProcessId}", AnomalySeverity.Error);
         NotifyIfBelowMinimum();
     }
