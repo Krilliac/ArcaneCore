@@ -9,7 +9,7 @@ using static ArcaneCore.Game.Tests.CreatureTestKit;
 
 namespace ArcaneCore.Game.Tests.Creatures;
 
-/// <summary>SCRIPT_COMMAND_TELEPORT_TO (6) in the DB script runner (cmangos ScriptMgr.cpp:1925-1933).</summary>
+/// <summary>SCRIPT_COMMAND_TELEPORT_TO (6) and SEND_MAIL (38) in the DB script runner (cmangos ScriptMgr.cpp:1925-1933).</summary>
 public sealed class RelayScriptMailTeleportTests
 {
     private const uint ScriptId = 5162;
@@ -70,6 +70,87 @@ public sealed class RelayScriptMailTeleportTests
             Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, giver, null));
             Run(world, 12000);
             Assert.Empty(teleports.Calls);
+        }
+    }
+
+    private sealed class RecordingMail : IScriptMailSink
+    {
+        public List<(Player Receiver, uint Sender, uint Template, uint Money, uint Delay)> Calls { get; } = [];
+
+        public void Send(Player receiver, uint senderEntry, uint templateId, uint money, uint delaySeconds)
+            => Calls.Add((receiver, senderEntry, templateId, money, delaySeconds));
+    }
+
+    // Quest 8728 style: mail template 40, 25 copper, datalong2 the alternative sender, dataint the delay in seconds.
+    private static RelayScriptStep MailStep(uint sender, int delaySeconds) => new RelayScriptStep(ScriptId, 1000, 0, 38, 40, sender, 25, 0, 0, 0, delaySeconds, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+    private static (WorldRuntime World, CreatureMapSystem System) BuildMail(RecordingMail? mail, RelayScriptStep step)
+    {
+        var ai = new CreatureAiContent([], []) { DbScripts = new DbScriptCatalog([(DbScriptKind.QuestStart, step)]) };
+        (WorldRuntime world, _, CreatureMapSystem system) = CreateAiSystem(
+            new CreatureContent([Template()], [Spawn(1, WolfEntry, 0, 0)], [], [], [], ai),
+            new CreatureAiServices { ScriptMail = mail });
+        return (world, system);
+    }
+
+    [Fact]
+    public void SendMailCommand_MailsThePlayerFromTheAlternativeSenderWithTemplateMoneyAndDelay()
+    {
+        var mail = new RecordingMail();
+        (WorldRuntime world, CreatureMapSystem system) = BuildMail(mail, MailStep(7777, 3600));
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Creature giver = Assert.Single(system.Creatures);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, giver, player));
+            Run(world, 2000);
+            (Player receiver, uint sender, uint template, uint money, uint delay) = Assert.Single(mail.Calls);
+            Assert.Same(player, receiver);
+            Assert.Equal((7777u, 40u, 25u, 3600u), (sender, template, money, delay));
+        }
+    }
+
+    [Fact]
+    public void SendMailCommand_WithoutAlternativeSenderUsesTheSourceCreatureAndNoNegativeDelay()
+    {
+        var mail = new RecordingMail();
+        (WorldRuntime world, CreatureMapSystem system) = BuildMail(mail, MailStep(0, -5));
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Creature giver = Assert.Single(system.Creatures);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, giver, player));
+            Run(world, 2000);
+            (_, uint sender, _, _, uint delay) = Assert.Single(mail.Calls);
+            Assert.Equal((giver.Entry, 0u), (sender, delay));
+        }
+    }
+
+    [Fact]
+    public void SendMailCommand_WithoutAPlayerTargetDoesNothing()
+    {
+        var mail = new RecordingMail();
+        (WorldRuntime world, CreatureMapSystem system) = BuildMail(mail, MailStep(7777, 0));
+        using (world)
+        {
+            _ = AddPlayer(world, 1, 0, 10);
+            Creature giver = Assert.Single(system.Creatures);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, giver, null));
+            Run(world, 2000);
+            Assert.Empty(mail.Calls);
+        }
+    }
+
+    [Fact]
+    public void SendMailCommand_WithoutAMailServiceIsSkippedWithoutThrowing()
+    {
+        (WorldRuntime world, CreatureMapSystem system) = BuildMail(null, MailStep(7777, 0));
+        using (world)
+        {
+            (Player player, _) = AddPlayer(world, 1, 0, 10);
+            Creature giver = Assert.Single(system.Creatures);
+            Assert.True(system.StartDbScript(DbScriptKind.QuestStart, ScriptId, giver, player));
+            Run(world, 2000);
         }
     }
 }

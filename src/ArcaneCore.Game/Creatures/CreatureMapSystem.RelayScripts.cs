@@ -800,6 +800,10 @@ public sealed partial class CreatureMapSystem
                 RelayMoveDynamic(step, source, target);
                 return false;
 
+            case 38: // SCRIPT_COMMAND_SEND_MAIL (CreatureMapSystem.RelaySeams.cs)
+                RelaySendMail(step, source, target);
+                return false;
+
             case 39: // SCRIPT_COMMAND_SET_HOVER
                 RelaySetHover(step, source);
                 return false;
