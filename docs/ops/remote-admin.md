@@ -27,9 +27,9 @@ After connecting, the server sends a greeting line and then `Username:` as a lin
 
 * **Interactive** (telnet, PuTTY raw): type the account name, then the password after `Password:`. The prompt `AC> ` (no newline) is
   shown before each command.
-* **Automation, account:** one line, `@login <user> <password>`.
+* **Automation, account:** one line, `@login <user> <password>` An account with a PIN or TOTP second factor adds the code as a trailing word: `@login <user> <password> <code>`; in the interactive login a `Code:` prompt follows the password. An IP-locked account is refused from another address unless it has a factor, an IP-banned address is refused, and a TOTP code can be used once (replays are refused).
 * **Automation, token:** one line, `@token <token>`. The token is the content of `AgentLoginFile`. It logs in as `Console` with
-  Administrator rights. Anyone who can read the daemon's directory can read the token, so it is meant for agents on the same machine.
+  Administrator rights. The file is created owner-only (Windows: an ACL granting only the daemon's account and SYSTEM, with inheritance off; Unix: mode 600), so only agents running as the daemon's OS user can read the token. The token is never logged, only the path.
 
 The answer is `+Logged in as NAME (Level).`, or `-Wrong username or password.` (an unknown account, a wrong password, an inactive account
 and an account below `MinSecurity` all look the same). After `MaxFailedLogins` the server says `-Too many failed logins; closing.`
