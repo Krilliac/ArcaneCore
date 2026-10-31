@@ -170,6 +170,13 @@ usage() { # <name> <env words> <targets>
 usage dup-targets "A=1" "a/X.slnf b/X.slnf"
 usage knob-text "GATE_SUITE_BUDGET_MIN=twenty" "tests/ci/X.slnf"
 usage knob-negative "GATE_CLASS_BUDGET_SEC=-5" "tests/ci/X.slnf"
+usage knob-huge-suite "GATE_SUITE_BUDGET_MIN=99999999999999999999" "tests/ci/X.slnf"
+usage knob-suite-cap "GATE_SUITE_BUDGET_MIN=1441" "tests/ci/X.slnf"
+usage knob-class-cap "GATE_CLASS_BUDGET_SEC=86401" "tests/ci/X.slnf"
+usage knob-long-cap "GATE_LONG_TEST_SEC=3601" "tests/ci/X.slnf"
+usage knob-minute-cap "GATE_BUDGET_MINUTE_SEC=61" "tests/ci/X.slnf"
+usage knob-minute-zero "GATE_BUDGET_MINUTE_SEC=0" "tests/ci/X.slnf"
+usage empty-label "A=1" ".csproj"
 usage knob-empty-budgets "GATE_TIME_BUDGETS=maybe" "tests/ci/X.slnf"
 [ $bad = 0 ] && echo "test-stages self-test: all cases behaved" || echo "test-stages self-test: FAILED"
 exit $bad

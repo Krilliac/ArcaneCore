@@ -21,7 +21,9 @@
 #       TestSessionTimeout: kills the testhost, still writes the .trx of what finished) and the gate FAILS naming the target, the
 #       budget and the tests still running; that target's counts are marked partial. Applies with --filter too. The wall-clock check
 #       of a target (without --filter) times only the dotnet part, not the wait in GATE_WRAP/GATE_WRAP_DATA (e.g. a flock).
-# Numeric knobs must be whole numbers (else exit 2); GATE_TIME_BUDGETS is on or off. Two targets with the same name are exit 2.
+# GATE_BUDGET_MINUTE_SEC (1..60, default 60) is a test hook: the self-test shrinks a budget "minute" so it runs in seconds.
+# Numeric knobs must be whole numbers within range (GATE_SUITE_BUDGET_MIN <= 1440, GATE_CLASS_BUDGET_SEC <= 86400,
+# GATE_LONG_TEST_SEC 1..3600; else exit 2); GATE_TIME_BUDGETS is on or off. Two targets with the same name are exit 2.
 #   GATE_CLASS_BUDGET_SEC (default 600) fails a target whose test class's tests add up to more than that (xunit runs a class's tests
 #       one after another, so the slowest class sets the floor of the run time). Not applied with --filter.
 #   GATE_LONG_TEST_SEC (default 60) a test running longer is reported by xunit as "[Long Running Test]" and named in the summary.
@@ -39,7 +41,7 @@ while [ $# -gt 0 ]; do
     --filter) filter=${2:-}; shift 2 ;;
     --commit) commit=${2:-}; shift 2 ;;
     --selftest) selftest=1; shift ;;
-    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,31p' "$0"; exit 0 ;;
     --*) echo "test-stages: unknown option $1" >&2; exit 2 ;;
     *) targets+=("$1"); shift ;;
   esac
@@ -61,7 +63,11 @@ minute_sec=${GATE_BUDGET_MINUTE_SEC:-60}   # test hook: the self-test shrinks a 
 for knob in GATE_BUDGET_MINUTE_SEC=$minute_sec GATE_SUITE_BUDGET_MIN=$suite_budget_min GATE_CLASS_BUDGET_SEC=$class_budget_sec GATE_LONG_TEST_SEC=$long_test_sec; do
   [[ "${knob#*=}" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "test-stages: ${knob%%=*} must be a whole number, not '${knob#*=}'" >&2; exit 2; }
 done
-[ "$long_test_sec" -gt 0 ] && [ "$minute_sec" -gt 0 ] || { echo "test-stages: GATE_LONG_TEST_SEC and GATE_BUDGET_MINUTE_SEC must be at least 1" >&2; exit 2; }
+# Ranges keep every product below inside bash's 64-bit arithmetic and inside an int of VSTest's millisecond timeout.
+[ "$long_test_sec" -ge 1 ] && [ "$long_test_sec" -le 3600 ] || { echo "test-stages: GATE_LONG_TEST_SEC must be 1..3600" >&2; exit 2; }
+[ "$minute_sec" -ge 1 ] && [ "$minute_sec" -le 60 ] || { echo "test-stages: GATE_BUDGET_MINUTE_SEC must be 1..60" >&2; exit 2; }
+[ "$suite_budget_min" -le 1440 ] || { echo "test-stages: GATE_SUITE_BUDGET_MIN must be at most 1440" >&2; exit 2; }
+[ "$class_budget_sec" -le 86400 ] || { echo "test-stages: GATE_CLASS_BUDGET_SEC must be at most 86400" >&2; exit 2; }
 if [ "$time_budgets" = off ]; then suite_budget_min=0 class_budget_sec=0; fi
 read -r -a wrap <<< "${GATE_WRAP:-}"
 read -r -a wrap_data <<< "${GATE_WRAP_DATA:-}"
@@ -89,9 +95,10 @@ run_test() {
   fi
   # stdin from /dev/null: the rerun loop below reads failed-test names from its stdin, and a child that read it would swallow them.
   # The marker holds the epoch second at which dotnet itself starts (after any GATE_WRAP / GATE_WRAP_DATA prefix has let it through,
-  # e.g. a flock wait), so a run's time is the dotnet part only. bash -c is the innermost command of the wrapped line.
+  # e.g. a flock wait), so a run's time is the dotnet part only. bash -c is the innermost command of the wrapped line. Main stage only:
+  # the timing stage and its reruns are not timed.
   local n=${#pre[@]} full=()
-  full=("${cmd[@]:0:n}" bash -c 'date +%s > "$0"; exec "$@"' "$log.start" "${cmd[@]:n}")
+  if [ "$ser" = 0 ]; then full=("${cmd[@]:0:n}" bash -c 'date +%s > "$0"; exec "$@"' "$log.start" "${cmd[@]:n}"); else full=("${cmd[@]}"); fi
   "${full[@]}" > "$log" 2>&1 < /dev/null
 }
 
@@ -141,10 +148,11 @@ still_running() {
 # Nothing of an earlier run in the same folders may be read as this one's: its rc, time and trx files are removed first, so a job that
 # dies before writing its rc reads as rc 255 (failed), never as a leftover 0.
 main_run() {
-  local rc st
+  local rc st st0
+  st0=$(date +%s)
   rm -f "$logs/main-$2.rc" "$logs/main-$2.secs" "$logs/main-$2.log.start"; rm -rf "${results:?}/$2"
   run_test "$logs/main-$2.log" "$results/$2" "$3" 0 "$1" "$4"; rc=$?
-  st=$(cat "$logs/main-$2.log.start" 2>/dev/null || date +%s)
+  st=$(cat "$logs/main-$2.log.start" 2>/dev/null || echo "$st0")   # no marker: dotnet never started; time from the job's start, never 0
   echo $(( $(date +%s) - st )) > "$logs/main-$2.secs.tmp"; mv "$logs/main-$2.secs.tmp" "$logs/main-$2.secs"
   echo $rc > "$logs/main-$2.rc.tmp"; mv "$logs/main-$2.rc.tmp" "$logs/main-$2.rc"
 }
@@ -152,6 +160,7 @@ main_run() {
 label() { basename "$1" | sed -E 's/\.(slnf|slnx|sln|csproj)$//'; }
 # Each target's logs, trx folder and rc file are named by its label: two with the same label would overwrite each other.
 dups=$(for t in "${targets[@]}"; do label "$t"; done | sort | uniq -d)
+for t in "${targets[@]}"; do [ -n "$(label "$t")" ] || { echo "test-stages: target '$t' has an empty name" >&2; exit 2; }; done
 [ -z "$dups" ] || { echo "test-stages: targets share the name(s): $(echo $dups) (their logs and results would collide)" >&2; exit 2; }
 
 a_exec=0 a_pass=0 a_fail=0 a_skip=0 b_exec=0 b_pass=0 b_fail=0 b_skip=0
