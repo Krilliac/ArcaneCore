@@ -221,6 +221,8 @@ One in-memory copy each at `c3dea16`:
   (`src/ArcaneCore.Realm/Program.cs:19`, `src/ArcaneCore.World/Program.cs:19`), with no
   lock or validate-only mode (`src/ArcaneCore.Data/Schema/SchemaBootstrapper.cs:78-120`).
 
+Realm-wide state a second process would have to share (queues, channels, who list, corpses, outdoor PvP, event timers), with holder rules and a lane list, is surveyed in [cluster-realm-state.md](cluster-realm-state.md).
+
 ## 5. Not verified
 
 - Behaviour under a real client, a second OS process, or MySQL (CI provides MariaDB
