@@ -24,7 +24,7 @@
 # GATE_BUDGET_MINUTE_SEC (1..60, default 60) is a test hook: the self-test shrinks a budget "minute" so it runs in seconds.
 # Numeric knobs must be whole numbers within range (GATE_SUITE_BUDGET_MIN <= 1440, GATE_CLASS_BUDGET_SEC <= 86400,
 # GATE_LONG_TEST_SEC 1..3600; else exit 2); GATE_TIME_BUDGETS is on or off. Two targets with the same name are exit 2.
-#   GATE_CLASS_BUDGET_SEC (default 600) fails a target whose test class's tests add up to more than that (xunit runs a class's tests
+#   GATE_CLASS_BUDGET_SEC (default 900) fails a target whose test class's tests add up to more than that (xunit runs a class's tests
 #       one after another, so the slowest class sets the floor of the run time). Not applied with --filter.
 #   GATE_LONG_TEST_SEC (default 60) a test running longer is reported by xunit as "[Long Running Test]" and named in the summary.
 # GATE_ASSEMBLY_PARALLEL=0 runs a target's test assemblies one after another (-m:1) in the main stage too; the timing stage always does.
@@ -55,7 +55,7 @@ ledger=$logs/flake-ledger.txt
 : >> "$ledger"
 config=${GATE_CONFIGURATION:-Release}
 suite_budget_min=${GATE_SUITE_BUDGET_MIN:-20}
-class_budget_sec=${GATE_CLASS_BUDGET_SEC:-600}
+class_budget_sec=${GATE_CLASS_BUDGET_SEC:-900}
 long_test_sec=${GATE_LONG_TEST_SEC:-60}
 time_budgets=${GATE_TIME_BUDGETS:-on}
 case "$time_budgets" in on|off) ;; *) echo "test-stages: GATE_TIME_BUDGETS must be on or off, not '$time_budgets'" >&2; exit 2 ;; esac

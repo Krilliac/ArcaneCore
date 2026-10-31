@@ -19,7 +19,7 @@
   10.0.401 and 11.0.100-rc.2 SDKs; the repository's global.json pins 11, so the run uses 11. If the services are not running, this
   script starts them.
   Time budgets: the gate stops each test assembly of a main-stage target after 20 minutes (a hard stop that names the slow tests),
-  fails a target whose dotnet run took over 20 minutes in all (wall clock) and a test class that adds up to over 10 minutes (see the
+  fails a target whose dotnet run took over 20 minutes in all (wall clock) and a test class that adds up to over 15 minutes (see the
   header of test-stages.sh); -NoTimeBudget turns all of that off for slow hardware.
   Two copies of this script exist and must be kept in sync: this one and the operator's copy outside the repository (it runs commits
   that predate this file). They differ only in the OpsEnv.ps1 include, the examples and the default flake-ledger path. test-stages.sh

@@ -44,7 +44,7 @@ case "$flt" in
         fi
         mktrx Ns.Slow.Sleeper 00:07:00; block 5 0 0 Successful; exit 0 ;;
       killedjob) block 10 0 0 Successful; kill -9 $PPID; exit 0 ;; # the gate's job for this target dies before it can write its rc
-      slowclass) mktrx Ns.Heavy.A 00:06:40 Ns.Heavy.B 00:05:00 Ns.Light.C 00:00:02; block 5 0 0 Successful; exit 0 ;;
+      slowclass) mktrx Ns.Heavy.A 00:10:00 Ns.Heavy.B 00:06:40 Ns.Light.C 00:00:02; block 5 0 0 Successful; exit 0 ;;
       concurrent)
         echo "start $2" >> "$SIM_EVENTS"; sleep 1; echo "end $2" >> "$SIM_EVENTS"
         case "$2" in
@@ -128,7 +128,7 @@ check hardstop 0 "" '^GATE RESULT: PASS$'
 envs="GATE_CLASS_BUDGET_SEC=0"; tag=slowclass-zero
 check slowclass 0 "" '^GATE RESULT: PASS$'
 envs=; tag=
-check slowclass 1 "" 'test class Ns\.Heavy adds up to 700s, over the 600s class budget' 'Ns\.Light adds up'
+check slowclass 1 "" 'test class Ns\.Heavy adds up to 1000s, over the 900s class budget' 'Ns\.Light adds up'
 tag=slowclass-filtered
 check slowclass 0 "--filter FullyQualifiedName~X" '^GATE RESULT: PASS$' 'class budget'
 tag=slowclass-offswitch; envs="GATE_TIME_BUDGETS=off"
