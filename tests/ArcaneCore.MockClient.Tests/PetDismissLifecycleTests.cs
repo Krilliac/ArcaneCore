@@ -58,6 +58,7 @@ public sealed partial class WorldLifecyclePersistenceTests
                 CharacterDbContext characterDb = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
                 CharacterRecord row = await characterDb.Characters.SingleAsync(r => r.Id == checked((int)character), token);
                 row.Class = (byte)Class.Hunter;
+                row.Level = expected.Level; // a hunter pet loaded above its owner drops to the owner's level at full health (Pet.cpp:2353-2356)
                 await characterDb.SaveChangesAsync(token);
             }
 
