@@ -18,6 +18,9 @@
   One-time node setup (mariadb-server, postgresql-16, root/arcane and arcane/arcane logins) was done 2026-10-10. /opt/dotnet holds the
   10.0.401 and 11.0.100-rc.2 SDKs; the repository's global.json pins 11, so the run uses 11. If the services are not running, this
   script starts them.
+  Time budgets: the gate stops each test assembly of a main-stage target after 20 minutes (a hard stop that names the slow tests),
+  fails a target whose dotnet run took over 20 minutes in all (wall clock) and a test class that adds up to over 15 minutes (see the
+  header of test-stages.sh); -NoTimeBudget turns all of that off for slow hardware.
   Two copies of this script exist and must be kept in sync: this one and the operator's copy outside the repository (it runs commits
   that predate this file). They differ only in the OpsEnv.ps1 include, the examples and the default flake-ledger path. test-stages.sh
   beside each must be byte-identical to the repository's tools/ops/ci/test-stages.sh.
@@ -43,6 +46,9 @@ param(
     # dotnet test --filter expression ANDed into both stages (RED/GREEN proofs without whole-suite runs). Skips the MockClient
     # self-test, so a filtered run is never a full gate.
     [string] $Filter,
+    # Sets GATE_TIME_BUDGETS=off for the gate: no hard stop at the suite time budget and no class-budget failure (timings stay in the
+    # summary as info). For genuinely slow hardware.
+    [switch] $NoTimeBudget,
     [string] $NodeHost = 'Node@10.77.0.2',
     [string] $Key = "$env:USERPROFILE\.ssh\sonder-node-ed25519"
 )
@@ -133,6 +139,7 @@ $targets = ($Suites | ForEach-Object { "tests/ci/$_.slnf" }) -join ' '
 $dbFlag = if ($WithDbProviders) { 1 } else { 0 }
 if ($Filter -and $Filter.Contains("'")) { throw 'filter must not contain a single quote' }
 $filterArg = if ($Filter) { "--filter '$Filter'" } else { '' }
+$budgetEnv = if ($NoTimeBudget) { 'GATE_TIME_BUDGETS=off ' } else { '' }
 $selftestArg = if (-not $Filter -and $Suites -contains 'Rest') { '--selftest' } else { '' }
 $runTests = if ($BuildOnly) { 0 } else { 1 }
 $full = if ($fullGate) { 1 } else { 0 }
@@ -183,7 +190,7 @@ if [ $runTests = 1 ]; then
   # takes ~50 min, so the lock waits up to 5 h. Each dotnet test is capped at 60 min (timeout -k kills a hung testhost), so an
   # abandoned or stuck run frees Node1 by itself.
   lock=; [ $dbFlag = 1 ] && lock="flock -w 18000 /root/ci/data-suite.lock"
-  GATE_WRAP="timeout -k 60 3600" GATE_WRAP_DATA="`$lock" bash `$S-stages.sh --stage all --logs `$W/logs --commit $sha $filterArg $selftestArg $targets || fail=1
+  ${budgetEnv}GATE_WRAP="timeout -k 60 3600" GATE_WRAP_DATA="`$lock" bash `$S-stages.sh --stage all --logs `$W/logs --commit $sha $filterArg $selftestArg $targets || fail=1
 fi
 rm -f `$S-stages.sh
 echo "CI RESULT: `$( [ `$fail -eq 0 ] && echo PASS || echo FAIL )$( if ($Filter) { ' (FILTERED, not a full gate)' } elseif ($BuildOnly) { ' (BUILD ONLY, no tests)' } )"

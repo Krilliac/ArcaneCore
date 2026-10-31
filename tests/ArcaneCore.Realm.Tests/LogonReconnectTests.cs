@@ -172,6 +172,20 @@ public sealed class LogonReconnectTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReconnectChallenge_AnswersSuspendedForATemporaryAccountBan()
+    {
+        // Applies the logon-challenge ban rule (vmangos AuthSocket.cpp logon path) to reconnect, beyond the references: a temporary ban is FAIL_SUSPENDED.
+        var accounts = new InMemoryAccountStore();
+        Account account = await accounts.CreateAsync(new Account { Username = "RECONNECT", Salt = [1], Verifier = [2], SessionKey = new byte[40] });
+        var bans = new InMemoryBanStore();
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        bans.AddAccountRow(account.Id, now - 60, now + 86400);
+        await using NetworkStream client = await StartAsync(accounts, new InMemoryRealmStore([]), bans);
+        await client.WriteAsync(BuildChallenge("RECONNECT"));
+        Assert.Equal(new byte[] { (byte)AuthCommand.ReconnectChallenge, (byte)AuthResult.Suspended }, await ReadExactAsync(client, 2));
+    }
+
+    [Fact]
     public async Task ReconnectChallenge_RejectsActiveAccountAndIpBans()
     {
         var accounts = new InMemoryAccountStore();

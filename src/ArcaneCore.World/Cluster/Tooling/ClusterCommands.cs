@@ -577,6 +577,7 @@ public sealed class ClusterCommands : ICommandGroup
         // count on the pool and send the report from the world thread.
         WorldRuntime world = context.World;
         ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>(); // resolved here: the pool continuations below must not touch the session scope
+        IDisposable hold = context.Defer(); // open until the report (or its failure notice) ran on the world thread: RA and the control pipe report done only then
         _ = Task.Run(async () =>
         {
             int pendingTransfers;
@@ -584,21 +585,28 @@ public sealed class ClusterCommands : ICommandGroup
             {
                 pendingTransfers = await transfers.CountUnresolvedAsync().ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            catch (OperationCanceledException)
+            {
+                // A cancelled count ends this task Canceled, which the OnlyOnFaulted continuation never sees: reply and release here.
+                PostAndRelease(world, hold, () => context.Reply("Cluster diagnostics unavailable: the pending transfer count read was cancelled."));
+                return;
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("cluster.diag-count", ex);
                 logger?.LogWarning(ex, "cluster diag could not read the unresolved transfer count"); // logged here, not from the posted action: a stopped world never runs it
-                world.Post(() => context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store."));
+                PostAndRelease(world, hold, () => context.Reply("Cluster diagnostics unavailable: the pending transfer count could not be read from the transfer decision store."));
                 return;
             }
 
-            world.Post(() => ReplyDiag(context, pendingTransfers, pendingWrites, retainedFailures, fencing, worldToken, nodeId, role, incarnation, realmId, contentRev));
+            PostAndRelease(world, hold, () => ReplyDiag(context, pendingTransfers, pendingWrites, retainedFailures, fencing, worldToken, nodeId, role, incarnation, realmId, contentRev));
         }).ContinueWith(
             t =>
             {
                 Exception ex = t.Exception!.GetBaseException();
                 if (ex is OperationCanceledException or OutOfMemoryException)
                 {
+                    hold.Dispose(); // no reply is possible, but the command must still settle (Dispose is idempotent)
                     return;
                 }
 
@@ -606,7 +614,7 @@ public sealed class ClusterCommands : ICommandGroup
                 logger?.LogFault("cluster-diag-post", ex, "cluster diag could not post its reply to the world thread");
                 try
                 {
-                    world.Post(() => context.Reply("Cluster diagnostics unavailable: the report could not be delivered."));
+                    PostAndRelease(world, hold, () => context.Reply("Cluster diagnostics unavailable: the report could not be delivered."));
                 }
                 catch (Exception replyEx) when (replyEx is not OutOfMemoryException)
                 {
@@ -619,6 +627,30 @@ public sealed class ClusterCommands : ICommandGroup
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         return true;
+    }
+
+    /// <summary>Queue <paramref name="reply"/> for the world thread and release <paramref name="hold"/> after it ran; when the post itself throws, release it here (the action will never run).</summary>
+    private static void PostAndRelease(WorldRuntime world, IDisposable hold, Action reply)
+    {
+        try
+        {
+            world.Post(() =>
+            {
+                try
+                {
+                    reply();
+                }
+                finally
+                {
+                    hold.Dispose();
+                }
+            });
+        }
+        catch
+        {
+            hold.Dispose();
+            throw;
+        }
     }
 
     /// <summary>World thread: build and send the <c>.cluster diag</c> report once the unresolved transfer count is known.</summary>

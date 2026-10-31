@@ -184,13 +184,17 @@ internal static class PlayerbotCombatView
                 && SpellSystem.IsExplicitUnitTarget(spell.Effects[0].TargetA)
                 && unit.Guid != combo.GetComboTarget(player))
                 return false;
-            if (spell.IsPositive && ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(system, unit, spell, ReferenceEquals(unit, player))) return false;
-            // A crowd-control spell on a target at the immune diminishing level lands with no aura (vmangos Spell::DoSpellHitOnUnit): do not waste the cast.
-            if (!spell.IsPositive && !ReferenceEquals(unit, player) && system.IsFullyDiminished is { } diminished && diminished(player, unit, spell)) return false;
-            if (spell.Effects.Any(e => !e.IsEmpty && e.TargetA == SpellImplicitTarget.UnitCasterPet) && petStatus != RotationPetStatus.Alive) return false;
+            // The cheap power, reagent and shapeshift refusals come before the immunity rules (independent refusals, same result).
             if (!HasPower(player, spell)) return false;
             if (spell.GetErrorAtShapeshiftedCast((uint)form, formFlags) != SpellCastResult.CastOk) return false;
             if (!HasReagents(player, spell) || !HasEquippedItem(player, spell)) return false;
+            // Hostile spells too (vmangos CanTryToCastSpell -> IsImmuneToSpell): a totem takes no negative aura and a creature's
+            // mechanic or school immunity would waste the cast.
+            if (ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpell(system, unit, spell, ReferenceEquals(unit, player))) return false;
+            if (!spell.IsPositive && !ReferenceEquals(unit, player) && AllEffectsImmune(system, unit, spell)) return false;
+            // A crowd-control spell on a target at the immune diminishing level lands with no aura (vmangos Spell::DoSpellHitOnUnit): do not waste the cast.
+            if (!spell.IsPositive && !ReferenceEquals(unit, player) && system.IsFullyDiminished is { } diminished && diminished(player, unit, spell)) return false;
+            if (spell.Effects.Any(e => !e.IsEmpty && e.TargetA == SpellImplicitTarget.UnitCasterPet) && petStatus != RotationPetStatus.Alive) return false;
             if (spell.HasEffect(SpellEffectName.EnchantItemTemporary)
                 && (mainHand is null || !ArcaneCore.Game.Crafting.Enchanting.ItemTargetRules.IsFit(spell, mainHand.Template)))
                 return false;
@@ -348,12 +352,14 @@ internal static class PlayerbotCombatView
     internal static RotationUnit Describe(SpellSystem system, Player bot, Unit unit, GroupManager? groups)
     {
         var auras = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        bool periodicHeal = false;
+        bool periodicHeal = false, rooted = false, slowed = false;
         uint harmful = 0, helpful = 0;
         foreach (SpellAuraHolder holder in system.GetAuras(unit))
         {
             if (holder.IsRemoved) continue;
             auras.Add(holder.Spell.Name);
+            rooted |= holder.HasAura(AuraType.ModRoot) || holder.HasAura(AuraType.ModStun);
+            slowed |= holder.HasAura(AuraType.ModDecreaseSpeed);
             periodicHeal |= holder.HasAura(AuraType.PeriodicHeal);
             if (holder.Spell.Dispel is > 0 and < 32)
             {
@@ -383,6 +389,8 @@ internal static class PlayerbotCombatView
             InMeleeRange = !self && InMeleeRange(bot, unit),
             IsCasting = system.GetState(unit.Guid)?.CurrentCast is { State: SpellCastState.Preparing or SpellCastState.Casting },
             IsMoving = unit is Creature creature ? creature.IsMoving : unit.Movement.HasFlag(MovementFlags.MaskMoving),
+            IsRooted = rooted,
+            IsSlowed = slowed,
             TargetsBot = !self && ReferenceEquals(unit.Combat.Victim, bot),
             InCombat = unit.Combat.IsInCombat,
             CreatureType = unit is Creature c ? c.Template.CreatureType : 0,
@@ -394,6 +402,22 @@ internal static class PlayerbotCombatView
             IsCrowdControlled = !self && system.HasBreakableByDamageCrowdControlAura(unit, bot),
             Auras = auras,
         };
+    }
+
+    /// <summary>Every effect of a hostile spell is refused by the target's per-effect immunity (a totem's override, effect and aura-state immunity), so the cast lands nothing (vmangos Spell::AddUnitTarget drops immune effects).</summary>
+    private static bool AllEffectsImmune(SpellSystem system, Unit target, SpellInfo spell)
+    {
+        bool any = false;
+        for (int i = 0; i < spell.Effects.Count; i++)
+        {
+            if (spell.Effects[i].IsEmpty) continue;
+            // An effect aimed at the caster or an area still lands elsewhere (vmangos Spell::AddUnitTarget drops immune effects per target).
+            if (!SpellSystem.IsExplicitUnitTarget(spell.Effects[i].TargetA)) return false;
+            any = true;
+            if (!ArcaneCore.Game.Spells.Rules.Immunity.ImmunityRules.IsImmuneToSpellEffect(system, target, spell, i, castOnSelf: false)) return false;
+        }
+
+        return any;
     }
 
     private static float CombatReach(Unit unit)

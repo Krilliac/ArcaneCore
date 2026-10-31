@@ -1019,6 +1019,9 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         }
     }
 
+    /// <summary>How many times a full cap let <see cref="Match"/> pass over a waiting goal that has no live volunteer (tests: no candidates are built for it).</summary>
+    internal long CapSkippedGoals { get; private set; }
+
     private bool QuestGroupSlotFree() => OwnGroupCount < _options.Groups.MaxGroups && _groups.Count(g => g.Run is null && g.Handoff is null && g.Siege is null) < QuestGroupLimit;
 
     /// <summary>The groups the bots formed themselves: a handed-over group (a player's own, <see cref="BotGroup.Handoff"/>) takes no slot of <c>MaxGroups</c>.</summary>
@@ -1027,10 +1030,12 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
     private void Match()
     {
         PruneRecruiting(Now);
+        PruneVolunteers(Now);
+        // A group with a real player (a volunteer) takes no slot from the cap, so a full cap only stops the bots-only plans.
         if (!QuestGroupSlotFree())
         {
             NoteCapBlocked();
-            return;
+            if (_volunteers.Count == 0) return;
         }
 
         if (GroupManagerOrNull() is not { } groupManager) return;
@@ -1039,10 +1044,17 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                      .GroupBy(w => (w.Waiting.Goal.Key, Team: _bots[w.BotId].Session.Player?.Team ?? 0))
                      .OrderBy(g => g.Min(w => w.Waiting.SinceMs)).ToArray())
         {
-            if (!QuestGroupSlotFree())
+            bool slotFree = QuestGroupSlotFree();
+            if (!slotFree)
             {
                 NoteCapBlocked();
-                return;
+                if (_volunteers.Count == 0) return;
+            }
+
+            if (!slotFree && !HasLiveVolunteer(wanting.Key.Key, wanting.Key.Team))
+            {
+                CapSkippedGoals++; // a full cap lets only a goal with a volunteer through: nothing is built for the others
+                continue;
             }
 
             PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
@@ -1057,11 +1069,13 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             int size = wanting.Max(w => w.Waiting.Goal.Size);
             List<PlayerbotGroupCandidate> candidates = BuildCandidates(wanting, goal);
 
-            PlayerbotGroupPlan? plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups, goal.InInstance);
-            if (plan is null && candidates.Count >= 1) plan = MatchWithVolunteer(candidates, size, goal, groupManager); // asked for it (Volunteers.cs)
+            // A player who asked for the group (Volunteers.cs) comes first, ahead of surplus bots; it forms even with the cap full.
+            ObjectGuid? volunteer = null;
+            PlayerbotGroupPlan? plan = candidates.Count >= 1 ? MatchWithVolunteer(candidates, size, goal, groupManager, out volunteer) : null;
+            if (plan is null && slotFree) plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups, goal.InInstance);
             List<Guid> recruited = [];
-            if (plan is null && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
-            if (plan is null && _options.Groups.InvitePlayers && candidates.Count >= 1)
+            if (plan is null && slotFree && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
+            if (plan is null && slotFree && _options.Groups.InvitePlayers && candidates.Count >= 1)
                 plan = MatchWithPlayer(candidates, size, goal, groupManager);
             if (plan is not null && goal.InInstance && !PlanAnchored(plan))
             {
@@ -1071,6 +1085,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
 
             if (plan is null) continue;
             Form(goal with { Size = size }, plan);
+            if (volunteer is { } formedVolunteer && plan.Members.Any(m => m.Bot.Guid == formedVolunteer.Value)) _volunteers.Remove(formedVolunteer);
             if (recruited.Count > 0) NoteRecruited(plan, recruited);
         }
     }

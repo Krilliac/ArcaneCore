@@ -54,6 +54,19 @@ public sealed class RowMapperTests
         Assert.Equal(0f, s.Ratio);
     }
 
+    [Theory]
+    [InlineData("0", false)]
+    [InlineData("", false)]
+    [InlineData("false", false)]
+    [InlineData("False", false)]
+    [InlineData("FALSE", false)]
+    [InlineData("fAlSe", false)]
+    [InlineData("1", true)]
+    [InlineData("TRUE", true)]
+    [InlineData("true", true)]
+    public void BoolColumns_ReadTheLiteralsMySqlAccepts_IgnoringCase(string raw, bool expected)
+        => Assert.Equal(expected, Map(["flag"], [raw]).Flag);
+
     [Fact]
     public void Maps_ReportsWhichColumnsAreRead()
     {

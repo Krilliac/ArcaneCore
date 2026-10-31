@@ -69,6 +69,39 @@ public sealed class ClusterHostSupervisorStopAuthTests
         Assert.Equal(["a\rb", "c", "d", "", "e"], lines);
     }
 
+    [Theory]
+    [InlineData(SupervisorLineReader.MaxLineLength - 1, "\r\n", SupervisorLineReader.MaxLineLength - 1)]
+    [InlineData(SupervisorLineReader.MaxLineLength, "\n", SupervisorLineReader.MaxLineLength)]
+    [InlineData(SupervisorLineReader.MaxLineLength, "\r\n", SupervisorLineReader.MaxLineLength)]
+    public async Task LineReader_ALineEndingAtTheLengthCap_IsOneLineWithoutACarriageReturnOrAPhantomLine(int length, string terminator, int expectedLength)
+    {
+        var lines = new List<string>();
+
+        await SupervisorLineReader.ReadLinesAsync(new StringReader(new string('x', length) + terminator + "next\n"), lines.Add);
+
+        Assert.Equal([new string('x', expectedLength), "next"], lines);
+    }
+
+    [Fact]
+    public async Task LineReader_ALineOneOverTheCap_IsStillDeliveredInPieces()
+    {
+        var lines = new List<string>();
+
+        await SupervisorLineReader.ReadLinesAsync(new StringReader(new string('x', SupervisorLineReader.MaxLineLength + 1) + "\n"), lines.Add);
+
+        Assert.Equal([new string('x', SupervisorLineReader.MaxLineLength), "x"], lines);
+    }
+
+    [Fact]
+    public async Task LineReader_ARunOfCarriageReturnsAtTheCap_StaysBounded()
+    {
+        var lines = new List<string>();
+
+        await SupervisorLineReader.ReadLinesAsync(new StringReader(new string('\r', SupervisorLineReader.MaxLineLength * 3)), lines.Add);
+
+        Assert.All(lines, l => Assert.True(l.Length <= SupervisorLineReader.MaxLineLength + 1));
+    }
+
     [Fact]
     public async Task StoppingLine_WithTheToken_IsConsumed_NotShown()
     {

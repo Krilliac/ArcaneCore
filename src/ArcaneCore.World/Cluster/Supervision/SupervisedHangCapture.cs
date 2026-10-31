@@ -13,8 +13,8 @@ public enum SupervisedHangCaptureMode
     Dump = 2,
 }
 
-/// <summary>One capture the supervisor asks for.</summary>
-public sealed record SupervisedHangCaptureRequest(string Name, int ProcessId, SupervisedHangCaptureMode Mode, string Directory, string? StackTool);
+/// <summary>One capture the supervisor asks for. <paramref name="ToolTimeout"/> bounds the stack tool run (<c>Cluster:Supervisor:HangCaptureTimeoutSeconds</c>); null keeps the two-minute default.</summary>
+public sealed record SupervisedHangCaptureRequest(string Name, int ProcessId, SupervisedHangCaptureMode Mode, string Directory, string? StackTool, TimeSpan? ToolTimeout = null);
 
 /// <summary>Captures diagnostics from a hung child; the seam tests replace so no tool runs.</summary>
 public interface ISupervisedHangCapture
@@ -30,7 +30,7 @@ public interface ISupervisedHangCapture
 /// </summary>
 public sealed class SystemSupervisedHangCapture : ISupervisedHangCapture
 {
-    private static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(120);
+    private static readonly TimeSpan DefaultToolTimeout = TimeSpan.FromSeconds(120);
 
     private readonly ArcaneCore.Kernel.Ops.Watchdog.IHangStackRunner _runner;
 
@@ -53,7 +53,7 @@ public sealed class SystemSupervisedHangCapture : ISupervisedHangCapture
         {
             string tool = string.IsNullOrWhiteSpace(request.StackTool) ? "dotnet-stack" : request.StackTool;
             (int exitCode, string output) = await _runner.RunAsync(
-                tool, ["report", "-p", request.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)], ToolTimeout).WaitAsync(ct).ConfigureAwait(false);
+                tool, ["report", "-p", request.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)], request.ToolTimeout ?? DefaultToolTimeout).WaitAsync(ct).ConfigureAwait(false);
             await File.WriteAllTextAsync(Path.Combine(request.Directory, baseName + ".stacks.txt"), output, ct).ConfigureAwait(false);
             if (exitCode != 0)
                 throw new InvalidOperationException($"{tool} exited with code {exitCode} capturing stacks of process {request.ProcessId}.");

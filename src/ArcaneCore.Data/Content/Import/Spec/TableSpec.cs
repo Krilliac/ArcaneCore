@@ -3,10 +3,14 @@ namespace ArcaneCore.Data.Content.Import;
 /// <summary>
 /// One part of a table's key. <see cref="Canonical"/> is the name used in messages; the
 /// importers look the column up by any of <see cref="Names"/> (case-insensitive). A key part has
-/// no default: a table without it is rejected rather than read with an implicit 0.
+/// no default: a table without it is rejected rather than read with an implicit 0, unless the part is
+/// <see cref="Optional"/> (the importer itself treats a missing column as 0, so the scan must not be stricter than the import).
 /// </summary>
 public sealed record KeyColumn(string Canonical, IReadOnlyList<string> Names)
 {
+    /// <summary>The importer reads the table without this column; a dump that lacks it is accepted and the part counts as constant.</summary>
+    public bool Optional { get; init; }
+
     public KeyColumn(string canonical, params string[] aliases)
         : this(canonical, (IReadOnlyList<string>)[canonical, .. aliases])
     {
@@ -70,7 +74,8 @@ public sealed class TableSpec
     /// <summary>
     /// The index in <paramref name="columns"/> of each key part.
     /// </summary>
-    /// <exception cref="ImportSchemaException">A key part has none of its names among the columns.</exception>
+    /// <returns>The index per key part; -1 for an <see cref="KeyColumn.Optional"/> part the columns lack.</returns>
+    /// <exception cref="ImportSchemaException">A required key part has none of its names among the columns.</exception>
     public int[] ResolveKey(IReadOnlyList<string> columns)
     {
         var indexes = new int[Keys.Count];
@@ -84,6 +89,12 @@ public sealed class TableSpec
                 {
                     break;
                 }
+            }
+
+            if (found < 0 && Keys[k].Optional)
+            {
+                indexes[k] = -1;
+                continue;
             }
 
             if (found < 0)

@@ -1126,7 +1126,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Most item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession second value: 90).",
+      "meaning": "Most item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession second value: 90); at most 10000.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#auctionhousebot",
       "isCollection": false
@@ -1142,7 +1142,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "Fewest item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession first value: 80).",
+      "meaning": "Fewest item templates drawn per sell action (cMaNGOS AuctionHouseBot.Items.Profession first value: 80); at least -10000 (a negative value makes an empty draw likelier).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#auctionhousebot",
       "isCollection": false
@@ -3519,7 +3519,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "`Creatures:Movement:PathJobs`: run the navmesh searches of out-of-combat creature moves (wander, waypoint, point and scripted moves, evade/home returns of walkers) and of chases (in or out of combat, a pet's included) on a pool of path-job threads instead of the map's update (multithreading plan W5). The answer is the same search over the same loaded tiles; the creature starts the move on a later update, as it does today when the per-update search budget is spent. Follow and formation searches join the pool only with `PathJobsFollow`; flee, confused and flier searches and a pet's other moves stay synchronous. Off by default; read when the map's creature system starts.",
+      "meaning": "`Creatures:Movement:PathJobs`: run the navmesh searches of out-of-combat creature moves (wander, waypoint, point and scripted moves, evade/home returns of walkers) and of chases (in or out of combat, a pet's included) on a pool of path-job threads instead of the map's update (multithreading plan W5). The answer is the same search over the same loaded tiles; the creature starts the move on a later update, as it does today when the per-update search budget is spent (a chaser already running takes its answer mid-spline only with `PathJobsFollow` on too). A search a worker has been running for 5 s (`CreatureMapSystem.PathJobPendingTimeoutMs`) is dropped and asked again; time a job waits in the pool's queue does not count, so a busy pool keeps its queue in order. Follow and formation searches join the pool only with `PathJobsFollow`; flee, confused and flier searches and a pet's other moves stay synchronous. Off by default; read when the map's creature system starts.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#creatures",
       "isCollection": false
@@ -3535,7 +3535,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "`Creatures:Movement:PathJobsFollow`: out-of-combat follow searches (pets and escorts following their leader) go to the path-job pool too (`PathJobs` must be on). The follower keeps its current spline until the answer arrives (one or two updates); an answer whose destination is within `CreatureMapSystem.PathJobFollowTolerance` (1 yd) of the re-asked one still applies, since a leader on the move shifts the follow point every update. A slower answer is still waited for, and walked when the path it found ends closer to the leader's new point than the follower stands; a lagging answer with no path, or one ending farther away, is asked again. A follower already on a spline takes no pool answer until that spline ends, so behind a running leader on a loaded pool it moves stop-and-go. Chase searches use the pool whenever `PathJobs` is on, with or without this setting.",
+      "meaning": "`Creatures:Movement:PathJobsFollow`: out-of-combat follow searches (pets and escorts following their leader) go to the path-job pool too (`PathJobs` must be on). The follower keeps its current spline until the answer arrives (one or two updates); an answer whose destination is within `CreatureMapSystem.PathJobFollowTolerance` (1 yd) of the re-asked one still applies, since a leader on the move shifts the follow point every update. A slower answer is still waited for, and walked when the path it found ends closer to the leader's new point than the follower stands; a lagging answer with no path, or one ending farther away, is asked again. A follower, formation member or chaser already on a spline takes its answer mid-spline: while it has only run on along that spline (up to `CreatureMapSystem.PathJobCarryYards`, 4 yd) its job is waited for, not dropped and asked again, and the path is re-anchored at where it now stands, dropping corners it has already passed, so behind a running leader it keeps running with one job in flight. On a map with navigation the new first leg is walked on the navmesh with the path's own options; it is refused (asked again from where the creature stands) when the creature cannot be placed on the mesh, the walk is blocked, or it ends on another layer. A map without navigation takes the leg unchecked. Chase searches use the pool whenever `PathJobs` is on; only with this setting does a running chaser take answers mid-spline too, otherwise its answer is dropped and asked again once it has run past the answer's start.",
       "allowed": "true | false",
       "docs": "docs/reference/configuration.md#creatures",
       "isCollection": false
@@ -14912,6 +14912,22 @@
       "isCollection": false
     },
     {
+      "path": "World:MeetingStone:LeaveSoloQueueOnPartyJoin",
+      "section": "World:MeetingStone",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "ArcaneCore deviation, off by default (retail): a player queued alone at a meeting stone who joins a party by an ordinary invitation leaves the solo queue (the client is told SETQUEUE LEAVE_QUEUE). vmangos keeps the stale entry (Group.cpp AddMember only updates the LFG state of a party that is itself in the queue), so that player keeps blocking the roles of everyone queued after them until they log out, and is lost from a pair the queue forms. This also applies to the inviter of a new party who had queued alone.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldmeetingstone",
+      "isCollection": false
+    },
+    {
       "path": "World:PacketHeuristics:Cadence",
       "section": "World:PacketHeuristics",
       "type": "bool",
@@ -24910,11 +24926,11 @@
       "kind": "scalar",
       "elementType": "int",
       "enumValues": null,
-      "default": "255",
+      "default": "128",
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is created. 0 = no cap. vmangos has none and the stock client's limit is UNVERIFIED (not captured from a real client). The default (255) assumes a chat edit box of that length, which is unconfirmed; if the client allows longer names, raise it or set 0.",
+      "meaning": "ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is created. vmangos has no cap and the stock client's limit is UNVERIFIED (not captured from a real client). A custom name is normalized to at most 128 characters (vmangos normalizePlayerName(m_name, 128)), so a longer one is always refused: the default is 128, and a larger value or 0 (no configured cap) is still held to 128.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldsocial",
       "isCollection": false
@@ -24930,7 +24946,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "live",
-      "meaning": "ArcaneCore hardening: the longest channel password (characters) accepted on join or when set; over it a join gets WRONG_PASSWORD and a set is ignored. 0 = no cap. Default 255, as for `MaxChannelNameLength`.",
+      "meaning": "ArcaneCore hardening: the longest channel password (characters) accepted on join or when set; over it a join gets WRONG_PASSWORD and a set is ignored. 0 = no cap. Default 255 (unrelated to the 128-character name limit).",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#worldsocial",
       "isCollection": false

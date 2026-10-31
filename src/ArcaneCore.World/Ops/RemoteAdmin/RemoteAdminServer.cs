@@ -585,13 +585,41 @@ public sealed class RemoteAdminServer : IHostedService
         }
     }
 
-    /// <summary>Reads '\n'-terminated UTF-8 lines (a trailing '\r' and telnet IAC sequences dropped) of at most a given number of bytes.</summary>
+    /// <summary>
+    /// Reads '\n'-terminated UTF-8 lines (a trailing '\r' and telnet IAC sequences dropped) of at most a given number of bytes.
+    /// The telnet state (RFC 854/855) lives across reads, so a negotiation or subnegotiation split by TCP segmentation is dropped whole.
+    /// Owned by one connection's reader task; not thread-safe.
+    /// </summary>
     internal sealed class LineReader(Stream stream, int maxBytes)
     {
+        private const byte Iac = 0xFF;
+        private const byte Sb = 0xFA;
+        private const byte Will = 0xFB;
+        private const byte Dont = 0xFE;
+
+        private enum Telnet : byte
+        {
+            /// <summary>Plain data.</summary>
+            Data,
+
+            /// <summary>After IAC: the next byte is a command, or IAC again for a literal 0xFF.</summary>
+            Command,
+
+            /// <summary>After IAC WILL/WONT/DO/DONT: one option byte to skip.</summary>
+            Option,
+
+            /// <summary>Inside IAC SB ... : skipped until IAC SE.</summary>
+            Subnegotiation,
+
+            /// <summary>After an IAC inside a subnegotiation: SE ends it, IAC is an escaped 0xFF.</summary>
+            SubnegotiationCommand,
+        }
+
         private readonly byte[] _buffer = new byte[4096];
         private readonly MemoryStream _line = new();
         private int _start;
         private int _end;
+        private Telnet _telnet;
 
         public async Task<(string? Line, bool TooLong)> ReadLineAsync(CancellationToken token)
         {
@@ -608,19 +636,52 @@ public sealed class RemoteAdminServer : IHostedService
                 while (_start < _end)
                 {
                     byte b = _buffer[_start++];
-                    if (b == (byte)'\n') return ContentLength() > maxBytes ? (null, true) : (Take(), false);
-                    if (b == 0xFF)
+                    if (_telnet != Telnet.Data)
                     {
-                        // Telnet IAC: skip the command byte and its option (good enough for the negotiation a telnet client sends).
-                        _start = Math.Min(_end, _start + 2);
+                        if (!StepTelnet(b)) continue;
+                        b = Iac; // IAC IAC: a literal 0xFF data byte
+                    }
+                    else if (b == Iac)
+                    {
+                        _telnet = Telnet.Command;
                         continue;
                     }
 
+                    if (b == (byte)'\n') return ContentLength() > maxBytes ? (null, true) : (Take(), false);
                     if (b == 0) continue;
                     _line.WriteByte(b);
                     // One pending byte beyond the limit is allowed: it may be the carriage return of a CRLF line of exactly maxBytes.
                     if (_line.Length > maxBytes + 1L) return (null, true);
                 }
+            }
+        }
+
+        /// <summary>Advance the telnet state by one byte seen while not in plain data. True when the byte is an escaped literal 0xFF (IAC IAC).</summary>
+        private bool StepTelnet(byte b)
+        {
+            switch (_telnet)
+            {
+                case Telnet.Command:
+                    if (b == Iac)
+                    {
+                        _telnet = Telnet.Data;
+                        return true;
+                    }
+
+                    _telnet = b >= Will && b <= Dont ? Telnet.Option : b == Sb ? Telnet.Subnegotiation : Telnet.Data;
+                    return false;
+
+                case Telnet.Subnegotiation:
+                    if (b == Iac) _telnet = Telnet.SubnegotiationCommand;
+                    return false;
+
+                case Telnet.SubnegotiationCommand:
+                    _telnet = b == Iac ? Telnet.Subnegotiation : Telnet.Data; // IAC IAC stays inside; SE (or a malformed byte) ends it
+                    return false;
+
+                default: // Option: the option byte is consumed
+                    _telnet = Telnet.Data;
+                    return false;
             }
         }
 

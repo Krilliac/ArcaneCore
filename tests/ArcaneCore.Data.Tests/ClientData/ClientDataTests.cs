@@ -236,6 +236,42 @@ public sealed class ClientDataTests
     }
 
     [Fact]
+    public void ARenamedExplicitFile_IsCheckedAgainstTheLayoutOfTheConsumersDbc()
+    {
+        using var temp = new TempDirectory("arcane-clientdata-");
+        // Another build's CharSections (wrong field count) under a name that has no reference layout of its own.
+        string renamed = Path.Combine(temp.Path, "CharSections_Custom.dbc");
+        File.WriteAllBytes(renamed, SyntheticDbc.Image(ClientDbcLayouts.Find("CharSections.dbc")!.Fields + 3, null, [1u]));
+
+        ClientDataReport report = ClientDataReport.Build(Config(("CharacterCreation:CharSectionsDbcPath", renamed)));
+
+        ClientDbcResolution resolution = report.Resolutions.Single(r => r.Consumer.Key == "CharacterCreation:CharSectionsDbcPath");
+        Assert.Equal(ClientDbcStatus.FormatMismatch, resolution.Check!.Status);
+        Assert.Contains(report.Problems, p => p.Key == "CharacterCreation:CharSectionsDbcPath" && p.Problem.Contains("format mismatch", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void KeysSharingAFile_ThatResolvedDifferently_GetTheirOwnLines()
+    {
+        using var temp = new TempDirectory("arcane-clientdata-");
+        WriteAllConsumerFiles(temp.Path);
+        File.Delete(Path.Combine(temp.Path, "SkillLine.dbc")); // blocks Skills:SkillLineAbilityDbcPath, not NpcServices:SkillLineAbilityDbcPath
+
+        ClientDataReport report = ClientDataReport.Build(Config(("ClientData:DbcDirectory", temp.Path)));
+
+        Assert.True(report.Overlay.ContainsKey("NpcServices:SkillLineAbilityDbcPath"));
+        Assert.False(report.Overlay.ContainsKey("Skills:SkillLineAbilityDbcPath"));
+        ClientDataLine[] lines = [.. report.Lines().Where(l => l.Text.StartsWith("ClientData: SkillLineAbility.dbc: ", StringComparison.Ordinal))];
+        Assert.Equal(2, lines.Length);
+        ClientDataLine skills = Assert.Single(lines, l => l.Text.Contains("Skills:SkillLineAbilityDbcPath", StringComparison.Ordinal));
+        Assert.True(skills.Warning);
+        Assert.Contains("not used", skills.Text, StringComparison.Ordinal);
+        ClientDataLine npc = Assert.Single(lines, l => l.Text.Contains("NpcServices:SkillLineAbilityDbcPath", StringComparison.Ordinal));
+        Assert.False(npc.Warning);
+        Assert.DoesNotContain("Skills:SkillLineAbilityDbcPath", npc.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NoDirectory_ChangesNothing_AndAMissingDirectoryIsAProblem()
     {
         ClientDataReport none = ClientDataReport.Build(Config());

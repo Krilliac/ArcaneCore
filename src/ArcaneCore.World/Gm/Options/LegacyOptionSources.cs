@@ -62,7 +62,11 @@ internal static class LegacyOptionSources
                     RateStatus d = ServerRates.For(s.World).Describe(RateScopeOf(s), rate);
                     return (d.Overridden, Canonical(d.Configured));
                 },
-                (s, actor) => ServerRates.For(s.World).Reset(RateScopeOf(s), rate, actor));
+                (s, actor, force) =>
+                {
+                    bool done = ServerRates.For(s.World).TryReset(RateScopeOf(s), rate, actor, RateChangeKind.Reset, out string? refusal, force);
+                    return (done, refusal);
+                });
             keys.Add(new OptionKey(
                 rate.Name, rate.Description, OptionType.Number, rate.AppliesTo == "live" ? OptionApplyClass.Live : OptionApplyClass.NextLoad, RatesGroup, get, set,
                 min: rate.Min, max: rate.Max, aliases: aliases, tracking: tracking, configPath: RateConfigPath(rate.Name) ?? string.Empty));
