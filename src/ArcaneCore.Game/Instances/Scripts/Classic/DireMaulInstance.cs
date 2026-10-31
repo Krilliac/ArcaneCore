@@ -12,8 +12,8 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// Ported: the nineteen states and their save string; SPECIAL breaks the crumbling wall (177220) once; DONE breaks it if that has not happened
 /// and opens the corrupted vine (179502); a wall or vine created while Alzzin is done (or the wall already broken) is created open; a loaded
 /// state of DONE or more counts as the wall broken. The Gordok Tribute run continues in DireMaul/DireMaulTribute.cs.
-/// Not ported (logged at debug level): the Felvine shards' respawn on DONE, Zevrim, Ironbark, Warpwood, Immol'thar, the prince and the
-/// pylons. The Dreadsteed ritual (TYPE_DREADSTEED) is in DireMaul/DireMaulDreadsteed.cs.
+/// Not ported (logged at debug level): the Felvine shards' respawn on DONE. Zevrim, Ironbark, Warpwood, Immol'thar, the prince and the
+/// pylons are in DireMaul/DireMaulWest.cs. The Dreadsteed ritual (TYPE_DREADSTEED) is in DireMaul/DireMaulDreadsteed.cs.
 /// </para>
 /// </summary>
 [InstanceScript(MapId)]
@@ -76,6 +76,7 @@ public sealed partial class DireMaulInstance(Map instance) : ScriptedInstance(in
                 OpenIf(go, Encounters[TypeAlzzin] == EncounterState.Done);
                 break;
             default:
+                CreateWestObject(go);
                 return;
         }
 
@@ -86,7 +87,7 @@ public sealed partial class DireMaulInstance(Map instance) : ScriptedInstance(in
     {
         if (type != TypeAlzzin)
         {
-            if (!SetAdditionalData(type, data) && !SetDreadsteedData(type, data))
+            if (!SetAdditionalData(type, data) && !SetDreadsteedData(type, data) && !SetWestData(type, data))
             {
                 NotPorted(type, data, "(a Dire Maul event other than Alzzin's and the Tribute run)");
             }
