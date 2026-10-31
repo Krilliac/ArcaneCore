@@ -39,12 +39,14 @@ public sealed class PetAggroOnSightTests
     }
 
     /// <summary>
-    /// The first <paramref name="swings"/> swings are table-roll hits that deal no damage, every later roll comes from a fixed seed. The pet
-    /// template has no melee damage, so MapCombat.CalculateDamage rolls NextFloat(0, FallbackMaxDamage = 5) and a roll below 1 dithers to
-    /// 0 (MapCombat.Dither): a landed hit that leaves the mob's health unchanged. Unseeded, that (with miss, dodge and parry) happens on
-    /// a sizable share of swings, which is what made the "the pet never struck" assertion flaky.
+    /// The first <paramref name="swings"/> table rolls in the fight are misses (a roll of 0 is inside the miss band), every later roll comes from
+    /// a fixed seed. The dice is shared by both fighters: the defensive mob swings back at the pet, and whoever swings first takes the first
+    /// roll, so forcing only the first roll can land on the mob's swing and leave the pet's first swing free to hit; three misses cover the pet's first swing and its next one (an earlier version of
+    /// this case did exactly that and could not fail). A hit always deals at least 1 damage (MeleeHitTable.ApplyArmor), so a miss (like a
+    /// dodge, a parry or a full block) is the only way a swing leaves the mob's health alone; unseeded, those outcomes decided whether
+    /// the pet had struck by the end of the window.
     /// </summary>
-    private sealed class SwingsDealNothing(int seed, int swings) : ICombatRandom
+    private sealed class FirstSwingsMiss(int seed, int swings) : ICombatRandom
     {
         private readonly SeededCombatDice _rest = new(seed);
         private int _rolled;
@@ -60,10 +62,10 @@ public sealed class PetAggroOnSightTests
             }
 
             _rolled++;
-            return minInclusive + ((maxInclusive - minInclusive) / 2); // mid-table: a plain hit
+            return minInclusive;
         }
 
-        public float NextFloat(float min, float max) => Spent ? _rest.NextFloat(min, max) : min; // the damage roll lands on the minimum
+        public float NextFloat(float min, float max) => _rest.NextFloat(min, max);
     }
 
     private static Yard Start(ReactState react, int seed = 1, ICombatRandom? dice = null)
@@ -112,15 +114,15 @@ public sealed class PetAggroOnSightTests
     }
 
     [Fact]
-    public void AnAggressivePetWhoseFirstSwingDealsNothing_StillStrikesWithinOneAttackSpeed()
+    public void AnAggressivePetWhoseFirstSwingMisses_StillStrikesWithinOneAttackSpeed()
     {
-        var dice = new SwingsDealNothing(1, swings: 1);
+        var dice = new FirstSwingsMiss(1, swings: 3);
         using Yard y = Start(ReactState.Aggressive, dice: dice);
         Creature mob = y.SpawnMob(12, 0);
         Run(y.World, 1100);
         Assert.Same(mob, y.Pet.Combat.Victim);
 
-        // Chase until the pet's first swing rolls the table (the scripted zero-damage hit); allow the same 3 s the seeded theory uses.
+        // Chase until the first three swings have rolled the table (the scripted misses); allow the same 3 s the seeded theory uses.
         uint waited = 0;
         while (!dice.Spent && waited < 3000)
         {
@@ -128,9 +130,8 @@ public sealed class PetAggroOnSightTests
             waited += 100;
         }
 
-        Assert.True(dice.Spent, "the pet never swung");
-        Run(y.World, 100); // the swing resolves on the tick that rolled it
-        Assert.Equal(mob.MaxHealth, mob.Health); // the first swing did no damage
+        Assert.True(dice.Spent, "the first three swings never all happened");
+        Assert.True(mob.Health == mob.MaxHealth, $"the scripted first swings missed, health {mob.Health}/{mob.MaxHealth} after {waited} ms");
 
         // The next swing is one attack speed later (the pet template's base attack time is 2 s).
         uint untilStrike = 0;
@@ -140,7 +141,7 @@ public sealed class PetAggroOnSightTests
             untilStrike += 100;
         }
 
-        Assert.True(mob.Health < mob.MaxHealth, "the pet never struck within one attack speed after its first swing dealt nothing");
+        Assert.True(mob.Health < mob.MaxHealth, $"the pet never struck within one attack speed after its first swing missed (health {mob.Health}/{mob.MaxHealth}, {untilStrike} ms)");
     }
 
     [Theory]
