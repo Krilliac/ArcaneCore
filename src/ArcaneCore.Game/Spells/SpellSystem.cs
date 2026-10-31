@@ -209,8 +209,9 @@ public sealed partial class SpellSystem
 
         // A triggered cast runs its effects on the same stack, so a cyclic TRIGGER_SPELL chain would overflow it (fatal in .NET). Real data has
         // long acyclic chains (Onyxia's Deep Breath is 19 deep; vmangos has no guard), so cut only a spell already on the triggered-cast stack,
-        // with a high backstop depth for pathological non-repeating custom data.
-        if (_triggerStack.Contains(spellId))
+        // with a high backstop depth for pathological non-repeating custom data. Only a cast made by a spell effect (TRIGGER_SPELL / TRIGGER_MISSILE
+        // pass the triggering spell) is checked for a repeat: PassiveReapply legitimately recasts a passive that is already on the stack and has its own depth bound.
+        if (triggeringSpell is not null && _triggerStack.Contains(spellId))
         {
             AnomalyLedger.Shared.Report(
                 "spell",
