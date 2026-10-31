@@ -147,9 +147,9 @@ internal static class SchemaReferenceRenderer
         sb.Append("\nThe largest code a shutdown command may ask for is ").Append(HostExitCodes.MaxRequested).Append(" (126-255 belong to shells).\n\n");
         sb.Append("### Startup schema refusal\n\n");
         sb.Append("Both daemons initialise their databases through `DatabaseStartup.InitializeAsync`. A refusal (policy, database newer than the code, unknown state, lock timeout) is one scrubbed line on stderr and one of these codes instead of a crash; they are the `arcane-db` codes of the same name, so the numbers below are not the ones in the table above.\n\n");
-        sb.Append(ConstantTable(typeof(DbUpgradeExitCodes), "src/ArcaneCore.Data/Schema/Upgrade/Cli/DbUpgradeExitCodes.cs", excluded: ["Ok", "Failure", "Usage", "UpgradePending", "Drift", "Unreachable", "BackupNotConfirmed"]));
+        sb.Append(ConstantTable(typeof(DbUpgradeExitCodes), "src/ArcaneCore.Data/Schema/Upgrade/Cli/DbUpgradeExitCodes.cs", excluded: ["Ok", "Failure", "Usage", "UpgradePending", "Drift", "Unreachable", "BackupNotConfirmed", "CopyVerifyFailed"]));
         sb.Append("\n");
-        sb.Append("## `arcane-db`\n\nThe `arcane-db` codes (0-8) are documented in one place, the table of the [database upgrade runbook](../ops/database-upgrade.md); a test keeps that table complete.\n\n");
+        sb.Append("## `arcane-db`\n\nThe `arcane-db` codes (0-9) are documented in one place, the table of the [database upgrade runbook](../ops/database-upgrade.md); a test keeps that table complete.\n\n");
         sb.Append("## `arcane-content-importer`\n\n");
         sb.Append(ConstantTable(typeof(ImporterExitCodes), "src/ArcaneCore.Data/Content/Import/Cli/ExitCodes.cs", excluded: []));
         return sb.ToString();
