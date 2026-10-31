@@ -207,34 +207,48 @@ public sealed partial class SpellSystem
             return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
         }
 
-        // A triggered cast runs its effects on the same stack, so a cyclic TRIGGER_SPELL chain would overflow it (fatal in .NET). Bound the
-        // nesting the way the proc engine bounds MaxProcDepth.
-        if (_triggerDepth >= MaxTriggerDepth)
+        // A triggered cast runs its effects on the same stack, so a cyclic TRIGGER_SPELL chain would overflow it (fatal in .NET). Real data has
+        // long acyclic chains (Onyxia's Deep Breath is 19 deep; vmangos has no guard), so cut only a spell already on the triggered-cast stack,
+        // with a high backstop depth for pathological non-repeating custom data.
+        if (_triggerStack.Contains(spellId))
         {
             AnomalyLedger.Shared.Report(
                 "spell",
                 "trigger-recursion-cut",
                 FormatSpellSubject(spellId),
-                $"caster={FormatUnitSubject(caster)} triggerDepth={_triggerDepth} maxTriggerDepth={MaxTriggerDepth}",
+                $"caster={FormatUnitSubject(caster)} triggerDepth={_triggerStack.Count} repeatedSpell={spellId}",
                 AnomalySeverity.Warning);
             return SpellCastResult.Error;
         }
 
-        _triggerDepth++;
+        if (_triggerStack.Count >= MaxTriggerDepth)
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "trigger-depth-backstop-cut",
+                FormatSpellSubject(spellId),
+                $"caster={FormatUnitSubject(caster)} triggerDepth={_triggerStack.Count} maxTriggerDepth={MaxTriggerDepth}",
+                AnomalySeverity.Warning);
+            return SpellCastResult.Error;
+        }
+
+        int depth = _triggerStack.Count;
+        _triggerStack.Add(spellId);
         try
         {
             return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
         }
         finally
         {
-            _triggerDepth--;
+            _triggerStack.RemoveRange(depth, _triggerStack.Count - depth);
         }
     }
 
-    /// <summary>A triggered cast inside a triggered cast's effects is allowed this deep (cyclic TRIGGER_SPELL data would otherwise overflow the stack).</summary>
-    public const int MaxTriggerDepth = 8;
+    /// <summary>Backstop on triggered-cast nesting for non-repeating (custom) data; cycles are cut by spell id well before this.</summary>
+    public const int MaxTriggerDepth = 64;
 
-    private int _triggerDepth;
+    /// <summary>Spell ids on the current triggered-cast stack (same-thread, nested via effects).</summary>
+    private readonly List<uint> _triggerStack = new();
 
     /// <summary>
     /// A triggered cast made by an aura (vmangos CastSpell with <c>triggeredByAura</c>, which sets Spell::m_triggeredByAuraSpell):
@@ -1721,7 +1735,8 @@ public sealed partial class SpellSystem
     private static bool IsDestAreaTarget(SpellImplicitTarget target) => target is
         SpellImplicitTarget.EnumUnitsScriptAoeAtDestLoc or SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc
         or SpellImplicitTarget.EnumUnitsEnemyAoeAtDynobjLoc or SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc
-        or SpellImplicitTarget.EnumUnitsPartyAoeAtDestLoc;
+        or SpellImplicitTarget.EnumUnitsPartyAoeAtDestLoc
+        or SpellImplicitTarget.EnumUnitsFriendAoeAtDynobjLoc or SpellImplicitTarget.EnumGameObjectsScriptAoeAtDestLoc;
 
     private static SpellCastResult CheckDestRange(Unit caster, SpellInfo spell, SpellCastTargets targets, bool strict, Rules.ISpellModifiers? modifiers = null)
     {
