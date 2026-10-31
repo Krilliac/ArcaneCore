@@ -151,7 +151,7 @@ public sealed class RowMapper<T>
 
             if (type == typeof(bool))
             {
-                return raw is not ("0" or "" or "false" or "False");
+                return !(raw is "0" or "" || raw.Equals("false", StringComparison.OrdinalIgnoreCase)); // MySQL reads the bare literals FALSE/false/False as 0
             }
 
             if (type == typeof(float) || type == typeof(double))
