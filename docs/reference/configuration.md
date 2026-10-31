@@ -841,7 +841,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `Progression:GroupXpDistance` | `float` | `74` | - | MaxGroupXPDistance (yards, 3D): group members farther from the victim get no XP or kill credit. |
+| `Progression:GroupXpDistance` | `float` | `74` | - | MaxGroupXPDistance (yards): the reward distance for XP, quest kill credit and kill reputation, measured by GroupRewardRange (2D, strict less-than, widened by both bounding radii, +150 yards for world bosses, unlimited on raid maps, a dead member counts through his corpse). |
 | `Progression:LevelStatsPath` | `string` | `null` | - | Optional developer-supplied level stats file (see `PlayerLevelStatsTable`). Absent: level-ups change level and XP but no base health, mana or stats. |
 | `Progression:MaxPlayerLevel` | `uint` | `60` | - | MaxPlayerLevel: no experience is gained at or above it. |
 | `Progression:RateXpKill` | `float` | `1` | - | Rate.XP.Kill. |

@@ -98,7 +98,7 @@ public sealed class KillRewardsTests
     }
 
     [Fact]
-    public void XpQuestAndReputation_PickTheSameRecipientsAsTheCorpseMoneySplit()
+    public void KillRewardRecipients_PickTheSameRecipientsAsTheCorpseMoneySplit()
     {
         using var kit = new Kit();
         Player killer = kit.AddPlayer(1, 5, 0);

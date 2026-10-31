@@ -129,7 +129,7 @@ until the orchestrator regenerates `docs/reference/configuration.md` (new key `L
   respawn; docs/areas/loot-templates.md) and the corpse money splits among the looter's current group within
   `IsWithinLootXPDist` of the looter. Experience, quest kill credit and kill reputation go to the killer's group and measure
   through `GroupRewardRange.IsAtGroupRewardDistance` too (2D, strict, bounding radii, raid maps unlimited, dead members by
-  corpse), so they pick the same recipients as the money split.
+  corpse), so they pick the same recipients as the money split. This holds with default config: XP uses `Progression:GroupXpDistance`, the money split uses `Loot:GroupLootDistance`, `BossRewardDistanceBonus` and `RaidMapsUnlimitedRewardDistance`, so changing one set does not move the other. World-boss kills now reach the +150 yd bonus for XP, quest and reputation credit too (before, 74 yd 3D), as in retail.
 * Unlike vmangos, SMSG_GROUP_LIST is only resent when the pointer value actually changes (vmangos also
   resends when it is already cleared).
 * Group state stays memory-only (docs/areas/social.md).

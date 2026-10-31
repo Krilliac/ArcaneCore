@@ -30,7 +30,7 @@ public sealed class ProgressionOptions
     /// </summary>
     public float RateXpPersonalMax { get; set; } = 1.0f;
 
-    /// <summary>MaxGroupXPDistance (yards, 3D): group members farther from the victim get no XP or kill credit.</summary>
+    /// <summary>MaxGroupXPDistance (yards): the reward distance for XP, quest kill credit and kill reputation, measured by GroupRewardRange (2D, strict less-than, widened by both bounding radii, +150 yards for world bosses, unlimited on raid maps, a dead member counts through his corpse).</summary>
     public float GroupXpDistance { get; set; } = 74.0f;
 
     /// <summary>
