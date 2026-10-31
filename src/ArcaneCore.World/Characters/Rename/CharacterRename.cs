@@ -124,6 +124,64 @@ public static class CharacterRename
     }
 
     /// <summary>
+    /// The login gate (vmangos Player::LoadFromDB, Player.cpp:14612-14626): false when the character carries
+    /// <see cref="CharacterAtLoginFlags.Rename"/>, or when its stored name fails the name rules or the name catalog (a reserved_name
+    /// match refuses only Player-level accounts); a failing name is flagged in the store first so the next character list prompts
+    /// the rename. vmangos kicks the session after the refusal (CharacterHandler.cpp:485-487); the caller answers
+    /// SMSG_CHARACTER_LOGIN_FAILED instead. A failing store is logged and the login goes on, so the world never depends on the
+    /// <c>character_at_login</c> table.
+    /// </summary>
+    public static async Task<bool> MayLogInAsync(WorldSession session, CharacterRecord character)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(character);
+        ICharacterRenameStore? store = session.Services.GetService<ICharacterRenameStore>();
+        if (store is null)
+        {
+            return true;
+        }
+
+        try
+        {
+            IReadOnlyDictionary<int, uint> flags = await store.GetFlagsAsync(session.AccountId).ConfigureAwait(false);
+            if (flags.TryGetValue(character.Id, out uint bits) && (bits & CharacterAtLoginFlags.Rename) != 0)
+            {
+                session.Logger.LogWarning("[{Endpoint}] character {Id} attempts to login but must be renamed", session.RemoteEndpoint, character.Id);
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("character.rename-login-flags", ex);
+            AnomalyLedger.Shared.Report("character", "rename-failed", $"character {character.Id}", $"login at-login flags error={ex.GetType().Name}: {ex.Message}");
+            session.Logger.LogError(ex, "[{Endpoint}] the at-login flags of character {Id} could not be read; the login goes on", session.RemoteEndpoint, character.Id);
+            return true;
+        }
+
+        CharacterCreationOptions options = session.Services.GetService<CharacterCreationFeature>()?.Options ?? new CharacterCreationOptions();
+        NameCatalog catalog = session.Services.GetService<NameCatalogFeature>()?.Catalog ?? NameCatalog.Empty;
+        if (CharacterNameRules.Check(character.Name, NameRuleSettings.From(options, create: false)) is null
+            && CharacterNameCatalog.Check(catalog, character.Name, session.Security) is null)
+        {
+            return true;
+        }
+
+        session.Logger.LogWarning("[{Endpoint}] character {Id} has a stored name that fails the name rules; flagged for rename", session.RemoteEndpoint, character.Id);
+        try
+        {
+            await store.SetFlagAsync(character.Id, CharacterAtLoginFlags.Rename).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("character.rename-login-flag", ex);
+            AnomalyLedger.Shared.Report("character", "rename-failed", $"character {character.Id}", $"login flag write error={ex.GetType().Name}: {ex.Message}");
+            session.Logger.LogError(ex, "[{Endpoint}] character {Id} could not be flagged for rename; the login is refused anyway", session.RemoteEndpoint, character.Id);
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// The at-login flags of the account's characters, for the character list: a character with <see cref="CharacterAtLoginFlags.Rename"/>
     /// shows the rename prompt through <see cref="CharacterRenamePackets.CharacterFlagRename"/> in SMSG_CHAR_ENUM.
     /// </summary>
