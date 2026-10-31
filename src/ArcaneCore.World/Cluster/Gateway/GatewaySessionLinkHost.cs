@@ -428,7 +428,8 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"account-{request.AccountId}", $"phase=session-open error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
-            _logger.LogFault("cluster.transport", ex, "Gateway session open for account {Account} failed", request.AccountId); // records the fault ledger entry itself
+            // LogFault records the fault ledger entry itself.
+            _logger.LogFault("cluster.transport", ex, "Gateway session open for account {Account} failed", request.AccountId);
             result = GatewaySessionAcceptResult.Refused(AuthResponseCode.Failed, "the worker failed to open the session");
         }
 
