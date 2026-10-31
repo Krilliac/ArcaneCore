@@ -160,7 +160,7 @@ public sealed class MapWorkerSingletonLeaseTests
     }
 
     [Fact]
-    public async Task TwoMapWorkers_BothRunTheResetSchedule_ButOnlyTheInstancesLeaseHolderWritesRaidResetTimes()
+    public async Task TwoMapWorkers_OnlyTheInstancesLeaseHolderRunsTheResetScheduler_AndWritesRaidResetTimes()
     {
         using var directory = new TempDirectory("arcanecore-leases-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
@@ -174,33 +174,54 @@ public sealed class MapWorkerSingletonLeaseTests
         await first.Host.StartAsync(CancellationToken.None);
         await second.Host.StartAsync(CancellationToken.None);
 
-        // Both nodes run the instance feature; only the first holds the lease.
-        Assert.Contains(nameof(InstanceFeature), first.Features.List().Select(f => f.Name));
-        Assert.Contains(nameof(InstanceFeature), second.Features.List().Select(f => f.Name));
         Assert.True(first.Instances!.HoldsScheduleAuthority);
         Assert.False(second.Instances!.HoldsScheduleAuthority);
         Assert.Equal(Node, (await ReadAsync(database, RealmAuthorityScopes.Instances)).OwnerNode);
+        await first.LoadedAsync();
+        await second.LoadedAsync();
         await first.Instances.FlushAsync();
         await second.Instances.FlushAsync();
         long scheduled = firstStore.ResetTimes[RaidMap];
-        Assert.Equal(scheduled, secondStore.ResetTimes[RaidMap]);
+        Assert.Empty(secondStore.ResetTimes); // the non-holder writes no row at load either
 
-        // The raid map's weekly reset comes due on both nodes' clocks.
         firstClock.Advance(TimeSpan.FromDays(8));
         secondClock.Advance(TimeSpan.FromDays(8));
         Assert.True(await first.Instances.RunScheduleTickAsync().WaitAsync(TimeSpan.FromSeconds(30)));
-        Assert.True(await second.Instances.RunScheduleTickAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.False(await second.Instances.RunScheduleTickAsync().WaitAsync(TimeSpan.FromSeconds(30)));
         await first.Instances.FlushAsync();
         await second.Instances.FlushAsync();
 
-        // The schedule moved on in both nodes' memory, but only the holder wrote the next reset time.
         long next = first.Instances.Instances.GetRaidResetTime(RaidMap);
         Assert.True(next > scheduled);
-        Assert.Equal(next, second.Instances.Instances.GetRaidResetTime(RaidMap));
         Assert.Equal(next, firstStore.ResetTimes[RaidMap]);
-        Assert.Equal(scheduled, secondStore.ResetTimes[RaidMap]);
+        Assert.Equal(1, first.Instances.ScheduleRuns);
+        Assert.Equal(0, second.Instances.ScheduleRuns);
+        Assert.Empty(secondStore.ResetTimes);
+        Assert.Equal(scheduled, second.Instances.Instances.GetRaidResetTime(RaidMap)); // its schedule never moved
     }
 
+    [Theory]
+    [InlineData(ClusterNodeRole.Social)]
+    [InlineData(ClusterNodeRole.Economy)]
+    [InlineData(ClusterNodeRole.Gateway)]
+    public async Task NonMapWorkerNodeStartingFirst_DoesNotTakeTheInstancesLease_SoTheMapWorkerRunsTheSchedule(ClusterNodeRole other)
+    {
+        using var directory = new TempDirectory("arcanecore-leases-", sqlite: true);
+        string database = Path.Combine(directory.Path, "characters.db");
+        await EnsureSchemaAsync(database);
+        var store = new RecordingInstanceStore();
+        var clock = new ArcaneCore.World.Tests.Cluster.Social.ManualTimeProvider(ScheduleStart);
+        await using Kit early = Kit.Create(database, other, node: "early-node");
+        await using Kit worker = Kit.Create(database, ClusterNodeRole.MapWorker, withInstances: true, node: "worker-2", instanceStore: store, instanceClock: clock);
+        await early.Host.StartAsync(CancellationToken.None);
+        await worker.Host.StartAsync(CancellationToken.None);
+
+        Assert.Equal("worker-2", (await ReadAsync(database, RealmAuthorityScopes.Instances)).OwnerNode);
+        Assert.True(worker.Instances!.HoldsScheduleAuthority);
+        await worker.LoadedAsync();
+        await worker.Instances.FlushAsync();
+        Assert.True(store.ResetTimes.ContainsKey(RaidMap));
+    }
     [Fact]
     public async Task MapWorker_LosingTheInstancesLease_StopsTheResetSchedule()
     {
@@ -221,6 +242,7 @@ public sealed class MapWorkerSingletonLeaseTests
         Assert.True(kit.Instances.Halted);
         Assert.False(kit.Instances.HoldsScheduleAuthority);
 
+        await kit.LoadedAsync();
         await kit.Instances.FlushAsync();
         long written = instanceStore.ResetTimes[RaidMap];
         clock.Advance(TimeSpan.FromDays(8));
@@ -243,6 +265,7 @@ public sealed class MapWorkerSingletonLeaseTests
         await using Kit kit = Kit.Create(database, ClusterNodeRole.Combined, withInstances: true, instanceStore: instanceStore, instanceClock: clock);
         await kit.Host.StartAsync(CancellationToken.None);
         Assert.True(kit.Instances!.HoldsScheduleAuthority);
+        await kit.LoadedAsync();
         await kit.Instances.FlushAsync();
         long scheduled = instanceStore.ResetTimes[RaidMap];
 
@@ -255,10 +278,9 @@ public sealed class MapWorkerSingletonLeaseTests
     }
 
     [Fact]
-    public void LeaseScopeFor_DoesNotDecideAttachmentOfTheInstanceFeature_ButTheScheduleScopeIsInstances()
+    public void LeaseScopeFor_DoesNotDecideAttachmentOfTheInstanceFeature()
     {
         Assert.Null(ClusterRoleFeatureFilter.LeaseScopeFor(typeof(InstanceFeature)));
-        Assert.Equal(RealmAuthorityScopes.Instances, ClusterRoleFeatureFilter.ScheduleLeaseScopeFor(typeof(InstanceFeature)));
     }
 
     /// <summary>Instance store that records the raid reset times written to it (one per map: the last write).</summary>
@@ -347,6 +369,9 @@ public sealed class MapWorkerSingletonLeaseTests
         public FeatureHost Features { get; }
         public OrdinaryFeature Ordinary { get; }
         public InstanceFeature? Instances { get; }
+
+        /// <summary>Wait until the world thread ran the commands queued so far (the instance feature loads its state there).</summary>
+        public Task LoadedAsync() => _world.InvokeAsync(() => true);
 
         public static Kit Create(string database, ClusterNodeRole role, Func<CancellationToken, Task>? startupWork = null,
             bool withInstances = false, string node = Node, IRealmAuthorityLeaseStore? keeperStore = null, TimeProvider? time = null,

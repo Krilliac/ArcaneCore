@@ -17,7 +17,7 @@ public interface IRealmSingletonHalt
 
 /// <summary>
 /// Holds this node's realm-singleton leases (the social, economy and instances scopes) for a <see cref="ClusterNodeRole.MapWorker"/>: takes them once at start,
-/// renews them on a timer, and gives them back at stop. The realm singletons (AutoBroadcast, the auction house bot, and the instance reset schedule's realm-wide writes) cannot be detached from a running
+/// renews them on a timer, and gives them back at stop. The realm singletons (AutoBroadcast, the auction house bot, and the instance reset schedule, which runs on the Instances holder only) cannot be detached from a running
 /// world, so losing a lease is fail-stop: the keeper logs it, records a fault, and asks the host to stop with exit code
 /// <see cref="ExitCodes.Failure"/>. The owner id is <c>Cluster:Worker:NodeId</c>. On loss every registered <see cref="IRealmSingletonHalt"/> is halted first (each guarded), so the singletons stop ticking while the host winds down. Open gap: storage writes are not checked against the fencing
 /// token at commit, so a partitioned former holder is bounded by this stop, not by the database.
@@ -30,7 +30,11 @@ public interface IRealmSingletonHalt
 /// </summary>
 public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
 {
-    private static readonly string[] Scopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy, RealmAuthorityScopes.Instances];
+    private static readonly string[] Scopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy];
+    private static readonly string[] MapWorkerScopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy, RealmAuthorityScopes.Instances];
+
+    /// <summary>The scopes this node competes for: the Instances lease only on a <see cref="ClusterNodeRole.MapWorker"/> (the only non-combined role that attaches the instance feature), so a Gateway, Social or Economy node never holds it and orphans the schedule.</summary>
+    private string[] ScopesToTake => _node.Role == ClusterNodeRole.MapWorker ? MapWorkerScopes : Scopes;
 
     private sealed class Held(long token, DateTimeOffset expiresAtUtc)
     {
@@ -96,7 +100,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
     public async Task AcquireAtStartAsync(Guid incarnation, CancellationToken cancellationToken)
     {
         _incarnation = incarnation;
-        foreach (string scope in Scopes)
+        foreach (string scope in ScopesToTake)
         {
             AuthorityLeaseResult result = await TryAcquireAsync(scope).ConfigureAwait(false);
             if (result.Outcome == AuthorityLeaseOutcome.RejectedHeldByOther

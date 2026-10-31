@@ -100,16 +100,16 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     private volatile bool _halted;
     private long _scheduleRuns;
 
-    /// <summary>Whether <see cref="Halt"/> was called (the instances realm authority lease was lost): the reset scheduler never runs again.</summary>
+    /// <summary>Whether <see cref="Halt"/> was called (the instances realm authority lease was lost): the reset scheduler never runs again. The keeper halts every singleton when any scope is lost, so this includes a node that never held Instances.</summary>
     public bool Halted => _halted;
 
     /// <summary>Reset schedule ticks that were queued on the world thread so far (tests).</summary>
     public long ScheduleRuns => Interlocked.Read(ref _scheduleRuns);
 
     /// <summary>
-    /// Whether this node writes the realm-wide raid reset times: the one node holding the <see cref="RealmAuthorityScopes.Instances"/> lease in a cluster,
-    /// every single-process (combined) world, never after <see cref="Halt"/>. The reset schedule itself (warnings, unbind and teleport, local save resets)
-    /// runs on every node for the maps it hosts: it only touches this process's own memory, and instance ids come from durable id blocks.
+    /// Whether this node runs the instance reset schedule (warnings, resets, the save-expiry sweep, the raid reset time writes): the one node holding the
+    /// <see cref="RealmAuthorityScopes.Instances"/> lease in a cluster, every single-process (combined) world, never after <see cref="Halt"/>.
+    /// A non-holder neither runs the schedule nor writes the raid reset time row at load, so exactly one node does.
     /// </summary>
     public bool HoldsScheduleAuthority => !_halted && (_leaseKeeper is null || _leaseKeeper.TokenFor(RealmAuthorityScopes.Instances) is not null);
 
@@ -129,11 +129,11 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
 
     /// <summary>
     /// Queue the reset schedule update on the world thread; the task completes when it ran (false when it did not run: not attached or halted).
-    /// The realm-wide writes are made only while this node holds the instances lease, checked on the world thread when the update runs.
+    /// The update runs only while this node holds the instances lease, checked on the world thread when it runs.
     /// </summary>
     public Task<bool> RunScheduleTickAsync()
     {
-        if (_world is not { } world || _manager is not { } manager || _halted)
+        if (_world is not { } world || _manager is not { } manager || !HoldsScheduleAuthority)
         {
             return Task.FromResult(false);
         }
@@ -142,7 +142,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         world.Post(() =>
         {
-            if (_halted)
+            if (!HoldsScheduleAuthority)
             {
                 done.SetResult(false);
                 return;
@@ -150,7 +150,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
 
             try
             {
-                manager.UpdateSchedule(realmAuthority: HoldsScheduleAuthority);
+                manager.UpdateSchedule();
                 done.SetResult(true);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -251,6 +251,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         _manager.ScriptCastPlayerTargetSpell = (player, spell, target) => services.GetService<SpellFeature>()?.System.CastSpell(
             player, spell, SpellCastTargets.ForUnit(target), triggered: true);
         _manager.SystemMessage = static (player, text) => player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(text));
+        _manager.HoldsRealmAuthority = () => HoldsScheduleAuthority;
         _manager.Install();
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
