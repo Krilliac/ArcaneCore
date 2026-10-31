@@ -199,6 +199,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            // A failed job did not persist its phase: forget it so the queued phase is written below.
+            _inFlightPhase = null;
             // The job's failure would have been logged by its apply on the world thread, which no longer runs: log it here.
             // The queued work below is still written.
             FaultLedger.Shared.Record("world-event.war-effort", ex);
@@ -279,6 +281,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             {
                 // Keep _queuedPhase: the phase write is idempotent and the next five-second refresh relaunches it (like the pending
                 // boss deaths). Clearing it lost the Gathering start, and that refresh then saw Disabled and stopped event 120.
+                _inFlightPhase = null;
                 foreach (int done in result.FlushedBossDeaths) _pendingBossDeaths.Remove(done);
                 FaultLedger.Shared.Record("world-event.war-effort", ex);
                 AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"refresh-store error={ex.GetType().Name}: {ex.Message}");
