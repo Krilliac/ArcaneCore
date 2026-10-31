@@ -367,6 +367,20 @@ public sealed class PublicHubTests
         Assert.Equal("rate-limited", limited["code"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("""{"op":1,"csrf":"x"}""")]
+    [InlineData("""{"op":{},"csrf":"x"}""")]
+    public async Task AnAuthFrameWhoseOpIsNotAString_IsClosedAsUnauthorized(string frame)
+    {
+        await using PublicRig rig = await PublicRig.StartAsync();
+        using ClientWebSocket socket = await rig.ConnectAsync(await rig.VisitAsync());
+
+        await socket.SendAsync(Encoding.UTF8.GetBytes(frame), WebSocketMessageType.Text, true, CancellationToken.None);
+
+        Assert.Null(await socket.ReceiveTextAsync());
+        Assert.Equal((WebSocketCloseStatus)4401, socket.CloseStatus);
+    }
+
     // ---- connections -------------------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -385,6 +399,38 @@ public sealed class PublicHubTests
         Assert.True(await WaitAsync(() => rig.Server.Hub.Count == 1), "the closed socket kept its slot");
         using ClientWebSocket third = await OpenAsync(rig, visitor);
         Assert.Equal(2, rig.Server.Hub.Count);
+    }
+
+    [Fact]
+    public async Task ThePerAddressCap_HoldsWhileManyThreadsReserveAndReleaseTheSameAddress()
+    {
+        await using PublicRig rig = await PublicRig.StartAsync(o => { o.MaxConnectionsPerIp = 1; o.MaxConnections = 1000; });
+        PublicHub hub = rig.Server.Hub;
+        int inside = 0;
+        int overshoot = 0;
+
+        // With a cap of one, at most one thread may hold the address at a time. A Release that removed the shared entry right after another
+        // thread incremented it would erase that thread's count, and a second one would fit.
+        Task[] churn = [.. Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+        {
+            for (int i = 0; i < 50_000; i++)
+            {
+                if (hub.TryReserve("10.9.9.9"))
+                {
+                    if (Interlocked.Increment(ref inside) > 1)
+                    {
+                        Interlocked.Increment(ref overshoot);
+                    }
+
+                    Interlocked.Decrement(ref inside);
+                    hub.ReleaseReservation("10.9.9.9");
+                }
+            }
+        }))];
+        await Task.WhenAll(churn);
+
+        Assert.Equal(0, Volatile.Read(ref overshoot));
+        Assert.Equal(0, hub.Count);
     }
 
     [Fact]

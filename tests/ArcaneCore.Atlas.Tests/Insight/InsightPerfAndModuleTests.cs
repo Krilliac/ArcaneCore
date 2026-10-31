@@ -68,6 +68,43 @@ public sealed class InsightPerfAndModuleTests
         Assert.False(context.Commands.TryGet("live.inspect", out _));
     }
 
+    [Fact]
+    public void SpellNames_FromAnUnsupportedCompressionMethod_ReportAProblemOnce_AndStayEmptyInsteadOfFailingEveryCall()
+    {
+        using AtlasContext context = AtlasModules.Compose(
+            new AtlasPaths(null, null),
+            NullLoggerFactory.Instance,
+            headless: true,
+            [new LiveModule(new LiveOptions { PipeNameFor = _ => "atlas-insight-unused" }), new UnsupportedFilesModule(), new InsightModule()]);
+        InsightHub hub = context.Services.Get<InsightHub>()!;
+
+        Assert.Null(hub.Spells());
+        Assert.Null(hub.Spells());
+        Assert.Contains(context.Problems, p => p.Contains("spell names are not available", StringComparison.Ordinal));
+    }
+
+    private sealed class UnsupportedFilesModule : IAtlasModule
+    {
+        public string Name => "unsupported-files";
+
+        public int Order => ModuleOrder.Foundation;
+
+        public void Register(AtlasContext context) => context.Services.Add<IClientFileSource>(new ThrowingFiles());
+    }
+
+    private sealed class ThrowingFiles : IClientFileSource
+    {
+        public string Description => "throwing";
+
+        public bool Exists(string path) => true;
+
+        public byte[]? Read(string path) => throw new NotSupportedException("compression method 0x10 (bzip2) is not supported");
+
+        public IReadOnlyList<string> List(string prefix) => [];
+
+        public string? ArchiveOf(string path) => null;
+    }
+
     [WindowsFact]
     public async Task PerfStats_WithoutAUiReport_HasHostNumbersAndNoUiBlock()
     {

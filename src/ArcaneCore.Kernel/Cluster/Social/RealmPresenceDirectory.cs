@@ -180,7 +180,7 @@ public sealed class InMemoryRealmPresenceDirectory : IRealmPresenceDirectory
             {
                 if (!string.Equals(previous.CharacterName, entry.CharacterName, StringComparison.OrdinalIgnoreCase))
                 {
-                    _guidByName.Remove(previous.CharacterName);
+                    RemoveNameIfOwnedBy(previous.CharacterName, entry.CharacterGuid);
                 }
             }
             else
@@ -228,9 +228,18 @@ public sealed class InMemoryRealmPresenceDirectory : IRealmPresenceDirectory
             slot.HighWaterSessionGeneration = Math.Max(slot.HighWaterSessionGeneration, expectedSessionGeneration);
             slot.HighWaterPresenceVersion = Math.Max(slot.HighWaterPresenceVersion, expectedPresenceVersion);
             slot.Active = null;
-            _guidByName.Remove(active.CharacterName);
+            RemoveNameIfOwnedBy(active.CharacterName, characterGuid);
             _activeCount--;
             return PresenceMutationResult.Applied;
+        }
+    }
+
+    /// <summary>Under the gate: drop a name from the index only while it still points at <paramref name="guid"/>; a later holder of the same name keeps its entry.</summary>
+    private void RemoveNameIfOwnedBy(string name, ulong guid)
+    {
+        if (_guidByName.TryGetValue(name, out ulong owner) && owner == guid)
+        {
+            _guidByName.Remove(name);
         }
     }
 

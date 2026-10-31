@@ -59,6 +59,10 @@ public sealed class CircuitBreaker
     private int _probesInFlight;
     private long _openedAt;
     private long _rejected;
+    private long _epoch;
+
+    /// <summary>The admission value that opts out of the straggler check (the token-less protocol).</summary>
+    private const long AnyEpoch = -1;
 
     /// <param name="options">Thresholds and durations; validated here, a bad value throws <see cref="ArgumentException"/>.</param>
     /// <param name="timeProvider">The clock; tests pass a fake, production uses <see cref="TimeProvider.System"/>.</param>
@@ -125,7 +129,15 @@ public sealed class CircuitBreaker
     /// (or <see cref="OnNeutral"/> when the outcome says nothing about the dependency). False: refused;
     /// <paramref name="retryAfter"/> says how long until a probe is allowed (zero when one is already running).
     /// </summary>
-    public bool TryEnter(out TimeSpan retryAfter)
+    public bool TryEnter(out TimeSpan retryAfter) => TryEnter(out retryAfter, out _);
+
+    /// <summary>
+    /// <see cref="TryEnter(out TimeSpan)"/> that also returns an admission stamp: the breaker's epoch, which changes on
+    /// every state transition. Pass it back to <see cref="OnSuccess(long)"/>, <see cref="OnFailure(Exception, long)"/> or
+    /// <see cref="OnNeutral(long)"/> so that a call admitted before the current half-open period (a straggler
+    /// admitted while closed) cannot close, reopen or release a probe slot of the half-open breaker.
+    /// </summary>
+    public bool TryEnter(out TimeSpan retryAfter, out long admission)
     {
         CircuitStateChange? change = null;
         bool admitted;
@@ -179,6 +191,8 @@ public sealed class CircuitBreaker
             {
                 _rejected++;
             }
+
+            admission = _epoch;
         }
 
         Notify(change);
@@ -189,7 +203,13 @@ public sealed class CircuitBreaker
     public bool TryEnter() => TryEnter(out _);
 
     /// <summary>The call admitted by <see cref="TryEnter()"/> succeeded.</summary>
-    public void OnSuccess()
+    public void OnSuccess() => OnSuccess(AnyEpoch);
+
+    /// <summary>
+    /// <see cref="OnSuccess()"/> for a call admitted with <paramref name="admission"/> (see
+    /// <see cref="TryEnter(out TimeSpan, out long)"/>). A stale admission is ignored while half-open.
+    /// </summary>
+    public void OnSuccess(long admission)
     {
         CircuitStateChange? change = null;
         lock (_gate)
@@ -199,6 +219,10 @@ public sealed class CircuitBreaker
                 case CircuitState.Closed:
                     _consecutiveFailures = 0;
                     Record(success: true);
+                    break;
+
+                case CircuitState.HalfOpen when IsStale(admission):
+                    // Admitted before this half-open period (while closed): not a probe, proves nothing about the dependency now.
                     break;
 
                 case CircuitState.HalfOpen:
@@ -216,12 +240,18 @@ public sealed class CircuitBreaker
     }
 
     /// <summary>The call admitted by <see cref="TryEnter()"/> failed with <paramref name="exception"/>.</summary>
-    public void OnFailure(Exception exception)
+    public void OnFailure(Exception exception) => OnFailure(exception, AnyEpoch);
+
+    /// <summary>
+    /// <see cref="OnFailure(Exception)"/> for a call admitted with <paramref name="admission"/> (see
+    /// <see cref="TryEnter(out TimeSpan, out long)"/>). A stale admission is ignored while half-open.
+    /// </summary>
+    public void OnFailure(Exception exception, long admission)
     {
         ArgumentNullException.ThrowIfNull(exception);
         if (!_isFailure(exception))
         {
-            OnNeutral();
+            OnNeutral(admission);
             return;
         }
 
@@ -241,6 +271,9 @@ public sealed class CircuitBreaker
 
                     break;
 
+                case CircuitState.HalfOpen when IsStale(admission):
+                    break;
+
                 case CircuitState.HalfOpen:
                     // The probe failed: the dependency is still down, start another open period.
                     _probesInFlight--;
@@ -254,11 +287,14 @@ public sealed class CircuitBreaker
     }
 
     /// <summary>The admitted call ended without saying anything about the dependency (e.g. the caller cancelled it).</summary>
-    public void OnNeutral()
+    public void OnNeutral() => OnNeutral(AnyEpoch);
+
+    /// <summary><see cref="OnNeutral()"/> for a call admitted with <paramref name="admission"/>; a stale one frees no probe slot.</summary>
+    public void OnNeutral(long admission)
     {
         lock (_gate)
         {
-            if (_state == CircuitState.HalfOpen && _probesInFlight > 0)
+            if (_state == CircuitState.HalfOpen && _probesInFlight > 0 && !IsStale(admission))
             {
                 _probesInFlight--;
             }
@@ -302,7 +338,7 @@ public sealed class CircuitBreaker
     public TResult Execute<TState, TResult>(Func<TState, TResult> operation, TState state)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        if (!TryEnter(out TimeSpan retryAfter))
+        if (!TryEnter(out TimeSpan retryAfter, out long admission))
         {
             throw new CircuitOpenException(Name, retryAfter);
         }
@@ -314,11 +350,11 @@ public sealed class CircuitBreaker
         }
         catch (Exception ex)
         {
-            OnFailure(ex);
+            OnFailure(ex, admission);
             throw;
         }
 
-        OnSuccess();
+        OnSuccess(admission);
         return result;
     }
 
@@ -326,7 +362,7 @@ public sealed class CircuitBreaker
     public void Execute<TState>(Action<TState> operation, TState state)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        if (!TryEnter(out TimeSpan retryAfter))
+        if (!TryEnter(out TimeSpan retryAfter, out long admission))
         {
             throw new CircuitOpenException(Name, retryAfter);
         }
@@ -337,11 +373,11 @@ public sealed class CircuitBreaker
         }
         catch (Exception ex)
         {
-            OnFailure(ex);
+            OnFailure(ex, admission);
             throw;
         }
 
-        OnSuccess();
+        OnSuccess(admission);
     }
 
     /// <summary>
@@ -354,7 +390,7 @@ public sealed class CircuitBreaker
         Func<TState, CancellationToken, ValueTask<TResult>> operation, TState state, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        if (!TryEnter(out TimeSpan retryAfter))
+        if (!TryEnter(out TimeSpan retryAfter, out long admission))
         {
             return ValueTask.FromException<TResult>(new CircuitOpenException(Name, retryAfter));
         }
@@ -366,17 +402,17 @@ public sealed class CircuitBreaker
         }
         catch (Exception ex)
         {
-            Outcome(ex, cancellationToken);
+            Outcome(ex, cancellationToken, admission);
             return ValueTask.FromException<TResult>(ex);
         }
 
         if (pending.IsCompletedSuccessfully)
         {
-            OnSuccess();
+            OnSuccess(admission);
             return pending;
         }
 
-        return AwaitAsync(pending, cancellationToken);
+        return AwaitAsync(pending, cancellationToken, admission);
     }
 
     /// <summary><see cref="ExecuteAsync{TState, TResult}"/> for an operation without a result.</summary>
@@ -389,7 +425,7 @@ public sealed class CircuitBreaker
         return run.IsCompletedSuccessfully ? default : new ValueTask(run.AsTask());
     }
 
-    private async ValueTask<TResult> AwaitAsync<TResult>(ValueTask<TResult> pending, CancellationToken cancellationToken)
+    private async ValueTask<TResult> AwaitAsync<TResult>(ValueTask<TResult> pending, CancellationToken cancellationToken, long admission)
     {
         TResult result;
         try
@@ -398,25 +434,28 @@ public sealed class CircuitBreaker
         }
         catch (Exception ex)
         {
-            Outcome(ex, cancellationToken);
+            Outcome(ex, cancellationToken, admission);
             throw;
         }
 
-        OnSuccess();
+        OnSuccess(admission);
         return result;
     }
 
-    private void Outcome(Exception exception, CancellationToken cancellationToken)
+    private void Outcome(Exception exception, CancellationToken cancellationToken, long admission)
     {
         if (exception is OperationCanceledException && cancellationToken.IsCancellationRequested)
         {
-            OnNeutral();
+            OnNeutral(admission);
         }
         else
         {
-            OnFailure(exception);
+            OnFailure(exception, admission);
         }
     }
+
+    /// <summary>True for a stamped admission from before the current epoch (call under <see cref="_gate"/>).</summary>
+    private bool IsStale(long admission) => admission != AnyEpoch && admission != _epoch;
 
     // ---- internals (all under _gate) -------------------------------------------------------------------------------
 
@@ -424,6 +463,7 @@ public sealed class CircuitBreaker
     {
         CircuitState from = _state;
         _state = to;
+        _epoch++;
         if (to != CircuitState.HalfOpen)
         {
             _probesInFlight = 0;

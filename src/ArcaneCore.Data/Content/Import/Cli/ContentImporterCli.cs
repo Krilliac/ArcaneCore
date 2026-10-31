@@ -24,6 +24,7 @@ using ArcaneCore.Data.World.Totems;
 using ArcaneCore.Kernel.Quests;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.Kernel.WorldData.PlayerStats;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Content.Import;
@@ -1426,7 +1427,75 @@ public static partial class ContentImporterCli
             throw new UsageException($"--provider needs --connection-string (or the {ConnectionVariable} variable)");
         }
 
-        return new Target(parsed, connection, null);
+        return new Target(parsed, connection, parsed == DatabaseProvider.Sqlite ? SqliteFilePath(connection) : null);
+    }
+
+    /// <summary>
+    /// The full path of the file a SQLite connection string opens, so the repository guard and the existence checks
+    /// apply to <c>--provider sqlite</c> as they do to <c>--database</c>; null for an in-memory or unparsable target.
+    /// </summary>
+    private static string? SqliteFilePath(string connectionString)
+    {
+        string dataSource;
+        SqliteOpenMode mode;
+        try
+        {
+            var builder = new SqliteConnectionStringBuilder(connectionString);
+            dataSource = builder.DataSource.Trim();
+            mode = builder.Mode;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+
+        if (dataSource.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        {
+            string rest = dataSource["file:".Length..];
+            string query = string.Empty;
+            int q = rest.IndexOf('?', StringComparison.Ordinal);
+            if (q >= 0)
+            {
+                query = rest[(q + 1)..];
+                rest = rest[..q];
+            }
+
+            foreach (string pair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (pair.Equals("mode=memory", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+            }
+
+            if (rest.StartsWith("//", StringComparison.Ordinal))
+            {
+                // file://<authority>/<path>: the authority must be empty or localhost.
+                int slash = rest.IndexOf('/', 2);
+                string authority = slash < 0 ? rest[2..] : rest[2..slash];
+                if (authority.Length != 0 && !authority.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+
+                rest = slash < 0 ? string.Empty : rest[slash..];
+            }
+
+            rest = Uri.UnescapeDataString(rest);
+            if (rest.Length >= 3 && rest[0] == '/' && char.IsAsciiLetter(rest[1]) && rest[2] == ':')
+            {
+                rest = rest[1..]; // /C:/dir/file.db -> C:/dir/file.db
+            }
+
+            dataSource = rest;
+        }
+
+        if (mode == SqliteOpenMode.Memory || dataSource.Length == 0 || dataSource == ":memory:")
+        {
+            return null;
+        }
+
+        return Path.GetFullPath(dataSource);
     }
 
     private static WorldDbContext OpenWorld(Target target)

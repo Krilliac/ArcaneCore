@@ -145,6 +145,39 @@ public sealed class ClusterSupervisorHostingTests
         Assert.Contains("failed while stopping", error.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task RunAsync_WhenAStopSignalCancelsTheStartBetweenTwoLaunches_ReturnsSuccess_AndDrainsTheLaunchedChild()
+    {
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        builder.Configuration.AddConfiguration(Config(min: 1, processCount: 2));
+        var inner = new RecordingLauncher();
+        builder.Services.AddSingleton<ISupervisedProcessLauncher>(sp => new StopAfterFirstLaunchLauncher(sp.GetRequiredService<IHostApplicationLifetime>(), inner));
+        var error = new StringWriter();
+
+        int exit = await ClusterSupervisorHosting.RunAsync(builder, error).WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.Equal(0, exit); // an operator stop is a clean exit, not an unhandled OperationCanceledException
+        Assert.Contains("cancelled", error.ToString(), StringComparison.Ordinal);
+        Assert.Single(inner.Launched); // the second launch never ran
+        Assert.Equal(1, inner.Drained);
+    }
+
+    private sealed class StopAfterFirstLaunchLauncher(IHostApplicationLifetime lifetime, ISupervisedProcessLauncher inner) : ISupervisedProcessLauncher
+    {
+        private int _launches;
+
+        public ISupervisedProcess Launch(SupervisedProcessConfig config)
+        {
+            ISupervisedProcess process = inner.Launch(config);
+            if (Interlocked.Increment(ref _launches) == 1)
+            {
+                lifetime.StopApplication(); // cancels ApplicationStopping, which the host links into StartAsync's token
+            }
+
+            return process;
+        }
+    }
+
     private sealed class StopOnLaunchLauncher(IHostApplicationLifetime lifetime) : ISupervisedProcessLauncher
     {
         public ISupervisedProcess Launch(SupervisedProcessConfig config)

@@ -220,6 +220,43 @@ public sealed class ChannelManagerTests
         Assert.Contains(channel, f.Context.Channels.JoinedBy(a));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SoleOwnerKickingOrBanningThemselves_DeletesTheChannel_SoItsPasswordAndBansDoNotLinger(bool ban)
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        f.Context.Channels.Join(a, "Club", string.Empty);
+        f.Context.Channels.SetPassword(a, "Club", "pw");
+
+        f.Context.Channels.KickOrBan(a, "Club", "P1", ban);
+
+        Assert.Null(f.Context.Channels.Find(Team.Alliance, "Club"));
+        f.ClearAll();
+        f.Context.Channels.Join(b, "Club", string.Empty); // a fresh channel: no stale password
+        Assert.Equal([ChatNotify.YouJoined, ChatNotify.ModeChange, ChatNotify.ModeChange], Notifies(f, b));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(255)]
+    public void Join_RefusesNamesTheNormalizerWouldReject_WhateverTheConfiguredCap(int configured)
+    {
+        using var f = new SocialFixture();
+        f.Context.Options.MaxChannelNameLength = configured;
+        Player a = f.AddPlayer(1);
+        f.ClearAll();
+
+        f.Context.Channels.Join(a, "A" + new string('b', 199), string.Empty);
+
+        Assert.Equal([ChatNotify.InvalidName], Notifies(f, a));
+        Assert.Empty(f.Context.Channels.JoinedBy(a));
+        Assert.Null(f.Context.Channels.Find(Team.Alliance, "A" + new string('b', 199)));
+        Assert.Equal(128, new Game.Social.SocialOptions().MaxChannelNameLength);
+    }
+
     [Fact]
     public void KickAndBan_NeedAModerator_AndBanKeepsThePlayerOut()
     {

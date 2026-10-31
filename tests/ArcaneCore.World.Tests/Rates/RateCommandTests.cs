@@ -390,6 +390,29 @@ public sealed class RateCommandTests
     }
 
     [Fact]
+    public async Task ResettingOneSideOfThePersonalPair_CannotLeaveMinAboveMax()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        ProgressionOptions options = host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.Options;
+        await host.OnWorldAsync(() => { options.RateXpPersonalMin = 1; options.RateXpPersonalMax = 10; });
+
+        await SayAsync(admin, ".rates set Rate.XP.Personal.Max 20");
+        await admin.ReadChatAsync();
+        await SayAsync(admin, ".rates set Rate.XP.Personal.Min 15");
+        await admin.ReadChatAsync();
+
+        await SayAsync(admin, ".rates reset Rate.XP.Personal.Max");
+        Assert.Contains("would be below Rate.XP.Personal.Min 15", (await admin.ReadChatAsync()).Text);
+        Assert.Equal((15f, 20f), await host.OnWorldAsync(() => (options.RateXpPersonalMin, options.RateXpPersonalMax)));
+
+        await SayAsync(admin, ".rates reset all"); // order independent: Min goes first, then Max
+        await admin.ReadChatAsync();
+        Assert.Equal((1f, 10f), await host.OnWorldAsync(() => (options.RateXpPersonalMin, options.RateXpPersonalMax)));
+    }
+
+    [Fact]
     public async Task PersonalMin_AndMax_CannotCross()
     {
         await using var host = WorldTestHost.Start();

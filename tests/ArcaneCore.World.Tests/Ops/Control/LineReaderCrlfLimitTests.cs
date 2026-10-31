@@ -20,6 +20,70 @@ public sealed class LineReaderCrlfLimitTests
 
     private static byte[] Bytes(string text) => Encoding.UTF8.GetBytes(text);
 
+    /// <summary>A stream that returns each chunk from its own ReadAsync call, so a telnet sequence can be split across reads.</summary>
+    private sealed class ChunkedStream(params byte[][] chunks) : Stream
+    {
+        private int _next;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_next >= chunks.Length)
+            {
+                return ValueTask.FromResult(0);
+            }
+
+            byte[] chunk = chunks[_next++];
+            chunk.CopyTo(buffer);
+            return ValueTask.FromResult(chunk.Length);
+        }
+    }
+
+    private static async Task<string?> ReadOneLineAsync(params byte[][] chunks)
+    {
+        var reader = new RemoteAdminServer.LineReader(new ChunkedStream(chunks), 64);
+        (string? line, bool tooLong) = await reader.ReadLineAsync(CancellationToken.None);
+        Assert.False(tooLong);
+        return line;
+    }
+
+    [Fact]
+    public async Task RemoteAdmin_TelnetNegotiationSplitAfterIac_DoesNotLeakTheOptionBytes()
+        => Assert.Equal("user", await ReadOneLineAsync([0xFF], [0xFB, 0x01, (byte)'u', (byte)'s', (byte)'e', (byte)'r', (byte)'\n']));
+
+    [Fact]
+    public async Task RemoteAdmin_TelnetNegotiationSplitAfterTheCommand_DoesNotLeakTheOptionByte()
+        => Assert.Equal("user", await ReadOneLineAsync([0xFF, 0xFB], [0x01, (byte)'u', (byte)'s', (byte)'e', (byte)'r', (byte)'\n']));
+
+    [Fact]
+    public async Task RemoteAdmin_TelnetNegotiationInOneRead_IsDroppedAsBefore()
+        => Assert.Equal("user", await ReadOneLineAsync([0xFF, 0xFD, 0x03, (byte)'u', (byte)'s', (byte)'e', (byte)'r', (byte)'\n']));
+
+    [Fact]
+    public async Task RemoteAdmin_EscapedIac_IsOneLiteral0xFFByte_AndKeepsTheNextDataByte()
+    {
+        byte[] wire = [(byte)'a', 0xFF, 0xFF, (byte)'b', (byte)'\n'];
+        string? line = await ReadOneLineAsync(wire);
+        Assert.Equal(Encoding.UTF8.GetString([(byte)'a', 0xFF, (byte)'b']), line);
+    }
+
+    [Fact]
+    public async Task RemoteAdmin_Subnegotiation_IsDroppedWholeEvenSplitAcrossReads()
+        => Assert.Equal("go", await ReadOneLineAsync(
+            [0xFF, 0xFA, 0x1F, 0x00],
+            [0x50, 0x00, 0x18, 0xFF],
+            [0xF0, (byte)'g', (byte)'o', (byte)'\n']));
+
     [Theory]
     [InlineData("abcdefgh\n")]
     [InlineData("abcdefgh\r\n")]

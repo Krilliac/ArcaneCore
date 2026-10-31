@@ -327,7 +327,7 @@ public sealed class PlayerbotEconomyAnomalyTests
         });
     }
 
-    // --- harness (a trimmed copy of PlayerbotEconomyWorldTests, whose helpers are private) -----------------------------
+    // --- harness (a trimmed copy of the PlayerbotEconomyWorldTestBase helpers) -----------------------------
 
     private static Task<ScenarioTestWorld> StartAsync(Action<IServiceCollection>? more = null) => ScenarioTestWorld.StartAsync(services =>
     {

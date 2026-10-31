@@ -420,10 +420,15 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         {
             result = await _acceptor.OpenAsync(request, session, ct).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The host is stopping: cancellation is not a fault. The open is refused so the gateway does not wait for a reply.
+            result = GatewaySessionAcceptResult.Refused(AuthResponseCode.Failed, "the worker is shutting down");
+        }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("cluster.gateway-host", ex);
             AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"account-{request.AccountId}", $"phase=session-open error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
+            // LogFault records the fault ledger entry itself.
             _logger.LogFault("cluster.transport", ex, "Gateway session open for account {Account} failed", request.AccountId);
             result = GatewaySessionAcceptResult.Refused(AuthResponseCode.Failed, "the worker failed to open the session");
         }

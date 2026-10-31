@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using ArcaneCore.Kernel.Configuration;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Realm.Net;
 
@@ -56,11 +57,21 @@ public sealed class PatchCatalog(Func<AutoPatchOptions> options)
             return null;
         }
 
-        byte[] md5 = _md5.GetOrAdd((path, info.Length, info.LastWriteTimeUtc), static key =>
+        try
         {
-            using FileStream stream = File.OpenRead(key.Path);
-            return MD5.HashData(stream);
-        });
-        return new ClientPatch(path, info.Length, md5);
+            byte[] md5 = _md5.GetOrAdd((path, info.Length, info.LastWriteTimeUtc), static key =>
+            {
+                using FileStream stream = File.OpenRead(key.Path);
+                return MD5.HashData(stream);
+            });
+            return new ClientPatch(path, info.Length, md5);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Locked by a writer or scanner, denied, or deleted since the Exists check: offer no patch (the client is answered
+            // VersionInvalid) rather than fault the logon session. Nothing is cached, so the next challenge retries.
+            AnomalyLedger.Shared.Report("logon", "patch-unreadable", Path.GetFileName(path), $"auto-patch file cannot be read: {ex.GetType().Name}: {ex.Message}", AnomalySeverity.Warning);
+            return null;
+        }
     }
 }

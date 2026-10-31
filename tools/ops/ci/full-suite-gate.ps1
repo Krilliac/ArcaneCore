@@ -2,11 +2,16 @@
 # self-test against that build.
 # Run it from the worktree root, normally through the build-slot gate so it waits its turn and runs at BelowNormal:
 #   pwsh -NoProfile -File tools/ops/ci/run-in-slot.ps1 -Lane <name> -WorkDir <worktree> -Command 'pwsh -NoProfile -File tools/ops/ci/full-suite-gate.ps1'
-# Prints RESTORE_EXIT, BUILD_EXIT, SUITE_EXIT <suite>=<rc> per suite and SELFTEST_EXIT. Exit 0 = all passed, 1 = a suite or the
+# -Suites names tests/ci/<name>.slnf files (default Game, World, Data, Rest = ci.yml's four).
+# Prints RESTORE_EXIT, BUILD_EXIT, SUITE_EXIT <suite>=<rc> per suite, TIMING_EXIT and SELFTEST_EXIT. Exit 0 = all passed, 1 = a suite or the
 # self-test failed, 2 = the restore or the build failed (nothing ran: a failed build must never read as "0 failures"). dotnet comes
 # from DOTNET_ROOT, else PATH.
+# A suite is a solution filter in tests/ci (the four of ci.yml's matrix, which together cover every test project once), run with ci.yml's
+# Category!=Timing filter. The Category=Timing tests then run serially through tools/ops/ci/test-stages.sh --stage timing (ci.yml's
+# own stage; one isolated rerun per failure), printing TIMING_EXIT. That stage needs bash on PATH: without it TIMING_EXIT=bash-missing
+# and the gate fails, because timing tests that did not run are not a pass.
 param(
-    [string[]]$Suites = @('World', 'Game', 'Data', 'Kernel', 'Realm', 'MockClient', 'Cryptography')
+    [string[]]$Suites = @('Game', 'World', 'Data', 'Rest')
 )
 $dotnet = if ($env:DOTNET_ROOT -and (Test-Path (Join-Path $env:DOTNET_ROOT 'dotnet.exe'))) { Join-Path $env:DOTNET_ROOT 'dotnet.exe' } else { 'dotnet' }
 $fail = 0
@@ -20,8 +25,20 @@ if ($LASTEXITCODE -ne 0) { exit 2 }
 if ($LASTEXITCODE -ne 0) { exit 2 }
 foreach ($s in $Suites) {
     "=== SUITE $s ==="
-    & $dotnet test "tests/ArcaneCore.$s.Tests" --no-build --logger "console;verbosity=minimal"
+    & $dotnet test "tests/ci/$s.slnf" --no-build --filter "Category!=Timing" --logger "console;verbosity=minimal"
     "SUITE_EXIT $s=$LASTEXITCODE"
+    if ($LASTEXITCODE -ne 0) { $fail = 1 }
+}
+"=== TIMING ==="
+$bash = Get-Command bash -ErrorAction SilentlyContinue | Where-Object { $_.Source -notmatch 'Windows.System32' } | Select-Object -First 1
+if (-not $bash) {
+    'TIMING_EXIT=bash-missing'
+    $fail = 1
+} else {
+    # The build above is Debug (no -c), so point the stage at it; test-stages.sh defaults to Release.
+    $env:GATE_CONFIGURATION = 'Debug'
+    & $bash.Source tools/ops/ci/test-stages.sh --stage timing --logs timing-logs ($Suites | ForEach-Object { "tests/ci/$_.slnf" })
+    "TIMING_EXIT=$LASTEXITCODE"
     if ($LASTEXITCODE -ne 0) { $fail = 1 }
 }
 "=== SELFTEST ==="
