@@ -14,6 +14,7 @@ using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Skills;
 using ArcaneCore.World.Tests.Spells;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -141,6 +142,38 @@ public sealed class GameObjectTypesWorldTests
         Assert.Equal(MeetingStonePackets.SetQueue(StoneArea, MeetingStoneStatus.JoinedQueue), await member.ReadUntilAsync(WorldOpcode.SmsgMeetingstoneSetqueue));
     }
 
+    /// <summary>
+    /// World:MeetingStone:LeaveSoloQueueOnPartyJoin reaches the queue through MeetingStoneFeature: with the key on, a player queued alone at the
+    /// stone who accepts a party invitation is told SETQUEUE LEAVE_QUEUE and is no longer queued; with the key absent (retail) the entry stays and
+    /// the client hears nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task MeetingStone_LeaveSoloQueueOnPartyJoin_FromConfiguration_DecidesWhetherAJoinedPartyEndsTheSoloEntry(bool configured)
+    {
+        await using WorldTestHost host = Start(configured ? new Dictionary<string, string?> { ["World:MeetingStone:LeaveSoloQueueOnPartyJoin"] = "true" } : null);
+        await using WorldTestClient leader = await host.EnterWorldAsync("GOLQL", "Golql");
+        await using WorldTestClient joiner = await host.EnterWorldAsync("GOLQJ", "Golqj");
+        Player joinerPlayer = await host.PlayerAsync("Golqj");
+        await joiner.CollectAsync();
+        await joiner.SendAsync(WorldOpcode.CmsgMeetingstoneJoin, BitConverter.GetBytes(Guid(StoneEntry, StoneSpawn).Value));
+        Assert.Equal(MeetingStonePackets.SetQueue(StoneArea, MeetingStoneStatus.JoinedQueue), await joiner.ReadUntilAsync(WorldOpcode.SmsgMeetingstoneSetqueue));
+        Assert.True(await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<MeetingStoneFeature>().Queue!.IsPlayerQueued(joinerPlayer.Guid)));
+
+        await leader.SendAsync(WorldOpcode.CmsgGroupInvite, [.. System.Text.Encoding.UTF8.GetBytes("Golqj"), 0]);
+        await joiner.ReadUntilAsync(WorldOpcode.SmsgGroupInvite);
+        await joiner.SendAsync(WorldOpcode.CmsgGroupAccept, []);
+        await joiner.ReadUntilAsync(WorldOpcode.SmsgGroupList);
+
+        bool queued = await host.OnWorldAsync(() => host.WorldServices.GetRequiredService<MeetingStoneFeature>().Queue!.IsPlayerQueued(joinerPlayer.Guid));
+        Assert.Equal(!configured, queued);
+        if (configured)
+            Assert.Equal(MeetingStonePackets.SetQueue(0, MeetingStoneStatus.LeaveQueue), await joiner.ReadUntilAsync(WorldOpcode.SmsgMeetingstoneSetqueue));
+        else
+            Assert.DoesNotContain(await joiner.CollectAsync(), p => p.Opcode == WorldOpcode.SmsgMeetingstoneSetqueue);
+    }
+
     [Fact]
     public async Task AcceptingASummon_TeleportsToTheSummonPoint()
     {
@@ -173,7 +206,7 @@ public sealed class GameObjectTypesWorldTests
         return services;
     }
 
-    private static WorldTestHost Start()
+    private static WorldTestHost Start(Dictionary<string, string?>? configuration = null)
     {
         uint[] chestData = new uint[GameObjectTemplate.DataCount];
         chestData[0] = ChestLock;
@@ -208,7 +241,10 @@ public sealed class GameObjectTypesWorldTests
         {
             using (items.Use())
             {
-                return WorldTestHost.Start(configureServices: services => Configure(services).AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(new SpellContent(
+                return WorldTestHost.Start(configureServices: services =>
+                {
+                    if (configuration is not null) services.AddSingleton<IConfiguration>(new ConfigurationBuilder().AddInMemoryCollection(configuration).Build());
+                    Configure(services).AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(new SpellContent(
                     [
                         // Opening (the key's spell): OPEN_LOCK at the object target (Spell.dbc 3366: effect 33, target 23).
                         new SpellTemplateRow
@@ -223,7 +259,8 @@ public sealed class GameObjectTypesWorldTests
                             Effect1 = 10, EffectImplicitTargetA1 = 1, EffectBasePoints1 = 49, EffectBaseDice1 = 1, EffectDieSides1 = 1,
                         },
                     ],
-                    [], [], [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 12, MaxRange = 5 }], [], [], []))));
+                    [], [], [new SpellRangeRow { Id = 1 }, new SpellRangeRow { Id = 12, MaxRange = 5 }], [], [], [])));
+                });
             }
         }
         finally

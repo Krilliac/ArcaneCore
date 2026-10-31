@@ -259,17 +259,31 @@ internal sealed class PublicFeedPool : IPublicWorld, IPublicFeedSink, IAsyncDisp
             _releasedAt.Remove(map);
         }
 
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        // The count raised above is only given back by Demand.Dispose, so a wait or subscribe that throws (a guest socket closing cancels its
+        // token) must give it back here, or the map would count as viewed for good and never be unsubscribed.
+        bool handedOut = false;
         try
         {
-            await EnsureSubscribedLockedAsync(map, cancellationToken).ConfigureAwait(false);
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await EnsureSubscribedLockedAsync(map, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _gate.Release();
+            }
+
+            handedOut = true;
+            return new Demand(this, map);
         }
         finally
         {
-            _gate.Release();
+            if (!handedOut)
+            {
+                Release(map);
+            }
         }
-
-        return new Demand(this, map);
     }
 
     private void Release(uint map)
