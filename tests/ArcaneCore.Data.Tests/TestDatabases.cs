@@ -1,5 +1,5 @@
 using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
+using System.Data.Common;
 using MySqlConnector;
 using Npgsql;
 
@@ -119,12 +119,107 @@ internal sealed class TestDatabases : IAsyncDisposable
         }
     }
 
+    private const int DropAttempts = 4;
+    private const int DropCommandTimeoutSeconds = 120;
+
+    /// <summary>
+    /// Drop a provider database. PostgreSQL refuses a plain DROP while any session is attached, so it runs
+    /// <c>DROP DATABASE ... WITH (FORCE)</c> (terminates the remaining sessions) from the <c>postgres</c> maintenance
+    /// database; MariaDB runs <c>DROP DATABASE IF EXISTS</c> from a connection with no default database. The command
+    /// timeout is long because a busy shared server can take well over the 30 s default, and a failed attempt is retried
+    /// a bounded number of times with a growing pause before the last exception is rethrown.
+    /// </summary>
     private static async Task DropAsync(DatabaseConnectionOptions options)
     {
-        var builder = new DbContextOptionsBuilder<DbContext>();
-        DataServiceCollectionExtensions.ConfigureProvider(builder, options);
-        await using var db = new DbContext(builder.Options);
-        await db.Database.EnsureDeletedAsync();
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await DropOnceAsync(options);
+                return;
+            }
+            catch (Exception ex) when (attempt < DropAttempts && (ex is DbException || ex is TimeoutException))
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt * 2));
+            }
+        }
+    }
+
+    private static async Task DropOnceAsync(DatabaseConnectionOptions options)
+    {
+        switch (options.Provider)
+        {
+            case DatabaseProvider.MariaDb or DatabaseProvider.MySql:
+            {
+                var builder = new MySqlConnectionStringBuilder(options.ConnectionString);
+                string name = builder.Database;
+                builder.Database = string.Empty;
+                builder.Pooling = false;
+                await using var connection = new MySqlConnection(builder.ConnectionString);
+                await connection.OpenAsync();
+                await using MySqlCommand command = connection.CreateCommand();
+                command.CommandTimeout = DropCommandTimeoutSeconds;
+                command.CommandText = "DROP DATABASE IF EXISTS `" + name.Replace("`", "``", StringComparison.Ordinal) + "`";
+                await command.ExecuteNonQueryAsync();
+                break;
+            }
+
+            case DatabaseProvider.PostgreSql:
+            {
+                var builder = new NpgsqlConnectionStringBuilder(options.ConnectionString);
+                string name = builder.Database!;
+                builder.Database = "postgres";
+                builder.Pooling = false;
+                await using var connection = new NpgsqlConnection(builder.ConnectionString);
+                await connection.OpenAsync();
+                await using NpgsqlCommand command = connection.CreateCommand();
+                command.CommandTimeout = DropCommandTimeoutSeconds;
+                command.CommandText = "DROP DATABASE IF EXISTS \"" + name.Replace("\"", "\"\"", StringComparison.Ordinal) + "\" WITH (FORCE)";
+                await command.ExecuteNonQueryAsync();
+                break;
+            }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(options));
+        }
+    }
+
+    /// <summary>Whether the provider database named in <paramref name="options"/> exists on the server.</summary>
+    public static async Task<bool> ExistsAsync(DatabaseConnectionOptions options)
+    {
+        switch (options.Provider)
+        {
+            case DatabaseProvider.MariaDb or DatabaseProvider.MySql:
+            {
+                var builder = new MySqlConnectionStringBuilder(options.ConnectionString);
+                string name = builder.Database;
+                builder.Database = string.Empty;
+                builder.Pooling = false;
+                await using var connection = new MySqlConnection(builder.ConnectionString);
+                await connection.OpenAsync();
+                await using MySqlCommand command = connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = @n";
+                command.Parameters.AddWithValue("@n", name);
+                return Convert.ToInt64(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture) > 0;
+            }
+
+            case DatabaseProvider.PostgreSql:
+            {
+                var builder = new NpgsqlConnectionStringBuilder(options.ConnectionString);
+                string name = builder.Database!;
+                builder.Database = "postgres";
+                builder.Pooling = false;
+                await using var connection = new NpgsqlConnection(builder.ConnectionString);
+                await connection.OpenAsync();
+                await using NpgsqlCommand command = connection.CreateCommand();
+                command.CommandText = "SELECT COUNT(*) FROM pg_database WHERE datname = @n";
+                command.Parameters.AddWithValue("n", name);
+                return Convert.ToInt64(await command.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture) > 0;
+            }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(options));
+        }
     }
 
     /// <summary>
