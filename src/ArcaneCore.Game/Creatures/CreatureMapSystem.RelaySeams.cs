@@ -25,7 +25,9 @@ public sealed partial class CreatureMapSystem
             return;
         }
 
-        teleports.Teleport(player, step.DataLong, step.X, step.Y, step.Z, step.Orientation);
+        // cmangos ScriptMgr.cpp:1931 calls TeleportTo with the default options (0), so a same-map teleport leaves combat
+        // (Player.cpp:2016-2017 CombatStop unless TELE_TO_NOT_LEAVE_COMBAT): keepCombat is false, unlike spell teleports.
+        teleports.Teleport(player, step.DataLong, step.X, step.Y, step.Z, step.Orientation, keepCombat: false);
     }
 
     /// <summary>
