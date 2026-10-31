@@ -7,6 +7,7 @@ using ArcaneCore.Game.Loot;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.SpawnGroups;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Updates;
 using ArcaneCore.Kernel.Diagnostics;
@@ -1060,8 +1061,17 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         return (dx * dx) + (dy * dy) + (dz * dz) > reach * reach ? GameObjectUseResult.TooFar : GameObjectUseResult.Ok;
     }
 
+    /// <summary>The display id of the Scarlet Monastery lever buttons, the only ones that need line of sight (GameObject.cpp:1441-1446).</summary>
+    private const uint LeverDisplayId = 295;
+
     private GameObjectUseResult UseDoorOrButton(Player player, GameObject go)
     {
+        // GameObject::Use, button (GameObject.cpp:1441-1446): the levers inside the cathedral and armory entrances need line of sight.
+        if (go.Type == GameObjectType.Button && go.Template.DisplayId == LeverDisplayId && !player.IsWithinLineOfSight(go))
+        {
+            return GameObjectUseResult.LineOfSight;
+        }
+
         GameObjectUseResult locked = CheckDirectLock(player, go);
         if (locked != GameObjectUseResult.Ok)
         {
@@ -1185,8 +1195,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
     /// (GameObject.cpp:1548-1560) starts the event, and both chest paths reach that Use: the direct use and the spell path (Spell::SendLoot,
     /// SpellEffects.cpp:2142-2145, which shows the loot after it). ArcaneCore starts it only for a use that passed the quest gate, the lock
     /// and the open itself, so a refused use (or a crafted CMSG_GAMEOBJ_USE on a locked chest) cannot spring the ambush; cmangos has no
-    /// server-side quest gate or direct-use lock check to refuse it. Limit: a restocking chest (GO_NOT_READY) refuses the open here and so
-    /// starts no event, where cmangos would start it with the empty loot window.
+    /// server-side quest gate or direct-use lock check to refuse it. A restocking chest (GO_NOT_READY) opens empty and starts the event again.
     /// </summary>
     private GameObjectUseResult OpenChestStartingEvent(Player player, GameObject go, Action<GameObject>? onOpened = null)
     {
@@ -1247,17 +1256,16 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.InUse;
         }
 
-        // A restocking chest (GO_NOT_READY) has no loot until its restock time ran out. Limit: vmangos sends the empty loot window and
-        // restarts the restock timer when it is closed (Player::SendLoot generates loot only for GO_READY, Player.cpp:7672); here the
-        // open is refused and the timer keeps running.
-        if (go.LootState == GameObjectLootState.NotReady)
-        {
-            return GameObjectUseResult.NotUsable;
-        }
-
         if (ChestLevelRefuses(player, go))
         {
             return GameObjectUseResult.LevelTooLow;
+        }
+
+        // A restocking chest (GO_NOT_READY) has no loot until its restock time ran out: Player::SendLoot generates loot only for GO_READY
+        // (Player.cpp:7670) and sends the window all the same. Closing it counts as looted out, so the restock countdown starts again.
+        if (go.LootState == GameObjectLootState.NotReady)
+        {
+            return Loot.OpenEmptyGameObject(player, go, onOpened) == LootResult.Ok ? GameObjectUseResult.Ok : GameObjectUseResult.InUse;
         }
 
         LootResult opened = key is { } durable
@@ -1398,7 +1406,7 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.NeedsQuest;
         }
 
-        Quests?.GameObjectUsed(player, go.Entry, go.Guid);
+        RewardGroupAtUse(player, go);
         TriggerLinkedTrap(go, player); // GameObject.cpp:1593
 
         if (go.Template.GetData(6) is var cooldown and not 0)
@@ -1430,6 +1438,28 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
         }
 
         return GameObjectUseResult.Ok;
+    }
+
+    /// <summary>
+    /// Player::RewardPlayerAndGroupAtCast for a goober (GameObject.cpp:1590, Player.cpp:20019-20040): the user's group members within the
+    /// group reward distance of the object (the user alone without a group) get the objective credit, a dead member only while his body is
+    /// not released, and only the user counts as the original caster.
+    /// </summary>
+    private void RewardGroupAtUse(Player user, GameObject go)
+    {
+        if (Quests is not { } quests)
+        {
+            return;
+        }
+
+        List<Player> members = Loot?.RecipientsFor(user, go, out _) ?? [user];
+        foreach (Player member in members)
+        {
+            if (KillRewards.CanReceiveQuestCredit(member))
+            {
+                quests.GameObjectUsed(member, go.Entry, go.Guid, ReferenceEquals(member, user));
+            }
+        }
     }
 
     /// <summary>

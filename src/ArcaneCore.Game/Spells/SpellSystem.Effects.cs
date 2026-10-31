@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells.Rules.Application;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
@@ -330,6 +331,46 @@ public sealed partial class SpellSystem
     /// Raised after a cast effect reaches a unit for quest objectives.
     /// </summary>
     public event Action<Unit, Unit, uint>? SpellHitTarget;
+
+    /// <summary>
+    /// Raised once per game object a finished cast's effects targeted, for quest cast objectives (vmangos Spell::DoAllEffectOnTarget for a
+    /// GOTargetInfo, Spell.cpp:1845-1851: Player::RewardPlayerAndGroupAtCast(go, spellId)). Not raised for an auto-repeat shot, a next-swing
+    /// spell or a spell whose channel is running.
+    /// </summary>
+    public event Action<Unit, GameObject, uint>? SpellHitGameObject;
+
+    private void RaiseGameObjectCastCredit(SpellCast cast)
+    {
+        if (SpellHitGameObject is null || cast.AutoRepeatShot || cast.Spell.IsNextMeleeSwing || cast.State == SpellCastState.Casting
+            || cast.Caster.Map?.FindUpdater<GameObjectMapSystem>() is not { } objects)
+        {
+            return;
+        }
+
+        HashSet<ObjectGuid> guids = [.. cast.ObjectTargetsByEffect.Values.SelectMany(g => g)];
+        if (!cast.Targets.GameObject.IsEmpty)
+        {
+            for (int i = 0; i < SpellConstants.MaxEffects; i++)
+            {
+                SpellEffectInfo effect = cast.Spell.Effects[i];
+                if (effect.Effect != SpellEffectName.None
+                    && (effect.TargetA is SpellImplicitTarget.GameObject or SpellImplicitTarget.GameObjectItem
+                        || effect.TargetB is SpellImplicitTarget.GameObject or SpellImplicitTarget.GameObjectItem))
+                {
+                    guids.Add(cast.Targets.GameObject);
+                    break;
+                }
+            }
+        }
+
+        foreach (ObjectGuid guid in guids)
+        {
+            if (objects.Find(guid) is { } go)
+            {
+                SpellHitGameObject?.Invoke(cast.Caster, go, cast.Spell.Id);
+            }
+        }
+    }
 
     /// <summary>
     /// vmangos Spell::EffectSchoolDMG + Unit::DealDamage path: armor (physical), crit and partial

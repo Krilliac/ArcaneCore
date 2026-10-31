@@ -620,6 +620,22 @@ public sealed partial class LootService : IViewerFieldFilter
         return ShowChest(player, go, go.Loot, onOpened);
     }
 
+    /// <summary>
+    /// Open a restocking chest that is not ready (GO_NOT_READY) with an empty loot window: no loot is generated. Releasing it is a
+    /// looted-out release, which restarts the restock countdown (vmangos Player::SendLoot, Player.cpp:7670; DoLootRelease, LootHandler.cpp:435-500).
+    /// </summary>
+    internal LootResult OpenEmptyGameObject(Player player, GameObject go, Action<GameObject>? onOpened = null)
+    {
+        if (go.Loot is null || !_bags.ContainsKey(go.Guid))
+        {
+            LootBag empty = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, 0, [player]);
+            go.Loot = empty;
+            _bags[go.Guid] = (go, empty);
+        }
+
+        return ShowChest(player, go, go.Loot, onOpened);
+    }
+
     private LootResult ShowChest(Player player, GameObject go, LootBag bag, Action<GameObject>? onOpened = null)
     {
         if (!bag.IsRecipient(player) && bag.Owner.IsEmpty && bag.Permission == LootPermission.Open)

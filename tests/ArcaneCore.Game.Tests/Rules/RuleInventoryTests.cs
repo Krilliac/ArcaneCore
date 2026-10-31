@@ -23,6 +23,7 @@ public sealed class RuleInventoryTests
         "ArcaneCore.Game/Creatures/CreatureMapSystem.RelayCommandsExtra.cs",
         "ArcaneCore.Game/Creatures/CreatureMapSystem.RelayFormation.cs",
         "ArcaneCore.Game/Creatures/CreatureMapSystem.RelayScripts.cs",
+        "ArcaneCore.Game/Creatures/CreatureMapSystem.RelaySeams.cs",
         "ArcaneCore.Game/Creatures/CreatureQuestScripts.cs",
         "ArcaneCore.Game/Quests/Adapters/DbScriptQuestCredit.cs",
     ];

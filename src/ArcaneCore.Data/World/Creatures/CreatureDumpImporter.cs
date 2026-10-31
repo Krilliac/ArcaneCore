@@ -113,6 +113,7 @@ public sealed class CreatureDumpImporter
     private readonly Dictionary<uint, (uint Probability, CreatureEquipmentRow Row)> _equipment = [];
     private bool _sawImmunityTable;
     private bool _sawImmunityMaskColumns;
+    private bool _sawImmunityFlagsColumn;
     private readonly Dictionary<(uint Entry, uint SetId, byte Type, uint Value), CreatureImmunityRow> _immunities = [];
     private readonly Dictionary<uint, CreatureSpawnRow> _spawns = [];
     private readonly Dictionary<(uint, uint), CreatureMovementRow> _movement = [];
@@ -257,7 +258,7 @@ public sealed class CreatureDumpImporter
     {
         ArgumentNullException.ThrowIfNull(db);
         int rows = 0;
-        if (_sawImmunityTable)
+        if (_sawImmunityTable || _sawImmunityFlagsColumn)
         {
             await db.Set<CreatureImmunityRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _immunities.Values, cancellationToken).ConfigureAwait(false);
@@ -937,6 +938,33 @@ public sealed class CreatureDumpImporter
         }
 
         _templates[entry] = (patch, t, stats);
+        if (vmangos && row.Has("immunity_flags"))
+        {
+            _sawImmunityFlagsColumn = true;
+            ApplyVMangosImmunityFlags(entry, U32(row, "immunity_flags"));
+        }
+    }
+
+    /// <summary>vmangos <c>CREATURE_IMMUNITY_TAUNT</c> (CreatureDefines.h) in <c>creature_template.immunity_flags</c>.</summary>
+    private const uint VMangosImmunityTaunt = 0x02;
+
+    /// <summary>Spell.dbc effect SPELL_EFFECT_ATTACK_ME and aura SPELL_AURA_MOD_TAUNT: what vmangos immunity_flags TAUNT turns into (Creature.cpp) and what mangos-classic's immunity migration writes.</summary>
+    private const uint AttackMeEffect = 114, ModTauntAura = 11;
+
+    /// <summary>
+    /// Replace the set-0 taunt rows derived for <paramref name="entry"/> (a later row of the same template at an equal or newer patch supersedes an earlier one):
+    /// the TAUNT bit becomes an Effect 114 and a State 11 immunity row. The other immunity_flags bits are not mapped here.
+    /// </summary>
+    private void ApplyVMangosImmunityFlags(uint entry, uint flags)
+    {
+        _immunities.Remove((entry, 0u, (byte)CreatureImmunityType.Effect, AttackMeEffect));
+        _immunities.Remove((entry, 0u, (byte)CreatureImmunityType.State, ModTauntAura));
+        if ((flags & VMangosImmunityTaunt) == 0) return;
+
+        _immunities[(entry, 0u, (byte)CreatureImmunityType.Effect, AttackMeEffect)] =
+            new CreatureImmunityRow { Entry = entry, SetId = 0, Type = (byte)CreatureImmunityType.Effect, Value = AttackMeEffect };
+        _immunities[(entry, 0u, (byte)CreatureImmunityType.State, ModTauntAura)] =
+            new CreatureImmunityRow { Entry = entry, SetId = 0, Type = (byte)CreatureImmunityType.State, Value = ModTauntAura };
     }
 
     private CreatureExtraFlagsDialect ResolveExtraFlagsDialect(DumpRow row, bool vmangosTemplate)

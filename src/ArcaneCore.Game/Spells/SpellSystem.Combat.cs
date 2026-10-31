@@ -1,9 +1,12 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Ranged;
+using ArcaneCore.Game.Spells.Procs;
 using ArcaneCore.Game.Spells.Rules;
+using ArcaneCore.Game.Stats;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 
@@ -28,11 +31,23 @@ public sealed partial class SpellSystem
 
     /// <summary>
     /// The normalized weapon speed in seconds of a unit's hand for NORMALIZED_WEAPON_DMG (vmangos
-    /// Unit::GetAPMultiplier: 2.4 one-hand, 3.3 two-hand, 1.7 dagger, 2.8 ranged). The item area
-    /// knows the weapon; the default assumes a one-hand weapon (2.8 ranged).
+    /// SpellCaster::GetAPMultiplier, SpellCaster.cpp:1826-1853: 2.4 one-hand and fist, 3.3 two-hand, 1.7 dagger,
+    /// 2.8 ranged). The default reads the player's unbroken weapon of the hand, usable or not (<see cref="PlayerCombatSkills.WeaponForAttack"/>)
+    /// through <see cref="StatFormulas.ApMultiplier"/>; a non-player's multiplier is its plain attack time.
     /// </summary>
-    public Func<Unit, WeaponAttackType, float> NormalizedWeaponSpeed { get; set; }
-        = static (_, attack) => attack == WeaponAttackType.RangedAttack ? 2.8f : 2.4f;
+    public Func<Unit, WeaponAttackType, float> NormalizedWeaponSpeed { get; set; } = DefaultNormalizedWeaponSpeed;
+
+    private static float DefaultNormalizedWeaponSpeed(Unit unit, WeaponAttackType attack)
+    {
+        uint attackTime = unit.Combat.GetAttackTime(attack);
+        if (unit is not Player player)
+        {
+            return attackTime / 1000.0f;
+        }
+
+        Item? weapon = PlayerCombatSkills.WeaponForAttack(player, attack, nonBroken: true, useable: false); // vmangos SpellCaster::GetAPMultiplier passes useable=false
+        return StatFormulas.ApMultiplier(attackTime, normalized: true, isPlayer: true, weapon?.Template.GetInventoryType(), weapon?.Template.SubClass ?? 0u);
+    }
 
     /// <summary>Sum of the amounts of <paramref name="type"/> auras on <paramref name="unit"/> (vmangos Unit::GetTotalAuraModifier).</summary>
     public int GetTotalAuraModifier(Unit unit, AuraType type, Func<SpellAura, bool>? filter = null)
@@ -81,6 +96,8 @@ public sealed partial class SpellSystem
                 : (uint)(amount * CombatRules.CritMultiplier(spell));
         }
 
+        uint blocked = RollSpellPartialBlock(caster, target, spell, amount);
+        amount -= blocked; // vmangos CalculateAbsorbResistBlock (Unit.cpp:2205-2224): the block comes off before absorb and resist
         uint resisted = ApplyResist(caster, target, spell, ref amount, periodic: false);
         uint original = amount;
         uint absorbed = AbsorbDamage(caster, target, spell.SchoolMask(), amount, spell); // shields, mana shield, split (Unit.cpp:1920-2200)
@@ -115,11 +132,61 @@ public sealed partial class SpellSystem
         }
         else
         {
-            SendNextMeleeSpellAttackerStateUpdate(caster, target, spell, queuedMeleeSpell, dealt, absorbed, resisted, crit, packetCast);
+            SendNextMeleeSpellAttackerStateUpdate(caster, target, spell, queuedMeleeSpell, dealt, absorbed, resisted, crit, packetCast, blocked: blocked);
             SendToSet(caster, WorldOpcode.SmsgSpellnonmeleedamagelog, SpellPackets.BuildSpellNonMeleeDamageLog(
-                target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed: absorbed, resisted: resisted, hitInfo: spellHitInfo), includeSelf: true);
+                target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed: absorbed, resisted: resisted, blocked: blocked, hitInfo: spellHitInfo), includeSelf: true);
         }
         return new SpellDamageResult(dealt, resisted, crit, absorbed);
+    }
+
+    /// <summary>
+    /// The partial block of a melee or ranged class spell (vmangos Unit::CalculateAbsorbResistBlock, Unit.cpp:2205-2224, with
+    /// IsSpellPartiallyBlocked :2351-2374 and RollSpellBlockChanceOutcome :2376-2395; mangos-classic CanBlockAbility /
+    /// RollAbilityPartialBlockOutcome agree): returns the victim's shield block value capped at <paramref name="amount"/> when the roll
+    /// succeeds, else 0. Needs the victim facing the caster, a spell that is neither NO_ACTIVE_DEFENSE nor EX3_COMPLETELY_BLOCKED, and a
+    /// creature without the no-block behaviour. The chance is the victim's block chance (<see cref="MapCombat.BuildRollInput"/>: nothing while
+    /// stunned, casting or a totem) minus the weapon-skill difference to the victim's level maximum times 0.04 against a player and 0.1
+    /// against a creature; a creature caps at 5% and scales by level/10 below level 10; a chance of 0 or less draws nothing.
+    /// </summary>
+    internal uint RollSpellPartialBlock(Unit caster, Unit target, SpellInfo spell, uint amount)
+    {
+        if (amount == 0 || spell.DamageClass is not (SpellDamageClass.Melee or SpellDamageClass.Ranged)
+            || spell.HasAttribute(SpellAttributesCombat.NoActiveDefense) || (spell.AttributesEx3 & (uint)SpellAttributesEx3Combat.CompletelyBlocked) != 0
+            || target.Map?.FindUpdater<MapCombat>() is not { } combat || !MapCombat.HasInArc(target, caster, CombatConstants.DefaultArc))
+        {
+            return 0;
+        }
+
+        WeaponAttackType attack = ProcFlagRules.AttackTypeOf(spell);
+        MeleeRollInput input = combat.BuildRollInput(caster, target, attack);
+        if (!input.VictimIsPlayer && !input.VictimCreatureCanBlock)
+        {
+            return 0;
+        }
+
+        // mangos-classic Unit::CanBlockInCombat (Unit.cpp:3090-3112): a victim whose block chance is under 0.005 cannot block at all (a player
+        // without a usable, unbroken off-hand shield has none), so the skill difference below must not turn 0 into a chance.
+        if (input.BlockChance < 0.005f)
+        {
+            return 0;
+        }
+
+        float chance = input.BlockChance -((input.AttackerWeaponSkill - input.VictimMaxSkill) * (input.VictimIsPlayer ? 0.04f : 0.1f));
+        if (!input.VictimIsPlayer)
+        {
+            chance = Math.Min(chance, 5.0f);
+            if (input.VictimLevel < 10)
+            {
+                chance *= input.VictimLevel / 10.0f;
+            }
+        }
+
+        if (!(chance > 0f) || !((float)(Random.NextDouble() * 100.0) < chance))
+        {
+            return 0;
+        }
+
+        return Math.Min(combat.ShieldBlockValue(target), amount);
     }
 
     /// <summary>

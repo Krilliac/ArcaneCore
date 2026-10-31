@@ -18,7 +18,8 @@ public sealed partial class SummonService
     /// owner fields, so nothing takes it away with its summoner (vmangos WorldObject::SummonCreature).
     /// <para>
     /// LIMITS: a dead summon is left to its corpse decay (vmangos restarts its timer for the corpse); a summoning ritual game object as the
-    /// destination (Ritual of Doom) and the spell script's <c>OnSummon</c> (Inferno's Enslave Demon) are not modelled.
+    /// destination (Ritual of Doom) is not modelled. The spell script's <c>OnSummon</c> (Inferno's Enslave Demon) runs after the summon is registered
+    /// (vmangos SpellEffects.cpp:5818).
     /// </para>
     /// </summary>
     private void EffectSummonDemon(SpellEffectContext context)
@@ -57,5 +58,6 @@ public sealed partial class SummonService
 
         pets.Options = _options;
         pets.Register(summon, this);
+        context.System.NotifySummoned(context, summon); // vmangos m_spellScript->OnSummon(this, pSummon) (SpellEffects.cpp:5818)
     }
 }
