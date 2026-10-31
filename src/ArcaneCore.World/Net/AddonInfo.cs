@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using ArcaneCore.Protocol;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.Net;
 
@@ -59,12 +60,16 @@ public static class AddonInfo
     /// or cannot be decompressed (the client still proceeds to character select). Parsing never
     /// throws: a record that does not fit (name over <see cref="MaxAddonNameBytes"/>, a truncated
     /// tail) ends the list, and the list ends at <see cref="MaxAddons"/> records or when the next
-    /// record could push the response past <see cref="MaxResponseBytes"/>.
+    /// record could push the response past <see cref="MaxResponseBytes"/>. A block that is not a zlib stream
+    /// (a modded client) is answered empty without any exception being raised and noted on <paramref name="logger"/> at Debug.
     /// </summary>
-    public static byte[] BuildResponse(ReadOnlySpan<byte> addonBlock)
+    /// <param name="addonBlock">The addon block of CMSG_AUTH_SESSION.</param>
+    /// <param name="logger">Receives the one Debug line for a block that is not zlib; null logs nothing.</param>
+    /// <param name="endpoint">The connection's endpoint, the prefix of that line.</param>
+    public static byte[] BuildResponse(ReadOnlySpan<byte> addonBlock, ILogger? logger = null, string? endpoint = null)
     {
         var response = new PacketWriter(64);
-        if (!TryDecompress(addonBlock, out byte[] decompressed))
+        if (!TryDecompress(addonBlock, logger, endpoint, out byte[] decompressed))
         {
             return response.AsMemory().ToArray();
         }
@@ -110,7 +115,7 @@ public static class AddonInfo
         return response.AsMemory().ToArray();
     }
 
-    private static bool TryDecompress(ReadOnlySpan<byte> addonBlock, out byte[] decompressed)
+    private static bool TryDecompress(ReadOnlySpan<byte> addonBlock, ILogger? logger, string? endpoint, out byte[] decompressed)
     {
         decompressed = [];
         if (addonBlock.Length < 4)
@@ -121,6 +126,15 @@ public static class AddonInfo
         uint uncompressedSize = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(addonBlock);
         if (uncompressedSize is 0 or > 0xFFFFF)
         {
+            return false;
+        }
+
+        // The zlib header (RFC 1950): CMF low nibble 8 (deflate) and CMF*256 + FLG a multiple of 31. Checked here so a block that is
+        // not zlib never reaches ZLibStream, which would raise a first-chance exception for every such connection.
+        if (addonBlock.Length < 6 || (addonBlock[4] & 0x0F) != 8 || (addonBlock[4] * 256 + addonBlock[5]) % 31 != 0)
+        {
+            logger?.LogDebug("[{Endpoint}] addon block is not zlib (CMF {Cmf}, len {Length}); sending empty addon info",
+                endpoint, addonBlock.Length > 4 ? $"0x{addonBlock[4]:X2}" : "n/a", addonBlock.Length);
             return false;
         }
 
