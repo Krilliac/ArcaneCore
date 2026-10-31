@@ -33,6 +33,18 @@ public interface ISpellScript
     {
     }
 
+    /// <summary>
+    /// The cancelling form of <see cref="OnEffectExecute(SpellEffectContext)"/> (vmangos <c>bool SpellScript::OnEffectExecute</c>, whose false return skips
+    /// the effect, Spell.cpp:5254-5257): return false to stop the effect from running on this target, true to let it run.
+    /// <paramref name="runByDefault"/> is true on every call (the effect runs unless the script says otherwise). The dispatcher calls only this
+    /// overload; its default body runs the void hook and lets the effect run, so a script overrides whichever form it needs.
+    /// </summary>
+    bool OnEffectExecute(SpellEffectContext context, bool runByDefault)
+    {
+        OnEffectExecute(context);
+        return runByDefault;
+    }
+
     /// <summary>A DISPEL effect of the spell removed <paramref name="removedStacks"/> aura stacks (at least one) from its target.</summary>
     void OnSuccessfulDispel(SpellEffectContext context, int removedStacks)
     {
