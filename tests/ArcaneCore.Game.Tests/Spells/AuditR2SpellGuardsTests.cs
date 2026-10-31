@@ -137,4 +137,19 @@ public sealed class AuditR2SpellGuardsTests
         var near = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = (player.X + 5, player.Y, player.Z) };
         Assert.Equal(SpellCastResult.CastOk, kit.System.HandleCastRequest(player, areaSpell, near));
     }
+
+    [Theory]
+    [InlineData(SpellImplicitTarget.EnumUnitsFriendAoeAtDynobjLoc)]
+    [InlineData(SpellImplicitTarget.EnumGameObjectsScriptAoeAtDestLoc)]
+    public void HandleCastRequest_AcceptsClientDestOnDynobjAndGameObjectDestAreaSpells(SpellImplicitTarget target)
+    {
+        const uint areaSpell = 49105;
+        SpellInfo area = SpellTestKit.Spell(areaSpell, SpellTestKit.Effect(SpellEffectName.Dummy, 0, target)) with { RangeIndex = 4, Range = new SpellRange(0, 30) };
+        using var kit = new SpellTestKit(area);
+        (Player player, _) = kit.AddPlayer(1);
+        kit.Spellbook.Teach(player, areaSpell);
+        var near = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = (player.X + 5, player.Y, player.Z) };
+
+        Assert.NotEqual(SpellCastResult.BadTargets, kit.System.HandleCastRequest(player, areaSpell, near));
+    }
 }

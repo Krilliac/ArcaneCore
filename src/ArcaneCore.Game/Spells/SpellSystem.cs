@@ -217,7 +217,7 @@ public sealed partial class SpellSystem
                 "spell",
                 "trigger-recursion-cut",
                 FormatSpellSubject(spellId),
-                $"caster={FormatUnitSubject(caster)} triggerDepth={_triggerStack.Count} repeatedSpell={spellId}",
+                $"caster={FormatUnitSubject(caster)} triggerDepth={_triggerStack.Count}",
                 AnomalySeverity.Warning);
             return SpellCastResult.Error;
         }
