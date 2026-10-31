@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -52,6 +54,64 @@ public sealed class SpellEffectCombatTests
         kit.System.CastSpell(caster, Normalized, SpellCastTargets.ForUnit(target.Guid), triggered: true);
         Assert.Equal(44u, target.Health); // 10 + (2.4 - 2.0) × 140 / 14 + 2
         Assert.Equal(14f, kit.System.WeaponDamageRoll(caster, WeaponAttackType.BaseAttack, normalized: true), 3);
+    }
+
+    private const uint TwoHander = 91_001;
+    private const uint DaggerItem = 91_002;
+    private const uint BowItem = 91_003;
+    private const uint MaceItem = 91_004;
+
+    private static readonly ItemTemplateStore WeaponStore = new(
+    [
+        new ItemTemplate { Entry = TwoHander, Class = 2, SubClass = 8, Name = "Two-Hander", DisplayId = 1, InventoryType = 17, Delay = 3600, MaxDurability = 100 },
+        new ItemTemplate { Entry = DaggerItem, Class = 2, SubClass = 15, Name = "Dagger", DisplayId = 2, InventoryType = 13, Delay = 1500, MaxDurability = 100 },
+        new ItemTemplate { Entry = BowItem, Class = 2, SubClass = 2, Name = "Bow", DisplayId = 3, InventoryType = 15, Delay = 2800, MaxDurability = 100 },
+        new ItemTemplate { Entry = MaceItem, Class = 2, SubClass = 4, Name = "Mace", DisplayId = 4, InventoryType = 13, Delay = 2000, MaxDurability = 100 },
+    ], []);
+
+    private static void Equip(Player player, byte slot, uint entry, uint durability = 100)
+    {
+        player.Inventory.Templates = WeaponStore;
+        player.Inventory.Load(
+        [
+            new InventoryItemData(0, slot, new ItemInstanceData { Guid = 7000u + slot, Entry = entry, Durability = durability, Charges = [0, 0, 0, 0, 0], Enchantments = new uint[21] }),
+        ]);
+    }
+
+    [Theory]
+    [InlineData(InventorySlots.MainHand, TwoHander, WeaponAttackType.BaseAttack, 23f)] // 10 + (3.3 - 2.0) x 140 / 14
+    [InlineData(InventorySlots.MainHand, DaggerItem, WeaponAttackType.BaseAttack, 7f)] // 10 + (1.7 - 2.0) x 10
+    [InlineData(InventorySlots.MainHand, MaceItem, WeaponAttackType.BaseAttack, 14f)]  // 10 + (2.4 - 2.0) x 10
+    [InlineData(InventorySlots.Ranged, BowItem, WeaponAttackType.RangedAttack, 18f)]  // 10 + (2.8 - 2.0) x 10
+    public void NormalizedWeaponSpeed_FollowsTheEquippedWeaponType(byte slot, uint entry, WeaponAttackType attack, float expected)
+    {
+        using var kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        Equip(caster, slot, entry);
+        caster.SetFloat(UpdateFields.UnitFieldMindamage, 10);
+        caster.SetFloat(UpdateFields.UnitFieldMaxdamage, 10);
+        caster.SetFloat(UpdateFields.UnitFieldMinrangeddamage, 10);
+        caster.SetFloat(UpdateFields.UnitFieldMaxrangeddamage, 10);
+        caster.SetUInt32(UpdateFields.UnitFieldBaseattacktime, 2000);
+        caster.SetUInt32(UpdateFields.UnitFieldRangedattacktime, 2000);
+        caster.SetInt32(UpdateFields.UnitFieldAttackPower, 140);
+        caster.SetInt32(UpdateFields.UnitFieldRangedAttackPower, 140);
+
+        Assert.Equal(expected, kit.System.WeaponDamageRoll(caster, attack, normalized: true), 3);
+    }
+
+    [Fact]
+    public void NormalizedWeaponSpeed_OfABrokenTwoHander_FallsBackToTheFistValue()
+    {
+        using var kit = Kit();
+        (Player caster, _) = kit.AddPlayer(1);
+        Equip(caster, InventorySlots.MainHand, TwoHander, durability: 0);
+        caster.SetFloat(UpdateFields.UnitFieldMindamage, 10);
+        caster.SetFloat(UpdateFields.UnitFieldMaxdamage, 10);
+        caster.SetUInt32(UpdateFields.UnitFieldBaseattacktime, 2000);
+        caster.SetInt32(UpdateFields.UnitFieldAttackPower, 140);
+
+        Assert.Equal(14f, kit.System.WeaponDamageRoll(caster, WeaponAttackType.BaseAttack, normalized: true), 3); // GetWeaponForAttack(nonBroken) is null: 2.4
     }
 
     [Fact]
