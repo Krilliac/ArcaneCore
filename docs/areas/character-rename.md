@@ -47,10 +47,18 @@ written off the world thread; a database failure is reported to the caller. Unkn
   it is removed with the character.
 * No options of its own. The name rules come from `CharacterCreation:*`.
 
+### The login gate
+
+`CharacterHandlers.HandlePlayerLoginAsync` calls `CharacterRename.MayLogInAsync` before the character enters the world (vmangos
+`Player::LoadFromDB`, Player.cpp:14612-14626). The login is refused when the character carries `AT_LOGIN_RENAME`, or when its stored
+name fails the name rules or the name catalog (`CharacterNameRules` with the creation options, then `CharacterNameCatalog.Check`; a
+`reserved_name` match refuses only Player-level accounts). A failing name is flagged in the store first, so the next `SMSG_CHAR_ENUM`
+carries 0x4000 and `CMSG_CHAR_RENAME` clears it. vmangos kicks the session (CharacterHandler.cpp:485-487); ArcaneCore answers
+`SMSG_CHARACTER_LOGIN_FAILED` (`CHAR_LOGIN_FAILED`, 0x41) and stays on the character screen. If the store read fails, the error is
+logged and the login goes on. Bot logins do not pass through this handler and are unaffected.
+
 ## Known gaps
 
-* **Invalid names at login.** vmangos flags a character at login whose stored name no longer passes the name rules
-  (`Player::LoadFromDB`, PlayerLoad.cpp:233-239) and refuses the login; ArcaneCore does neither.
 * **Other name caches** (guild rosters, mail sender names, friend lists, group members) were not audited; the character directory and the
   client caches (`SMSG_INVALIDATE_PLAYER`) are handled. A renamed character is offline at the character screen, so no live object carries
   its old name.
