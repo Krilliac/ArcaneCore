@@ -167,8 +167,8 @@ public sealed partial class NaxxramasInstance
     /// The coils' overload beam: each living Tesla Coil (16218) casts Shock (28159) at Thaddius, whose script drops his spawn stun (28160) and
     /// casts the lightning visual that pulls the zone (<see cref="ThaddiusShockScript"/>). mangos-classic boss_thaddius.cpp TriggerTeslas
     /// (the effect of 28359 on each coil: remove its auras, cast Shock) and ShockThaddius; vmangos boss_thaddius.cpp EVENT_TRANSITION_2 (each
-    /// coil casts SPELL_SHOCK_OVERLOAD at him, the stun is removed). A map without coil spawns still loses the stun, as vmangos removes it from
-    /// the AI.
+    /// coil casts SPELL_SHOCK_OVERLOAD at him, the stun is removed). The stun is always removed (vmangos removes it from
+    /// the AI), whether or not a coil's Shock lands.
     /// </summary>
     private void ShockThaddius(Creature thaddius)
     {
@@ -176,7 +176,8 @@ public sealed partial class NaxxramasInstance
         Creature[] coils = [.. system.Creatures.Where(c => c.Entry == 16218 && c.IsAlive)];
         foreach (Creature coil in coils)
             system.CastSpell(coil, ThaddiusShockScript.Shock, thaddius, triggered: true);
-        if (coils.Length == 0) system.RemoveAuras(thaddius, ThaddiusShockScript.ThaddiusSpawn);
+        // vmangos boss_thaddius.cpp:818 removes the stun unconditionally: a missed or resisted Shock must not leave him stunned.
+        system.RemoveAuras(thaddius, ThaddiusShockScript.ThaddiusSpawn);
     }
 
     public override void OnCreatureCreate(Creature creature)
@@ -286,6 +287,7 @@ public sealed partial class NaxxramasInstance
                 {
                     foreach (Creature add in gothicCreatures.Creatures.Where(c => c.Entry is 16124 or 16125 or 16126 or 16127 or 16148 or 16150).ToArray())
                         gothicCreatures.ForcedDespawn(add, 0);
+                    PruneGothikCorpseTriggers(gothicCreatures, all: true);
                 }
                 SetDoor(181124, state is not (EncounterState.InProgress or EncounterState.Special));
                 SetDoor(181170, state is EncounterState.Special or EncounterState.Done or EncounterState.Fail);

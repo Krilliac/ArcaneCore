@@ -111,15 +111,19 @@ public sealed class SilithusAncientsScript : ISpellScript
 
 /// <summary>
 /// Creatures that go away when a script spell hits them (ForcedDespawn): Despawn Spectral Combatants 17678 after 3 s (cmangos SpellEffects.cpp:650-660),
-/// Despawn 26264 (:3980-3988) and Despawn Toxic Slimes 26585 (boss_viscidus.cpp ViscidusDespawnAdds) any creature at once, Despawn Shades of Taerar 24886
-/// (:1166-1177, entry 15302), Despawn Brood 25792 (:1126-1132, Yauj brood 15621), Dispel Drakonids 23484 (:1062-1078, Nefarian's drakonids 14261-14265 and
-/// 14302), Despawn Chained Spirits 24342 (boss_mandokir.cpp DespawnChainedSpirits, Chained Spirit 15117), and the Kodo Kombobulator 18269 (mangoszero
-/// SpellEffectDummy.cpp:531-546) on any non-player target, and Despawn Buffet 29336 (boss_sapphiron.cpp DespawnBuffet) on any creature.
+/// Despawn Toxic Slimes 26585 (boss_viscidus.cpp ViscidusDespawnAdds) and Despawn Buffet 29336 (boss_sapphiron.cpp DespawnBuffet) at once, each only
+/// for a creature its spell_script_target row names; Despawn 26264 (:3980-3988, self-targeted: 'Despawn Self' 26268/26270) the caster itself;
+/// Despawn Shades of Taerar 24886 (:1166-1177, entry 15302), Despawn Brood 25792 (:1126-1132, Yauj brood 15621), Dispel Drakonids 23484 (:1062-1078,
+/// Nefarian's drakonids 14261-14265 and 14302), Despawn Chained Spirits 24342 (boss_mandokir.cpp DespawnChainedSpirits, Chained Spirit 15117), and the
+/// Kodo Kombobulator 18269 (mangoszero SpellEffectDummy.cpp:531-546, self-targeted on the Tamed Kodo 11627) for the kodo entries 4700-4702 and 11627.
 /// </summary>
 [SpellScript(17678, 26264, 26585, 24886, 25792, 23484, 24342, 18269, 29336)]
 public sealed class DespawnCreatureScript : ISpellScript
 {
     private static readonly uint[] s_drakonids = [14261, 14262, 14263, 14264, 14265, 14302];
+
+    /// <summary>The wild kodos the Kombobulator takes and the Tamed Kodo they become (Aged, Dying, Ancient 4700-4702; Tamed 11627).</summary>
+    private static readonly uint[] s_kodos = [4700, 4701, 4702, 11627];
 
     public void OnEffectExecute(SpellEffectContext context)
     {
@@ -130,12 +134,40 @@ public sealed class DespawnCreatureScript : ISpellScript
             25792 => [15621u],
             23484 => s_drakonids,
             24342 => [15117u],
+            18269 => s_kodos,
             _ => [],
         };
-        if (OtherCoresCasts.CreatureOf(context.Target, entries) is { } creature)
+        if (OtherCoresCasts.CreatureOf(context.Target, entries) is not { } creature)
         {
-            WorldDummyCasts.Despawn(creature, context.Spell.Id == 17678 ? 3000u : 0u);
+            return;
         }
+
+        // 26264 is self-targeted (TARGET_SELF, triggered by Despawn Self 26268/26270) and has no spell_script_target row: only the caster goes.
+        bool selfOnly = context.Spell.Id == 26264;
+        if (selfOnly ? !ReferenceEquals(creature, context.Caster) : entries.Length == 0 && !IsListedScriptTarget(context, creature))
+        {
+            return;
+        }
+
+        WorldDummyCasts.Despawn(creature, context.Spell.Id == 17678 ? 3000u : 0u);
+    }
+
+    /// <summary>
+    /// 17678, 26585 and 29336 name no entry in their reference scripts: the spell's script-target selection (spell_script_target) decides
+    /// who is hit. A world without those rows would otherwise despawn every creature in the area, so the target must match a row (a creature or dead-creature
+    /// row for its entry).
+    /// </summary>
+    private static bool IsListedScriptTarget(SpellEffectContext context, Creature creature)
+    {
+        foreach (SpellStore.ScriptTarget row in context.System.Store.GetScriptTargets(context.Spell.Id))
+        {
+            if (row.TargetEntry == creature.Entry && row.Type is 1 or 2)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 
@@ -351,7 +383,7 @@ public sealed class HateReductionScript : ISpellScript
 }
 
 /// <summary>
-/// Trigger Teslas 28359 (cmangos boss_thaddius.cpp TriggerTeslas): the target loses all its auras and casts Shock Overload 28159 (not triggered). The
+/// Trigger Teslas 28359 (cmangos boss_thaddius.cpp TriggerTeslas): the target (only a Tesla Coil 16218, its spell_script_target) loses all its auras and casts Shock Overload 28159 (not triggered). The
 /// overload emote (broadcast text 12178) is not sent: no broadcast-text seam exists for a spell script.
 /// </summary>
 [SpellScript(28359)]
@@ -361,6 +393,11 @@ public sealed class TriggerTeslasScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         Unit target = context.Target;
+        if (target is not Creature { Entry: 16218 })
+        {
+            return;
+        }
+
         foreach (SpellAuraHolder holder in context.System.GetAuras(target).ToArray())
         {
             context.System.RemoveAuras(target, holder.Spell.Id);
@@ -372,7 +409,7 @@ public sealed class TriggerTeslasScript : ISpellScript
 
 /// <summary>
 /// Teleport Trigger 29499 (cmangos boss_heigan.cpp TeleportTrigger): each target casts Teleport Players 29273 on itself. The reference also caps the
-/// spell at 3 affected targets (SetMaxAffectedTargets); that cap is a target-selection property this script cannot set.
+/// spell at 3 affected targets (SetMaxAffectedTargets): <see cref="HeiganTeleportTriggerModule"/> registers it.
 /// </summary>
 [SpellScript(29499)]
 public sealed class HeiganTeleportTriggerScript : ISpellScript
@@ -381,6 +418,16 @@ public sealed class HeiganTeleportTriggerScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         OtherCoresCasts.Cast(context, context.Target, context.Target, 29273);
+    }
+}
+
+/// <summary>cmangos boss_heigan.cpp TeleportTrigger::OnInit: spell->SetMaxAffectedTargets(3).</summary>
+public sealed class HeiganTeleportTriggerModule : ISpellHandlerModule
+{
+    public void Register(SpellSystem system)
+    {
+        ArgumentNullException.ThrowIfNull(system);
+        system.RegisterSpellMaxTargetsOverride(29499, 3);
     }
 }
 

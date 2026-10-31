@@ -393,6 +393,46 @@ public sealed class NaxxramasPartTwoTests
     }
 
     [Fact]
+    public void Thaddius_LosesTheSpawnStunAtTheOverload_EvenWhenEveryCoilShockMisses()
+    {
+        // The fake caster resolves no Shock (a miss or a resist), so only the unconditional removal (vmangos boss_thaddius.cpp:818) lifts 28160.
+        using var raid = new Raid(15928).Initialize(activateThaddius: false);
+        raid.Creatures.SpawnTemporary(Template(16218), 5, 0, 270, 0);
+        raid.Caster.Auras.Add((raid.Boss, 28160));
+        Creature stalagg = raid.Creatures.SpawnTemporary(Template(15929), 1, 0, 270, 0);
+        Creature feugen = raid.Creatures.SpawnTemporary(Template(15930), 1, 0, 270, 0);
+        raid.Map.Combat.DealDamage(raid.Tank, stalagg, stalagg.Health, direct: false);
+        raid.Map.Combat.DealDamage(raid.Tank, feugen, feugen.Health, direct: false);
+
+        raid.Instance.Update(14000);
+
+        Assert.Contains(raid.Caster.RemovedAuras, r => ReferenceEquals(r.Unit, raid.Boss) && r.Spell == 28160);
+        Assert.False(raid.Caster.HasAura(raid.Boss, 28160));
+    }
+
+    [Fact]
+    public void Gothik_CorpseTriggersArePruned_WhenTheyDespawnAndWhenTheEncounterResets()
+    {
+        using var raid = new Raid(16060).Initialize();
+        var objects = new GameObjectMapSystem(raid.Map, new GameObjectContent(
+            [GameObjectTestKit.GoTemplate(181170, GameObjectType.Door)], [], [], [], []));
+        raid.Map.AddUpdater(objects);
+        objects.Summon(181170, 0, 0, 270, 0);
+        raid.Creatures.SpawnTemporary(Template(16137), 0, -20, 270, 0);
+        raid.Map.Combat.Kill(raid.Tank, raid.Creatures.SpawnTemporary(Template(16124), 0, -10, 270, 0));
+        Assert.Equal(1, raid.Instance.GothikCorpseTriggerCount);
+
+        // The 15 s timed despawn removes the first trigger; the next chain start drops its stale guid.
+        raid.World.RunTick(16000);
+        raid.Map.Combat.Kill(raid.Tank, raid.Creatures.SpawnTemporary(Template(16124), 0, -10, 270, 0));
+        Assert.Equal(1, raid.Instance.GothikCorpseTriggerCount);
+
+        raid.Instance.SetData(NaxxramasInstance.Gothik, EncounterState.Fail);
+
+        Assert.Equal(0, raid.Instance.GothikCorpseTriggerCount);
+    }
+
+    [Fact]
     public void Sapphiron_FiveIceBoltsPrecedeAirBreath_ThenLands()
     {
         using var raid = new Raid(15989).Initialize();
