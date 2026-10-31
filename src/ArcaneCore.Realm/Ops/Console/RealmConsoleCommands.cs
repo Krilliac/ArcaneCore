@@ -96,6 +96,10 @@ public sealed class RealmConsoleCommands(
     private async Task PrintInfoAsync(Action<string> say, CancellationToken cancellationToken)
     {
         TimeSpan uptime = _time.GetUtcNow() - _started;
+        if (uptime < TimeSpan.Zero)
+        {
+            uptime = TimeSpan.Zero; // the wall clock stepped back (NTP, VM resume): a negative uptime would print "-01:-05:-22"
+        }
         say("uptime: " + string.Create(CultureInfo.InvariantCulture, $"{(int)uptime.TotalDays}d {uptime.Hours:D2}:{uptime.Minutes:D2}:{uptime.Seconds:D2}"));
         say($"logon sessions: {_activeSessions()}");
         say($"realms: {(await LoadRealmsAsync(cancellationToken).ConfigureAwait(false)).Count}");

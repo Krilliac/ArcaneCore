@@ -368,6 +368,7 @@ public sealed class ClusterHostSupervisorRecoveryTests
         Assert.Equal(launcher.Processes[0].ProcessId, request.ProcessId);
         Assert.Equal(options.HangCaptureDirectory, request.Directory);
         Assert.Equal("dotnet-stack", request.StackTool);
+        Assert.Equal(TimeSpan.FromSeconds(options.HangCaptureTimeoutSeconds), request.ToolTimeout);
     }
 
     [Fact]

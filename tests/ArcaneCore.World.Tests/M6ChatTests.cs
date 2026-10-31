@@ -237,6 +237,23 @@ public sealed class M6ChatTests
         Assert.Equal(new[] { "Player" }, await WhoAsync(player));
     }
 
+    [Fact]
+    public async Task Who_HidesAnInvisibleGm_FromLowerSecurity_ButNotFromEqualOrHigher()
+    {
+        await using var host = WorldTestHost.Start(); // GmLevelInWhoList defaults to Administrator
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAYER", "Player");
+        await using WorldTestClient gm = await host.EnterWorldAsync("STAFF", "Staff", AccountSecurity.GameMaster);
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await DrainAsync(player, gm, admin);
+        Assert.Equal(new[] { "Admin", "Player", "Staff" }, (await WhoAsync(player)).Order(StringComparer.Ordinal));
+
+        await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Staff")!.GmInvisible = true);
+
+        Assert.Equal(new[] { "Admin", "Player" }, (await WhoAsync(player)).Order(StringComparer.Ordinal)); // lower security: hidden
+        Assert.Contains("Staff", await WhoAsync(gm)); // sees itself
+        Assert.Contains("Staff", await WhoAsync(admin)); // higher security still sees it
+    }
+
     // --- helpers -------------------------------------------------------------------
 
     private static async Task DrainAsync(params WorldTestClient[] clients)

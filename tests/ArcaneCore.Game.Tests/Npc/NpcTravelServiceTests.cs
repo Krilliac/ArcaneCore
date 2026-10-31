@@ -496,6 +496,17 @@ public sealed class NpcTravelServiceTests
     }
 
     [Fact]
+    public void Logout_PrunesTheAbortedFlag_SoTheSetDoesNotGrowForPlayersWhoNeverFlyAgain()
+    {
+        using var rig = new TaxiRig();
+        rig.Player.Money = 1000;
+        rig.Kit.Services.ActivateTaxi(rig.Player, rig.Kit.Npc.Guid, 1, 2);
+        rig.Flights.OnPlayerRemoved(rig.Map, rig.Player); // aborts the flight and records the flag
+        Assert.Null(rig.Flights.SuspendForLogout(rig.Player)); // not flying, but logout still prunes the flag
+        Assert.False(rig.Flights.TryConsumeAborted(rig.Player));
+    }
+
+    [Fact]
     public void Flight_SuspendsAndResumesAtTheCurrentLegWithoutChargingItAgain()
     {
         using var rig = new TaxiRig();

@@ -3,6 +3,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using Xunit;
 
@@ -338,6 +339,24 @@ public sealed class M6LogoutAndCommandTests
         Assert.Equal("Player |cffffffff|Hplayer:Victim|h[Victim]|h|r kicked.", await CommandAsync(gm, ".kick victim"));
         Assert.True(await victim.IsClosedByServerAsync());
         await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Victim") is null, "the victim to leave");
+    }
+
+    [Fact]
+    public async Task Kick_ByAGameMasterCommand_RecordsAReason_SoItRaisesNoKickWithoutReasonAnomaly()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient gm = await host.EnterWorldAsync("GM", "Gamemaster", AccountSecurity.GameMaster);
+        await using WorldTestClient victim = await host.EnterWorldAsync("VICTIM", "Victim");
+        await Drain(gm, victim);
+        var session = (ArcaneCore.World.Net.WorldSession)(await host.PlayerAsync("Victim")).Session;
+        string subject = session.AnomalySubject;
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Subject == subject);
+
+        await CommandAsync(gm, ".kick victim");
+        Assert.True(await victim.IsClosedByServerAsync());
+
+        Assert.False(capture.Any("session/kick-no-reason"));
+        Assert.Equal("kicked by a GM command", session.KickReason);
     }
 
     [Fact]

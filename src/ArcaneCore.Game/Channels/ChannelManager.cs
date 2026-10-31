@@ -44,8 +44,10 @@ public sealed class ChannelManager(SocialContext context)
         }
 
         // World:Social:MaxChannelNameLength / MaxChannelPassphraseLength: refused before any Channel object is created.
+        // Never above Channel.MaxCustomNameLength: a longer name does not normalize and would be stored as an unreachable INVALIDCHANNEL.
         int maxName = context.Options.MaxChannelNameLength;
-        if (maxName > 0 && name.Length > maxName)
+        maxName = maxName > 0 ? Math.Min(maxName, Channel.MaxCustomNameLength) : Channel.MaxCustomNameLength;
+        if (name.Length > maxName)
         {
             player.Session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.InvalidName, name[..maxName]));
             return;
@@ -148,6 +150,7 @@ public sealed class ChannelManager(SocialContext context)
         if (Get(player, name) is { } channel && channel.KickOrBan(player, target, ban) is { } removed)
         {
             Joined(removed).Remove(channel);
+            RemoveIfEmpty(removed.Team, channel); // a sole owner kicking or banning themselves empties the channel
         }
     }
 

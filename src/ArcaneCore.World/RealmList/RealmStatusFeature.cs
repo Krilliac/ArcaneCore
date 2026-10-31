@@ -33,6 +33,7 @@ public sealed class RealmStatusFeature : IWorldFeature
     private float? _pendingPopulation;
     private float? _latestPopulation;        // the newest requested value, kept so it can be re-issued after the Online write resets it
     private Task _populationWriter = Task.CompletedTask;
+    private bool _writing;                   // a writer loop is running; set and cleared under _gate (Task.IsCompleted lags the loop's exit)
     private bool _stopping;
     private int _warnedMissing;
 
@@ -133,32 +134,46 @@ public sealed class RealmStatusFeature : IWorldFeature
     /// <summary>Caller holds <c>_gate</c>.</summary>
     private void Enqueue(float population)
     {
-        bool idle = _pendingPopulation is null && _populationWriter.IsCompleted;
+        bool idle = !_writing;
         _latestPopulation = population;
         _pendingPopulation = population;
         if (idle)
         {
+            _writing = true;
             _populationWriter = Task.Run(WritePopulationAsync);
         }
     }
 
     private async Task WritePopulationAsync()
     {
-        while (true)
+        try
         {
-            float population;
-            lock (_gate)
+            while (true)
             {
-                if (_pendingPopulation is not { } next)
+                float population;
+                lock (_gate)
                 {
-                    return;
+                    if (_pendingPopulation is not { } next)
+                    {
+                        _writing = false; // in the same locked block that saw nothing pending, so no request can slip in between
+                        return;
+                    }
+
+                    population = next;
+                    _pendingPopulation = null;
                 }
 
-                population = next;
-                _pendingPopulation = null;
+                await WriteAsync("population", store => store.SetPopulationAsync(_options.Id, population, CancellationToken.None)).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            lock (_gate)
+            {
+                _writing = false; // an unexpected escape must not leave the flag set, or no writer would ever start again
             }
 
-            await WriteAsync("population", store => store.SetPopulationAsync(_options.Id, population, CancellationToken.None)).ConfigureAwait(false);
+            throw;
         }
     }
 

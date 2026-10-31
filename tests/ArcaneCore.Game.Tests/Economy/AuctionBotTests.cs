@@ -273,6 +273,34 @@ public sealed class AuctionBotTests
     }
 
     [Fact]
+    public void Normalize_caps_the_template_draw_range()
+    {
+        var options = new AuctionBotOptions { TemplatesPerSellMin = int.MinValue, TemplatesPerSellMax = int.MaxValue };
+        IReadOnlyList<string> fixes = options.Normalize();
+        Assert.Equal((-10_000, 10_000), (options.TemplatesPerSellMin, options.TemplatesPerSellMax));
+        Assert.Equal(2, fixes.Count);
+        var planner = new AuctionBotPlanner(options, new AuctionBotPricing(options), new AuctionBotItemPool([Item(1)], options, new AuctionBotPricing(options)), new Random(1));
+        Assert.NotNull(planner.PlanSell(10)); // the draw span no longer overflows Random.Next
+    }
+
+    [Fact]
+    public async Task PlanSell_ends_when_every_stack_is_over_the_price_cap_and_the_amount_is_unbounded()
+    {
+        var options = Options(o => { o.ValueVariance = 0; o.TemplatesPerSellMin = 0; o.TemplatesPerSellMax = 0; });
+        var pricing = new AuctionBotPricing(options);
+        ItemTemplate dear = Item(1, itemClass: 0, buy: 1000, stack: 20);
+        var planner = new AuctionBotPlanner(options, pricing, new AuctionBotItemPool([dear], options, pricing), new Random(4))
+        {
+            Overrides = new Dictionary<uint, AuctionBotItemOverride> { [1] = new(1, 1_000_000_000, 100, uint.MaxValue, uint.MaxValue) },
+        };
+        // 20 x 1e9 is above AuctionHouseRules.MaxPrice, so no stack is listable; the stack size does not divide 2^32, so the old
+        // 32-bit counter wrapped and never reached the total.
+        Task<IReadOnlyList<AuctionBotSellIntent>> run = Task.Run(() => planner.PlanSell(10, e => e == 1 ? dear : null));
+        Assert.True(await Task.WhenAny(run, Task.Delay(TimeSpan.FromSeconds(10))) == run, "PlanSell did not finish");
+        Assert.Empty(await run);
+    }
+
+    [Fact]
     public void Loot_config_parses_like_ParseLootConfig()
     {
         Assert.Equal([30, 35, 8, 12], AuctionBotOptions.ParseLootConfig(" 30, 35,  8, 12"));
