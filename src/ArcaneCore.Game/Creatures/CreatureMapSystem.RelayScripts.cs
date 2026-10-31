@@ -450,6 +450,10 @@ public sealed partial class CreatureMapSystem
                 RelayMoveTo(step, source, target);
                 return false;
 
+            case 6: // SCRIPT_COMMAND_TELEPORT_TO (CreatureMapSystem.RelaySeams.cs)
+                RelayTeleportTo(step, source, target);
+                return false;
+
             case 7: // SCRIPT_COMMAND_QUEST_EXPLORED (cmangos ScriptMgr.cpp:1934-1966; the player: GetPlayerTargetOrSourceAndLog, :1685-1694)
             {
                 Player? player = target as Player ?? source as Player;

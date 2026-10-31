@@ -713,6 +713,12 @@ public sealed class CreatureAiServices
     /// such a step can only empty slots. Bound by the world to its item store.
     /// </summary>
     public Func<uint, ArcaneCore.Kernel.Items.ItemTemplate?>? ItemTemplateOf { get; init; }
+
+    /// <summary>
+    /// Moves the player of a DB script TELEPORT_TO step (6, cmangos Player::TeleportTo); null: that step is reported and skipped. Bound by the
+    /// world to the shared teleport service.
+    /// </summary>
+    public ArcaneCore.Game.Spells.ITeleportSink? Teleports { get; init; }
 }
 
 /// <summary>The quest credit EventAI actions give (cmangos Player methods called from CreatureEventAI::ProcessAction).</summary>
