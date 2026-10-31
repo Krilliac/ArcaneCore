@@ -227,6 +227,8 @@ public sealed class SupervisedProcessConfig
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' StopGraceMs must be 0 (use DrainTimeoutMs) or 1 to {MaxDrainTimeoutMs} (was {StopGraceMs}).");
         if (!Enum.IsDefined(HangCapture))
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' HangCapture is not one of None, Stacks, Dump.");
+        if (!Enum.IsDefined(Console))
+            throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' Console is not one of Merged, Window, None.");
         if (RealmId < 0)
             throw new InvalidOperationException($"SupervisedProcessConfig '{Name}' RealmId must not be negative (was {RealmId}); 0 means none.");
     }
@@ -314,12 +316,17 @@ public sealed class ClusterSupervisorOptions
     /// <summary>Sum of every child's <see cref="SupervisedProcessConfig.DrainTimeoutMs"/> (each clamped to <see cref="SupervisedProcessConfig.MaxDrainTimeoutMs"/>): children drain one after another.</summary>
     public TimeSpan TotalDrainBudget => TimeSpan.FromMilliseconds(Processes.Values.Sum(p => (long)Math.Clamp(p.DrainTimeoutMs, 0, SupervisedProcessConfig.MaxDrainTimeoutMs)));
 
-    /// <summary>Non-fatal findings (empty when none), for the startup check.</summary>
-    public IEnumerable<string> Warnings()
+    /// <summary>Non-fatal findings (empty when none).</summary>
+    public IEnumerable<string> Warnings() => WarningsWithRemediation().Select(w => w.Problem);
+
+    /// <summary>Non-fatal findings (empty when none), each with the remediation that fits it, for the startup check.</summary>
+    public IEnumerable<(string Problem, string Remediation)> WarningsWithRemediation()
     {
         if (Enabled && TotalDrainBudget + ShutdownMargin > MaxShutdown)
         {
-            yield return $"{SectionName}:Processes drain timeouts add up to {TotalDrainBudget.TotalMinutes:0.#} min, but the host's shutdown timeout is capped at {MaxShutdown.TotalMinutes:0} min; the children last in the drain order can be killed before their DrainTimeoutMs elapses.";
+            yield return (
+                $"{SectionName}:Processes drain timeouts add up to {TotalDrainBudget.TotalMinutes:0.#} min, but the host's shutdown timeout is capped at {MaxShutdown.TotalMinutes:0} min; the children last in the drain order can be killed before their DrainTimeoutMs elapses.",
+                "keep the total of the children's DrainTimeoutMs within the host shutdown cap by splitting the children across supervisors");
         }
 
         if (Enabled)
@@ -328,14 +335,18 @@ public sealed class ClusterSupervisorOptions
             {
                 if (WorldStopBudget.RunsWorld(process.Role) && TimeSpan.FromMilliseconds(process.DrainTimeoutMs) < WorldStopBudget.Recommended)
                 {
-                    yield return $"{SectionName}:Processes:{key}:DrainTimeoutMs is {process.DrainTimeoutMs} ms, below the {WorldStopBudget.Recommended.TotalSeconds:0} s a world needs to stop (bot shutdown, then the write-queue and save-queue drains, up to {WorldStopBudget.Bounded.TotalSeconds:0} s of them bounded); the supervisor would kill it mid-shutdown and lose its pending saves.";
+                    yield return (
+                        $"{SectionName}:Processes:{key}:DrainTimeoutMs is {process.DrainTimeoutMs} ms, below the {WorldStopBudget.Recommended.TotalSeconds:0} s a world needs to stop (bot shutdown, then the write-queue and save-queue drains, up to {WorldStopBudget.Bounded.TotalSeconds:0} s of them bounded); the supervisor would kill it mid-shutdown and lose its pending saves.",
+                        "keep a world child's DrainTimeoutMs above its stop time (the default is 180000)");
                 }
             }
         }
 
         if (Enabled && Processes.Values.Any(p => p.HangCapture == SupervisedHangCaptureMode.Dump))
         {
-            yield return $"{SectionName}:Processes:<key>:HangCapture is Dump: a dump of a hung child is written to {HangCaptureDirectory}, and it holds everything in that process's memory (session keys, password hashes in flight, chat). Keep the directory private and delete the dumps when the hang is understood.";
+            yield return (
+                $"{SectionName}:Processes:<key>:HangCapture is Dump: a dump of a hung child is written to {HangCaptureDirectory}, and it holds everything in that process's memory (session keys, password hashes in flight, chat). Keep the directory private and delete the dumps when the hang is understood.",
+                $"keep {SectionName}:HangCaptureDirectory private and delete the dumps once the hang is understood, or use HangCapture=Stacks or None");
         }
     }
 
@@ -403,6 +414,7 @@ public sealed class ClusterSupervisorOptions
                     HangDrainTimeoutMs = config.HangDrainTimeoutMs,
                     StopGraceMs = config.StopGraceMs,
                     HangCapture = config.HangCapture,
+                    Console = config.Console,
                     RealmId = config.RealmId,
                 };
                 effective.Validate();

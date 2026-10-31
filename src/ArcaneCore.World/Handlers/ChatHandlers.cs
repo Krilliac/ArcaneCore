@@ -687,6 +687,13 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
                 continue;
             }
 
+            // vmangos Player::IsVisibleGloballyFor (MiscHandler.cpp:131): a GM who is invisible (`.gm visible off`) is hidden from askers
+            // of lower security, the same rule the map's visibility uses.
+            if (!GmInvisibilityRule.Instance.CanSee(player, other, alreadyVisible: false, detect: false))
+            {
+                continue;
+            }
+
             uint level = other.Level;
             uint race = (uint)other.Race;
             uint cls = (uint)other.Class;

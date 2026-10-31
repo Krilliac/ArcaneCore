@@ -26,6 +26,11 @@ internal sealed class SpecKeyReader
         var key = new uint[cached.Indexes.Length];
         for (int i = 0; i < key.Length; i++)
         {
+            if (cached.Indexes[i] < 0)
+            {
+                continue; // an Optional key part the dump lacks keys as 0, the importer default
+            }
+
             string? raw = cached.Indexes[i] < row.Values.Count ? row.Values[cached.Indexes[i]] : null;
             if (!uint.TryParse(raw, NumberStyles.None, CultureInfo.InvariantCulture, out key[i]))
             {

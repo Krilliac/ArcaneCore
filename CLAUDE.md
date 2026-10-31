@@ -92,7 +92,7 @@ the catch census are in [docs/ops/exception-audit.md](docs/ops/exception-audit.m
 **Renames and moves**
 - **Reflection in tests** reaches private members by string, for example `GetField("_procDepth")` in
   `tests/ArcaneCore.Game.Tests/Spells/SpellAnomalyTests.cs` and `GetMethod("UnloadGrid")` in
-  `tests/ArcaneCore.World.Tests/Playerbots/Groups/PlayerbotSiegeWorldTests.cs`. Grep for `BindingFlags.NonPublic`.
+  `tests/ArcaneCore.World.Tests/Playerbots/Groups/PlayerbotSiegeStopAndRetreatWorldTests.cs`. Grep for `BindingFlags.NonPublic`.
 - **String lookups**: `MapUpdateDiagnostics.SubsystemOf` switches on updater type names
   (`src/ArcaneCore.Game/Maps/MapUpdateDiagnostics.cs`). `PlayerbotQaLogTap` matches logger category strings
   (`src/ArcaneCore.Playerbots/Qa/PlayerbotQaLogTap.cs`). A rename stops the match silently.

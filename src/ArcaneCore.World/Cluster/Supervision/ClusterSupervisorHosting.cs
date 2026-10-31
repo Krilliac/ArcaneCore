@@ -173,7 +173,8 @@ public static class ClusterSupervisorHosting
 
     /// <summary>
     /// Runs the supervisor until the host is stopped. Refuses (78) inside a supervised child, so a copied key cannot make a child
-    /// supervise again; returns 1 when the start is refused (for example below <c>MinClusterProcesses</c>), else 0.
+    /// supervise again; returns 1 when the start is refused (for example below <c>MinClusterProcesses</c>), else 0. A stop signal that
+    /// cancels the start between two launches is a clean stop: the children already launched are drained and 0 is returned.
     /// </summary>
     public static async Task<int> RunAsync(HostApplicationBuilder builder, TextWriter error)
     {
@@ -194,14 +195,30 @@ public static class ClusterSupervisorHosting
         {
             await host.StartAsync().ConfigureAwait(false);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            // Ctrl+C or SIGTERM during the launches: ApplicationStopping is linked into StartAsync's token, so the next launch throws.
+            await error.WriteLineAsync("ArcaneCore.World supervisor start was cancelled by a stop signal; draining the processes already launched.").ConfigureAwait(false);
+            try
+            {
+                await host.StopAsync().ConfigureAwait(false);
+            }
+            catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
+            {
+                await error.WriteLineAsync($"ArcaneCore.World supervisor stop after the cancelled start failed: {stopEx.Message}").ConfigureAwait(false);
+                return ExitCodes.Failure;
+            }
+
+            return ExitCodes.Success;
+        }
+        catch (Exception ex)
         {
             await error.WriteLineAsync($"ArcaneCore.World supervisor refuses to start: {ex.Message}").ConfigureAwait(false);
             try
             {
                 await host.StopAsync().ConfigureAwait(false);
             }
-            catch (Exception stopEx) when (stopEx is not OperationCanceledException)
+            catch (Exception stopEx) when (stopEx is not OutOfMemoryException)
             {
                 await error.WriteLineAsync($"ArcaneCore.World supervisor stop after the refused start failed: {stopEx.Message}").ConfigureAwait(false);
             }

@@ -88,6 +88,8 @@ public sealed class LogonSession(
     private CancellationTokenSource? _unauthenticatedLifetime;
     private ReadDeadline? _deadline;
     private ClientPatch? _offeredPatch; // chosen at the challenge of a non-5875 build, sent at its proof
+    private string? _proofFaultStage; // the proof's stage label and account, kept past ResetChallengeState for fault telemetry only; cleared per command
+    private string _proofFaultAccount = string.Empty;
     private ClientPatch? _xferPatch;
     private CancellationTokenSource? _sessionCap; // Auth:MaxSessionDurationSeconds; re-armed per patch chunk so only an idle transfer hits it    // offered by XFER_INITIATE; XFER_ACCEPT/RESUME stream it
 
@@ -155,7 +157,12 @@ public sealed class LogonSession(
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            AnomalyLedger.Shared.Report("logon", "handshake-timeout", "logon-session", "logon session read timed out before handshake completed", AnomalySeverity.Info);
+            if (!_authenticated)
+            {
+                // An authenticated session that reaches the session cap or the frame deadline completed its handshake: not a handshake timeout.
+                AnomalyLedger.Shared.Report("logon", "handshake-timeout", "logon-session", "logon session read timed out before handshake completed", AnomalySeverity.Info);
+            }
+
             if (deadline.Expired)
             {
                 if (guard is not null)
@@ -210,6 +217,8 @@ public sealed class LogonSession(
             _traffic.RecordIn(_inboundCommand, 1);
 
             var command = (AuthCommand)commandBuffer[0];
+            _proofFaultStage = null;
+            _proofFaultAccount = string.Empty;
             try
             {
                 switch (command)
@@ -310,7 +319,7 @@ public sealed class LogonSession(
             stage,
             _inboundCommand,
             command,
-            LogSafe.Escape(_username),
+            LogSafe.Escape(_username.Length > 0 ? _username : _proofFaultAccount),
             recording.Id,
             recording.Count,
             stack);
@@ -320,6 +329,7 @@ public sealed class LogonSession(
         => command switch
         {
             AuthCommand.LogonChallenge => "logon-challenge",
+            AuthCommand.LogonProof when _proofFaultStage is not null => _proofFaultStage,
             AuthCommand.LogonProof when _offeredPatch is not null => "logon-proof-patch",
             AuthCommand.LogonProof when _promptPin => "logon-proof-pin",
             AuthCommand.LogonProof when _isAutocreate => "logon-proof-autocreate",
@@ -665,6 +675,8 @@ public sealed class LogonSession(
         string clientLocale = _clientLocale;
         ushort clientBuild = _clientBuild;
         ClientPatch? offeredPatch = _offeredPatch;
+        _proofFaultAccount = username;
+        _proofFaultStage = offeredPatch is not null ? "logon-proof-patch" : promptPin ? "logon-proof-pin" : isAutocreate ? "logon-proof-autocreate" : null;
         ResetChallengeState();
 
         // The state machine: a proof consumes the challenge, so from here the session holds no SRP state
@@ -862,15 +874,21 @@ public sealed class LogonSession(
         }
 
         Account? account = await accountStore.FindByUsernameAsync(username, cancellationToken).ConfigureAwait(false);
-        bool accountBanned = account?.Status == AccountStatus.Banned
-            || account is not null && _banStore is not null
-            && await _banStore.GetActiveAccountBanAsync(account.Id, cancellationToken).ConfigureAwait(false) is not null;
+        // Applies the logon-challenge ban rule (vmangos AuthSocket.cpp logon path) to reconnect as well, which goes beyond the references
+        // (neither checks bans on reconnect): the status column is an always-honoured Banned, then Suspended, then a permanent ban
+        // row answers FAIL_BANNED and a temporary one FAIL_SUSPENDED.
+        AccountBanRecord? ban = account is not null && _banStore is not null
+            ? await _banStore.GetActiveAccountBanAsync(account.Id, cancellationToken).ConfigureAwait(false)
+            : null;
+        bool accountBanned = account?.Status == AccountStatus.Banned || ban is not null;
         if (account is null || account.Status != AccountStatus.Active
             || accountBanned
             || account.SessionKey is not { Length: 40 } sessionKey)
         {
-            AuthResult result = accountBanned ? AuthResult.Banned
-                : account?.Status == AccountStatus.Suspended ? AuthResult.Suspended : AuthResult.UnknownAccount;
+            AuthResult result = account?.Status == AccountStatus.Banned ? AuthResult.Banned
+                : account?.Status == AccountStatus.Suspended ? AuthResult.Suspended
+                : ban is { IsPermanent: true } ? AuthResult.Banned
+                : ban is not null ? AuthResult.Suspended : AuthResult.UnknownAccount;
             RecordFailure();
             await SendReconnectFailureAsync(result, cancellationToken).ConfigureAwait(false);
             return;

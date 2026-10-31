@@ -186,6 +186,15 @@ public sealed class RealmConsoleTests
     }
 
     [Fact]
+    public async Task RealmConsole_Info_ClampsUptimeAfterABackwardClockStep()
+    {
+        var rig = new Rig { Sessions = 1 };
+        rig.Time.Now -= new TimeSpan(0, 1, 5, 22); // an NTP correction or VM resume moved the wall clock back
+
+        Assert.Equal(Prefix + "uptime: 0d 00:00:00", (await rig.RunAsync("info"))[0]);
+    }
+
+    [Fact]
     public async Task RealmConsole_Online_PrintsTheLogonSessionCount()
     {
         var rig = new Rig { Sessions = 0 };

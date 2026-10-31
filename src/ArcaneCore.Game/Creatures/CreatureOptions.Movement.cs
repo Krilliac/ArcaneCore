@@ -66,8 +66,10 @@ public sealed class CreatureMovementOptions
     /// <c>Creatures:Movement:PathJobs</c>: run the navmesh searches of out-of-combat creature moves (wander, waypoint, point and scripted
     /// moves, evade/home returns of walkers) and of chases (in or out of combat, a pet's included) on a pool of path-job threads instead
     /// of the map's update (multithreading plan W5). The answer is the same search over the same loaded tiles; the creature starts the
-    /// move on a later update, as it does today when the per-update search budget is spent. Follow and formation searches join the pool
-    /// only with <see cref="PathJobsFollow"/>; flee, confused and flier searches and a pet's other moves stay synchronous. Off by
+    /// move on a later update, as it does today when the per-update search budget is spent (a chaser already running takes its answer
+    /// mid-spline only with <see cref="PathJobsFollow"/> on too). A search a worker has been running for 5 s
+    /// (<c>CreatureMapSystem.PathJobPendingTimeoutMs</c>) is dropped and asked again; time a job waits in the pool's queue does not count,
+    /// so a busy pool keeps its queue in order. Follow and formation searches join the pool only with <see cref="PathJobsFollow"/>; flee, confused and flier searches and a pet's other moves stay synchronous. Off by
     /// default; read when the map's creature system starts.
     /// </summary>
     public bool PathJobs { get; set; }
@@ -84,8 +86,14 @@ public sealed class CreatureMovementOptions
     /// an answer whose destination is within <c>CreatureMapSystem.PathJobFollowTolerance</c> (1 yd) of the re-asked one still applies,
     /// since a leader on the move shifts the follow point every update. A slower answer is still waited for, and walked when the path it
     /// found ends closer to the leader's new point than the follower stands; a lagging answer with no path, or one ending farther away,
-    /// is asked again. A follower already on a spline takes no pool answer until that spline ends, so behind a running leader on a
-    /// loaded pool it moves stop-and-go. Chase searches use the pool whenever <see cref="PathJobs"/> is on, with or without this setting.
+    /// is asked again. A follower, formation member or chaser already on a spline takes its answer mid-spline: while it has only run on
+    /// along that spline (up to <c>CreatureMapSystem.PathJobCarryYards</c>, 4 yd) its job is waited for, not dropped and asked again, and
+    /// the path is re-anchored at where it now stands, dropping corners it has already passed, so behind a running leader it keeps
+    /// running with one job in flight. On a map with navigation the new first leg is walked on the navmesh with the path's own options;
+    /// it is refused (asked again from where the creature stands) when the creature cannot be placed on the mesh, the walk is blocked,
+    /// or it ends on another layer. A map without navigation takes the leg unchecked. Chase searches use the pool whenever
+    /// <see cref="PathJobs"/> is on; only with this setting does a running chaser take answers mid-spline too, otherwise its answer is
+    /// dropped and asked again once it has run past the answer's start.
     /// </summary>
     public bool PathJobsFollow { get; set; }
 

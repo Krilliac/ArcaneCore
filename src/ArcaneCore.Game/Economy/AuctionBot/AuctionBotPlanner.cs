@@ -152,10 +152,12 @@ public sealed class AuctionBotPlanner
             }
 
             uint value = _pricing.WithVariance(ValuePerItem(t), _random);
-            uint total = totals[entry];
-            for (uint listed = 0; listed < total; listed += t.Stackable)
+            // At most `room` listings can be returned, so a larger total is cut to that many full stacks: an unbounded MaxAmount
+            // cannot spin this loop for billions of skipped over-priced stacks, and the 64-bit counter cannot wrap.
+            ulong total = Math.Min(totals[entry], (ulong)t.Stackable * (ulong)room);
+            for (ulong listed = 0; listed < total; listed += t.Stackable)
             {
-                uint count = Math.Min(t.Stackable, total - listed);
+                uint count = (uint)Math.Min((ulong)t.Stackable, total - listed);
                 ulong buyout = (ulong)value * count;
                 if (buyout == 0 || buyout > AuctionHouseRules.MaxPrice)
                 {

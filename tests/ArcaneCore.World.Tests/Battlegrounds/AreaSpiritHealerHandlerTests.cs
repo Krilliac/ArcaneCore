@@ -16,6 +16,13 @@ public sealed class AreaSpiritHealerHandlerTests
 {
     private static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(200);
 
+    /// <summary>
+    /// A map id no other test queues for. The anomaly ledger is process-wide and every test host numbers its first character 1, so
+    /// subsystem, code and subject cannot tell this test's notices from a concurrent test's; the map id in the detail can.
+    /// </summary>
+    private const uint UnclaimedMap = 4_242_424u;
+    private const string UnclaimedMapDetail = "map 4242424:";
+
     [Fact]
     public async Task OutsideABattleground_QueryAndQueue_AreIgnored()
     {
@@ -55,12 +62,12 @@ public sealed class AreaSpiritHealerHandlerTests
         await using WorldTestClient client = await host.EnterWorldAsync("ASHFLOOD", "Ashflood");
         await client.CollectAsync(Quiet);
         using ArcaneCore.Kernel.Diagnostics.AnomalyCapture anomalies = ArcaneCore.Kernel.Diagnostics.AnomalyLedger.Shared.Capture(
-            n => n.Subsystem == "anticheat" && n.Code == "battlefield-join");
+            n => n.Subsystem == "anticheat" && n.Code == "battlefield-join" && n.Detail.Contains(UnclaimedMapDetail, StringComparison.Ordinal));
 
         const int Packets = 25;
         for (int i = 0; i < Packets; i++)
         {
-            await client.SendAsync(WorldOpcode.CmsgBattlefieldJoin, BitConverter.GetBytes(489u));
+            await client.SendAsync(WorldOpcode.CmsgBattlefieldJoin, BitConverter.GetBytes(UnclaimedMap));
         }
 
         await client.CollectAsync(Quiet);
@@ -68,7 +75,7 @@ public sealed class AreaSpiritHealerHandlerTests
 
         Assert.Single(logs.Lines, l => l.Contains("CMSG_BATTLEFIELD_JOIN", StringComparison.Ordinal));
         uint low = await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Ashflood")!.Guid.Low);
-        Assert.Equal(Packets, anomalies.Notices.Count(n => n.Detail.Contains("map 489", StringComparison.Ordinal)));
+        Assert.Equal(Packets, anomalies.Notices.Count);
         Assert.All(anomalies.Notices, n => Assert.Equal($"character {low}", n.Subject)); // the report names the offending character
     }
 
