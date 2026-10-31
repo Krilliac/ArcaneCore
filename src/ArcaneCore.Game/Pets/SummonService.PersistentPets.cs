@@ -803,6 +803,13 @@ public sealed partial class SummonService
                 // experience restarts and the pet earns loyalty level minus one training points (as PetLoyalty.GivePetLevel does in the world).
                 creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
                 PetLoyalty.SetTrainingPoints(creature, clampCharm.TrainingPoints + (PetLoyalty.Level(creature) - 1));
+                // GivePetLevel -> InitStatsForLevel ends with SetHealth(GetMaxHealth()) and SetPower(POWER_MANA, max) (Pet.cpp:1484-1485), after the restore
+                // (Pet.cpp:367-368), so a living pet comes back full; a dead one (no saved health) stays dead (JUST_DIED, Pet.cpp:415) unless it is being revived.
+                if (snapshot.Health > 0 || revive)
+                {
+                    creature.Health = creature.MaxHealth;
+                    creature.SetUInt32(UpdateFields.UnitFieldPower1, creature.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+                }
             }
             return new CreatureHome(owner.X, owner.Y, owner.Z, owner.Orientation);
         }, snapshot.PetNumber);
