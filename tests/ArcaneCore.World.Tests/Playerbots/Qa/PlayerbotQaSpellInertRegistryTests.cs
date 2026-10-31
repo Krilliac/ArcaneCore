@@ -109,6 +109,21 @@ public sealed class PlayerbotQaSpellInertRegistryTests
     }
 
     [Fact]
+    public void ADeliberatelyInertSpell_IsNotATargetGap_ButTheSameSpellUnderAnotherIdIs()
+    {
+        // Implicit target 46 (location script near caster) has no selector in a bare system.
+        const SpellImplicitTarget unselectable = (SpellImplicitTarget)46;
+        InertSpell entry = DeliberatelyInertSpells.All.First(e => e.Reason == InertSpellReason.Marker);
+        SpellInfo listed = Spell(entry.SpellId, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy, targetA: unselectable));
+        SpellInfo unlisted = Spell(Unlisted, Effect(SpellEffectName.ApplyAura, 0, aura: AuraType.Dummy, targetA: unselectable));
+        var analyzer = new PlayerbotQaSpellGapAnalyzer(System(listed, unlisted));
+
+        Assert.Empty(analyzer.Of(listed));
+        Assert.Contains(QaSpellGaps.Target, analyzer.Of(unlisted).Select(g => g.Code));
+        Assert.Contains(QaSpellGaps.Target, analyzer.Of(listed, honourExplicitLists: false).Select(g => g.Code));
+    }
+
+    [Fact]
     public void AnUnusedEffect_IsCoveredOnlyByAnEntryThatNamesIt()
     {
         InertSpell stealth = DeliberatelyInertSpells.All.First(e => e.Unhandled == nameof(SpellEffectName.Stealth));

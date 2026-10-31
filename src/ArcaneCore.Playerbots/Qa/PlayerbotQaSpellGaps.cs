@@ -1,3 +1,4 @@
+using System.Globalization;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Paladin;
 using ArcaneCore.Game.Spells.Scripts;
@@ -20,7 +21,9 @@ internal readonly record struct QaSpellGap(int EffectIndex, string Code, string 
 /// rule and works); a DUMMY or OVERRIDE_CLASS_SCRIPTS aura nothing reads (<see cref="TalentEffectCoverage.HasConsumer"/>, a dummy-aura case or a periodic
 /// dummy tick); a DUMMY effect no spell script claims, and a SCRIPT_EFFECT neither the script-effect table nor a spell script claims, each only when it is
 /// the spell's sole working effect (a DUMMY next to a damage effect is usually cosmetic; the mage teleports' empty SCRIPT_EFFECT is vmangos-exact).
-/// An implicit target the system cannot select is only known when a cast meets it (<see cref="ISpellCastObserver.OnUnsupported"/>).
+/// An implicit target the system cannot select (<see cref="SpellSystem.CanSelectImplicitTarget"/>, against the selectors registered so far) is a
+/// <see cref="QaSpellGaps.Target"/> gap too, so the sweep and the start-up coverage see it without a cast; a bot's cast that meets one also reports it
+/// (<see cref="ISpellCastObserver.OnUnsupported"/>).
 /// <para>
 /// Two explicit lists silence a gap with a stated reason, and neither changes behaviour: <see cref="DeliberatelyInertSpells"/> (no reference core
 /// implements the spell either, with a citation) and <see cref="QaSpellConsumers"/> (ArcaneCore consumes the spell in code the registries cannot
@@ -62,6 +65,12 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
             if (effect.IsEmpty) continue;
             string name = effect.Effect.ToString();
             int value = effect.BasePoints + 1;
+            if (!silenced && !system.CanSelectImplicitTarget(spell, effect))
+            {
+                SpellImplicitTarget selector = system.SelectorOf(effect);
+                (gaps ??= []).Add(new QaSpellGap(i, QaSpellGaps.Target, string.Create(CultureInfo.InvariantCulture, $"{(uint)selector} ({selector})"), name, value, 0));
+            }
+
             if (!system.HasEffectHandler(effect.Effect))
             {
                 if (inert?.CoversUnhandled(name) != true) (gaps ??= []).Add(new QaSpellGap(i, QaSpellGaps.Effect, name, name, value, 0));

@@ -28,8 +28,32 @@ public static class SpellTargetSelectors
     /// <summary>TARGET_LOCATION_CASTER_FRONT (+0).</summary>
     public const uint LocationCasterFront = 47;
 
+    /// <summary>TARGET_LOCATION_CASTER_BACK (vmangos Spell.cpp:2986-3014: orientation + pi, at the effect radius).</summary>
+    public const uint LocationCasterBack = 48;
+
+    /// <summary>TARGET_LOCATION_CASTER_LEFT (orientation + pi/2).</summary>
+    public const uint LocationCasterLeft = 49;
+
+    /// <summary>TARGET_LOCATION_CASTER_RIGHT (orientation - pi/2).</summary>
+    public const uint LocationCasterRight = 50;
+
+    /// <summary>TARGET_ENUM_UNITS_SCRIPT_IN_CONE_60 (vmangos Spell.cpp:2702-2740): the spell_script_target units in the frontal cone.</summary>
+    public const uint UnitsScriptInCone = 60;
+
     /// <summary>TARGET_UNIT_RAID_AND_CLASS: the explicit target's same-class group members in range.</summary>
     public const uint UnitRaidAndClass = 61;
+
+    /// <summary>
+    /// The angle added to the caster's orientation by target 48 (back), 49 (left) or 50 (right), the destination direction of a Leap whose target B
+    /// names one; null for any other target.
+    /// </summary>
+    public static float? CasterSideAngle(SpellImplicitTarget target) => (uint)target switch
+    {
+        LocationCasterBack => MathF.PI,
+        LocationCasterLeft => MathF.PI * 0.5f,
+        LocationCasterRight => -MathF.PI * 0.5f,
+        _ => null,
+    };
 
     /// <summary>
     /// vmangos Spell.cpp:2977-3022: unless the client already sent a destination, the destination is

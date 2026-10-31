@@ -394,9 +394,10 @@ public static class ForcedMovement
     /// hit (the "falling BLINK" case). Otherwise the way is checked in <see cref="LeapStep"/> yards: each step takes the floor (within
     /// <c>4</c> yards of the estimate), refuses an edge between ground and water of more than 2 yards, follows the water surface
     /// (<see cref="LiquidRange"/> below it), refuses a step a model blocks (segment from 1.5 yards above the previous point) and a slope steeper than
-    /// <see cref="LeapMaxSlopeDegrees"/>; the blink ends at the last step that passed.
+    /// <see cref="LeapMaxSlopeDegrees"/>; the blink ends at the last step that passed. <paramref name="angleOffset"/> turns the direction away from
+    /// the facing (target B 48 back, 49 left, 50 right).
     /// </summary>
-    public static Vector3 LeapDestination(Unit unit, float distance)
+    public static Vector3 LeapDestination(Unit unit, float distance, float angleOffset = 0f)
     {
         ArgumentNullException.ThrowIfNull(unit);
         var previous = new Vector3(unit.X, unit.Y, unit.Z);
@@ -406,7 +407,7 @@ public static class ForcedMovement
         }
 
         MapCollision collision = map.Collision;
-        float orientation = unit.Orientation;
+        float orientation = unit.Orientation + angleOffset;
         float cos = MathF.Cos(orientation);
         float sin = MathF.Sin(orientation);
 
