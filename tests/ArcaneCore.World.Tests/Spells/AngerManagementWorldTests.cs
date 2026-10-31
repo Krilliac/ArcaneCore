@@ -14,7 +14,7 @@ public sealed class AngerManagementWorldTests
     [Fact]
     public async Task ModPowerRegenRage_UsesFiveSecondFirstTickAndThreeSecondRemainder()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual());
         await using WorldTestClient client = await host.EnterWorldAsync("ANGER", "Anger");
         await host.OnWorldAsync(() =>
         {
@@ -31,10 +31,17 @@ public sealed class AngerManagementWorldTests
             CombatEnvironment.For(host.World).Options.RateRageLoss = 0;
         });
         await client.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(994010));
+        await host.StepAsync();
         await client.ReadUntilAsync(WorldOpcode.SmsgSpellGo);
-        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Anger")!
-            .GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage) >= 10, "first periodic rage gain");
-        Assert.Equal(10u, await host.PlayerStateAsync("Anger", p => p.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage)));
+        // Manual game clock, one 50 ms tick per step: the rage value is captured in the same world-thread call that
+        // detects the first change, so no later tick (the 3 s remainder) can move it between the read and the assert.
+        uint rageAtFirstTick = 0;
+        await host.RunUntilAsync(() =>
+        {
+            rageAtFirstTick = host.World.FindOnlinePlayer("Anger")!.GetUInt32(UpdateFields.UnitFieldPower1 + (int)PowerType.Rage);
+            return rageAtFirstTick != 0;
+        }, "first periodic rage gain", maxGameMs: 8_000);
+        Assert.Equal(10u, rageAtFirstTick);
         await client.CollectAsync();
     }
 
