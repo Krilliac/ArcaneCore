@@ -164,6 +164,8 @@ public sealed class PlayerbotWarModeWorldTests
                 if (scenario is HelpCase.HelperFlaggedWarModeOff or HelpCase.VictimStartedIt) FlagForGood(self);
                 if (scenario == HelpCase.AttackerInExemptArea) PvpAreaState.SetWarModeExempt(foe, true);
                 world.Options.Social.WarMode.Enabled = scenario is HelpCase.HelperUnflaggedWarModeOn or HelpCase.VictimStartedItWarModeOn;
+                // The enemy stands 8 yd from the helper: out of the 5 yd on-sight radius, so only the help lane can draw the helper in (never War Mode's own on-sight attack).
+                world.Options.Pvp.Initiate.RadiusYards = PlayerbotPvpInitiateOptions.MinRadiusYards;
 
                 // The victim started on the enemy, who only fights back: the helper must not take the defender on.
                 if (scenario is HelpCase.VictimStartedIt or HelpCase.VictimStartedItWarModeOn) Assert.True(vic.Map!.Combat.Attack(vic, foe), "the victim could not attack the enemy");
@@ -177,7 +179,7 @@ public sealed class PlayerbotWarModeWorldTests
 
             PlayerbotHelpLane lane = SocialTestKit.Feature(world.Host).Help;
             PlayerbotBrain brain = HelpTestKit.BrainOf(world, helper);
-            if (lane.Helped == 1 || scenario == HelpCase.VictimStartedItWarModeOn)
+            if (lane.Helped == 1)
             {
                 await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => brain.EngagedPlayer is not null).Result, "the helper to take the attacker on");
             }
@@ -199,11 +201,9 @@ public sealed class PlayerbotWarModeWorldTests
     {
         HelpOutcome outcome = await HelpAsync(scenario, attackerIsBot);
 
-        // With War Mode on the helper may take the enemy on sight before the lane asks it (then the lane counts no help).
-        Assert.True(outcome.Helped == 1 || (scenario == HelpCase.HelperUnflaggedWarModeOn && outcome.Reason == PlayerbotEngageReason.Initiate));
+        Assert.Equal(1, outcome.Helped);
         Assert.True(outcome.Engaged);
-        // With War Mode on the helper may already have taken the enemy on sight (Initiate) when the lane's request lands: both are on-sight engagements.
-        Assert.True(outcome.Reason == PlayerbotEngageReason.Help || (scenario == HelpCase.HelperUnflaggedWarModeOn && outcome.Reason == PlayerbotEngageReason.Initiate));
+        Assert.Equal(PlayerbotEngageReason.Help, outcome.Reason);
     }
 
     [Theory]
@@ -213,8 +213,9 @@ public sealed class PlayerbotWarModeWorldTests
     {
         HelpOutcome outcome = await HelpAsync(HelpCase.VictimStartedItWarModeOn, attackerIsBot);
 
-        // The helper may already have the enemy on sight (Initiate) before the lane's request lands; either way it engages the one that only fought back.
+        Assert.Equal(1, outcome.Helped);
         Assert.True(outcome.Engaged);
+        Assert.Equal(PlayerbotEngageReason.Help, outcome.Reason);
     }
 
     [Theory]
