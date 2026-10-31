@@ -1,4 +1,3 @@
-using System.Diagnostics.Metrics;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Creatures;
@@ -35,14 +34,14 @@ public sealed class PlayerbotRunQaSignalWorldTests : PlayerbotRunWorldTestBase
     public async Task ARunGivenUpForAContentReason_ReportsOneRunFailedSignalToBotQa_WithNoBotOrGroupIdentity_AndCountsItByOutcome(string reason, string outcome)
     {
         var bus = new PlayerbotQaSignalBus(64);
-        (List<string> outcomes, MeterListener listener) = ListenToRuns();
-        using MeterListener _ = listener;
         await using GroupTestWorld world = await StartWithQaAsync(bus);
         (Guid Id, string Name)[] members = await AddPartyAsync(world, "Qat");
         world.Coordinator.RunRoll = () => 0d;
         Assert.True(await world.RunUntilAsync(30_000, () => world.Coordinator.Groups.Any(g => g.Run is not null)), await world.TraceAsync());
         PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
         world.Coordinator.RunRoll = () => 1d;
+        // Negative control: nothing has been counted yet, so the assertion below can only pass on a count this coordinator made.
+        Assert.Equal(0, world.Coordinator.RunOutcomeCount(outcome));
         // A run lasts under a minute here and MaxRunMinutes cannot go below 10 (validated), so the fault the group AI raises is injected the way its own are
         // (RunFault, applied by Advance): the same Finish, disband and report path as a real gather or travel timeout or a no-path.
         await world.OnWorldAsync(() =>
@@ -67,7 +66,8 @@ public sealed class PlayerbotRunQaSignalWorldTests : PlayerbotRunWorldTestBase
         Assert.All(members, m => Assert.DoesNotContain(m.Name, everything, StringComparison.Ordinal));
         Assert.Equal($"{reason} in {signal.Detail} at {signal.Stage}", PlayerbotQaAggregator.Subject(signal, null));
         Assert.Equal(1, world.Coordinator.RunTotals.GivenUp);
-        lock (outcomes) Assert.Contains(outcome, outcomes);
+        Assert.Equal(1, world.Coordinator.RunOutcomeCount(outcome));
+        Assert.Equal(1, new[] { PlayerbotRunMeters.Completed, PlayerbotRunMeters.GivenUp, PlayerbotRunMeters.Timeout }.Sum(world.Coordinator.RunOutcomeCount));
     }
 
     [Theory]
