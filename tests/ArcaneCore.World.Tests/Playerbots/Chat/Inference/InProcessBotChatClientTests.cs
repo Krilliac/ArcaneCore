@@ -118,6 +118,39 @@ public sealed class InProcessBotChatClientTests
     }
 
     [Fact]
+    public void An_overrun_finishing_while_the_circuit_is_open_does_not_retrip_it()
+    {
+        PlayerbotOptions options = Options("tiny.gguf", o =>
+        {
+            o.CircuitBreakerOverruns = 2;
+            o.CircuitBreakerSeconds = 60;
+        });
+        var time = new ManualTime();
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == CircuitOpen);
+        using var client = new InProcessBotChatClient(new FakeBotChatClient(), options, Path.GetTempPath(), new ListLogger(), time);
+        var overran = typeof(InProcessBotChatClient).GetMethod("Overran", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        var until = typeof(InProcessBotChatClient).GetField("_circuitOpenUntil", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+        // Two overruns trip the circuit; the third finishes afterwards (a request admitted before the trip, MaxConcurrent >= 2).
+        overran.Invoke(client, [options.Chat.InProcess]);
+        overran.Invoke(client, [options.Chat.InProcess]);
+        object openUntil = until.GetValue(client)!;
+        time.Advance(TimeSpan.FromSeconds(10));
+        overran.Invoke(client, [options.Chat.InProcess]);
+
+        InProcessChatStats stats = client.Stats();
+        Assert.Equal(3, stats.Overruns);
+        Assert.Equal(1, stats.CircuitOpens);
+        Assert.Equal(openUntil, until.GetValue(client));
+        Assert.Equal(1, capture.Count(CircuitOpen));
+
+        // Half-open is unchanged: after the rest one more overrun reopens it.
+        time.Advance(TimeSpan.FromSeconds(61));
+        overran.Invoke(client, [options.Chat.InProcess]);
+        Assert.Equal(2, client.Stats().CircuitOpens);
+    }
+
+    [Fact]
     public async Task An_open_circuit_leaves_the_reply_to_the_templates()
     {
         TinyModel tiny = TinyModel.Create("qwen2", 8, 2, 1, 16, context: 2048);

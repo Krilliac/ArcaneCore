@@ -185,6 +185,9 @@ internal sealed class InProcessBotChatClient : IBotChatClient, IDisposable
         int seconds = options.CircuitBreakerSeconds;
         lock (_gate)
         {
+            // A reply already in flight when the circuit opened is counted above but neither re-trips nor re-reports it:
+            // the open circuit already answers for it, and the half-open counter (N-1) must survive the rest.
+            if (_circuitOpenUntil > _time.GetUtcNow()) return;
             if (++_consecutiveOverruns >= options.CircuitBreakerOverruns)
             {
                 _circuitOpenUntil = _time.GetUtcNow() + TimeSpan.FromSeconds(seconds);
