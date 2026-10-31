@@ -16,9 +16,12 @@
 # additionally prefixes a target named Data.slnf (e.g. a flock), GATE_CONFIGURATION (default Release), GATE_MAIN_SERIAL=1 runs
 # the main stage's targets one after another.
 # Time budgets (0 turns a knob off; GATE_TIME_BUDGETS=off turns all of them off for slow hardware and keeps the timings as info):
-#   GATE_SUITE_BUDGET_MIN (default 20)  HARD STOP: a main-stage target still running after this many minutes is aborted by VSTest
-#       (RunConfiguration.TestSessionTimeout: kills the testhost, still writes the .trx of what finished) and FAILS the gate naming
-#       the target, the budget and the tests still running. Applies with --filter too.
+#   GATE_SUITE_BUDGET_MIN (default 20)  HARD STOP, per test assembly (each project of a target is its own VSTest session, so each
+#       gets the full budget): an assembly still running after this many minutes is aborted by VSTest (RunConfiguration.
+#       TestSessionTimeout: kills the testhost, still writes the .trx of what finished) and the gate FAILS naming the target, the
+#       budget and the tests still running; that target's counts are marked partial. Applies with --filter too. The wall-clock check
+#       of a target (without --filter) times only the dotnet part, not the wait in GATE_WRAP/GATE_WRAP_DATA (e.g. a flock).
+# Numeric knobs must be whole numbers (else exit 2); GATE_TIME_BUDGETS is on or off. Two targets with the same name are exit 2.
 #   GATE_CLASS_BUDGET_SEC (default 600) fails a target whose test class's tests add up to more than that (xunit runs a class's tests
 #       one after another, so the slowest class sets the floor of the run time). Not applied with --filter.
 #   GATE_LONG_TEST_SEC (default 60) a test running longer is reported by xunit as "[Long Running Test]" and named in the summary.
@@ -36,7 +39,7 @@ while [ $# -gt 0 ]; do
     --filter) filter=${2:-}; shift 2 ;;
     --commit) commit=${2:-}; shift 2 ;;
     --selftest) selftest=1; shift ;;
-    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,29p' "$0"; exit 0 ;;
     --*) echo "test-stages: unknown option $1" >&2; exit 2 ;;
     *) targets+=("$1"); shift ;;
   esac
@@ -53,6 +56,12 @@ suite_budget_min=${GATE_SUITE_BUDGET_MIN:-20}
 class_budget_sec=${GATE_CLASS_BUDGET_SEC:-600}
 long_test_sec=${GATE_LONG_TEST_SEC:-60}
 time_budgets=${GATE_TIME_BUDGETS:-on}
+case "$time_budgets" in on|off) ;; *) echo "test-stages: GATE_TIME_BUDGETS must be on or off, not '$time_budgets'" >&2; exit 2 ;; esac
+minute_sec=${GATE_BUDGET_MINUTE_SEC:-60}   # test hook: the self-test shrinks a budget "minute" so it can run in seconds
+for knob in GATE_BUDGET_MINUTE_SEC=$minute_sec GATE_SUITE_BUDGET_MIN=$suite_budget_min GATE_CLASS_BUDGET_SEC=$class_budget_sec GATE_LONG_TEST_SEC=$long_test_sec; do
+  [[ "${knob#*=}" =~ ^(0|[1-9][0-9]*)$ ]] || { echo "test-stages: ${knob%%=*} must be a whole number, not '${knob#*=}'" >&2; exit 2; }
+done
+[ "$long_test_sec" -gt 0 ] && [ "$minute_sec" -gt 0 ] || { echo "test-stages: GATE_LONG_TEST_SEC and GATE_BUDGET_MINUTE_SEC must be at least 1" >&2; exit 2; }
 if [ "$time_budgets" = off ]; then suite_budget_min=0 class_budget_sec=0; fi
 read -r -a wrap <<< "${GATE_WRAP:-}"
 read -r -a wrap_data <<< "${GATE_WRAP_DATA:-}"
@@ -79,7 +88,11 @@ run_test() {
     [ "$tmo" -gt 0 ] && cmd+=("RunConfiguration.TestSessionTimeout=$tmo")
   fi
   # stdin from /dev/null: the rerun loop below reads failed-test names from its stdin, and a child that read it would swallow them.
-  "${cmd[@]}" > "$log" 2>&1 < /dev/null
+  # The marker holds the epoch second at which dotnet itself starts (after any GATE_WRAP / GATE_WRAP_DATA prefix has let it through,
+  # e.g. a flock wait), so a run's time is the dotnet part only. bash -c is the innermost command of the wrapped line.
+  local n=${#pre[@]} full=()
+  full=("${cmd[@]:0:n}" bash -c 'date +%s > "$0"; exec "$@"' "$log.start" "${cmd[@]:n}")
+  "${full[@]}" > "$log" 2>&1 < /dev/null
 }
 
 # counts <log> -> "passed failed skipped" summed over every test run block in the log.
@@ -125,13 +138,21 @@ still_running() {
 }
 
 # main_run <target> <label> <filter> <session timeout ms>: one main-stage target; writes <logs>/main-<label>.{log,rc,secs}.
+# Nothing of an earlier run in the same folders may be read as this one's: its rc, time and trx files are removed first, so a job that
+# dies before writing its rc reads as rc 255 (failed), never as a leftover 0.
 main_run() {
-  local st=$SECONDS rc
+  local rc st
+  rm -f "$logs/main-$2.rc" "$logs/main-$2.secs" "$logs/main-$2.log.start"; rm -rf "${results:?}/$2"
   run_test "$logs/main-$2.log" "$results/$2" "$3" 0 "$1" "$4"; rc=$?
-  echo $rc > "$logs/main-$2.rc"; echo $((SECONDS - st)) > "$logs/main-$2.secs"
+  st=$(cat "$logs/main-$2.log.start" 2>/dev/null || date +%s)
+  echo $(( $(date +%s) - st )) > "$logs/main-$2.secs.tmp"; mv "$logs/main-$2.secs.tmp" "$logs/main-$2.secs"
+  echo $rc > "$logs/main-$2.rc.tmp"; mv "$logs/main-$2.rc.tmp" "$logs/main-$2.rc"
 }
 
 label() { basename "$1" | sed -E 's/\.(slnf|slnx|sln|csproj)$//'; }
+# Each target's logs, trx folder and rc file are named by its label: two with the same label would overwrite each other.
+dups=$(for t in "${targets[@]}"; do label "$t"; done | sort | uniq -d)
+[ -z "$dups" ] || { echo "test-stages: targets share the name(s): $(echo $dups) (their logs and results would collide)" >&2; exit 2; }
 
 a_exec=0 a_pass=0 a_fail=0 a_skip=0 b_exec=0 b_pass=0 b_fail=0 b_skip=0
 selftest_line="not run"
@@ -146,7 +167,7 @@ if [ "$stage" != timing ]; then
   # The targets run at the same time (GATE_MAIN_SERIAL=1 runs them one after another), each with its own .trx folder so two
   # runs that start in the same second cannot overwrite each other's file; the results are then read in target order.
   pids=()
-  hard_ms=$((suite_budget_min * 60000))
+  hard_ms=$((suite_budget_min * minute_sec * 1000))
   for t in "${targets[@]}"; do
     l=$(label "$t")
     if [ "${GATE_MAIN_SERIAL:-0}" = 1 ]; then main_run "$t" "$l" "$flt" "$hard_ms"
@@ -159,22 +180,24 @@ if [ "$stage" != timing ]; then
     secs=$(cat "$logs/main-$l.secs" 2>/dev/null || echo 0)
     read -r p f s < <(counts "$log"); e=$((p + f))
     a_exec=$((a_exec + e)) a_pass=$((a_pass + p)) a_fail=$((a_fail + f)) a_skip=$((a_skip + s))
-    echo "main $t rc=$rc executed $e (passed $p, failed $f), skipped $s"
-    summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s")
     # VSTest's own line when the session timeout fires: "Aborting test run: test run timeout of N milliseconds exceeded."
     timedout=0; grep -q 'test run timeout of [0-9]* milliseconds exceeded' "$log" && timedout=1
+    part=; [ $timedout = 1 ] && part=" (partial: stopped at budget)"
+    echo "main $t rc=$rc executed $e (passed $p, failed $f), skipped $s$part"
+    summary+=("  $t: rc=$rc executed $e passed $p failed $f skipped $s$part")
     over=$timedout
     running=$(still_running "$log")
     if [ $timedout = 1 ]; then
       fail "main $t was stopped at its ${suite_budget_min}m time budget (GATE_SUITE_BUDGET_MIN): still running: ${running:-nothing reported (each under ${long_test_sec}s)}"
-    elif grep -q 'Test Run Aborted' "$log"; then fail "main $t: test run aborted"; fi
+    fi
+    grep -q 'Test Run Aborted' "$log" && fail "main $t: test run aborted"
     if [ $rc -ne 0 ] || [ "$f" -gt 0 ]; then
-      if [ $timedout = 0 ] || [ "$f" -gt 0 ]; then fail "main $t rc=$rc failed=$f"; fi
+      fail "main $t rc=$rc failed=$f"
       failed_names "$log" | sort -u | head -30 | sed 's/^/  Failed /'
     fi
     summary+=("    run time $((secs / 60))m$((secs % 60))s")
     # Budgets that fail the gate: not with --filter (a subset's times say nothing about the suite) and not when switched off.
-    if [ -z "$filter" ] && [ $timedout = 0 ] && [ "$suite_budget_min" -gt 0 ] && [ "$secs" -gt $((suite_budget_min * 60)) ]; then
+    if [ -z "$filter" ] && [ $timedout = 0 ] && [ "$suite_budget_min" -gt 0 ] && [ "$secs" -gt $((suite_budget_min * minute_sec)) ]; then
       fail "main $t took $((secs / 60))m, over its ${suite_budget_min}m budget"; over=1
     fi
     classes=$(class_times "$results/$l")

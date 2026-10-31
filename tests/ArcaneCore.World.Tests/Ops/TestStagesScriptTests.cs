@@ -27,16 +27,16 @@ public sealed class TestStagesScriptTests
         process.StandardInput.Close();
         Task<string> stderr = process.StandardError.ReadToEndAsync();
         string stdout = process.StandardOutput.ReadToEnd();
-        Assert.True(process.WaitForExit(120_000), "the self-test did not finish in 2 minutes:\n" + stdout);
+        Assert.True(process.WaitForExit(300_000), "the self-test did not finish in 5 minutes:\n" + stdout);
 
         Assert.True(process.ExitCode == 0, $"exit {process.ExitCode}\n{stdout}\n{stderr.Result}");
         Assert.Contains("test-stages self-test: all cases behaved", stdout, StringComparison.Ordinal);
-        foreach (string budgetCase in new[] { "hardstop", "hardstop-off", "slowclass", "slowclass-filtered", "concurrent" })
+        foreach (string budgetCase in new[] { "hardstop", "hardstop-off", "slowclass", "slowclass-filtered", "concurrent", "stalerc", "norc", "wrapwait", "dup-targets", "knob-text" })
         {
             Assert.Contains("ok   " + budgetCase + ":", stdout, StringComparison.Ordinal);
         }
 
-        Assert.Equal(23, stdout.Split('\n').Count(l => l.StartsWith("ok   ", StringComparison.Ordinal)));
+        Assert.Equal(32, stdout.Split('\n').Count(l => l.StartsWith("ok   ", StringComparison.Ordinal)));
     }
 }
 

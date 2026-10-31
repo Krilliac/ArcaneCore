@@ -7,6 +7,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 gate=$here/test-stages.sh
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin"
+printf '#!/usr/bin/env bash
+sleep 4
+exec "$@"
+' > "$work/bin/slowwrap"; chmod +x "$work/bin/slowwrap"
 cat > "$work/bin/dotnet" <<'SHIM'
 #!/usr/bin/env bash
 flt=; prev=; trx=; tmo=
@@ -39,6 +43,7 @@ case "$flt" in
           echo "Test Run Aborted."; echo "Total tests: Unknown"; echo "     Passed: 1"; exit 1
         fi
         mktrx Ns.Slow.Sleeper 00:07:00; block 5 0 0 Successful; exit 0 ;;
+      killedjob) block 10 0 0 Successful; kill -9 $PPID; exit 0 ;; # the gate's job for this target dies before it can write its rc
       slowclass) mktrx Ns.Heavy.A 00:06:40 Ns.Heavy.B 00:05:00 Ns.Light.C 00:00:02; block 5 0 0 Successful; exit 0 ;;
       concurrent)
         echo "start $2" >> "$SIM_EVENTS"; sleep 1; echo "end $2" >> "$SIM_EVENTS"
@@ -140,5 +145,31 @@ tag=concurrent-serial; envs="GATE_MAIN_SERIAL=1"
 check concurrent 1 "--stage main" 'Bad.slnf: rc=1 executed 10'
 [ "$(head -2 "$work/events-concurrent-serial.txt" | cut -d' ' -f1 | tr '
 ' ' ')" = "start end " ] || { echo "FAIL concurrent-serial: GATE_MAIN_SERIAL=1 overlapped"; bad=1; }
+# Nothing of an earlier run may be read as this run's: a stale rc=0 (and a stale trx) sit in the folders, the job dies before writing
+# its rc (rc 255 path), and a job that never ran at all has no rc either.
+tag=stalerc; envs=; tgts=tests/ci/X.slnf
+mkdir -p "$work/logs-stalerc"; echo 0 > "$work/logs-stalerc/main-X.rc"; echo 5 > "$work/logs-stalerc/main-X.secs"
+check killedjob 1 "--stage main" 'main tests/ci/X.slnf rc=255'
+tag=norc
+check killedjob 1 "--stage main" 'main tests/ci/X.slnf rc=255'
+tag=stale-trx
+mkdir -p "$work/logs-stale-trx/trx/X"; echo '<UnitTestResult testName="Ns.Old.A" duration="00:20:00" />' > "$work/logs-stale-trx/trx/X/old.trx"
+check pass 0 "" '^GATE RESULT: PASS$' 'Ns.Old'
+# The wall-clock budget times only dotnet: a GATE_WRAP_DATA wait (a flock) longer than the budget does not fail a Data run.
+tag=wrapwait; tgts=tests/ci/Data.slnf; envs="GATE_WRAP_DATA=$work/bin/slowwrap GATE_BUDGET_MINUTE_SEC=1 GATE_SUITE_BUDGET_MIN=2"
+check pass 0 "" '^GATE RESULT: PASS$' 'budget'
+# A stopped target's counts are marked partial, and Test Run Aborted / a non-zero rc are still reported beside the timeout.
+tag=hardstop-partial; tgts=tests/ci/X.slnf; envs=
+check hardstop 1 "" 'skipped 0 \(partial: stopped at budget\)'
+grep -q 'test run aborted' "$work/hardstop-partial.out" && grep -q 'rc=1 failed=0' "$work/hardstop-partial.out" || { echo "FAIL hardstop-partial: aborted / rc not reported beside the timeout"; bad=1; }
+# Usage errors (exit 2): duplicate target names, knobs that are not whole numbers.
+usage() { # <name> <env words> <targets>
+  env $2 PATH="$work/bin:$PATH" bash "$gate" --logs "$work/logs-$1" $3 > "$work/$1.out" 2>&1; local got=$?
+  if [ $got -eq 2 ]; then echo "ok   $1: exit 2"; else echo "FAIL $1: exit $got (want 2)"; sed 's/^/    /' "$work/$1.out"; bad=1; fi
+}
+usage dup-targets "A=1" "a/X.slnf b/X.slnf"
+usage knob-text "GATE_SUITE_BUDGET_MIN=twenty" "tests/ci/X.slnf"
+usage knob-negative "GATE_CLASS_BUDGET_SEC=-5" "tests/ci/X.slnf"
+usage knob-empty-budgets "GATE_TIME_BUDGETS=maybe" "tests/ci/X.slnf"
 [ $bad = 0 ] && echo "test-stages self-test: all cases behaved" || echo "test-stages self-test: FAILED"
 exit $bad
