@@ -604,6 +604,36 @@ public sealed class RefreshCliTests : IDisposable
     }
 
     /// <summary>
+    /// The reference checks count rows and list distinct ids: three graveyard links to one missing zone and two builds of one ship are
+    /// three and two rows, not one each.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_ReferenceChecks_CountRowsNotDistinctIds()
+    {
+        string world = await OldWorldAsync(withShip: false);
+        await using (WorldDbContext db = Open(world))
+        {
+            db.Set<AreaTemplateRow>().Add(new AreaTemplateRow { Entry = 12, MapId = 0, Name = "Elwynn Forest" });
+            await db.SaveChangesAsync();
+        }
+
+        string dump = PathOf("world.sql");
+        File.WriteAllText(dump, Dump + "\n"
+            + "INSERT INTO `game_graveyard_zone` (`id`,`ghost_loc`,`link_kind`,`faction`) VALUES (611,2597,0,67),(612,2597,0,67);\n"
+            + "INSERT INTO `transports` (`entry`,`name`,`period`,`build`) VALUES (176231,'Menethil Harbor and Theramore Isle',329000,5875);\n");
+
+        string dbc = Dbcs();
+        File.Delete(Path.Combine(dbc, "Map.dbc"));
+        File.Delete(Path.Combine(dbc, "AreaTable.dbc"));
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--database", world, "--dbc-dir", dbc);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("check: 3 game_graveyard_zone row(s) name a zone with no area_template row: 2597", output, StringComparison.Ordinal);
+        Assert.Contains("check: 2 transports row(s) name no gameobject_template of type 15: 176231", output, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A world whose map_template and area_template hold only the continents (what import-map-dbc left before) and a DBC directory without
     /// Map.dbc and AreaTable.dbc: the refresh leaves both tables alone and names what the world will skip at start (the portal to map 36,
     /// the graveyard link to zone 2597), the world's own "unknown target map" and "not existing zone id" warnings.
@@ -749,6 +779,30 @@ public sealed class RefreshCliTests : IDisposable
         Assert.Contains("would replace:", output, StringComparison.Ordinal);
         Assert.Contains("  world_safe_locs  5", output, StringComparison.Ordinal);
         Assert.Equal(before, await File.ReadAllBytesAsync(world));
+    }
+
+    /// <summary>
+    /// What the dump alone says (a vmangos spell script step the importer cannot translate, the spell_effect_mod spells nobody reviewed) is
+    /// reported by a dry run as it is by the real refresh, in the console and in the --report file.
+    /// </summary>
+    [Fact]
+    public async Task Refresh_DryRun_ReportsSpellScriptRejectionsAndUnreviewedEffectMods()
+    {
+        string dump = PathOf("readwarn.sql");
+        File.WriteAllText(dump, """
+            INSERT INTO `spell_scripts` (`id`,`delay`,`priority`,`command`,`datalong`,`datalong2`,`datalong3`,`datalong4`,`target_param1`,`target_param2`,`target_type`,`data_flags`,`dataint`,`dataint2`,`dataint3`,`dataint4`,`x`,`y`,`z`,`o`,`condition_id`,`comments`) VALUES
+            (3,0,0,6,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'teleport is not verified');
+            INSERT INTO `spell_effect_mod` (`Id`,`EffectIndex`,`EffectApplyAuraName`) VALUES (23881,1,4);
+            """);
+        string report = PathOf("readwarn.json");
+
+        (int code, string output, string error) = await RunAsync("refresh", dump, "--dry-run", "--report", report);
+
+        Assert.True(code == ExitCodes.Ok, error + output);
+        Assert.Contains("spell_scripts 3 not imported", output, StringComparison.Ordinal);
+        Assert.Contains("spell(s) not reviewed", output, StringComparison.Ordinal);
+        string json = await File.ReadAllTextAsync(report);
+        Assert.Contains("spell_scripts 3 not imported", json, StringComparison.Ordinal);
     }
 
     /// <summary>

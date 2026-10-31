@@ -10,7 +10,9 @@ namespace ArcaneCore.World.Ops.Accounts;
 /// <see cref="Window"/> from one network lock that account for that network only, so a stranger who knows a staff account's name cannot lock the
 /// owner out from another network. A soft ceiling over all networks, <see cref="GlobalSoftLimit"/> failures in the window, adds
 /// <see cref="SoftDelay"/> to each further attempt instead of refusing it. Account names are keyed upper-case and whether the account exists is
-/// never consulted, so the counters are no oracle. Memory is bounded by <c>maxTracked</c> keys (expired ones go first, then the oldest).
+/// never consulted, so the counters are no oracle. Memory is bounded by <c>maxTracked</c> keys: expired ones go first, then the key with the fewest
+/// failures (oldest among equals) that is not yet at its limit, so a flood of invented names evicts other one-off names and never a standing lockout or a
+/// near-limit count; when every key is at its limit a new key is not tracked.
 /// Thread-safe: one lock; every operation is O(failures in the window).
 /// </summary>
 internal sealed class WebLoginLockout(TimeProvider time, int maxTracked = WebLoginLockout.DefaultMaxTracked)
@@ -98,13 +100,22 @@ internal sealed class WebLoginLockout(TimeProvider time, int maxTracked = WebLog
         string key = Key(account);
         lock (_gate)
         {
+            bool networkRoom = true;
+            bool accountRoom = true;
             if (_byNetwork.Count + _byAccount.Count >= _maxTracked)
             {
-                MakeRoom(now);
+                MakeRoom(now, out networkRoom, out accountRoom);
             }
 
-            Enqueue(_byNetwork, (key, network), now);
-            Enqueue(_byAccount, key, now);
+            if (networkRoom || _byNetwork.ContainsKey((key, network)))
+            {
+                Enqueue(_byNetwork, (key, network), now);
+            }
+
+            if (accountRoom || _byAccount.ContainsKey(key))
+            {
+                Enqueue(_byAccount, key, now);
+            }
         }
     }
 
@@ -144,8 +155,12 @@ internal sealed class WebLoginLockout(TimeProvider time, int maxTracked = WebLog
         failures.Enqueue(now);
     }
 
-    /// <summary>Under the gate: drop keys whose failures have all expired; when none had, drop the key with the oldest last failure.</summary>
-    private void MakeRoom(long now)
+    /// <summary>
+    /// Under the gate: drop keys whose failures have all expired; when none had, evict from each table the key with the fewest failures (oldest last
+    /// failure among equals) that is still under its limit. A key at its limit (a lockout, the soft ceiling) is never evicted, so the outputs say
+    /// whether each table has room for a new key.
+    /// </summary>
+    private void MakeRoom(long now, out bool networkRoom, out bool accountRoom)
     {
         List<(string, string)> staleNetwork = [.. _byNetwork.Where(p => Count(p.Value, now) == 0).Select(p => p.Key)];
         foreach ((string, string) key in staleNetwork)
@@ -159,19 +174,42 @@ internal sealed class WebLoginLockout(TimeProvider time, int maxTracked = WebLog
             _byAccount.Remove(key);
         }
 
+        networkRoom = true;
+        accountRoom = true;
         if (_byNetwork.Count + _byAccount.Count < _maxTracked)
         {
             return;
         }
 
-        if (_byNetwork.Count > 0)
+        networkRoom = EvictWeakest(_byNetwork, NetworkLimit);
+        accountRoom = EvictWeakest(_byAccount, GlobalSoftLimit);
+    }
+
+    private static bool EvictWeakest<TKey>(Dictionary<TKey, Queue<long>> table, int limit)
+        where TKey : notnull
+    {
+        bool found = false;
+        TKey weakest = default!;
+        int weakestCount = int.MaxValue;
+        long weakestLast = long.MaxValue;
+        foreach (KeyValuePair<TKey, Queue<long>> pair in table)
         {
-            _byNetwork.Remove(_byNetwork.MinBy(p => p.Value.Last()).Key);
+            int count = pair.Value.Count;
+            if (count >= limit)
+            {
+                continue;
+            }
+
+            long last = pair.Value.Last();
+            if (count < weakestCount || (count == weakestCount && last < weakestLast))
+            {
+                found = true;
+                weakest = pair.Key;
+                weakestCount = count;
+                weakestLast = last;
+            }
         }
 
-        if (_byAccount.Count > 0)
-        {
-            _byAccount.Remove(_byAccount.MinBy(p => p.Value.Last()).Key);
-        }
+        return found && table.Remove(weakest);
     }
 }

@@ -1,9 +1,11 @@
 using ArcaneCore.Game.Locomotion;
+using ArcaneCore.Game.Progression;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Audit;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Progression;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -138,6 +140,27 @@ public sealed class ServerConfigCommandTests
         string diff = await RunAsync(admin, ".server config diff");
         Assert.StartsWith("2 overridden option(s)", diff, StringComparison.Ordinal);
         Assert.Equal("2 option(s) back to their baseline values.", await RunAsync(admin, ".server config reset all"));
+        Assert.Equal("No rate is overridden.", await RunAsync(admin, ".rates overrides"));
+    }
+
+    [Fact]
+    public async Task ConfigReset_OfOneSideOfThePersonalRatePair_ExplainsTheRefusal_AndResetAllStillClearsBoth()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient admin = await host.EnterWorldAsync("ADMIN", "Admin", AccountSecurity.Administrator);
+        await admin.CollectAsync();
+        ProgressionOptions options = host.WorldServices.GetRequiredService<ProgressionFeature>().Progression.Options;
+        await host.OnWorldAsync(() => { options.RateXpPersonalMin = 1; options.RateXpPersonalMax = 10; });
+        await RunAsync(admin, ".server config set Rate.XP.Personal.Max 20");
+        await RunAsync(admin, ".server config set Rate.XP.Personal.Min 15");
+
+        string single = await RunAsync(admin, ".server config reset Rate.XP.Personal.Max");
+        Assert.Contains("would be below Rate.XP.Personal.Min 15", single, StringComparison.Ordinal);
+        Assert.DoesNotContain("is not overridden", single, StringComparison.Ordinal);
+        Assert.Equal((15f, 20f), await host.OnWorldAsync(() => (options.RateXpPersonalMin, options.RateXpPersonalMax)));
+
+        Assert.Equal("2 option(s) back to their baseline values.", await RunAsync(admin, ".server config reset all"));
+        Assert.Equal((1f, 10f), await host.OnWorldAsync(() => (options.RateXpPersonalMin, options.RateXpPersonalMax)));
         Assert.Equal("No rate is overridden.", await RunAsync(admin, ".rates overrides"));
     }
 

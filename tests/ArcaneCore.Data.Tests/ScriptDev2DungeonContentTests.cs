@@ -40,6 +40,32 @@ public sealed class ScriptDev2DungeonContentTests
             importer.RelaySnapshot().Steps.Select(s => s.Id).Order());
     }
 
+    /// <summary>
+    /// ScriptDev2 LoadScriptWaypoints blacklists the (entry, path) of a point 0 and skips all its points; the world-42 script_waypoint table
+    /// already drops such a path, and its creature_movement_template copy (which the escorts fall back to) must not keep it either,
+    /// whichever order the rows arrive in.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ScriptWaypointPathWithAPointZero_IsNotCopiedIntoTheMovementTemplates(bool zeroFirst)
+    {
+        string zero = "(900,0,0,1,1,1,0,0,0,'bad')";
+        string others = "(900,0,1,2,2,2,0,0,0,'dropped'),(900,0,2,3,3,3,0,0,0,'dropped too')";
+        string rows = zeroFirst ? zero + "," + others : others + "," + zero;
+        var importer = new CreatureDumpImporter();
+        importer.Read(new StringReader($"""
+            INSERT INTO `script_waypoint` (`Entry`,`PathId`,`Point`,`PositionX`,`PositionY`,`PositionZ`,`Orientation`,`WaitTime`,`ScriptId`,`Comment`) VALUES
+            {rows},(900,1,1,4,4,4,0,0,0,'other path kept'),(901,0,1,5,5,5,0,0,0,'other entry kept');
+            """));
+
+        Assert.Equal([(900u, 1u), (901u, 0u)],
+            importer.PathSnapshot().Select(p => (p.Entry, p.PathId & ~CreatureContent.ScriptWaypointPathBit)).Order());
+        Assert.DoesNotContain(importer.PathSnapshot(), p => p.Point == 0);
+        Assert.Equal(2, importer.ScriptDevContentCounts().PathPoints);
+        Assert.Equal(2, importer.BuildReport().ScriptWaypointCopies);
+    }
+
     [Fact]
     public void Importer_CarriesTheBlackwingLairGossipOptions_AndNoNeighbouringGossipText()
     {

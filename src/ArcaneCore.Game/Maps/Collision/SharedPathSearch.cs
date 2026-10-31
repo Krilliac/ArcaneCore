@@ -142,6 +142,7 @@ public sealed class NavJob
 {
     private int _status;
     private int _abandoned;
+    private int _started;
 
     private static readonly List<(int X, int Y)> NoMissedTiles = [];
     private readonly List<(int X, int Y)>? _missed;
@@ -212,6 +213,14 @@ public sealed class NavJob
     /// <summary>Owner-side stamp (the owner's clock when it was submitted). Never read by a worker.</summary>
     public long SubmittedAtMs { get; set; }
 
+    /// <summary>
+    /// Owner-side stamp: the owner's clock when it first saw <see cref="IsStarted"/>, or -1 while it has not. Never read by a worker.
+    /// </summary>
+    public long StartedSeenAtMs { get; set; } = -1;
+
+    /// <summary>A worker has taken the job and is running it (set before the search starts; a skipped, abandoned job never starts).</summary>
+    public bool IsStarted => Volatile.Read(ref _started) != 0;
+
     public NavJobStatus Status => (NavJobStatus)Volatile.Read(ref _status);
 
     public bool IsDone => Volatile.Read(ref _status) != (int)NavJobStatus.Pending;
@@ -234,6 +243,8 @@ public sealed class NavJob
     public void Abandon() => Volatile.Write(ref _abandoned, 1);
 
     internal bool IsAbandoned => Volatile.Read(ref _abandoned) != 0;
+
+    internal void MarkStarted() => Volatile.Write(ref _started, 1);
 
     internal void Finish(NavJobStatus status, PathResult? result, PathSearchTotals search, long computeTicks, long queueTicks)
     {
@@ -371,6 +382,7 @@ public sealed class NavJobSystem : IDisposable
             return;
         }
 
+        job.MarkStarted();
         PathSearchTotals before = PathSearchCounters.Current;
         try
         {

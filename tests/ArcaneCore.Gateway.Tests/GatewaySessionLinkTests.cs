@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Cluster.Gateway;
@@ -245,6 +246,36 @@ public sealed class GatewaySessionLinkTests
         Assert.Equal(new byte[] { 1, 2 }, sink.Payloads.Select(p => p[0]).ToArray());
     }
 
+    [Fact]
+    public async Task AnOpenCancelledByShutdown_IsRefusedWithoutRecordingAFault()
+    {
+        const int account = 7123; // a subject no other test reports under
+        using var cts = new CancellationTokenSource(Deadline);
+        var acceptor = new BlockingAcceptor();
+        using AnomalyCapture faults = AnomalyLedger.Shared.Capture(n => n.Key == "cluster/gateway-fault" && n.Subject == "account-" + account);
+        GatewaySessionLinkHost host = StartHost(acceptor);
+        await using var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), host.BoundEndPoint, Secret);
+        await client.ConnectAsync(cts.Token);
+        Task<GatewaySessionOpenReply> open = client.OpenAsync(new GatewaySessionOpenRequest(1, account, "ACCOUNT", 5875, "198.51.100.4:4000"), new RecordingSink(), cts.Token);
+        _ = open.ContinueWith(static t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+        await acceptor.Entered.Task.WaitAsync(cts.Token);
+
+        await host.DisposeAsync(); // cancels the token the in-flight open is awaiting on
+        await acceptor.Cancelled.Task.WaitAsync(cts.Token);
+        // The host's catch runs right after the acceptor rethrows and answers Refused; wait for that outcome (the link may also drop first) instead of sleeping.
+        try
+        {
+            GatewaySessionOpenReply reply = await open.WaitAsync(cts.Token);
+            Assert.False(reply.Accepted);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && ex is not Xunit.Sdk.XunitException)
+        {
+            // The link closed with the host before the refusal arrived: the open still settled, which is all the fault check needs.
+        }
+
+        Assert.Empty(faults.Notices);
+    }
+
     private static GatewaySessionOpenRequest Request(long generation) => new(generation, 7, "ACCOUNT", 5875, "198.51.100.4:4000");
 
     private static ClusterSessionPacket Packet(long generation, int account, long epoch, long sequence, byte marker) =>
@@ -253,7 +284,7 @@ public sealed class GatewaySessionLinkTests
     private static ClusterNodeManifest Manifest(ClusterRole role, string content = "dev") =>
         GatewayLinkManifest.Create(role, role.ToString(), Guid.NewGuid(), 1, content, 1, 1);
 
-    private static GatewaySessionLinkHost StartHost(FakeAcceptor acceptor)
+    private static GatewaySessionLinkHost StartHost(IGatewaySessionAcceptor acceptor)
     {
         var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), acceptor, () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0));
         host.Start();
@@ -314,6 +345,30 @@ public sealed class GatewaySessionLinkTests
             var session = new FakeSession { Output = output, SendOnStart = SendDuringOpen };
             Sessions.Enqueue(session);
             return GatewaySessionAcceptResult.Accepted(session);
+        }
+    }
+
+    /// <summary>An acceptor whose open never finishes on its own: it waits on the token it is given, as a database call does.</summary>
+    private sealed class BlockingAcceptor : IGatewaySessionAcceptor
+    {
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask<GatewaySessionAcceptResult> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken)
+        {
+            Entered.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                Cancelled.TrySetResult();
+                throw;
+            }
+
+            throw new InvalidOperationException("unreachable: the delay only ends by cancellation");
         }
     }
 

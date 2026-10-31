@@ -30,9 +30,9 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
             issues.Add(new ConfigIssue(ConfigSeverity.Error, ClusterSupervisorOptions.SectionName, problem, "see the M15.4 section of docs/CLUSTERING_DESIGN.md"));
         }
 
-        foreach (string warning in options.Warnings())
+        foreach ((string warning, string remediation) in options.WarningsWithRemediation())
         {
-            issues.Add(new ConfigIssue(ConfigSeverity.Warning, $"{ClusterSupervisorOptions.SectionName}:Processes", warning, "keep a world child's DrainTimeoutMs above its stop time (the default is 180000), and keep the total within the host shutdown cap by splitting the children across supervisors"));
+            issues.Add(new ConfigIssue(ConfigSeverity.Warning, $"{ClusterSupervisorOptions.SectionName}:Processes", warning, remediation));
         }
 
         if (options.Enabled && configuration.GetSection(GatewayWorkerOptions.SectionName).GetValue<bool>(nameof(GatewayWorkerOptions.Enabled)))
