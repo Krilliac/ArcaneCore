@@ -51,4 +51,7 @@ public sealed partial class ZulGurubInstance(Map instance) : ScriptedInstance(in
     }
 
     public override uint GetData(uint type) => type < MaxEncounter ? Encounters[type] : 0;
+
+    /// <summary>vmangos instance_zulgurub <c>IsEncounterInProgress</c>: any encounter IN_PROGRESS or SPECIAL.</summary>
+    public override bool IsEncounterInProgress => Encounters.Any(e => e is EncounterState.InProgress or EncounterState.Special);
 }

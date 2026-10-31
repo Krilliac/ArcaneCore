@@ -114,7 +114,7 @@ public abstract partial class InstanceData : IMapUpdater
     {
     }
 
-    /// <summary>vmangos <c>IsEncounterInProgress</c>: used by the map's entry check (not consulted yet).</summary>
+    /// <summary>vmangos <c>IsEncounterInProgress</c>: used by the map's entry check (InstanceManager refuses raid entry with ZoneInCombat while a group member inside is in combat).</summary>
     public virtual bool IsEncounterInProgress => false;
 
     /// <summary>
