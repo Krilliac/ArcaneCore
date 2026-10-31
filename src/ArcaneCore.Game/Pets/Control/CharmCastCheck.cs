@@ -42,8 +42,9 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
             }
 
             // SPELL_EFFECT_SUMMON, SUMMON_PHANTASM, SUMMON_DEMON and SUMMON_PET (Spell.cpp:6124-6141): a caster that charms something
-            // uncharms it first when the spell has SPELL_ATTR_EX_DISMISS_PET_FIRST, else ALREADY_HAVE_CHARM. (The old-pet half,
-            // UnsummonOldPetBeforeNewSummon, is SummonService.UnsummonOldPetBeforeNewSummon, which refuses the summon.)
+            // uncharms it first when the spell has SPELL_ATTR_EX_DISMISS_PET_FIRST, else ALREADY_HAVE_CHARM. The separate ALREADY_HAVE_SUMMON check
+            // (Spell.cpp:6133-6134) is not made here: SummonService.UnsummonOldPetBeforeNewSummon dismisses a player's old pet at effect time
+            // and only refuses a dead pet on Call Pet or a non-player caster.
             if (effect.Effect is SpellEffectName.Summon or SpellEffectName.SummonPhantasm or SpellEffectName.SummonDemon or SpellEffectName.SummonPet
                 && !caster.CharmGuid.IsEmpty)
             {

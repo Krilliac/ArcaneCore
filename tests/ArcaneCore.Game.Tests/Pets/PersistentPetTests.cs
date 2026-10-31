@@ -318,10 +318,10 @@ public sealed class PersistentPetTests
 
     // Pet.cpp:413 (LoadPetFromDB) -> SynchronizeLevelWithOwner (Pet.cpp:2353-2356): a hunter pet saved above its owner loads at the owner's level.
     [Theory]
-    [InlineData(25, 20, 20u, 200u, 50u)]
-    [InlineData(20, 20, 20u, 200u, 50u)]
-    [InlineData(5, 20, 5u, 100u, 10u)]
-    public void CachedRestore_ClampsAHunterPetToTheOwnersLevel(byte savedLevel, byte ownerLevel, uint expectedLevel, uint expectedHealth, uint expectedMana)
+    [InlineData(25, 20, 20u, 200u, 50u, 0u, 12)]
+    [InlineData(20, 20, 20u, 200u, 50u, 500u, 10)]
+    [InlineData(5, 20, 5u, 100u, 10u, 500u, 10)]
+    public void CachedRestore_ClampsAHunterPetToTheOwnersLevel(byte savedLevel, byte ownerLevel, uint expectedLevel, uint expectedHealth, uint expectedMana, uint expectedExperience, int expectedTrainingPoints)
     {
         var content = new PetContent(
             [
@@ -334,10 +334,12 @@ public sealed class PersistentPetTests
         (Player owner, _) = kit.AddPlayer(1);
         owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
         owner.Level = ownerLevel;
-        var snapshot = new PersistentPetSnapshot(1, 88, PetTestKit.PetEntry, savedLevel, 0, 80, 0, 0, 1, [], []);
+        var snapshot = new PersistentPetSnapshot(1, 88, PetTestKit.PetEntry, savedLevel, 500, 80, 0, 0, 1, [], [], LoyaltyLevel: 3, TrainingPoints: 10);
         Creature pet = Assert.IsType<Creature>(kit.Service.RestoreCurrentPet(owner, snapshot));
         Assert.Equal(expectedLevel, (uint)pet.Level);
         Assert.Equal(expectedHealth, pet.MaxHealth);
         Assert.Equal(expectedMana, pet.GetUInt32(UpdateFields.UnitFieldMaxpower1));
+        Assert.Equal(expectedExperience, pet.GetUInt32(UpdateFields.UnitFieldPetexperience));
+        Assert.Equal(expectedTrainingPoints, pet.Summon!.Charm!.TrainingPoints);
     }
 }

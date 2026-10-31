@@ -797,6 +797,13 @@ public sealed partial class SummonService
                 reactCharm.ReactState = (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2);
             }
             PetLoyalty.Restore(creature, snapshot.LoyaltyLevel, snapshot.LoyaltyPoints, snapshot.TrainingPoints);
+            if (loadLevel < snapshot.Level && creature.Summon.Charm is { } clampCharm)
+            {
+                // Pet::GivePetLevel (Pet.cpp:1198-1211), run by the clamp after LoadPetFromDB restored XP (Pet.cpp:286) and TP (Pet.cpp:380):
+                // experience restarts and the pet earns loyalty level minus one training points (as PetLoyalty.GivePetLevel does in the world).
+                creature.SetUInt32(UpdateFields.UnitFieldPetexperience, 0);
+                PetLoyalty.SetTrainingPoints(creature, clampCharm.TrainingPoints + (PetLoyalty.Level(creature) - 1));
+            }
             return new CreatureHome(owner.X, owner.Y, owner.Z, owner.Orientation);
         }, snapshot.PetNumber);
 
