@@ -123,7 +123,7 @@ internal static partial class DbCopyTestSupport
     /// <summary>The row count of every model table of the database (a table that is absent counts -1).</summary>
     public static async Task<Dictionary<string, long>> CountsAsync(string component, DatabaseConnectionOptions connection)
     {
-        await using DbContext db = SchemaProbe.CreateContext(component, connection);
+        await using DbContext db = SchemaProbe.CreateContext(component, Unpooled(connection));
         var counts = new Dictionary<string, long>(StringComparer.Ordinal);
         foreach ((string table, _) in ModelTables(db, SchemaProbe.SchemaOf(component)))
         {
@@ -140,7 +140,7 @@ internal static partial class DbCopyTestSupport
     /// </summary>
     public static async Task<Dictionary<string, string[]>> DumpAsync(string component, DatabaseConnectionOptions connection)
     {
-        await using DbContext db = SchemaProbe.CreateContext(component, connection);
+        await using DbContext db = SchemaProbe.CreateContext(component, Unpooled(connection));
         var result = new Dictionary<string, string[]>(StringComparer.Ordinal);
         await db.Database.OpenConnectionAsync();
         DbConnection raw = db.Database.GetDbConnection();
@@ -310,6 +310,44 @@ internal static partial class DbCopyTestSupport
         return (rest, name => name == "ARCANE_DB_TARGET_CONNECTION" ? value : null);
     }
 
+    /// <summary>
+    /// The same database without connection pooling. A pooled EF context keeps idle sessions that <c>ClearPool</c> cannot reach (a Pomelo or Npgsql data source owns its
+    /// own pool), and the copy's session check would count them as another process. The tool itself always connects unpooled.
+    /// </summary>
+    public static DatabaseConnectionOptions Unpooled(DatabaseConnectionOptions options)
+    {
+        string connectionString = options.Provider switch
+        {
+            DatabaseProvider.MariaDb or DatabaseProvider.MySql => new MySqlConnectionStringBuilder(options.ConnectionString) { Pooling = false }.ConnectionString,
+            DatabaseProvider.PostgreSql => new NpgsqlConnectionStringBuilder(options.ConnectionString) { Pooling = false }.ConnectionString,
+            _ => options.ConnectionString,
+        };
+        return new DatabaseConnectionOptions { Provider = options.Provider, ConnectionString = connectionString };
+    }
+
+    /// <summary>The other sessions on the target's database (id, user, command, state), for a failure message. Never prints a password.</summary>
+    public static async Task<string> DescribeSessionsAsync(DatabaseConnectionOptions target)
+    {
+        if (target.Provider == DatabaseProvider.Sqlite)
+        {
+            return "(SQLite)";
+        }
+
+        await using DbConnection connection = await HoldSessionAsync(target);
+        await using DbCommand command = connection.CreateCommand();
+        command.CommandText = target.Provider == DatabaseProvider.PostgreSql
+            ? "SELECT pid, usename, state, left(query, 60) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            : "SELECT id, user, command, left(coalesce(info, ''), 60) FROM information_schema.processlist WHERE db = DATABASE() AND id <> CONNECTION_ID()";
+        await using DbDataReader reader = await command.ExecuteReaderAsync();
+        var lines = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            lines.Add(string.Join(" | ", Enumerable.Range(0, 4).Select(i => Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture))));
+        }
+
+        return lines.Count == 0 ? "(none)" : string.Join("; ", lines);
+    }
+
     /// <summary>The password of a server connection string (null when it has none).</summary>
     public static string? PasswordOf(DatabaseConnectionOptions options)
     {
@@ -328,7 +366,7 @@ internal static partial class DbCopyTestSupport
     /// <summary>Every value of one column as the driver returns it, written invariantly (a ulong is a negative long on SQLite, a decimal on PostgreSQL, a ulong on MariaDB).</summary>
     public static async Task<string[]> RawColumnAsync(string component, DatabaseConnectionOptions connection, string table, string column)
     {
-        await using DbContext db = SchemaProbe.CreateContext(component, connection);
+        await using DbContext db = SchemaProbe.CreateContext(component, Unpooled(connection));
         await db.Database.OpenConnectionAsync();
         await using DbCommand command = db.Database.GetDbConnection().CreateCommand();
         command.CommandText = $"SELECT {UpgradeTestSupport.Quote(db, column)} FROM {UpgradeTestSupport.Quote(db, table)} WHERE {UpgradeTestSupport.Quote(db, column)} IS NOT NULL";

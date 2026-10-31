@@ -274,7 +274,20 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
 
         Assert.Equal([DbUpgradeExitCodes.Ok, DbUpgradeExitCodes.Refused, DbUpgradeExitCodes.Usage, DbUpgradeExitCodes.Usage], [ok, refused, usage, wrong]);
         Assert.NotEqual(DbUpgradeExitCodes.Ok, down);
-        Assert.All(seen, text => Assert.DoesNotContain(password!, text, StringComparison.Ordinal));
+        // A short or common password (a word that also occurs in "arcane-db copy" or a database name) cannot be searched for on its own: it would match the tool's
+        // ordinary text. It is always searched for where a leak would put it, as a connection-string value, and so is the whole connection string. A long password is also
+        // searched for as a bare substring.
+        string[] needles =
+        [
+            target.ConnectionString, unreachable.ConnectionString,
+            $"Password={password}", $"Pwd={password}", $"Pwd = {password}", $"Password = {password}", $"password={password}", $"pwd={password}",
+            .. password!.Length >= 12 ? new[] { password } : [],
+        ];
+        // Never Assert.DoesNotContain here: its failure text would print the password it found.
+        for (int i = 0; i < seen.Count; i++)
+        {
+            Assert.False(needles.Any(needle => seen[i].Contains(needle, StringComparison.OrdinalIgnoreCase)), $"the output of step {i} contains the target password or its connection string");
+        }
         DbCopyTestSupport.ClearPool(target);
     }
 

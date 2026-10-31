@@ -150,7 +150,7 @@ public sealed class DbCopyTests : IAsyncLifetime
 
         DbCopyTestSupport.ClearPool(target);
         (int again, string output, string error2) = await RunCopyAsync(source, component, target, "--replace");
-        Assert.True(again == DbUpgradeExitCodes.Ok, $"exit {again}\n{output}\n{error2}");
+        Assert.True(again == DbUpgradeExitCodes.Ok, $"exit {again}\n{output}\n{error2}\nsessions on the target: {await DbCopyTestSupport.DescribeSessionsAsync(target)}");
         Dictionary<string, string[]> second = await DbCopyTestSupport.DumpAsync(component, target);
         foreach (string table in first.Keys)
         {
