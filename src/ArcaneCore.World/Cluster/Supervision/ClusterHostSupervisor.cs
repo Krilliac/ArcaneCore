@@ -1144,9 +1144,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
             // The dumping announcement is authenticated like the stop announcement: an unauthenticated one could be forged from logged text to keep
             // a hung child from being drained for the whole dump grace, so a token-less or wrong-token line is ordinary output.
-            if (SupervisorProtocol.TryParseDumping(line, out _, out string dumpingToken) && TokenMatches(dumpingToken))
+            if (SupervisorProtocol.TryParseDumping(line, out int dumpingMaxSeconds, out string dumpingToken) && TokenMatches(dumpingToken))
             {
-                RecordDumping(entry, process);
+                RecordDumping(entry, process, dumpingMaxSeconds);
                 return;
             }
 
@@ -1192,7 +1192,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
     // An authenticated dumping line: the child is writing its own crash dump and is about to end. Give it the dump grace instead of draining and killing it
     // for the silence that follows, which would truncate the dump (and a second capture of ours would only compete with it).
-    private void RecordDumping(ManagedEntry entry, ISupervisedProcess process)
+    // The grace is what the child said it needs (max=, plus a minute of slack) bounded by DumpGraceSeconds, which is the operator's cap:
+    // an authenticated child still cannot buy more than the cap, and a short dump does not hold a wedged child for the whole cap.
+    private void RecordDumping(ManagedEntry entry, ISupervisedProcess process, int announcedMaxSeconds)
     {
         lock (_gate)
         {
@@ -1200,10 +1202,19 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 return; // a line from an incarnation that has been replaced
 
             entry.LastBeatTimestamp = _time.GetTimestamp();
-            entry.DumpingTimestamp ??= entry.LastBeatTimestamp;
+            if (entry.DumpingTimestamp is null)
+            {
+                entry.DumpingTimestamp = entry.LastBeatTimestamp;
+                entry.DumpingGraceSeconds = DumpGraceFor(announcedMaxSeconds, _options.DumpGraceSeconds);
+            }
+
             entry.WakeWatcher();
         }
     }
+
+    /// <summary>The dump grace for an announced <c>max=</c>: <c>min(max + 60, cap)</c>, never below one second.</summary>
+    internal static int DumpGraceFor(int announcedMaxSeconds, int capSeconds)
+        => (int)Math.Max(1L, Math.Min(announcedMaxSeconds + 60L, capSeconds));
 
     private void RecordStopping(ManagedEntry entry, ISupervisedProcess process, SupervisorStopIntent intent)
     {
@@ -1378,7 +1389,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                         silence = _time.GetElapsedTime(entry.LastBeatTimestamp ?? entry.LaunchTimestamp, now);
                         TimeSpan left = TimeSpan.FromSeconds(config.HangTimeoutSeconds) - silence;
                         TimeSpan graceLeft = entry.DumpingTimestamp is { } dumpingSince
-                            ? TimeSpan.FromSeconds(_options.DumpGraceSeconds) - _time.GetElapsedTime(dumpingSince, now)
+                            ? TimeSpan.FromSeconds(entry.DumpingGraceSeconds) - _time.GetElapsedTime(dumpingSince, now)
                             : TimeSpan.Zero;
                         if (graceLeft > TimeSpan.Zero)
                         {
@@ -1968,6 +1979,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public SupervisedExitDisposition? LastDisposition { get; set; }
         public long? LastBeatTimestamp { get; set; }
         public long? DumpingTimestamp { get; set; }
+        public int DumpingGraceSeconds { get; set; }
         public CancellationTokenSource? StopCts { get; set; }
         public Task? MonitorTask { get; set; }
 
@@ -1998,6 +2010,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             LaunchTimestamp = now;
             LastBeatTimestamp = null;
             DumpingTimestamp = null;
+            DumpingGraceSeconds = 0;
             Armed = false;
             GraceWarned = false;
             StopAnnouncedTimestamp = null;

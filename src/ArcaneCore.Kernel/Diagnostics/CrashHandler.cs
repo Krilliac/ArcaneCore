@@ -220,7 +220,7 @@ public sealed class CrashHandler : IDisposable
     /// Write the in-process crash dump (<c>Diagnostics:CrashDump</c>) of a process that is about to end, after the crash report and before the
     /// exit policy runs; used by the hooks here and by the tick watchdog's fatal path. <paramref name="failFast"/> is whether the process ends by
     /// <see cref="Environment.FailFast(string)"/> (the runtime's own dump may then cover it) or by <see cref="Environment.Exit(int)"/>. Returns the
-    /// note for the crash dialog (null when nothing is configured). Never throws; bounded by <c>Diagnostics:CrashDump:TimeoutSeconds</c> per attempt.
+    /// note for the crash dialog (null when nothing is configured). Never throws; bounded by <see cref="CrashDumpService.MaxWaitSeconds"/> (three times <c>Diagnostics:CrashDump:TimeoutSeconds</c>) for the whole Full, Heap, Mini chain, not per attempt.
     /// </summary>
     public string? WriteCrashDump(bool failFast)
     {

@@ -2406,7 +2406,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "How long a child that announced `dumping` (its own crash dump, `Diagnostics:CrashDump`) is exempt from the hang timeout and from a hang capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600). Keep it above three times the child's `Diagnostics:CrashDump:TimeoutSeconds`.",
+      "meaning": "The cap on how long a child that announced `dumping` (its own crash dump, `Diagnostics:CrashDump`) is exempt from the hang timeout and from a hang capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600). The exemption is `min(announced max + 60, this)`: the child's own `max=` from its authenticated line, bounded by this value. Keep it above three times the child's `Diagnostics:CrashDump:TimeoutSeconds` plus a minute, or the cap cuts a long dump short.",
       "allowed": "a whole number, -2147483648 to 2147483647",
       "docs": "docs/reference/configuration.md#clustersupervisor",
       "isCollection": false
