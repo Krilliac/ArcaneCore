@@ -170,7 +170,7 @@ public sealed class RemoteAdminServer : IHostedService
             _tokenPath = path;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Principal.IdentityNotMappedException
-            or PlatformNotSupportedException)
+            or PlatformNotSupportedException or InvalidOperationException)
         {
             _logger.LogWarning(ex, "remote admin: could not write the token file {Path}; @token login is off", path);
         }
