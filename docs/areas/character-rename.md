@@ -55,7 +55,10 @@ name fails the name rules or the name catalog (`CharacterNameRules` with the cre
 `reserved_name` match refuses only Player-level accounts). A failing name is flagged in the store first, so the next `SMSG_CHAR_ENUM`
 carries 0x4000 and `CMSG_CHAR_RENAME` clears it. vmangos kicks the session (CharacterHandler.cpp:485-487); ArcaneCore answers
 `SMSG_CHARACTER_LOGIN_FAILED` (`CHAR_LOGIN_FAILED`, 0x41) and stays on the character screen. If the store read fails, the error is
-logged and the login goes on. Bot logins do not pass through this handler and are unaffected.
+logged and the login goes on. Managed bot logins do pass through this gate: `ManagedPlayerbotFeature` dispatches `CMSG_PLAYER_LOGIN` through
+`DispatchManagedSessionAsync`, which calls this same handler, so each bot login costs one `character_at_login` read (as in vmangos, where
+bots also go through `Player::LoadFromDB`). A bot whose character is flagged or whose name fails the rules is refused with
+`CHAR_LOGIN_FAILED`; it does not enter the world, and the managed start fails with `login-refused`.
 
 ## Known gaps
 
