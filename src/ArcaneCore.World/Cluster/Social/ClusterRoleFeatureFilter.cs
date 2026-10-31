@@ -50,7 +50,7 @@ public sealed class ClusterRoleFeatureFilter
 
     /// <summary>
     /// The lease scope whose holder runs <paramref name="featureType"/> (<see cref="RealmAuthorityScopes.Social"/> for AutoBroadcast,
-    /// <see cref="RealmAuthorityScopes.Economy"/> for the auction house bot), or null for a feature that is not a realm singleton.
+    /// <see cref="RealmAuthorityScopes.Economy"/> for the auction house bot, <see cref="RealmAuthorityScopes.Instances"/> for the instance reset scheduler), or null for a feature that is not a realm singleton.
     /// </summary>
     public static string? LeaseScopeFor(Type featureType)
     {
@@ -60,7 +60,13 @@ public sealed class ClusterRoleFeatureFilter
             return RealmAuthorityScopes.Social;
         }
 
-        return featureType == typeof(AuctionBotFeature) ? RealmAuthorityScopes.Economy : null;
+        if (featureType == typeof(AuctionBotFeature))
+        {
+            return RealmAuthorityScopes.Economy;
+        }
+
+        // InstanceFeature attaches on every map worker; the lease gates only its reset scheduler and save-expiry sweep (InstanceFeature.SchedulerRuns).
+        return featureType == typeof(Instances.InstanceFeature) ? RealmAuthorityScopes.Instances : null;
     }
 
     /// <summary>

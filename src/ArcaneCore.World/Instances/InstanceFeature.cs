@@ -6,6 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Instances;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
@@ -36,7 +37,7 @@ namespace ArcaneCore.World.Instances;
 /// last instance are dropped and a purge of its rows is queued after any later write.</para>
 /// <para>Options come from the <c>World:Instances</c> configuration section (<see cref="InstanceOptions"/>).</para>
 /// </summary>
-public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAreaTriggerListener, IAreaTriggerGate, IAsyncDisposable
+public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers) : IWorldFeature, ICharacterDeleteHook, IAreaTriggerListener, IAreaTriggerGate, IAsyncDisposable, Cluster.Social.IRealmSingletonHalt
 {
     /// <summary>How often the reset schedule runs (vmangos checks it every world update; resets are minute-granular).</summary>
     public const int ScheduleIntervalMs = 5000;
@@ -95,6 +96,58 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     private WorldRuntime? _world;
     private Task? _stopped;
     private readonly Lock _lifecycleLock = new();
+    private Cluster.Social.RealmAuthorityLeaseKeeper? _leaseKeeper;
+    private volatile bool _halted;
+    private long _scheduleRuns;
+
+    /// <summary>Whether <see cref="Halt"/> was called (the instances realm authority lease was lost): the reset scheduler never runs again.</summary>
+    public bool Halted => _halted;
+
+    /// <summary>Reset schedule ticks that were allowed to run so far (tests).</summary>
+    public long ScheduleRuns => Interlocked.Read(ref _scheduleRuns);
+
+    /// <summary>
+    /// Whether this node runs the reset scheduler and the save-expiry sweep (<see cref="InstanceManager.UpdateSchedule"/>): the one node holding the
+    /// <see cref="RealmAuthorityScopes.Instances"/> lease in a cluster, every single-process (combined) world, never after <see cref="Halt"/>.
+    /// Instance ids come from durable id blocks, so the rest of the feature runs on every map worker.
+    /// </summary>
+    public bool SchedulerRuns => !_halted && (_leaseKeeper is null || _leaseKeeper.TokenFor(RealmAuthorityScopes.Instances) is not null);
+
+    /// <summary>Stop the reset scheduler for good (a lost instances realm authority lease). Safe from any thread.</summary>
+    public void Halt()
+    {
+        if (_halted) return;
+        _halted = true;
+        _logger.LogWarning("instance reset scheduler halted: the node no longer holds the instances realm authority lease");
+    }
+
+    /// <summary>One timer tick: queue the reset schedule update on the world thread, unless this node does not own the scheduler. Public for tests.</summary>
+    public void RunScheduleTick()
+    {
+        if (_world is not { } world || _manager is not { } manager || !SchedulerRuns)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _scheduleRuns);
+        world.Post(() =>
+        {
+            if (_halted)
+            {
+                return;
+            }
+
+            try
+            {
+                manager.UpdateSchedule();
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("instance.feature", ex);
+                _logger.LogFault("instance.schedule-update", ex, "instance reset schedule update failed");
+            }
+        });
+    }
 
     /// <summary>The instance manager (world thread only; available after <see cref="Attach"/>).</summary>
     public InstanceManager Instances => _manager ?? throw new InvalidOperationException("the instance feature is not attached");
@@ -146,6 +199,8 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
+        // Resolved here, not in the constructor: the keeper itself takes the halts (this feature among them).
+        _leaseKeeper = services.GetService<Cluster.Social.RealmAuthorityLeaseKeeper>();
         services.GetService<IConfiguration>()?.GetSection(InstanceOptions.SectionName).Bind(Options);
         InstanceStoreSnapshot snapshot = InstanceStoreSnapshot.Empty;
         using (IServiceScope scope = scopes.CreateScope())
@@ -227,18 +282,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
                 }
             }
         });
-        _scheduleTimer = new Timer(_ => world.Post(() =>
-        {
-            try
-            {
-                manager.UpdateSchedule();
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("instance.feature", ex);
-                _logger.LogFault("instance.schedule-update", ex, "instance reset schedule update failed");
-            }
-        }), null, ScheduleIntervalMs, ScheduleIntervalMs);
+        _scheduleTimer = new Timer(_ => RunScheduleTick(), null, ScheduleIntervalMs, ScheduleIntervalMs);
         _logger.LogInformation("instances: {Instances} stored, {Binds} character binds", snapshot.Instances.Count, snapshot.Binds.Count);
     }
 
