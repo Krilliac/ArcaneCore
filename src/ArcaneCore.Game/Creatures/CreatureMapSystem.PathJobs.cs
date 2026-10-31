@@ -11,8 +11,10 @@ namespace ArcaneCore.Game.Creatures;
 /// an out-of-combat follow or formation move; never a flee, confused or flier search) is queued on <see cref="NavJobSystem"/> and answers <see cref="PathOutcome.Deferred"/>,
 /// exactly as a spent per-update budget does: every motion already waits and asks again. When it asks again and the job has finished,
 /// the answer is used if it still fits (the creature has not moved off the job's start, the same destination and options; a wander leg
-/// takes its finished leg whatever new point it drew, since the point is random anyway). Anything that no longer fits is dropped and
-/// asked again. The search itself is the same <see cref="ISharedPathSearch"/> query over the same loaded tiles, so the answer is the one
+/// takes its finished leg whatever new point it drew, since the point is random anyway). A follower, formation member or chaser that has
+/// only run on along its own spline since it asked still fits: the answer is re-anchored at where the creature now is
+/// (<see cref="TryReanchorAtCreature"/>), so a creature moving behind a moving target re-aims mid-spline instead of running its spline
+/// out first. Anything that no longer fits is dropped and asked again. The search itself is the same <see cref="ISharedPathSearch"/> query over the same loaded tiles, so the answer is the one
 /// the synchronous search would have given; only its timing moves off the map's thread. A full pool or a full per-map in-flight cap
 /// falls back to the synchronous, budgeted search.
 /// </summary>
@@ -33,6 +35,35 @@ public sealed partial class CreatureMapSystem
     /// <summary>How far (yd) a re-asked follow, formation or chase point may lie from the job's for the job's path to still apply.</summary>
     internal const float PathJobFollowTolerance = 1f;
 
+    /// <summary>
+    /// How far (yd) a follower, formation member or chaser may have run along its own spline from a job's start for the job's path to
+    /// still apply, re-anchored at the creature (<see cref="TryReanchorAtCreature"/>). At run speed (7 yd/s) this is about 570 ms of
+    /// pool lag; a slower answer is dropped and asked again from where the creature then is.
+    /// </summary>
+    internal const float PathJobCarryYards = 4f;
+
+    /// <summary>
+    /// How far (yd, 2D) the navmesh walk from the creature toward the re-anchored path's first corner may stop short of it before the
+    /// re-anchored path is refused (<see cref="TryReanchorAtCreature"/>): the corner lies behind a wall or off the mover's mesh from here.
+    /// </summary>
+    internal const float PathJobReanchorSlackYards = 0.5f;
+
+    /// <summary>
+    /// How far (yd) the mesh surface the walk ends on may lie above or below the re-anchored first corner (<see cref="TryReanchorAtCreature"/>):
+    /// farther, the walk reached the corner's column on another layer (the floor under a bridge the corner is on), and the leg is refused.
+    /// </summary>
+    internal const float PathJobReanchorStepYards = 2f;
+
+    /// <summary>The most already-passed leading corners a re-anchored path drops (<see cref="TryReanchorAtCreature"/>).</summary>
+    internal const int PathJobReanchorMaxSkips = 4;
+
+    /// <summary>
+    /// A job a worker has been running this long (ms), counted from when the map first saw it started (<see cref="NavJob.IsStarted"/>),
+    /// is dropped and asked again when its creature asks for it, so a search stuck in a worker cannot hold a creature forever. Time in
+    /// the queue does not count: on a busy pool a queued job keeps its place (<see cref="PathJobUnclaimedMs"/> is the finished-job sweep).
+    /// </summary>
+    internal const long PathJobPendingTimeoutMs = 5_000;
+
     /// <summary>A finished job nobody asked for within this long (ms) is dropped by the sweep.</summary>
     internal const long PathJobUnclaimedMs = 10_000;
 
@@ -50,7 +81,11 @@ public sealed partial class CreatureMapSystem
     /// <summary>How often (ms) the sweep runs and recounts the jobs still queued or running.</summary>
     internal const long PathJobSweepMs = 250;
 
-    private sealed record PathJobKey(PathOptions Options, bool ToSpawn, bool AnyDestination);
+    /// <summary>
+    /// What a job was asked with. <c>Spline</c> is the spline a follower, formation member or chaser was running when it asked (null
+    /// otherwise, or when it stood): only travel along that spline carries the job's start (<see cref="RanOnAlongItsSpline"/>).
+    /// </summary>
+    private sealed record PathJobKey(PathOptions Options, bool ToSpawn, bool AnyDestination, CreatureSpline? Spline = null);
 
     /// <summary>
     /// The pool this map's eligible searches go to, or null (synchronous searches only): the process pool when
@@ -159,13 +194,30 @@ public sealed partial class CreatureMapSystem
 
         var start = new Vector3(creature.X, creature.Y, creature.Z);
         bool anyDestination = !toSpawn && IsWanderLeg(creature);
-        float destinationTolerance = (follow || formation || chasing) ? PathJobFollowTolerance : PathJobDestinationTolerance;
+        bool tracking = follow || formation || chasing;
+        // Taking an answer mid-spline is part of PathJobsFollow (follow and formation need it anyway; a chase only with it), so PathJobs
+        // alone keeps a chase's earlier behaviour: an answer whose start the chaser has run past is dropped and asked again.
+        bool mayCarry = tracking && _options.Movement.PathJobsFollow;
+        float destinationTolerance = tracking ? PathJobFollowTolerance : PathJobDestinationTolerance;
         if (_creaturePathJobs.TryGetValue(creature, out NavJob? job))
         {
             var key = (PathJobKey)job.Tag!;
-            bool sameRequest = ReferenceEquals(key.Options, options) && key.ToSpawn == toSpawn && key.AnyDestination == anyDestination
-                && Vector3.DistanceSquared(job.Start, start) <= PathJobStartTolerance * PathJobStartTolerance;
+            bool sameKey = ReferenceEquals(key.Options, options) && key.ToSpawn == toSpawn && key.AnyDestination == anyDestination;
+            bool startFits = Vector3.DistanceSquared(job.Start, start) <= PathJobStartTolerance * PathJobStartTolerance;
+
+            // A follower, formation member or chaser running at ~7 yd/s is 0.7 yd past the job's start one 100 ms update later: past
+            // PathJobStartTolerance, but only along the spline it was running when it asked. That still fits (the answer is re-anchored
+            // at the creature below), and the job is waited for rather than dropped and asked again on every update.
+            bool carried = sameKey && !startFits && mayCarry && RanOnAlongItsSpline(creature, key.Spline, job.Start, start);
+            bool sameRequest = sameKey && (startFits || carried);
             bool done = job.IsDone; // read once: a worker may publish between two reads
+            if (!done && job.StartedSeenAtMs < 0 && job.IsStarted)
+            {
+                job.StartedSeenAtMs = _clockMs;
+            }
+
+            // Only a job a worker is running times out: time in the queue does not count, so a busy pool's queue is never cycled.
+            bool overdue = !done && job.StartedSeenAtMs >= 0 && _clockMs - job.StartedSeenAtMs > PathJobPendingTimeoutMs;
             bool destinationFits = anyDestination
                 || Vector3.DistanceSquared(job.Destination, destination) <= destinationTolerance * destinationTolerance;
 
@@ -174,7 +226,7 @@ public sealed partial class CreatureMapSystem
             // (LaggingAnswerStillCloses). Dropping it would restart the wait every time the target moves another yard, so a pool slower
             // than that would never answer at all.
             bool lagging = sameRequest && !destinationFits && (follow || formation || chasing);
-            if (!done && ((sameRequest && destinationFits) || lagging))
+            if (!done && !overdue && ((sameRequest && destinationFits) || lagging))
             {
                 PathJobWaits++;
                 _lastPlanQueued = true;
@@ -182,8 +234,12 @@ public sealed partial class CreatureMapSystem
                 return true;
             }
 
-            bool fits = sameRequest
-                && (destinationFits || (lagging && job.Status == NavJobStatus.Completed && LaggingAnswerStillCloses(start, job.Result, destination)));
+            // A carried answer without a path is not applied either: no path from a point the creature has already run past says
+            // nothing about where it stands now (on a chase it would feed the unreachable-target evade). It is asked again from here.
+            bool fits = !overdue
+                && sameRequest
+                && (destinationFits || (lagging && job.Status == NavJobStatus.Completed && LaggingAnswerStillCloses(start, job.Result, destination)))
+                && (!carried || job.Status != NavJobStatus.Completed || job.Result is { HasPath: true });
 
             if (fits && job.Status == NavJobStatus.Completed && job.Result is not null && !HasDrapeBudget)
             {
@@ -198,10 +254,15 @@ public sealed partial class CreatureMapSystem
             _creaturePathJobs.Remove(creature);
             if (fits && job.Status == NavJobStatus.Completed && job.Result is { } result)
             {
-                PathJobsApplied++;
-                CountJobSearch(creature, job);
-                plan = FinishPlannedPath(creature, start, job.Destination, toSpawn, options, result);
-                return true;
+                if (!carried || TryReanchorAtCreature(creature, job.Start, start, result, options, out result))
+                {
+                    PathJobsApplied++;
+                    CountJobSearch(creature, job);
+                    plan = FinishPlannedPath(creature, start, job.Destination, toSpawn, options, result);
+                    return true;
+                }
+
+                fits = false; // the re-anchored first leg is blocked from here: asked again from where the creature stands
             }
 
             if (!fits)
@@ -223,7 +284,7 @@ public sealed partial class CreatureMapSystem
 
         var next = new NavJob(shared, Map.MapId, start, destination, options, urgent: !anyDestination)
         {
-            Tag = new PathJobKey(options, toSpawn, anyDestination),
+            Tag = new PathJobKey(options, toSpawn, anyDestination, mayCarry ? creature.Spline : null),
             SubmittedAtMs = _clockMs,
         };
         if (!jobs.TrySubmit(next))
@@ -247,13 +308,121 @@ public sealed partial class CreatureMapSystem
     /// answer without a path is never applied (it would report a stale point unreachable, which on a chase feeds the unreachable-target
     /// evade): it is dropped and asked again. Dropping every lagging answer would starve the follower whenever the pool answers slower
     /// than the target moves 1 yd (an owner running 7 yd/s with answers two 100 ms updates late): every answer would be stale and the
-    /// follower would stand until the target stopped. vmangos TargetedMovementGenerator::Update re-aims a moving chaser or follower
-    /// synchronously, mid-spline, as soon as the target has moved; this code does not yet: a creature already moving keeps its spline
-    /// and its pool answers are dropped (the job start no longer fits), so it re-aims only once that spline ends.
+    /// follower would stand until the target stopped. A creature already moving takes such an answer mid-spline, re-anchored at where
+    /// it now stands (<see cref="TryReanchorAtCreature"/>); <paramref name="start"/> is that position.
     /// </summary>
     private static bool LaggingAnswerStillCloses(Vector3 start, PathResult? result, Vector3 wanted)
         => result is { HasPath: true } path
             && Vector3.DistanceSquared(path.Points[^1], wanted) < Vector3.DistanceSquared(start, wanted);
+
+    /// <summary>
+    /// Whether the creature got from <paramref name="jobStart"/> to <paramref name="here"/> only by running the spline it ran when the job
+    /// was asked (<paramref name="spline"/>): it is still on that spline, or the spline has run out and the creature stands at its end.
+    /// No farther than <see cref="PathJobCarryYards"/>. A creature stopped part-way, put elsewhere (a knockback, a teleport) or sent on
+    /// another spline is not carried: its answer is dropped as before.
+    /// </summary>
+    private bool RanOnAlongItsSpline(Creature creature, CreatureSpline? spline, Vector3 jobStart, Vector3 here)
+    {
+        if (spline is null || Vector3.DistanceSquared(jobStart, here) > PathJobCarryYards * PathJobCarryYards)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(creature.Spline, spline))
+        {
+            return true;
+        }
+
+        return creature.Spline is null && spline.IsFinished(_clockMs)
+            && Vector3.DistanceSquared(new Vector3(spline.EndX, spline.EndY, spline.EndZ), here) <= PathJobStartTolerance * PathJobStartTolerance;
+    }
+
+    /// <summary>
+    /// A path found from <paramref name="jobStart"/>, a point the creature has since run past (<see cref="RanOnAlongItsSpline"/>),
+    /// re-anchored at where it now stands: the job's start is replaced by <paramref name="here"/> and the creature heads for the path's
+    /// first corner still ahead, then on along the path (vmangos TargetedMovementGenerator::Update re-aims a moving chaser or follower
+    /// from its current position, mid-spline). A leading corner the creature has already passed is dropped (at most
+    /// <see cref="PathJobReanchorMaxSkips"/>): one on the stretch of its own spline it ran since the job's start, or one whose next corner
+    /// it can walk to straight from here; otherwise it would turn back to it.
+    /// <para>
+    /// The new first leg was not part of the search, so on a map with navigation it is walked on the navmesh with the job's own options
+    /// (<paramref name="options"/>: the mover's include flags, and no slope exclusion for a follow, formation or chase path, so a creature
+    /// on a ramp is placed on the ramp's polygon). The leg is refused when the creature cannot be placed on the mesh (off it, its tile
+    /// not loaded), when the walk stops more than <see cref="PathJobReanchorSlackYards"/> short of the corner, or when it ends on a surface
+    /// more than <see cref="PathJobReanchorStepYards"/> above or below the corner (another layer). Only a map without a mesh query at all
+    /// (no navigation: its paths are straight lines) takes the leg unchecked. The caller puts the result on the ground and smooths it as
+    /// it does a path searched from here (<see cref="FinishPlannedPath"/>).
+    /// </para>
+    /// </summary>
+    private bool TryReanchorAtCreature(Creature creature, Vector3 jobStart, Vector3 here, PathResult found, PathOptions options, out PathResult reanchored)
+    {
+        reanchored = found;
+        if (_ungatedMotion)
+        {
+            return false; // follow, formation and chase never run outside the gate; refuse rather than read the mesh unguarded
+        }
+
+        IMeshPointQuery? mesh = Map.Collision.MeshPoints;
+        IReadOnlyList<Vector3> points = found.Points;
+        int last = points.Count - 1;
+        int first = 1;
+        bool firstLegWalked = false; // the leg to points[first] was already walked by the skip below
+        for (int skipped = 0; first < last && skipped < PathJobReanchorMaxSkips; skipped++)
+        {
+            Vector3 corner = points[first];
+            bool behind = Vector3.DistanceSquared(corner, here) <= TargetedMovementGenerator.ArrivedEpsilon * TargetedMovementGenerator.ArrivedEpsilon
+                || OnStretchRun(corner, jobStart, here);
+            bool nextWalks = !behind && mesh is not null && LegWalks(mesh, creature, here, points[first + 1], options);
+            if (!behind && !nextWalks)
+            {
+                break;
+            }
+
+            first++;
+            firstLegWalked = nextWalks;
+        }
+
+        if (mesh is not null && !firstLegWalked && !LegWalks(mesh, creature, here, points[first], options))
+        {
+            return false;
+        }
+
+        var spliced = new List<Vector3>(points.Count - first + 1) { here };
+        for (int i = first; i < points.Count; i++)
+        {
+            spliced.Add(points[i]);
+        }
+
+        reanchored = found with { Points = spliced };
+        return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="corner"/> lies on the stretch the creature ran since the job's start (within
+    /// <see cref="PathJobStartTolerance"/> of the segment from <paramref name="jobStart"/> to <paramref name="here"/>; at most
+    /// <see cref="PathJobCarryYards"/> of its own spline, taken as straight).
+    /// </summary>
+    private static bool OnStretchRun(Vector3 corner, Vector3 jobStart, Vector3 here)
+    {
+        Vector3 run = here - jobStart;
+        float length = run.LengthSquared();
+        float t = length > 1e-6f ? Math.Clamp(Vector3.Dot(corner - jobStart, run) / length, 0f, 1f) : 0f;
+        return Vector3.DistanceSquared(jobStart + (run * t), corner) <= PathJobStartTolerance * PathJobStartTolerance;
+    }
+
+    /// <summary>
+    /// Whether the creature can walk straight from <paramref name="from"/> to <paramref name="to"/> on the navmesh with its path's
+    /// <paramref name="options"/> (see <see cref="TryReanchorAtCreature"/>): the start is placed on the mesh, the walk ends within
+    /// <see cref="PathJobReanchorSlackYards"/> of the point (2D) and on a surface within <see cref="PathJobReanchorStepYards"/> of its
+    /// height. The walk's end point is the surface of the polygon it ends on, at the point's column (<c>NavMeshQuery.Raycast</c>).
+    /// </summary>
+    private static bool LegWalks(IMeshPointQuery mesh, Creature creature, Vector3 from, Vector3 to, PathOptions options)
+    {
+        MeshRaycastResult walk = mesh.Raycast(creature.MapId, from, to, options);
+        return walk.Available
+            && Vector2.DistanceSquared(new Vector2(walk.Point.X, walk.Point.Y), new Vector2(to.X, to.Y)) <= PathJobReanchorSlackYards * PathJobReanchorSlackYards
+            && MathF.Abs(walk.Point.Z - to.Z) <= PathJobReanchorStepYards;
+    }
 
     /// <summary>A job's search in this map's counters (not in the per-update budget: it did not run on this thread).</summary>
     private void CountJobSearch(Creature creature, NavJob job)

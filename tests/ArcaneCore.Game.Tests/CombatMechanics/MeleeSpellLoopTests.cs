@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Tests.CombatCore;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -56,6 +57,10 @@ public sealed class MeleeSpellLoopTests
             Kit = new SpellTestKit(Strike(twoDamageEffects, zeroDamage));
             (Caster, CasterSession) = Kit.AddPlayer(1);
             (Target, _) = Kit.AddPlayer(2, 3, 0, race: Race.Orc);
+            // The white swing rolls the melee hit table on MapCombat.Random; the default is the unseeded Random.Shared, so a test
+            // asserting white damage failed whenever the roll came up miss/dodge/parry. A scripted roll past every table range is a
+            // plain hit at minimum weapon damage on every swing.
+            Caster.Map!.Combat.Random = new ScriptedRandom();
             Target.Map!.Combat.TogglePvp(Target, true); // PvP flagged (desired): a valid attack target on every swing (vmangos Player::CanAutoAttackTarget → IsValidAttackTarget, Object.cpp:3797-3814)
             Kit.Spellbook.Teach(Caster, HeroicStrike, CastBolt);
             Caster.SetUInt32(UpdateFields.UnitFieldMaxpower1 + 1, 1000);

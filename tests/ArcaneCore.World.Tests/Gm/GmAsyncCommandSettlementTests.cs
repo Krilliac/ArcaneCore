@@ -13,22 +13,39 @@ namespace ArcaneCore.World.Tests.Gm;
 /// </summary>
 public sealed class GmAsyncCommandSettlementTests
 {
-    private static async Task<(CommandContext Context, bool SettledAtHandlerReturn, ConcurrentQueue<string> Replies)> RunAsync(
+    /// <summary>
+    /// Runs the command as the console and reports whether it settled before a reply existed. That is judged where the order is decided, not by when the handler
+    /// returned: each reply line notes whether the command had already settled when it was written (RA would then have sent <c>#done ok</c> first), and at handler
+    /// return a settled command counts only if no reply had been written yet. A worker that replies and releases its hold before the world thread gets back from the
+    /// handler (a fast store on a loaded box) is the correct order, and must not count as early.
+    /// </summary>
+    private static async Task<(CommandContext Context, bool SettledBeforeItsReply, ConcurrentQueue<string> Replies)> RunAsync(
         WorldTestHost host, WorldSession session, string path, string args)
     {
         var replies = new ConcurrentQueue<string>();
-        (CommandContext context, bool early) = await host.OnWorldAsync(() =>
+        CommandContext? running = null;
+        int settledBeforeAReply = 0;
+        void Output(string line)
+        {
+            if (Volatile.Read(ref running) is { WhenSettled.IsCompleted: true }) Interlocked.Exchange(ref settledBeforeAReply, 1);
+            replies.Enqueue(line);
+        }
+
+        (CommandContext context, bool settledWithoutReply) = await host.OnWorldAsync(() =>
         {
             CommandTable table = ChatCommands.CreateTable();
-            CommandContext ctx = CommandContext.ForConsole(session, table, replies.Enqueue);
+            CommandContext ctx = CommandContext.ForConsole(session, table, Output);
+            Volatile.Write(ref running, ctx);
             ChatCommand command = table.Resolve(path, AccountSecurity.Administrator)!;
             ctx.Bind(command, path); // what CommandTable.Execute does
             Assert.True(command.Handler!(ctx, args));
             ctx.Complete();
-            return (ctx, ctx.WhenSettled.IsCompleted);
+            // Settled first, replies second: a hold is released only after its reply was enqueued, so a correct command that settled already shows its reply here.
+            bool settled = ctx.WhenSettled.IsCompleted;
+            return (ctx, settled && replies.IsEmpty);
         });
         await context.WhenSettled.WaitAsync(TimeSpan.FromSeconds(30));
-        return (context, early, replies);
+        return (context, settledWithoutReply || Volatile.Read(ref settledBeforeAReply) != 0, replies);
     }
 
     [Fact]
