@@ -1,3 +1,4 @@
+using ArcaneCore.World.Ops.Accounts;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -10,6 +11,7 @@ public static class RemoteAdminServiceCollectionExtensions
     public static IServiceCollection AddRemoteAdmin(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<RemoteAdminOptions>(configuration.GetSection(RemoteAdminOptions.SectionName));
+        services.AddSecondFactorChecker();
         services.AddHostedService<RemoteAdminServer>();
         return services;
     }
