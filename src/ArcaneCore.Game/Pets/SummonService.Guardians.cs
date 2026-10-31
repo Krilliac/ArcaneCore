@@ -1,6 +1,8 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Skills;
 using ArcaneCore.Kernel.WorldData.Creatures;
 
 namespace ArcaneCore.Game.Pets;
@@ -70,6 +72,15 @@ public sealed partial class SummonService
                 level = (int)result;
             }
         }
+        else if (caster is Player engineer && context.Cast.CastItem?.Template is { RequiredSkill: SkillIds.Engineering, InventoryType: (uint)InventoryType.Trinket })
+        {
+            // the level of a pet summoned with an engineering trinket scales with the engineering skill (vmangos SpellEffects.cpp:2823-2831)
+            int engineering = engineer.Skills?.GetValue(SkillIds.Engineering) ?? 0;
+            if (engineering != 0)
+            {
+                level = engineering / 5;
+            }
+        }
 
         SpellCastTargets targets = context.Cast.Targets;
         (float centerX, float centerY, float centerZ) = targets.HasDest ? targets.Dest : (caster.X, caster.Y, caster.Z);
@@ -126,6 +137,8 @@ public sealed partial class SummonService
             {
                 AttachPetAi(guardian);
             }
+
+            context.System.NotifySummoned(context, guardian); // vmangos m_spellScript->OnSummon(this, spawnCreature) (SpellEffects.cpp:2911-2912)
         }
     }
 

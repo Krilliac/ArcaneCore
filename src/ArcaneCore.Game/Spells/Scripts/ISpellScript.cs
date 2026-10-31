@@ -12,8 +12,8 @@ namespace ArcaneCore.Game.Spells.Scripts;
 /// other effects have no script hook), and <see cref="OnSuccessfulDispel"/> after a DISPEL effect that removed at least
 /// one aura.
 /// </para>
-/// <see cref="OnSummon"/> follows a creature summon of the spell: only SPELL_EFFECT_SUMMON_WILD raises it here (vmangos also calls it from the
-/// pet, guardian, possessed, totem, critter, demon and game object summons, SpellEffects.cpp:2432-5818, which no script of this code base needs yet).
+/// <see cref="OnSummon"/> follows a creature summon of the spell: SPELL_EFFECT_SUMMON_WILD, SUMMON_GUARDIAN and SUMMON_DEMON raise it here (vmangos also calls it from the
+/// pet, possessed, totem, critter and game object summons, SpellEffects.cpp:2432-5818, which no script of this code base needs yet).
 /// </summary>
 public interface ISpellScript
 {
