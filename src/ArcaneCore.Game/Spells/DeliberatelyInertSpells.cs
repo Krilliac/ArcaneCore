@@ -69,7 +69,7 @@ public static partial class DeliberatelyInertSpells
     private const string CitMindSpells = "vmangos SpellAuras.cpp:7752 and 7820 list rank 1 only in CalculateForDebuffLimit (debuff slots), not as a DUMMY reader";
     private const string WhyTest = "test spell (the name says test)";
 
-    private static readonly InertSpell[] s_all = [.. Build(), .. BuildResearched()];
+    private static readonly InertSpell[] s_all = [.. Build(), .. BuildResearched(), .. BuildNaxxramas(), .. BuildAhnQiraj(), .. BuildBlackrockRaids(), .. BuildDungeons(), .. BuildWorldEvents()];
     private static readonly FrozenDictionary<uint, InertSpell> s_byId = Index(s_all);
 
     /// <summary>Every entry, grouped by reason.</summary>

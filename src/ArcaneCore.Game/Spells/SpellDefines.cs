@@ -250,6 +250,9 @@ public enum SpellImplicitTarget : uint
     /// <summary>TARGET_UNIT_SCRIPT_NEAR_CASTER: the nearest unit spell_script_target lists (vmangos Spell::CheckScriptTargeting).</summary>
     UnitScriptNearCaster = 38,
     UnitFriendChainHeal = 45,
+
+    /// <summary>TARGET_LOCATION_SCRIPT_NEAR_CASTER: the destination is the nearest spell_script_target object (vmangos Spell::CheckScriptTargeting, Spell.cpp:446-600).</summary>
+    LocationScriptNearCaster = 46,
     /// <summary>vmangos TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_DEST_LOC (SpellDefines.h:107).</summary>
     EnumGameObjectsScriptAoeAtDestLoc = 52,
     LocationCasterTargetPosition = 53,
