@@ -46,10 +46,27 @@ public sealed partial class DeployScriptSafetyTests
         // server-status.ps1 closes older consoles for the same World port; without -Supervise the new one is read-only (no crash/hang recovery).
         (int code, string output) = Python(["-c",
             "import importlib.util,sys; s=importlib.util.spec_from_file_location('pc',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
-            + "a=m.status_console_argv('s.ps1','prof',8085,3724); e=m.status_console_env(); print(a[-1]); print(e['ARCANECORE_LIVE_SERVER']); print(m.console_running_script(8085).count('8085'))",
+            + "a=m.status_console_argv('s.ps1','prof',8085,3724); print(a[-1]); print(m.console_running_script(8085).count('8085'))",
             PostChecks]);
         Assert.True(code == 0, output);
-        Assert.Equal(["-Supervise", "1", "2"], output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        Assert.Equal(["-Supervise", "2"], output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    [PythonFact]
+    public void PostChecks_StatusConsole_SetsTheLiveServerVariableBeforePopen_AndPassesNoEnvArgument()
+    {
+        // The child inherits os.environ; an env= argument built from a copy of os.environ is what the subprocess taint rules flag.
+        (int code, string output) = Python(["-c",
+            "import ast,sys; t=ast.parse(open(sys.argv[1],encoding='utf-8').read()); "
+            + "print(not any(isinstance(n, ast.FunctionDef) and n.name=='status_console_env' for n in ast.walk(t))); "
+            + "calls=[n for n in ast.walk(t) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr=='Popen']; "
+            + "sets=[n.lineno for n in ast.walk(t) if isinstance(n, ast.Assign) and any(isinstance(g, ast.Subscript) and ast.unparse(g.value)=='os.environ' "
+            + "and ast.unparse(g.slice)==repr('ARCANECORE_LIVE_SERVER') for g in n.targets) and ast.unparse(n.value)==repr('1')]; "
+            + "print(len(calls)); print(sum(1 for c in calls if any(k.arg=='env' for k in c.keywords))); "
+            + "print(len(sets)); print(all(any(s < c.lineno for s in sets) for c in calls))",
+            PostChecks]);
+        Assert.True(code == 0, output);
+        Assert.Equal(["True", "1", "0", "1", "True"], output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 
     [PythonFact]

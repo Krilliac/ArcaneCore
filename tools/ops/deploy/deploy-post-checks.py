@@ -39,13 +39,6 @@ def status_console_argv(console: str, profile: Path, world_port: int, auth_port:
             "-WorldPort", str(int(world_port)), "-AuthPort", str(int(auth_port)), "-Supervise"]
 
 
-def status_console_env() -> dict[str, str]:
-    """The environment for the status console: this process's, plus ARCANECORE_LIVE_SERVER=1 as deploy-live.py sets it."""
-    env = dict(os.environ)
-    env["ARCANECORE_LIVE_SERVER"] = "1"
-    return env
-
-
 def console_running_script(world_port: int) -> str:
     """PowerShell that prints how many pwsh/powershell processes run server-status.ps1 for the World port (the port defaults to 8085 there)."""
     port = int(world_port)
@@ -151,9 +144,10 @@ def main() -> int:
         if running and running != "0":
             print(f"deploy-post-checks: a status console is already running for World port {world_port}; left in place", file=sys.stderr)
         else:
-            status_env = status_console_env()
+            # The child inherits this process's environment. This script exits right after, so setting the variable here is harmless.
+            os.environ["ARCANECORE_LIVE_SERVER"] = "1"
             subprocess.Popen(status_console_argv(args.status_console, profile, world_port, auth_port),
-                             close_fds=True, env=status_env, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                             close_fds=True, creationflags=subprocess.CREATE_NEW_CONSOLE)
     print(json.dumps(dict(healthy=True, world=world_pid, realm=realm_pid, started_bots=started, enabled_bots=enabled, max_bots=max_bots,
                           missing_log_lines=missing, log_counts=report["world_log_counts"])))
     return 0
