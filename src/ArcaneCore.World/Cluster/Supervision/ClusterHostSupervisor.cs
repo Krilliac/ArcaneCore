@@ -1538,15 +1538,23 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         {
             if (!ReferenceEquals(entry.Process, process) || entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
                 return;
+        }
+
+        // The line goes out before the state is published: whoever sees Faulted (a status poll, a test) can rely on the FATAL text being routed already.
+        _multiplexer.RouteLine(
+            entry.Config,
+            $"FATAL: Process '{entry.Config.Name}' (pid {process.ProcessId}) is still running after a drain request and a kill; not restarting it, and it remains in the owned set.",
+            isStdErr: true);
+
+        lock (_gate)
+        {
+            if (!ReferenceEquals(entry.Process, process) || entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped)
+                return;
 
             entry.State = SupervisedProcessState.Faulted;
             entry.LastDisposition = SupervisedExitDisposition.Fault;
         }
 
-        _multiplexer.RouteLine(
-            entry.Config,
-            $"FATAL: Process '{entry.Config.Name}' (pid {process.ProcessId}) is still running after a drain request and a kill; not restarting it, and it remains in the owned set.",
-            isStdErr: true);
         AnomalyLedger.Shared.Report("cluster", "supervisor-kill-failed", entry.Config.Name, $"pid={process.ProcessId}", AnomalySeverity.Error);
         NotifyIfBelowMinimum();
     }

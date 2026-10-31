@@ -414,14 +414,36 @@ internal static class ManualDelaysExtensions
     /// Releases every pending delay again and again until <paramref name="condition"/> holds. A loop that was between "decided to wait"
     /// and "registered the wait" when one release ran is caught by the next; an extra release only makes a loop re-check its state.
     /// </summary>
-    public static async Task ReleaseUntilAsync(this ManualDelays delays, Func<bool> condition, string what)
+    public static Task ReleaseUntilAsync(this ManualDelays delays, Func<bool> condition, string what)
     {
-        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
-        while (!condition())
+        // A dedicated thread polls, so thread-pool starvation under a loaded gate cannot stall the loop, and the bound is a count of
+        // releases rather than a wall-clock deadline (it only matters when the test is already failing).
+        const int MaxReleases = 100_000;
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        new Thread(() =>
         {
-            Assert.True(DateTime.UtcNow < deadline, "timed out waiting for " + what);
-            delays.ReleaseAll();
-            await Task.Delay(2);
-        }
+            try
+            {
+                for (int i = 0; i < MaxReleases; i++)
+                {
+                    if (condition())
+                    {
+                        done.SetResult();
+                        return;
+                    }
+
+                    delays.ReleaseAll();
+                    Thread.Sleep(2);
+                }
+
+                done.SetException(new Xunit.Sdk.XunitException("gave up waiting for " + what));
+            }
+            catch (Exception ex)
+            {
+                done.SetException(ex);
+            }
+        })
+        { IsBackground = true, Name = "supervision-release-until" }.Start();
+        return done.Task;
     }
 }
