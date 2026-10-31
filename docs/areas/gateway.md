@@ -254,8 +254,8 @@ recovery).
     database-backed `EfRealmAuthorityLeaseStore` (as `IRealmAuthorityLeaseStore`) whenever `Cluster:Node:Role` is not
     Combined. `WorldHost` takes the leases it can get at start and attaches a feature only when the filter admits it, so
     the auction bot and AutoBroadcast run only under a lease the node holds. The Instances lease scope is never taken.
-  - What is still missing is the topology those pieces serve: no separate social or economy process, no cross-process
-    realm services on the link, and no map routing. The staged plan is in the
+  - What is still missing is what those pieces serve: cross-process realm services on the link at the lease holder
+    (S2/S3) and map routing (S4). Decision D3 means there will be no dedicated social or economy process. The staged plan is in the
     [design](../CLUSTERING_DESIGN.md#decisions-and-staged-plan-2026-10-30) (S0-S7).
 - **The M15.4 host supervisor is hosted as an opt-in mode, with gaps.** `Cluster:Supervisor:Enabled` runs `ArcaneCore.World` as the
   supervisor only (see "Running under the host supervisor" above and the

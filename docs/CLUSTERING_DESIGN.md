@@ -357,8 +357,9 @@ Status: hosted as an opt-in mode of `ArcaneCore.World` (`Cluster:Supervisor:Enab
 (see [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond)). No World role other than combined and map worker exists.
 
 A single clustered host runs **3 executables** across **6 to 9 OS processes**:
-`ArcaneCore.Realm`, `ArcaneCore.World` (decided topology: a gateway, whole-map workers, and a lease-holding realm authority on one worker; a World process runs `Combined` or `MapWorker`, and `ClusterNodeOptions.Validate` refuses Social, Economy and Gateway),
+`ArcaneCore.Realm`, `ArcaneCore.World` (a World process runs `Combined` or `MapWorker`; `ClusterNodeOptions.Validate` refuses Social, Economy and Gateway),
 and the host supervisor (`ClusterHostSupervisor` in `src/ArcaneCore.World/Cluster/Supervision/`).
+The decided topology (D2/D3) is the separate `ArcaneCore.Gateway` executable, whole-map workers, and a lease-holding realm authority on one worker.
 Bots remain in-process on the `worker` that owns their map; there is no separate bot-world executable.
 
 - **Default merged console (`Merged`).** By default, the supervisor spawns every child windowless (`CreateNoWindow = true`, redirected `stdout`/`stderr`), writes every line to that child's per-process log file, and multiplexes output into the single supervisor console prefixed with its `[<name>]` role tag (for example `[realm]`, `[gateway:1]`, `[worker:EK]`, `[worker:Kalimdor]`, `[worker:Instances]`).
@@ -396,8 +397,8 @@ validates and applies them on its own tick. Common rules (planned):
   charter's seam rule requires (`ARCANECORE_CHARTER.md:135-139`). The combined
   World executable always runs Local.
 - **Transport.** The M15.1 custom TCP link transport (`GatewayLinkChannel`, HMAC challenge), with the membership/readiness family:
-  versioned registration, a unique service incarnation, mutual authentication
-  scoped to realm and role, deadlines, and bounded in-flight requests on both sides.
+  versioned registration, a unique service incarnation, authentication
+  (today one-way: the gateway proves the shared secret to the worker via the HMAC challenge; mutual authentication scoped to realm and role is planned), deadlines, and bounded in-flight requests on both sides.
   Retry only requests that carry an idempotency key.
 - **Fail closed.** The world never waits on a service inside a tick. When a
   service is down or not ready, its feature pauses: no new intents are applied
@@ -617,7 +618,7 @@ The roadmap owns phase status ([clustering phase status](ROADMAP.md#clustering-p
 | M15.1 — transport/session owner | Versioned contracts, gateway hosting and one separate game worker; retain combined World hosting and a local contract adapter; realm replicas and account-generation claims | Real owned subprocess registration/receive loop/readiness; actual SRP/M2/world cipher; two gateways replace duplicate sessions consistently; one-worker mock lifecycle remains equivalent |
 | M15.2 — realm services/game owner | Routed identity/presence/social authority; one fenced realm auction/mail authority; scoped feature registration; true distinct Map instances and durable instance bindings | Cross-gateway social delivery and logout ordering, concurrent names/group/guild IDs, single auction/mail scheduling and custody ownership, isolated instances, restart recovery and all existing feature tests |
 | M15.3 — transfer/game/data owners | Complete feature state capture/install, durable transfer decisions, fenced residency, deadlines and acknowledgement routing; static multiple-worker map placement | Seamless 5875 TCP connection across workers; quests/timers, inventory, casts/auras/cooldowns and corpse semantics preserved; duplicate/lost/reordered/late messages and crashes at every handoff stage cannot activate two owners |
-| M15.4 — operations/recovery owner | Host daemon/coordinator supervision, distinct readiness/drain, capacity admission, restart reconciliation and placement of new/empty maps; live map relocation only after complete map snapshots | Kill only fixture-owned subprocesses at defined stages; coordinator/worker/gateway/social/storage partitions, cold starts, drains and constrained-host overload recover with bounded resources and measured data loss policy |
+| M15.4 — operations/recovery owner | Host daemon/coordinator supervision, distinct readiness/drain, capacity admission, restart reconciliation and placement of new/empty maps; live map relocation only after complete map snapshots | Kill only fixture-owned subprocesses at defined stages; coordinator/worker/gateway/storage partitions, cold starts, drains and constrained-host overload recover with bounded resources and measured data loss policy |
 | M15.5 — tooling/compatibility owner | Job contracts for existing CLIs/import/codegen/mock, content revision rollout, mixed-version policy, upgrade/rollback runbook and cluster diagnostics | Offline tools retain CLI use; live content replacement is refused or coordinated; Windows/Linux and private cross-host tests; deterministic output artifacts; compatible rollout and safe local-mode rollback |
 | M15.6 — auxiliary services owner | In value order: Warden hosted on the gateway with a realm-wide Warden manifest; the optional Remote bot chat service; the optional Remote bot planner; the optional Remote auction house bot planner with durable intent ids, plus one fenced auction and mail owner per realm. Also the AutoBroadcast placement, cluster metrics labels and the server-mail idempotency fix ([auxiliary services](#auxiliary-services)) | Every Remote service runs as a real owned subprocess and is also tested in Local mode; Local mode stays equivalent to today. Killing a service at each intent stage leaves the custody audit clean, with no lost or duplicated item or copper; a replayed intent returns Duplicate. A down chat service sends nothing to providers and the built-in replies continue. A gateway with Warden enabled and an unusable module is not ready. Stale-epoch plans and verdicts are discarded |
 
