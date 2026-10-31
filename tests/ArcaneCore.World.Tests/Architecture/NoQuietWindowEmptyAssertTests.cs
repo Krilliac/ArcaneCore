@@ -24,7 +24,7 @@ public sealed partial class NoQuietWindowEmptyAssertTests
         var offenders = new List<string>();
         foreach (string file in Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories))
         {
-            string relative = Path.GetRelativePath(root, file).Replace('\', '/');
+            string relative = Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
             if (relative.Contains("/obj/", StringComparison.Ordinal) || relative.Contains("/bin/", StringComparison.Ordinal))
             {
                 continue;
