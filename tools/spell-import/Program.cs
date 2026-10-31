@@ -9,9 +9,11 @@ using Microsoft.Extensions.Hosting;
 // from a 1.12.1 (build 5875) client and replaces the matching world-database tables
 // (docs/areas/spells.md § Loading spell data). The DBCs are game data: extract them from your
 // own client; they are never committed.
+// The shipped appsettings.json sets Database:World:*, which wins over the top-level Database:Provider/ConnectionString
+// (DatabaseOptions.Resolve), so the override must name the World section.
 if (args.Length < 1 || args[0] is "-h" or "--help")
 {
-    Console.Error.WriteLine("usage: arcane-spell-import <path to DBFilesClient> [--Database:ConnectionString=...]");
+    Console.Error.WriteLine("usage: arcane-spell-import <path to DBFilesClient> [--Database:World:Provider=Sqlite --Database:World:ConnectionString=...]");
     return 1;
 }
 
