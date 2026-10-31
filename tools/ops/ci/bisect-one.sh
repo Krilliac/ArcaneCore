@@ -5,6 +5,8 @@ set -u
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ] || [ $# -lt 1 ]; then
   echo "Usage: bisect-one.sh <sha> [filter=FullyQualifiedName~PlayerbotGroupStallTests]"
   echo "  Environment: ARCANECORE_BISECT_WORKTREE (default: current repo), ARCANECORE_DATA_ROOT, TMPDIR."
+  echo "  The target worktree is reset (tracked edits reverted, untracked files removed except bin/obj) and left on a detached HEAD at <sha>."
+  echo "  A worktree with uncommitted changes is refused (exit 97); use a separate worktree for bisecting."
   exit 0
 fi
 sha="$1"
@@ -14,6 +16,10 @@ mkdir -p "$S"
 W="${ARCANECORE_BISECT_WORKTREE:-$(git rev-parse --show-toplevel)}"
 data_root="${ARCANECORE_DATA_ROOT:?ARCANECORE_DATA_ROOT is not set (the directory that holds terrain-5875 and client-dbc-5875)}"
 cd "$W" || exit 99
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  echo "REFUSED: $W has uncommitted changes; bisect-one.sh would discard them. Commit them or point ARCANECORE_BISECT_WORKTREE at a separate worktree."
+  exit 97
+fi
 git checkout -q -- . && git clean -fdq -e bin -e obj 2>/dev/null
 git checkout -q --detach "$sha" || { echo "CHECKOUT FAILED $sha"; exit 98; }
 dll=$(ls -1 tests/ArcaneCore.World.Tests/bin/Release/*/ArcaneCore.World.Tests.dll 2>/dev/null | head -1)

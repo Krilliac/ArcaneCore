@@ -106,7 +106,8 @@ internal sealed class PublicHub
         Interlocked.Decrement(ref _count);
         if (_perIp.AddOrUpdate(ipKey, 0, (_, n) => n - 1) <= 0)
         {
-            _perIp.TryRemove(ipKey, out _);
+            // Remove only while the entry still holds zero: a TryReserve that incremented it in between keeps its count.
+            _perIp.TryRemove(new KeyValuePair<string, int>(ipKey, 0));
         }
     }
 
@@ -307,7 +308,7 @@ internal sealed class PublicHub
             return false;
         }
 
-        if (message is null || !TryParse(message, out JsonObject? root) || root["op"]?.GetValue<string>() != "auth"
+        if (message is null || !TryParse(message, out JsonObject? root) || !(root["op"] is JsonValue opValue && opValue.TryGetValue(out string? op) && op == "auth")
             || !state.Session.CsrfMatches(root["csrf"] is JsonValue v && v.TryGetValue(out string? csrf) ? csrf : null))
         {
             await CloseAsync(state, (WebSocketCloseStatus)4401, "unauthorized").ConfigureAwait(false);

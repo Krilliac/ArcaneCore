@@ -53,10 +53,21 @@ if ($Allowlist) {
     if (-not (Test-Path -LiteralPath $Allowlist)) {
         Set-Content -LiteralPath $Allowlist -Encoding ascii -Value '# SHA-256 of each module dll that may be loaded with .hotmodule (one per line; text after the hash is a label)'
     }
-    if (Select-String -LiteralPath $Allowlist -Pattern $sha -Quiet) {
+    # Read the file the way the server does (ModuleAllowlist.Check): a line counts only when it is not blank, does not start with '#' after
+    # trimming, and its first whitespace-delimited token is the hash. A hash in a comment (a revoked build) or in another line's label is not approved.
+    $listed = $false
+    foreach ($line in (Get-Content -LiteralPath $Allowlist)) {
+        $text = $line.Trim()
+        if ($text.Length -eq 0 -or $text[0] -eq '#') { continue }
+        if (($text -split '[ \t]', 2)[0] -ieq $sha) { $listed = $true; break }
+    }
+    if ($listed) {
         Write-Host "hotmodule-hash: already approved in $Allowlist"
     } else {
         if (-not $Label) { $Label = (Get-Item -LiteralPath $Dll).VersionInfo.FileVersion }
+        # Add-Content writes no line break first: a hand-edited file without a final newline would glue the entry onto its last line.
+        $existing = [System.IO.File]::ReadAllText((Resolve-Path -LiteralPath $Allowlist).ProviderPath)
+        if ($existing.Length -gt 0 -and -not $existing.EndsWith("`n")) { Add-Content -LiteralPath $Allowlist -Encoding ascii -Value '' }
         Add-Content -LiteralPath $Allowlist -Encoding ascii -Value "$sha  $Name $((Get-Date).ToString('yyyy-MM-dd HH:mm:ss')) $Label"
         Write-Host "hotmodule-hash: approved (added to $Allowlist)"
     }

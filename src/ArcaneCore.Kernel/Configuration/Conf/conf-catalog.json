@@ -14912,6 +14912,22 @@
       "isCollection": false
     },
     {
+      "path": "World:MeetingStone:LeaveSoloQueueOnPartyJoin",
+      "section": "World:MeetingStone",
+      "type": "bool",
+      "kind": "scalar",
+      "elementType": "bool",
+      "enumValues": null,
+      "default": "false",
+      "defaultEntries": [],
+      "daemons": "World",
+      "reload": "start",
+      "meaning": "ArcaneCore deviation, off by default (retail): a player queued alone at a meeting stone who joins a party by an ordinary invitation leaves the solo queue (the client is told SETQUEUE LEAVE_QUEUE). vmangos keeps the stale entry (Group.cpp AddMember only updates the LFG state of a party that is itself in the queue), so that player keeps blocking the roles of everyone queued after them until they log out, and is lost from a pair the queue forms. This also applies to the inviter of a new party who had queued alone.",
+      "allowed": "true | false",
+      "docs": "docs/reference/configuration.md#worldmeetingstone",
+      "isCollection": false
+    },
+    {
       "path": "World:PacketHeuristics:Cadence",
       "section": "World:PacketHeuristics",
       "type": "bool",

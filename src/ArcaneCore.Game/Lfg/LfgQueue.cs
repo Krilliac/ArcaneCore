@@ -180,6 +180,33 @@ public sealed class LfgQueue(ILfgGroups groups)
     // --- group hooks --------------------------------------------------------------------------
 
     /// <summary>
+    /// Whether a solo-queued player who joins a party by invitation leaves the solo queue (<see cref="OnMemberJoined(Group, ObjectGuid)"/>).
+    /// Off by default: retail keeps the entry.
+    /// </summary>
+    public bool LeaveSoloQueueOnPartyJoin { get; set; }
+
+    /// <summary>True while the queue itself adds a queued player to a party (<see cref="FillRole"/>): that entry is removed by the queue.</summary>
+    private bool _queueAdding;
+
+    /// <summary>
+    /// A member joined <paramref name="group"/> (<see cref="GroupManager.MemberAdded"/>). One who sat in the solo queue and joined by an ordinary
+    /// invitation is no longer a solo candidate: the entry would block the roles of everyone queued after it (<see cref="FillRole"/> yields to a
+    /// longer waiter that no party can take) and be dropped from a pair the queue forms. The entry leaves with SETQUEUE LEAVE_QUEUE, as a client
+    /// leave does. Only when <see cref="LeaveSoloQueueOnPartyJoin"/> is on: vmangos has no such hook (Group.cpp:418-424 only updates a party
+    /// that is itself in the queue), so the retail behaviour is to keep the entry.
+    /// </summary>
+    public void OnMemberJoined(Group group, ObjectGuid member)
+    {
+        ArgumentNullException.ThrowIfNull(group);
+        if (LeaveSoloQueueOnPartyJoin && !_queueAdding)
+        {
+            RemovePlayer(member, systemLeave: false);
+        }
+
+        OnMemberJoined(group);
+    }
+
+    /// <summary>
     /// Group::AddMember (Group.cpp:418-424) for a member who did not come through the queue: a queued party recounts its roles and size
     /// (LFGQueue::UpdateGroup), and a party that became full leaves the queue complete.
     /// </summary>
@@ -444,7 +471,18 @@ public sealed class LfgQueue(ILfgGroups groups)
         }
 
         queued.PlayerCount++;
-        if (!groups.AddMember(queued.Group, player))
+        bool added;
+        _queueAdding = true;
+        try
+        {
+            added = groups.AddMember(queued.Group, player);
+        }
+        finally
+        {
+            _queueAdding = false;
+        }
+
+        if (!added)
         {
             queued.AvailableRoles = openRoles;
             queued.DpsCount = openDps;
