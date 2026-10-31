@@ -67,6 +67,46 @@ public sealed class ActivateObjectEffectTests
     }
 
     [Fact]
+    public void AGameObjectTargetedCast_RaisesTheCastCreditOncePerObject_WithTheSpellId()
+    {
+        // vmangos Spell::DoAllEffectOnTarget(GOTargetInfo) (Spell.cpp:1845-1851) rewards RewardPlayerAndGroupAtCast(go, spellId).
+        using var rig = new Rig();
+        GameObject go = rig.Spawn(Goober);
+        var hits = new List<(Unit Caster, GameObject Go, uint SpellId)>();
+        rig.Kit.System.SpellHitGameObject += (caster, target, spellId) => hits.Add((caster, target, spellId));
+
+        Assert.Equal(SpellCastResult.CastOk, rig.Cast(6, go));
+
+        (Unit caster, GameObject hit, uint spell) = Assert.Single(hits);
+        Assert.Same(rig.Caster, caster);
+        Assert.Same(go, hit);
+        Assert.Equal(990106u, spell);
+    }
+
+    [Fact]
+    public void AChanneledGameObjectCast_RaisesNoCastCredit_WhileTheChannelRuns()
+    {
+        // Spell.cpp:1845: !IsChannelActive(); the channel's own effects do not credit.
+        const uint channel = 990210;
+        using var rig = new Rig();
+        rig.Kit.System.Store = new SpellStore(
+            [Spell(channel, Effect(SpellEffectName.ActivateObject, 0, SpellImplicitTarget.GameObject, misc: 6)) with
+            {
+                RangeIndex = 4, Range = new SpellRange(0, 30), AttributesEx = SpellAttributesEx.IsChanneled,
+                Duration = new SpellDuration(5000, 0, 5000), StartRecoveryCategory = 0, StartRecoveryTime = 0,
+            }], [], []);
+        GameObject go = rig.Spawn(Goober);
+        var hits = new List<uint>();
+        rig.Kit.System.SpellHitGameObject += (_, _, spellId) => hits.Add(spellId);
+
+        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = go.Guid };
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, channel, targets, triggered: false));
+
+        Assert.Equal(channel, rig.Caster.GetUInt32(UpdateFields.UnitChannelSpell)); // the channel really is running
+        Assert.Empty(hits);
+    }
+
+    [Fact]
     public void ScriptNearCaster_UsesTheNearestListedObject_OrTheExplicitListedObject()
     {
         const uint spell = 990201;
