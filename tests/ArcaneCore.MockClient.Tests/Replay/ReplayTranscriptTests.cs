@@ -55,10 +55,11 @@ public sealed class ReplayTranscriptTests
 
     internal static async Task<string> RecordAsync()
     {
+        var transcript = new ReplayTranscript();
+        // The fixture starts under its own hang bound; the scenario deadline is armed afterwards (TestDeadlines).
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync();
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         CancellationToken ct = deadline.Token;
-        var transcript = new ReplayTranscript();
-        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(ct);
         await server.AddAccountAsync("REPLAY", "PASSWORD", ct);
 
         LogonResult logon = await LogonClient.AuthenticateAsync(server.RealmEndpoint, "REPLAY", "PASSWORD", ct, tap: transcript.Logon);
