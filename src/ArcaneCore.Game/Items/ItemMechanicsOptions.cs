@@ -20,7 +20,7 @@ public sealed class ItemMechanicsOptions
     /// percent chance (0.5 means 0.5 percent) that damage dealt or taken costs a worn item a
     /// durability point (Unit.cpp:1093-1108). Rolled per damage event by MapCombat (MapCombat.Durability.cs):
     /// a player victim that survives loses a point on a uniformly random equipment slot, and a
-    /// player's connecting melee swing wears the weapon of the swinging hand. Zero or less never
+    /// player's connecting melee swing likewise wears one of the 19 equipment slots chosen uniformly. Zero or less never
     /// rolls; <see cref="DurabilityLossEnable"/> false overrides it.
     /// </summary>
     public double DurabilityLossChanceDamage { get; set; } = 0.5;
@@ -42,8 +42,8 @@ public sealed class ItemMechanicsOptions
 
     /// <summary>
     /// mangos <c>DurabilityLossChance.Absorb</c> (mangos-classic World.cpp:460, mangoszero WorldConfig.cpp:233; mangos default 0.5): the percent
-    /// chance that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (the hit-taken
-    /// pool). Default 0 (off), as vmangos has no absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.
+    /// chance that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (drawn from the
+    /// worn armor pieces that have a durability maximum, a shield included and a weapon not). Default 0 (off), as vmangos has no absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.
     /// </summary>
     public double DurabilityLossChanceAbsorb { get; set; }
 
