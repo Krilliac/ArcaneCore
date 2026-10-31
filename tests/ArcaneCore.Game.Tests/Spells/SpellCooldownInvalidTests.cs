@@ -7,8 +7,8 @@ using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
 namespace ArcaneCore.Game.Tests.Spells;
 
 /// <summary>
-/// <c>spell/cooldown-invalid</c> is report-only (hardening wave H1): a cooldown above <see cref="SpellSystem.MaxReasonableCooldownMs"/> is
-/// reported once and then applied exactly as the data says (the base clamped only at zero); a normal cooldown reports nothing.
+/// <c>spell/cooldown-invalid</c> is raised for a cooldown above <see cref="SpellSystem.MaxReasonableCooldownMs"/>: it is
+/// reported once and then applied capped at that threshold; a normal cooldown reports nothing.
 /// </summary>
 public sealed class SpellCooldownInvalidTests : IDisposable
 {
@@ -38,7 +38,7 @@ public sealed class SpellCooldownInvalidTests : IDisposable
         => n.Key == "spell/cooldown-invalid" && n.Subject == SpellSystem.FormatSpellSubject(spell);
 
     [Fact]
-    public void ACooldownOverTheThreshold_IsReportedOnce_AndIsNotCapped()
+    public void ACooldownOverTheThreshold_IsReportedOnce_AndIsCappedAtTheThreshold()
     {
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => ForSpell(n, LongSpell));
         uint castAt = _kit.Now;
@@ -47,11 +47,11 @@ public sealed class SpellCooldownInvalidTests : IDisposable
 
         Assert.Equal(1, capture.Count("spell/cooldown-invalid"));
         uint until = _kit.System.GetState(_player.Guid)!.SpellCooldowns[LongSpell];
-        Assert.Equal(SpellSystem.MaxReasonableCooldownMs + 86_400_000u, until - castAt);
+        Assert.Equal(SpellSystem.MaxReasonableCooldownMs, until - castAt);
     }
 
     [Fact]
-    public void ACategoryCooldownOverTheThreshold_IsReportedOnce_AndIsNotCapped()
+    public void ACategoryCooldownOverTheThreshold_IsReportedOnce_AndIsCappedAtTheThreshold()
     {
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => ForSpell(n, LongCategorySpell));
         uint castAt = _kit.Now;
@@ -60,7 +60,7 @@ public sealed class SpellCooldownInvalidTests : IDisposable
 
         Assert.Equal(1, capture.Count("spell/cooldown-invalid"));
         uint until = _kit.System.GetState(_player.Guid)!.CategoryCooldowns[77];
-        Assert.Equal(SpellSystem.MaxReasonableCooldownMs + 86_400_000u, until - castAt);
+        Assert.Equal(SpellSystem.MaxReasonableCooldownMs, until - castAt);
     }
 
     [Fact]

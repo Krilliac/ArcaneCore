@@ -159,6 +159,15 @@ public sealed partial class SpellSystem
             return SpellCastResult.BadTargets;
         }
 
+        // vmangos Spell::ValidateExplicitTargetMask (Spell.cpp:6710-6716, asked for a client's own cast): a client may not send a destination
+        // the spell cannot use (its Targets and implicit target types allow none), so a self-range trap, totem or summon-object spell cannot
+        // be placed anywhere. Server casts (scripts, GM commands) name their own destinations and do not come through here.
+        if ((targets.Mask & SpellCastTargetFlags.DestLocation) != 0 && !AllowsClientDest(spell))
+        {
+            player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(spellId, SpellCastResult.BadTargets));
+            return SpellCastResult.BadTargets;
+        }
+
         // Casting spells interrupts looting, once the request passed the unknown/not-known/BAD_TARGETS refusals (HandleCastSpellOpcode,
         // vmangos@0e3ff01 SpellHandler.cpp:301-306): a window left open would also make the cast of a gather on the same node fail with CHEST_IN_USE against
         // the caster's own stale window.
@@ -188,8 +197,59 @@ public sealed partial class SpellSystem
         ArgumentNullException.ThrowIfNull(caster);
         ArgumentNullException.ThrowIfNull(targets);
         SpellInfo? spell = Store.Get(spellId);
-        return spell is null ? SpellCastResult.NotFound : Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
+        if (spell is null)
+        {
+            return SpellCastResult.NotFound;
+        }
+
+        if (!triggered)
+        {
+            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
+        }
+
+        // A triggered cast runs its effects on the same stack, so a cyclic TRIGGER_SPELL chain would overflow it (fatal in .NET). Real data has
+        // long acyclic chains (Onyxia's Deep Breath is 19 deep; vmangos has no guard), so cut only a spell already on the triggered-cast stack,
+        // with a high backstop depth for pathological non-repeating custom data. Only a cast made by a spell effect (TRIGGER_SPELL / TRIGGER_MISSILE
+        // pass the triggering spell) is checked for a repeat: PassiveReapply legitimately recasts a passive that is already on the stack and has its own depth bound.
+        if (triggeringSpell is not null && _triggerStack.Contains(spellId))
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "trigger-recursion-cut",
+                FormatSpellSubject(spellId),
+                $"caster={FormatUnitSubject(caster)} triggerDepth={_triggerStack.Count}",
+                AnomalySeverity.Warning);
+            return SpellCastResult.Error;
+        }
+
+        if (_triggerStack.Count >= MaxTriggerDepth)
+        {
+            AnomalyLedger.Shared.Report(
+                "spell",
+                "trigger-depth-backstop-cut",
+                FormatSpellSubject(spellId),
+                $"caster={FormatUnitSubject(caster)} triggerDepth={_triggerStack.Count} maxTriggerDepth={MaxTriggerDepth}",
+                AnomalySeverity.Warning);
+            return SpellCastResult.Error;
+        }
+
+        int depth = _triggerStack.Count;
+        _triggerStack.Add(spellId);
+        try
+        {
+            return Prepare(caster, spell, targets, triggered, triggeringSpell: triggeringSpell);
+        }
+        finally
+        {
+            _triggerStack.RemoveRange(depth, _triggerStack.Count - depth);
+        }
     }
+
+    /// <summary>Backstop on triggered-cast nesting for non-repeating (custom) data; cycles are cut by spell id well before this.</summary>
+    public const int MaxTriggerDepth = 64;
+
+    /// <summary>Spell ids on the current triggered-cast stack (same-thread, nested via effects).</summary>
+    private readonly List<uint> _triggerStack = new();
 
     /// <summary>
     /// A triggered cast made by an aura (vmangos CastSpell with <c>triggeredByAura</c>, which sets Spell::m_triggeredByAuraSpell):
@@ -1650,6 +1710,34 @@ public sealed partial class SpellSystem
 
         return spell.Range.Min > 0 && combatDistance < spell.Range.Min ? SpellCastResult.TooClose : SpellCastResult.CastOk;
     }
+
+    /// <summary>
+    /// Whether the spell can take a client-supplied destination: Spell.dbc Targets names one, or an effect's implicit target type is an area
+    /// at a destination (vmangos GetAllowedTargetMask / GetAllowedTargetMaskForTargetType, SpellMgr.cpp:3449, SpellEntry.h:419).
+    /// </summary>
+    private static bool AllowsClientDest(SpellInfo spell)
+    {
+        if ((spell.Targets & (uint)SpellCastTargetFlags.DestLocation) != 0)
+        {
+            return true;
+        }
+
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.Effect != SpellEffectName.None && (IsDestAreaTarget(effect.TargetA) || IsDestAreaTarget(effect.TargetB)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsDestAreaTarget(SpellImplicitTarget target) => target is
+        SpellImplicitTarget.EnumUnitsScriptAoeAtDestLoc or SpellImplicitTarget.EnumUnitsEnemyAoeAtDestLoc
+        or SpellImplicitTarget.EnumUnitsEnemyAoeAtDynobjLoc or SpellImplicitTarget.EnumUnitsFriendAoeAtDestLoc
+        or SpellImplicitTarget.EnumUnitsPartyAoeAtDestLoc
+        or SpellImplicitTarget.EnumUnitsFriendAoeAtDynobjLoc or SpellImplicitTarget.EnumGameObjectsScriptAoeAtDestLoc;
 
     private static SpellCastResult CheckDestRange(Unit caster, SpellInfo spell, SpellCastTargets targets, bool strict, Rules.ISpellModifiers? modifiers = null)
     {
