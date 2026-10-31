@@ -32,6 +32,7 @@ public sealed class SmartAiGossipTests
         [
             new GossipMenuOption { MenuId = MenuId, Id = 0, OptionId = (byte)GossipOption.Gossip, NpcOptionNpcFlag = (uint)NpcFlags.Gossip, OptionText = "First" },
             new GossipMenuOption { MenuId = MenuId, Id = 1, OptionId = (byte)GossipOption.Gossip, NpcOptionNpcFlag = (uint)NpcFlags.Gossip, OptionText = "Second" },
+            new GossipMenuOption { MenuId = MenuId, Id = 2, OptionId = (byte)GossipOption.Gossip, NpcOptionNpcFlag = (uint)NpcFlags.Gossip, OptionText = "Third", BoxCoded = 1 },
         ],
     };
 
@@ -133,6 +134,35 @@ public sealed class SmartAiGossipTests
         rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 1, null);
 
         Assert.Empty(rig.Smart.Spells.Casts);
+    }
+
+    [Fact]
+    public void GossipSelect_Event62_DoesNotRunForACodedOption()
+    {
+        using var rig = new Rig([CreatureRow(WolfEntry, 0, SmartEvent.GossipSelect, SmartAction.Cast, SmartTarget.ActionInvoker, e1: MenuId, e2: 2, a1: SelectSpell)]);
+
+        rig.Services.GossipHello(rig.Smart.Player, rig.Npc.Guid);
+        rig.Services.GossipSelectOption(rig.Smart.Player, rig.Npc.Guid, 2, "code");
+
+        Assert.Empty(rig.Smart.Spells.Casts);
+    }
+
+    private sealed class OrderProbeAi(Creature creature, Func<bool> menuSent, Action<bool> record) : AggressorAI(creature)
+    {
+        public override void OnGossipHello(Player player) => record(menuSent());
+    }
+
+    [Fact]
+    public void GossipHello_RaisesTheAiHook_AfterTheGossipMenuWasSent()
+    {
+        using var rig = new Rig([]);
+        bool? menuAlreadySent = null;
+        rig.Smart.Wolf.AI = new OrderProbeAi(rig.Smart.Wolf,
+            () => rig.Smart.Session.Sent.Any(p => p.Opcode == WorldOpcode.SmsgGossipMessage), sent => menuAlreadySent = sent);
+
+        rig.Services.GossipHello(rig.Smart.Player, rig.Npc.Guid);
+
+        Assert.True(menuAlreadySent);
     }
 
     private sealed class ThrowingAi(Creature creature) : AggressorAI(creature)

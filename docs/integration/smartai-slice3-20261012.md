@@ -91,8 +91,8 @@ Deviations:
 
 ## Creature gossip (branch `claude/ux-smartai-creature-gossip`, 2026-10-30)
 
-- **Event 64 GOSSIP_HELLO now fires for creatures.** `QuestNpcServices.GossipHello` raises `CreatureAI.OnGossipHello` after the interaction pause and
-  before the menu is prepared; `CreatureSmartAI` forwards it as event 64 with the player as invoker (AzerothCore `SmartAI::sGossipHello`,
+- **Event 64 GOSSIP_HELLO now fires for creatures.** `QuestNpcServices.GossipHello` raises `CreatureAI.OnGossipHello` after the menu has been sent and
+  flushed (AzerothCore HandleGossipHelloOpcode, NPCHandler.cpp, calls `sGossipHello` last; a spirit guide skips it); `CreatureSmartAI` forwards it as event 64 with the player as invoker (AzerothCore `SmartAI::sGossipHello`,
   SmartAI.cpp:1202-1205). The menu is not suppressed, so the gossip packet is unchanged.
 - **Event 62 GOSSIP_SELECT delivered.** `OnGossipSelect` raises `CreatureAI.OnGossipSelect(player, menuId, optionId)` for lines that came from
   `gossip_menu_option` (`GossipMenuItem.MenuId` / `MenuOptionId`, additive init properties); a row runs only when param1 equals the shown menu id and

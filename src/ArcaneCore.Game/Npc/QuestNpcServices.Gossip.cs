@@ -132,7 +132,6 @@ public sealed partial class QuestNpcServices
 
         InteractingCancels?.Invoke(player);
         PauseInteractionMovement(player, npc);
-        RaiseCreatureAiHook(player, npc, "npc.gossip-hello-ai", ai => ai.OnGossipHello(player));
         if ((npc.NpcFlags & NpcFlags.SpiritGuide) != 0)
         {
             player.Session.Send(WorldOpcode.SmsgAreaSpiritHealerTime,
@@ -152,12 +151,27 @@ public sealed partial class QuestNpcServices
             }
 
             Flush(s);
+            RaiseGossipHelloAi(player, npc);
             return;
         }
 
         PrepareGossipMenu(s, npc, npc.GossipMenuId);
         SendPreparedGossip(s, npc);
         Flush(s);
+        RaiseGossipHelloAi(player, npc);
+    }
+
+    /// <summary>
+    /// The creature AI's hello hook runs last, after the menu is sent, as AzerothCore does (HandleGossipHelloOpcode, NPCHandler.cpp: OnGossipHello,
+    /// PrepareGossipMenu, SendPreparedGossip, then unit->AI()->sGossipHello). A spirit guide never reaches it there (the battleground spirit guide
+    /// branch returns first), so a spirit guide skips it here too.
+    /// </summary>
+    private void RaiseGossipHelloAi(Player player, NpcInfo npc)
+    {
+        if ((npc.NpcFlags & NpcFlags.SpiritGuide) == 0)
+        {
+            RaiseCreatureAiHook(player, npc, "npc.gossip-hello-ai", ai => ai.OnGossipHello(player));
+        }
     }
 
     /// <summary>
@@ -383,7 +397,8 @@ public sealed partial class QuestNpcServices
 
         Player p = s.Quests.Player;
         GossipMenuItem item = menu.GossipItems[(int)listId];
-        if (!npc.IsGameObject && item.MenuId is { } shownMenu)
+        // A coded option goes to sGossipSelectCode in AzerothCore, which SmartAI leaves empty, so it never raises event 62.
+        if (!npc.IsGameObject && !item.Coded && item.MenuId is { } shownMenu)
         {
             RaiseCreatureAiHook(p, npc, "npc.gossip-select-ai", ai => ai.OnGossipSelect(p, shownMenu, item.MenuOptionId));
         }

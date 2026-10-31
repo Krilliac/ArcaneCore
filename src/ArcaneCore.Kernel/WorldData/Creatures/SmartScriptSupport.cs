@@ -159,7 +159,7 @@ public static class SmartScriptSupport
             return badAction;
         }
 
-        if (source == SmartScriptSource.GameObject && row.EventType == 64 && row.EventParam1 > 1)
+        if (row.EventType == 64 && row.EventParam1 > 1)
         {
             return row.EventParam1 == 2
                 ? "GOSSIP_HELLO filter 2 (report use only) can never fire: CMSG_GAMEOBJ_REPORT_USE does not exist in 1.12"

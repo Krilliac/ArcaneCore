@@ -134,7 +134,7 @@ public abstract class CreatureAI
 
     /// <summary>
     /// A player opened this creature's gossip (CMSG_GOSSIP_HELLO; AzerothCore CreatureAI::sGossipHello, SmartAI.cpp:1202-1205). Raised by
-    /// <c>QuestNpcServices.GossipHello</c> before the menu is prepared; it never replaces the menu. Nothing by default. A fault is contained
+    /// <c>QuestNpcServices.GossipHello</c> after the menu is sent (AzerothCore HandleGossipHelloOpcode, NPCHandler.cpp, calls it last); it never replaces the menu. Nothing by default. A fault is contained
     /// by the caller (recorded once in the <c>FaultLedger</c>) and the gossip reply still goes out.
     /// </summary>
     public virtual void OnGossipHello(Player player)
