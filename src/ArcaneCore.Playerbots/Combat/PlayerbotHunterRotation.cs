@@ -86,7 +86,7 @@ internal sealed class PlayerbotHunterRotation : PlayerbotClassRotation
             ?? Do(s, ConcussiveShot, v, outside && v.IsMoving && v.TargetsBot)
             ?? Do(s, AimedShot, v, outside)
             ?? Do(s, ArcaneShot, v, outside)
-            ?? Do(s, SerpentSting, v, outside && v.CreatureType is not (4 or 11)) // elementals and mechanicals are immune
+            ?? Do(s, SerpentSting, v, outside && v.CreatureType is not (4 or 9)) // elementals (4) and mechanicals (9) are immune to the poison (no server data carries it); totems are refused by CanCast
             ?? Do(s, MultiShot, v, outside)
             ?? (close is null ? null
                 : Do(s, ScareBeast, close, close.CreatureType == 1)
