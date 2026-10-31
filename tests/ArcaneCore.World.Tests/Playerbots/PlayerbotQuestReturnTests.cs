@@ -498,11 +498,18 @@ public sealed partial class PlayerbotQuestReturnTests
 
         internal async Task AcceptAndCompleteAsync(bool complete = true)
         {
+            // Quest state loads asynchronously: StateOf can be null or not Loaded, and the quest absent from the log, on the first
+            // steps. Keep stepping the goals (one world call per poll) until the state is loaded and the quest is in the log.
+            var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+            await host.WaitForWorldAsync(() =>
+            {
+                session.ManagedBudget = new ManagedActionBudget(1);
+                goals.Update(session.Player!, 500);
+                return Feature.Services.StateOf(session.Player!) is { Loaded: true } state
+                    && state.Quests.Get(QuestInteractionFixture.QuestId) is not null;
+            }, "return fixture quest accepted into the log");
             await host.World.InvokeAsync(() =>
             {
-                var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
-                for (int i = 0; i < 2; i++)
-                { session.ManagedBudget = new ManagedActionBudget(1); goals.Update(session.Player!, 500); }
                 Assert.Equal(QuestStatus.Incomplete, Feature.Services.StateOf(session.Player!)!.Quests.Get(QuestInteractionFixture.QuestId)!.Status);
                 if (complete) Feature.Services.KilledMonsterCredit(session.Player!, 90, ObjectGuid.WithEntry(HighGuid.Unit, 90, 42));
                 return true;
