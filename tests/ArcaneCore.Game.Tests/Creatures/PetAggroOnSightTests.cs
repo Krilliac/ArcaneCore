@@ -38,11 +38,19 @@ public sealed class PetAggroOnSightTests
         public Creature SpawnMob(float x, float y) => System.SpawnTemporary(Template(MobEntry) with { ExtraFlags = 0x02 }, x, y, 83.5f, 0);
     }
 
-    /// <summary>The pet's first swing misses (a table roll of 0 is inside the miss band), every later roll comes from a fixed seed.</summary>
-    private sealed class FirstSwingMisses(int seed) : ICombatRandom
+    /// <summary>
+    /// The first <paramref name="swings"/> swings are table-roll hits that deal no damage, every later roll comes from a fixed seed. The pet
+    /// template has no melee damage, so MapCombat.CalculateDamage rolls NextFloat(0, FallbackMaxDamage = 5) and a roll below 1 dithers to
+    /// 0 (MapCombat.Dither): a landed hit that leaves the mob's health unchanged. Unseeded, that (with miss, dodge and parry) happens on
+    /// a sizable share of swings, which is what made the "the pet never struck" assertion flaky.
+    /// </summary>
+    private sealed class SwingsDealNothing(int seed, int swings) : ICombatRandom
     {
         private readonly SeededCombatDice _rest = new(seed);
-        public bool Spent { get; private set; }
+        private int _rolled;
+
+        /// <summary>True once the scripted swings have all rolled the hit table.</summary>
+        public bool Spent => _rolled >= swings;
 
         public int Next(int minInclusive, int maxInclusive)
         {
@@ -51,11 +59,11 @@ public sealed class PetAggroOnSightTests
                 return _rest.Next(minInclusive, maxInclusive);
             }
 
-            Spent = true;
-            return minInclusive;
+            _rolled++;
+            return minInclusive + ((maxInclusive - minInclusive) / 2); // mid-table: a plain hit
         }
 
-        public float NextFloat(float min, float max) => _rest.NextFloat(min, max);
+        public float NextFloat(float min, float max) => Spent ? _rest.NextFloat(min, max) : min; // the damage roll lands on the minimum
     }
 
     private static Yard Start(ReactState react, int seed = 1, ICombatRandom? dice = null)
@@ -96,7 +104,7 @@ public sealed class PetAggroOnSightTests
         // The attack start's combat flag is not kept until the pet strikes: a player's pet uses the PvP combat timer, and the 1.2 s check
         // clears it while no creature holds the pet on a threat list (vmangos Unit::Update, Unit.cpp:256-287; 90716802). Once it hits, the
         // mob holds it and it stays in combat.
-        Run(y.World, 5000);
+        Run(y.World, 3000);
         Assert.Same(mob, y.Pet.Combat.Victim);
         Assert.True(y.Pet.Combat.IsInCombat);
         Assert.True(mob.Health < mob.MaxHealth, "the pet never struck");
@@ -104,15 +112,15 @@ public sealed class PetAggroOnSightTests
     }
 
     [Fact]
-    public void AnAggressivePetWhoseFirstSwingMisses_StillStrikesWithinOneAttackSpeed()
+    public void AnAggressivePetWhoseFirstSwingDealsNothing_StillStrikesWithinOneAttackSpeed()
     {
-        var dice = new FirstSwingMisses(1);
+        var dice = new SwingsDealNothing(1, swings: 1);
         using Yard y = Start(ReactState.Aggressive, dice: dice);
         Creature mob = y.SpawnMob(12, 0);
         Run(y.World, 1100);
         Assert.Same(mob, y.Pet.Combat.Victim);
 
-        // Chase until the pet's first swing rolls the table (the forced miss); allow the same 3 s the seeded theory uses.
+        // Chase until the pet's first swing rolls the table (the scripted zero-damage hit); allow the same 3 s the seeded theory uses.
         uint waited = 0;
         while (!dice.Spent && waited < 3000)
         {
@@ -122,7 +130,7 @@ public sealed class PetAggroOnSightTests
 
         Assert.True(dice.Spent, "the pet never swung");
         Run(y.World, 100); // the swing resolves on the tick that rolled it
-        Assert.Equal(mob.MaxHealth, mob.Health); // the first swing missed: the forced roll was consumed and no damage landed
+        Assert.Equal(mob.MaxHealth, mob.Health); // the first swing did no damage
 
         // The next swing is one attack speed later (the pet template's base attack time is 2 s).
         uint untilStrike = 0;
@@ -132,7 +140,7 @@ public sealed class PetAggroOnSightTests
             untilStrike += 100;
         }
 
-        Assert.True(mob.Health < mob.MaxHealth, "the pet never struck within one attack speed after its first swing missed");
+        Assert.True(mob.Health < mob.MaxHealth, "the pet never struck within one attack speed after its first swing dealt nothing");
     }
 
     [Theory]
