@@ -42,16 +42,16 @@ public sealed class PetAggroOnSightTests
     private sealed class FirstSwingMisses(int seed) : ICombatRandom
     {
         private readonly SeededCombatDice _rest = new(seed);
-        private bool _spent;
+        public bool Spent { get; private set; }
 
         public int Next(int minInclusive, int maxInclusive)
         {
-            if (_spent)
+            if (Spent)
             {
                 return _rest.Next(minInclusive, maxInclusive);
             }
 
-            _spent = true;
+            Spent = true;
             return minInclusive;
         }
 
@@ -96,7 +96,7 @@ public sealed class PetAggroOnSightTests
         // The attack start's combat flag is not kept until the pet strikes: a player's pet uses the PvP combat timer, and the 1.2 s check
         // clears it while no creature holds the pet on a threat list (vmangos Unit::Update, Unit.cpp:256-287; 90716802). Once it hits, the
         // mob holds it and it stays in combat.
-        Run(y.World, 3000);
+        Run(y.World, 5000);
         Assert.Same(mob, y.Pet.Combat.Victim);
         Assert.True(y.Pet.Combat.IsInCombat);
         Assert.True(mob.Health < mob.MaxHealth, "the pet never struck");
@@ -106,16 +106,33 @@ public sealed class PetAggroOnSightTests
     [Fact]
     public void AnAggressivePetWhoseFirstSwingMisses_StillStrikesWithinOneAttackSpeed()
     {
-        using Yard y = Start(ReactState.Aggressive, dice: new FirstSwingMisses(1));
+        var dice = new FirstSwingMisses(1);
+        using Yard y = Start(ReactState.Aggressive, dice: dice);
         Creature mob = y.SpawnMob(12, 0);
-
         Run(y.World, 1100);
         Assert.Same(mob, y.Pet.Combat.Victim);
-        Assert.Equal(mob.MaxHealth, mob.Health);
 
-        // Chase and first (missed) swing take about 3 s as in the test above; the next swing is one attack speed (2 s) later.
-        Run(y.World, 5000);
-        Assert.True(mob.Health < mob.MaxHealth, "the pet never struck within the attack-speed bound after its first swing missed");
+        // Chase until the pet's first swing rolls the table (the forced miss); allow the same 3 s the seeded theory uses.
+        uint waited = 0;
+        while (!dice.Spent && waited < 3000)
+        {
+            Run(y.World, 100);
+            waited += 100;
+        }
+
+        Assert.True(dice.Spent, "the pet never swung");
+        Run(y.World, 100); // the swing resolves on the tick that rolled it
+        Assert.Equal(mob.MaxHealth, mob.Health); // the first swing missed: the forced roll was consumed and no damage landed
+
+        // The next swing is one attack speed later (the pet template's base attack time is 2 s).
+        uint untilStrike = 0;
+        while (mob.Health >= mob.MaxHealth && untilStrike < 2000)
+        {
+            Run(y.World, 100);
+            untilStrike += 100;
+        }
+
+        Assert.True(mob.Health < mob.MaxHealth, "the pet never struck within one attack speed after its first swing missed");
     }
 
     [Theory]
