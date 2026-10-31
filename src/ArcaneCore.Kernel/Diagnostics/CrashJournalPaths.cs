@@ -32,7 +32,7 @@ public static class CrashJournalPaths
     public static string ReportPathFor(string directory, string processName, DateTime utc)
         => Path.Combine(directory, $"crash-report.{SafeName(processName)}.{utc.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture)}Z.txt");
 
-    private static string SafeName(string processName)
+    internal static string SafeName(string processName)
     {
         char[] invalid = Path.GetInvalidFileNameChars();
         string safe = string.Create(processName.Length, processName, (span, source) =>

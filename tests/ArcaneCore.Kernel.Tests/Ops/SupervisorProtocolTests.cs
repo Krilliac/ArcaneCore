@@ -8,6 +8,33 @@ namespace ArcaneCore.Kernel.Tests.Ops;
 /// <summary>The line formats the cluster host supervisor and its children exchange on stdout and stdin (<see cref="SupervisorProtocol"/>).</summary>
 public sealed class SupervisorProtocolTests
 {
+    [Fact]
+    public void Dumping_WithMaxAndToken_RoundTripsThroughTheHeartbeatLineFormat()
+    {
+        string line = "heartbeat 2026-10-29T10:00:00.000Z pid=1 " + SupervisorProtocol.FormatDumpingState(360, "tok");
+
+        Assert.Equal("heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping max=360 token=tok", line);
+        Assert.True(SupervisorProtocol.TryParseDumping(line, out int max, out string token));
+        Assert.Equal(360, max);
+        Assert.Equal("tok", token);
+        Assert.False(SupervisorProtocol.TryParseHeartbeat(line, out _), "a dumping line is not a plain heartbeat");
+    }
+
+    [Theory]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping max=360")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping token=tok")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping max=x token=tok")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping max=360 token=tok extra")]
+    [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping max=360 token=tok\r")]
+    [InlineData("x heartbeat 2026-10-29T10:00:00.000Z pid=1 dumping max=360 token=tok")]
+    public void Dumping_MalformedOrWithoutAToken_IsRejected(string line)
+        => Assert.False(SupervisorProtocol.TryParseDumping(line, out _, out _));
+
+    [Fact]
+    public void FormatDumpingState_WithoutAToken_WritesNone_AndClampsTheMax()
+        => Assert.Equal("dumping max=1", SupervisorProtocol.FormatDumpingState(0, null));
+
     [Theory]
     [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=4242 ready", SupervisorHeartbeatState.Ready)]
     [InlineData("heartbeat 2026-10-29T10:00:00.000Z pid=4242 alive", SupervisorHeartbeatState.Alive)]

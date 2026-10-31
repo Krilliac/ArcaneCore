@@ -29,6 +29,9 @@ public sealed class CrashHandler : IDisposable
     [ThreadStatic]
     private static bool _reporting;
 
+    [ThreadStatic]
+    private static bool t_dumping;
+
     private readonly UnhandledExceptionEventHandler _onUnhandled;
     private readonly EventHandler<UnobservedTaskExceptionEventArgs> _onUnobserved;
     private readonly EventHandler<FirstChanceExceptionEventArgs> _onFirstChance;
@@ -36,6 +39,11 @@ public sealed class CrashHandler : IDisposable
     private volatile ICrashSink _sink;
     private volatile IReadOnlyList<ICrashContextProvider> _providers;
     private volatile bool _firstChanceHooked;
+    private volatile CrashDumpService _dumpService = new();
+    private readonly object _dumpGate = new();
+    private string? _dumpDoneNote;
+    private bool _dumpDone;
+    private volatile Action<int>? _dumpAnnouncer;
     private bool _disposed;
 
     private CrashHandler(DiagnosticsOptions options, ICrashSink sink, IReadOnlyList<ICrashContextProvider> providers)
@@ -65,6 +73,23 @@ public sealed class CrashHandler : IDisposable
 
     /// <summary>Where reports go (standard error until the host starts, then the logger).</summary>
     public ICrashSink Sink => _sink;
+
+    /// <summary>The in-process crash dump writer (<c>Diagnostics:CrashDump</c>); tests replace it so no real dump is written.</summary>
+    public CrashDumpService DumpService
+    {
+        get => _dumpService;
+        set => _dumpService = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    /// <summary>
+    /// Told, with the most seconds the dump may take, just before the in-process dump starts. The heartbeat writer sets it to publish the
+    /// <c>dumping</c> state, so a supervisor that kills a process for a stale heartbeat waits for the dump instead of truncating it.
+    /// </summary>
+    public Action<int>? DumpAnnouncer
+    {
+        get => _dumpAnnouncer;
+        set => _dumpAnnouncer = value;
+    }
 
     /// <summary>Whether the first-chance hook is attached (Debug Kernel build with the option on).</summary>
     public bool FirstChanceHooked => _firstChanceHooked;
@@ -154,10 +179,11 @@ public sealed class CrashHandler : IDisposable
     {
         var exception = e.ExceptionObject as Exception;
         DiagnosticsOptions options = _options;
-        string? report = Report(CrashKind.Unhandled, exception, LogLevel.Critical, terminating: true);
-        string? faultId = RecordFault("unhandled", exception, terminating: true); // the runtime ends the process after this handler whatever the policy
         bool failFast = options.OnUnhandled == UnhandledExceptionPolicy.FailFast;
-        ShowDialog(options, CrashKind.Unhandled, exception, failFast, "Diagnostics:OnUnhandled = " + options.OnUnhandled, "unhandled", faultId, report);
+        string? report = Report(CrashKind.Unhandled, exception, LogLevel.Critical, terminating: true, CrashDumpService.DescribePlan(options.CrashDump, failFast));
+        string? faultId = RecordFault("unhandled", exception, terminating: true); // the runtime ends the process after this handler whatever the policy
+        string? dumpNote = WriteCrashDump(failFast);
+        ShowDialog(options, CrashKind.Unhandled, exception, failFast, "Diagnostics:OnUnhandled = " + options.OnUnhandled, "unhandled", faultId, report, dumpNote);
         Terminate(failFast, exception);
     }
 
@@ -168,7 +194,8 @@ public sealed class CrashHandler : IDisposable
         bool terminating = policy != UnobservedTaskPolicy.Log;
         // Critical either way in the log: an unobserved fault is an exception nobody handled, whether or not the policy
         // ends the process. The fault ledger carries whether it terminates, so the staff announcement is Critical only then.
-        string? report = Report(CrashKind.UnobservedTask, e.Exception, LogLevel.Critical, terminating);
+        bool failFastPolicy = policy == UnobservedTaskPolicy.FailFast;
+        string? report = Report(CrashKind.UnobservedTask, e.Exception, LogLevel.Critical, terminating, terminating ? CrashDumpService.DescribePlan(options.CrashDump, failFastPolicy) : null);
         string? faultId = RecordFault("unobserved-task", e.Exception, terminating);
         if (!terminating)
         {
@@ -176,9 +203,9 @@ public sealed class CrashHandler : IDisposable
             return;
         }
 
-        bool failFast = policy == UnobservedTaskPolicy.FailFast;
-        ShowDialog(options, CrashKind.UnobservedTask, e.Exception, failFast, "Diagnostics:OnUnobservedTask = " + policy, "unobserved-task", faultId, report);
-        Terminate(failFast, e.Exception);
+        string? dumpNote = WriteCrashDump(failFastPolicy);
+        ShowDialog(options, CrashKind.UnobservedTask, e.Exception, failFastPolicy, "Diagnostics:OnUnobservedTask = " + policy, "unobserved-task", faultId, report, dumpNote);
+        Terminate(failFastPolicy, e.Exception);
     }
 
     /// <summary>
@@ -187,9 +214,77 @@ public sealed class CrashHandler : IDisposable
     /// never throws. Used by the hooks here and by the tick watchdog's fatal path. The re-entrancy guard of the report covers it.
     /// </summary>
     public void ShowFatalDialog(CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? report)
-        => ShowDialog(_options, kind, exception, failFast, decidedBy, faultSite: null, faultId: null, report);
+        => ShowDialog(_options, kind, exception, failFast, decidedBy, faultSite: null, faultId: null, report, WriteCrashDump(failFast));
 
-    private static void ShowDialog(DiagnosticsOptions options, CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? faultSite, string? faultId, string? report)
+    /// <summary>
+    /// Write the in-process crash dump (<c>Diagnostics:CrashDump</c>) of a process that is about to end, after the crash report and before the
+    /// exit policy runs; used by the hooks here and by the tick watchdog's fatal path. <paramref name="failFast"/> is whether the process ends by
+    /// <see cref="Environment.FailFast(string)"/> (the runtime's own dump may then cover it) or by <see cref="Environment.Exit(int)"/>. Returns the
+    /// note for the crash dialog (null when nothing is configured). Never throws; bounded by <c>Diagnostics:CrashDump:TimeoutSeconds</c> per attempt.
+    /// </summary>
+    public string? WriteCrashDump(bool failFast)
+    {
+        if (t_dumping)
+        {
+            return null; // this thread is already dumping (a hook that threw inside the dump)
+        }
+
+        t_dumping = true;
+        try
+        {
+            // One dump per process: a second crashing thread waits here for the first to finish (and shares its note) instead of racing on
+            // to FailFast, which would end the process in the middle of the first thread's dump.
+            lock (_dumpGate)
+            {
+                if (_dumpDone)
+                {
+                    return _dumpDoneNote;
+                }
+
+                DiagnosticsOptions options = _options;
+                ICrashSink sink = _sink;
+                string daemon = CrashJournalPaths.ProcessName();
+                string directory = CrashDumpService.ResolveDirectory(options.CrashDump, CrashDialog.LogFilePath);
+                CrashDumpOutcome? outcome = _dumpService.Run(options.CrashDump, failFast, daemon, directory, DateTime.UtcNow, (level, text) => SayDump(sink, level, text), _dumpAnnouncer);
+                if (outcome is not null)
+                {
+                    _dumpDone = true;
+                    _dumpDoneNote = outcome.Note;
+                }
+
+                return outcome?.Note;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine($"crash dump failed: {ex.GetType().Name}: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            t_dumping = false;
+        }
+    }
+
+    private static void SayDump(ICrashSink sink, LogLevel level, string text)
+    {
+        try
+        {
+            sink.Write(level, text, null);
+            if (!sink.IsSynchronous)
+            {
+                Console.Error.WriteLine(text);
+                Console.Error.Flush();
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            Console.Error.WriteLine(text);
+            Console.Error.WriteLine($"crash sink {sink.GetType().Name} failed: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    private static void ShowDialog(DiagnosticsOptions options, CrashKind kind, Exception? exception, bool failFast, string decidedBy, string? faultSite, string? faultId, string? report, string? dumpNote)
     {
         if (!options.CrashDialog || _reporting)
         {
@@ -199,7 +294,7 @@ public sealed class CrashHandler : IDisposable
         _reporting = true;
         try
         {
-            CrashDialog.TryShowFatal(enabled: true, kind, exception, failFast, decidedBy, faultSite, faultId, report);
+            CrashDialog.TryShowFatal(enabled: true, kind, exception, failFast, decidedBy, faultSite, faultId, report, dumpNote);
         }
         finally
         {
@@ -237,7 +332,7 @@ public sealed class CrashHandler : IDisposable
             return;
         }
 
-        _ = Report(CrashKind.FirstChance, e.Exception, LogLevel.Debug, terminating: false);
+        _ = Report(CrashKind.FirstChance, e.Exception, LogLevel.Debug, terminating: false, dumpPlan: null);
     }
 
     /// <summary>
@@ -348,7 +443,7 @@ public sealed class CrashHandler : IDisposable
     }
 
     /// <summary>Write the report through the sink; returns its text (null when nested on this thread or rendering failed).</summary>
-    private string? Report(CrashKind kind, Exception? exception, LogLevel level, bool terminating)
+    private string? Report(CrashKind kind, Exception? exception, LogLevel level, bool terminating, string? dumpPlan)
     {
         if (_reporting)
         {
@@ -363,7 +458,7 @@ public sealed class CrashHandler : IDisposable
                 CrashAlert.TryBeep(checkErrorStream: true);
             }
 
-            string report = CrashReport.Render(kind, exception, _providers, DateTime.UtcNow);
+            string report = CrashReport.Render(kind, exception, _providers, DateTime.UtcNow, dumpPlan);
             ICrashSink sink = _sink;
             try
             {
@@ -400,7 +495,8 @@ public sealed class CrashHandler : IDisposable
         if (failFast)
         {
             // FailFast writes its own line and the exception to standard error / the event log, then aborts
-            // (SIGABRT 134 on Linux, 0x80131623 on Windows); a dump follows when DOTNET_DbgEnableMiniDump is set.
+            // (SIGABRT 134 on Linux, 0x80131623 on Windows); the runtime's own dump follows when DOTNET_DbgEnableMiniDump is set
+            // (the in-process dump of Diagnostics:CrashDump has been written, or skipped for that reason, before this point).
             Environment.FailFast(exception is null ? "ArcaneCore: unhandled exception" : "ArcaneCore: " + exception.GetType().FullName + ": " + exception.Message, exception);
         }
 

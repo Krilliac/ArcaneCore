@@ -20,6 +20,8 @@ public sealed class CompositeHeartbeatSink(IReadOnlyList<IHeartbeatSink> sinks) 
 
     public bool Stopping(string status) => All(s => s.Stopping(status));
 
+    public bool Dumping(string status, int maxSeconds) => All(s => s.Dumping(status, maxSeconds));
+
     public void Dispose()
     {
         foreach (IHeartbeatSink sink in _sinks)

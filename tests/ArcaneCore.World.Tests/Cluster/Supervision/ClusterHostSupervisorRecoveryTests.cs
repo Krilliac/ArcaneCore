@@ -258,6 +258,42 @@ public sealed class ClusterHostSupervisorRecoveryTests
     }
 
     [Fact]
+    public async Task Hang_ChildThatAnnouncedDumping_GetsTheDumpGrace_ThenIsTreatedAsHung()
+    {
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true);
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess dumping = launcher.Last;
+        dumping.Beat();
+        dumping.Beat(SupervisorProtocol.FormatDumpingState(360, dumping.Token));
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(300)); // 300 s of silence: far past the 120 s hang timeout, inside the 420 s dump grace
+        await rig.Delays.PulseAsync();
+        await rig.Delays.PulseAsync();
+        Assert.Equal(0, dumping.Drains);
+        Assert.Equal(0, dumping.Kills);
+        Assert.Equal(SupervisedProcessState.Running, Snap(rig).State);
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(130)); // 430 s since the announcement: the grace is spent, the child is wedged in its dump
+        await rig.Delays.ReleaseUntilAsync(() => dumping.Drains == 1, "the hang watch to act once the dump grace is spent");
+    }
+
+    [Fact]
+    public async Task Hang_UnauthenticatedDumpingLine_GetsNoDumpGrace()
+    {
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true);
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess forged = launcher.Last;
+        forged.Beat();
+        forged.Beat(SupervisorProtocol.FormatDumpingState(360, "not-the-token"));
+        forged.Beat("dumping max=360"); // no token at all
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(130)); // past the 120 s hang timeout, far inside the 420 s dump grace a real announcement would earn
+        await rig.Delays.ReleaseUntilAsync(() => forged.Drains == 1, "the hang watch to act at once: a forged dumping line earns no grace");
+    }
+
+    [Fact]
     public async Task Hang_SlowButBeating_NeverActs()
     {
         await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), holdAllDelays: true);

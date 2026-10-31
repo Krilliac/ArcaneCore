@@ -330,7 +330,7 @@ while ($true) {
         foreach ($svcName in @('Realm', 'World')) {
             $listener = $activeListeners[$svcName]
             if ($null -ne $listener) {
-                if ($svcName -eq 'World' -and $null -ne $hbInfo -and $hbInfo.Pid -eq $listener.Id -and $hbInfo.State -ne 'stopping' -and $hbInfo.AgeSec -gt $HangKillSeconds) {
+                if ($svcName -eq 'World' -and $null -ne $hbInfo -and $hbInfo.Pid -eq $listener.Id -and $hbInfo.State -ne 'stopping' -and -not ($hbInfo.State -eq 'dumping' -and $hbInfo.AgeSec -le 420) -and $hbInfo.AgeSec -gt $HangKillSeconds) {
                     Write-SupervisorLog "World pid $($listener.Id) heartbeat stale for $([int]$hbInfo.AgeSec)s (> ${HangKillSeconds}s); killing and restarting"
                     Stop-Process -Id $listener.Id -Force -ErrorAction SilentlyContinue
                     Start-Sleep -Seconds 1

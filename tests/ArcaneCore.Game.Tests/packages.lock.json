@@ -193,6 +193,7 @@
       "arcanecore.kernel": {
         "type": "Project",
         "dependencies": {
+          "Microsoft.Diagnostics.NETCore.Client": "[0.2.750501, )",
           "Microsoft.Extensions.Configuration": "[9.0.21, )",
           "Microsoft.Extensions.Configuration.Json": "[9.0.21, )",
           "Microsoft.Extensions.FileProviders.Physical": "[9.0.21, )",
@@ -231,6 +232,12 @@
         "dependencies": {
           "SQLitePCLRaw.core": "2.1.13"
         }
+      },
+      "Microsoft.Diagnostics.NETCore.Client": {
+        "type": "CentralTransitive",
+        "requested": "[0.2.750501, )",
+        "resolved": "0.2.750501",
+        "contentHash": "XVOWyjoikpjTecPv8fYWspgNGhXtOeMX3K3wq9kXftU9U04V6IwCY4NQuVrY/BIBwmui6lF8z7pNP64cwFvUNQ=="
       },
       "Microsoft.EntityFrameworkCore": {
         "type": "CentralTransitive",

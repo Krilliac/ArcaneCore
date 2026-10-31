@@ -1860,6 +1860,21 @@ Cluster.Supervisor.CrashLoopMaxRestarts = 5
 Cluster.Supervisor.CrashLoopWindowSeconds = 300
 
 #
+#    Cluster.Supervisor.DumpGraceSeconds
+#        Description: How long a child that announced dumping (its own crash dump,
+#                     Diagnostics:CrashDump) is exempt from the hang timeout and from a hang capture
+#                     of the supervisor's own, in seconds (default 420: three times the default dump
+#                     timeout of 120 s, plus a minute; 1 to 3600). Keep it above three times the
+#                     child's Diagnostics:CrashDump:TimeoutSeconds.
+#        Type: int
+#        Default: 420
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clustersupervisor
+#
+Cluster.Supervisor.DumpGraceSeconds = 420
+
+#
 #    Cluster.Supervisor.Enabled
 #        Description: Runs this World process as the host supervisor only (default: false): it
 #                     launches and watches the configured Processes and starts no world, database,
@@ -3866,6 +3881,82 @@ Diagnostics.BreakOnInvariant = false
 Diagnostics.CrashDialog = false
 
 #
+#    Diagnostics.CrashDump.Directory
+#        Description: The directory the dump files are written to, named
+#                     &lt;daemon&gt;-&lt;pid&gt;-&lt;yyyyMMdd-HHmmss&gt;.dmp (UTC). Empty (default)
+#                     means dumps beside the log file (the resolved Logging:ArcaneCore:File:Path, so
+#                     logs/dumps by default, the directory .debug dump uses), or dumps in the
+#                     daemon's own directory when file logging is off. Created on the first dump,
+#                     readable by the daemon's account only on Linux and macOS.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.CrashDump.Directory = ""
+
+#
+#    Diagnostics.CrashDump.FullMinFreeGB
+#        Description: Free space, in GiB, the dump volume must have for a Full dump; below it Full
+#                     falls back to Heap. Default 16, the launcher's threshold
+#                     (tools/ops/live/LiveDiagnostics.ps1). 0 never falls back for space.
+#        Type: int
+#        Default: 16
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.CrashDump.FullMinFreeGB = 16
+
+#
+#    Diagnostics.CrashDump.MaxFiles
+#        Description: How many of this feature's dump files are kept in the directory: after a dump
+#                     is written the oldest beyond this count are deleted. Only files named by the
+#                     pattern above are touched. 0 keeps every file. Default 5.
+#        Type: int
+#        Default: 5
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.CrashDump.MaxFiles = 5
+
+#
+#    Diagnostics.CrashDump.Mode
+#        Description: What to write: Off, Mini, Heap or Full. Default Full: it only acts when the
+#                     process is already crashing, so it changes nothing for a healthy server. A
+#                     failure of the chosen type falls back Full, Heap, Mini and is logged. Values:
+#                     Off, Mini, Heap, Full.
+#        Type: CrashDumpMode
+#        Default: Full
+#        Allowed: Off | Mini | Heap | Full
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.CrashDump.Mode = Full
+
+#
+#    Diagnostics.CrashDump.TimeoutSeconds
+#        Description: How long the daemon waits for its own diagnostics server to start a dump
+#                     before it gives up and ends the process anyway; it bounds an unresponsive
+#                     server, not the length of a dump. The runtime suspends the waiting thread too,
+#                     so a slow dump can outlast it: a file that is still growing is waited for, up
+#                     to three times this value in total (a Full dump of a 7 GB process takes about
+#                     a minute). A timeout, or an unreachable diagnostics endpoint
+#                     (DOTNET_EnableDiagnostics=0), is not retried with a smaller type; a type the
+#                     runtime refuses is. While it dumps the daemon publishes the heartbeat state
+#                     dumping, which supervisors honour for a grace of this long plus a margin.
+#                     Default 120.
+#        Type: int
+#        Default: 120
+#        Allowed: a whole number, -2147483648 to 2147483647
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#diagnostics
+#
+Diagnostics.CrashDump.TimeoutSeconds = 120
+
+#
 #    Diagnostics.FaultDialog
 #        Description: Also show a dialog the first time each fault signature is caught and survived
 #                     (the fault ledger, .server faults), on a background thread so the faulting
@@ -3963,9 +4054,11 @@ Diagnostics.OnInvariant = Continue
 #                     (AppDomain.UnhandledException): the report is always written first. FailFast
 #                     (default): Environment.FailFast, which is what the runtime does on its own;
 #                     the process aborts (exit status 134, SIGABRT, on Linux; 0x80131623 / Watson on
-#                     Windows) and a dump is written when DOTNET_DbgEnableMiniDump=1. Exit:
-#                     Environment.Exit(70) (ExitCodes.UnhandledException, sysexits EX_SOFTWARE), an
-#                     exit code a supervisor can match; no dump. Values: FailFast, Exit.
+#                     Windows). Exit: Environment.Exit(70) (ExitCodes.UnhandledException, sysexits
+#                     EX_SOFTWARE), an exit code a supervisor can match. Under both, the daemon
+#                     writes a dump of itself first (Diagnostics:CrashDump); the runtime's own
+#                     DOTNET_DbgEnableMiniDump=1 dump covers a FailFast too, and then this one is
+#                     skipped. Values: FailFast, Exit.
 #        Type: UnhandledExceptionPolicy
 #        Default: FailFast
 #        Allowed: FailFast | Exit

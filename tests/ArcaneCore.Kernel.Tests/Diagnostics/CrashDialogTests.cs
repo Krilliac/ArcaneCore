@@ -295,11 +295,11 @@ public sealed class CrashDialogTests : IDisposable
     [Fact]
     public void CrashHandler_ShowFatalDialog_FollowsTheOption()
     {
-        CrashHandler handler = CrashHandler.Install(new DiagnosticsOptions(), StandardErrorCrashSink.Instance);
+        CrashHandler handler = CrashHandler.Install(DumpFree.Options(), StandardErrorCrashSink.Instance);
         handler.ShowFatalDialog(CrashKind.Unhandled, new TimeoutException("hang"), failFast: false, "the world tick watchdog", "report");
         Assert.Empty(_presenter.Shown);
 
-        handler.Reconfigure(new DiagnosticsOptions { CrashDialog = true }, StandardErrorCrashSink.Instance, providers: null);
+        handler.Reconfigure(DumpFree.Options(o => o.CrashDialog = true), StandardErrorCrashSink.Instance, providers: null);
         handler.ShowFatalDialog(CrashKind.Unhandled, new TimeoutException("hang"), failFast: false, "the world tick watchdog", "report");
         (_, string text) = Assert.Single(_presenter.Shown);
         Assert.Contains("exits with code 70 (the world tick watchdog)", text, StringComparison.Ordinal);

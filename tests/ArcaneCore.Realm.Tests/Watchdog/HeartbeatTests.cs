@@ -41,6 +41,12 @@ public sealed class HeartbeatTests
             return !Fail;
         }
 
+        public bool Dumping(string status, int maxSeconds)
+        {
+            Calls.Add("dumping:" + maxSeconds);
+            return !Fail;
+        }
+
         public void Dispose() => Calls.Add("dispose");
     }
 
@@ -199,6 +205,37 @@ public sealed class HeartbeatTests
         sink.Fail = false;
         writer.Check(_clock.NowMicros);
         Assert.Equal(1, writer.Sent);
+    }
+
+    [Fact]
+    public void Writer_AnnounceDumping_PublishesTheStateOnce_AndBeatsNoMore()
+    {
+        var sink = new FakeSink();
+        HeartbeatWriter writer = Writer(sink, 10);
+        writer.Start();
+        writer.Check(_clock.NowMicros);
+        writer.AnnounceDumping(360);
+        _clock.AdvanceMs(20_000);
+        writer.Check(_clock.NowMicros); // would be a beat, but the last line must stay "dumping"
+
+        Assert.Equal(["ready:ArcaneCore started", "beat", "dumping:360"], sink.Calls);
+    }
+
+    [Fact]
+    public void FileSink_Dumping_WritesTheDumpingState()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "arcanecore-hb-" + Guid.NewGuid().ToString("N") + ".txt");
+        try
+        {
+            using var sink = new FileHeartbeatSink(path, 4242);
+            Assert.True(sink.Beat());
+            Assert.True(sink.Dumping("dump", 360));
+            Assert.EndsWith(" pid=4242 dumping\n", File.ReadAllText(path), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 
     [Fact]

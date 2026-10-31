@@ -298,6 +298,13 @@ public sealed class ClusterSupervisorOptions
     /// <summary>The longest a hang capture may take before the supervisor drains and kills the child anyway, in seconds (default 300; 1 to 3600).</summary>
     public int HangCaptureTimeoutSeconds { get; set; } = 300;
 
+    /// <summary>
+    /// How long a child that announced <c>dumping</c> (its own crash dump, <c>Diagnostics:CrashDump</c>) is exempt from the hang timeout and from a hang
+    /// capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600). Keep it above
+    /// three times the child's <c>Diagnostics:CrashDump:TimeoutSeconds</c>.
+    /// </summary>
+    public int DumpGraceSeconds { get; set; } = 420;
+
     /// <summary>The dotnet-stack executable for <c>HangCapture=Stacks</c> (default empty: none; required when any child uses Stacks).</summary>
     public string StackCaptureTool { get; set; } = string.Empty;
 
@@ -376,6 +383,8 @@ public sealed class ClusterSupervisorOptions
             problems.Add($"{section}:HealthyUptimeSeconds must be 1 to 86400 (was {HealthyUptimeSeconds}).");
         if (RestartDelayMs is < 0 or > SupervisedProcessConfig.MaxDrainTimeoutMs)
             problems.Add($"{section}:RestartDelayMs must be 0 to {SupervisedProcessConfig.MaxDrainTimeoutMs} (was {RestartDelayMs}).");
+        if (DumpGraceSeconds is < 1 or > 3600)
+            problems.Add($"{section}:DumpGraceSeconds must be 1 to 3600 (was {DumpGraceSeconds}).");
         if (HangCaptureTimeoutSeconds is < 1 or > 3600)
             problems.Add($"{section}:HangCaptureTimeoutSeconds must be 1 to 3600 (was {HangCaptureTimeoutSeconds}).");
         if (Processes.Values.Any(p => p.HangCapture != SupervisedHangCaptureMode.None) && string.IsNullOrWhiteSpace(HangCaptureDirectory))

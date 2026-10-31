@@ -18,6 +18,13 @@ public interface IHeartbeatSink : IDisposable
     /// <summary>The process is stopping (systemd STOPPING=1).</summary>
     bool Stopping(string status);
 
+    /// <summary>
+    /// The process is writing its own crash dump and will end within <paramref name="maxSeconds"/> (the file sink writes the state <c>dumping</c>,
+    /// the stdout sink the same on its line, systemd resets its watchdog timeout). Beats stop meanwhile; a supervisor must not kill the process
+    /// for a stale heartbeat while it dumps. Unlike the other calls this one comes from the crashing thread. The default does nothing.
+    /// </summary>
+    bool Dumping(string status, int maxSeconds) => true;
+
     /// <summary>The last delivery failure, for the log line.</summary>
     string? LastError { get; }
 }

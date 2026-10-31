@@ -92,12 +92,16 @@ public static class DiagnosticsProbe
                     CrashDialog.ReportDirectory = rest[0];
                 }
 
-                CrashHandler.Install(new DiagnosticsOptions { OnUnhandled = UnhandledExceptionPolicy.Exit, CrashDialog = true }, StandardErrorCrashSink.Instance, [new ProbeContext()]);
+                CrashHandler.Install(Options(o => { o.OnUnhandled = UnhandledExceptionPolicy.Exit; o.CrashDialog = true; }), StandardErrorCrashSink.Instance, [new ProbeContext()]);
                 return ThrowOnThread(withInner: true);
 
             case "fault-dialog-live":
                 // The real presenter and the real environment probe: one caught fault, one box, and a wait until it is closed.
                 return FaultDialogLive();
+
+            case "dump":
+                // dump <failfast|exit|unobserved-failfast|unobserved-exit> <Off|Mini|Heap|Full> <directory> [maxFiles]: the real in-process crash dump.
+                return DumpScenario(rest);
 
             case "hosting-bad-config":
                 // UseArcaneDiagnostics must exit 78 before anything else runs.
@@ -110,9 +114,67 @@ public static class DiagnosticsProbe
         }
     }
 
+    /// <summary>Probe options: the in-process crash dump is Off unless a scenario asks for it, so the other scenarios never write a dump of the test process.</summary>
+    private static DiagnosticsOptions Options(Action<DiagnosticsOptions> configure)
+    {
+        var options = new DiagnosticsOptions();
+        options.CrashDump.Mode = CrashDumpMode.Off;
+        configure(options);
+        return options;
+    }
+
+    private static int DumpScenario(string[] rest)
+    {
+        string how = rest[0];
+        var options = Options(o =>
+        {
+            o.CrashDump.Mode = Enum.Parse<CrashDumpMode>(rest[1]);
+            o.CrashDump.Directory = rest[2];
+            if (rest.Length > 3)
+            {
+                o.CrashDump.MaxFiles = int.Parse(rest[3], System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (how == "invariant")
+            {
+                o.OnInvariant = InvariantPolicy.FailFast;
+            }
+
+            o.OnUnhandled = how == "exit" ? UnhandledExceptionPolicy.Exit : UnhandledExceptionPolicy.FailFast;
+            o.OnUnobservedTask = how switch
+            {
+                "unobserved-exit" => UnobservedTaskPolicy.Exit,
+                "unobserved-failfast" => UnobservedTaskPolicy.FailFast,
+                _ => UnobservedTaskPolicy.Log,
+            };
+        });
+        CrashHandler.Install(options, StandardErrorCrashSink.Instance, [new ProbeContext()]);
+        if (how == "invariant")
+        {
+            Invariant.Configure(options, logger: null);
+            Invariant.Check(false, "probe-invariant");
+            return Survive(); // FailFast never returns
+        }
+
+        if (how.StartsWith("unobserved", StringComparison.Ordinal))
+        {
+            DropFaultedTask();
+            for (int i = 0; i < 100; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                Thread.Sleep(50);
+            }
+
+            return Survive();
+        }
+
+        return ThrowOnThread();
+    }
+
     private static int Unhandled(UnhandledExceptionPolicy policy, ICrashSink? sink = null)
     {
-        CrashHandler.Install(new DiagnosticsOptions { OnUnhandled = policy }, sink ?? StandardErrorCrashSink.Instance, [new ProbeContext()]);
+        CrashHandler.Install(Options(o => o.OnUnhandled = policy), sink ?? StandardErrorCrashSink.Instance, [new ProbeContext()]);
         return ThrowOnThread();
     }
 
@@ -121,7 +183,7 @@ public static class DiagnosticsProbe
         CrashDialog.ReportDirectory = rest.Length > 0 ? rest[0] : null;
         CrashDialog.Presenter = presenter;
         CrashDialog.EnvironmentProbe = static () => new CrashDialogEnvironment(true, true, false, false, false, false);
-        CrashHandler.Install(new DiagnosticsOptions { OnUnhandled = policy, CrashDialog = true }, StandardErrorCrashSink.Instance, [new ProbeContext()]);
+        CrashHandler.Install(Options(o => { o.OnUnhandled = policy; o.CrashDialog = true; }), StandardErrorCrashSink.Instance, [new ProbeContext()]);
         return ThrowOnThread(withInner: true);
     }
 
@@ -191,7 +253,7 @@ public static class DiagnosticsProbe
 
     private static int Unobserved(UnobservedTaskPolicy policy, ICrashSink? sink = null)
     {
-        CrashHandler.Install(new DiagnosticsOptions { OnUnobservedTask = policy }, sink ?? StandardErrorCrashSink.Instance, [new ProbeContext()]);
+        CrashHandler.Install(Options(o => o.OnUnobservedTask = policy), sink ?? StandardErrorCrashSink.Instance, [new ProbeContext()]);
         DropFaultedTask();
         for (int i = 0; i < 20; i++)
         {
