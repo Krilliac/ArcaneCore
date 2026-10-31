@@ -24,15 +24,15 @@ public sealed class SocialOptions
 
     /// <summary>
     /// ArcaneCore hardening: the longest channel name (characters) a join accepts; a longer one gets INVALID_NAME and no channel is
-    /// created. 0 = no cap. vmangos has none and the stock client's limit is UNVERIFIED (not captured from a real client). A custom name
-    /// is normalized to at most 128 characters (vmangos normalizePlayerName(m_name, 128)), so a longer one is always refused: the default is
-    /// 128 and a larger value or 0 is still held to 128.
+    /// created. vmangos has no cap and the stock client's limit is UNVERIFIED (not captured from a real client). A custom name is
+    /// normalized to at most 128 characters (vmangos normalizePlayerName(m_name, 128)), so a longer one is always refused: the default is
+    /// 128, and a larger value or 0 (no configured cap) is still held to 128.
     /// </summary>
     public int MaxChannelNameLength { get; set; } = 128;
 
     /// <summary>
     /// ArcaneCore hardening: the longest channel password (characters) accepted on join or when set; over it a join gets WRONG_PASSWORD
-    /// and a set is ignored. 0 = no cap. Default 255, as for <see cref="MaxChannelNameLength"/>.
+    /// and a set is ignored. 0 = no cap. Default 255 (unrelated to the 128-character name limit).
     /// </summary>
     public int MaxChannelPassphraseLength { get; set; } = 255;
 

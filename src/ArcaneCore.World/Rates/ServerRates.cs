@@ -259,9 +259,9 @@ public sealed class ServerRates
     public bool Reset(RateScope scope, RateDefinition rate, string actor, RateChangeKind kind = RateChangeKind.Reset)
         => TryReset(scope, rate, actor, kind, out _);
 
-    /// <summary>As <see cref="Reset"/>; <paramref name="error"/> is set when the restore was refused because it would cross a paired rate.</summary>
-    public bool TryReset(RateScope scope, RateDefinition rate, string actor, RateChangeKind kind, out string? error)
-        => ResetCore(scope, rate, actor, kind, enforceCrossCheck: true, out error);
+    /// <summary>As <see cref="Reset"/>; <paramref name="error"/> is set when the restore was refused because it would cross a paired rate. <paramref name="force"/> skips that check (the last pass of a reset-all).</summary>
+    public bool TryReset(RateScope scope, RateDefinition rate, string actor, RateChangeKind kind, out string? error, bool force = false)
+        => ResetCore(scope, rate, actor, kind, enforceCrossCheck: !force, out error);
 
     private bool ResetCore(RateScope scope, RateDefinition rate, string actor, RateChangeKind kind, bool enforceCrossCheck, out string? error)
     {

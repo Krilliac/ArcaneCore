@@ -31,7 +31,11 @@ public readonly record struct OptionScope(IServiceProvider Services, WorldRuntim
 public readonly record struct OptionActor(string Name, string? Reason);
 
 /// <summary>How a key that tracks its own override (the rates, whose baseline <see cref="Rates.ServerRates"/> keeps) answers the catalog.</summary>
-internal sealed record OptionTracking(Func<OptionScope, (bool Overridden, object? Baseline)> State, Func<OptionScope, string, bool> Reset);
+/// <summary>
+/// An override the owner tracks itself. <paramref name="Reset"/>(scope, actor, force) says whether the key went back and, when the owner refused
+/// (a restore that would cross a paired value), why; <c>force</c> skips that refusal for the last pass of a reset-all.
+/// </summary>
+internal sealed record OptionTracking(Func<OptionScope, (bool Overridden, object? Baseline)> State, Func<OptionScope, string, bool, (bool Done, string? Refusal)> Reset);
 
 /// <summary>
 /// One option the server can show and (unless it needs a restart) change: its path, a typed value with bounds, the apply class and the
