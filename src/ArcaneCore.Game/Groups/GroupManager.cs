@@ -506,12 +506,14 @@ public sealed partial class GroupManager(SocialContext context)
     /// uncommon..artifact drops the request: vmangos stores whatever the packet says, so a crafted
     /// 0 would roll every grey and 7 or more would roll nothing, and the value reaches every
     /// member's client in the group list; azerothcore GroupHandler.cpp:535 refuses it, and the
-    /// 1.12 menu only offers uncommon, rare and epic.
+    /// 1.12 menu only offers uncommon, rare and epic. In a battleground raid the request goes to the
+    /// parked original group, or is dropped when there is none (vmangos GroupHandler.cpp:343-344),
+    /// so a raid leader cannot take over the raid's loot settings.
     /// </summary>
     public void SetLootMethod(Player player, uint method, ObjectGuid master, uint threshold)
     {
         if (method > (uint)LootMethod.NeedBeforeGreed || threshold is < Group.MinLootThreshold or > Group.MaxLootThreshold
-            || GetGroup(player.Guid) is not { } group || !group.IsLeader(player.Guid))
+            || GroupForPartyRules(player.Guid) is not { } group || !group.IsLeader(player.Guid))
         {
             return;
         }
