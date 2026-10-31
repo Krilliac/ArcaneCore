@@ -21,6 +21,12 @@ namespace ArcaneCore.Game.Spells;
 /// </summary>
 public sealed partial class SpellSystem
 {
+    /// <summary>PLAYER_FIELD_BYTES_2 byte holding the flags (vmangos PLAYER_FIELD_BYTES_2_OFFSET_FLAGS, Player.h:369).</summary>
+    private const int DetectAmoreFlagsByte = 1;
+
+    /// <summary>PLAYER_FIELD_BYTE2_DETECT_AMORE (vmangos Player.h:388).</summary>
+    private const byte DetectAmoreFlag = 0x01;
+
     /// <summary>vmangos UNIT_VIS_FLAGS_UNTRACKABLE (UnitDefines.h:149).</summary>
     public const byte UntrackableVisFlag = 0x04;
 
@@ -105,6 +111,17 @@ public sealed partial class SpellSystem
             }
         }, null));
 
-        RegisterAura(AuraType.DetectAmore, new AuraHandler(null, null));
+        // SPELL_AURA_DETECT_AMORE (Aura::HandleDetectAmore, SpellAuras.cpp:3781-3790): on a player, PLAYER_FIELD_BYTES_2 byte 1 flag 0x01
+        // (PLAYER_FIELD_BYTE2_DETECT_AMORE), which makes the client show the Amorous creatures (Cologne / Perfume, spell 26802).
+        RegisterAura(AuraType.DetectAmore, new AuraHandler(static (_, holder, _, apply) =>
+        {
+            if (holder.Target is not Player player)
+            {
+                return;
+            }
+
+            byte flags = player.GetByte(UpdateFields.PlayerFieldBytes2, DetectAmoreFlagsByte);
+            player.SetByte(UpdateFields.PlayerFieldBytes2, DetectAmoreFlagsByte, (byte)(apply ? flags | DetectAmoreFlag : flags & ~DetectAmoreFlag));
+        }, null));
     }
 }

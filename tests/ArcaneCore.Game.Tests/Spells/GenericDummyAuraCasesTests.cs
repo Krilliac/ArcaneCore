@@ -52,6 +52,23 @@ public sealed class GenericDummyAuraCasesTests
     }
 
     [Fact]
+    public void DetectAmoreAura_SetsTheClientFlagInPlayerFieldBytes2_AndClearsItOnRemoval()
+    {
+        const uint amore = 930410;
+        using SpellTestKit kit = Kit(Instant(Spell(amore, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.DetectAmore)) with
+        {
+            Duration = new SpellDuration(60_000, 0, 60_000),
+        }));
+        (Player player, _) = kit.AddPlayer(1);
+
+        kit.System.CastSpell(player, amore, SpellCastTargets.ForSelf(), triggered: true);
+        Assert.Equal(0x01, player.GetByte(UpdateFields.PlayerFieldBytes2, 1) & 0x01); // PLAYER_FIELD_BYTE2_DETECT_AMORE
+
+        kit.System.RemoveAuras(player, amore);
+        Assert.Equal(0, player.GetByte(UpdateFields.PlayerFieldBytes2, 1) & 0x01);
+    }
+
+    [Fact]
     public void PartyFever_MakesAPlayerOutOfCombatDance_AndNotOneInCombat()
     {
         using SpellTestKit kit = Kit(DummyAura(GenericDummyAuraModule.PartyFever));
