@@ -19898,9 +19898,10 @@ World.Realm.PlayerLimit = 100
 #    World.RemoteAdmin.AgentLoginFile
 #        Description: A file the daemon writes a fresh random token to at start; @token
 #                     &lt;token&gt; logs in as the console (Administrator) without an account, for
-#                     automation running as the same OS user (the file is readable by whoever can
-#                     read the daemon's directory). Relative paths are under the daemon's base
-#                     directory. Empty: token login off.
+#                     automation running as the same OS user. The file is created owner-only
+#                     (Windows: an ACL for the daemon's account and SYSTEM, no inheritance; Unix:
+#                     mode 600), so other local users cannot read it. Relative paths are under the
+#                     daemon's base directory. Empty: token login off.
 #        Type: string
 #        Default: "ra-token.txt"
 #        Allowed: text

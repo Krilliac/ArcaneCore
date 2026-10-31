@@ -72,6 +72,7 @@ public sealed class RemoteAdminServer : IHostedService
     private string? _tokenPath;
     private byte[]? _token;
     private int _nextConnection;
+    private readonly SecondFactorChecker _factor;
 
     public RemoteAdminServer(
         IOptions<RemoteAdminOptions> options,
@@ -80,8 +81,10 @@ public sealed class RemoteAdminServer : IHostedService
         WorldRuntime world,
         SessionRegistry registry,
         IOptions<WorldSessionOptions> sessionOptions,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        SecondFactorChecker? secondFactor = null)
     {
+        _factor = secondFactor ?? new SecondFactorChecker();
         _options = options.Value;
         _scopes = scopes;
         _opcodes = opcodes;
@@ -162,13 +165,63 @@ public sealed class RemoteAdminServer : IHostedService
         byte[] token = Encoding.ASCII.GetBytes(Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant());
         try
         {
-            File.WriteAllText(path, Encoding.ASCII.GetString(token) + "\n");
+            WriteTokenFile(path, token);
             _token = token;
             _tokenPath = path;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.Principal.IdentityNotMappedException
+            or PlatformNotSupportedException or InvalidOperationException)
         {
             _logger.LogWarning(ex, "remote admin: could not write the token file {Path}; @token login is off", path);
+        }
+    }
+
+    /// <summary>
+    /// Creates the token file readable by the daemon's own account only (and SYSTEM on Windows), the standard the control pipe sets
+    /// (<see cref="ArcaneCore.World.Ops.Control.ControlPipeSecurity"/>): a protected DACL owned by the daemon's account on Windows, mode 0600 on Unix.
+    /// An existing file is replaced, so permissions an earlier run or another user left on it do not carry over. Any failure throws
+    /// (the caller turns <c>@token</c> login off) and a half-written file is removed.
+    /// </summary>
+    internal static void WriteTokenFile(string path, byte[] token)
+    {
+        File.Delete(path);
+        byte[] content = [.. token, (byte)'\n'];
+        FileStream stream;
+        if (OperatingSystem.IsWindows())
+        {
+            System.Security.Principal.SecurityIdentifier user = ArcaneCore.World.Ops.Control.ControlPipeSecurity.CurrentUser();
+            var security = new System.Security.AccessControl.FileSecurity();
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            security.SetOwner(user);
+            security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(user, System.Security.AccessControl.FileSystemRights.FullControl,
+                System.Security.AccessControl.AccessControlType.Allow));
+            security.AddAccessRule(new System.Security.AccessControl.FileSystemAccessRule(ArcaneCore.World.Ops.Control.ControlPipeSecurity.LocalSystem,
+                System.Security.AccessControl.FileSystemRights.FullControl, System.Security.AccessControl.AccessControlType.Allow));
+            stream = System.IO.FileSystemAclExtensions.Create(new FileInfo(path), FileMode.CreateNew, System.Security.AccessControl.FileSystemRights.Write,
+                FileShare.Read, bufferSize: 4096, FileOptions.None, security);
+        }
+        else
+        {
+            stream = new FileStream(path, new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.Read,
+                UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            });
+        }
+
+        try
+        {
+            using (stream)
+            {
+                stream.Write(content);
+            }
+        }
+        catch
+        {
+            File.Delete(path);
+            throw;
         }
     }
 
@@ -311,7 +364,7 @@ public sealed class RemoteAdminServer : IHostedService
                     string rest = first.Length > 6 ? first[6..].Trim() : string.Empty;
                     int space = rest.IndexOf(' ');
                     who = space < 0 ? rest : rest[..space];
-                    login = space < 0 ? null : await CheckAccountAsync(who, rest[(space + 1)..], automation: true, token).ConfigureAwait(false);
+                    login = space < 0 ? null : await CheckAccountAsync(who, rest[(space + 1)..].TrimStart(), splitCode: true, automation: true, endpoint, token).ConfigureAwait(false);
                 }
                 else
                 {
@@ -319,7 +372,12 @@ public sealed class RemoteAdminServer : IHostedService
                     output.WriteLine("Password:");
                     string? password = await ReadAsync(reader, output, timeout.Token).ConfigureAwait(false);
                     if (password is null) return null;
-                    login = await CheckAccountAsync(first, password, automation: false, token).ConfigureAwait(false);
+                    // The code prompt does not depend on the account or the password (an account without a factor answers with an empty line), so
+                    // whether "Code:" appears tells a stranger nothing; password, code and the other checks then give one failure answer.
+                    output.WriteLine("Code:");
+                    string? typedCode = await ReadAsync(reader, output, timeout.Token).ConfigureAwait(false);
+                    if (typedCode is null) return null;
+                    login = await CheckAccountAsync(first, password, typedCode, automation: false, endpoint, timeout.Token).ConfigureAwait(false);
                 }
 
                 if (login is not null)
@@ -357,16 +415,57 @@ public sealed class RemoteAdminServer : IHostedService
             : null;
     }
 
-    private async Task<Login?> CheckAccountAsync(string name, string password, bool automation, CancellationToken token)
+    /// <summary>
+    /// Checks the one-line <c>@login user password [code]</c>: tries the whole text as the password first, then the text before the last space as the
+    /// password and the last word as the PIN/TOTP code.
+    /// </summary>
+    private async Task<Login?> CheckAccountAsync(string name, string password, bool splitCode, bool automation, string endpoint, CancellationToken token)
+    {
+        if (name.Length is 0 or > 32 || password.Length is 0 or > 128 + 16) return null;
+        Login? login = await CheckAccountAsync(name, password, code: null, automation, endpoint, token).ConfigureAwait(false);
+        int cut = password.LastIndexOf(' ');
+        if (login is null && splitCode && cut > 0 && cut < password.Length - 1)
+        {
+            login = await CheckAccountAsync(name, password[..cut].TrimEnd(), password[(cut + 1)..], automation, endpoint, token).ConfigureAwait(false);
+        }
+
+        return login;
+    }
+
+    private async Task<Login?> CheckAccountAsync(string name, string password, string? code, bool automation, string endpoint, CancellationToken token)
     {
         if (name.Length is 0 or > 32 || password.Length is 0 or > 128) return null;
         await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         IAccountStore? accounts = scope.ServiceProvider.GetService<IAccountStore>();
         if (accounts is null) return null;
+        IBanStore? bans = scope.ServiceProvider.GetService<IBanStore>();
+        TimeProvider time = scope.ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
         // The shared check (equal-time verifier, status column and ban rows, as the realm and the gateway judge them): a banned account is refused.
-        AccountCheckResult check = await AccountPasswordCheck.CheckAsync(accounts, scope.ServiceProvider.GetService<IBanStore>(), name, password,
-            scope.ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System, token).ConfigureAwait(false);
+        AccountCheckResult check = await AccountPasswordCheck.CheckAsync(accounts, bans, name, password, time, token).ConfigureAwait(false);
         if (check.Account is not { } account || account.Security < _options.MinSecurity) return null;
+
+        // IP bans (vmangos AuthSocket.cpp:338-352), as the realm and the web login judge them.
+        string? address = AccountBanEvaluator.AddressOfEndpoint(endpoint);
+        if (address is not null && bans is not null
+            && await bans.GetActiveIpBanAsync(address, token).ConfigureAwait(false) is { } ipBan
+            && AccountBanEvaluator.IsActive(ipBan, time.GetUtcNow().ToUnixTimeSeconds()))
+        {
+            return null;
+        }
+
+        // IP lock and the second factor (vmangos AuthSocket.cpp:393-414,497-517; ArcaneCore.Realm LogonSession): an IP-locked account
+        // from another address needs a configured factor, and a configured PIN/TOTP is always required. (The realm asks for a factor only
+        // when the address moved or ALWAYS_ENFORCE is set; RA, like the web login, is stricter.) The factor and the replay record are
+        // the ones the web login uses (SecondFactorChecker), so a code spent there is spent here.
+        bool moved = account.LockFlags.HasFlag(AccountLockFlags.IpLock) && !string.Equals(account.LastIp, address, StringComparison.OrdinalIgnoreCase);
+        bool hasFactor = SecondFactorChecker.HasFactor(account);
+        if (moved && !hasFactor) return null;
+        if (hasFactor)
+        {
+            if (!_factor.CodeAccepted(account, code, time, out long totpStep)) return null;
+            if (totpStep >= 0 && !_factor.ClaimTotpStep(account.Id, totpStep)) return null;
+        }
+
         return new Login(account.Username, account.Security, automation);
     }
 

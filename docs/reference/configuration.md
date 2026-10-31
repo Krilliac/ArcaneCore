@@ -2061,7 +2061,7 @@ How to read the tables:
 
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
-| `World:RemoteAdmin:AgentLoginFile` | `string` | `"ra-token.txt"` | - | A file the daemon writes a fresh random token to at start; `@token &lt;token&gt;` logs in as the console (Administrator) without an account, for automation running as the same OS user (the file is readable by whoever can read the daemon's directory). Relative paths are under the daemon's base directory. Empty: token login off. |
+| `World:RemoteAdmin:AgentLoginFile` | `string` | `"ra-token.txt"` | - | A file the daemon writes a fresh random token to at start; `@token &lt;token&gt;` logs in as the console (Administrator) without an account, for automation running as the same OS user. The file is created owner-only (Windows: an ACL for the daemon's account and SYSTEM, no inheritance; Unix: mode 600), so other local users cannot read it. Relative paths are under the daemon's base directory. Empty: token login off. |
 | `World:RemoteAdmin:BindAddress` | `string` | `"127.0.0.1"` | - | The address to listen on. Default 127.0.0.1: only this machine can connect. Any other address exposes a clear-text protocol (passwords included) to the network; the daemon logs a warning when it is not a loopback address. |
 | `World:RemoteAdmin:CommandTimeoutSeconds` | `int` | `1800` | - | Seconds a command that holds itself open (`.botctl wait`, `.botctl run`) may run before RA reports `#done error timeout` and reads the next line (the command itself goes on). |
 | `World:RemoteAdmin:Enabled` | `bool` | `true` | - | Listen for RA connections. Default on (loopback only, see `BindAddress`). |

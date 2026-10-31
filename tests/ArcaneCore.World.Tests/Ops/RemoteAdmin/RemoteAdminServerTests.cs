@@ -162,6 +162,8 @@ public sealed class RemoteAdminServerTests
             await admin.SendAsync("RAADMIN");
             Assert.Equal("Password:", await admin.ReadLineAsync());
             await admin.SendAsync("secret");
+            Assert.Equal("Code:", await admin.ReadLineAsync());
+            await admin.SendAsync(string.Empty);
             Assert.Equal("+Logged in as RAADMIN (Administrator).", await admin.ReadLineAsync());
             await admin.SendAsync("@auto on");
             await admin.ReadUntilAsync("#done");
@@ -207,6 +209,208 @@ public sealed class RemoteAdminServerTests
             await free.ReadUntilAsync("Username:");
             await free.SendAsync("@login RAFREE secret");
             Assert.Equal("+Logged in as RAFREE (Administrator).", await free.ReadLineAsync());
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private static async Task<Account> CreateAdminAsync(WorldTestHost host, string name, AccountLockFlags flags = AccountLockFlags.None, string securityInfo = "", string lastIp = "")
+    {
+        byte[] salt = Enumerable.Range(1, 32).Select(i => (byte)i).ToArray();
+        return await host.Accounts.CreateAsync(new Account
+        {
+            Username = name, Salt = salt, Security = AccountSecurity.Administrator, Status = AccountStatus.Active,
+            Verifier = WowSrp6.ToFixedLittleEndian(WowSrp6.ComputeVerifier(salt, name, "secret"), 32), SessionKey = new byte[40],
+            LockFlags = flags, SecurityInfo = securityInfo, LastIp = lastIp,
+        });
+    }
+
+    private static async Task<string> TryLoginAsync(RemoteAdminServer server, string line)
+    {
+        await using Client client = await Client.ConnectAsync(server.Port);
+        await client.ReadUntilAsync("Username:");
+        await client.SendAsync(line);
+        return (await client.ReadLineAsync())!;
+    }
+
+    [Fact]
+    public async Task AccountLogin_RequiresTheFixedPin_OfAnAccountThatHasOne()
+    {
+        // The RA login skipped the second factor the realm and the web login enforce (vmangos AuthSocket.cpp:497-517).
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RAPIN", AccountLockFlags.FixedPin, "1234");
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPIN secret"));
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPIN secret 9999"));
+            Assert.Equal("+Logged in as RAPIN (Administrator).", await TryLoginAsync(server, "@login RAPIN secret 1234"));
+
+            Assert.Equal("+Logged in as RAPIN (Administrator).", await InteractiveLoginAsync(server, "RAPIN", "secret", "1234"));
+            Assert.Equal("-Wrong username or password.", await InteractiveLoginAsync(server, "RAPIN", "secret", ""));
+            Assert.Equal("-Wrong username or password.", await InteractiveLoginAsync(server, "RAPIN", "wrong", "1234"));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// The interactive login. The server asks for <c>Code:</c> after the password whatever the account and the password were (so the prompt is no
+    /// password oracle); returns the one answer line.
+    /// </summary>
+    private static async Task<string> InteractiveLoginAsync(RemoteAdminServer server, string user, string password, string code)
+    {
+        await using Client client = await Client.ConnectAsync(server.Port);
+        await client.ReadUntilAsync("Username:");
+        await client.SendAsync(user);
+        Assert.Equal("Password:", await client.ReadLineAsync());
+        await client.SendAsync(password);
+        Assert.Equal("Code:", await client.ReadLineAsync());
+        await client.SendAsync(code);
+        return (await client.ReadLineAsync())!;
+    }
+
+    [Fact]
+    public async Task InteractiveLogin_AsksForTheCodeOfAnyAccount_AndAnAccountWithoutAFactorTakesAnEmptyAnswer()
+    {
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RAPLAIN2");
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("+Logged in as RAPLAIN2 (Administrator).", await InteractiveLoginAsync(server, "RAPLAIN2", "secret", ""));
+            Assert.Equal("-Wrong username or password.", await InteractiveLoginAsync(server, "RAPLAIN2", "wrong", ""));
+            Assert.Equal("-Wrong username or password.", await InteractiveLoginAsync(server, "NOSUCHACCOUNT", "secret", ""));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AccountLogin_AnIpLockedAccountFromAnotherAddress_NeedsItsFactor_AndAcceptsIt()
+    {
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RAMOVED", AccountLockFlags.IpLock | AccountLockFlags.FixedPin, "4321", lastIp: "10.9.9.9");
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAMOVED secret"));
+            Assert.Equal("+Logged in as RAMOVED (Administrator).", await TryLoginAsync(server, "@login RAMOVED secret 4321"));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AccountLogin_ATotpCodeSpentThroughTheSharedChecker_IsRefusedHere()
+    {
+        // The web login and RA share one SecondFactorChecker, so a step spent on one surface is spent on the other.
+        await using WorldTestHost host = PartyTestHost.Start();
+        string secret = Totp.NewSecret();
+        Account account = await CreateAdminAsync(host, "RASHARED", AccountLockFlags.Totp, secret);
+        Totp.TryDecodeSecret(secret, out byte[] key);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        string code = Totp.Generate(key, now).ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
+        var shared = new ArcaneCore.World.Ops.Accounts.SecondFactorChecker();
+        Assert.True(shared.CodeAccepted(account, code, TimeProvider.System, out long step));
+        Assert.True(shared.ClaimTotpStep(account.Id, step));
+        RemoteAdminServer server = new(Options.Create(Options0()), host.WorldServices.GetRequiredService<IServiceScopeFactory>(), host.Opcodes, host.World, host.Registry,
+            Options.Create(new WorldSessionOptions()), NullLoggerFactory.Instance, shared);
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RASHARED secret " + code));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AccountLogin_RequiresATotpCode_AndRefusesItsReplay()
+    {
+        await using WorldTestHost host = PartyTestHost.Start();
+        string secret = Totp.NewSecret();
+        await CreateAdminAsync(host, "RATOTP", AccountLockFlags.Totp, secret);
+        Totp.TryDecodeSecret(secret, out byte[] key);
+        string code = Totp.Generate(key, DateTimeOffset.UtcNow.ToUnixTimeSeconds()).ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RATOTP secret"));
+            Assert.Equal("+Logged in as RATOTP (Administrator).", await TryLoginAsync(server, "@login RATOTP secret " + code));
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RATOTP secret " + code));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AccountLogin_RefusesAnIpLockedAccount_FromAnotherAddress_AndAnIpBannedAddress()
+    {
+        await using WorldTestHost host = PartyTestHost.Start();
+        await CreateAdminAsync(host, "RALOCKED", AccountLockFlags.IpLock, lastIp: "10.9.9.9");
+        await CreateAdminAsync(host, "RAHOME", AccountLockFlags.IpLock, lastIp: "127.0.0.1");
+        await CreateAdminAsync(host, "RAPLAIN");
+        RemoteAdminServer server = NewServer(host, Options0());
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RALOCKED secret"));
+            Assert.Equal("+Logged in as RAHOME (Administrator).", await TryLoginAsync(server, "@login RAHOME secret"));
+
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            host.Bans.AddIpRow("127.0.0.1", now, now); // permanent
+            Assert.Equal("-Wrong username or password.", await TryLoginAsync(server, "@login RAPLAIN secret"));
+        }
+        finally
+        {
+            await server.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task TokenFile_IsReadableByTheDaemonAccountOnly_EvenWhenAnOpenFileWasThere()
+    {
+        // Not proven: the effective access of a particular other account (needs a second OS user); this checks the descriptor and mode that grant it.
+        await using WorldTestHost host = PartyTestHost.Start();
+        string path = Path.Combine(Path.GetTempPath(), "ra-token-acl-" + Guid.NewGuid().ToString("N") + ".txt");
+        File.WriteAllText(path, "stale\n"); // a file from an earlier run, with whatever permissions the directory gave it
+        RemoteAdminServer server = NewServer(host, Options0(path));
+        await server.StartAsync(CancellationToken.None);
+        try
+        {
+            Assert.Equal(server.Token, File.ReadAllText(path).Trim());
+            if (OperatingSystem.IsWindows())
+            {
+                System.Security.AccessControl.FileSecurity security = new FileInfo(path).GetAccessControl();
+                Assert.True(security.AreAccessRulesProtected, "the token file inherits the directory's ACL");
+                foreach (System.Security.AccessControl.FileSystemAccessRule rule in security.GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier)))
+                {
+                    var sid = (System.Security.Principal.SecurityIdentifier)rule.IdentityReference;
+                    Assert.True(sid == System.Security.Principal.WindowsIdentity.GetCurrent().User || sid.IsWellKnown(System.Security.Principal.WellKnownSidType.LocalSystemSid),
+                        "unexpected ACL entry for " + sid);
+                }
+            }
+            else
+            {
+                Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(path));
+            }
         }
         finally
         {
