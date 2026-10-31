@@ -30,7 +30,6 @@ public readonly record struct OptionScope(IServiceProvider Services, WorldRuntim
 /// <summary>Who changes an option and why; the reason is free text after the value of <c>.server config set</c>.</summary>
 public readonly record struct OptionActor(string Name, string? Reason);
 
-/// <summary>How a key that tracks its own override (the rates, whose baseline <see cref="Rates.ServerRates"/> keeps) answers the catalog.</summary>
 /// <summary>
 /// An override the owner tracks itself. <paramref name="Reset"/>(scope, actor, force) says whether the key went back and, when the owner refused
 /// (a restore that would cross a paired value), why; <c>force</c> skips that refusal for the last pass of a reset-all.

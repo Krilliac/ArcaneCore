@@ -928,7 +928,7 @@ AuctionHouseBot.StackPercentMin = 0
 #
 #    AuctionHouseBot.TemplatesPerSellMax
 #        Description: Most item templates drawn per sell action (cMaNGOS
-#                     AuctionHouseBot.Items.Profession second value: 90).
+#                     AuctionHouseBot.Items.Profession second value: 90); at most 10000.
 #        Type: int
 #        Default: 90
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -940,7 +940,8 @@ AuctionHouseBot.TemplatesPerSellMax = 90
 #
 #    AuctionHouseBot.TemplatesPerSellMin
 #        Description: Fewest item templates drawn per sell action (cMaNGOS
-#                     AuctionHouseBot.Items.Profession first value: 80).
+#                     AuctionHouseBot.Items.Profession first value: 80); at least -10000 (a negative
+#                     value makes an empty draw likelier).
 #        Type: int
 #        Default: 80
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -20052,11 +20053,12 @@ World.Social.AllowTwoSideGuild = false
 #
 #    World.Social.MaxChannelNameLength
 #        Description: ArcaneCore hardening: the longest channel name (characters) a join accepts; a
-#                     longer one gets INVALID_NAME and no channel is created. 0 = no cap. vmangos
-#                     has none and the stock client's limit is UNVERIFIED (not captured from a real
-#                     client). A custom name is normalized to at most 128 characters (vmangos
+#                     longer one gets INVALID_NAME and no channel is created. vmangos has no cap and
+#                     the stock client's limit is UNVERIFIED (not captured from a real client). A
+#                     custom name is normalized to at most 128 characters (vmangos
 #                     normalizePlayerName(m_name, 128)), so a longer one is always refused: the
-#                     default is 128 and a larger value or 0 is still held to 128.
+#                     default is 128, and a larger value or 0 (no configured cap) is still held to
+#                     128.
 #        Type: int
 #        Default: 128
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -20069,7 +20071,7 @@ World.Social.MaxChannelNameLength = 128
 #    World.Social.MaxChannelPassphraseLength
 #        Description: ArcaneCore hardening: the longest channel password (characters) accepted on
 #                     join or when set; over it a join gets WRONG_PASSWORD and a set is ignored. 0 =
-#                     no cap. Default 255, as for MaxChannelNameLength.
+#                     no cap. Default 255 (unrelated to the 128-character name limit).
 #        Type: int
 #        Default: 255
 #        Allowed: a whole number, -2147483648 to 2147483647
