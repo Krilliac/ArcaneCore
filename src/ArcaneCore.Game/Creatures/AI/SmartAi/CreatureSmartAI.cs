@@ -79,6 +79,13 @@ public sealed class CreatureSmartAI : AggressorAI
         Script.ProcessEventsFor(SmartEvent.ReceiveEmote, player, textEmote);
     }
 
+    /// <summary>AzerothCore SmartAI::sGossipHello (SmartAI.cpp:1202-1205): SMART_EVENT_GOSSIP_HELLO with the player as invoker; the menu still shows.</summary>
+    public override void OnGossipHello(Player player) => Script.ProcessEventsFor(SmartEvent.GossipHello, player, 0);
+
+    /// <summary>AzerothCore SmartAI::sGossipSelect (SmartAI.cpp:1207-1210): SMART_EVENT_GOSSIP_SELECT, var0 the menu id and var1 the option id.</summary>
+    public override void OnGossipSelect(Player player, uint menuId, uint optionId)
+        => Script.ProcessEventsFor(SmartEvent.GossipSelect, player, menuId, null, optionId);
+
     public override void OnSpellHit(Unit caster, SpellInfo spell) => Script.ProcessEventsFor(SmartEvent.SpellHit, caster, spell: spell);
 
     /// <summary>AzerothCore SmartAI::UpdateAI: the timers every update, then the aggressor's victim choice and melee.</summary>

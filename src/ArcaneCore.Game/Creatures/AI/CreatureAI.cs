@@ -132,6 +132,25 @@ public abstract class CreatureAI
     {
     }
 
+    /// <summary>
+    /// A player opened this creature's gossip (CMSG_GOSSIP_HELLO; AzerothCore CreatureAI::sGossipHello, SmartAI.cpp:1202-1205). Raised by
+    /// <c>QuestNpcServices.GossipHello</c> after the menu is sent (AzerothCore HandleGossipHelloOpcode, NPCHandler.cpp, calls it last); it never replaces the menu. Nothing by default. A fault is contained
+    /// by the caller (recorded once in the <c>FaultLedger</c>) and the gossip reply still goes out.
+    /// </summary>
+    public virtual void OnGossipHello(Player player)
+    {
+    }
+
+    /// <summary>
+    /// A player selected a line of this creature's gossip (AzerothCore CreatureAI::sGossipSelect(player, sender, action), SmartAI.cpp:1207-1210):
+    /// <paramref name="menuId"/> is the shown gossip menu's id and <paramref name="optionId"/> the option's id inside it
+    /// (<c>gossip_menu_option.id</c>). Raised for the lines the menu data defines, before the option's own action. Nothing by default; a
+    /// fault is contained by the caller.
+    /// </summary>
+    public virtual void OnGossipSelect(Player player, uint menuId, uint optionId)
+    {
+    }
+
     /// <summary>Spawned or respawned (vmangos JustRespawned / Reset).</summary>
     public virtual void OnRespawn()
     {
