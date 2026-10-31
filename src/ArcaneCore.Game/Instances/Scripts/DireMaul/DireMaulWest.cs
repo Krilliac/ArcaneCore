@@ -11,9 +11,9 @@ namespace ArcaneCore.Game.Instances.Scripts.Classic;
 /// <list type="number">
 /// <item>Zevrim's death sets TYPE_ZEVRIM DONE: Old Ironbark yells and becomes Ironbark the Redeemed; the Redeemed's death sets TYPE_IRONBARK.</item>
 /// <item>Tendris' death sets TYPE_WARPWOOD DONE and uses the Warpwood door.</item>
-/// <item>The Arcane Aberrations and Mana Remnants (the generator guards) belong to the unfinished crystal generator within 20 yards of them;
-/// when the last of them dies the pylon is DONE and its generator is used. The reference sorts the guards at their first combat; this port
-/// resolves the generator at death, which gives the same grouping unless a guard was pulled out of its generator's radius.</item>
+/// <item>The Arcane Aberrations and Mana Remnants (the generator guards) belong to the unfinished crystal generator within 20 yards of their spawn;
+/// when the last of them dies the pylon is DONE and its generator is used. The guards are sorted into fixed per-generator sets at
+/// their first fight (SortPylonGuards, by spawn home); the pylon is DONE when its set empties, wherever the last guard dies.</item>
 /// <item>With all five pylons DONE the force field is used and the Highborne summoners attack a living Immol'thar.</item>
 /// <item>Immol'thar's death sets TYPE_IMMOLTHAR DONE: the Prince yells and turns hostile (until he respawns) and the chest aura goes. A Prince
 /// created while Immol'thar is DONE is hostile too.</item>
@@ -33,6 +33,7 @@ public sealed partial class DireMaulInstance
     public static readonly uint[] CrystalGenerators = [177259, 177257, 177258, 179504, 179505];
 
     private readonly List<ObjectGuid> _generatorGuards = [];
+    private readonly List<ObjectGuid>[] _pylonGuardSets = [[], [], [], [], []];
     private readonly List<ObjectGuid> _highborneSummoners = [];
 
     /// <summary>CheckAllGeneratorsDestroyed.</summary>
@@ -68,10 +69,18 @@ public sealed partial class DireMaulInstance
                 break;
             case NpcArcaneAberration:
             case NpcManaRemnant:
-                _generatorGuards.Add(creature.Guid);
+                if (!_generatorGuards.Contains(creature.Guid))
+                {
+                    _generatorGuards.Add(creature.Guid);
+                }
+
                 break;
             case NpcHighborneSummoner:
-                _highborneSummoners.Add(creature.Guid);
+                if (!_highborneSummoners.Contains(creature.Guid))
+                {
+                    _highborneSummoners.Add(creature.Guid);
+                }
+
                 break;
             case NpcOldIronbark:
             case NpcImmolthar:
@@ -197,45 +206,89 @@ public sealed partial class DireMaulInstance
         _highborneSummoners.Clear();
     }
 
-    /// <summary>PylonGuardJustDied: the pylon finishes with the last guard of its generator.</summary>
-    private void PylonGuardJustDied(Creature dead)
+    /// <summary>
+    /// SortPylonGuards: every living guard within the radius of an unfinished generator joins that generator's set (once); dead and missing
+    /// guards leave the guard list. The reference calls it at the first fight of a guard, so a guard pulled out of range later still counts.
+    /// Positions are the guards' spawn homes, which is where an unpulled guard stands.
+    /// </summary>
+    private void SortPylonGuards()
     {
         if (Instance.FindUpdater<CreatureMapSystem>() is not { } creatures)
         {
             return;
         }
 
-        for (int i = 0; i < PylonCount; i++)
+        _generatorGuards.RemoveAll(guid => creatures.FindCreature(guid) is not { IsAlive: true });
+        foreach (ObjectGuid guid in _generatorGuards)
         {
-            if (Encounters[TypePylon1 + i] == EncounterState.Done
-                || GetSingleGameObjectFromStorage(CrystalGenerators[i]) is not { } generator
-                || !Near(dead, generator))
+            if (creatures.FindCreature(guid) is { } guard)
             {
-                continue;
+                AssignToPylonSet(guard);
             }
-
-            bool othersAlive = false;
-            foreach (ObjectGuid guid in _generatorGuards)
-            {
-                if (guid != dead.Guid && creatures.FindCreature(guid) is { IsAlive: true } guard && Near(guard, generator))
-                {
-                    othersAlive = true;
-                    break;
-                }
-            }
-
-            if (!othersAlive)
-            {
-                SetData(TypePylon1 + (uint)i, EncounterState.Done);
-            }
-
-            return;
         }
     }
 
-    private static bool Near(Creature creature, GameObject generator)
+    private void AssignToPylonSet(Creature guard)
     {
-        float dx = creature.X - generator.X, dy = creature.Y - generator.Y;
+        for (int i = 0; i < PylonCount; i++)
+        {
+            if (_pylonGuardSets[i].Contains(guard.Guid))
+            {
+                return;
+            }
+        }
+
+        for (int i = 0; i < PylonCount; i++)
+        {
+            if (Encounters[TypePylon1 + i] != EncounterState.Done
+                && GetSingleGameObjectFromStorage(CrystalGenerators[i]) is { } generator
+                && NearHome(guard, generator))
+            {
+                _pylonGuardSets[i].Add(guard.Guid);
+                return;
+            }
+        }
+    }
+
+    /// <summary>PylonGuardJustDied: the pylon finishes when the last guard of its fixed set dies, wherever it dies.</summary>
+    private void PylonGuardJustDied(Creature dead)
+    {
+        if (FindPylonSet(dead.Guid) < 0)
+        {
+            // The guard died without the instance hearing its first fight: sort the living ones and place this one by its home.
+            SortPylonGuards();
+            AssignToPylonSet(dead);
+        }
+
+        int set = FindPylonSet(dead.Guid);
+        if (set < 0)
+        {
+            return;
+        }
+
+        _pylonGuardSets[set].Remove(dead.Guid);
+        if (_pylonGuardSets[set].Count == 0 && Encounters[TypePylon1 + set] != EncounterState.Done)
+        {
+            SetData(TypePylon1 + (uint)set, EncounterState.Done);
+        }
+    }
+
+    private int FindPylonSet(ObjectGuid guid)
+    {
+        for (int i = 0; i < PylonCount; i++)
+        {
+            if (_pylonGuardSets[i].Contains(guid))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool NearHome(Creature creature, GameObject generator)
+    {
+        float dx = creature.Home.X - generator.X, dy = creature.Home.Y - generator.Y;
         return dx * dx + dy * dy <= PylonGuardRadius * PylonGuardRadius;
     }
 
@@ -267,9 +320,15 @@ public sealed partial class DireMaulInstance
 
     public override void OnCreatureEnterCombat(Creature creature)
     {
-        if (creature.Template.Entry == NpcImmolthar)
+        switch (creature.Template.Entry)
         {
-            SetData(TypeImmolthar, EncounterState.InProgress);
+            case NpcImmolthar:
+                SetData(TypeImmolthar, EncounterState.InProgress);
+                break;
+            case NpcArcaneAberration:
+            case NpcManaRemnant:
+                SortPylonGuards();
+                break;
         }
     }
 }

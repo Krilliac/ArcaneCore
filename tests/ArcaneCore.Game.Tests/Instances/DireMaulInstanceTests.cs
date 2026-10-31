@@ -135,7 +135,35 @@ public sealed class DireMaulInstanceTests
         Assert.Equal(EncounterState.Done, run.Data.GetData(DireMaulInstance.TypeZevrim));
         Assert.Contains(run.Creatures.Creatures, c => c.Entry == DireMaulInstance.NpcIronbarkRedeemed);
 
-        run.Data.SetData(DireMaulInstance.TypeIronbark, EncounterState.Done);
+        Creature redeemed = run.Creatures.Creatures.First(c => c.Entry == DireMaulInstance.NpcIronbarkRedeemed);
+        run.Data.OnCreatureDeath(redeemed);
         Assert.Equal(EncounterState.Done, run.Data.GetData(DireMaulInstance.TypeIronbark));
+    }
+
+    [Fact]
+    public void PylonGuards_PulledFarFromTheGenerator_StillFinishThePylonWithTheLastDeath()
+    {
+        using Run run = Enter();
+        Creature first = run.Npc(DireMaulInstance.NpcArcaneAberration, 0);
+        Creature second = run.Npc(DireMaulInstance.NpcManaRemnant, 0);
+        run.Data.OnCreatureEnterCombat(first);
+        first.Relocate(first.X + 80f, first.Y, first.Z);
+        second.Relocate(second.X - 80f, second.Y, second.Z);
+
+        run.Map.Combat.Kill(null, first);
+        run.Data.OnCreatureDeath(first);
+        Assert.NotEqual(EncounterState.Done, run.Data.GetData(DireMaulInstance.TypePylon1)); // the pulled guard still counts
+        run.Map.Combat.Kill(null, second);
+        run.Data.OnCreatureDeath(second);
+        Assert.Equal(EncounterState.Done, run.Data.GetData(DireMaulInstance.TypePylon1));
+        Assert.Equal(GameObjectState.Active, run.Go(DireMaulInstance.CrystalGenerators[0]).State);
+    }
+
+    [Fact]
+    public void ImmolTharEnteringCombat_SetsTheEncounterInProgress()
+    {
+        using Run run = Enter();
+        run.Data.OnCreatureEnterCombat(run.Npc(DireMaulInstance.NpcImmolthar));
+        Assert.Equal(EncounterState.InProgress, run.Data.GetData(DireMaulInstance.TypeImmolthar));
     }
 }
