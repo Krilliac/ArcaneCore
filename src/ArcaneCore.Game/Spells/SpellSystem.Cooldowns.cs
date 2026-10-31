@@ -167,8 +167,11 @@ public sealed partial class SpellSystem
                 FormatSpellSubject(spell.Id),
                 $"unit={FormatUnitSubject(state.Unit)} recoveryMs={recovery} categoryRecoveryMs={categoryRecovery}",
                 AnomalySeverity.Warning);
-            // Report-only: the cooldown is applied unchanged (see the Math.Max clamps below).
         }
+
+        // Same bound the restore path applies (Persistence.cs): a value past it cannot wrap the signed (int) mod cast or the IsStillRunning compare.
+        recovery = Math.Min(recovery, MaxReasonableCooldownMs);
+        categoryRecovery = Math.Min(categoryRecovery, MaxReasonableCooldownMs);
 
         // vmangos Player::AddCooldown (Player.cpp:22200-22206): the cooldown spell mod applies to the spell's own time when it
         // has one, otherwise to the category time ("blizzlike code for choosing which is recTime > categoryRecTime").
