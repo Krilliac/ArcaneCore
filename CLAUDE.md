@@ -34,7 +34,8 @@ World.Contracts → Game
 World (Exe) → Kernel, Cryptography, Data, Protocol, Game, World.Contracts
 Playerbots  → World, World.Contracts, Game, Kernel, Protocol, Data   (pack; copied beside World, loaded at runtime)
 Realm (Exe) → Kernel, Cryptography, Data
-Gateway (Exe) → Kernel, Cryptography, Data, Protocol, World          (known smell, audit #184/#148)
+Cluster.Protocol → Kernel, Protocol   (gateway-worker link; referenced by World and Gateway)
+Gateway (Exe) → Kernel, Cryptography, Data, Protocol, Cluster.Protocol, World   (known smell, audit #184/#148)
 ```
 
 **Allowed directions:** downward only, in the layer order Kernel < {Cryptography, Protocol, Data} < Game < World.Contracts < World <
