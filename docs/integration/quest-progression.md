@@ -26,7 +26,7 @@ No GPL text was copied.
   event (which saves the player).
 - `KillRewards` and `ProgressionFeature`: kill XP on `UnitKilled`. A solo player gets
   full XP. In a group, online members on the same map within
-  `Progression:GroupXpDistance` (3D) share it by level, and grey kills give nothing.
+  `Progression:GroupXpDistance` (2D, bounding radii, strict, see `GroupRewardRange`) share it by level, and grey kills give nothing.
 - `PlayerLevelStatsTable`: a fail-closed CSV, one row per line in the form
   `race,class,level,basehp,basemana,str,agi,sta,int,spi`. A malformed or duplicate
   row rejects the whole file.
