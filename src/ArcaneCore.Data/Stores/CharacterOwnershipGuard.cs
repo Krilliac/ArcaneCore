@@ -207,7 +207,7 @@ internal static class CharacterOwnershipGuard
             Add("@incarnation", token.Incarnation.ToString("D"));
         }
 
-        await DbConnectionOpen.EnsureOpenAsync(command.Connection!, cancellationToken).ConfigureAwait(false);
+        await DbConnectionOpen.EnsureOpenAsync(db.Database, cancellationToken).ConfigureAwait(false);
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
     }
 }

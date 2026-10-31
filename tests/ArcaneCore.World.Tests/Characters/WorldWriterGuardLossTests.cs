@@ -142,6 +142,49 @@ public sealed class WorldWriterGuardLossTests
         await command.ExecuteNonQueryAsync();
     }
 
+    /// <summary>
+    /// Drops a scratch database without <c>WITH (FORCE)</c> (which needs privileges the test role does not always have: 42501): ends this role's remaining sessions on it, waits until none is left
+    /// (5 s at most), then drops, retrying while the server still reports it in use (55006).
+    /// </summary>
+    private static async Task DropScratchDatabaseAsync(string database)
+    {
+        await using var connection = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable(PostgresVariable)!.TrimEnd(';')) { Database = "postgres", Pooling = false }.ConnectionString);
+        await connection.OpenAsync();
+
+        async Task<long> CountAsync()
+        {
+            await using NpgsqlCommand count = connection.CreateCommand();
+            count.CommandText = "SELECT count(*) FROM pg_stat_activity WHERE datname = @db AND pid <> pg_backend_pid()";
+            count.Parameters.AddWithValue("db", database);
+            return Convert.ToInt64(await count.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        await using (NpgsqlCommand terminate = connection.CreateCommand())
+        {
+            terminate.CommandText = "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = @db AND pid <> pg_backend_pid() AND backend_type = 'client backend' AND usename = current_user";
+            terminate.Parameters.AddWithValue("db", database);
+            await terminate.ExecuteNonQueryAsync();
+        }
+
+        for (var waited = System.Diagnostics.Stopwatch.StartNew(); waited.Elapsed < TimeSpan.FromSeconds(5) && await CountAsync() != 0;)
+            await Task.Delay(50);
+
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await using NpgsqlCommand drop = connection.CreateCommand();
+                drop.CommandText = $"DROP DATABASE IF EXISTS \"{database}\"";
+                await drop.ExecuteNonQueryAsync();
+                return;
+            }
+            catch (PostgresException ex) when (ex.SqlState == "55006" && attempt < 5)
+            {
+                await Task.Delay(200);
+            }
+        }
+    }
+
     // Ends every session that holds an advisory lock in the scratch lock database (only this test's locks live there).
     private static Task KillLockSessionsAsync(string scratch)
         => ExecuteAsync($"SELECT pg_terminate_backend(l.pid) FROM pg_locks l WHERE l.locktype = 'advisory' AND l.database = (SELECT oid FROM pg_database WHERE datname = '{scratch}')");
@@ -180,7 +223,7 @@ public sealed class WorldWriterGuardLossTests
                 Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => CharacterDatabaseWriterLock.TryAcquire(options.Resolve(DatabaseComponent.Characters)));
             }
         }
-        finally { await ExecuteAsync($"DROP DATABASE IF EXISTS \"{scratch}\" WITH (FORCE)"); }
+        finally { await DropScratchDatabaseAsync(scratch); }
     }
 
     [PostgresFact]
@@ -217,6 +260,6 @@ public sealed class WorldWriterGuardLossTests
                 }
             }
         }
-        finally { await ExecuteAsync($"DROP DATABASE IF EXISTS \"{scratch}\" WITH (FORCE)"); }
+        finally { await DropScratchDatabaseAsync(scratch); }
     }
 }

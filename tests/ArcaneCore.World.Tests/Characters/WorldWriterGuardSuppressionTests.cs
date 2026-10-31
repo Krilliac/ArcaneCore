@@ -196,6 +196,7 @@ public sealed class WorldWriterGuardSuppressionTests
             Assert.Equal(1, lifetime.Stops); // the container handed it the host's IHostApplicationLifetime
             Assert.NotNull(drain.Saves.SuppressedReason); // and the same ShutdownDrain the queues use
             Assert.NotNull(drain.Features.SuppressedReason);
+            Assert.True(provider.GetRequiredService<ArcaneCore.Data.Characters.Ownership.CharacterDatabaseWriterFence>().IsTripped); // and the context-wide fence the guard was handed
             Assert.Equal(ArcaneCore.Kernel.Ops.ExitCodes.Failure, ArcaneCore.Kernel.Ops.ExitCodes.Current);
         }
         finally

@@ -48,7 +48,7 @@ namespace ArcaneCore.Data.Characters.Ownership;
 /// <c>onConflict</c> is called at once, once per loss. Every session id this process opened since the lock was last held counts as its own (a take that failed after the server granted the lock
 /// leaves such a session behind). An own session that the server has not ended yet (no TCP reset reached it) is not a conflict, it is reported through <c>onRetakeBlocked</c> (first time and
 /// every tenth) and retried on every tick until the server ends the session (the idle timeout above); but ids are only names (a server restart or a reused backend pid can make a rival look
-/// like one), so an own holder still there one stale timeout plus one check interval after the first such retake is declared a conflict. A server that cannot be reached is
+/// like one), so an own holder still there one stale timeout plus one check interval after this process first found that same session holding the lock is declared a conflict (a retake that fails and leaves a new own session holding it restarts the count). A server that cannot be reached is
 /// reported the same way. The opposite failure also exists: a host that died or a network partition can leave the server holding the dead session, so the lock stays taken until the server ends it;
 /// <c>pg_terminate_backend(pid)</c> / <c>KILL &lt;id&gt;</c> of the stale session clears it at once.
 /// </para>
@@ -88,7 +88,8 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
     private bool _conflictReported;
     private long _sessionId; // the server session (PostgreSQL backend pid, MariaDB connection id) that holds, or last held, the lock
     private readonly HashSet<long> _ownSessions = []; // every server session this process opened since the lock was last held (guarded by the gate): a holder in this set is this process's own dead session, never a rival
-    private long _ownBlockedSince; // Time timestamp of the first retake of this loss that found the lock held by an own session; 0 when none
+    private long _ownBlockedSince; // Time timestamp of the first retake that found the lock held by the session in _ownBlockedHolder; 0 when none
+    private long _ownBlockedHolder; // the own session the clock above is counting against; a different own holder restarts the clock (a failed retake can leave a new own session holding the lock)
     private int _blockedReports; // retakes that could not be completed in the current loss, for the throttle of onRetakeBlocked
 
     private ServerAdvisoryWriterLock(DbConnection connection, bool postgres, string mySqlName, long postgresKey, string connectionString, string lockDatabase, string description,
@@ -123,6 +124,12 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
 
     /// <summary>Runs on a freshly taken lock's connection right after the take, inside the retake's failure handling (tests make the post-take step fail with it).</summary>
     internal Action<DbConnection>? AfterTakeHook { get; set; }
+
+    /// <summary>Records <paramref name="sessionId"/> as a session this process opened, as a retake that failed after the server granted the lock would (tests).</summary>
+    internal void AddOwnSessionForTest(long sessionId)
+    {
+        lock (_gate) _ownSessions.Add(sessionId);
+    }
 
     /// <summary>Every server session id this process has opened since the lock was last held (tests).</summary>
     internal long[] OwnSessionsForTest()
@@ -403,6 +410,8 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
                         }
                         else if (result.Kind == TakeKind.Held && !_ownSessions.Contains(result.SessionId))
                         {
+                            _ownBlockedSince = 0;
+                            _ownBlockedHolder = 0;
                             if (!_conflictReported)
                             {
                                 _conflictReported = true;
@@ -413,14 +422,19 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
                         else if (result.Kind == TakeKind.Held)
                         {
                             long now = Time.GetTimestamp();
-                            if (_ownBlockedSince == 0) _ownBlockedSince = Math.Max(1, now);
+                            if (_ownBlockedHolder != result.SessionId)
+                            {
+                                _ownBlockedHolder = result.SessionId;
+                                _ownBlockedSince = Math.Max(1, now);
+                            }
+
                             if (Time.GetElapsedTime(_ownBlockedSince, now) > ownWaitLimit)
                             {
                                 // A session id is only a name: a server restart or a reused backend pid can make a rival look like our dead session. A real dead session is gone within the stale timeout.
                                 if (!_conflictReported)
                                 {
                                     _conflictReported = true;
-                                    notice = $"{Description}: still held by server session {result.SessionId}, which this process opened earlier, more than {ownWaitLimit.TotalSeconds:0} s after the loss: the server should have ended it by now, so it is treated as another session (a reused session id)";
+                                    notice = $"{Description}: still held by server session {result.SessionId}, which this process opened earlier, for more than {ownWaitLimit.TotalSeconds:0} s since this process first found that session holding it: the server should have ended an idle session within {_staleTimeout.TotalSeconds:0} s, so it is treated as another world (a reused session id)";
                                     callback = _onConflict;
                                 }
                             }
@@ -429,6 +443,12 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
                                 notice = Blocked($"{Description}: still held by this process's own earlier session {result.SessionId}, which the server has not ended yet");
                                 callback = _onRetakeBlocked;
                             }
+                        }
+                        else
+                        {
+                            // Unknown without a failure: the holder was gone by the time it was looked up. Nothing is known about any holder now, so the own-held clock starts over.
+                            _ownBlockedSince = 0;
+                            _ownBlockedHolder = 0;
                         }
                     }
                 }
@@ -439,6 +459,7 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
                     _ownSessions.Clear();
                     _ownSessions.Add(result.SessionId);
                     _ownBlockedSince = 0;
+                    _ownBlockedHolder = 0;
                     _lost = false;
                     _conflictReported = false;
                     _blockedReports = 0;

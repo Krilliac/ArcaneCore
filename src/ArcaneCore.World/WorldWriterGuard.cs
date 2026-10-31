@@ -19,15 +19,16 @@ namespace ArcaneCore.World;
 /// <para>
 /// A MariaDB/MySQL/PostgreSQL lock can be lost while the world runs (the session died, the server dropped it). The loss is logged Critical, <see cref="LockPath"/> is null while it lasts, and the
 /// lock tries to take itself back on every health check (logged as a warning when it works). If the retake finds the lock held by a session other than this process's own earlier one, another
-/// world writes the database: the guard logs Critical, records a fault, sets the failure exit code, asks the host for an orderly stop (<see cref="IHostApplicationLifetime.StopApplication"/>, as the
-/// realm authority lease does) and suppresses the drain lanes (<see cref="StopDrainBudget.Suppress"/>). A suppressed lane refuses every attempt of every save and feature queue from then on, stopping or not (the host's
-/// <c>SaveAll</c> runs while the queues are still live), so nothing more, shutdown saves included, is written into the other world's database; the snapshots stay retained and are lost with
-/// the process. Residual window: while the lock is merely lost, and until the first retake that finds the rival (the second health tick after the loss), this world keeps writing and its
-/// queues are not paused; those saves land. New logins are not gated separately.
+/// world writes the database: the guard trips the <see cref="CharacterDatabaseWriterFence"/> first, then logs Critical, records a fault, sets the failure exit code, asks the host for an orderly stop
+/// (<see cref="IHostApplicationLifetime.StopApplication"/>, as the realm authority lease does) and suppresses the drain lanes (<see cref="StopDrainBudget.Suppress"/>). The fence is the backstop: every further
+/// connection, transaction, statement and commit of this process on the characters database is refused at the data layer, whichever feature issues it, including the writers that have no lane. The lanes are the
+/// polite path: a suppressed lane refuses every attempt of every save and feature queue from then on, stopping or not (the host's <c>SaveAll</c> runs while the queues are still live), so the shutdown
+/// saves are skipped and the snapshots stay retained, lost with the process. Residual window: while the lock is merely lost, and until the first retake that finds the rival (the second health tick after the loss),
+/// this world keeps writing and its queues are not paused; those saves land, and so does a write already on the wire at the instant of the trip. New logins are not gated separately.
 /// </para>
 /// </summary>
 public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions = null, ILogger<WorldWriterGuard>? logger = null, bool deferUntilPromotion = false,
-    IHostApplicationLifetime? lifetime = null, TimeSpan? lockHealthInterval = null, Action<int>? setExitCode = null, ShutdownDrain? drain = null) : IDisposable
+    IHostApplicationLifetime? lifetime = null, TimeSpan? lockHealthInterval = null, Action<int>? setExitCode = null, ShutdownDrain? drain = null, CharacterDatabaseWriterFence? fence = null) : IDisposable
 {
     private readonly object _gate = new();
     private volatile CharacterDatabaseWriterLock? _lock; // written under the gate, read lock-free by LockPath
@@ -79,15 +80,16 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
     internal void OnLockConflict(string description)
     {
         if (Interlocked.Exchange(ref _stopRequested, 1) != 0) return;
-        string message = $"the characters database writer lock was lost and is now held by another session ({DatabaseStartup.Scrub(description, null)}); another world is writing this database, so this world is stopping";
+        const string Why = "another world holds the characters database writer lock";
+        fence?.Trip(Why); // first: before the lanes and the stop, so no writer, laned or not, gets another statement in
+        string message = $"the characters database writer lock was lost and is now held by another session ({DatabaseStartup.Scrub(description, null)}); another world is writing this database, so this world is stopping{(fence is null ? string.Empty : "; its characters database access is fenced off first")}";
         logger?.LogCritical("{Message}", message);
         FaultLedger.Shared.Record("world.writer-lock", new InvalidOperationException(message));
         if (drain is not null)
         {
-            const string Why = "another world holds the characters database writer lock";
             drain.Saves.Suppress(Why);
             drain.Features.Suppress(Why);
-            logger?.LogCritical("The shutdown saves of this world are SKIPPED ({Why}): unsaved character and feature changes since the last completed save are lost, so they cannot overwrite the other world's data.", Why);
+            logger?.LogCritical("The characters database is FENCED and the shutdown saves of this world are SKIPPED ({Why}): every further connection, transaction, statement and commit on it is refused, and unsaved character and feature changes since the last completed save are lost, so they cannot overwrite the other world's data.", Why);
         }
 
         (setExitCode ?? (code => ExitCodes.Current = code))(ExitCodes.Failure);

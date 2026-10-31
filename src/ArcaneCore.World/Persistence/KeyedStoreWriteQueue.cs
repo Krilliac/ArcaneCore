@@ -372,7 +372,7 @@ public class KeyedStoreWriteQueue<TStore>(IServiceScopeFactory scopes, ILogger l
         {
             if (attempt == 1 && (_stopped || _drain.IsSuppressed) && _drain.Refuse() is { } exhausted)
             {
-                failure = exhausted; // shutdown drain only: nothing is attempted, the write stays retained
+                failure = exhausted; // stop drain exhausted or lane suppressed: nothing is attempted, the write stays retained
                 refused = true;
                 break;
             }

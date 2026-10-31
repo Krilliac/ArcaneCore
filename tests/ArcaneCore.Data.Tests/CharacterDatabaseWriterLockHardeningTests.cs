@@ -37,6 +37,49 @@ public sealed class CharacterDatabaseWriterLockHardeningTests
         await command.ExecuteNonQueryAsync();
     }
 
+    /// <summary>
+    /// Drops a scratch database without <c>WITH (FORCE)</c> (which needs privileges the test role does not always have: 42501): ends this role's remaining sessions on it, waits until none is left
+    /// (5 s at most), then drops, retrying while the server still reports it in use (55006).
+    /// </summary>
+    private static async Task DropScratchDatabaseAsync(string database)
+    {
+        await using var connection = new NpgsqlConnection(AdminBuilder().ConnectionString);
+        await connection.OpenAsync();
+
+        async Task<long> CountAsync()
+        {
+            await using NpgsqlCommand count = connection.CreateCommand();
+            count.CommandText = "SELECT count(*) FROM pg_stat_activity WHERE datname = @db AND pid <> pg_backend_pid()";
+            count.Parameters.AddWithValue("db", database);
+            return Convert.ToInt64(await count.ExecuteScalarAsync(), System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        await using (NpgsqlCommand terminate = connection.CreateCommand())
+        {
+            terminate.CommandText = "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = @db AND pid <> pg_backend_pid() AND backend_type = 'client backend' AND usename = current_user";
+            terminate.Parameters.AddWithValue("db", database);
+            await terminate.ExecuteNonQueryAsync();
+        }
+
+        for (var waited = System.Diagnostics.Stopwatch.StartNew(); waited.Elapsed < TimeSpan.FromSeconds(5) && await CountAsync() != 0;)
+            await Task.Delay(50);
+
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await using NpgsqlCommand drop = connection.CreateCommand();
+                drop.CommandText = $"DROP DATABASE IF EXISTS \"{database}\"";
+                await drop.ExecuteNonQueryAsync();
+                return;
+            }
+            catch (PostgresException ex) when (ex.SqlState == "55006" && attempt < 5)
+            {
+                await Task.Delay(200);
+            }
+        }
+    }
+
     // ---- 1. PostgreSQL: the lock is cluster-wide, not per lock database
 
     [PostgresFact]
@@ -70,7 +113,7 @@ public sealed class CharacterDatabaseWriterLockHardeningTests
             }
             finally { second.Dispose(); }
         }
-        finally { await ExecuteAdminAsync($"DROP DATABASE IF EXISTS \"{scratch}\" WITH (FORCE)"); }
+        finally { await DropScratchDatabaseAsync(scratch); }
     }
 
     // ---- 2. A lost lock is re-taken, or reported as taken over. The state machine is stepped by hand (CheckHealth with a one-hour interval), so no timer races the test.
@@ -268,12 +311,55 @@ public sealed class CharacterDatabaseWriterLockHardeningTests
         time.Advance(TimeSpan.FromHours(1));
         held.CheckHealth();
         Assert.Equal(1, reports.Conflicts);
-        Assert.Contains("treated as another session", reports.ConflictText);
+        Assert.Contains("treated as another world", reports.ConflictText);
         held.CheckHealth();
         Assert.Equal(1, reports.Conflicts); // once per loss
         Assert.True(held.IsLost);
 
         await zombie.DisposeAsync();
+    }
+
+    [ServerProviderTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task AFailedRetake_ThatLeavesANewOwnSession_RestartsTheOwnHeldClock(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        string name = ServerAdvisoryWriterLock.DatabaseNameOf(options)!;
+        var reports = new Reports();
+        using ServerAdvisoryWriterLock held = Acquire(options, reports); // interval 1 h: the own-session wait is bounded at 5 h
+        var time = new ManualTime();
+        held.Time = time;
+        System.Data.Common.DbConnection? zombie = null;
+        held.CloseDeadConnection = connection => zombie = connection; // the first session keeps the lock while it is open
+        held.MarkLostForTest();
+
+        held.CheckHealth();
+        held.CheckHealth();
+        Assert.NotNull(zombie);
+        Assert.Equal(0, reports.Conflicts); // first found: session A holds it, the own-held clock starts here
+
+        time.Advance(TimeSpan.FromHours(4.5));
+        await zombie.DisposeAsync(); // A ends; a failed retake of ours would have left a different own session B holding the lock. Stand B in with a second lock object.
+        ServerAdvisoryWriterLock? second = null;
+        for (int attempt = 0; attempt < 200 && second is null; attempt++)
+        {
+            try { second = ServerAdvisoryWriterLock.TryAcquire(options, name); }
+            catch (CharacterDatabaseAlreadyOwnedException) { await Task.Delay(25); }
+        }
+
+        Assert.NotNull(second);
+        using (second)
+        {
+            held.AddOwnSessionForTest(second.SessionId);
+            time.Advance(TimeSpan.FromHours(1)); // 5.5 h after the clock started on A, but only now was B first found
+            held.CheckHealth();
+            Assert.Equal(0, reports.Conflicts); // B is a different holder: the clock restarted
+
+            time.Advance(TimeSpan.FromHours(5.5));
+            held.CheckHealth();
+            Assert.Equal(1, reports.Conflicts); // B itself has now outlived the wait
+        }
     }
 
     // ---- The pg_locks decomposition of a negative key whose halves are both >= 2^31

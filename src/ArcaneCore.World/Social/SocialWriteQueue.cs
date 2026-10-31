@@ -974,7 +974,7 @@ public sealed class SocialWriteQueue : ISocialPersistence, IPetitionPersistence
         {
             if (attempt == 1 && (_stopped || _drain.IsSuppressed) && _drain.Refuse() is { } refused)
             {
-                return refused; // shutdown drain only: nothing is attempted, the write stays retained
+                return refused; // stop drain exhausted or lane suppressed: nothing is attempted, the write stays retained
             }
 
             if (made is not null)

@@ -39,7 +39,7 @@ public sealed class StopDrainBudget
     private int _failed;
     private int _refused;
     private StopDrainExhaustedException? _lastRefusal;
-    private string? _suppressedReason;
+    private volatile string? _suppressedReason; // written under the gate (first wins), read lock-free
 
     /// <summary>How much stalled time exhausts the lane.</summary>
     public TimeSpan StallBudget { get; init; } = DefaultStallBudget;
@@ -87,18 +87,10 @@ public sealed class StopDrainBudget
 
     /// <summary>
     /// Why every attempt on this lane is refused from now on (null: not suppressed). Set by <see cref="Suppress"/> when the world must stop without writing: the characters database is
-    /// being written by another world, so the shutdown saves would land in its data.
+    /// being written by another world, so the shutdown saves would land in its data. The lanes are the polite path (a refused write stays retained, nothing is attempted); the context-wide
+    /// <c>CharacterDatabaseWriterFence</c> is the backstop for the writers that have no lane.
     /// </summary>
-    public string? SuppressedReason
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _suppressedReason;
-            }
-        }
-    }
+    public string? SuppressedReason => _suppressedReason;
 
     /// <summary>
     /// Refuses every later attempt on this lane, whether or not it was <see cref="Begin"/>-started: the write stays retained with a <see cref="StopDrainExhaustedException"/> naming
