@@ -1,5 +1,7 @@
 using System.Data;
 using System.Data.Common;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 
 namespace ArcaneCore.Data;
 
@@ -27,6 +29,28 @@ internal static class DbConnectionOpen
         }
 
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Makes the connection of <paramref name="database"/> open through EF, so the context's connection interceptors (the characters writer-lock fence among them) see the open. An open connection
+    /// is left alone; a broken one is closed first. Returns true when this call opened it, false when it was already open.
+    /// </summary>
+    public static async Task<bool> EnsureOpenAsync(DatabaseFacade database, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        DbConnection connection = database.GetDbConnection();
+        if (connection.State == ConnectionState.Open)
+        {
+            return false;
+        }
+
+        if (connection.State == ConnectionState.Broken)
+        {
+            await connection.CloseAsync().ConfigureAwait(false);
+        }
+
+        await database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         return true;
     }
 }

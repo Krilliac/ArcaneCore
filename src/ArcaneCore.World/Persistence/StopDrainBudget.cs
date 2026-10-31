@@ -39,6 +39,7 @@ public sealed class StopDrainBudget
     private int _failed;
     private int _refused;
     private StopDrainExhaustedException? _lastRefusal;
+    private volatile string? _suppressedReason; // written under the gate (first wins), read lock-free
 
     /// <summary>How much stalled time exhausts the lane.</summary>
     public TimeSpan StallBudget { get; init; } = DefaultStallBudget;
@@ -83,6 +84,29 @@ public sealed class StopDrainBudget
             _coveredUntil = _beginTimestamp;
         }
     }
+
+    /// <summary>
+    /// Why every attempt on this lane is refused from now on (null: not suppressed). Set by <see cref="Suppress"/> when the world must stop without writing: the characters database is
+    /// being written by another world, so the shutdown saves would land in its data. The lanes are the polite path (a refused write stays retained, nothing is attempted); the context-wide
+    /// <c>CharacterDatabaseWriterFence</c> is the backstop for the writers that have no lane.
+    /// </summary>
+    public string? SuppressedReason => _suppressedReason;
+
+    /// <summary>
+    /// Refuses every later attempt on this lane, whether or not it was <see cref="Begin"/>-started: the write stays retained with a <see cref="StopDrainExhaustedException"/> naming
+    /// <paramref name="reason"/>, and <see cref="Exhausted"/> is true. Queues refuse every attempt on a suppressed lane, whether or not they are stopping, so nothing more is written through them. The first reason stays.
+    /// </summary>
+    public void Suppress(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        lock (_gate)
+        {
+            _suppressedReason ??= reason;
+        }
+    }
+
+    /// <summary>True once <see cref="Suppress"/> was called. Queues refuse every attempt on a suppressed lane, stopping or not (see <see cref="Refuse"/>).</summary>
+    public bool IsSuppressed => SuppressedReason is not null;
 
     /// <summary>The stalled time so far in milliseconds, counting completed failed attempts only; 0 when not started.</summary>
     public double StalledMs
@@ -183,8 +207,9 @@ public sealed class StopDrainBudget
             }
 
             _refused++;
-            _lastRefusal = new StopDrainExhaustedException(
-                $"{Name}: stalled {StalledMsLocked():0} ms of {StallBudget.TotalMilliseconds:0} ms with no write landing; the write was not attempted and stays retained");
+            _lastRefusal = new StopDrainExhaustedException(_suppressedReason is not null
+                ? $"{Name}: writes are suppressed ({_suppressedReason}); the write was not attempted and stays retained"
+                : $"{Name}: stalled {StalledMsLocked():0} ms of {StallBudget.TotalMilliseconds:0} ms with no write landing; the write was not attempted and stays retained");
             return _lastRefusal;
         }
     }
@@ -203,7 +228,7 @@ public sealed class StopDrainBudget
     public string Describe()
         => $"{Name}: {Succeeded} landed, {Failed} failed, {Refused} refused, {InFlight} in flight, stalled {StalledMs:0} ms of {StallBudget.TotalMilliseconds:0} ms";
 
-    private bool ExhaustedLocked() => _beginTimestamp != 0 && StalledMsLocked() >= StallBudget.TotalMilliseconds;
+    private bool ExhaustedLocked() => _suppressedReason is not null || (_beginTimestamp != 0 && StalledMsLocked() >= StallBudget.TotalMilliseconds);
 
     private double StalledMsLocked() => _beginTimestamp == 0 ? 0 : _stalledTicks * 1000.0 / Time.TimestampFrequency; // completed failures only: a running attempt is unknown until its verdict
 
