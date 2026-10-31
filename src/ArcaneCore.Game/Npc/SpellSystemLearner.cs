@@ -18,7 +18,7 @@ namespace ArcaneCore.Game.Npc;
 /// Player::GetTrainerSpellState, a skill a SkillRaceClassInfo row marks not trainable or above the player's
 /// level is not offered, and buying casts the teaching spell through the spell system so its effects
 /// (LEARN_SPELL, SKILL_STEP) run. Without it every skill value reads 0 and no primary-profession points exist.
-/// The spell_chain req_spell column is not modelled (ChainReq is always 0); the talent-dependent ranks are gated through prev_spell, which
+/// The spell_chain req_spell column is read from <see cref="SpellChainRequirements"/> (the two Greater Blessings); the talent-dependent ranks are gated through prev_spell, which
 /// <see cref="TalentAbilityRankLinks"/> merges into the rank chains.
 /// </remarks>
 /// <param name="spells">The spell system (resolved lazily: features attach in name order).</param>
@@ -82,7 +82,7 @@ public sealed class SpellSystemLearner(Func<SpellSystem?> spells, SkillLineAbili
 
         if (catalog is null)
         {
-            return new TrainerSpellInfo(learned, learnedInfo.SpellLevel, abilities.PreviousRank(learned), 0, false, false, false);
+            return new TrainerSpellInfo(learned, learnedInfo.SpellLevel, abilities.PreviousRank(learned), SpellChainRequirements.RequiredFor(learned), false, false, false);
         }
 
         // vmangos Player::GetTrainerSpellState (Player.cpp:4277-4293): a primary-profession teaching spell is one whose
@@ -103,7 +103,7 @@ public sealed class SpellSystemLearner(Func<SpellSystem?> spells, SkillLineAbili
 
         bool primaryLearn = professionLearn && catalog.IsPrimaryProfessionSkill(unchecked((uint)second.MiscValue));
         return new TrainerSpellInfo(
-            learned, learnedInfo.SpellLevel, catalog.Ranks.Previous(learned), 0,
+            learned, learnedInfo.SpellLevel, catalog.Ranks.Previous(learned), SpellChainRequirements.RequiredFor(learned),
             catalog.IsPrimaryProfessionFirstRankSpell(learned), primaryLearn, firstRank);
     }
 

@@ -138,6 +138,94 @@ public sealed class TalentRankChainTrainerTests
         public void Dispose() => Kit.Dispose();
     }
 
+    /// <summary>One trainer row teaching the learned spell (through teaching spell 900000 + learned) over a catalog of the ability rows.</summary>
+    private sealed class ChainRig : IDisposable
+    {
+        private readonly uint _teaching;
+
+        public ChainRig(uint learned, params uint[] abilities)
+        {
+            _teaching = 900000 + learned;
+            SpellInfo[] spells =
+            [
+                .. abilities.Append(learned).Distinct().Select(a => SpellTestKit.Spell(a)),
+                SpellTestKit.Spell(_teaching, SpellTestKit.Effect(SpellEffectName.LearnSpell, 1, trigger: learned)),
+            ];
+            var system = new SpellSystem(new SpellStore(spells, [], []), () => 0u, spellbook: Book);
+            var learner = new SpellSystemLearner(() => system, new SkillLineAbilityCatalog(Rows(abilities)));
+            NpcContent content = NpcContent.Empty with
+            {
+                TrainerSpells = [new TrainerSpell { Entry = NpcServiceTestKit.Entry, Spell = _teaching, SpellCost = 10 }],
+            };
+            Kit = new NpcServiceTestKit(NpcFlags.Trainer | NpcFlags.Gossip, content,
+                new QuestNpcDependencies(Spells: learner, Reputation: new NpcVendorServiceTests.FixedReputation(1f)));
+            Kit.Npc = Kit.Npc with { TrainerType = TrainerType.TradeSkills, TrainerClass = 0 };
+            Kit.Player.Level = 60;
+            Kit.Player.Money = 100;
+            Learned = learned;
+        }
+
+        public uint Learned { get; }
+
+        public MemorySpellbook Book { get; } = new();
+
+        public NpcServiceTestKit Kit { get; }
+
+        public byte State()
+        {
+            Kit.Drain();
+            Kit.Services.TrainerList(Kit.Player, Kit.Npc.Guid);
+            var r = new PacketReader(Kit.Single(WorldOpcode.SmsgTrainerList));
+            r.ReadUInt64();
+            r.ReadUInt32();
+            Assert.Equal(1u, r.ReadUInt32());
+            Assert.Equal(_teaching, r.ReadUInt32());
+            return r.ReadByte();
+        }
+
+        public void Know(uint spell) => Book.LearnSpell(Kit.Player, spell);
+
+        public void Buy() => Kit.Services.BuyTrainerSpell(Kit.Player, Kit.Npc.Guid, _teaching);
+
+        public void Dispose() => Kit.Dispose();
+    }
+
+    [Theory]
+    [InlineData(20116u, 26573u, new[] { 26573u, 20116u, 20922u, 20923u, 20924u })]
+    [InlineData(16811u, 16810u, new[] { 16810u, 16689u, 16811u, 16812u, 16813u, 17329u })]
+    [InlineData(27681u, 14752u, new[] { 14752u, 14818u, 27681u })]
+    [InlineData(17354u, 16190u, new[] { 16190u, 17354u, 17359u })]
+    public void TrainerSellsTalentAbilityRankOnlyAfterTheTalentSpell(uint rank, uint required, uint[] abilities)
+    {
+        using var rig = new ChainRig(rank, abilities);
+        Assert.Equal((byte)TrainerSpellState.Red, rig.State());
+        rig.Buy();
+        Assert.False(rig.Book.HasSpell(rig.Kit.Player, rank));
+        Assert.Equal(100u, rig.Kit.Player.Money);
+
+        rig.Know(required);
+        Assert.Equal((byte)TrainerSpellState.Green, rig.State());
+        rig.Buy();
+        Assert.True(rig.Book.HasSpell(rig.Kit.Player, rank));
+    }
+
+    [Theory]
+    [InlineData(25898u, 20217u)]
+    [InlineData(25899u, 20914u)]
+    public void TrainerHonoursSpellChainReqSpell(uint spell, uint required)
+    {
+        using var rig = new ChainRig(spell, spell);
+        Assert.Equal(required, SpellChainRequirements.RequiredFor(spell));
+        Assert.Equal((byte)TrainerSpellState.Red, rig.State());
+        rig.Buy();
+        Assert.False(rig.Book.HasSpell(rig.Kit.Player, spell));
+
+        rig.Know(required);
+        Assert.Equal((byte)TrainerSpellState.Green, rig.State());
+        rig.Buy();
+        Assert.True(rig.Book.HasSpell(rig.Kit.Player, spell));
+    }
+
     [Fact]
     public void TrainerRefusesPyroblastRank2WithoutTheTalentSpell()
     {

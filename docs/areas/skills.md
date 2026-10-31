@@ -138,7 +138,7 @@ copied). Each piece of code cites file:line.
   `SkillAdded` and `SkillRemoving` now maintain skill auras; quest-log cleanup on skill removal
   (`Player.cpp:5576-5599`) remains a separate quest hook.
 - Trainer rows: the `SkillRaceClassInfo` minimum level is not applied (the reference applies it only when training; the
-  list and the state share one predicate here). `spell_chain` `req_spell` and the custom `spell_chain` table are not loaded; only the talent-ability prev_spell links are supplied (`TalentAbilityRankLinks`).
+  list and the state share one predicate here). the custom `spell_chain` table is not loaded, and `req_spell` is modelled only for the two Greater Blessings (`SpellChainRequirements`); only the talent-ability prev_spell links are supplied (`TalentAbilityRankLinks`).
   Learning rank N without rank N-1 does not learn the lower ranks (`Player.cpp:3621-3629`), the spellbook owner's rule.
 - Account trial restrictions (`HasTrialRestrictions`, `Player.cpp:5227, 5251`), battleground flags, the per-object use
   requirement table and the play-time flag are not modelled in gathering. An immune gatherer is refused before anything opens

@@ -115,6 +115,8 @@ public static class TalentAbilityRankLinks
         (15430, 15237), (15431, 15430), (27799, 15431), (27800, 27799), (27801, 27800),
         // Divine Spirit
         (14818, 14752), (14819, 14818), (27841, 14819),
+        // Prayer of Spirit (mangos-classic spell_chain: ('27681','14752','14752','2'))
+        (27681, 14752),
         // Lightwell
         (27870, 724), (27871, 27870),
         // Dark Pact
@@ -129,7 +131,27 @@ public static class TalentAbilityRankLinks
         (20116, 26573), (20922, 20116), (20923, 20922), (20924, 20923),
         // Nature's Grasp (the DBC only links rank 1 -> 2)
         (16811, 16810), (16812, 16811), (16813, 16812), (17329, 16813),
+        // Mana Tide Totem. Neither reference chains these ranks; retail trains rank 2 and 3 only after rank 1, so this follows retail beyond the references.
+        (17354, 16190), (17359, 17354),
     ];
+}
+
+/// <summary>
+/// The spell_chain req_spell column for the trainer-sold spells that carry one (mangos-classic sql/base/mangos.sql spell_chain rows
+/// <c>(25898,0,25898,1,20217)</c> and <c>(25899,0,25899,1,20914)</c>): Greater Blessing of Kings needs Blessing of Kings and Greater
+/// Blessing of Sanctuary needs Blessing of Sanctuary rank 4. Trainers refuse the spell until the player knows the required spell
+/// (Player::GetTrainerSpellState) and send it as the first chain node of the trainer list. No other 1.12 row has a req_spell.
+/// </summary>
+public static class SpellChainRequirements
+{
+    private static readonly FrozenDictionary<uint, uint> Required = new Dictionary<uint, uint>
+    {
+        [25898] = 20217,
+        [25899] = 20914,
+    }.ToFrozenDictionary();
+
+    /// <summary>The spell the player must know before <paramref name="spellId"/> is trainable, 0 when none.</summary>
+    public static uint RequiredFor(uint spellId) => Required.GetValueOrDefault(spellId);
 }
 
 /// <summary>
