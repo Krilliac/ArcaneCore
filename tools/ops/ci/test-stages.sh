@@ -22,6 +22,7 @@
 #   GATE_CLASS_BUDGET_SEC (default 600) fails a target whose test class's tests add up to more than that (xunit runs a class's tests
 #       one after another, so the slowest class sets the floor of the run time). Not applied with --filter.
 #   GATE_LONG_TEST_SEC (default 60) a test running longer is reported by xunit as "[Long Running Test]" and named in the summary.
+# GATE_ASSEMBLY_PARALLEL=0 runs a target's test assemblies one after another (-m:1) in the main stage too; the timing stage always does.
 # The summary lists the slowest classes and tests of a target that hit a budget.
 set -u
 
@@ -35,7 +36,7 @@ while [ $# -gt 0 ]; do
     --filter) filter=${2:-}; shift 2 ;;
     --commit) commit=${2:-}; shift 2 ;;
     --selftest) selftest=1; shift ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
     --*) echo "test-stages: unknown option $1" >&2; exit 2 ;;
     *) targets+=("$1"); shift ;;
   esac
@@ -69,7 +70,9 @@ fail() { reasons+=("$1"); }
 run_test() {
   local log=$1 trx=$2 flt=$3 ser=$4 target=$5 tmo=${6:-0} pre=("${wrap[@]}")
   [ "$(basename "$target")" = Data.slnf ] && pre=("${wrap_data[@]}" "${wrap[@]}")
-  local cmd=("${pre[@]}" dotnet test "$target" -c "$config" --no-build -m:1 --verbosity normal --logger trx --results-directory "$trx" --filter "$flt")
+  local cmd=("${pre[@]}" dotnet test "$target" -c "$config" --no-build --verbosity normal --logger trx --results-directory "$trx" --filter "$flt")
+  # -m:1 runs a suite's test assemblies one after another; the main stage drops it unless GATE_ASSEMBLY_PARALLEL=0.
+  if [ "$ser" = 1 ] || [ "${GATE_ASSEMBLY_PARALLEL:-1}" = 0 ]; then cmd+=(-m:1); fi
   if [ "$ser" = 1 ]; then cmd+=(-- "${serial[@]}")
   else
     cmd+=(-- "${main_settings[@]}")

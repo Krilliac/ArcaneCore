@@ -106,9 +106,15 @@ check hardstop 1 "" 'main tests/ci/X.slnf was stopped at its 20m time budget.*st
 grep -q 'xUnit.LongRunningTestSeconds=60' "$work/args-hardstop.txt" || { echo "FAIL hardstop: no LongRunningTestSeconds"; bad=1; }
 [ "$(head -1 "$work/args-hardstop.txt" | grep -o ' -- ' | wc -l)" = 1 ] || { echo "FAIL hardstop: main run did not have exactly one --"; bad=1; }
 grep -q 'slowest completed tests' "$work/hardstop.out" && grep -q 'Ns.Fast.Q' "$work/hardstop.out" || { echo "FAIL hardstop: slowest tests not listed"; bad=1; }
+# Assemblies of a suite run in parallel in the main stage (no -m:1); the timing stage and GATE_ASSEMBLY_PARALLEL=0 keep -m:1.
+[ "$(head -1 "$work/args-hardstop.txt" | grep -c -- ' -m:1 ')" = 0 ] || { echo "FAIL hardstop: main stage still passes -m:1"; bad=1; }
+[ "$(tail -1 "$work/args-hardstop.txt" | grep -c -- ' -m:1 ')" = 1 ] || { echo "FAIL hardstop: timing stage lost -m:1"; bad=1; }
 envs="GATE_SUITE_BUDGET_MIN=3"; tag=hardstop-3min
 check hardstop 1 "" 'was stopped at its 3m time budget'
 grep -q 'TestSessionTimeout=180000' "$work/args-hardstop-3min.txt" || { echo "FAIL hardstop-3min: knob not honoured"; bad=1; }
+envs="GATE_ASSEMBLY_PARALLEL=0"; tag=asm-serial
+check pass 0 "" 'serial: confirmed'
+[ "$(grep -c -- ' -m:1 ' "$work/args-asm-serial.txt")" = "$(grep -c '^test ' "$work/args-asm-serial.txt")" ] || { echo "FAIL asm-serial: -m:1 missing from a run"; bad=1; }
 envs="GATE_TIME_BUDGETS=off"; tag=hardstop-off
 check hardstop 0 "" 'time budgets: OFF' 'was stopped'
 grep -q 'TestSessionTimeout' "$work/args-hardstop-off.txt" && { echo "FAIL hardstop-off: a session timeout was still passed"; bad=1; }
