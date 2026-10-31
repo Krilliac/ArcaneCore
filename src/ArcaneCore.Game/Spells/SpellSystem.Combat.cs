@@ -45,7 +45,7 @@ public sealed partial class SpellSystem
             return attackTime / 1000.0f;
         }
 
-        Item? weapon = PlayerCombatSkills.WeaponForAttack(player, attack, nonBroken: true, useable: true);
+        Item? weapon = PlayerCombatSkills.WeaponForAttack(player, attack, nonBroken: true, useable: false); // vmangos SpellCaster::GetAPMultiplier passes useable=false
         return StatFormulas.ApMultiplier(attackTime, normalized: true, isPlayer: true, weapon?.Template.GetInventoryType(), weapon?.Template.SubClass ?? 0u);
     }
 

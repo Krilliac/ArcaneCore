@@ -92,7 +92,7 @@ Known gaps and UNVERIFIED points:
 - UNVERIFIED: whether retail 1.12.1 weights the slots on a hit taken or done. Both reference cores pick uniformly over all 19 slots (vmangos `Unit.cpp:882`, `Unit.cpp:892`; mangos-classic `Unit.cpp:1228`, `:1244`) and no per-slot weights were found in the other cores searched; the code follows them.
 - UNVERIFIED: whether retail wears the weapon only for white swings, whether a ranged weapon wears on ranged hits, and whether environmental damage (falling, lava) wears armor; the code follows the reference core for the last (self damage is damage taken).
 - `DurabilityLossChance.Absorb`, `.Parry` and `.Block` are modelled since the economy-items lane (see below), off by default because vmangos does not have them; the slots they wear are a reconstruction, since no reference core still reads them. The `SPELL_ATTR_EX3_NO_DURABILITY_LOSS` exception is not modelled.
-- The new `Items:DurabilityLossChanceDamage` description in `ItemMechanicsOptions` changes the generated `docs/reference/configuration.md` row, so `ConfigReferenceTests` in `ArcaneCore.World.Tests` fails until the orchestrator regenerates it.
+- A spell partial block (`RollSpellPartialBlock`) reduces damage but raises no `PROC_EX_BLOCK` proc bit, so block-triggered procs do not fire on blocked spells; and the deferred next-swing `ATTACKERSTATEUPDATE` path still reports blocked=0 (needs `SpellSystem.Seams.cs`). Both are follow-ups.
 
 ### Deliberate differences
 

@@ -4766,8 +4766,8 @@ Items.DurabilityLossChanceBlock = 0
 #                     or taken costs a worn item a durability point (Unit.cpp:1093-1108). Rolled per
 #                     damage event by MapCombat (MapCombat.Durability.cs): a player victim that
 #                     survives loses a point on a uniformly random equipment slot, and a player's
-#                     connecting melee swing wears the weapon of the swinging hand. Zero or less
-#                     never rolls; DurabilityLossEnable false overrides it.
+#                     connecting melee swing likewise wears one of the 19 equipment slots chosen
+#                     uniformly. Zero or less never rolls; DurabilityLossEnable false overrides it.
 #        Type: double
 #        Default: 0.5
 #        Allowed: a number, '.' is the decimal point

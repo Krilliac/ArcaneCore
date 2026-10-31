@@ -5748,7 +5748,7 @@
       "defaultEntries": [],
       "daemons": "World",
       "reload": "start",
-      "meaning": "vmangos `DurabilityLossChance.Damage` (mangosd.conf.dist.in:2848, World.cpp:554): the percent chance (0.5 means 0.5 percent) that damage dealt or taken costs a worn item a durability point (Unit.cpp:1093-1108). Rolled per damage event by MapCombat (MapCombat.Durability.cs): a player victim that survives loses a point on a uniformly random equipment slot, and a player's connecting melee swing wears the weapon of the swinging hand. Zero or less never rolls; `DurabilityLossEnable` false overrides it.",
+      "meaning": "vmangos `DurabilityLossChance.Damage` (mangosd.conf.dist.in:2848, World.cpp:554): the percent chance (0.5 means 0.5 percent) that damage dealt or taken costs a worn item a durability point (Unit.cpp:1093-1108). Rolled per damage event by MapCombat (MapCombat.Durability.cs): a player victim that survives loses a point on a uniformly random equipment slot, and a player's connecting melee swing likewise wears one of the 19 equipment slots chosen uniformly. Zero or less never rolls; `DurabilityLossEnable` false overrides it.",
       "allowed": "a number, '.' is the decimal point",
       "docs": "docs/reference/configuration.md#items",
       "isCollection": false
