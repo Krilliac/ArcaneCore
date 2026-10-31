@@ -660,9 +660,9 @@ public sealed partial class PetAI : CreatureAI
         }
 
         if (spells.CastSpell(Me, chosen.Id, SpellCastTargets.ForUnit(chosenTarget.Guid), triggered: false) == SpellCastResult.CastOk
-            && !chosen.IsPositive && Owner is Player owner)
+            && Owner is Player owner)
         {
-            if (Me.Summon?.Kind == SummonKind.Pet && _random.Next(0, 101) < 10)
+            if (Me.Summon?.Kind == SummonKind.Pet && !ReferenceEquals(chosenTarget, Me) && _random.Next(0, 101) < 10)
             {
                 owner.Session.Send(WorldOpcode.SmsgPetActionSound, PetPackets.BuildActionSound(Me.Guid, PetTalk.SpecialSpell));
             }
