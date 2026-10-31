@@ -103,20 +103,24 @@ public static class SpellPackets
         ArgumentNullException.ThrowIfNull(hits);
         ArgumentNullException.ThrowIfNull(misses);
         ArgumentNullException.ThrowIfNull(targets);
-        var writer = new PacketWriter(48 + (hits.Count * 8) + (misses.Count * 10));
+        // The retail layout counts hits and misses in one byte each: write at most 255 of each so the counts always match the GUIDs that follow.
+        int hitCount = Math.Min(hits.Count, byte.MaxValue);
+        int missCount = Math.Min(misses.Count, byte.MaxValue);
+        var writer = new PacketWriter(48 + (hitCount * 8) + (missCount * 10));
         writer.WritePackedGuid(castItemOrCaster.Value);
         writer.WritePackedGuid(caster.Value);
         writer.WriteUInt32(spellId);
         writer.WriteUInt16((ushort)flags);
-        writer.WriteByte((byte)hits.Count);
-        foreach (ObjectGuid hit in hits)
+        writer.WriteByte((byte)hitCount);
+        for (int i = 0; i < hitCount; i++)
         {
-            writer.WriteUInt64(hit.Value);
+            writer.WriteUInt64(hits[i].Value);
         }
 
-        writer.WriteByte((byte)misses.Count);
-        foreach ((ObjectGuid guid, SpellMissInfo reason) in misses)
+        writer.WriteByte((byte)missCount);
+        for (int i = 0; i < missCount; i++)
         {
+            (ObjectGuid guid, SpellMissInfo reason) = misses[i];
             writer.WriteUInt64(guid.Value);
             writer.WriteByte((byte)reason);
             if (reason == SpellMissInfo.Reflect)
