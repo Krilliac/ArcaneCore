@@ -271,7 +271,7 @@ public sealed class TalentWorldTests
 
         await client.SendAsync(WorldOpcode.CmsgLearnTalent, U32U32(2, 0));   // row 1 needs five points in the tree
 
-        Assert.Empty(await client.CollectAsync());
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgLearnedSpell, WorldOpcode.SmsgSupercededSpell, WorldOpcode.SmsgRemovedSpell, WorldOpcode.MsgTalentWipeConfirm);
         Assert.Equal(3u, await host.OnWorldAsync(() => FreePoints(host, "TIERLOCK")));
     }
 
@@ -431,7 +431,7 @@ public sealed class TalentWorldTests
 
         await client.SendAsync(WorldOpcode.MsgTalentWipeConfirm, GuidBody(Trainer));   // the creature is only a quest giver
 
-        Assert.Empty(await client.CollectAsync());
+        await client.AssertNoPacketsAsync(WorldOpcode.SmsgLearnedSpell, WorldOpcode.SmsgSupercededSpell, WorldOpcode.SmsgRemovedSpell, WorldOpcode.MsgTalentWipeConfirm);
         Assert.True(await host.OnWorldAsync(() => Knows(host, "NOTRAINER", T1R1)));
     }
 
