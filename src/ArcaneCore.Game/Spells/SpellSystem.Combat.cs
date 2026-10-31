@@ -32,7 +32,7 @@ public sealed partial class SpellSystem
     /// <summary>
     /// The normalized weapon speed in seconds of a unit's hand for NORMALIZED_WEAPON_DMG (vmangos
     /// SpellCaster::GetAPMultiplier, SpellCaster.cpp:1826-1853: 2.4 one-hand and fist, 3.3 two-hand, 1.7 dagger,
-    /// 2.8 ranged). The default reads the player's usable, unbroken weapon of the hand (<see cref="PlayerCombatSkills.WeaponForAttack"/>)
+    /// 2.8 ranged). The default reads the player's unbroken weapon of the hand, usable or not (<see cref="PlayerCombatSkills.WeaponForAttack"/>)
     /// through <see cref="StatFormulas.ApMultiplier"/>; a non-player's multiplier is its plain attack time.
     /// </summary>
     public Func<Unit, WeaponAttackType, float> NormalizedWeaponSpeed { get; set; } = DefaultNormalizedWeaponSpeed;
@@ -164,7 +164,14 @@ public sealed partial class SpellSystem
             return 0;
         }
 
-        float chance = input.BlockChance - ((input.AttackerWeaponSkill - input.VictimMaxSkill) * (input.VictimIsPlayer ? 0.04f : 0.1f));
+        // mangos-classic Unit::CanBlockInCombat (Unit.cpp:3090-3112): a victim whose block chance is under 0.005 cannot block at all (a player
+        // without a usable, unbroken off-hand shield has none), so the skill difference below must not turn 0 into a chance.
+        if (input.BlockChance < 0.005f)
+        {
+            return 0;
+        }
+
+        float chance = input.BlockChance -((input.AttackerWeaponSkill - input.VictimMaxSkill) * (input.VictimIsPlayer ? 0.04f : 0.1f));
         if (!input.VictimIsPlayer)
         {
             chance = Math.Min(chance, 5.0f);

@@ -42,8 +42,8 @@ public sealed class ItemMechanicsOptions
 
     /// <summary>
     /// mangos <c>DurabilityLossChance.Absorb</c> (mangos-classic World.cpp:460, mangoszero WorldConfig.cpp:233; mangos default 0.5): the percent
-    /// chance that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (the hit-taken
-    /// pool). Default 0 (off), as vmangos has no absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.
+    /// chance that a player whose absorb effects take part of a melee swing loses a durability point on one worn armor piece (drawn from the
+    /// worn armor pieces that have a durability maximum, a shield included and a weapon not). Default 0 (off), as vmangos has no absorb wear; 0.5 restores the mangos setting. Zero or less never rolls.
     /// </summary>
     public double DurabilityLossChanceAbsorb { get; set; }
 

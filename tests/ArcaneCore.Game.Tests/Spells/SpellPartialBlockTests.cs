@@ -108,4 +108,24 @@ public sealed class SpellPartialBlockTests
 
         Assert.Equal(0u, kit.System.DealDirectDamage(caster, victim, kit.Store.Get(MeleeStrike)!, 20, allowCrit: false).Dealt); // 20 < 30
     }
+
+    [Fact]
+    public void APlayerVictimWithoutAShield_NeverBlocksEvenWhenTheAttackerSkillIsBelowItsMaximum()
+    {
+        using SpellTestKit kit = Kit();
+        (Player caster, CombatTestUnit creature) = Scene(kit, MathF.PI, roll: 0.0);
+        (Player victim, _) = kit.AddPlayer(2);
+        victim.Level = 60; // maximum skill 300 against the level 1 caster's 5: the skill difference alone would give an 11.8% chance
+        victim.SetUInt32(UpdateFields.UnitFieldStat0, 400); // a shield block value of 19 if a block ever landed
+        victim.Relocate(2, 0, caster.Z, MathF.PI, 0);
+        victim.Map!.Combat.Track(victim);
+        kit.World.RunTick(0);
+        SpellInfo strike = kit.Store.Get(MeleeStrike)!;
+
+        for (int i = 0; i < 100; i++)
+        {
+            kit.System.Random = new FixedRandom(i / 100.0);
+            Assert.Equal(0u, kit.System.RollSpellPartialBlock(caster, victim, strike, 100));
+        }
+    }
 }
