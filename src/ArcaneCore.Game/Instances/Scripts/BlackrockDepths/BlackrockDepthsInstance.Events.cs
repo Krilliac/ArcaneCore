@@ -106,7 +106,7 @@ public sealed partial class BlackrockDepthsInstance
     /// <summary>npc_rocknotAI: wake Phalanx (his escort) when the bar reacts to the broken door.</summary>
     internal void StartPhalanx()
     {
-        if (GetSingleCreatureFromStorage(NpcPhalanx)?.AI is PhalanxAI phalanx) phalanx.Start();
+        if (GetSingleCreatureFromStorage(NpcPhalanx)?.AI is PhalanxAI phalanx) phalanx.Start(instantRespawn: true);
     }
 
     public override void Initialize()
@@ -402,7 +402,7 @@ public sealed partial class BlackrockDepthsInstance
             && GetData(TypePlugger) is not (EncounterState.InProgress or EncounterState.Done)) SetData(TypeBar, EncounterState.InProgress);
         else if (entry == NpcPlugger)
         {
-            if (GetSingleCreatureFromStorage(NpcPhalanx)?.AI is PhalanxAI phalanx) phalanx.Start();
+            if (GetSingleCreatureFromStorage(NpcPhalanx)?.AI is PhalanxAI phalanx) phalanx.Start(instantRespawn: true);
             MakeBarHostile();
             SetData(TypePlugger, EncounterState.InProgress);
         }

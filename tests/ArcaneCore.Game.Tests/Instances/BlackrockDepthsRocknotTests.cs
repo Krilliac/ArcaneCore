@@ -6,6 +6,7 @@ using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.Classic;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Instances;
@@ -22,8 +23,11 @@ public sealed class BlackrockDepthsRocknotTests
             [BlackrockDepthsInstance.NpcNagmara, BlackrockDepthsInstance.NpcPhalanx, BlackrockDepthsInstance.NpcRocknot],
             null, null,
             [.. Enumerable.Range(1, 34).Select(i => (BlackrockDepthsInstance.NpcRocknot, EscortAI.EscortPathId,
-                new CreatureWaypoint((uint)i, -16f + i * 0.1f, -383f, 61.78f, 0, 0)))],
-            null);
+                new CreatureWaypoint((uint)i, -16f + i * 0.1f, -383f, 61.78f, 0, 0)))
+                .Concat(Enumerable.Range(1, 2).Select(i => (BlackrockDepthsInstance.NpcPhalanx, EscortAI.EscortPathId,
+                    new CreatureWaypoint((uint)i, -12f + i * 0.1f, -383f, 61.78f, 0, 0))))],
+            null,
+            (BlackrockDepthsInstance.GoBarKegShot, GameObjectType.Goober));
 
     [Fact]
     public void RocknotsAle_ThreeTurnIns_CountThreeAlesAndStartTheWalkToTheBarrel()
@@ -135,5 +139,38 @@ public sealed class BlackrockDepthsRocknotTests
         Assert.Contains(h.Creatures.Creatures, c => c.Template.Entry == BlackrockDepthsInstance.NpcRocknot);
         Assert.True(ai.HasEscortState(EscortAI.EscortState.Escorting));
         Assert.True(ai.HasEscortState(EscortAI.EscortState.Paused));
+    }
+
+    [Fact]
+    public void AleEvent_AfterTheKegIsShot_PhalanxWalksToTheBarDoorAndStaysThere()
+    {
+        using DungeonScriptHarness h = Harness();
+        var instance = (BlackrockDepthsInstance)h.Data;
+        Creature rocknot = h.Creature(BlackrockDepthsInstance.NpcRocknot);
+        Creature phalanx = h.Creature(BlackrockDepthsInstance.NpcPhalanx);
+        var ai = Assert.IsType<RocknotAI>(rocknot.AI);
+        var phalanxAi = Assert.IsType<PhalanxAI>(phalanx.AI);
+        for (int i = 0; i < 3; i++)
+        {
+            ai.OnQuestRewarded(h.Player, RocknotAI.QuestAle);
+        }
+
+        h.Tick(2000);
+        Reach(ai, 1, 2, 3, 4, 5, 6, 7);
+        h.Tick(2000);
+        h.Tick(1000);
+        h.Tick(5000);
+
+        Assert.Equal(GameObjectState.Active, h.Object(BlackrockDepthsInstance.GoBarKegShot).State);
+        Assert.Equal(EncounterState.Done, instance.GetData(BlackrockDepthsInstance.TypeRocknot));
+        Assert.True(phalanxAi.HasEscortState(EscortAI.EscortState.Escorting));
+
+        phalanxAi.OnMovementInform(MovementGeneratorType.Point, 1);
+        phalanxAi.OnMovementInform(MovementGeneratorType.Point, 2);
+        h.Tick(2500);
+
+        Assert.True(phalanx.IsInWorld);
+        Assert.Contains(h.Creatures.Creatures, c => c.Template.Entry == BlackrockDepthsInstance.NpcPhalanx);
+        Assert.True(phalanxAi.HasEscortState(EscortAI.EscortState.Paused));
     }
 }
