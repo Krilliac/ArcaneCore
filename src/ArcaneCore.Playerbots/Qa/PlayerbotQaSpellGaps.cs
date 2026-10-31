@@ -65,7 +65,7 @@ internal sealed class PlayerbotQaSpellGapAnalyzer(SpellSystem system)
             if (effect.IsEmpty) continue;
             string name = effect.Effect.ToString();
             int value = effect.BasePoints + 1;
-            if (!system.CanSelectImplicitTarget(spell, effect))
+            if (!silenced && !system.CanSelectImplicitTarget(spell, effect))
             {
                 SpellImplicitTarget selector = system.SelectorOf(effect);
                 (gaps ??= []).Add(new QaSpellGap(i, QaSpellGaps.Target, string.Create(CultureInfo.InvariantCulture, $"{(uint)selector} ({selector})"), name, value, 0));
