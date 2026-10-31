@@ -235,6 +235,8 @@ public enum SpellImplicitTarget : uint
     GameObjectItem = 26,
     /// <summary>Ground aura destination; its dynamic object selects enemies on later updates (vmangos Spell::SetTargetMap).</summary>
     EnumUnitsEnemyAoeAtDynobjLoc = 28,
+    /// <summary>vmangos TARGET_ENUM_UNITS_FRIEND_AOE_AT_DYNOBJ_LOC (SpellDefines.h:84).</summary>
+    EnumUnitsFriendAoeAtDynobjLoc = 29,
     EnumUnitsFriendAoeAtSrcLoc = 30,
     EnumUnitsFriendAoeAtDestLoc = 31,
     /// <summary>vmangos TARGET_LOCATION_UNIT_MINION_POSITION: caster-relative summon destination.</summary>
@@ -248,6 +250,8 @@ public enum SpellImplicitTarget : uint
     /// <summary>TARGET_UNIT_SCRIPT_NEAR_CASTER: the nearest unit spell_script_target lists (vmangos Spell::CheckScriptTargeting).</summary>
     UnitScriptNearCaster = 38,
     UnitFriendChainHeal = 45,
+    /// <summary>vmangos TARGET_ENUM_GAMEOBJECTS_SCRIPT_AOE_AT_DEST_LOC (SpellDefines.h:107).</summary>
+    EnumGameObjectsScriptAoeAtDestLoc = 52,
     LocationCasterTargetPosition = 53,
 
     /// <summary>
