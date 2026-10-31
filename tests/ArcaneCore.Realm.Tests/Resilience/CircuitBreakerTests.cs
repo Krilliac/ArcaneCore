@@ -316,6 +316,81 @@ public sealed class CircuitBreakerTests
         Assert.Equal(0, after - before);
     }
 
+    /// <summary>Opens the breaker, admits a slow call while closed first, then lets the open period pass and takes the probe.</summary>
+    private static (CircuitBreaker Breaker, FakeTimeProvider Clock, TaskCompletionSource<int> Straggler, Task<int> StragglerTask)
+        HalfOpenWithAStraggler(CancellationToken token = default)
+    {
+        var clock = new FakeTimeProvider();
+        var breaker = new CircuitBreaker(Consecutive(2), clock);
+        var straggler = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<int> stragglerTask = breaker.ExecuteAsync(
+            static (tcs, ct) => new ValueTask<int>(tcs.Task), straggler, token).AsTask(); // admitted while Closed, still running
+        Assert.False(stragglerTask.IsCompleted);
+
+        Assert.Throws<TimeoutException>(() => breaker.Execute(Fail, 0));
+        Assert.Throws<TimeoutException>(() => breaker.Execute(Fail, 0));
+        Assert.Equal(CircuitState.Open, breaker.State);
+        clock.Advance(Open);
+        Assert.True(breaker.TryEnter()); // the probe
+        Assert.Equal(CircuitState.HalfOpen, breaker.State);
+        return (breaker, clock, straggler, stragglerTask);
+    }
+
+    [Fact]
+    public async Task HalfOpen_StragglerSuccessAdmittedWhileClosed_DoesNotCloseTheCircuit()
+    {
+        var (breaker, _, straggler, stragglerTask) = HalfOpenWithAStraggler();
+
+        straggler.SetResult(1);
+        Assert.Equal(1, await stragglerTask);
+
+        Assert.Equal(CircuitState.HalfOpen, breaker.State);
+        Assert.False(breaker.TryEnter()); // the probe is still in flight
+        breaker.OnSuccess(); // the real probe closes it
+        Assert.Equal(CircuitState.Closed, breaker.State);
+    }
+
+    [Fact]
+    public async Task HalfOpen_StragglerFailureAdmittedWhileClosed_DoesNotReopenTheCircuit()
+    {
+        var (breaker, _, straggler, stragglerTask) = HalfOpenWithAStraggler();
+
+        straggler.SetException(new TimeoutException("late"));
+        await Assert.ThrowsAsync<TimeoutException>(() => stragglerTask);
+
+        Assert.Equal(CircuitState.HalfOpen, breaker.State);
+        breaker.OnSuccess();
+        Assert.Equal(CircuitState.Closed, breaker.State);
+    }
+
+    [Fact]
+    public async Task HalfOpen_StragglerCancellationAdmittedWhileClosed_DoesNotFreeTheProbeSlot()
+    {
+        using var cts = new CancellationTokenSource();
+        var (breaker, _, straggler, stragglerTask) = HalfOpenWithAStraggler(cts.Token);
+
+        cts.Cancel();
+        straggler.SetException(new OperationCanceledException(cts.Token));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => stragglerTask);
+
+        Assert.Equal(CircuitState.HalfOpen, breaker.State);
+        Assert.False(breaker.TryEnter()); // still one probe, not two
+    }
+
+    [Fact]
+    public void HalfOpen_TokenProtocol_ProbeStampStillDrivesTheBreaker()
+    {
+        var clock = new FakeTimeProvider();
+        var breaker = new CircuitBreaker(Consecutive(1), clock);
+        Assert.True(breaker.TryEnter(out _, out long closedStamp));
+        breaker.OnFailure(new TimeoutException(), closedStamp);
+        clock.Advance(Open);
+
+        Assert.True(breaker.TryEnter(out _, out long probeStamp));
+        breaker.OnFailure(new TimeoutException(), probeStamp);
+        Assert.Equal(CircuitState.Open, breaker.State);
+    }
+
     [Fact]
     public void InvalidOptions_AreRefusedAtConstruction()
     {
