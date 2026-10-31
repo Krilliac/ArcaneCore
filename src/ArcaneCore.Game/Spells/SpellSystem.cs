@@ -1502,13 +1502,6 @@ public sealed partial class SpellSystem
             return stalked;
         }
 
-        // TARGET_LOCATION_SCRIPT_NEAR_CASTER (46) with no spell_script_target row for the spell: vmangos Spell::CheckScriptTargeting answers
-        // SPELL_FAILED_BAD_TARGETS (Spell.cpp:446-460). A spell-specific selector for the target owns its own targeting.
-        if (HasScriptLocationTargetWithoutRows(spell))
-        {
-            return SpellCastResult.BadTargets;
-        }
-
         bool needsUnit = NeedsUnitTarget(spell);
         Unit? checkedTarget = null;
         if (needsUnit)
@@ -1568,6 +1561,13 @@ public sealed partial class SpellSystem
         if (items != SpellCastResult.CastOk)
         {
             return items;
+        }
+
+        // TARGET_LOCATION_SCRIPT_NEAR_CASTER (46) with no spell_script_target row for the spell: vmangos Spell::CheckScriptTargeting answers
+        // SPELL_FAILED_BAD_TARGETS (Spell.cpp:446-460). Runs after the Items phase (spell focus, Spell.cpp:7243): vmangos reaches CheckScriptTargeting only from SetTargetMap at cast time (:2848-2860). A spell-specific selector for the target owns its own targeting.
+        if (HasScriptLocationTargetWithoutRows(spell))
+        {
+            return SpellCastResult.BadTargets;
         }
 
         if (needsUnit)
