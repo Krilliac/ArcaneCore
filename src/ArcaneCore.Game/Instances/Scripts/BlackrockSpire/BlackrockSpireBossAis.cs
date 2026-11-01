@@ -514,7 +514,7 @@ public sealed class UrokChallengeAI : IGameObjectAi
 
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<GameObject, State> _states = new();
 
-    /// <summary>Whether the challenge of <paramref name="go"/> is still running (false once the banner fell or Doomhowl came).</summary>
+    /// <summary>Whether the challenge of <paramref name="go"/> is still running (false once the banner fell; Doomhowl's arrival does not clear it, as in the source).</summary>
     public bool IsActive(GameObject go) => _states.GetOrCreateValue(go).Active;
 
     /// <summary>How many underlings of <paramref name="go"/>'s challenge have died.</summary>
@@ -732,14 +732,21 @@ public abstract class UrokUnderlingAI(Creature creature) : ScriptDevBossAI(creat
 
     private GameObject? FindMound()
     {
+        IReadOnlyCollection<GameObject> all = Me.Map?.FindUpdater<GameObjectMapSystem>()?.GameObjects ?? [];
         if (Mound is { } own)
         {
-            return own;
+            if (all.Contains(own))
+            {
+                return own;
+            }
+
+            // The challenge ended and took its object away: like FindNearestGameObject, find nothing there.
+            Mound = null;
         }
 
         GameObject? best = null;
         float bestSq = 40f * 40f;
-        foreach (GameObject go in Me.Map?.FindUpdater<GameObjectMapSystem>()?.GameObjects ?? [])
+        foreach (GameObject go in all)
         {
             float sq = WorldGeometry.DistanceSq3D(Me, go);
             if (go.Entry == UrokChallengeAI.GoChallenge && sq <= bestSq)
@@ -804,7 +811,7 @@ public sealed class UrokEnforcerAI(Creature creature) : UrokUnderlingAI(creature
     protected override void CombatUpdate(uint diffMs) => CastWhenReady(ref _strike, diffMs, Victim, SpellStrike, 5_000, 20_000);
 }
 
-/// <summary>urokOgreMagusAI: Slow on a random target (first 8 to 11 s, then 17 to 24 s), Bloodlust at or below 30 percent health (every 30 to 35 s) and Arcane Bolt on the victim every 1.2 to 2.4 s.</summary>
+/// <summary>urokOgreMagusAI: Slow on a random target (first 8 to 11 s, then 17 to 24 s), Bloodlust at or below 30 percent health (every 30 to 35 s) and Arcane Bolt on the victim every 5 to 10 s (melee mode).</summary>
 public sealed class UrokOgreMagusAI(Creature creature) : UrokUnderlingAI(creature)
 {
     public const uint SpellSlow = 13747, SpellBloodlust = 6742, SpellArcaneBolt = 15979;
@@ -825,6 +832,7 @@ public sealed class UrokOgreMagusAI(Creature creature) : UrokUnderlingAI(creatur
             CastWhenReady(ref _bloodlust, diffMs, Me, SpellBloodlust, 30_000, 35_000);
         }
 
-        CastWhenReady(ref _bolt, diffMs, Victim, SpellArcaneBolt, 1_200, 2_400);
+        // The melee-mode row (1060205): the magus has no ranged-mode movement, so the 1.2-2.4 s ranged cadence (1060204) does not apply.
+        CastWhenReady(ref _bolt, diffMs, Victim, SpellArcaneBolt, 5_000, 10_000);
     }
 }

@@ -231,7 +231,9 @@ public sealed class BlackrockSpireBossTests
             Assert.Equal(1, Count(ShadowHunterVoshgajinAI.SpellHex));
             ai.OnUpdate(2_000); // 23 s
             Assert.Equal(2, Count(ShadowHunterVoshgajinAI.SpellHex));
-            ai.OnUpdate(22_000); // 45 s + 2 s after the first curse
+            ai.OnUpdate(21_000); // 44 s
+            Assert.Equal(1, Count(ShadowHunterVoshgajinAI.SpellCurseOfBlood));
+            ai.OnUpdate(3_000); // 47 s: 2 s first cast + 45 s timer
             Assert.Equal(2, Count(ShadowHunterVoshgajinAI.SpellCurseOfBlood));
         }
     }
@@ -419,6 +421,189 @@ public sealed class BlackrockSpireBossTests
             Assert.Single(caster.Casts, c => c.Spell == UrokOgreMagusAI.SpellBloodlust);
             magusAi.OnUpdate(11_000); // Slow comes within 8 to 11 s
             Assert.Single(caster.Casts, c => c.Spell == UrokOgreMagusAI.SpellSlow);
+        }
+    }
+
+    // --- Challenge object use (kill spell) -------------------------------------------------------
+
+    private sealed class RecordingObjectSpells : IGameObjectSpells
+    {
+        public List<(GameObject Source, uint Spell, Unit Target, Unit? Caster)> Casts { get; } = [];
+
+        public bool Cast(GameObject source, uint spellId, Unit target, Unit? unitCaster)
+        {
+            Casts.Add((source, spellId, target, unitCaster));
+            return true;
+        }
+
+        public float? MaxRange(uint spellId) => null;
+
+        public bool IsChanneling(Unit unit) => false;
+
+        public void StartRitualAnimation(Player helper, uint animSpellId, GameObject ritual)
+        {
+        }
+
+        public bool CastRitualSpell(GameObject ritual, uint spellId, Unit caster, ObjectGuid summonTarget) => false;
+
+        public void StartCreatingSpellCooldown(Player owner, uint spellId)
+        {
+        }
+    }
+
+    [Fact]
+    public void UrokChallenge_Use_KillsTheNearestUnderlingWithin20Yards_RefusesFor30Seconds()
+    {
+        (DungeonScriptTestKit rig, GameObject mound, UrokChallengeAI ai) = ChallengeRig();
+        using (rig)
+        {
+            var spells = new RecordingObjectSpells();
+            rig.Objects.Spells = spells;
+            Creature[] inRange = [.. Underlings(rig).Where(c => c.IsAlive && WorldGeometry.DistanceSq3D(mound, c) <= 20f * 20f)];
+            Assert.NotEmpty(inRange);
+            Creature nearest = inRange.OrderBy(c => WorldGeometry.DistanceSq3D(mound, c)).First();
+
+            Assert.True(ai.OnUse(rig.Objects, mound, rig.Player));
+            (GameObject Source, uint Spell, Unit Target, Unit? Caster) cast = Assert.Single(spells.Casts);
+            Assert.Same(mound, cast.Source);
+            Assert.Equal(UrokChallengeAI.SpellKillAdd, cast.Spell);
+            Assert.Same(nearest, cast.Target);
+            Assert.Same(rig.Player, cast.Caster);
+
+            Assert.True(ai.OnUse(rig.Objects, mound, rig.Player)); // the use is taken, but nothing is cast
+            Assert.Single(spells.Casts);
+
+            ai.Update(rig.Objects, mound, UrokChallengeAI.KillAddCooldownMs - 1);
+            Assert.True(ai.OnUse(rig.Objects, mound, rig.Player));
+            Assert.Single(spells.Casts);
+
+            ai.Update(rig.Objects, mound, 1);
+            Assert.True(ai.OnUse(rig.Objects, mound, rig.Player));
+            Assert.Equal(2, spells.Casts.Count);
+        }
+    }
+
+    [Fact]
+    public void UrokChallenge_Use_AfterTheBannerFell_IsTakenButCastsNothing()
+    {
+        (DungeonScriptTestKit rig, GameObject mound, UrokChallengeAI ai) = ChallengeRig();
+        using (rig)
+        {
+            var spells = new RecordingObjectSpells();
+            rig.Objects.Spells = spells;
+            ai.EndChallenge(rig.Objects, mound);
+            Assert.False(ai.IsActive(mound));
+
+            Assert.True(ai.OnUse(rig.Objects, mound, rig.Player));
+
+            Assert.Empty(spells.Casts);
+        }
+    }
+
+    // --- Underling banner walk ---------------------------------------------------------------
+
+    private sealed class DestinationCaster : ICreatureSpellCaster
+    {
+        public List<(uint Spell, float X, float Y, float Z, bool Triggered)> Destinations { get; } = [];
+
+        public event Action<Unit, Unit, SpellInfo>? SpellHit { add { } remove { } }
+
+        public CreatureCastResult Cast(Creature caster, uint spellId, Unit? target, bool triggered) => CreatureCastResult.Ok;
+
+        public CreatureCastResult CastAtDestination(Creature caster, uint spellId, float x, float y, float z, bool triggered)
+        {
+            Destinations.Add((spellId, x, y, z, triggered));
+            return CreatureCastResult.Ok;
+        }
+
+        public bool IsCasting(Creature caster) => false;
+
+        public bool HasAura(Unit unit, uint spellId) => false;
+
+        public void Interrupt(Creature caster)
+        {
+        }
+
+        public void OnCreatureRemoved(Creature creature)
+        {
+        }
+    }
+
+    private static (DungeonScriptTestKit Rig, Creature Underling, GameObject Mound, UrokEnforcerAI Ai, DestinationCaster Caster) IdleUnderling()
+    {
+        var caster = new DestinationCaster();
+        DungeonScriptTestKit rig = Rig([Enforcer], [Enforcer], [(UrokChallengeAI.GoChallenge, GameObjectType.Generic)],
+            new CreatureAiServices { Spells = caster });
+        Creature underling = rig.Creature(Enforcer);
+        GameObject mound = rig.Object(UrokChallengeAI.GoChallenge);
+        var ai = new UrokEnforcerAI(underling) { Mound = mound };
+        ai.OnRespawn();
+        underling.Relocate(mound.X + 20f, mound.Y, mound.Z);
+        return (rig, underling, mound, ai, caster);
+    }
+
+    [Fact]
+    public void UrokUnderling_IdleFarFromTheMound_WalksToItOnPoint2_AndWaitsTenSecondsBeforeTheNextTry()
+    {
+        (DungeonScriptTestKit rig, Creature underling, GameObject mound, UrokEnforcerAI ai, DestinationCaster caster) = IdleUnderling();
+        using (rig)
+        {
+            ai.OnUpdate(1);
+
+            Assert.Equal(MovementGeneratorType.Point, underling.Motion.CurrentType);
+            Assert.Empty(caster.Destinations);
+
+            // Arriving with another point id does nothing; point 2 hits the banner.
+            underling.Relocate(mound.X + 0.5f, mound.Y, mound.Z);
+            ai.OnMovementInform(MovementGeneratorType.Point, UrokUnderlingAI.BannerPointId + 1);
+            Assert.Empty(caster.Destinations);
+            ai.OnMovementInform(MovementGeneratorType.Point, UrokUnderlingAI.BannerPointId);
+            (uint Spell, float X, float Y, float Z, bool Triggered) hit = Assert.Single(caster.Destinations);
+            Assert.Equal(UrokChallengeAI.SpellDestroySpear, hit.Spell);
+            Assert.Equal(mound.X, hit.X, 0.001f);
+            Assert.Equal(mound.Y, hit.Y, 0.001f);
+            Assert.Equal(mound.Z, hit.Z, 0.001f);
+            Assert.False(hit.Triggered);
+
+            // The hit set the 11 s retry timer; at 11 s the timer is spent, the next tick hits again.
+            ai.OnUpdate(11_000);
+            Assert.Single(caster.Destinations);
+            ai.OnUpdate(1);
+            Assert.Equal(2, caster.Destinations.Count);
+        }
+    }
+
+    [Fact]
+    public void UrokUnderling_WalkSetsATenSecondRetryTimer_ThenHitsTheBannerInReach()
+    {
+        (DungeonScriptTestKit rig, Creature underling, GameObject mound, UrokEnforcerAI ai, DestinationCaster caster) = IdleUnderling();
+        using (rig)
+        {
+            ai.OnUpdate(1); // starts the walk, timer 10 s
+            underling.Relocate(mound.X + 0.5f, mound.Y, mound.Z); // in reach, without the arrival event
+
+            ai.OnUpdate(10_000);
+            Assert.Empty(caster.Destinations);
+            ai.OnUpdate(1);
+            Assert.Single(caster.Destinations);
+        }
+    }
+
+    [Fact]
+    public void UrokUnderling_AfterTheChallengeEnded_NoLongerWalksToTheRemovedMound()
+    {
+        (DungeonScriptTestKit rig, Creature underling, GameObject mound, UrokEnforcerAI ai, DestinationCaster caster) = IdleUnderling();
+        using (rig)
+        {
+            var challenge = Assert.IsType<UrokChallengeAI>(rig.Objects.AiFor(mound));
+            challenge.EndChallenge(rig.Objects, mound);
+            underling.Relocate(mound.X + 0.5f, mound.Y, mound.Z);
+
+            ai.OnUpdate(1);
+            ai.OnMovementInform(MovementGeneratorType.Point, UrokUnderlingAI.BannerPointId);
+
+            Assert.Empty(caster.Destinations);
+            Assert.Null(ai.Mound);
         }
     }
 }
