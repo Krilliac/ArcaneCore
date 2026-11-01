@@ -65,6 +65,7 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         if (guid == player.Guid.Value)
         {
             session.Services.GetService<AntiCheat.AntiCheatFeature>()?.OnTimeSkipped(session, player, lag);
+            session.SessionTrace?.TimeSkip(session, player, lag);
             player.Map?.BroadcastToObservers(player, WorldOpcode.MsgMoveTimeSkipped, MiscPackets.BuildMoveTimeSkipped(player.Guid, lag));
         }
         else if (player.GetMover() is { } mover && !ReferenceEquals(mover, player) && mover.Guid.Value == guid)
@@ -185,8 +186,10 @@ public sealed class MovementHandlers : IOpcodeHandlerGroup
         // The anticheat judges the block as the client sent it, before the observers correct it (docs/areas/anticheat.md).
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         antiCheat?.BeforeMovement(session, player, opcode, movement);
+        session.SessionTrace?.Movement(session, player, opcode, in movement);
         ApplyObserved(session, player, opcode, movement);
         antiCheat?.AfterMovement(player);
+        session.SessionTrace?.AfterMovement(player);
         CheckAndHealLifeStateDesync(session, player, opcode, in movement);
         // MovementHandler.cpp:1115-1131: a free move that is not a long fall is the unstuck point (SaveNoUndermapPosition: z + 3, then + 2).
         if (!session.IsInChaosProbe
