@@ -95,14 +95,7 @@ public sealed class CharacterClaimService(
             long ticket = 0;
             if (result.IsClaimed)
             {
-                ticket = Interlocked.Increment(ref _generation);
-                lock (_pendingGate)
-                {
-                    _pendingReleases.Remove(characterId); // this login owns the claim now: a release still waiting for its flush must not delete it
-                    if (!_liveTickets.TryGetValue(characterId, out List<long>? live))
-                        _liveTickets[characterId] = live = [];
-                    live.Add(ticket); // newer than every ticket handed out before: the releases of older logins are invalid from here on
-                }
+                ticket = IssueTicket(characterId);
             }
             else
             {
@@ -146,6 +139,28 @@ public sealed class CharacterClaimService(
         Task release = Task.Run(() => ReleaseAsync(store, characterId, token, marker, isOnline, ticket));
         _inFlight[release] = 0;
         _ = release.ContinueWith(done => _inFlight.TryRemove(done, out _), TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// A claim ticket for a character whose claim reached this worker through a committed transfer (the target's activation): it is newer than every ticket handed out before, so a release of an
+    /// older login is invalid from here on, and the activated player's own logout release carries it (<see cref="BindTicket"/>). Zero without a worker-shard token (no claim exists in this mode).
+    /// Call <see cref="AbandonTicket"/> when the activation fails. Any thread.
+    /// </summary>
+    public long IssueTicketForReceivedClaim(int characterId, CharacterOwnershipToken? token)
+        => token is null || !CharacterOwnershipScopes.IsWorker(token.Scope) ? 0 : IssueTicket(characterId);
+
+    private long IssueTicket(int characterId)
+    {
+        long ticket = Interlocked.Increment(ref _generation);
+        lock (_pendingGate)
+        {
+            _pendingReleases.Remove(characterId); // this login owns the claim now: a release still waiting for its flush must not delete it
+            if (!_liveTickets.TryGetValue(characterId, out List<long>? live))
+                _liveTickets[characterId] = live = [];
+            live.Add(ticket); // newer than every ticket handed out before: the releases of older logins are invalid from here on
+        }
+
+        return ticket;
     }
 
     /// <summary>Completes when every release scheduled so far has finished (shutdown and tests).</summary>

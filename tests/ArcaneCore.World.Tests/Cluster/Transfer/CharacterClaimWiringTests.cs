@@ -237,6 +237,47 @@ public sealed class CharacterClaimWiringTests
     }
 
     [Fact]
+    public async Task ALogoutRelease_OfATransferredInLogin_PostedAfterAQuickRelogin_KeepsTheRelogInsClaim()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var services = new ServiceCollection();
+        services.AddSingleton(rig.Store);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        Assert.True((await rig.Store.TryClaimCharacterAsync(37, a)).IsClaimed); // the claim a committed transfer moved to this worker's scope
+        long transferredIn = claims.IssueTicketForReceivedClaim(37, a); // WorkerTransferTarget activation
+        var shadow = new object();
+        claims.BindTicket(shadow, transferredIn);
+        Assert.True(transferredIn > 0);
+        Assert.Equal(transferredIn, claims.TicketOf(shadow)); // the logout path reads a non-zero ticket, not an unticketed release
+
+        (CharacterClaimResult relogin, long reloginTicket) = await claims.ClaimWithTicketAsync(37, a); // the quick relogin on the same worker claims first
+        Assert.Equal(CharacterClaimOutcome.AlreadyHeld, relogin.Outcome);
+        Assert.True(reloginTicket > transferredIn);
+
+        claims.ScheduleRelease(37, a, () => false, claims.TicketOf(shadow)); // the posted logout release of the transferred-in player
+        await claims.DrainAsync();
+        Assert.Equal(a, rig.Store.GetActiveOwnership(37));
+
+        claims.ScheduleRelease(37, a, () => false, reloginTicket);
+        await claims.DrainAsync();
+        Assert.Null(rig.Store.GetActiveOwnership(37));
+    }
+
+    [Fact]
+    public async Task AReceivedClaimsTicket_IsRefusedWithoutAWorkerToken()
+    {
+        var services = new ServiceCollection();
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        Assert.Equal(0L, claims.IssueTicketForReceivedClaim(38, null));
+    }
+
+    [Fact]
     public async Task AnAbandonedLoginsTicket_StopsInvalidatingTheOlderLoginsRelease()
     {
         using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);

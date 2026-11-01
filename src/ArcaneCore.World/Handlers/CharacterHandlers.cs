@@ -437,12 +437,23 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             }
         }
 
-        IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
-        var player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
+        Player player;
+        try
         {
-            Home = home,
-            CharacterOwnership = session.World.CharacterOwnership,
-        };
+            IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(character.Id).ConfigureAwait(false);
+            player = new Player(character, CharacterPackets.BuildAppearance(raceInfo, classInfo), session, buttons)
+            {
+                Home = home,
+                CharacterOwnership = session.World.CharacterOwnership,
+            };
+        }
+        catch
+        {
+            // A ticket that never reached a player would stay "newest" and make the older login's release skip: stop counting it.
+            session.Services.GetService<CharacterClaimService>()?.AbandonTicket(character.Id, claimTicket);
+            throw;
+        }
+
         if (claimTicket != 0)
             session.Services.GetService<CharacterClaimService>()?.BindTicket(player, claimTicket); // the logout release finds it through the player
 
