@@ -496,10 +496,10 @@ public sealed class LiveLaunchScriptTests : IDisposable
             Assert.Equal("true", ArgumentValue(arguments, "Cluster:Fencing:Enabled"));
         }
 
-        // Only the lease holder is the map worker.
+        // Every world is a map worker, so the realm authority lease (not a Combined role) picks the singleton runner.
         Assert.Contains("--Cluster:Node:Role=MapWorker", worlds["worker-EK"], StringComparison.Ordinal);
-        Assert.DoesNotContain("--Cluster:Node:Role", worlds["worker-Kalimdor"], StringComparison.Ordinal);
-        Assert.DoesNotContain("--Cluster:Node:Role", worlds["worker-instances"], StringComparison.Ordinal);
+        Assert.Contains("--Cluster:Node:Role=MapWorker", worlds["worker-Kalimdor"], StringComparison.Ordinal);
+        Assert.Contains("--Cluster:Node:Role=MapWorker", worlds["worker-instances"], StringComparison.Ordinal);
         Assert.Contains("--Gateway:Workers:2:NodeId=worker:instances", output, StringComparison.Ordinal);
         Assert.Contains("--Gateway:LoginWorker=worker:EK", output, StringComparison.Ordinal);
     }
@@ -565,6 +565,16 @@ public sealed class LiveLaunchScriptTests : IDisposable
         (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", .. arguments.Split(' ')], Secret);
         Assert.NotEqual(0, code);
         Assert.Contains(message, output, StringComparison.Ordinal);
+        Assert.False(started);
+    }
+
+    [PwshFact]
+    public void StartCluster_Split_WithoutPlan_IsRefused_BeforeAnythingStarts()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Topology", "Split", "-PgSecretFile", $"'{Q(Path.Combine(_root, "no-such-secret.json"))}'"], Secret);
+        Assert.NotEqual(0, code);
+        Assert.Contains("can only be planned", output, StringComparison.Ordinal);
         Assert.False(started);
     }
 

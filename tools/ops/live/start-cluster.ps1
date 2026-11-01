@@ -38,10 +38,14 @@
   Instead, with Diagnostics:CrashDialog on for the SUPERVISOR (e.g. Diagnostics__CrashDialog=true in its console), the supervisor opens
   the crash dialog itself when a child exits unexpectedly with a nonzero code (SupervisorCrashDialog; docs/ops/invariants.md).
   Children inherit the console environment, so the same variable makes each child write its crash-report file (no box) for the supervisor to show.
-  Without -Topology Split a second World (a standby worker, several map workers) is not started: all worlds of a realm share one
-  characters database and one writer lock, so they can coexist only on PostgreSQL with fencing, which -Topology Split sets up.
+  A second World (a standby worker, several map workers) is not started: all worlds of a realm share one characters database and one
+  writer lock (WorldWriterGuard; on PostgreSQL a session advisory lock named after the characters database), and every non-standby
+  world takes it at start, so a second one refuses to start. The fencing proof covers a takeover from one host to the next, not
+  concurrent writers.
 
   -Topology Split (implies the gateway; needs the link secret and the PostgreSQL secret file)
+    PLAN ONLY for now: a real (non -Plan) start is refused with a message, because concurrent fenced map workers are not supported yet
+    (the writer lock above would refuse the second and third world and the supervisor would stop the cluster). -Plan prints the layout.
     Starts the realm (order 0), three fenced worker worlds (orders 1 to 3) and the gateway (order 4, Gateway:Workers lists the three):
         worker-EK         node worker:EK         map 0 (Eastern Kingdoms)              no instance copies
         worker-Kalimdor   node worker:Kalimdor   map 1 (Kalimdor)                      no instance copies
@@ -49,8 +53,9 @@
     The node ids and map lists are the three worker entries of ClusterNodeBridgeFeature.DefaultEndpointsSpec (a test pins the two tables
     together). Every world gets its own Cluster:Worker:NodeId, Cluster:Fencing:OwnerNode (the same text), link port (-WorkerPort + index),
     client port (-WorldPort + 100 * index) and heartbeat file; OwnedMaps lists are disjoint and are also given to the supervisor as
-    Processes:<name>:Maps. The world named by -LeaseHolder (default EK) gets Cluster:Node:Role=MapWorker, so the realm-wide singletons run
-    only while it holds their lease, and is the gateway's login worker and the child with the supervisor RealmId (-RealmId; the supervisor
+    Processes:<name>:Maps. Every world gets Cluster:Node:Role=MapWorker, so the realm authority lease picks the single runner of the realm-wide
+    singletons (auction bot, AutoBroadcast, expiry timers); a Combined role would run them on every world. The world named by -LeaseHolder
+    (default EK) is the gateway's login worker and the child with the supervisor RealmId (-RealmId; the supervisor
     needs unique ids, so the other worlds have none and are not addressed by a cross-world .server command).
     The characters, auth and world databases are PostgreSQL: host, port, user, password and database names come from the secret file of
     the user profile (<profile>\.arcanecore\pg-cutover.json, or ARCANECORE_PG_SECRET_FILE, or -PgSecretFile: a path, never a value; the
@@ -128,7 +133,7 @@ param(
     [switch]$MapWorker,
     # Combined: realm + one world (+ gateway with -Gateway). Split: realm + gateway + three fenced worker worlds on PostgreSQL (see the help).
     [ValidateSet('Combined', 'Split')][string]$Topology = 'Combined',
-    # Split only: the world that holds the realm-wide leases (Cluster:Node:Role MapWorker), takes the gateway's logins and the supervisor RealmId.
+    # Split only: the world that takes the gateway's logins and carries the supervisor RealmId (every Split world is a MapWorker).
     [ValidateSet('EK', 'Kalimdor', 'instances')][string]$LeaseHolder = 'EK',
     # Split only: a path to the PostgreSQL secret file (default: ARCANECORE_PG_SECRET_FILE, else <profile>\.arcanecore\pg-cutover.json).
     [string]$PgSecretFile,
@@ -152,7 +157,8 @@ $LiveProfile = Resolve-LiveProfile $LiveProfile
 $bin = Join-Path $LiveHome 'bin'
 $split = $Topology -eq 'Split'
 if ($split) {
-    if ($MapWorker) { throw '-MapWorker does not combine with -Topology Split: the -LeaseHolder world is the map worker.' }
+    if ($MapWorker) { throw '-MapWorker does not combine with -Topology Split: every Split world is a map worker.' }
+    if (-not $planOnly) { throw '-Topology Split can only be planned (-Plan) for now: concurrent fenced map workers are not supported yet. Every non-standby world takes the characters-database writer lock at start (WorldWriterGuard), so the second and third world would refuse to start and the supervisor would stop the cluster.' }
     $Gateway = $true
 } elseif ($PSBoundParameters.ContainsKey('LeaseHolder') -or $PSBoundParameters.ContainsKey('PgSecretFile')) {
     throw '-LeaseHolder and -PgSecretFile only mean something with -Topology Split.'
@@ -306,7 +312,8 @@ if ($split) {
             "--Cluster:Worker:RealmId=$RealmId", "--Cluster:Worker:NodeId=$($world.NodeId)",
             "--Cluster:Worker:OwnedMaps=$($world.Maps -join ',')", "--Cluster:Worker:AllowInstanceMaps=$(([string]$world.AllowInstanceMaps).ToLowerInvariant())")
         $isLeaseHolder = $world.Slug -eq $LeaseHolder
-        if ($isLeaseHolder) { $splitArgs += '--Cluster:Node:Role=MapWorker' }
+        # Every world is a MapWorker so ClusterRoleFeatureFilter lets the realm authority lease choose the one singleton runner.
+        $splitArgs += '--Cluster:Node:Role=MapWorker'
         Add-Child $world.Key 'worker' 'ArcaneCore.World.exe' $order $splitArgs $(if ($isLeaseHolder) { $RealmId } else { 0 }) $world.ClientPort ($world.Maps -join ',') $true
         $order++
     }
