@@ -25,7 +25,7 @@ public sealed class WorkerSpawnOwnershipTests
     }
 
     [Fact]
-    public void CreatureSpawnsOnAnUnownedMap_AreSkipped_AndTheMapIsNotCreated()
+    public async Task CreatureSpawnsOnAnUnownedMap_AreSkipped_AndTheMapIsNotCreated()
     {
         using ServiceProvider services = new ServiceCollection().AddSingleton<ICreatureDataStore>(new Store()).BuildServiceProvider();
         using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new NullSaveQueue(), NullLogger<WorldRuntime>.Instance);
@@ -35,6 +35,11 @@ public sealed class WorkerSpawnOwnershipTests
 
         feature.Attach(world);
         world.RunTick(50);
+
+        // The posted Install swallows a MapNotOwnedException into the fault ledger, so run it synchronously here (the test thread is the world
+        // thread): without the Owns guard, GetOrCreateSystem(1) reaches world.GetMap(1) and throws.
+        CreatureContent content = await new Store().LoadAsync();
+        Assert.Null(Record.Exception(() => feature.Install(content)));
 
         Assert.NotNull(feature.FindSystem(0));
         Assert.Null(feature.FindSystem(1));

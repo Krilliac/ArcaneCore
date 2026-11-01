@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Game.Transports;
@@ -87,10 +88,33 @@ public sealed class WorkerOwnershipRefusalTests
         TransportSystem system = Install(world, Crossing);
         ShipTransport ship = system.FindByEntry(Crossing)!;
 
-        Advance(world, 60000); // past the map change at 35 s
+        Player player = TestWorld.CreatePlayer(3, 100, 0, new FakeSession(3));
+        world.AddPlayer(player);
+        ClientMoves(world, player, Aboard(ship, 4f, 0f, 6f));
+        Assert.Same(ship, player.Transport);
+
+        Advance(world, 40000); // past the map change at 35 s: the ship is held at the last frame of map 0
+        (float X, float Y, float Z) shipHeld = (ship.X, ship.Y, ship.Z);
+        (float X, float Y, float Z) playerHeld = (player.X, player.Y, player.Z);
+        Assert.True(shipHeld.X < 1000f, "the ship must not have been dragged to the map 1 route");
+
+        Advance(world, 8000); // the path keeps asking for the unowned map; the ship must not move or carry anyone
 
         Assert.Equal(0u, ship.MapId);
         Assert.Same(world.FindMap(0), ship.CurrentMap);
         Assert.Null(world.FindMap(1));
+        Assert.Equal(shipHeld, (ship.X, ship.Y, ship.Z));
+        Assert.Equal(playerHeld, (player.X, player.Y, player.Z));
+        Assert.Same(ship, player.Transport);
+        Assert.Same(world.FindMap(0), player.Map);
+    }
+
+    private static void ClientMoves(WorldRuntime world, Player player, MovementInfo movement)
+    {
+        MovementInfo previous = player.Movement;
+        var context = new MovementObserverContext(player, world, WorldOpcode.MsgMoveHeartbeat);
+        MovementObservers.Before(context, in previous, ref movement);
+        player.ApplyClientMovement(movement, world.NowMs);
+        MovementObservers.After(context, in previous);
     }
 }

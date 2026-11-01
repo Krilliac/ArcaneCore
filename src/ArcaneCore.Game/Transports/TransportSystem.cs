@@ -441,14 +441,15 @@ public sealed partial class TransportSystem
 
     // --- map change (ShipTransport::TeleportTransport, Transport.cpp:120-200) ---------------------------------------
 
-    internal void TeleportTransport(ShipTransport ship, uint newMapId, float x, float y, float z, float o)
+    /// <summary>Returns false when the ship was held because <paramref name="newMapId"/> is owned by another worker (nothing changed).</summary>
+    internal bool TeleportTransport(ShipTransport ship, uint newMapId, float x, float y, float z, float o)
     {
         Map? oldMap = ship.CurrentMap;
         if ((oldMap is null || oldMap.MapId != newMapId) && !_world.Owns(newMapId))
         {
-            // The next frame is on a map another worker owns: hold the ship where it is (no far transfer between workers yet) instead of
-            // creating the map. The update calls this again each tick while the path stays on the unowned map; it is cheap and silent.
-            return;
+            // The next frame is on a map another worker owns: the caller holds the ship where it is (no far transfer between workers yet)
+            // instead of creating the map. It is asked again each tick; this is cheap and silent.
+            return false;
         }
 
         Map newMap = oldMap is not null && oldMap.MapId == newMapId ? oldMap : _world.GetMap(newMapId);
@@ -499,6 +500,8 @@ public sealed partial class TransportSystem
             _logger.LogDebug("Transport {Entry} sailed from map {OldMap} to map {NewMap} with {Passengers} passenger(s)", ship.Entry,
                 oldMap?.MapId, newMapId, ship.Passengers.Count);
         }
+
+        return true;
     }
 
     // vmangos: "Units teleport on transport not implemented": a creature stays on the old map; one whose owner is not
