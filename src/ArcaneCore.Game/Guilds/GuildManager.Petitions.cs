@@ -35,4 +35,7 @@ public sealed partial class GuildManager
 
         return guild;
     }
+
+    /// <summary>Publish a guild that was founded without <c>Save</c> (a petition turn-in, stored by the petition manager) to the other workers' replicas.</summary>
+    internal void Publish(Guild guild) => Link?.ReplicateGuild(guild.Id, guild.ToData());
 }

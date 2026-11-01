@@ -38,22 +38,81 @@ public sealed partial class GuildManager
             return;
         }
 
+        if (Link is { IsHolder: false } link)
+        {
+            // The designer and the money are this worker's; the guild is the holder's. The holder re-checks the leader and answers the player itself
+            // (result and query response); the 10 gold are taken here once it has stored the emblem.
+            if (player.Money < EmblemCost)
+            {
+                SendEmblemResult(player, GuildEmblemResult.NotEnoughMoney);
+                return;
+            }
+
+            QuestNpcServices npc = Npc;
+            var request = new GuildRequest(GuildRequestKind.SetEmblem, player.Guid, Values: [emblemStyle, emblemColor, borderStyle, borderColor, backgroundColor]);
+            if (!link.Forward(request, saved =>
+            {
+                if (saved)
+                {
+                    npc.TryCharge(player, EmblemCost);
+                }
+            }))
+            {
+                SendEmblemResult(player, GuildEmblemResult.NoMessage);
+            }
+
+            return;
+        }
+
         if (player.Money < EmblemCost || !Npc.TryCharge(player, EmblemCost))
         {
             SendEmblemResult(player, GuildEmblemResult.NotEnoughMoney);
             return;
         }
 
-        // Guild::SetEmblem (Guild.cpp:883-892).
+        ApplyEmblem(guild, emblemStyle, emblemColor, borderStyle, borderColor, backgroundColor);
+        SendEmblemResult(GuildActor.Of(player), GuildEmblemResult.Success);
+        player.Session.Send(WorldOpcode.SmsgGuildQueryResponse, GuildPackets.BuildQueryResponse(guild));
+    }
+
+    /// <summary>
+    /// The holder's half of <see cref="SaveEmblem"/> for a leader on another worker: the guild (2) and leader (3) checks again against the authoritative state, then the
+    /// five values, result 0 and the query response to the leader. True when the emblem was stored.
+    /// </summary>
+    private bool ServeEmblem(GuildActor player, IReadOnlyList<int>? values)
+    {
+        if (values is not { Count: 5 })
+        {
+            return false;
+        }
+
+        if (GetGuildOf(player) is not { } guild)
+        {
+            SendEmblemResult(player, GuildEmblemResult.NoGuild);
+            return false;
+        }
+
+        if (guild.LeaderId != player.Guid.Low)
+        {
+            SendEmblemResult(player, GuildEmblemResult.NotGuildMaster);
+            return false;
+        }
+
+        ApplyEmblem(guild, values[0], values[1], values[2], values[3], values[4]);
+        SendEmblemResult(player, GuildEmblemResult.Success);
+        player.Send(WorldOpcode.SmsgGuildQueryResponse, GuildPackets.BuildQueryResponse(guild));
+        return true;
+    }
+
+    /// <summary>Guild::SetEmblem (Guild.cpp:883-892).</summary>
+    private void ApplyEmblem(Guild guild, int emblemStyle, int emblemColor, int borderStyle, int borderColor, int backgroundColor)
+    {
         guild.EmblemStyle = emblemStyle;
         guild.EmblemColor = emblemColor;
         guild.BorderStyle = borderStyle;
         guild.BorderColor = borderColor;
         guild.BackgroundColor = backgroundColor;
         Save(guild);
-
-        SendEmblemResult(player, GuildEmblemResult.Success);
-        player.Session.Send(WorldOpcode.SmsgGuildQueryResponse, GuildPackets.BuildQueryResponse(guild));
     }
 
     /// <summary>
@@ -74,4 +133,7 @@ public sealed partial class GuildManager
 
     private static void SendEmblemResult(Player player, GuildEmblemResult result)
         => player.Session.Send(WorldOpcode.MsgSaveGuildEmblem, GuildEmblemPackets.BuildSaveResult(result));
+
+    private static void SendEmblemResult(GuildActor player, GuildEmblemResult result)
+        => player.Send(WorldOpcode.MsgSaveGuildEmblem, GuildEmblemPackets.BuildSaveResult(result));
 }
