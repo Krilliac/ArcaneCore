@@ -114,6 +114,12 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
         }
     }
 
+    /// <summary>
+    /// <see cref="Holds"/> for a feature that may run with no keeper: true when <paramref name="keeper"/> is null (Combined, tests: nothing is clustered, this process is the only writer),
+    /// otherwise the keeper's answer. The gate every realm sweep and singleton write of the World layer calls.
+    /// </summary>
+    public static bool HeldOrUnclustered(RealmAuthorityLeaseKeeper? keeper, string scope) => keeper is null || keeper.Holds(scope);
+
     /// <summary>The lease this node holds for <paramref name="scope"/> as a commit fence, or null when it holds none (also after a graceful release). A lease lost to a takeover keeps its old token here, which is what makes the stores refuse the write.</summary>
     public RealmLeaseFence? FenceFor(string scope)
     {
@@ -188,7 +194,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
         {
             return await TryAcquireAsync(scope).ConfigureAwait(false);
         }
-        catch (ArgumentException ex) when (Array.IndexOf(OptionalScopes, scope) >= 0)
+        catch (ArgumentException ex) when (ex.ParamName == "scope" && Array.IndexOf(OptionalScopes, scope) >= 0) // the store's UnknownScope: the scope parameter names the missing row
         {
             _logger.LogWarning(ex, "The {Scope} lease row does not exist in the characters database (schema 72 not applied); this node does not hold it, so the matching realm sweeps do not run here", scope);
             return null;

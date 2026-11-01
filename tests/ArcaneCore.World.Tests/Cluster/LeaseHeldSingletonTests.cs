@@ -325,7 +325,7 @@ public sealed class LeaseHeldSingletonTests
         private readonly ServiceProvider _services;
         private readonly CharacterSaveQueue _saves;
 
-        public EconomyNode(DbContextOptions<CharacterDbContext> options, RealmAuthorityLeaseKeeper? keeper)
+        public EconomyNode(DbContextOptions<CharacterDbContext> options, RealmAuthorityLeaseKeeper? keeper, TimeProvider? clock = null)
         {
             var services = new ServiceCollection();
             services.AddScoped(_ => new CharacterDbContext(options));
@@ -339,7 +339,7 @@ public sealed class LeaseHeldSingletonTests
             _services = services.BuildServiceProvider();
             _saves = _services.GetRequiredService<CharacterSaveQueue>();
             World = new WorldRuntime(new WorldRuntimeOptions { TickIntervalMs = 5, AutosaveIntervalMs = 0 }, _saves, NullLogger<WorldRuntime>.Instance);
-            Feature = new EconomyFeature(_services, _services.GetRequiredService<IServiceScopeFactory>(), NullLogger<EconomyFeature>.Instance);
+            Feature = new EconomyFeature(_services, _services.GetRequiredService<IServiceScopeFactory>(), NullLogger<EconomyFeature>.Instance, clock);
             Feature.Options.ExpirySweepSeconds = 0; // the test drives the sweep itself
             Feature.Attach(World);
             World.Start();
@@ -471,6 +471,226 @@ public sealed class LeaseHeldSingletonTests
             TryDelete(path);
         }
     }
+
+    // ---- honor: the lease is re-checked per week, and RequireHeld refuses between the check and the write
+
+    private void TakeMaintenanceLeaseOver(Guid incarnation, RealmAuthorityLeaseKeeper keeper)
+    {
+        long token = keeper.TokenFor(RealmAuthorityScopes.Maintenance)!.Value;
+        _leases.TryRelease(RealmAuthorityScopes.Maintenance, Node, incarnation, token);
+        _leases.TryAcquire(RealmAuthorityScopes.Maintenance, "other-node", Guid.NewGuid(), TimeSpan.FromMinutes(10), _time.GetUtcNow());
+        _time.Advance(TimeSpan.FromSeconds(10)); // the renewal tick finds the loss
+    }
+
+    [Fact]
+    public async Task HonorMaintenance_LeaseLostBetweenWeeks_AppliesTheFirstWeekOnly()
+    {
+        Guid incarnation = Guid.NewGuid();
+        await using RealmAuthorityLeaseKeeper keeper = CreateKeeper();
+        await keeper.AcquireAtStartAsync(incarnation, CancellationToken.None);
+        await using HonorRig rig = CreateHonor(keeper); // maintenance state (100, 107): game day 114 owes two weeks
+        rig.Store.OnMaintenanceApplied = () => TakeMaintenanceLeaseOver(incarnation, keeper);
+
+        Assert.Equal(1, await rig.Runner.RunDueAsync(114, null));
+
+        Assert.Equal(new HonorMaintenanceState(107, 114, false), rig.Store.Maintenance); // week one applied, week two stays due for the holder
+    }
+
+    [Fact]
+    public async Task HonorMaintenance_LeaseLostBeforeTheWrite_IsRefusedAndWritesNothing()
+    {
+        Guid incarnation = Guid.NewGuid();
+        await using RealmAuthorityLeaseKeeper keeper = CreateKeeper();
+        await keeper.AcquireAtStartAsync(incarnation, CancellationToken.None);
+        await using HonorRig rig = CreateHonor(keeper);
+        rig.Store.OnListWeeklyScores = () => TakeMaintenanceLeaseOver(incarnation, keeper); // after the per-week check, before RequireHeld
+
+        await Assert.ThrowsAsync<RealmLeaseNotHeldException>(() => rig.Runner.RunDueAsync(107, null));
+
+        Assert.Equal(new HonorMaintenanceState(100, 107, false), rig.Store.Maintenance);
+    }
+
+    // ---- state save queue: a refusal of a non-holder is not a fault
+
+    [Fact]
+    public async Task StateSaveQueue_CountsAStoreRefusalAsSkipped_NotAsAFault()
+    {
+        var queue = new StateSaveQueue<int, int>(_ => throw new RealmLeaseNotHeldException(RealmAuthorityScopes.WorldState), null, "test");
+
+        queue.Save(1, 1);
+        await queue.FlushAsync();
+
+        Assert.Equal(1, queue.Skipped);
+        Assert.Equal(0, queue.Written);
+    }
+
+    [Fact]
+    public async Task StateSaveQueue_WritesWhenTheStoreAccepts()
+    {
+        var queue = new StateSaveQueue<int, int>(_ => Task.CompletedTask, null, "test");
+
+        queue.Save(1, 1);
+        await queue.FlushAsync();
+
+        Assert.Equal(0, queue.Skipped);
+        Assert.Equal(1, queue.Written);
+    }
+
+    // ---- game event feature: the keeper reaches the status writer and the disabled-flag persist
+
+    private sealed class RecordingEventStores : IGameEventDataStore, IGameEventStatusStore
+    {
+        public int StatusWrites;
+        public int DisabledWrites;
+
+        public Task<GameEventContent> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new GameEventContent([new GameEventRecord(1, 0, 525600, 1, 0, 0, "Watched")], [], [], [], [], [], []));
+
+        public Task SetDisabledAsync(uint entry, bool disabled, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref DisabledWrites);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<int>> LoadActiveAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<int>>([]);
+
+        public Task ReplaceActiveAsync(IReadOnlyCollection<int> events, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref StatusWrites);
+            return Task.CompletedTask;
+        }
+    }
+
+    private static async Task<(int Status, int Disabled)> RunGameEventsAsync(RealmAuthorityLeaseKeeper keeper)
+    {
+        var stores = new RecordingEventStores();
+        var services = new ServiceCollection();
+        services.AddSingleton<IGameEventDataStore>(stores);
+        services.AddSingleton<IGameEventStatusStore>(stores);
+        services.AddSingleton(keeper);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 },
+            new CharacterSaveQueue(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance), NullLogger<WorldRuntime>.Instance);
+        var feature = new GameEventFeature(provider, NullLogger<GameEventFeature>.Instance);
+        feature.Attach(world);
+        world.RunTick(5_000); // the service initialises (and stores the empty running set)
+        feature.Service!.StartEvent(1);
+        feature.Service.EnableEvent(1, false);
+        await feature.StopAsync();
+        return (stores.StatusWrites, stores.DisabledWrites);
+    }
+
+    [Fact]
+    public async Task GameEventFeature_WithTheWorldStateLease_StoresStatusAndDisabledFlag()
+    {
+        await using RealmAuthorityLeaseKeeper keeper = CreateKeeper();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+
+        (int status, int disabled) = await RunGameEventsAsync(keeper);
+
+        Assert.True(status >= 1, "the holder stores the running set");
+        Assert.Equal(1, disabled);
+    }
+
+    [Fact]
+    public async Task GameEventFeature_WithoutTheWorldStateLease_StoresNothing()
+    {
+        _leases.TryAcquire(RealmAuthorityScopes.WorldState, "other-node", Guid.NewGuid(), TimeSpan.FromMinutes(10), _time.GetUtcNow());
+        await using RealmAuthorityLeaseKeeper keeper = CreateKeeper();
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+
+        (int status, int disabled) = await RunGameEventsAsync(keeper);
+
+        Assert.Equal(0, status);
+        Assert.Equal(0, disabled);
+    }
+
+    [Fact]
+    public async Task GameEventFeature_AfterTheLeaseIsLost_StoresNothing()
+    {
+        Guid incarnation = Guid.NewGuid();
+        await using RealmAuthorityLeaseKeeper keeper = CreateKeeper();
+        await keeper.AcquireAtStartAsync(incarnation, CancellationToken.None);
+        long token = keeper.TokenFor(RealmAuthorityScopes.WorldState)!.Value;
+        _leases.TryRelease(RealmAuthorityScopes.WorldState, Node, incarnation, token);
+        _leases.TryAcquire(RealmAuthorityScopes.WorldState, "other-node", Guid.NewGuid(), TimeSpan.FromMinutes(10), _time.GetUtcNow());
+        _time.Advance(TimeSpan.FromSeconds(10));
+        Assert.False(keeper.Holds(RealmAuthorityScopes.WorldState));
+
+        (int status, int disabled) = await RunGameEventsAsync(keeper);
+
+        Assert.Equal(0, status);
+        Assert.Equal(0, disabled);
+    }
+
+    // ---- auction recovery (economy lease)
+
+    private sealed class SteppingClock(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
+    private static async Task<DbContextOptions<CharacterDbContext>> CreateReservedAuctionDatabaseAsync(string path)
+    {
+        var options = new DbContextOptionsBuilder<CharacterDbContext>().UseSqlite($"Data Source={path};Pooling=False").Options;
+        // An auction whose escrow item does not exist: the startup load reserves it and the recovery sweep re-reads it.
+        var row = new AuctionRow();
+        row.CopyFrom(new AuctionRecord
+        {
+            Id = 700, HouseId = 7, ItemGuid = 9999, ItemEntry = 4000, ItemCount = 1, SellerId = 0, StartBid = 75, Buyout = 100, ExpireTime = 4_000_000_000,
+        });
+        await using var db = new CharacterDbContext(options);
+        await db.Database.EnsureCreatedAsync();
+        db.Add(row);
+        await db.SaveChangesAsync();
+        return options;
+    }
+
+    private async Task<long> RecoveryReadsAfterAsync(Func<RealmAuthorityLeaseKeeper, Task> prepare)
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"arcanecore-c6-recovery-{Guid.NewGuid():N}.db");
+        try
+        {
+            DbContextOptions<CharacterDbContext> options = await CreateReservedAuctionDatabaseAsync(path);
+            await using RealmAuthorityLeaseKeeper keeper = CreateKeeper();
+            await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+            await prepare(keeper);
+            var clock = new SteppingClock(DateTimeOffset.UtcNow);
+            await using var node = new EconomyNode(options, keeper, clock);
+            Assert.True(node.Feature.IsAuctionQuarantined(700));
+            clock.Advance(TimeSpan.FromMinutes(5)); // past the first mismatch backoff
+            await node.OnWorld(() =>
+            {
+                node.Feature.RecoverAuctions();
+                return true;
+            });
+            return node.Feature.RecoveryReadsStarted;
+        }
+        finally
+        {
+            TryDelete(path);
+        }
+    }
+
+    [Fact]
+    public async Task AuctionRecovery_RunsOnTheEconomyHolder()
+        => Assert.True(await RecoveryReadsAfterAsync(_ => Task.CompletedTask) >= 1);
+
+    [Fact]
+    public async Task AuctionRecovery_IsSkippedOnAWorkerThatDoesNotHoldTheEconomyLease()
+    {
+        _leases.TryAcquire(RealmAuthorityScopes.Economy, "other-node", Guid.NewGuid(), TimeSpan.FromMinutes(10), _time.GetUtcNow());
+
+        Assert.Equal(0, await RecoveryReadsAfterAsync(_ => Task.CompletedTask));
+    }
+
+    [Fact]
+    public async Task AuctionRecovery_StopsOnceTheLeaseIsGivenBack()
+        => Assert.Equal(0, await RecoveryReadsAfterAsync(keeper => keeper.ReleaseAllAsync()));
 
     private static void TryDelete(string path)
     {

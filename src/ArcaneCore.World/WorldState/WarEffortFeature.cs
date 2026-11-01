@@ -31,6 +31,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
     private GameEventService? _events;
     private uint _reloadMs;
     private OffThreadStoreWork? _store;
+    private ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? _leaseKeeper;
     private Func<Func<Task>, Task>? _offload;
     private WarEffortPhase? _queuedPhase;
     private bool _refreshDue;
@@ -68,6 +69,12 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         }
     }
 
+    /// <summary>
+    /// Whether this node makes the durable war-effort writes (the phase and the Colossus deaths): always with no lease keeper (Combined, tests), on a clustered node only while it holds the
+    /// <see cref="ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState"/> lease. A non-holder reloads the stored state and never writes it (writer-lock design section 2b; decision Q10).
+    /// </summary>
+    internal bool HoldsWorldStateLease => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(_leaseKeeper, ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState);
+
     /// <summary>The single-flight store runner (null before <see cref="Attach"/>).</summary>
     internal OffThreadStoreWork? StoreWork => _store;
 
@@ -79,6 +86,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         if (_offload is not null) _store.Offload = _offload;
         using (IServiceScope scope = scopes.CreateScope())
         {
+            _leaseKeeper = scope.ServiceProvider.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>();
             if (scope.ServiceProvider.GetService<IWarEffortStateStore>() is { } store)
             {
                 _hasStore = true;
@@ -300,7 +308,9 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         // A failing phase write must not freeze everything else this job does (boss deaths, the snapshot reload): remember it, do the rest,
         // and rethrow at the end so the caller still sees the phase as unwritten (kept queued, retried by the next refresh).
         ExceptionDispatchInfo? phaseFailure = null;
-        if (phase is { } start)
+        // Only the worldstate holder writes: a non-holder's queued phase counts as handled (the holder's stored phase is the truth it reloads below), and its Colossus deaths stay pending.
+        bool mayWrite = HoldsWorldStateLease;
+        if (phase is { } start && mayWrite)
         {
             try
             {
@@ -314,7 +324,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
 
         try
         {
-            foreach (int bossIndex in deaths)
+            foreach (int bossIndex in mayWrite ? deaths : [])
             {
                 await store.MarkBossKilledAsync(bossIndex).ConfigureAwait(false);
                 result.FlushedBossDeaths.Add(bossIndex);
@@ -332,7 +342,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         WarEffortSnapshot state = await store.LoadAsync().ConfigureAwait(false);
         result.Snapshot = state;
         phaseFailure?.Throw();
-        if (!full) return;
+        if (!full || !mayWrite) return;
         WarEffortPhase? next = state.Phase == WarEffortPhase.Transporting && state.PhaseEndsAtUnix > 0 && state.PhaseEndsAtUnix <= now
             ? WarEffortPhase.Gong
             : state.Phase == WarEffortPhase.TenHourWar && state.PhaseEndsAtUnix > 0 && state.PhaseEndsAtUnix <= now

@@ -73,7 +73,7 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
             await honor.WeekGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                LeaseFencedWrite.RequireHeld(keeper, RealmAuthorityScopes.Maintenance); // refuses (throws, nothing written) when the lease was given back since the check above
+                LeaseFencedWrite.RequireHeld(keeper, RealmAuthorityScopes.Maintenance); // refuses (throws, nothing written) when the lease was lost or given back since the check above; the store then verifies the lease row itself
                 await store.ApplyMaintenanceAsync(
                     new HonorMaintenanceBatch(plan.Updates, period.DeleteCpBefore, new HonorMaintenanceState(period.NewLast, period.NewNext, false), protectors),
                     cancellationToken).ConfigureAwait(false);

@@ -31,6 +31,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     private readonly List<StoreOp> _ops = [];
     private readonly Dictionary<uint, (int SpawnIndex, uint Entry)> _unsummonedCityAttacks = [];
     private OffThreadStoreWork? _store;
+    private ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? _leaseKeeper;
     private Func<Func<Task>, Task>? _offload;
     private ScourgeInvasionState? _intendedState;
     private bool _refreshDue;
@@ -67,6 +68,12 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         }
     }
 
+    /// <summary>
+    /// Whether this node makes the durable invasion writes (start and stop, Necropolis deaths, zone restarts, city attack claims): always with no lease keeper (Combined, tests), on a clustered node
+    /// only while it holds the <see cref="ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState"/> lease. A non-holder keeps running the invasion in memory from the stored state it reloads (writer-lock design section 2b; decision Q10).
+    /// </summary>
+    internal bool HoldsWorldStateLease => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(_leaseKeeper, ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState);
+
     /// <summary>The single-flight store runner (null before <see cref="Attach"/>); tests read its job count.</summary>
     internal OffThreadStoreWork? StoreWork => _store;
 
@@ -80,6 +87,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         if (_offload is not null) _store.Offload = _offload;
         using (IServiceScope scope = scopes.CreateScope())
         {
+            _leaseKeeper = scope.ServiceProvider.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>();
             if (scope.ServiceProvider.GetService<IScourgeInvasionStateStore>() is { } store)
             {
                 _hasStore = true;
@@ -479,7 +487,9 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
     {
         using IServiceScope scope = scopes.CreateScope();
         IScourgeInvasionStateStore store = scope.ServiceProvider.GetRequiredService<IScourgeInvasionStateStore>();
-        foreach (StoreOp op in ops)
+        // Only the worldstate holder writes: a non-holder drops its queued writes (the holder's stored state is the truth it reloads below) and keeps its pending deaths for when it holds the lease.
+        bool mayWrite = HoldsWorldStateLease;
+        foreach (StoreOp op in mayWrite ? ops : [])
         {
             try
             {
@@ -496,7 +506,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         }
         try
         {
-            foreach ((uint zone, uint guid, int next) in deaths)
+            foreach ((uint zone, uint guid, int next) in mayWrite ? deaths : [])
             {
                 await store.NecropolisDestroyedAsync(zone, guid, now, next).ConfigureAwait(false);
                 result.FlushedDeaths.Add((zone, guid));
@@ -512,7 +522,7 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         }
         ScourgeInvasionSnapshot snapshot = await store.LoadAsync().ConfigureAwait(false);
         result.Snapshot = snapshot;
-        if (!full) return;
+        if (!full || !mayWrite) return;
         if (snapshot.State == ScourgeInvasionState.Enabled && snapshot.BattlesWon < 150)
         {
             foreach (ScourgeInvasionZoneProgress zone in snapshot.Zones.OrderBy(z => z.NextAttackUnix))

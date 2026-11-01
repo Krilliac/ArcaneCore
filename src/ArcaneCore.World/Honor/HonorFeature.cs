@@ -307,7 +307,14 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
                     HonorMaintenanceState? state = store.GetMaintenanceAsync().GetAwaiter().GetResult();
                     if (state is null || state.LastDay == 0)
                     {
-                        store.SaveMaintenanceAsync(new HonorMaintenanceState(last, last + 7, false)).GetAwaiter().GetResult();
+                        // The first-start seed is a realm write: only the maintenance lease holder makes it (writer-lock design section 4, row 6). A node that is not the
+                        // holder computes the same week from the clock and leaves the row for the holder, so two nodes never both seed a different one.
+                        if (ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(
+                            scope.ServiceProvider.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>(),
+                            ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Maintenance))
+                        {
+                            store.SaveMaintenanceAsync(new HonorMaintenanceState(last, last + 7, false)).GetAwaiter().GetResult();
+                        }
                     }
                     else
                     {

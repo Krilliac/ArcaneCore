@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
@@ -54,7 +56,7 @@ public sealed class GameEventStatusDataModule : IDataModule, ICharacterDataClean
 /// read would fail one of them on the key). Database-level advisory locks are not used: PostgreSQL pooling returns the same
 /// physical connection to concurrent callers, which makes them re-entrant, and MariaDB DDL commits implicitly.
 /// </summary>
-public sealed class EfGameEventStatusStore(CharacterDbContext db) : IGameEventStatusStore
+public sealed class EfGameEventStatusStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IGameEventStatusStore
 {
     private static readonly SemaphoreSlim s_writers = new(1, 1);
 
@@ -64,6 +66,7 @@ public sealed class EfGameEventStatusStore(CharacterDbContext db) : IGameEventSt
 
     public async Task ReplaceActiveAsync(IReadOnlyCollection<int> events, CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         ArgumentNullException.ThrowIfNull(events);
         await s_writers.WaitAsync(cancellationToken).ConfigureAwait(false);
         try

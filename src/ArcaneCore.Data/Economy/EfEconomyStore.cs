@@ -28,6 +28,10 @@ namespace ArcaneCore.Data.Economy;
 /// </summary>
 public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IEconomyStore
 {
+    /// <summary>A commit with no participant that deletes an auction or a letter: the expiry sweeps' shape (a player's take, cancel or buyout always names its participants).</summary>
+    internal static bool IsRealmSweep(EconomyCommitRequest request)
+        => request.Participants.Count == 0 && request.Changes.Any(change => change is DeleteAuction or DeleteMail);
+
     public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -42,6 +46,13 @@ public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource
         request = EconomyRequestValidation.Freeze(request);
         EconomyRequestValidation.Validate(request);
         cancellationToken.ThrowIfCancellationRequested();
+
+        // The expiry operations (and the auction house bot's removals) are the realm's, not a character's: no participant, and they delete an auction or a letter. A clustered node
+        // that does not hold the economy lease is refused outright (writer-lock design section 2b, economy row: RequireHeld on the expiry operations), whatever its sweep thinks.
+        if (IsRealmSweep(request))
+        {
+            LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Economy);
+        }
 
         await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);

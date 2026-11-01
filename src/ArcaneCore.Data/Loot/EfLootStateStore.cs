@@ -1,10 +1,12 @@
 using System.Data;
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Economy;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
@@ -22,7 +24,7 @@ namespace ArcaneCore.Data.Loot;
 /// equal its Before snapshot while its After differs by exactly the awards. Any mismatch rolls back
 /// with a refusal result; any exception rolls back and propagates.
 /// </summary>
-public sealed class EfLootStateStore(CharacterDbContext db) : ILootStateStore
+public sealed class EfLootStateStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : ILootStateStore
 {
     public async Task<LootCommitResult> CommitAsync(LootCommitRequest request, CancellationToken cancellationToken = default)
     {
@@ -151,8 +153,16 @@ public sealed class EfLootStateStore(CharacterDbContext db) : ILootStateStore
 
     public async Task<IReadOnlyList<LootStateRecord>> LoadInstanceStatesAsync(CancellationToken cancellationToken = default)
     {
-        await using (var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false))
+        // In a cluster only the Instances lease holder purges orphan chests (writer-lock design section 4, row 4): another worker may have committed an instance row
+        // this node has not seen. A non-holder reads the states as they are; the holder's purge is verified against the lease row.
+        if (LeaseFencedWrite.IsHolder(leaseFences, RealmAuthorityScopes.Instances))
         {
+            await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+            if (leaseFences?.FenceFor(RealmAuthorityScopes.Instances) is { } fence)
+            {
+                await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            }
+
             // A reused instance id (after a restart the counter resumes above the highest stored
             // instance) must not inherit chests of a deleted instance whose rows survived a lost
             // delete or a delete that raced a commit.

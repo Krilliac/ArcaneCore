@@ -18,6 +18,12 @@ public interface IRealmLeaseFenceSource
 {
     /// <summary>The fence for <paramref name="scope"/>, or null when this process holds no lease for it (then it is not the singleton writer and nothing is checked).</summary>
     RealmLeaseFence? FenceFor(string scope);
+
+    /// <summary>
+    /// Whether this process is the live holder of <paramref name="scope"/>. The default is "a fence exists", which is right for a source that forgets a lease it gave back; the lease keeper overrides
+    /// it, because it keeps a lost lease's old token in <see cref="FenceFor"/> (so the commit fence refuses the write) while the node is no longer the holder.
+    /// </summary>
+    bool Holds(string scope) => FenceFor(scope) is not null;
 }
 
 /// <summary>
@@ -86,8 +92,37 @@ public static class LeaseFencedWrite
     public static void RequireHeld(IRealmLeaseFenceSource? source, string scope)
     {
         ArgumentException.ThrowIfNullOrEmpty(scope);
-        if (source is not null && source.FenceFor(scope) is null)
+        if (!IsHolder(source, scope))
             throw new RealmLeaseNotHeldException(scope);
+    }
+
+    /// <summary>
+    /// Whether this process may make the realm-singleton writes of <paramref name="scope"/>: always with no <paramref name="source"/> (nothing is clustered), otherwise only while the source
+    /// reports the lease held (<see cref="IRealmLeaseFenceSource.Holds"/>: not released, not lost). Sweeps that should skip quietly on a non-holder (boot cleanups) ask this; writes that must refuse call <see cref="RequireHeld"/>.
+    /// </summary>
+    public static bool IsHolder(IRealmLeaseFenceSource? source, string scope)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        return source is null || source.Holds(scope);
+    }
+
+    /// <summary>
+    /// <see cref="RequireHeld"/> then <see cref="InTransactionAsync{T}"/>: a non-holder (or a node that lost the lease) is refused before anything is written, and the holder's write is verified against the lease row
+    /// in the transaction that makes it. The one call a realm-singleton store write makes.
+    /// </summary>
+    public static Task<T> HeldWriteAsync<T>(
+        CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task<T>> write, CancellationToken cancellationToken)
+    {
+        RequireHeld(source, scope);
+        return InTransactionAsync(db, source, scope, write, cancellationToken);
+    }
+
+    /// <summary>The same as the generic overload, for a write with no result.</summary>
+    public static Task HeldWriteAsync(
+        CharacterDbContext db, IRealmLeaseFenceSource? source, string scope, Func<Task> write, CancellationToken cancellationToken)
+    {
+        RequireHeld(source, scope);
+        return InTransactionAsync(db, source, scope, write, cancellationToken);
     }
 
     /// <summary>

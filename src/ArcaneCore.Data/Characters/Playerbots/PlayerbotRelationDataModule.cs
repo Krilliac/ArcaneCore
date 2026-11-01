@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
@@ -59,7 +61,7 @@ public sealed class PlayerbotRelationDataModule : IDataModule, ICharacterDataCle
             .ExecuteDeleteAsync(cancellationToken);
 }
 
-public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbotRelationStore
+public sealed class EfPlayerbotRelationStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IPlayerbotRelationStore
 {
     public async Task<IReadOnlyList<PlayerbotRelation>> LoadAllAsync(CancellationToken cancellationToken = default)
         => (await db.Set<PlayerbotRelationRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false))
@@ -79,6 +81,7 @@ public sealed class EfPlayerbotRelationStore(CharacterDbContext db) : IPlayerbot
     public async Task ReplaceAsync(Guid botId, IReadOnlyList<PlayerbotRelation> rows, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rows);
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance); // a realm bot ledger: the maintenance lease holder writes it (writer-lock design section 2b; decision Q2)
         if (rows.Count > PlayerbotRelation.MaxRowsPerBot
             || rows.Any(row => row is null || row.BotId != botId || botId == Guid.Empty || row.CharacterId <= 0
                 || row.Affinity is < -100 or > 100 || row.WarAffinity is < -100 or > 100 || row.Familiarity < 0 || row.TrustPermille is < 0 or > 1000
