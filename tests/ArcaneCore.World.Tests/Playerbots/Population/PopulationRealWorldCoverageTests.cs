@@ -1,6 +1,16 @@
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Data.Graveyards;
+using ArcaneCore.Data.World.GameObjects;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.WorldData.Loot;
+using ArcaneCore.Data.Quests;
+using ArcaneCore.Data.Reputation;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Game.Quests;
+using ArcaneCore.Kernel.Reputation;
 using ArcaneCore.Data.Npc;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Data.World.Creatures;
@@ -103,5 +113,111 @@ public sealed class PopulationRealWorldCoverageTests(ITestOutputHelper output)
         Console.WriteLine(summary);
         output.WriteLine("first unavailable: " + string.Join(", ", examples));
         Assert.True(eligible > 0);
+    }
+
+    [RealPlacementWorldFact]
+    public async Task RealWorld_ZoneValue_RanksQuestHubsAboveDeadwindForAFreshLevel60Bot()
+    {
+        string path = Environment.GetEnvironmentVariable("ARCANECORE_TEST_WORLD_DB")!;
+        string dbc = Environment.GetEnvironmentVariable("ARCANECORE_TEST_DBC_DIR")!;
+        string root = Environment.GetEnvironmentVariable("ARCANECORE_TEST_TERRAIN_DIR")!;
+        var options = new DbContextOptionsBuilder<WorldDbContext>()
+            .UseSqlite($"Data Source={path};Mode=ReadOnly;Pooling=False").Options;
+        CreatureContent creatures;
+        GraveyardContent graveyardRows;
+        QuestStore quests;
+        NpcStore npcs;
+        LootContent loot;
+        ItemTemplateStore items;
+        MapContent mapContent;
+        IReadOnlyList<ReputationOnKillEntry> onKill;
+        await using (var db = new WorldDbContext(options))
+        {
+            creatures = await new EfCreatureDataStore(db).LoadAsync();
+            graveyardRows = await new EfGraveyardDataStore(db).LoadAsync();
+            quests = new QuestStore(await new EfQuestContentStore(db).LoadAsync());
+            npcs = new NpcStore(await new EfNpcContentStore(db).LoadAsync());
+            loot = await new EfLootDataStore(db).LoadAsync();
+            items = new ItemTemplateStore(await new EfItemTemplateSource(db).LoadTemplatesAsync());
+            mapContent = await new EfMapDataStore(db).LoadAsync();
+            onKill = await new EfReputationOnKillSource(db).LoadAsync();
+        }
+
+        AreaTemplate[] areas = [.. AreaTableDbcReader.Read(Path.Combine(dbc, "AreaTable.dbc")).Select(r => new AreaTemplate(
+            r.Entry, r.MapId, r.ZoneId, r.ExploreFlag, r.Flags, r.AreaLevel, r.Name, r.Team, r.LiquidTypeId))];
+        GraveyardCatalog graveyards = GraveyardCatalog.Build(graveyardRows, null, out _);
+        PopulationZoneAtlas atlas = PopulationZoneAtlas.Build(areas, graveyards, [0u, 1u], new HashSet<uint>());
+        var registry = new MapRegistry(mapContent.Maps);
+        var areaTable = new AreaTable(areas, registry);
+        var terrain = new TerrainManager(root) { Areas = areaTable };
+        FactionTemplateCatalog factions = FactionTemplateDbcReader.Load(Path.Combine(dbc, "FactionTemplate.dbc"));
+
+        // Mirrors PlayerbotPopulationFeature.EnsureZoneValue: triggers with a teleport, and the map templates they lead to.
+        AreaTriggerTemplate[] triggers = [.. mapContent.AreaTriggers];
+        Dictionary<uint, AreaTriggerTeleport> teleportById = mapContent.AreaTriggerTeleports.ToDictionary(t => t.Id);
+        var teleports = new Dictionary<uint, AreaTriggerTeleport>();
+        var mapTemplates = new Dictionary<uint, MapTemplate>();
+        foreach (AreaTriggerTemplate trigger in triggers)
+        {
+            if (!teleportById.TryGetValue(trigger.Id, out AreaTriggerTeleport? teleport)) continue;
+            teleports[trigger.Id] = teleport;
+            if (registry.Find(teleport.TargetMap) is { } target) mapTemplates[target.Entry] = target;
+        }
+
+        var sources = new PopulationZoneValueSources(
+            [0u, 1u],
+            creatures.GetSpawns,
+            creatures.FindTemplate,
+            id => quests.Get(id)?.Template,
+            quests.StartersOf,
+            loot,
+            items.Find,
+            npcs.VendorItems,
+            triggers,
+            id => teleports.GetValueOrDefault(id),
+            id => mapTemplates.GetValueOrDefault(id),
+            [.. onKill],
+            factions,
+            new HashSet<uint>());
+
+        (uint Map, int X, int Y) loaded = (uint.MaxValue, 0, 0);
+        TerrainTile tile = TerrainTile.Empty;
+        PopulationZoneValue value = PopulationZoneValue.Build(sources, (map, x, y, _) =>
+        {
+            if (TerrainTile.TileOf(x, y) is not { } at) return 0;
+            if (loaded != (map, at.X, at.Y))
+            {
+                tile = terrain.ReadTileDetached(map, at.X, at.Y);
+                loaded = (map, at.X, at.Y);
+            }
+
+            ushort flag = tile.GetAreaFlag(x, y);
+            return flag == 0 ? 0 : areaTable.GetZoneAndAreaId(flag, map).ZoneId;
+        }, CancellationToken.None);
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        output.WriteLine(string.Create(inv, $"zones with value: {value.Zones.Count}"));
+        PopulationValueWeights weights = PopulationValueWeights.Default;
+        PopulationLevelRule rule = PopulationLevelRule.From(new PlayerbotPopulationOptions());
+        var none = new Dictionary<uint, int>();
+        string Line(int rank, ZoneScore s)
+        {
+            ZoneContentFacts? f = value.Find(s.ZoneId);
+            return string.Create(inv, $"#{rank} {atlas.Find(s.ZoneId)?.Name ?? "?"} ({s.ZoneId}) total {s.Total:0.0} = Quest {s.Quest:0.0} Rep {s.Reputation:0.0} Gear {s.Gear:0.0} Farm {s.Farm:0.0} Elite -{s.Elite:0.0} Trouble -{s.Trouble:0.0} Distance -{s.Distance:0.0}"
+                + $" | quests {f?.Quests.Count ?? 0} repSources {f?.RepSources.Count ?? 0} gearFacts {f?.Gear.Count ?? 0} skinnable {f?.Skinnable ?? 0} dungeonMaps [{string.Join(',', f?.DungeonMaps ?? [])}]");
+        }
+
+        foreach (Team team in new[] { Team.Alliance, Team.Horde })
+        {
+            IReadOnlyList<ZoneScore> ranking = atlas.Rank(PopulationBotProfile.Fresh(60, team), rule, value, weights, none);
+            output.WriteLine($"--- {team}: {ranking.Count} ranked zones, top 12");
+            for (int i = 0; i < Math.Min(12, ranking.Count); i++) output.WriteLine(Line(i + 1, ranking[i]));
+            int deadwind = -1;
+            for (int i = 0; i < ranking.Count; i++) if (ranking[i].ZoneId == 41) deadwind = i;
+            output.WriteLine(deadwind < 0 ? $"{team}: Deadwind Pass (41) is not ranked" : $"{team}: Deadwind Pass at {Line(deadwind + 1, ranking[deadwind])}");
+
+            Assert.NotEmpty(ranking);
+            Assert.NotEqual(41u, ranking[0].ZoneId);
+        }
     }
 }

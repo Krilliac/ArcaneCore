@@ -42,16 +42,20 @@ internal static class PopulationCreatureSurvey
     /// not gated by a positive game event, a known template, not civilian, no-aggro, invisible or not selectable, hostile to the player
     /// template); <paramref name="level"/> is the template <c>MinLevel</c>.
     /// </summary>
-    private static bool TryHostileLevel(CreatureSpawn spawn, FactionTemplateRecord player, Func<uint, CreatureTemplate?> templateOf,
+    internal static bool TryHostileLevel(CreatureSpawn spawn, FactionTemplateRecord player, Func<uint, CreatureTemplate?> templateOf,
         FactionTemplateCatalog factions, IReadOnlySet<uint> gated, out int level)
     {
         level = 0;
         if (gated.Contains(spawn.Guid) || templateOf(spawn.Entry) is not { } template) return false;
         if ((template.Behaviour & Ignored) != 0 || (template.UnitFlags & (uint)UnitFlags.NotSelectable) != 0) return false;
-        if (factions.Find(template.Faction) is not { } faction || !faction.IsHostileTo(player)) return false;
+        if (!IsHostileTo(template, player, factions)) return false;
         level = template.MinLevel;
         return true;
     }
+
+    /// <summary>Whether the creature template's faction is hostile to the player faction template (false when its faction is unknown).</summary>
+    internal static bool IsHostileTo(CreatureTemplate template, FactionTemplateRecord player, FactionTemplateCatalog factions)
+        => factions.Find(template.Faction) is { } faction && faction.IsHostileTo(player);
 
     /// <summary>
     /// Zone capacity: the level of every creature spawn a bot of each team would fight on the surface, by zone and team. A spawn counts

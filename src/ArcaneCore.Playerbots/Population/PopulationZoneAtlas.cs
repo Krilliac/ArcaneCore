@@ -322,6 +322,16 @@ internal sealed class PopulationZoneAtlas
         => level <= zone.MaxLevel && zone.OpenTo(team) && zone.LocationsFor(team).Any(l => zone.LowestLevelAt(l, team, rule) <= level);
 
     /// <summary>
+    /// Whether a level-capped bot (<see cref="PlayerbotPopulationOptions.MaxLevel"/>) counts as fitting <paramref name="zone"/> when the
+    /// zone value routes it: the zone is open to the team, its highest level is within <paramref name="capReach"/> of the level, and one
+    /// of the team's locations takes the level. One rule shared by <see cref="Rank"/> (eligibility) and the relocation pass (so a capped
+    /// bot standing in a zone <see cref="Rank"/> would send it to is not out-levelled and moved on).
+    /// </summary>
+    public static bool CapReaches(PopulationZone zone, int level, Team team, PopulationLevelRule rule, int capReach)
+        => level >= PlayerbotPopulationOptions.MaxLevel && zone.MaxLevel >= level - capReach && zone.OpenTo(team)
+            && zone.LocationsFor(team).Any(l => zone.LowestLevelAt(l, team, rule) <= level);
+
+    /// <summary>
     /// Whether a bot of <paramref name="level"/> is below every place in <paramref name="zone"/> it could have been put
     /// (<see cref="PopulationZone.LowestLevelFor"/> the team under the same <paramref name="rule"/> placement uses). Such a bot could not
     /// have been placed there, and a bot placed anywhere is never under-levelled where it was placed, so relocation does not ping-pong.
@@ -406,5 +416,109 @@ internal sealed class PopulationZoneAtlas
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// A placement for a bot in one of the best valued zones for it (see <see cref="Rank"/>): a weighted draw among the top
+    /// <c>TopZones</c> by total value, scaled down as the zone fills towards <c>ZoneSoftCap</c>, then a safe location of the zone the bot's
+    /// level takes. A zone with no safe location is dropped and the draw repeats, first over the rest of the top zones, then over the rest
+    /// of the ranking. <paramref name="ranked"/> receives the ranking when given; <paramref name="minTotal"/> keeps the zones worth less out
+    /// of both (see <see cref="Rank"/>). A caller that picks for many bots with the same ranking passes it as <paramref name="precomputed"/>
+    /// (the ranking of <see cref="Rank"/> for the same arguments; <paramref name="vetoed"/>, <paramref name="trouble"/> and <paramref name="minTotal"/> are then not read).
+    /// Null when no valued zone is safe.
+    /// </summary>
+    internal PopulationSafeSelection? PickValued(PopulationBotProfile bot, PopulationLevelRule rule, PopulationZoneValue value,
+        PopulationValueWeights w, IReadOnlyDictionary<uint, int> assigned, Random random, Func<WorldSafeLoc, int, bool> safe,
+        Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null, IList<ZoneScore>? ranked = null, double minTotal = double.NegativeInfinity,
+        IReadOnlyList<ZoneScore>? precomputed = null)
+    {
+        ArgumentNullException.ThrowIfNull(bot);
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(w);
+        ArgumentNullException.ThrowIfNull(assigned);
+        ArgumentNullException.ThrowIfNull(random);
+        ArgumentNullException.ThrowIfNull(safe);
+        IReadOnlyList<ZoneScore> ranking = precomputed ?? Rank(bot, rule, value, w, assigned, vetoed, trouble, minTotal);
+        if (ranked is not null)
+            foreach (ZoneScore score in ranking) ranked.Add(score);
+        if (ranking.Count == 0) return null;
+
+        int top = Math.Min(w.TopZones, ranking.Count);
+        var pool = new List<ZoneScore>(ranking.Take(top));
+        var rest = new List<ZoneScore>(ranking.Skip(top));
+        while (true)
+        {
+            if (pool.Count == 0)
+            {
+                if (rest.Count == 0) return null;
+                (pool, rest) = (rest, pool);
+            }
+
+            double total = 0;
+            var weights = new double[pool.Count];
+            for (int i = 0; i < weights.Length; i++)
+            {
+                double room = w.ZoneSoftCap > 0 ? 1.0 - (double)assigned.GetValueOrDefault(pool[i].ZoneId) / w.ZoneSoftCap : 1.0;
+                weights[i] = pool[i].Total * Math.Max(room, 0.0);
+                total += weights[i];
+            }
+
+            int chosen = pool.Count - 1;
+            if (total > 0)
+            {
+                double draw = random.NextDouble() * total;
+                for (int i = 0; i < weights.Length; i++)
+                {
+                    draw -= weights[i];
+                    if (draw < 0) { chosen = i; break; }
+                }
+            }
+            else
+            {
+                chosen = random.Next(pool.Count);
+            }
+
+            PopulationZone zone = _byId[pool[chosen].ZoneId];
+            pool.RemoveAt(chosen);
+            IReadOnlyList<WorldSafeLoc> locations = zone.LocationsFor(bot.Team);
+            int first = random.Next(locations.Count);
+            for (int place = 0; place < locations.Count; place++)
+            {
+                WorldSafeLoc location = locations[(first + place) % locations.Count];
+                int low = zone.LowestLevelAt(location, bot.Team, rule);
+                if (low > bot.Level || !safe(location, bot.Level)) continue;
+                return new PopulationSafeSelection(new PopulationPlacement(zone, location, low, bot.Level), bot.Level);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The zones the bot may be sent to for their value, best first: eligible (open to the team, with a location for it, not vetoed, with
+    /// room, under the soft cap, and fitting the bot's level, or for a level-capped bot reaching it within <c>CapReach</c>), valued and
+    /// with a total above 0 and at least <paramref name="minTotal"/> (a move for value passes the total of the zone the bot leaves, scaled,
+    /// so it never lands in a zone worth less than the one it is in).
+    /// </summary>
+    internal IReadOnlyList<ZoneScore> Rank(PopulationBotProfile bot, PopulationLevelRule rule, PopulationZoneValue value, PopulationValueWeights w,
+        IReadOnlyDictionary<uint, int> assigned, Func<uint, bool>? vetoed = null, Func<uint, int>? trouble = null, double minTotal = double.NegativeInfinity)
+    {
+        ArgumentNullException.ThrowIfNull(bot);
+        ArgumentNullException.ThrowIfNull(rule);
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(w);
+        ArgumentNullException.ThrowIfNull(assigned);
+        var scores = new List<ZoneScore>();
+        foreach (PopulationZone zone in _zones)
+        {
+            if (!zone.OpenTo(bot.Team) || zone.LocationsFor(bot.Team).Count == 0 || vetoed?.Invoke(zone.ZoneId) == true) continue;
+            int inZone = assigned.GetValueOrDefault(zone.ZoneId);
+            if (w.ZoneSoftCap > 0 && inZone >= w.ZoneSoftCap) continue;
+            if (!HasRoom(zone, bot.Team, bot.Level, bot.Level, assigned)) continue;
+            if (!Fits(zone, bot.Level, bot.Team, rule) && !CapReaches(zone, bot.Level, bot.Team, rule, w.CapReach)) continue;
+            ZoneScore score = PopulationZoneScoring.Score(zone, value.Find(zone.ZoneId), bot, w, trouble?.Invoke(zone.ZoneId) ?? 0, inZone);
+            if (score.Valued && score.Total > 0 && score.Total >= minTotal) scores.Add(score);
+        }
+
+        scores.Sort(static (a, b) => { int c = b.Total.CompareTo(a.Total); return c != 0 ? c : a.ZoneId.CompareTo(b.ZoneId); });
+        return scores;
     }
 }
