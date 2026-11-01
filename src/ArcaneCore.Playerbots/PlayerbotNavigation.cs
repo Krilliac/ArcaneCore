@@ -1723,6 +1723,39 @@ internal static class PlayerbotNavigation
         return npc.IsFriendlyTo(self) || self.IsFriendlyTo(npc);
     }
 
+    /// <summary>
+    /// Whether any step along the leg from <paramref name="from"/> to <paramref name="to"/> hangs in the air without ground
+    /// support (<see cref="PlayerbotMotionAnomalies.AirwalkYards"/>), testing the floor under the chord exactly as
+    /// <see cref="PlayerbotMotion.Validate"/> does so the planner never plans a cliff fall the mover will refuse.
+    /// </summary>
+    internal static bool IsSteepEscapeFall(Player player, Map map, PlayerbotOptions options, Vector3 from, Vector3 to)
+    {
+        Vector2 legFlat = Flat(to) - Flat(from);
+        float legDist = legFlat.Length();
+        if (legDist <= 0.05f) return false;
+
+        float speed = PlayerbotMotion.Speed(player, options.MoveSpeed, out float s, out _) ? s : Unit.BaseRunSpeed;
+        float step = MathF.Max(speed * (PlayerbotMotion.HeartbeatIntervalMs / 1000f), 2f);
+
+        Vector3 stepFrom = from;
+        for (float walked = MathF.Min(step, legDist); ; walked += step)
+        {
+            float along = MathF.Min(walked, legDist);
+            Vector3 candidate = from + ((to - from) * (along / legDist));
+            if (!candidate.IsFinite()) return true;
+
+            float maxCeilingZ = MathF.Max(stepFrom.Z, candidate.Z) + 1.25f;
+            float directFloor = PlayerbotMotion.ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);
+            if (PlayerbotMotion.ValidHeight(directFloor) && candidate.Z - directFloor > PlayerbotMotionAnomalies.AirwalkYards)
+                return true;
+
+            if (along >= legDist) break;
+            stepFrom = candidate;
+        }
+
+        return false;
+    }
+
     /// <summary>The corners of a way off steep ground tried as the place where the ordinary routes begin again.</summary>
     private const int SteepEscapeCorners = 16;
 
@@ -1732,7 +1765,8 @@ internal static class PlayerbotNavigation
     /// three yards of it (no path), or only the patch's own edge (a partial path that never closes). The way off is the mesh's own
     /// path with the steep polygons allowed, cut at its first corner on walkable ground from which the ordinary query is a route,
     /// and only while no corner leads more than <see cref="SteepEscapeClimbYards"/> above the bot: a player slides down a slope it
-    /// cannot walk up. A destination off the walkable mesh from walkable ground gets no route, as before.
+    /// cannot walk up, but not one it falls down (<see cref="IsSteepEscapeFall"/>; a refused escape falls through to
+    /// <see cref="FromBeside"/> as any other). A destination off the walkable mesh from walkable ground gets no route, as before.
     /// <para>
     /// Live 2026-10-09: Ironwander (a warrior, level 7) stood on the mountainside north of Coldridge Valley at -5605.6, 155.8, 453.3,
     /// seven yards above the slope's floor, for over two hours. Every route from there answered no path, so every goal failed before
@@ -1753,6 +1787,9 @@ internal static class PlayerbotNavigation
         {
             Vector3 point = steep.Points[index];
             if (!point.IsFinite() || point.Z > start.Z + SteepEscapeClimbYards) return false;
+            // A fall is not a slide (#1501): the motion check refuses a walk through the air, so a route down a cliff face was planned,
+            // refused at its first step and planned again, 78 483 times.
+            if (IsSteepEscapeFall(player, map, options, steep.Points[index - 1], point)) return false;
             distance += Vector3.Distance(steep.Points[index - 1], point);
             if (!float.IsFinite(distance) || distance > options.MaxRouteYards) return false;
             if (!OnWalkableMesh(map, point)) continue;
