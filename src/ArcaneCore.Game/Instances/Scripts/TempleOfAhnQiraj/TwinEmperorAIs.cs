@@ -159,7 +159,7 @@ public sealed class VeklorAI : TwinEmperorAI
     public override void OnRespawn() => ResetTimers();
     public override void OnEvade() { base.OnEvade(); ResetTimers(); }
 
-    private void TeleportPair()
+    internal void TeleportPair()
     {
         if (Brother is not { AI: TwinEmperorAI other } brother || System is null) return;
         (float x, float y, float z, float o) = (Me.X, Me.Y, Me.Z, Me.Orientation);
