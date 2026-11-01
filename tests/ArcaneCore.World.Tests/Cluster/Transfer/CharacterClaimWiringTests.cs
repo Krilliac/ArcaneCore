@@ -370,7 +370,7 @@ public sealed class CharacterClaimWiringTests
     }
 
     [Fact]
-    public async Task AnAbandonedLoginsRelease_NeverDeletesTheClaimOfALoginThatClaimsRightAfter()
+    public async Task RegressionPin_AnAbandonedLoginsRelease_NeverDeletesTheClaimOfALoginThatClaimsRightAfter()
     {
         using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
         await using Rig rig = await Rig.CreateAsync(directory);

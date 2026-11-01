@@ -107,6 +107,20 @@ public sealed class ClusterSupervisorConfigChecksTests
     }
 
     [Fact]
+    public void ANumericWorkerScope_IsParsedLikeTheName_SoCaseOnlyShardClashesAreStillRefused()
+    {
+        // CharacterFencingScope.Worker = 1: the configuration binder accepts the number, so the check must too.
+        const string scope = " --Cluster:Fencing:Scope=1";
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=Node-A" + scope);
+        AddWorld(values, "b", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-a" + scope);
+
+        ConfigIssue error = Assert.Single(Errors(values));
+        Assert.Contains("shard", error.Problem, StringComparison.Ordinal);
+        Assert.Equal("Cluster:Supervisor:Processes:b:Arguments", error.Key);
+    }
+
+    [Fact]
     public void TwoWorldChildren_OnSqlite_AreRefused()
     {
         Dictionary<string, string?> values = Base("Sqlite");

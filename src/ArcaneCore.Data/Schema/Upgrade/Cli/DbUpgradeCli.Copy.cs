@@ -164,7 +164,6 @@ public static partial class DbUpgradeCli
             }
         }
 
-        /// <summary>Components commit one by one: after a later one fails the earlier ones stay in the target, and a re-run needs <c>--replace</c>.</summary>
         /// <summary>
         /// Whether the lock of the (valid) worker shard is held. A SQLite shard sidecar that does not exist means no worker ever took the lock, so the preflight reports it free without
         /// creating the file (<see cref="CharacterDatabaseWriterLock.ProbeShardFree"/> opens with OpenOrCreate, which would leave a sidecar next to a database this read-only check only reads).
@@ -176,6 +175,7 @@ public static partial class DbUpgradeCli
             return !CharacterDatabaseWriterLock.ProbeShardFree(options, shard);
         }
 
+        /// <summary>Components commit one by one: after a later one fails the earlier ones stay in the target, and a re-run needs <c>--replace</c>.</summary>
         private static string CommittedNote(IReadOnlyList<string> committed)
             => $"error: already committed before this failure: {string.Join(", ", committed)}. Their rows stay in the target, so the target is no longer empty; run the copy again with --replace.";
 
