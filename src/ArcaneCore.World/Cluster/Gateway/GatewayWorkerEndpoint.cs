@@ -89,6 +89,9 @@ public sealed class GatewayWorkerEndpoint(
             wardenVerifier is null ? null : ApplyWardenVerdict);
         _host.Start();
         logger.LogInformation("Worker mode: gateway link listening on {Endpoint}", _host.BoundEndPoint);
+        logger.LogInformation(
+            "Worker mode: advertising characters schema {CharactersSchema}, world schema {WorldSchema}, content revision {ContentRevision} (from {Source}); the gateway's Gateway:* labels must equal them",
+            versions.CharactersSchemaVersion, versions.WorldSchemaVersion, versions.ContentRevision, config.VersionsFromDatabase ? "the databases" : "the Cluster:Worker labels");
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)

@@ -34,8 +34,8 @@ public sealed class GatewayWorkerOptions
     /// <summary>Realm id both ends of the link must agree on.</summary>
     public int RealmId { get; set; } = 1;
 
-    /// <summary>`true` advertises the versions the databases record (characters and world schema version rows, and a content revision derived from the world schema version; an unreadable version refuses to link) instead of the three labels below, so a worker and gateway on mixed versions are refused at admission. `false`, the default, advertises the labels (the explicit override; tests and operators who pin them). The gateway has no database access: its Gateway:* labels must be set to the values the worker reads.</summary>
-    public bool VersionsFromDatabase { get; set; }
+    /// <summary>`true`, the default, advertises the versions the databases record (characters and world schema version rows, and a content revision derived from the world schema version; an unreadable version refuses to link) instead of the three labels below, so a worker and gateway on mixed versions are refused at admission. The worker logs the values it advertises at start. `false` advertises the labels (the explicit override; tests and operators who pin them). The gateway has no database access: set its Gateway:* labels to the values the worker logs, or every gateway is refused.</summary>
+    public bool VersionsFromDatabase { get; set; } = true;
 
     /// <summary>Content revision label both ends of the link must agree on; an override, used only while <see cref="VersionsFromDatabase"/> is false.</summary>
     public string ContentRevision { get; set; } = "dev";

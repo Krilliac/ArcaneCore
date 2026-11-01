@@ -61,13 +61,13 @@ public sealed class GatewayOptions
     /// <summary>Must equal the worker's Cluster:Worker:RealmId.</summary>
     public int RealmId { get; set; } = 1;
 
-    /// <summary>Must equal the worker's Cluster:Worker:ContentRevision.</summary>
+    /// <summary>Must equal the content revision the worker advertises (it logs it at start; with Cluster:Worker:VersionsFromDatabase on, the default, that is derived from the world schema version, e.g. world-schema-12). The gateway has no characters or world database, so these three are typed in by the operator.</summary>
     public string ContentRevision { get; set; } = "dev";
 
-    /// <summary>Must equal the worker's Cluster:Worker:CharactersSchemaVersion.</summary>
+    /// <summary>Must equal the characters schema version the worker advertises (logged at its start; the worker reads it from its database by default).</summary>
     public int CharactersSchemaVersion { get; set; } = 1;
 
-    /// <summary>Must equal the worker's Cluster:Worker:WorldSchemaVersion.</summary>
+    /// <summary>Must equal the world schema version the worker advertises (logged at its start; the worker reads it from its database by default).</summary>
     public int WorldSchemaVersion { get; set; } = 1;
 
     public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
