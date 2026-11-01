@@ -55,13 +55,13 @@ public sealed class ClusterNodeBridgeSwitchTests
     private static string ProbeSpec(int port) => string.Create(System.Globalization.CultureInfo.InvariantCulture, $"probe|Worker|127.0.0.1:{port}|0");
 
     [Fact]
-    public void Options_DefaultToOff_WithTheSevenLocalNodeEndpoints()
+    public void Options_DefaultToOff_WithTheFiveLocalNodeEndpoints()
     {
         var options = new ClusterNodeBridgeOptions();
 
         Assert.False(options.Enabled);
         Assert.Equal(ClusterNodeBridgeFeature.DefaultEndpointsSpec, options.Endpoints);
-        foreach (int port in new[] { 19081, 19082, 19083, 19084, 19085, 19086, 19087 })
+        foreach (int port in new[] { 19081, 19082, 19083, 19084, 19087 })
         {
             Assert.Contains($"127.0.0.1:{port}|", options.Endpoints, StringComparison.Ordinal);
         }
