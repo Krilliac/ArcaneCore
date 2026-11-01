@@ -651,8 +651,13 @@ public sealed class GmMovementCheatTests
         await flyer.CollectAsync();
         await walker.CollectAsync();
         await host.OnWorldAsync(() => host.World.FindOnlinePlayer("Hopflyer")!.Cheats = PlayerCheats.Fly);
+        // The subject names the player by guid (player names stay out of public issues).
+        uint flyerGuid = await host.PlayerStateAsync("Hopflyer", p => p.Guid.Low);
+        uint walkerGuid = await host.PlayerStateAsync("Hopwalker", p => p.Guid.Low);
+        string flyerSubject = $"player (guid {flyerGuid})";
+        string walkerSubject = $"player (guid {walkerGuid})";
         using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n =>
-            n.Key == "move/speed-violation" && (n.Subject.StartsWith("player Hopflyer ", StringComparison.Ordinal) || n.Subject.StartsWith("player Hopwalker ", StringComparison.Ordinal)));
+            n.Key == "move/speed-violation" && (n.Subject == flyerSubject || n.Subject == walkerSubject));
 
         foreach ((WorldTestClient client, string name) in new[] { (flyer, "Hopflyer"), (walker, "Hopwalker") })
         {
@@ -665,8 +670,8 @@ public sealed class GmMovementCheatTests
 
         // Neither cheat is a speed grant (vmangos reads PLAYER_CHEAT_FLY only for the levitating and swim-fly flags).
         Assert.Equal(2, capture.Count("move/speed-violation"));
-        Assert.Contains(capture.Notices, n => n.Subject.StartsWith("player Hopflyer ", StringComparison.Ordinal));
-        Assert.Contains(capture.Notices, n => n.Subject.StartsWith("player Hopwalker ", StringComparison.Ordinal));
+        Assert.Contains(capture.Notices, n => n.Subject == flyerSubject);
+        Assert.Contains(capture.Notices, n => n.Subject == walkerSubject);
     }
 
     [Fact]

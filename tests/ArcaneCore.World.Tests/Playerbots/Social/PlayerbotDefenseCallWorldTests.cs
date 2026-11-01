@@ -215,11 +215,11 @@ public sealed class PlayerbotDefenseCallWorldTests
         (Guid bot, WorldTestClient listener, WorldTestClient foe) = await ChannelSceneAsync(world);
         await using WorldTestClient keepListener = listener;
         await using WorldTestClient keepFoe = foe;
-        await world.AddBotAsync("Dfcaller2");
-        await HelpTestKit.StandAsync(world, "Dfcaller2", ("Dflistener", 3f));
+        await world.AddBotAsync("Dfcallertwo");
+        await HelpTestKit.StandAsync(world, "Dfcallertwo", ("Dflistener", 3f));
         await world.Host.OnWorldAsync(() =>
         {
-            Player second = RivalryKit.Online(world, "Dfcaller2");
+            Player second = RivalryKit.Online(world, "Dfcallertwo");
             second.ZoneId = RivalryKit.OrdinaryZone;
             SocialTestKit.Social(world.Host).Context.Channels.Join(second, "LocalDefense - " + RivalryKit.Ordinary.Name, string.Empty);
             world.Options.Pvp.Defense.MaxActiveCallsPerZone = 5;

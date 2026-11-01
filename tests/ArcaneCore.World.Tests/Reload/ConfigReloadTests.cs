@@ -1042,6 +1042,8 @@ public sealed class ConfigReloadTests : IDisposable
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MovementPackets)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.SlowThinkLogMs)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.MaxThinkSearchNodes)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.DropGreyQuests)}");
+        expected.Add($"{PlayerbotOptions.SectionName}:Social:Invites:AllowOptOut");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobs)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobsMaxPerBot)}");
         expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.PathJobsMaxInFlight)}");
@@ -1329,7 +1331,8 @@ public sealed class ConfigReloadTests : IDisposable
         // Playerbots:AsyncNavigationEnabled: the private navigation executor is created when the feature attaches.
         // Parallel:*: WorldRuntime builds the map threads and the stage gates once (docs/research/multithreading-plan-20261017.md).
         Assert.Equal(["World:BindAddress", "World:Maps:DataDirectory", "World:MaxConnections", "World:MaxConnectionsPerIp",
-            "World:Parallel:CreatureSplinePass", "World:Parallel:GateAllStages", "World:Parallel:Gated", "World:Parallel:MapUpdateThreads", "World:Parallel:OwnerGuard",
+            "World:Parallel:BotThinkPerMap", "World:Parallel:CreatureSplinePass", "World:Parallel:GateAllStages", "World:Parallel:Gated", "World:Parallel:MapHelpers",
+            "World:Parallel:MapUpdateThreads", "World:Parallel:OwnerGuard",
             "World:Parallel:Ungated", "World:Playerbots:AsyncNavigationEnabled", "World:Port", "World:TickIntervalMs", "World:TickLateToleranceMs", "World:TickTimer"], restartOnly);
     }
 }

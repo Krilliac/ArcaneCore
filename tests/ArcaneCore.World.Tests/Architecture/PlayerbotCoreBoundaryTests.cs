@@ -42,6 +42,7 @@ public sealed class PlayerbotCoreBoundaryTests
         ["ArcaneCore.World.Net.WorldSession.ManagedClosed"] = "a managed session closed",
         ["ArcaneCore.World.Net.WorldSession.ManagedPacketObserver"] = "the pack's view of packets sent to a bot",
         ["ArcaneCore.World.Net.WorldSession.TryManagedAction"] = "spends one action of the budget",
+        ["ArcaneCore.World.Net.WorldSession.TryManagedActionSpan"] = "spends one action of the budget and sends a movement packet from a reused buffer",
         ["ArcaneCore.World.Net.WorldSession.TryManagedMovement"] = "applies a bot's movement through the session",
         ["ArcaneCore.World.Handlers.MovementHandlers.RelayStoredMovement"] = "relays a bot's stored movement to watchers",
 

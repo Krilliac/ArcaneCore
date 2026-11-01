@@ -68,6 +68,7 @@ public sealed class BattlegroundAfkTaxiTests
                 HordeStart = new BattlegroundStartLocation(4f, 5f, 6f, 0f),
             });
             Battleground = Feature.Manager.CreateNewBattleground(BattlegroundType.WarsongGulch, 0) ?? throw new InvalidOperationException("no match");
+            Feature.Manager.StartBattleground(Battleground); // registers the running match the world-port acknowledgement looks up
             Map = (Feature.FindMatch(Battleground.InstanceId) ?? throw new InvalidOperationException("no match runtime")).Map
                 ?? throw new InvalidOperationException("the match has no map");
         }

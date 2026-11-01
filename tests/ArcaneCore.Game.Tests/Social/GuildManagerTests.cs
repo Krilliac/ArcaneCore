@@ -501,12 +501,15 @@ public sealed class GuildManagerTests
         f.Persistence.Guilds.Clear();
         f.ClearAll();
 
+        // A new member starts with LogoutTime = now (vmangos Guild::AddMember), so the transfer must leave that value as it was.
+        long joinedAt = guild.Find(b.Guid.Low)!.LogoutTime;
+
         // The character left through a committed transfer and is still online on the target: nothing is written or announced.
         f.Context.Guilds.OnLoggingOut(b, transferredAway: true);
 
         Assert.Empty(f.Persistence.Guilds);
         Assert.Empty(f.Sent(a, WorldOpcode.SmsgGuildEvent));
-        Assert.Equal(0, guild.Find(b.Guid.Low)!.LogoutTime);
+        Assert.Equal(joinedAt, guild.Find(b.Guid.Low)!.LogoutTime);
 
         f.Context.Guilds.OnLoggingOut(b);
 

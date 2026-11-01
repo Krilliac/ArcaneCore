@@ -306,7 +306,7 @@ public sealed class DurableChestTests
         // The inventory's own source now yields a different id for every roll, so a take that re-rolled (a grant without the staged property)
         // would end with 2002; only the grant staged with the window's property leaves 1001 on the item.
         alice.Inventory.RandomProperties = new ItemRandomProperties(
-            new ItemRandomPropertyCatalog([new ItemRandomPropertyRecord(2002, "of the Boar", [74, 75, 0])], [new ItemEnchantmentChance(5, 2002, 100f)]),
+            new ItemRandomPropertyCatalog([new ItemRandomPropertyRecord(1001, "of the Bear", [74, 75, 0]), new ItemRandomPropertyRecord(2002, "of the Boar", [74, 75, 0])], [new ItemEnchantmentChance(5, 2002, 100f)]),
             () => 10f);
         Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(alice, shown.Slot));
 

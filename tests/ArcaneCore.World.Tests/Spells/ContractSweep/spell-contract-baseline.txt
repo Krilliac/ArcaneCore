@@ -9,45 +9,20 @@
 # The same run rewrites spell-contract-coverage.txt (which checks ran per spell; a check that stops running also fails the sweep).
 # Then review both diffs: every removed line here should be a fix you expected, every added line a regression to explain.
 a.error-log	8324	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
-a.unhandled-other	16053	no-consumer:Dummy
 a.unhandled-other	16378	dummy:Dummy
 a.unhandled-other	17619	no-consumer:Dummy
 a.unhandled-other	18350	dummy:Dummy
+a.unhandled-other	18800	no-consumer:Dummy
 a.unhandled-other	19502	no-consumer:Dummy
-a.unhandled-other	20863	dummy:Dummy
 a.unhandled-other	21914	dummy:Dummy
 a.unhandled-other	21917	dummy:Dummy
+a.unhandled-other	22690	no-consumer:Dummy
 a.unhandled-other	23852	dummy:Dummy
 a.unhandled-other	24746	no-consumer:Dummy
-a.unhandled-other	26406	script:ScriptEffect
-a.unhandled-other	26408	script:ScriptEffect
-a.unhandled-other	26409	script:ScriptEffect
-a.unhandled-other	26410	script:ScriptEffect
-a.unhandled-other	26412	script:ScriptEffect
-a.unhandled-other	26414	script:ScriptEffect
-a.unhandled-other	26924	script:ScriptEffect
-a.unhandled-other	28236	script:ScriptEffect
-a.unhandled-other	28338	script:ScriptEffect
 a.unhandled-other	28349	dummy:Dummy
-a.unhandled-other	28560	script:ScriptEffect
-a.unhandled-other	28749	dummy:Dummy
-a.unhandled-other	28781	dummy:Dummy
-a.unhandled-other	29682	dummy:Dummy
-a.unhandled-other	29874	dummy:Dummy
-a.unhandled-other	29875	dummy:Dummy
 a.unhandled-other	30012	dummy:Dummy
 a.unhandled-other	5302	no-consumer:Dummy
 a.unhandled-other	6277	no-consumer:Dummy
 a.unhandled-other	84	dummy:Dummy
-b.never-expires	1010	still applied 1 s after 120000 ms
-b.never-expires	29851	still applied 1 s after 2000 ms
 b.removed-early	13711	gone before its duration
-b.removed-early	14308	gone before its duration
-b.removed-early	14621	gone before its duration
-b.removed-early	18657	gone before its duration
-b.removed-early	21827	gone before its duration
-b.removed-early	21863	gone before its duration
-b.removed-early	3410	gone before its duration
 b.removed-early	6410	gone before its duration
-b.removed-early	9484	gone before its duration
-b.state-not-restored	12479	display

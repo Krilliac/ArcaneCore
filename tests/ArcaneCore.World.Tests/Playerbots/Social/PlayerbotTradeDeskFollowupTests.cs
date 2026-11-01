@@ -27,7 +27,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Social;
 public sealed class PlayerbotTradeDeskFollowupTests
 {
     private const uint BuyEntry = 995_001, FillerEntry = 995_002, QuiverEntry = 995_003, ArrowEntry = 995_004, SoulBagEntry = 995_005, ShardEntry = 995_006, Price = 1000;
-    private const string BotName = "Followbot", CustomerName = "Followcustomer";
+    private const string BotName = "Followbot", CustomerName = "Followclient";
 
     private static ItemTemplate Plain(uint entry, string name, uint stackable = 20)
         => new() { Entry = entry, Class = 15, SubClass = 0, Name = name, DisplayId = 1, Quality = 1, SellPrice = Price, Stackable = stackable };

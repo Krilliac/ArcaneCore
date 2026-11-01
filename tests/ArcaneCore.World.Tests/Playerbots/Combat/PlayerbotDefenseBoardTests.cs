@@ -140,8 +140,11 @@ public sealed class PlayerbotDefenseBoardTests
         var board = NewBoard(maxOpenMs: 60_000);
         var id = Report(board, 1, 100, Vector3.Zero).CallId;
 
-        _now += 55_000;
-        Report(board, 1, 100, Vector3.Zero); // still live at the end of the window
+        for (int i = 0; i < 11; i++)  // a report every 5 s keeps the call live (the live window is 10 s, the grace here is 0)
+        {
+            _now += 5_000;
+            Report(board, 1, 100, Vector3.Zero);
+        }
         _now += 4_000;
         Assert.True(board.Find(id)!.IsLive(_now));
         Assert.True(board.Find(id)!.IsOpen(_now));
@@ -153,8 +156,11 @@ public sealed class PlayerbotDefenseBoardTests
         _now = 1_000_000;
         var long_ = NewBoard();
         var longId = Report(long_, 1, 100, Vector3.Zero).CallId;
-        _now += 55_000;
-        Report(long_, 1, 100, Vector3.Zero);
+        for (int i = 0; i < 11; i++)
+        {
+            _now += 5_000;
+            Report(long_, 1, 100, Vector3.Zero);
+        }
         _now += 5_000;
         Assert.True(long_.Find(longId)!.IsOpen(_now));
     }

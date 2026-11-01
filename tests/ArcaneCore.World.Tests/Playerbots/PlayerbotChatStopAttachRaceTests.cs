@@ -27,6 +27,9 @@ public sealed class PlayerbotChatStopAttachRaceTests
     private static WorldTestHost Start()
         => ManagedPlayerbotLifecycleTests.Start(new InMemoryAccountStore(), new InMemoryCharacterStore(), new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore(), manualClock: true);
 
+    private static void UndoSubscriptions(ManagedPlayerbotFeature feature)
+        => (typeof(ManagedPlayerbotFeature).GetField("_subscriptions", Private)!.GetValue(feature) as IDisposable)?.Dispose();
+
     private static void SetField(ManagedPlayerbotFeature feature, string name, object? value)
         => typeof(ManagedPlayerbotFeature).GetField(name, Private)!.SetValue(feature, value);
 
@@ -55,6 +58,7 @@ public sealed class PlayerbotChatStopAttachRaceTests
         // The rollback attaches again on the world thread while the stop is still inside its await.
         await host.World.InvokeAsync(() =>
         {
+            UndoSubscriptions(feature); // a rollback attaches after the detach undid the subscriptions (one session policy at a time)
             feature.AttachFrom(host.World, null, new FeatureSubscriptions("chat-stop-attach-race"));
             return true;
         });
@@ -103,6 +107,7 @@ public sealed class PlayerbotChatStopAttachRaceTests
 
             await host.World.InvokeAsync(() =>
             {
+                UndoSubscriptions(feature); // a rollback attaches after the detach undid the subscriptions (one session policy at a time)
                 feature.AttachFrom(host.World, null, new FeatureSubscriptions("chat-stale-attach"));
                 return true;
             }).WaitAsync(TimeSpan.FromSeconds(10)); // the old code blocked here for the stale client's load (up to 30 s)

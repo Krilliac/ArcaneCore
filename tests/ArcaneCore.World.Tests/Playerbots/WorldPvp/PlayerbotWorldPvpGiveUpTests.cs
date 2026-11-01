@@ -761,10 +761,11 @@ public sealed class PlayerbotWorldPvpGiveUpTests
             Assert.False(PlayerbotMotion.IsBlacklisted(player, a));
             Assert.True(PlayerbotMotion.IsBlacklisted(player, b));
 
-            PlayerbotMotion.Unblacklist(player, a);
-            long before = GC.GetAllocatedBytesForCurrentThread();
-            for (int i = 0; i < 100; i++) PlayerbotMotion.Unblacklist(player, a);
-            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+            Action window = () =>
+            {
+                for (int i = 0; i < 100; i++) PlayerbotMotion.Unblacklist(player, a);
+            };
+            ArcaneCore.TestSupport.AllocationProbe.AssertEveryCleanWindowAtMost(window, 0, "PlayerbotMotion.Unblacklist of an absent place");
             return true;
         });
     }

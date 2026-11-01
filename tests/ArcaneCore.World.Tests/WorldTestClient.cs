@@ -574,6 +574,12 @@ internal sealed record ChatMessage(ChatType Type, Language Language, ulong Sende
         var reader = new PacketReader(payload);
         var type = (ChatType)reader.ReadByte();
         var language = (Language)reader.ReadUInt32();
+        if (type == ChatType.Channel)
+        {
+            reader.ReadCString(); // the channel name
+            reader.ReadUInt32();  // the sender's honor rank
+        }
+
         ulong sender = reader.ReadUInt64();
         ulong? sender2 = type is ChatType.Say or ChatType.Party or ChatType.Yell ? reader.ReadUInt64() : null;
         uint length = reader.ReadUInt32();

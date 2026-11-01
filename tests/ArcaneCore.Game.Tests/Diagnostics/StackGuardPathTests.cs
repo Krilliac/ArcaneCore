@@ -305,10 +305,10 @@ public sealed class StackGuardPathTests
 
     private static Probe RelayEmote()
     {
-        // The Elly Langston pattern of RelayScriptTests: EMOTE (1) with data_flags 2 on the relay's source creature.
+        // The Elly Langston pattern of RelayScriptTests: the player is the relay source and the creature its target; EMOTE (1) with data_flags 2 (REVERSE_DIRECTION) makes the creature the actor.
         Town town = BuildTown([Step(RelayBase, command: 1, dataLong: EmoteDance, flags: 2)]);
 
-        return new Probe(() => town.System.StartRelayScript(RelayBase, town.Creature, town.Player),
+        return new Probe(() => town.System.StartRelayScript(RelayBase, town.Player, town.Creature),
             () => town.Creature.GetUInt32(UpdateFields.UnitNpcEmotestate) == EmoteDance, town);
     }
 

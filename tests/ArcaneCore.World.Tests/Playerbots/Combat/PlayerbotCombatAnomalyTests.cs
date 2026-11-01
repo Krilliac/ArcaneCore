@@ -558,13 +558,14 @@ public sealed class PlayerbotCombatAnomalyTests
             using AnomalyCapture cap = AnomalyLedger.Shared.Capture(n => n.Subject == botSubject || n.Subject == mapSubject);
 
             var watch = new PlayerbotPhantomCombatWatch();
-            // Loops for at least 125 s (126 s: 42 * 3000 ms) refreshing combat with no opponent.
+            // Loops for at least 125 s (126 s: 126 * 1000 ms) refreshing combat with no opponent. A frame is charged at most one sweep interval plus MaxChargedFrameMs (2 s),
+            // so the world advances in 1 s frames: a 3 s frame would charge 2 s and the 120 s budget would not be crossed in this loop.
             // Bot watch ignores repeated sets, while Game-side MapCombat catches it at 120 s as combat/combat-never-left.
             MapCombat combat = player.Map!.Combat;
-            for (uint nowMs = 3000; nowMs <= 126_000; nowMs += 3000)
+            for (uint nowMs = 1000; nowMs <= 126_000; nowMs += 1000)
             {
                 combat.SetInCombatState(player, 3_600_000, caller: "HandOffCaller", via: "HandOffVia");
-                combat.Update(3000);
+                combat.Update(1000);
                 watch.Look(player, nowMs);
             }
 

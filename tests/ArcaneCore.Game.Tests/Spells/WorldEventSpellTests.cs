@@ -265,7 +265,7 @@ public sealed class WorldEventSpellTests
     [InlineData(24803u, InertSpellReason.Marker, "gameobject_template 180502")]
     [InlineData(10848u, InertSpellReason.SpawnAura, "20210717172913_world.sql:221")]
     [InlineData(27978u, InertSpellReason.SpawnAura, "20230723234305_world.sql:14")]
-    [InlineData(20783u, InertSpellReason.Marker, "ashenvale.cpp:663")]
+    [InlineData(20783u, InertSpellReason.Marker, "ashenvale.cpp:447 and :663")]
     public void SpellsWithAKnownCaster_AreNotNeverCastAndNameTheirRow(uint id, InertSpellReason reason, string rowCitation)
     {
         Assert.True(DeliberatelyInertSpells.TryGet(id, out InertSpell? entry), $"spell {id} is not listed");

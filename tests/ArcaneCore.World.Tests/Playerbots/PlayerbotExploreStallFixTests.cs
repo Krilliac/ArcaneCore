@@ -330,7 +330,7 @@ public sealed class PlayerbotExploreStallFixTests
                     kills++;
                     uint count = kills;
                     if (watch.Observe(player, PlayerbotGoalKind.Explore, 0, 0, now, 120_000,
-                            _ => new PlayerbotStallWatch.Fingerprint(60, 0, 0, 0, 0, 0, 0, 0, 0, count)))
+                            _ => new PlayerbotStallWatch.Fingerprint(60, 0, 0, 0, 0, 0, 0, 0, Kills: count)))
                         first = now;
                 }
 

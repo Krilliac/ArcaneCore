@@ -1161,7 +1161,7 @@ public sealed class LiveLaunchScriptTests : IDisposable
         (string Program, string Call)[] entries =
         [
             ("src/ArcaneCore.Realm/Program.cs", "UseArcaneDiagnostics(builder)"),
-            ("src/ArcaneCore.Gateway/Program.cs", "UseArcaneDiagnostics(builder)"),
+            ("src/ArcaneCore.Gateway/Program.cs", "UseArcaneDiagnostics(builder!)"),
             ("src/ArcaneCore.World/Program.cs", "UseWorldDiagnostics(builder)"),
         ];
         foreach ((string program, string call) in entries)

@@ -47,6 +47,7 @@ public sealed class SpellEffectsBatchTests
     {
         using SpellTestKit kit = new(StealthSpell(), PickPocketSpell());
         kit.System.CombatRules = new FixedRules { Miss = miss };
+        kit.System.Damage = new MapCombatDamageSink(); // the default sink only moves health; the combat start under test is the real one's
         (Player rogue, _) = kit.AddPlayer(1);
         (Player victim, _) = kit.AddHostilePlayer(2, 2);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(rogue, Stealth, SpellCastTargets.ForSelf(), triggered: true));
@@ -142,7 +143,8 @@ public sealed class SpellEffectsBatchTests
         using PetTestKit kit = GrimoireKit();
         (Player owner, _) = kit.AddPlayer(1);
 
-        Assert.Equal(SpellCastResult.NoPet, kit.Cast(owner, GrimoireOfSacrifice));
+        // A triggered cast with no pet is silent (DontReport, CasterPetCastCheck); the player's own cast is refused with NoPet.
+        Assert.Equal(SpellCastResult.NoPet, kit.Spells.System.CastSpell(owner, GrimoireOfSacrifice, SpellCastTargets.ForSelf(), triggered: false));
     }
 
     [Fact]
