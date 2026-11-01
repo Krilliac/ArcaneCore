@@ -17,7 +17,7 @@ public sealed class PlayerbotTradeCounterRow
 }
 
 /// <summary>Characters schema 71: the playerbot trade desk's hourly trade counts, daily outflow totals and the received-gift counts, so they survive a restart.</summary>
-public sealed class PlayerbotTradeCounterDataModule : IDataModule
+public sealed class PlayerbotTradeCounterDataModule : IDataModule, ICharacterDataCleanup
 {
     public const int Version = 71;
     public const string Table = "playerbot_trade_counter";
@@ -41,6 +41,10 @@ public sealed class PlayerbotTradeCounterDataModule : IDataModule
 
     public void AddServices(IServiceCollection services)
         => services.AddScoped<IPlayerbotTradeCounterStore, EfPlayerbotTradeCounterStore>();
+
+    /// <summary>Nothing to remove: the counters are keyed by a bot's id (a Guid) and a trade key, never by a character row.</summary>
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+        => Task.CompletedTask;
 }
 
 public sealed class EfPlayerbotTradeCounterStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IPlayerbotTradeCounterStore

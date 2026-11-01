@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -10,7 +11,7 @@ namespace ArcaneCore.Data.Loot;
 /// item_loot), so the window and the taken item agree after a restart. The columns are declared by the models of <see cref="LootStateDataModule"/>
 /// and <see cref="ArcaneCore.Data.Characters.Items.ItemLootDataModule"/>; this step adds them to databases created before it.
 /// </summary>
-public sealed class LootStateRandomPropertyDataModule : IDataModule
+public sealed class LootStateRandomPropertyDataModule : IDataModule, ICharacterDataCleanup
 {
     public const int Version = 70;
 
@@ -30,4 +31,8 @@ public sealed class LootStateRandomPropertyDataModule : IDataModule
     {
         // The chest store reads and writes the column with the rest of the stack.
     }
+
+    /// <summary>Nothing to remove: this step only adds columns to tables whose owners (chest loot, container item loot) declare their own deletion.</summary>
+    public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken)
+        => Task.CompletedTask;
 }

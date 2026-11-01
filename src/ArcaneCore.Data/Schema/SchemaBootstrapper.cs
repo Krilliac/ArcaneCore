@@ -78,6 +78,12 @@ public sealed class SchemaDefinition
     public IReadOnlyList<EnsureRowChange> ModelSeedDeclarations { get; init; } = [];
 
     /// <summary>
+    /// Columns that steps outside a truncated step prefix add. The model's seed rows carry null for them, so model-differ validation
+    /// accepts a null for these columns exactly as it does for columns that <see cref="Steps"/> add. Metadata only: nothing is added.
+    /// </summary>
+    public IReadOnlyList<AddColumnChange> ModelColumnDeclarations { get; init; } = [];
+
+    /// <summary>
     /// Other development lines whose databases this build migrates to its own numbering once (the Codex line before
     /// the 2026-10-07 merge, <see cref="CodexLine"/>); empty for a component no other line renumbered.
     /// </summary>
