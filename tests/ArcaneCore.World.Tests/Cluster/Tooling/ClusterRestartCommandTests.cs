@@ -108,7 +108,7 @@ public sealed class ClusterRestartCommandTests
 
         ClusterRestartResult result = await orchestration.RunAsync(AccountSecurity.Administrator, "Admiral", Worker.Value);
 
-        Assert.Equal(ClusterRestartOutcome.Restarted, result.Outcome);
+        Assert.Equal(ClusterRestartOutcome.RestartQueued, result.Outcome);
         Assert.Equal(new[] { "handoff:worker:EK", "restart:worker:EK:Admiral" }, log);
         // Every session was rerouted to the standby before the restart was requested, so the restart drops none.
         Assert.Equal(new[] { 0 }, restarter.SessionsAtRestart);

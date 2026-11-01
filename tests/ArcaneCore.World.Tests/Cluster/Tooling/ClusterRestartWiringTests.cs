@@ -202,7 +202,7 @@ public sealed class ClusterRestartWiringTests
 
         ClusterRestartResult result = await orchestration.RunAsync(AccountSecurity.Administrator, "Admiral", WorkerName);
 
-        Assert.Equal(ClusterRestartOutcome.Restarted, result.Outcome);
+        Assert.Equal(ClusterRestartOutcome.RestartQueued, result.Outcome);
         Assert.Equal(WorldHandoffStage.Retired, result.Handoff!.Stage);
         Assert.True(await stdout.Written.WaitAsync(TimeSpan.FromSeconds(10)), "the supervisor request was never written");
 

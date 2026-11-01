@@ -10,19 +10,21 @@ namespace ArcaneCore.World.Cluster.Handoff;
 /// carries the handoff participants.
 /// <para>Thread-safe and stateless: each call journals its own handoff id (the store refuses a second unresolved handoff of the same scope). Runs on the caller's thread pool task.</para>
 /// </summary>
-public sealed class CoordinatorWorkerHandoffDriver(Func<WorldHandoffCoordinator?> coordinator, Func<IWorldHandoffSource?> source) : IWorkerHandoffDriver
+public sealed class CoordinatorWorkerHandoffDriver(Func<WorldHandoffCoordinator?> coordinator, Func<IWorldHandoffSource?> source, WorldHandoffInFlight? inFlight = null) : IWorkerHandoffDriver
 {
     public Task<WorldHandoffRecord> HandoffAsync(WorkerNodeId worker, CancellationToken cancellationToken)
     {
         WorldHandoffCoordinator coordinatorInstance = coordinator()
-            ?? throw new InvalidOperationException("this node has no world handoff coordinator registered");
+            ?? throw new WorldHandoffUnavailableException("this node has no world handoff coordinator configured (it needs a standby target and a gateway router)");
         IWorldHandoffSource sourceInstance = source()
-            ?? throw new InvalidOperationException("this node has no world handoff source registered");
-        if (!string.Equals(sourceInstance.WorkerId.Value, worker.Value, StringComparison.Ordinal))
+            ?? throw new WorldHandoffUnavailableException("this node has no world handoff source configured (it is not an active worker)");
+        if (!WorkerNodeNames.Equal(sourceInstance.WorkerId, worker))
         {
             throw new InvalidOperationException($"this node's handoff coordinator drains '{sourceInstance.WorkerId}', not '{worker}'");
         }
 
-        return coordinatorInstance.RunAsync(Guid.NewGuid(), afterStage: null, cancellationToken);
+        // The token cancels the handoff only before its epoch takeover (the coordinator ignores it afterwards); a tracked handoff is awaited by the host's stop.
+        Task<WorldHandoffRecord> run = coordinatorInstance.RunAsync(Guid.NewGuid(), afterStage: null, cancellationToken);
+        return inFlight?.Track(run) ?? run;
     }
 }
