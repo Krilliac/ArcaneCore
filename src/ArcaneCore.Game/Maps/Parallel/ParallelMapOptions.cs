@@ -58,6 +58,14 @@ public sealed class ParallelMapOptions
     /// </summary>
     public bool CreatureSplinePass { get; set; }
 
+    /// <summary>
+    /// Run the bots' thinks per map, on the map's update thread, as a stage after the map's other updaters and before Output
+    /// (<see cref="MapBotThinkStage"/>; docs/research/map-local-stages-design-20261024.md, section 5.7), instead of in the playerbot
+    /// feature's own pass (default false: today's order, exactly). The stage is classified like any unmarked updater, so it runs inside
+    /// the serial gate unless <see cref="Ungated"/> names MapBotThinkStage.
+    /// </summary>
+    public bool BotThinkPerMap { get; set; }
+
     /// <summary>The thread count actually used (clamped to 1..64).</summary>
     internal int EffectiveMapUpdateThreads => Math.Clamp(MapUpdateThreads, 1, 64);
 }
