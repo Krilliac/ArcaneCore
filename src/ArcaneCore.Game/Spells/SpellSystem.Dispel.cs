@@ -78,7 +78,8 @@ public sealed partial class SpellSystem
     /// </summary>
     private static bool IsOriginalFactionFriendly(Unit caster, Unit target)
     {
-        if (UnitControl.Find(target)?.Charm is null)
+        // a charmed summon keeps its CharmInfo in Creature.Summon.Charm (CharmService.InitCharmInfo), anything else in the control state
+        if (target.GetCharmInfo() is null)
         {
             return false;
         }

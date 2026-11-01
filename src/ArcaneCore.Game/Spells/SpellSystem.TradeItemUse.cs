@@ -51,10 +51,20 @@ public sealed partial class SpellSystem
         if (applicable != 1)
             return SpellCastResult.ItemNotReady;
 
-        SpellCastResult imageResult = TryBuildTradeEnchantmentAfterImage(caster, target, spell,
-            out ItemInstanceData? updatedRecipientItem);
-        if (imageResult != SpellCastResult.CastOk)
-            return imageResult;
+        // vmangos Spell.cpp:6455-6477: a pure open-lock item spell (a lockpick on a partner's lockbox) has no enchantment image;
+        // it is cast for real once the trade committed, exactly like the spellbook path (TryPlanTradeEnchantment).
+        bool castOnCommit = IsOpenLockOnly(spell);
+        ItemInstanceData? updatedRecipientItem;
+        if (castOnCommit)
+        {
+            updatedRecipientItem = target.ToData();
+        }
+        else
+        {
+            SpellCastResult imageResult = TryBuildTradeEnchantmentAfterImage(caster, target, spell, out updatedRecipientItem);
+            if (imageResult != SpellCastResult.CastOk)
+                return imageResult;
+        }
 
         SpellCastTargets targets = new()
         {
@@ -93,7 +103,8 @@ public sealed partial class SpellSystem
             CasterLifeAfter: null,
             PowerCost: 0,
             SpellSnapshot: spell with { },
-            ItemCast: context);
+            ItemCast: context,
+            CastOnCommit: castOnCommit);
         return SpellCastResult.CastOk;
     }
 }
