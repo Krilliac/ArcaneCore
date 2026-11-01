@@ -32,7 +32,8 @@ every process its own path, which the split-topology launch does) and, with the 
 3. At each checklist step write the step id and the UTC time into a running notes file. A failure is then found by time window across
    all five logs.
 4. When a step fails, keep from every log the lines from one minute before the step to one minute after, and search them for
-   `gateway-fault`, `transfer`, `Stage`, `Commit`, `Cancel` and `LinkLost`.
+   `gateway-fault`, `LinkLost`, `Transfer ` (every gateway transfer line starts with `Transfer <id>:`, so one id ties the gateway,
+   source and target lines together), `worker refused` and `no worker to redirect to`.
 5. Keep the client's own `Logs/` folder (`Errors` and `FrameXML` logs) and, for a disconnect, the client's last error text.
 6. Do not publish captured logs: they hold account, character and address data. Summarize them in the table's notes column.
 
@@ -43,7 +44,7 @@ Fail of steps 1 to 3 (later steps depend on them) and capture logs; steps 4 onwa
 
 | Id | Step | Observe (all must hold) |
 |---|---|---|
-| L1 | Login through the gateway | Realm list shows the realm; character list loads; entering the world completes; no client error dialog; the gateway log shows one accepted session for the account and a `SessionOpenReply` accepted by the worker |
+| L1 | Login through the gateway | Realm list shows the realm; character list loads; entering the world completes; no client error dialog; the gateway log shows one `'<account>' authenticated; forwarding to the worker (generation …, epoch …)` line and no `worker refused '<account>'` line |
 | L2 | Walking | Walk, run, jump and turn on land for two minutes: no rubber-banding, no disconnect, no snap-back; position survives a short stop and restart of movement |
 | L3 | Chat | Say, yell, emote and a whisper to a second account or a bot arrive; a channel (General) join and message works; ping stays stable (no sustained growth) |
 | L4 | EK to Kalimdor by boat or zeppelin | Board at an Eastern Kingdoms dock, ride, arrive at the Kalimdor dock; the loading screen appears once at the map change; after it the character is on the right map, not stuck, can move, and chat still works; no disconnect |
