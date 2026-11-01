@@ -30,7 +30,7 @@ namespace ArcaneCore.Gateway;
 /// session every other opcode is forwarded, decrypted, through the <see cref="GatewaySessionLinkClient"/>, and every server
 /// packet the worker sends is encrypted and written here.
 /// </summary>
-public sealed class GatewayClientConnection : IGatewaySessionSink
+public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTransferSession
 {
     private readonly GatewayServer _server;
     private readonly TcpClient _client;
@@ -271,6 +271,17 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             Volatile.Write(ref _loginPacket, new LoginPacket(payload, _packetReceivedMs));
         }
 
+        // A staged cross-worker transfer holds the packets of the freeze; a generation the session left is dropped (GatewayTransferRouter).
+        switch (_server.Transfers.Intercept(SessionGeneration, opcode, payload, _packetReceivedMs))
+        {
+            case GatewayTransferVerdict.Held:
+            case GatewayTransferVerdict.Drop:
+                return true;
+            case GatewayTransferVerdict.Overflow:
+                _logger.LogWarning("[{Endpoint}] more input than the transfer buffer holds while the character moved; disconnecting", RemoteEndpoint);
+                return false;
+        }
+
         lock (_redirectGate)
         {
             if (_redirectHeld is { } held)
@@ -489,6 +500,45 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         }
 
         Kick("Warden: " + reason);
+    }
+
+    /// <summary>The open request of a session on another worker for this client (cross-worker transfer): the authenticated account, name, build and endpoint.</summary>
+    internal GatewaySessionOpenRequest CreateOpenRequest(long generation) => new(generation, AccountId, _accountName, _build, RemoteEndpoint);
+
+    bool IGatewayTransferSession.IsOpen => _state == ConnectionState.Forwarding;
+
+    void IGatewayTransferSession.SendToClient(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Send(opcode, payload);
+
+    bool IGatewayTransferSession.ForwardToWorker(WorldOpcode opcode, ReadOnlySpan<byte> payload, uint receivedMs) =>
+        _link is { } link && link.SendClientPacket(SessionGeneration, opcode, payload, receivedMs);
+
+    /// <summary>
+    /// Switches this connection to the session the transfer router opened on the target worker and closes the session on the old link. Same shape as the
+    /// end of <see cref="AdoptAsync"/>: link and generation change together under the redirect gate; a client that left meanwhile closes the new session.
+    /// </summary>
+    void IGatewayTransferSession.Repoint(GatewayTransferTarget target)
+    {
+        GatewaySessionLinkClient next = (target.Link as GatewayLinkClientAdapter)?.Client
+            ?? throw new InvalidOperationException("the transfer target link is not a gateway worker link");
+        GatewaySessionLinkClient? old;
+        long oldGeneration;
+        lock (_redirectGate)
+        {
+            old = _link;
+            _link = next;
+            oldGeneration = Interlocked.Exchange(ref _generation, target.Generation);
+        }
+
+        old?.CloseSession(oldGeneration, ClusterSessionDetachReason.Transferred);
+        if (_state == ConnectionState.Closed)
+        {
+            // The client left while the session moved: Close ran against the old link and saw the old generation.
+            long left = Interlocked.Exchange(ref _generation, 0);
+            if (left != 0)
+            {
+                next.CloseSession(left, ClusterSessionDetachReason.ClientDisconnect);
+            }
+        }
     }
 
     void IGatewaySessionSink.OnServerPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)

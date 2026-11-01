@@ -55,6 +55,38 @@ public sealed class GatewayServer : BackgroundService
         Warden = warden;
         _realmLiveness = realmLiveness;
         _logger = loggers.CreateLogger<GatewayServer>();
+        Transfers = new GatewayTransferRouter(new GatewayServerTransferEnvironment(this, () => Transfers));
+    }
+
+    /// <summary>The gateway side of cross-worker player transfers: buffers, replays and re-points sessions on the worker coordinator's control frames.</summary>
+    public GatewayTransferRouter Transfers { get; }
+
+    /// <summary>The connection whose current session generation is <paramref name="generation"/>, or null.</summary>
+    internal GatewayClientConnection? FindConnection(long generation)
+    {
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            if (connection.SessionGeneration == generation)
+            {
+                return connection;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The registered link of the worker with node id <paramref name="nodeId"/>, or null when it has none at this moment.</summary>
+    internal GatewaySessionLinkClient? FindLinkByNode(string nodeId)
+    {
+        foreach (GatewayWorkerLink worker in _workers)
+        {
+            if (string.Equals(worker.NodeId, nodeId, StringComparison.Ordinal))
+            {
+                return worker.Link;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The gateway's Warden (null when none was registered: Warden stays on the world, as in a hand-built test server).</summary>
@@ -294,7 +326,7 @@ public sealed class GatewayServer : BackgroundService
         {
             GatewayWorkerEntry entry = entries[index];
             IPEndPoint endpoint = index == 0 && _worker is { } retargeted ? retargeted : new IPEndPoint(IPAddress.Parse(entry.Address), entry.Port);
-            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness);
+            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness, Transfers);
         }
 
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
@@ -433,6 +465,7 @@ public sealed class GatewayWorkerLink
     private readonly ILogger _logger;
     private readonly GatewayRouteTable _routes;
     private readonly GatewayRealmLiveness? _realmLiveness;
+    private readonly GatewayTransferRouter? _transfers;
     private readonly int[] _maps;
     private volatile IPEndPoint _target;
     private volatile IPEndPoint? _connected;
@@ -453,9 +486,11 @@ public sealed class GatewayWorkerLink
         GatewayWarden? warden,
         ILogger logger,
         GatewayRouteTable routes,
-        GatewayRealmLiveness? realmLiveness = null)
+        GatewayRealmLiveness? realmLiveness = null,
+        GatewayTransferRouter? transfers = null)
     {
         ArgumentNullException.ThrowIfNull(routes);
+        _transfers = transfers;
         _routes = routes;
         _realmLiveness = realmLiveness;
         _entry = entry;
@@ -525,6 +560,12 @@ public sealed class GatewayWorkerLink
             {
                 string node = NodeId;
                 link.WorkerStatusReceived = report => liveness.OnWorkerStatus(node, report); // the realm-list row of the realm is written from these reports
+            }
+
+            if (_transfers is { } transfers)
+            {
+                // The worker's coordinator drives staged transfers over this link; each frame is answered with an ack on the same link.
+                link.TransferControlReceived = control => _ = transfers.HandleControlAsync(control, link.SendTransferAck, stoppingToken);
             }
 
             try
