@@ -80,10 +80,9 @@ public sealed class CrossWorkerTransferTests
         OwnerRow owner = Assert.IsType<OwnerRow>(await ReadOwnerAsync(database, guid, ct));
         Assert.Equal(decision.TargetEpoch, owner.Epoch);
         Assert.Null(owner.ActiveTransfer);
-        if (epochBefore is { } before)
-        {
-            Assert.Equal(before + 1, owner.Epoch);
-        }
+        // Two paths, reported in the failure text: a row existed before (epoch compared against it), or none did (only the journal's source+1 above holds).
+        Assert.Equal(epochBefore is { } before ? before + 1 : decision.TargetEpoch, owner.Epoch,
+            epochBefore is null ? "no cluster_transfer_owner row existed before the transfer; only the journal epoch was checked" : "the owner epoch must advance exactly once from the pre-transfer row");
 
         Assert.Equal(shardsBefore, await ReadShardsAsync(database, ct));
 
@@ -142,10 +141,9 @@ public sealed class CrossWorkerTransferTests
         Assert.Equal(decision.SourceEpoch + 1, decision.TargetEpoch);
         OwnerRow owner = Assert.IsType<OwnerRow>(await ReadOwnerAsync(database, guid, ct));
         Assert.Equal(decision.TargetEpoch, owner.Epoch);
-        if (epochBefore is { } before)
-        {
-            Assert.Equal(before + 1, owner.Epoch);
-        }
+        // Two paths, reported in the failure text: a row existed before (epoch compared against it), or none did (only the journal's source+1 above holds).
+        Assert.Equal(epochBefore is { } before ? before + 1 : decision.TargetEpoch, owner.Epoch,
+            epochBefore is null ? "no cluster_transfer_owner row existed before the transfer; only the journal epoch was checked" : "the owner epoch must advance exactly once from the pre-transfer row");
 
         await session.LogoutAsync(ct);
         Assert.Single(await ReadDecisionsAsync(database, guid, ct));
@@ -223,7 +221,8 @@ public sealed class CrossWorkerTransferTests
                 await session.WaitForTrafficAsync(ct);
                 await session.ReadAsync(ct);
             }
-            catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+            catch (Exception ex) when (ex is EndOfStreamException or SocketException or ObjectDisposedException
+                or IOException { InnerException: SocketException or ObjectDisposedException } and not MockProtocolException)
             {
                 return true;
             }
