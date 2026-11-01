@@ -44,9 +44,9 @@ public sealed class ReputationCombatHooks(CombatHooks fallback, ReputationReacti
             return false; // targetability, evade, friendly team rule, unflagged enemy player: the base rules stay
         }
 
-        if (attacker is Player && victim is Player)
+        if (attacker is Player && victim is Player && !EitherCharmed(attacker, victim))
         {
-            return true; // player versus player is the base rule (team, PvP flag, duel)
+            return true; // uncharmed player versus player is the base rule (team, PvP flag, duel); a charmed pair goes through the reaction checks
         }
 
         return _resolver.TryCanAttack(attacker, victim, out bool canAttack) ? canAttack : _fallback.CanAttack(attacker, victim);
