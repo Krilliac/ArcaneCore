@@ -40,7 +40,11 @@ internal sealed class SweepScene : IDisposable
                 Targets = SpellCastTargets.ForUnit(mob.Guid);
                 break;
             case SweepTargetKind.Friendly:
-                Player friend = AddPlayer(cls, level, targetDistance, 0);
+                // A spell with a target creature type mask (Beast Lore, Tame Pet, Mechanical Patch Kit) refuses a player: its friendly
+                // target is a creature of the mask's lowest type (the check passes an untyped creature, so the type is staged).
+                Unit friend = spell.TargetCreatureType != 0
+                    ? AddCreature(hostile: false, level, targetDistance, 0, (uint)System.Numerics.BitOperations.TrailingZeroCount(spell.TargetCreatureType) + 1)
+                    : AddPlayer(cls, level, targetDistance, 0);
                 Target = friend;
                 Targets = SpellCastTargets.ForUnit(friend.Guid);
                 break;
@@ -99,9 +103,9 @@ internal sealed class SweepScene : IDisposable
         return player;
     }
 
-    public Creature AddCreature(bool hostile, byte level, float dx, float dy)
+    public Creature AddCreature(bool hostile, byte level, float dx, float dy, uint creatureType = 0)
     {
-        Creature creature = Rig.AddCreature(hostile, level, dx, dy);
+        Creature creature = Rig.AddCreature(hostile, level, dx, dy, creatureType);
         _creatures.Add(creature);
         return creature;
     }
