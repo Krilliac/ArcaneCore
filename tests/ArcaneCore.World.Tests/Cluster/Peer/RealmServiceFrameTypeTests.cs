@@ -24,8 +24,8 @@ public sealed class RealmServiceFrameTypeTests
     }
 
     [Fact]
-    public void RealmServiceProtocol_VersionIsOne()
+    public void RealmServiceProtocol_VersionIsTwo()
     {
-        Assert.Equal((ushort)1, RealmServiceProtocol.Version);
+        Assert.Equal((ushort)2, RealmServiceProtocol.Version);
     }
 }

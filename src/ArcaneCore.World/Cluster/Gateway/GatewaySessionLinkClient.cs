@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
@@ -317,6 +318,9 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private async Task ReceiveLoopAsync()
     {
         GatewayLinkChannel channel = _channel!;
+        byte[]? listenerNonce = null;
+        byte[]? connectorNonce = null;
+        bool secured = false;
         try
         {
             while (channel.IsOpen)
@@ -329,15 +333,50 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
 
                 var type = (GatewayWorkerFrameType)frame[0];
                 ReadOnlyMemory<byte> body = frame.AsMemory(1);
+                if (!secured && type is not (GatewayWorkerFrameType.LinkChallenge or GatewayWorkerFrameType.LinkProof or GatewayWorkerFrameType.HelloAck))
+                {
+                    throw new InvalidDataException($"frame {type} from a worker that has not proved the link secret");
+                }
+
                 switch (type)
                 {
                     case GatewayWorkerFrameType.LinkChallenge:
-                        byte[] nonce = GatewaySessionWire.DecodeNonceFrame(body.Span, "LinkChallenge");
-                        channel.TryEnqueue(GatewaySessionWire.EncodeNonceFrame(GatewayWorkerFrameType.LinkProof, GatewaySessionWire.ComputeProof(_linkSecret, nonce)));
+                        if (listenerNonce is not null)
+                        {
+                            throw new InvalidDataException("a second LinkChallenge frame");
+                        }
+
+                        // Answer with the proof and our own nonce; the registration waits until the worker has proved itself back.
+                        listenerNonce = GatewaySessionWire.DecodeNonceFrame(body.Span, "LinkChallenge");
+                        connectorNonce = RandomNumberGenerator.GetBytes(GatewaySessionWire.NonceBytes);
+                        channel.TryEnqueue(LinkAuth.Frame((byte)GatewayWorkerFrameType.LinkProof, GatewaySessionWire.ComputeProof(_linkSecret, listenerNonce), connectorNonce));
+                        break;
+                    case GatewayWorkerFrameType.LinkProof:
+                        if (listenerNonce is null || connectorNonce is null || secured)
+                        {
+                            throw new InvalidDataException("unexpected LinkProof frame from a worker");
+                        }
+
+                        byte[] serverProof = GatewaySessionWire.DecodeNonceFrame(body.Span, "LinkProof");
+                        if (!CryptographicOperations.FixedTimeEquals(serverProof, LinkAuth.ComputeServerProof(_linkSecret, listenerNonce, connectorNonce)))
+                        {
+                            throw new InvalidDataException("the worker failed the link proof (its link secret differs, or it is not the worker)");
+                        }
+
+                        LinkKeys keys = LinkAuth.DeriveKeys(_linkSecret, listenerNonce, connectorNonce);
+                        channel.ActivateReceiveKey(keys.ServerToClient);
+                        channel.EnqueueSendKey(keys.ClientToServer);
+                        secured = true;
                         channel.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloRegisterFrame(_manifest));
                         break;
                     case GatewayWorkerFrameType.HelloAck:
-                        _helloAck.TrySetResult(DecodeHelloAck(body.Span));
+                        var ack = DecodeHelloAck(body.Span);
+                        if (ack.Accepted && !secured)
+                        {
+                            throw new InvalidDataException("HelloAck accepted before the worker proved the link secret");
+                        }
+
+                        _helloAck.TrySetResult(ack);
                         break;
                     case GatewayWorkerFrameType.SessionOpenReply:
                         OnOpenReply(body.Span);

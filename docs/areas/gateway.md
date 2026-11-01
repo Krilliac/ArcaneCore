@@ -50,21 +50,38 @@ on it ends (`LinkLost`).
 
 ### Link admission
 
-The worker sends a 32-byte random challenge; the gateway answers with HMAC-SHA256 of it keyed by the shared link secret,
-then registers a `Gateway`-role manifest (realm id, contract version, content revision, schema versions). The worker
-checks the proof, the role and the manifest before it accepts any session. Worker mode refuses to start unless
+The worker sends a 32-byte random challenge; the gateway answers with HMAC-SHA256 of it keyed by the shared link secret
+plus its own 32-byte random nonce. The worker checks the proof and answers with its own proof (HMAC-SHA256 under the secret
+over a fixed label and both nonces), so the gateway knows the worker holds the secret and that the answer is fresh for this
+connection. Only then does the gateway register a `Gateway`-role manifest (realm id, contract version, content revision,
+schema versions). The worker checks the proof, the role and the manifest before it accepts any session. A wrong or missing
+proof is answered with a plain refusal and the link closes. A proof recorded on one connection is useless on another: the
+challenge differs per connection. Worker mode refuses to start unless
 `Cluster:Worker:LinkSecret` is at least 16 characters, **on every bind address, loopback included**: with an empty secret
 the proof is an HMAC any local process can compute, and the manifest values are public defaults. The gateway likewise
 refuses to start unless its own `LinkSecret` (the `Gateway` section below) is at least 16 characters. **An admitted gateway can open a session for any
 account it names (the worker checks the account's status and bans, not a session-key proof), so the link secret is as
 sensitive as a database password.**
 
+### Frame integrity
+
+After the two proofs, both directions switch to MAC-protected frames. Each end derives two 32-byte keys (one per direction)
+with HKDF-SHA256 from the secret, salted with both nonces, and every later frame carries a 16-byte tag: HMAC-SHA256 under the
+direction's key over an 8-byte frame counter and the frame. A flipped bit, a replayed, dropped or reordered frame, or a frame
+reflected into the other direction fails the check and the receiver closes the link (every session on it ends, `LinkLost`).
+The gateway contract version is 3 and the peer link protocol version is 2, so a gateway or peer from before this change is
+refused at the handshake instead of misreading frames. The golden vectors are pinned in `LinkIntegrityTests`. The peer link
+(`PeerLinkHost`, `PeerLinkClient`) uses the same construction with its own secret.
+
+Until this change the link assumed a loopback-only or fully trusted network: the gateway answered any challenge and frames
+carried no MAC.
+
 What the link does not protect:
 
-- **The worker is not authenticated to the gateway.** The gateway answers any challenge; it never checks that the worker
-  knows the secret. A process that binds the worker port before the World does receives every client's plaintext opcodes.
-- **The link is not encrypted and frames carry no MAC after the handshake.** Anyone on the path can read and inject.
-  Keep the link on loopback or a private network you control.
+- **The link is not encrypted.** Frames are authenticated, not hidden: anyone on the path can read the client opcodes (they
+  are plaintext after the header cipher is removed at the gateway) but cannot inject, alter, replay or reorder frames without
+  the secret. Keep the link on loopback or a private network you control.
+- **A holder of the secret is trusted completely** (see above), and a stolen secret defeats both proofs.
 
 ## Running it
 

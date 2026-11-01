@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Diagnostics;
@@ -276,7 +277,43 @@ public sealed class PeerLinkClient : IAsyncDisposable
                 }
 
                 byte[] nonce = PeerLinkWire.DecodeNonce(challenge.AsSpan(1), "Challenge");
-                channel.TryEnqueue(PeerLinkWire.EncodeNonce(RealmServiceFrameType.Proof, GatewaySessionWire.ComputeProof(_secret, nonce)));
+                byte[] connectorNonce = RandomNumberGenerator.GetBytes(GatewaySessionWire.NonceBytes);
+                channel.TryEnqueue(LinkAuth.Frame((byte)RealmServiceFrameType.Proof, GatewaySessionWire.ComputeProof(_secret, nonce), connectorNonce));
+
+                // The holder must prove the secret back (Proof, bound to both nonces) before anything else is sent; a refusal arrives in the clear.
+                byte[]? proofFrame = await channel.ReadFrameAsync(handshake.Token).ConfigureAwait(false);
+                if (proofFrame is not { Length: > 0 })
+                {
+                    throw new IOException("the peer closed the link during the handshake");
+                }
+
+                if ((RealmServiceFrameType)proofFrame[0] == RealmServiceFrameType.HelloAck)
+                {
+                    (bool early, string earlyReason, _) = PeerLinkWire.DecodeHelloAck(proofFrame.AsMemory(1));
+                    if (early)
+                    {
+                        throw new InvalidDataException("HelloAck accepted before the holder proved the peer secret");
+                    }
+
+                    Volatile.Write(ref _lastRefusal, earlyReason);
+                    _logger.LogWarning("Peer link to {Node} refused: {Reason}", holder.NodeId, earlyReason);
+                    return LinkEnd.Refused;
+                }
+
+                if ((RealmServiceFrameType)proofFrame[0] != RealmServiceFrameType.Proof)
+                {
+                    throw new InvalidDataException($"expected the holder's Proof, got frame type {proofFrame[0]}");
+                }
+
+                byte[] serverProof = PeerLinkWire.DecodeNonce(proofFrame.AsSpan(1), "Proof");
+                if (!CryptographicOperations.FixedTimeEquals(serverProof, LinkAuth.ComputeServerProof(_secret, nonce, connectorNonce)))
+                {
+                    throw new InvalidDataException("the holder failed the peer link proof (its secret differs, or it is not the holder)");
+                }
+
+                LinkKeys keys = LinkAuth.DeriveKeys(_secret, nonce, connectorNonce);
+                channel.ActivateReceiveKey(keys.ServerToClient);
+                channel.EnqueueSendKey(keys.ClientToServer);
                 channel.TryEnqueue(PeerLinkWire.EncodeHello(new PeerHelloInfo(RealmServiceProtocol.Version, _manifest, _leases.HeldLeases())));
 
                 byte[]? ackFrame = await channel.ReadFrameAsync(handshake.Token).ConfigureAwait(false);
