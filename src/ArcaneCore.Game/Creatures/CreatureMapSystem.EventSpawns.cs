@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -67,6 +68,12 @@ public sealed partial class CreatureMapSystem
                 if (live is not null)
                 {
                     Despawn(live);
+                    if ((live.NpcFlags & (uint)NpcFlags.SpiritGuide) != 0)
+                    {
+                        // A battleground spirit guide went away: the ghosts waiting at it go to another graveyard
+                        // (vmangos npc_spirit_guideAI::CorpseRemoved, battleground.cpp:74-93).
+                        Map.Combat.RepopWaitingGhostsNear(live.X, live.Y, live.Z);
+                    }
                 }
 
                 continue;
