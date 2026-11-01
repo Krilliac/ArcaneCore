@@ -12,6 +12,26 @@ namespace ArcaneCore.Game;
 /// </summary>
 internal static class StackGuard
 {
+    [ThreadStatic] private static bool t_suspended;
+
+    /// <summary>
+    /// Test seam for the RED proof: while the returned scope is open, <see cref="TryEnter"/> on the calling thread always answers true (the guard
+    /// is off), so a test can show what the guarded path does when nothing stops it. Affects only the calling thread; dispose restores the
+    /// previous state. Production code never calls it.
+    /// </summary>
+    internal static SuspendScope Suspend()
+    {
+        bool previous = t_suspended;
+        t_suspended = true;
+        return new SuspendScope(previous);
+    }
+
+    /// <summary>Restores the calling thread's guard state when disposed (<see cref="Suspend"/>); dispose it on the thread that opened it.</summary>
+    internal readonly struct SuspendScope(bool previous) : IDisposable
+    {
+        public void Dispose() => t_suspended = previous;
+    }
+
     /// <summary>
     /// True when the calling thread has enough stack left for the nested action. When it has not, records an
     /// <see cref="InsufficientExecutionStackException"/> under <paramref name="site"/> (in <paramref name="ledger"/>, <see cref="FaultLedger.Shared"/>
@@ -19,7 +39,7 @@ internal static class StackGuard
     /// </summary>
     public static bool TryEnter(string site, FaultLedger? ledger = null)
     {
-        if (RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        if (t_suspended || RuntimeHelpers.TryEnsureSufficientExecutionStack())
         {
             return true;
         }
