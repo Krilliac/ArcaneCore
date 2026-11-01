@@ -184,7 +184,7 @@ public sealed class SocialFeature(
         // Friends on other workers (S3c): their status comes from the realm directory when this node has one.
         if (services?.GetService<ArcaneCore.Kernel.Cluster.Social.IRealmPresenceDirectory>() is { } realmDirectory)
         {
-            _crossWorker = new CrossWorkerSocial(realmDirectory, _logger);
+            _crossWorker = new CrossWorkerSocial(realmDirectory, _logger, _presence?.WorkerId);
             _context.Friends.Remote = _crossWorker;
         }
 

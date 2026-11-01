@@ -195,6 +195,69 @@ public sealed class CrossWorkerFriendsTests
     }
 
     [Fact]
+    public async Task LocalFriendLoggingOut_WhileTheDirectoryStillListsHerOnThisWorker_GivesOneOfflineAndNoOnlineList()
+    {
+        var directory = new InMemoryRealmPresenceDirectory();
+        Assert.Equal(PresenceMutationResult.Applied, directory.TryUpsert(AliceOnWorkerA(), out _));
+        (WorldRuntime world, SocialContext context) = CreateWorld();
+        using (world)
+        {
+            var bobSession = new RecordingSession();
+            Player bob = CreatePlayer(BobId, "Bob", Race.Human, bobSession);
+            Player alice = CreatePlayer(AliceId, "Alice", Race.Human, new RecordingSession());
+            var cross = new CrossWorkerSocial(directory, localWorkerId: "worker-a");
+            world.Start();
+            await world.InvokeAsync(() =>
+            {
+                world.AddPlayer(bob);
+                world.AddPlayer(alice);
+                context.Friends.Remote = cross;
+                context.Friends.Load(bob, [new SocialEntry(AliceId, SocialFlags.Friend)]);
+                context.Friends.Load(alice, []);
+                return true;
+            });
+
+            // While Alice is online here she is not a remote candidate, so the directory is not consulted for her.
+            Assert.Empty(await world.InvokeAsync(() => context.Friends.RemoteFriendCandidates()));
+
+            // She logs out on this worker. The directory entry is still there (the publisher has not flushed the removal yet).
+            bobSession.Clear();
+            await world.InvokeAsync(() =>
+            {
+                context.Friends.BroadcastPresence(alice, online: false);
+                world.RemovePlayer(alice);
+                return true;
+            });
+            ulong[] wanted = await world.InvokeAsync(() => context.Friends.RemoteFriendCandidates());
+            Assert.Equal([(ulong)AliceId], wanted);
+
+            IReadOnlyList<RemotePresenceChange> changes = await cross.RefreshAsync(wanted);
+            Assert.Empty(changes);
+            Assert.False(cross.TryGet(ObjectGuid.Player(AliceId), out _));
+            await world.InvokeAsync(() =>
+            {
+                context.Friends.NotifyRemotePresence(changes);
+                return true;
+            });
+
+            // Exactly one FRIEND_OFFLINE (from the local logout) and no friend list that shows her online.
+            byte[] offline = Assert.Single(bobSession.Of(WorldOpcode.SmsgFriendStatus));
+            Assert.Equal((byte)FriendsResult.Offline, offline[0]);
+            Assert.Equal(ObjectGuid.Player(AliceId).Value, BitConverter.ToUInt64(offline, 1));
+            Assert.Empty(bobSession.Of(WorldOpcode.SmsgFriendList));
+
+            bobSession.Clear();
+            await world.InvokeAsync(() =>
+            {
+                context.Friends.SendFriendList(bob);
+                return true;
+            });
+            byte[] list = Assert.Single(bobSession.Of(WorldOpcode.SmsgFriendList));
+            Assert.Equal((byte)FriendStatus.Offline, list[9]);
+        }
+    }
+
+    [Fact]
     public async Task WhisperRoutedToTheRecipientsWorker_IsRefusedWhenTheRecipientIgnoresTheSender()
     {
         (WorldRuntime world, SocialContext context) = CreateWorld();

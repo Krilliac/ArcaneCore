@@ -111,9 +111,10 @@ public enum RoutedWhisperOutcome
 /// read). <see cref="Tick"/>, <see cref="DeliverWhisper"/> and everything touching <see cref="SocialContext"/> run on the world thread. The directory reads
 /// (<see cref="IRealmPresenceDirectory.FindByGuid"/>) may block on the peer link, so they only ever run on the thread pool inside <see cref="RefreshAsync"/>.
 /// </para>
-/// <para>Memory: the cache holds at most one entry per distinct listed friend that is online on another worker, rebuilt every refresh; one refresh runs at a time.</para>
+/// <para>Memory: the cache holds at most one entry per distinct listed friend that is online on another worker, rebuilt every refresh; one refresh runs at a time.
+/// Directory entries whose worker id equals <c>localWorkerId</c> are ignored (those characters are this process's own sessions).</para>
 /// </summary>
-public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger? logger = null) : IRemoteFriendPresence
+public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger? logger = null, string? localWorkerId = null) : IRemoteFriendPresence
 {
     private Dictionary<ulong, RemoteFriendInfo> _view = [];
     private HashSet<ulong> _watched = [];
@@ -137,7 +138,10 @@ public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger
             var next = new Dictionary<ulong, RemoteFriendInfo>(wanted.Count);
             foreach (ulong guid in wanted)
             {
-                if (directory.FindByGuid(guid) is { } entry)
+                // An entry owned by this worker is a character of this process: the session table is authoritative for her, and the directory entry of a
+                // character who just logged out here can outlive her session until the publisher flushes the removal. Using it would flash her online again.
+                if (directory.FindByGuid(guid) is { } entry
+                    && !(localWorkerId is not null && string.Equals(entry.WorkerId, localWorkerId, StringComparison.Ordinal)))
                 {
                     next[guid] = new RemoteFriendInfo(
                         entry.IsDnd ? FriendStatus.Dnd : entry.IsAfk ? FriendStatus.Afk : FriendStatus.Online,
