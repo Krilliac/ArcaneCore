@@ -13,15 +13,14 @@ using Microsoft.Extensions.Options;
 namespace ArcaneCore.Gateway;
 
 /// <summary>
-/// The gateway daemon's two loops: the client listener (admission through a <see cref="NetGuard"/> built from
-/// <c>Net:Protection</c>, one <see cref="GatewayClientConnection"/> per client) and the worker link (connect, and reconnect
-/// with backoff when it is lost or refused). Phase 3a: a lost link drops every client of it, and a client that authenticates
-/// while the link is down is answered AUTH_UNAVAILABLE.
+/// The gateway daemon's loops: the client listener (admission through a <see cref="NetGuard"/> built from
+/// <c>Net:Protection</c>, one <see cref="GatewayClientConnection"/> per client) and one link supervisor per configured worker
+/// (<see cref="GatewayWorkerLink"/>: connect, and reconnect with its own backoff when the link is lost or refused). A lost link drops
+/// only the clients of that worker; a client that authenticates is placed on the ready link with the fewest sessions, and is answered
+/// AUTH_UNAVAILABLE when no link is ready.
 /// </summary>
 public sealed class GatewayServer : BackgroundService
 {
-    private static readonly TimeSpan MaxLinkRetryDelay = TimeSpan.FromSeconds(30);
-
     private readonly IServiceScopeFactory _scopes;
     private readonly IOptions<GatewayOptions> _options;
     private readonly ILoggerFactory _loggers;
@@ -30,12 +29,10 @@ public sealed class GatewayServer : BackgroundService
     private readonly ConcurrentDictionary<GatewayClientConnection, Task> _connections = new();
     private readonly Guid _incarnation = Guid.NewGuid();
     private TcpListener? _listener;
-    private volatile GatewaySessionLinkClient? _link;
-    private TaskCompletionSource _linkUp = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private TaskCompletionSource? _retarget;
+    private volatile GatewayWorkerLink[] _workers = [];
     private volatile IPEndPoint? _worker;
-    private volatile IPEndPoint? _linkWorker;
     private long _nextGeneration;
+    private int _nextPick;
 
     public GatewayServer(
         IServiceScopeFactory scopes,
@@ -80,28 +77,73 @@ public sealed class GatewayServer : BackgroundService
     /// <summary>The bound client endpoint (after start).</summary>
     public IPEndPoint ListenEndPoint => (IPEndPoint)(_listener ?? throw new InvalidOperationException("not started")).LocalEndpoint;
 
-    /// <summary>The current worker link, or null while it is down.</summary>
-    public GatewaySessionLinkClient? Link => _link is { IsConnected: true } link ? link : null;
+    /// <summary>The worker links, in configuration order (empty before start).</summary>
+    public IReadOnlyList<GatewayWorkerLink> Workers => _workers;
 
-    /// <summary>The worker the link connects to: Gateway:WorkerAddress/WorkerPort until <see cref="RetargetWorkerAsync"/> moves it.</summary>
-    public IPEndPoint WorkerEndPoint => _worker ?? ConfiguredWorker();
+    /// <summary>The state of every worker link (node, endpoint, maps, status, sessions, failures, reconnects, last error).</summary>
+    public IReadOnlyList<GatewayWorkerLinkInfo> LinkStates()
+    {
+        GatewayWorkerLink[] workers = _workers;
+        var states = new GatewayWorkerLinkInfo[workers.Length];
+        for (int index = 0; index < workers.Length; index++)
+        {
+            states[index] = workers[index].Snapshot();
+        }
+
+        return states;
+    }
+
+    /// <summary>The first ready worker link (configuration order), or null while none is ready. With one worker this is the worker link.</summary>
+    public GatewaySessionLinkClient? Link
+    {
+        get
+        {
+            foreach (GatewayWorkerLink worker in _workers)
+            {
+                if (worker.Link is { } link)
+                {
+                    return link;
+                }
+            }
+
+            return null;
+        }
+    }
+
+    /// <summary>Links that are ready to take sessions.</summary>
+    internal int ReadyLinkCount => _workers.Count(worker => worker.Link is not null);
+
+    /// <summary>Sessions open across every ready link.</summary>
+    internal int TotalSessions => _workers.Sum(worker => worker.Link?.SessionCount ?? 0);
+
+    /// <summary>The first worker's endpoint: Gateway:Workers[0] (or WorkerAddress/WorkerPort) until <see cref="RetargetWorkerAsync"/> moves it.</summary>
+    public IPEndPoint WorkerEndPoint => _workers is { Length: > 0 } workers ? workers[0].EndPoint : _worker ?? ConfiguredWorker();
 
     /// <summary>
-    /// Move the worker link to <paramref name="worker"/> (the reroute of a whole-World handoff, Tier 3b): the link to the old worker is closed,
-    /// which disconnects its clients (they log in again through the new link; a seamless per-session reroute is not built), and the link loop
-    /// connects to the new worker with the same secret and manifest. Completes when the new link is registered. In-process only: nothing
-    /// remote can call it. Idempotent.
+    /// Move the first worker's link to <paramref name="worker"/> (the reroute of a whole-World handoff, Tier 3b): the link to the old worker is closed,
+    /// which disconnects its clients (they log in again through the new link; a seamless per-session reroute is not built), and the link supervisor
+    /// connects to the new worker with the same secret and manifest. Other workers' links are not touched. Completes when the new link is registered.
+    /// In-process only: nothing remote can call it. Idempotent.
     /// </summary>
     public async Task RetargetWorkerAsync(IPEndPoint worker, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(worker);
         _worker = worker;
         _logger.LogInformation("Worker link retargeted to {Worker}", worker);
-        while (!(Link is not null && Equals(_linkWorker, worker)))
+        while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (_link is not null && !Equals(_linkWorker, worker))
-                Volatile.Read(ref _retarget)?.TrySetResult();
+            GatewayWorkerLink[] workers = _workers;
+            if (workers.Length > 0)
+            {
+                GatewayWorkerLink primary = workers[0];
+                primary.Retarget(worker);
+                if (primary.Link is not null && Equals(primary.ConnectedEndPoint, worker))
+                {
+                    return;
+                }
+            }
+
             await Task.Delay(20, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -109,8 +151,29 @@ public sealed class GatewayServer : BackgroundService
     /// <summary>Open client connections.</summary>
     public int ConnectionCount => _connections.Count;
 
-    /// <summary>Completes when a worker link is registered (the current one, or the next).</summary>
-    public Task WaitForLinkAsync(CancellationToken cancellationToken) => Volatile.Read(ref _linkUp).Task.WaitAsync(cancellationToken);
+    /// <summary>Completes when any worker link is registered (a current one, or the next).</summary>
+    public Task WaitForLinkAsync(CancellationToken cancellationToken)
+    {
+        GatewayWorkerLink[] workers = _workers;
+        if (workers.Length == 0)
+        {
+            return new TaskCompletionSource().Task.WaitAsync(cancellationToken);
+        }
+
+        return Task.WhenAny(workers.Select(worker => worker.WaitForLinkAsync(cancellationToken))).Unwrap();
+    }
+
+    /// <summary>Completes when every worker link is registered (each link's current registration, or its next).</summary>
+    public Task WaitForAllLinksAsync(CancellationToken cancellationToken)
+    {
+        GatewayWorkerLink[] workers = _workers;
+        if (workers.Length == 0)
+        {
+            return new TaskCompletionSource().Task.WaitAsync(cancellationToken);
+        }
+
+        return Task.WhenAll(workers.Select(worker => worker.WaitForLinkAsync(cancellationToken)));
+    }
 
     /// <summary>
     /// The next session generation: unique and ascending for this process. The link client calls it and queues the SessionOpen
@@ -119,28 +182,89 @@ public sealed class GatewayServer : BackgroundService
     /// </summary>
     internal long NextGeneration() => Interlocked.Increment(ref _nextGeneration);
 
-    private IPEndPoint ConfiguredWorker() => new(IPAddress.Parse(_options.Value.WorkerAddress), _options.Value.WorkerPort);
+    /// <summary>
+    /// The ready link a new session is placed on: the one with the fewest open sessions, ties broken round robin so a burst of logins spreads.
+    /// Null when no link is ready.
+    /// </summary>
+    internal GatewaySessionLinkClient? AcquireLink()
+    {
+        GatewayWorkerLink[] workers = _workers;
+        if (workers.Length == 0)
+        {
+            return null;
+        }
+
+        int start = (int)((uint)Interlocked.Increment(ref _nextPick) % (uint)workers.Length);
+        GatewaySessionLinkClient? best = null;
+        int bestSessions = int.MaxValue;
+        for (int offset = 0; offset < workers.Length; offset++)
+        {
+            GatewaySessionLinkClient? link = workers[(start + offset) % workers.Length].Link;
+            if (link is null)
+            {
+                continue;
+            }
+
+            int sessions = link.SessionCount;
+            if (sessions < bestSessions)
+            {
+                best = link;
+                bestSessions = sessions;
+            }
+        }
+
+        return best;
+    }
+
+    private IPEndPoint ConfiguredWorker()
+    {
+        GatewayWorkerEntry entry = _options.Value.EffectiveWorkers()[0];
+        return new(IPAddress.Parse(entry.Address), entry.Port);
+    }
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
         GatewayOptions config = _options.Value;
         GatewaySessionLinkHost.ThrowIfWeakSecret(config.LinkSecret, "Gateway:LinkSecret"); // fail at start, not in the link loop
         ArgumentException.ThrowIfNullOrWhiteSpace(config.BindAddress);
-        ArgumentException.ThrowIfNullOrWhiteSpace(config.WorkerAddress);
         ArgumentOutOfRangeException.ThrowIfLessThan(config.Port, IPEndPoint.MinPort);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(config.Port, IPEndPoint.MaxPort);
-        ArgumentOutOfRangeException.ThrowIfLessThan(config.WorkerPort, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(config.WorkerPort, IPEndPoint.MaxPort);
+        if (config.Workers.Count > 0)
+        {
+            IReadOnlyList<string> workerProblems = config.ValidateWorkers();
+            if (workerProblems.Count > 0)
+            {
+                throw new ArgumentException(string.Join(" ", workerProblems), nameof(config));
+            }
+        }
+        else
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(config.WorkerAddress);
+            ArgumentOutOfRangeException.ThrowIfLessThan(config.WorkerPort, 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(config.WorkerPort, IPEndPoint.MaxPort);
+        }
+
         ArgumentOutOfRangeException.ThrowIfNegative(config.MaxConnections);
         ArgumentOutOfRangeException.ThrowIfNegative(config.MaxConnectionsPerIp);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(config.MaxOutboundBytes);
+        IReadOnlyList<GatewayWorkerEntry> entries = config.EffectiveWorkers();
+        var workers = new GatewayWorkerLink[entries.Count];
+        for (int index = 0; index < entries.Count; index++)
+        {
+            GatewayWorkerEntry entry = entries[index];
+            IPEndPoint endpoint = index == 0 && _worker is { } retargeted ? retargeted : new IPEndPoint(IPAddress.Parse(entry.Address), entry.Port);
+            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger);
+        }
+
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();
         _listener = listener;
+        _workers = workers;
         GatewayMeters.Attach(this);
         Guard = new NetGuard(_protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp,
             _logger, bindAddress: IPAddress.Parse(config.BindAddress));
-        _logger.LogInformation("Gateway listening on {Endpoint}; worker link to {Worker}:{Port}", listener.LocalEndpoint, config.WorkerAddress, config.WorkerPort);
+        _logger.LogInformation("Gateway listening on {Endpoint}; {Count} worker link(s): {Workers}", listener.LocalEndpoint, workers.Length,
+            string.Join(", ", workers.Select(worker => $"{worker.NodeId}={worker.EndPoint}")));
         return base.StartAsync(cancellationToken);
     }
 
@@ -148,7 +272,8 @@ public sealed class GatewayServer : BackgroundService
     {
         TcpListener listener = _listener ?? throw new InvalidOperationException("the gateway listener was not started");
         NetGuard guard = Guard!;
-        Task linkLoop = Task.Run(() => LinkLoopAsync(stoppingToken), CancellationToken.None);
+        GatewayWorkerLink[] workers = _workers;
+        Task linkLoops = Task.WhenAll(workers.Select(worker => Task.Run(() => worker.RunAsync(stoppingToken), CancellationToken.None)));
         try
         {
             await AcceptLoop.RunAsync(
@@ -188,10 +313,10 @@ public sealed class GatewayServer : BackgroundService
         {
             listener.Stop();
             await Task.WhenAll(_connections.Values).ConfigureAwait(false);
-            await linkLoop.ConfigureAwait(false);
-            if (_link is { } link)
+            await linkLoops.ConfigureAwait(false);
+            foreach (GatewayWorkerLink worker in workers)
             {
-                await link.DisposeAsync().ConfigureAwait(false);
+                await worker.DisposeLinkAsync().ConfigureAwait(false);
             }
 
             GatewayMeters.Detach(this);
@@ -222,17 +347,131 @@ public sealed class GatewayServer : BackgroundService
             _connections.TryRemove(connection, out _);
         }
     }
+}
 
-    private async Task LinkLoopAsync(CancellationToken stoppingToken)
+/// <summary>Where a worker link is in its life.</summary>
+public enum GatewayWorkerLinkStatus
+{
+    /// <summary>Connecting (the first attempt, or the next after a backoff).</summary>
+    Connecting,
+
+    /// <summary>Registered with the worker and taking sessions.</summary>
+    Ready,
+
+    /// <summary>The last attempt failed or the link was lost; waiting out the backoff.</summary>
+    Backoff,
+}
+
+/// <summary>A point-in-time view of one worker link.</summary>
+public sealed record GatewayWorkerLinkInfo(
+    string NodeId,
+    IPEndPoint EndPoint,
+    IReadOnlyList<int> Maps,
+    GatewayWorkerLinkStatus Status,
+    int Sessions,
+    long Failures,
+    long Reconnects,
+    string? LastError);
+
+/// <summary>
+/// The supervisor of one worker link: it connects a <see cref="GatewaySessionLinkClient"/> to its worker, keeps it registered, and after a lost or
+/// refused link reconnects with its own backoff (first <see cref="GatewayOptions.LinkRetryDelay"/>, doubling up to 30 s). Links are independent: one
+/// worker going away drops only its sessions. Thread safety: <see cref="RunAsync"/> runs on one task and writes the state; every reader
+/// (admission, metrics, <see cref="GatewayServer.LinkStates"/>) reads volatile fields.
+/// </summary>
+public sealed class GatewayWorkerLink
+{
+    private static readonly TimeSpan MaxLinkRetryDelay = TimeSpan.FromSeconds(30);
+
+    private readonly GatewayWorkerEntry _entry;
+    private readonly GatewayOptions _config;
+    private readonly Guid _incarnation;
+    private readonly ILoggerFactory _loggers;
+    private readonly GatewayWarden? _warden;
+    private readonly ILogger _logger;
+    private readonly int[] _maps;
+    private volatile IPEndPoint _target;
+    private volatile IPEndPoint? _connected;
+    private volatile GatewaySessionLinkClient? _link;
+    private volatile string? _lastError;
+    private int _status;
+    private long _failures;
+    private long _reconnects;
+    private TaskCompletionSource _linkUp = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource? _retarget;
+
+    internal GatewayWorkerLink(
+        GatewayWorkerEntry entry,
+        IPEndPoint endpoint,
+        GatewayOptions config,
+        Guid incarnation,
+        ILoggerFactory loggers,
+        GatewayWarden? warden,
+        ILogger logger)
     {
-        GatewayOptions config = _options.Value;
-        TimeSpan delay = config.LinkRetryDelay > TimeSpan.Zero ? config.LinkRetryDelay : TimeSpan.FromSeconds(1);
+        _entry = entry;
+        _config = config;
+        _incarnation = incarnation;
+        _loggers = loggers;
+        _warden = warden;
+        _logger = logger;
+        _target = endpoint;
+        _maps = [.. entry.Maps];
+    }
+
+    /// <summary>The worker's node id (Gateway:Workers:N:NodeId).</summary>
+    public string NodeId => _entry.NodeId;
+
+    /// <summary>The endpoint the supervisor connects to (a retarget moves it).</summary>
+    public IPEndPoint EndPoint => _target;
+
+    /// <summary>The endpoint of the registered link, or null while none is registered.</summary>
+    public IPEndPoint? ConnectedEndPoint => _connected;
+
+    /// <summary>Map ids this worker owns (empty: not map-restricted).</summary>
+    public IReadOnlyList<int> Maps => _maps;
+
+    /// <summary>Where the link is in its life.</summary>
+    public GatewayWorkerLinkStatus Status => (GatewayWorkerLinkStatus)Volatile.Read(ref _status);
+
+    /// <summary>The registered link, or null while it is down.</summary>
+    public GatewaySessionLinkClient? Link => _link is { IsConnected: true } link ? link : null;
+
+    /// <summary>Completes when this link is registered (the current registration, or the next).</summary>
+    public Task WaitForLinkAsync(CancellationToken cancellationToken) => Volatile.Read(ref _linkUp).Task.WaitAsync(cancellationToken);
+
+    /// <summary>A point-in-time view of this link.</summary>
+    public GatewayWorkerLinkInfo Snapshot() => new(
+        NodeId, EndPoint, _maps, Status, Link?.SessionCount ?? 0, Interlocked.Read(ref _failures), Interlocked.Read(ref _reconnects), _lastError);
+
+    /// <summary>Point the link at <paramref name="worker"/>; a registered link to another endpoint is closed so the supervisor reconnects.</summary>
+    internal void Retarget(IPEndPoint worker)
+    {
+        _target = worker;
+        if (_link is not null && !Equals(_connected, worker))
+        {
+            Volatile.Read(ref _retarget)?.TrySetResult();
+        }
+    }
+
+    internal async ValueTask DisposeLinkAsync()
+    {
+        if (_link is { } link)
+        {
+            await link.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    internal async Task RunAsync(CancellationToken stoppingToken)
+    {
+        TimeSpan delay = _config.LinkRetryDelay > TimeSpan.Zero ? _config.LinkRetryDelay : TimeSpan.FromSeconds(1);
         TimeSpan nextDelay = delay;
-        int linkRegistrations = 0;
+        int registrations = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
-            IPEndPoint worker = WorkerEndPoint;
-            var link = new GatewaySessionLinkClient(config.ToManifest(_incarnation), worker, config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), Warden?.Posture);
+            IPEndPoint worker = _target;
+            Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Connecting);
+            var link = new GatewaySessionLinkClient(_config.ToManifest(_incarnation), worker, _config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), _warden?.Posture);
             try
             {
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -247,9 +486,11 @@ public sealed class GatewayServer : BackgroundService
                     return;
                 }
 
-                GatewayMeters.CountLinkFailure(config.NodeId);
-
-                _logger.LogWarning("Worker link to {Worker} not established ({Message}); retrying in {Delay}", worker, ex.Message, nextDelay);
+                Interlocked.Increment(ref _failures);
+                _lastError = ex.Message;
+                Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Backoff);
+                GatewayMeters.CountLinkFailure(_config.NodeId);
+                _logger.LogWarning("Worker link {Node} to {Worker} not established ({Message}); retrying in {Delay}", NodeId, worker, ex.Message, nextDelay);
                 try
                 {
                     await Task.Delay(nextDelay, stoppingToken).ConfigureAwait(false);
@@ -266,30 +507,47 @@ public sealed class GatewayServer : BackgroundService
             nextDelay = delay;
             var retarget = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             Volatile.Write(ref _retarget, retarget);
-            _linkWorker = worker;
+            _connected = worker;
+            _lastError = null;
             _link = link;
-            if (linkRegistrations++ > 0)
+            Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Ready);
+            if (registrations++ > 0)
             {
-                GatewayMeters.CountLinkReconnect(config.NodeId);
+                Interlocked.Increment(ref _reconnects);
+                GatewayMeters.CountLinkReconnect(_config.NodeId);
             }
 
-            _logger.LogInformation("Worker link to {Worker} registered", worker);
+            _logger.LogInformation("Worker link {Node} to {Worker} registered", NodeId, worker);
             Volatile.Read(ref _linkUp).TrySetResult();
+            if (!Equals(_target, worker))
+            {
+                retarget.TrySetResult(); // retargeted while this attempt was connecting
+            }
+
             try
             {
                 await Task.WhenAny(link.Ended, retarget.Task).WaitAsync(stoppingToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                return; // ExecuteAsync disposes the link after the clients are gone
+                return; // the server disposes the link after the clients are gone
             }
 
             Volatile.Write(ref _linkUp, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
             _link = null;
+            _connected = null;
             if (retarget.Task.IsCompleted)
-                _logger.LogInformation("Worker link to {Worker} closed for the retarget to {Target}; its clients were disconnected", worker, WorkerEndPoint);
+            {
+                Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Connecting);
+                _logger.LogInformation("Worker link {Node} to {Worker} closed for the retarget to {Target}; its clients were disconnected", NodeId, worker, _target);
+            }
             else
-                _logger.LogWarning("Worker link to {Worker} lost; its clients were disconnected", worker);
+            {
+                _lastError = "link lost";
+                Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Backoff);
+                _logger.LogWarning("Worker link {Node} to {Worker} lost; its clients were disconnected", NodeId, worker);
+            }
+
             await link.DisposeAsync().ConfigureAwait(false);
         }
     }
