@@ -58,7 +58,7 @@ public sealed class PresenceWireGoldenTests
         Assert.Equal(6, (byte)ChannelModerationAction.Unban);
         Assert.Equal(7, (byte)ChannelModerationAction.Mute);
         Assert.Equal(8, (byte)ChannelModerationAction.Unmute);
-        Assert.Equal(9, (byte)ChannelModerationAction.ClaimModerator);
+        Assert.Equal(9, (byte)ChannelModerationAction.Kick);
     }
 
     [Fact]

@@ -125,28 +125,19 @@ public sealed class CrossWorkerChannelModerationTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task BanDecidedByTheLocalOwnerOnWorkerB_WhoDoesNotOwnAtTheHolder_StillBindsTheRealm()
+    public async Task BanDecidedFromWorkerB_ByAModeratorTheHolderOwnerGranted_BindsTheRealm()
     {
         Register(_a, 1, "Alice", 5);
         Register(_b, 2, "Bob", 7);
         Register(_b, 4, "Carol", 8);
         await JoinAsync(_a, 1, "Alice");
         _a.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 1, 1);
-        _a.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimModerator, 1, 1);
-        await _a.Routing.FlushAsync();
-
-        // Bob joins first on worker B, so he owns B's channel object; the holder refuses his owner claim but takes him as a moderator.
         await JoinAsync(_b, 2, "Bob");
         await JoinAsync(_b, 4, "Carol");
-        _b.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 2, 2);
-        _b.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimModerator, 2, 2);
-        await _b.Routing.FlushAsync();
-        ChannelModerationState before = Assert.IsType<ChannelModerationState>(_router.GetChannelModeration(Channel));
-        Assert.Equal(1UL, before.Owner);
-        Assert.Contains(2UL, before.Moderators);
 
-        // Bob bans Carol as the handler does: unsubscribe, then record the ban.
-        _b.Routing.LeaveChannel(Sender(4, "Carol"), Channel);
+        // Alice, the holder owner, promotes Bob; only then does his ban from worker B bind the realm.
+        _a.Routing.ModerateChannel(Channel, ChannelModerationAction.AddModerator, 1, 2);
+        await _a.Routing.FlushAsync();
         _b.Routing.ModerateChannel(Channel, ChannelModerationAction.Ban, 2, 4);
         await _b.Routing.FlushAsync();
         Assert.Equal([4UL], _router.GetChannelModeration(Channel)!.Banned);
@@ -158,9 +149,61 @@ public sealed class CrossWorkerChannelModerationTests : IAsyncLifetime
         await SpeakAsync(_a, 4, "Carol", "spam");
         Assert.Equal(0, _b.Routing.PumpOnce());
         Assert.Empty(_b.Received);
+    }
 
-        // A plain member who never claimed cannot moderate.
-        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.ClaimModerator, 2, 1), "a claim is for oneself");
+    [Fact]
+    public async Task ALocalOwnerOnWorkerB_WhoIsNoHolderModerator_BindsNothingAtTheRealm()
+    {
+        Register(_a, 1, "Alice", 5);
+        Register(_b, 2, "Bob", 7);
+        Register(_b, 4, "Carol", 8);
+        await JoinAsync(_a, 1, "Alice");
+        _a.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 1, 1);
+        await JoinAsync(_b, 2, "Bob");
+        await JoinAsync(_b, 4, "Carol");
+
+        // Bob is first on worker B (local owner there), but the holder owner never promoted him.
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 2, 2));
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.Ban, 2, 4));
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.Kick, 2, 4));
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.Mute, 2, 4));
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.AddModerator, 2, 2));
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.SetOwner, 2, 2));
+        ChannelModerationState state = Assert.IsType<ChannelModerationState>(_router.GetChannelModeration(Channel));
+        Assert.Equal(1UL, state.Owner);
+        Assert.Equal([1UL], state.Moderators);
+        Assert.Empty(state.Banned);
+        Assert.Empty(state.Muted);
+        Assert.True(_router.LeaveChannel(Channel, 4, 8), "Carol is still subscribed: nothing was kicked");
+    }
+
+    [Fact]
+    public async Task AModerator_CannotTakeOwnership_OrActAgainstTheOwner_ButTheOwnerAndStaffCan()
+    {
+        Register(_a, 1, "Alice", 5);
+        Register(_b, 2, "Bob", 7);
+        Register(_b, 5, "Gm", 9, security: 2);
+        await JoinAsync(_a, 1, "Alice");
+        await JoinAsync(_b, 2, "Bob");
+        await JoinAsync(_b, 5, "Gm");
+        Assert.True(_router.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 1, 1));
+        Assert.True(_router.ModerateChannel(Channel, ChannelModerationAction.AddModerator, 1, 2));
+
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.SetOwner, 2, 2), "a moderator cannot take ownership");
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.SetOwner, 2, 5), "nor hand it on");
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.Ban, 2, 1), "nor ban the owner");
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.Kick, 2, 1));
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.Mute, 2, 1));
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.RemoveModerator, 2, 1));
+        ChannelModerationState state = Assert.IsType<ChannelModerationState>(_router.GetChannelModeration(Channel));
+        Assert.Equal(1UL, state.Owner);
+        Assert.Contains(1UL, state.Moderators);
+        Assert.Empty(state.Banned);
+        Assert.Empty(state.Muted);
+
+        Assert.True(_router.ModerateChannel(Channel, ChannelModerationAction.SetOwner, 1, 2), "the owner may hand ownership on");
+        Assert.True(_router.ModerateChannel(Channel, ChannelModerationAction.Kick, 5, 2), "staff may act against the owner");
+        Assert.Equal(0UL, _router.GetChannelModeration(Channel)!.Owner);
     }
 
     [Fact]

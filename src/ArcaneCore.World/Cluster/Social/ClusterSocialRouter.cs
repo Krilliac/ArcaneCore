@@ -93,11 +93,8 @@ public enum ChannelModerationAction : byte
 
     Unmute = 8,
 
-    /// <summary>
-    /// The actor, a member whose worker made it owner or moderator of its own worker's channel object, becomes a moderator here so the moderation it decides binds the whole realm.
-    /// The holder keeps its own owner; the actor must be the target and a member.
-    /// </summary>
-    ClaimModerator = 9,
+    /// <summary>Removes the target from the channel without recording a ban; same rights as <see cref="Ban"/>.</summary>
+    Kick = 9,
 }
 
 /// <summary>The moderation state the holder keeps for one custom channel: its owner (0 when none) and the sorted guids of its moderators, banned and muted characters.</summary>
@@ -138,7 +135,7 @@ public interface IClusterSocialRouter
 
     /// <summary>
     /// A moderation change of a custom channel, held at the router so every worker sees one owner, moderator, ban and mute state. <paramref name="actorGuid"/> must be the channel's
-    /// owner or a moderator, or an online character of staff security (except for <see cref="ChannelModerationAction.ClaimOwner"/>, which needs an unowned channel and the actor to be
+    /// owner or a moderator, or an online character of staff security (SetOwner and any action against the owner need the owner or staff; except for <see cref="ChannelModerationAction.ClaimOwner"/>, which needs an unowned channel and the actor to be
     /// the target and a member). Refused (false) for an unknown channel, a missing right or a full list (<see cref="InMemoryClusterSocialRouter.MaxModerationEntries"/>).
     /// A ban also unsubscribes the target.
     /// </summary>
@@ -433,16 +430,18 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
                 return true;
             }
 
-            if (action == ChannelModerationAction.ClaimModerator)
+            // The holder's owner and moderator sets are authoritative: a worker's local channel object grants nothing here (mangos-classic Channel.cpp KickOrBan, SetMode, SetOwner).
+            bool actorIsOwner = actorGuid == state.Owner;
+            bool actorIsStaff = _directory.FindByGuid(actorGuid) is { } actor && actor.Security >= StaffSecurity;
+            if (!actorIsOwner && !actorIsStaff && !state.Moderators.Contains(actorGuid))
             {
-                return actorGuid == targetGuid && members.ContainsKey(actorGuid)
-                    && (state.Moderators.Contains(actorGuid) || (state.Moderators.Count < MaxModerationEntries && state.Moderators.Add(actorGuid)));
+                return false;
             }
 
-            bool actorMayModerate = actorGuid == state.Owner
-                || state.Moderators.Contains(actorGuid)
-                || (_directory.FindByGuid(actorGuid) is { } actor && actor.Security >= StaffSecurity);
-            if (!actorMayModerate)
+            // Only the owner or staff may hand ownership on, and only they may act against the owner.
+            bool ownerOrStaff = actorIsOwner || actorIsStaff;
+            bool againstOwner = state.Owner != 0 && targetGuid == state.Owner && action != ChannelModerationAction.Unban;
+            if (!ownerOrStaff && (action == ChannelModerationAction.SetOwner || againstOwner))
             {
                 return false;
             }
@@ -475,6 +474,15 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
                         DropMember(channelName, members, targetGuid);
                     }
 
+                    return true;
+
+                case ChannelModerationAction.Kick:
+                    if (!members.ContainsKey(targetGuid))
+                    {
+                        return false;
+                    }
+
+                    DropMember(channelName, members, targetGuid);
                     return true;
 
                 case ChannelModerationAction.Unban:

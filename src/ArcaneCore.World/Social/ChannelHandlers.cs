@@ -62,7 +62,6 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
             {
                 // The first joiner of a custom channel owns it locally; the holder grants the claim only while no other worker's member owns it already.
                 cluster.ModerateChannel(channel.Name, ChannelModerationAction.ClaimOwner, player.Guid.Value, player.Guid.Value);
-                cluster.ModerateChannel(channel.Name, ChannelModerationAction.ClaimModerator, player.Guid.Value, player.Guid.Value);
             }
         }
     }
@@ -80,8 +79,6 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
         if (!channel.IsConstant && !channel.Owner.IsEmpty)
         {
             cluster.ModerateChannel(channel.Name, ChannelModerationAction.ClaimOwner, channel.Owner.Value, channel.Owner.Value);
-            // Refused while another worker's member owns the channel at the holder: the local owner is then a holder moderator, so its bans and mutes still bind the realm.
-            cluster.ModerateChannel(channel.Name, ChannelModerationAction.ClaimModerator, channel.Owner.Value, channel.Owner.Value);
         }
     }
 
@@ -126,8 +123,8 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
     });
 
     /// <summary>
-    /// CMSG_CHANNEL_KICK / CMSG_CHANNEL_BAN: a target removed from the local channel is unsubscribed at the router (a ban is also recorded at the holder, which then refuses its
-    /// join from any worker and its lines), and ownership handed on by the removal is claimed.
+    /// CMSG_CHANNEL_KICK / CMSG_CHANNEL_BAN: a target removed from the local channel is kicked or banned at the holder when the actor holds the right there (a ban also makes it refuse the
+    /// target's join from any worker and its lines), and ownership handed on by the removal is claimed.
     /// </summary>
     private static void HandleKickOrBan(WorldSession session, Player player, byte[] payload, bool ban) => WithTarget(payload, (name, targetName) =>
     {
@@ -140,12 +137,8 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        // Always unsubscribe at the router, whatever the holder answers to the ban.
-        cluster.LeaveChannel(SenderOf(target), channel.Name);
-        if (ban)
-        {
-            cluster.ModerateChannel(channel.Name, ChannelModerationAction.Ban, player.Guid.Value, target.Guid.Value);
-        }
+        // The holder decides: a local owner or moderator that holds no right there removes the target from this worker's channel object only.
+        cluster.ModerateChannel(channel.Name, ban ? ChannelModerationAction.Ban : ChannelModerationAction.Kick, player.Guid.Value, target.Guid.Value);
 
         ClaimLocalOwner(cluster, channel);
     });
