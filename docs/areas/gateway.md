@@ -277,7 +277,7 @@ recovery).
   - `ClusterNodeHosting.AddClusterNodeRole` registers `ClusterRoleFeatureFilter`, `RealmAuthorityLeaseKeeper` and the
     database-backed `EfRealmAuthorityLeaseStore` (as `IRealmAuthorityLeaseStore`) whenever `Cluster:Node:Role` is not
     Combined. `WorldHost` takes the leases it can get at start and attaches a feature only when the filter admits it, so
-    the auction bot and AutoBroadcast run only under a lease the node holds. The Instances lease scope is never taken.
+    the auction bot and AutoBroadcast run only under a lease the node holds. A MapWorker also takes the Instances lease scope; it gates only the realm-wide durable writes of the instance reset schedule (see [instances.md](instances.md)).
   - What is still missing is what those pieces serve: cross-process realm services on the link at the lease holder
     (S2/S3) and map routing (S4). Decision D3 means there will be no dedicated social or economy process. The staged plan is in the
     [design](../CLUSTERING_DESIGN.md#decisions-and-staged-plan-2026-10-30) (S0-S7).

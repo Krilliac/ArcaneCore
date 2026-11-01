@@ -71,9 +71,9 @@ static (loaded from the world database or DBC at start, identical on every proce
 
 ## 3. Not verified
 
-- Whether anything takes the `instances` lease scope at runtime: the keeper's scope list has only `social` and
-  `economy` (`RealmAuthorityLeaseKeeper.cs:35`), while the lease table and the `/cluster` command know three scopes
-  (`RealmAuthorityLeaseDataModule.cs:33`, `ArcaneCore.World/Cluster/Tooling/ClusterCommands.cs:897`).
+- Instances lease: a MapWorker takes the `instances` scope (`RealmAuthorityLeaseKeeper.cs`) and it gates only the realm-wide
+  durable writes of the instance reset schedule; the lease table and the `/cluster` command know the same three scopes
+  (`RealmAuthorityLeaseDataModule.cs:33`, `ArcaneCore.World/Cluster/Tooling/ClusterCommands.cs:897`). See `docs/areas/instances.md`.
 - Which world-state providers beyond the BG one are registered at runtime (named in `WorldStates.cs:26-29`, not traced).
 - Behaviour with two live processes: nothing was run.
 - Playerbot realm state other than group ids.
