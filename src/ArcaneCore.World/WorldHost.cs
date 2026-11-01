@@ -87,6 +87,13 @@ public sealed class WorldHost(
     /// <summary>This process's ownership incarnation: the one a handoff's epoch takeover hands the characters ownership to.</summary>
     public Guid Incarnation => _incarnation;
 
+    /// <summary>
+    /// Worker scope with a valid explicit Cluster:Worker:OwnedMaps: the maps this world serves, which a handoff's epoch takeover writes to the shard's ownership row
+    /// (the standby serves its configured maps, so the durable row must say the same). Null in Realm scope or when the list is not usable (StartAsync refuses that).
+    /// </summary>
+    public IReadOnlyCollection<uint>? WorkerOwnedMaps
+        => IsWorkerScope && _worker is not null && CharacterFencingOptions.TryGetOwnedMaps(_worker, out IReadOnlyCollection<uint> maps, out _) ? maps : null;
+
     /// <summary>The durable owner node name this world claims under (Cluster:Fencing:OwnerNode).</summary>
     public string OwnerNode => _fencing.OwnerNode;
 
@@ -309,6 +316,11 @@ public sealed class WorldHost(
         catch (Data.Characters.Ownership.CharacterDatabaseAlreadyOwnedException ex)
         {
             throw new InvalidOperationException($"the characters database writer lock is held elsewhere (the old world is still running); refusing to promote, the standby stays a standby: {ex.Message}", ex);
+        }
+        catch (WorkerScopeConfigurationException ex)
+        {
+            // Worker scope misconfigured (an invalid shard id, or SQLite without AllowSqliteWorkerScope): nothing is held; the standby stays a standby, as for the other lock failures.
+            throw new InvalidOperationException($"the worker shard writer lock cannot be taken with this configuration ({ex.Message}); refusing to promote, the standby stays a standby", ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Data.Common.DbException)
         {
@@ -681,7 +693,8 @@ public sealed class WorldHost(
         CharacterOwnershipToken? token;
         if (_fencing is { HasTakeover: true, TakeoverEpoch: { } takeoverEpoch, TakeoverIncarnation: { } takeoverIncarnation })
         {
-            token = await store.TryTakeoverAsync(new CharacterOwnershipToken(scope, takeoverEpoch, takeoverIncarnation), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
+            // The takeover also writes this worker's owned maps: a handed-over shard must not keep the old owner's map set.
+            token = await store.TryTakeoverAsync(new CharacterOwnershipToken(scope, takeoverEpoch, takeoverIncarnation), _fencing.OwnerNode, _incarnation, maps, cancellationToken).ConfigureAwait(false);
         }
         else
         {
