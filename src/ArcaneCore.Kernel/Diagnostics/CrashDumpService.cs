@@ -42,7 +42,7 @@ public sealed record CrashDumpOutcome(string? Path, CrashDumpMode Mode, string N
 /// <para>
 /// Ownership: one instance per <see cref="CrashHandler"/>; no static state. Threading: <see cref="Run"/> is called on the crashing thread, which
 /// blocks while the dump is written on a dedicated background thread (never the thread pool, which a crash may have starved), so a hung runtime
-/// costs at most the timeout. Nothing here throws to the caller except out-of-memory; every failure is logged through the supplied callback.
+/// costs at most <see cref="MaxWaitSeconds"/> for the whole fallback chain (the timeout is per attempt, the limit is per chain). Nothing here throws to the caller except out-of-memory; every failure is logged through the supplied callback.
 /// </para>
 /// </summary>
 public sealed class CrashDumpService

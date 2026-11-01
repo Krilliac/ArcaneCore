@@ -299,9 +299,10 @@ public sealed class ClusterSupervisorOptions
     public int HangCaptureTimeoutSeconds { get; set; } = 300;
 
     /// <summary>
-    /// How long a child that announced <c>dumping</c> (its own crash dump, <c>Diagnostics:CrashDump</c>) is exempt from the hang timeout and from a hang
-    /// capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600). Keep it above
-    /// three times the child's <c>Diagnostics:CrashDump:TimeoutSeconds</c>.
+    /// The cap on how long a child that announced <c>dumping</c> (its own crash dump, <c>Diagnostics:CrashDump</c>) is exempt from the hang timeout and
+    /// from a hang capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600).
+    /// The exemption is <c>min(announced max + 60, this)</c>: the child's own <c>max=</c> from its authenticated line, bounded by this value. Keep it
+    /// above three times the child's <c>Diagnostics:CrashDump:TimeoutSeconds</c> plus a minute, or the cap cuts a long dump short.
     /// </summary>
     public int DumpGraceSeconds { get; set; } = 420;
 
