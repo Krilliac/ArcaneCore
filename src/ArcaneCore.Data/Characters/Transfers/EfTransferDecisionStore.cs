@@ -349,6 +349,27 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     }
 
     /// <inheritdoc />
+    public async Task<TransferDecisionRecord> RebindTargetInstanceAsync(Guid transferId, uint targetInstanceId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return await InTransactionAsync(async (db, ct) =>
+        {
+            ClusterTransferDecisionRow row = await RequireDecisionAsync(db, transferId, ct).ConfigureAwait(false);
+            if (row.TargetInstanceId == targetInstanceId)
+                return ToRecord(row);
+
+            if (row.State != (int)PlayerTransferDecisionState.PreCommit || row.Stage != (int)PlayerTransferStage.Reserve)
+                throw new InvalidOperationException($"Cannot rebind the target instance of transfer '{transferId}' in state {(PlayerTransferDecisionState)row.State} at stage {(PlayerTransferStage)row.Stage}; only a pre-commit Reserve may.");
+
+            await EnsureOwnerAsync(db, row.CharacterGuid, SourceToken(row), ct).ConfigureAwait(false);
+            row.TargetInstanceId = targetInstanceId;
+            row.UpdatedAtUtcMs = _clock();
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            return ToRecord(row);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<TransferDecisionRecord> AdvancePreCommitStageAsync(
         Guid transferId, PlayerTransferStage nextStage, PlayerTransferBundle? capturedBundle = null, CancellationToken cancellationToken = default)
     {
@@ -844,6 +865,9 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
             CancellationToken cancellationToken = default)
             => inner.CreateReservationCoreAsync(handoffId, transferId, characterGuid, accountId, sessionGeneration, sourceWorkerId, targetWorkerId,
                 sourceMapId, sourceInstanceId, targetMapId, targetInstanceId, sourceOwnershipToken, cancellationToken);
+
+        public Task<TransferDecisionRecord> RebindTargetInstanceAsync(Guid transferId, uint targetInstanceId, CancellationToken cancellationToken = default)
+            => inner.RebindTargetInstanceAsync(transferId, targetInstanceId, cancellationToken);
 
         public Task<TransferDecisionRecord> AdvancePreCommitStageAsync(Guid transferId, PlayerTransferStage nextStage, PlayerTransferBundle? capturedBundle = null, CancellationToken cancellationToken = default)
             => inner.AdvancePreCommitStageAsync(transferId, nextStage, capturedBundle, cancellationToken);

@@ -61,6 +61,16 @@ public interface ITransferDecisionStore
         CharacterOwnershipToken sourceOwnershipToken,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Q8: records the instance id the target worker allocated for an instance-0 request, so the record's <see cref="TransferDecisionRecord.TargetInstanceId"/> and the bundle captured next agree.
+    /// Only while the transfer is pre-commit at <see cref="PlayerTransferStage.Reserve"/> and still owned by the source token; the same id again is a no-op, a different id at a later stage throws
+    /// <see cref="InvalidOperationException"/>. Needs no schema change (the <c>target_instance</c> column exists).
+    /// </summary>
+    Task<TransferDecisionRecord> RebindTargetInstanceAsync(
+        Guid transferId,
+        uint targetInstanceId,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Advances a pre-commit transfer through stages 2..4 (<see cref="PlayerTransferStage.SuspendAndCapture"/>, <see cref="PlayerTransferStage.InstallPassive"/>, <see cref="PlayerTransferStage.StageWorldPort"/>).</summary>
     Task<TransferDecisionRecord> AdvancePreCommitStageAsync(
         Guid transferId,

@@ -356,6 +356,13 @@ public sealed class PlayerTransferCoordinator
                 DecisionRecord: aborted);
         }
 
+        if (targetInstanceId != record.TargetInstanceId)
+        {
+            // Journal the id the target allocated, so the durable row (which recovery and the gateway read) and the bundle captured next name the same instance. A failure here
+            // leaves a Reserve-stage record, which recovery aborts (and the abort discards the target's reservation).
+            record = await _decisionStore.RebindTargetInstanceAsync(request.TransferId, targetInstanceId, cancellationToken);
+        }
+
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.Reserve, record, cancellationToken);

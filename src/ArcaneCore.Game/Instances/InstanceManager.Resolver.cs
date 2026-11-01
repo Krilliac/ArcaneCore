@@ -279,11 +279,15 @@ public sealed partial class InstanceManager
         return false;
     }
 
+    /// <summary>Whether <paramref name="mapId"/> is a dungeon (an instance-0 transfer request for it needs <see cref="ReserveEntryInstance"/>; continents never do). Reads the immutable map registry: any thread.</summary>
+    public bool IsInstancedMap(uint mapId) => Registry.Find(mapId) is { IsDungeon: true };
+
     /// <summary>
-    /// The instance a character entering <paramref name="mapId"/> from another worker is bound to (cluster transfer, orchestrator decision Q8; the target worker allocates ids). The save the
-    /// character or its group is already bound to wins (vmangos <c>Player::GetBoundInstanceSaveForSelfOrGroup</c>); otherwise a new save is created and bound to the character as a
-    /// non-permanent bind, as <c>DungeonMap::BindPlayerOrGroupOnEnter</c> does for a solo entrant, and its map is created managed so it unloads on its timer when nobody arrives. Returns 0 when
-    /// <paramref name="mapId"/> is not a dungeon (continents use instance 0; battleground instance ids are bound by the battleground holder). World thread.
+    /// The instance a character entering <paramref name="mapId"/> from another worker will enter (cluster transfer, orchestrator decision Q8; the target worker allocates ids). The save the
+    /// character or its group is already bound to wins (vmangos <c>Player::GetBoundInstanceSaveForSelfOrGroup</c>); otherwise a new save is created and its map is created managed. The new save is
+    /// deliberately NOT bound yet and its map is held (no unload timer): while the source still owns the character, the target's bind write is refused by the worker write fence
+    /// (<c>CharacterWriteClaim</c>, design _wf/writer-lock-DESIGN.md C5), so the bind is made by <see cref="BindReservedEntry"/> once the transfer committed, and an aborted reservation is undone
+    /// by <see cref="ReleaseEntryInstance"/>. Returns 0 when <paramref name="mapId"/> is not a dungeon (continents use instance 0; battleground instance ids are bound by the battleground holder). World thread.
     /// </summary>
     public uint ReserveEntryInstance(ObjectGuid player, uint mapId)
     {
@@ -297,11 +301,76 @@ public sealed partial class InstanceManager
         if (save is null || save.IsDeleted)
         {
             save = CreateSave(template);
-            BindPlayer(player, save, permanent: false);
+            Map created = GetOrCreateInstanceMap(save);
+            if (_mapStates.TryGetValue(created, out InstanceMapState? state))
+            {
+                state.UnloadTimerMs = 0; // held until BindReservedEntry or ReleaseEntryInstance
+            }
+
+            return save.InstanceId;
         }
 
         GetOrCreateInstanceMap(save);
         return save.InstanceId;
+    }
+
+    /// <summary>
+    /// Undoes <see cref="ReserveEntryInstance"/> for an aborted or refused reservation: a save nobody is bound to is dropped together with its map (the map unloads after the current map pass and
+    /// <see cref="OnMapUnloading"/> deletes the unbound save; a map that was never created has its save deleted here). A save with binds (the character's or its group's own instance, or one
+    /// <see cref="BindReservedEntry"/> bound) is left alone. Idempotent. World thread.
+    /// </summary>
+    public void ReleaseEntryInstance(uint mapId, uint instanceId)
+    {
+        if (instanceId == 0 || FindSave(instanceId) is not { IsDeleted: false } save || save.MapId != mapId || save.HasBinds)
+        {
+            return;
+        }
+
+        if (_world.FindMap(mapId, instanceId) is { } map)
+        {
+            if (_mapStates.TryGetValue(map, out InstanceMapState? state))
+            {
+                state.UnloadTimerMs = _options.EffectiveUnloadDelayMs; // a map that stays occupied still unloads after its last player leaves
+            }
+
+            _world.UnloadMap(map);
+        }
+        else
+        {
+            DeleteSave(save);
+        }
+    }
+
+    /// <summary>
+    /// Binds <paramref name="player"/> to the instance <see cref="ReserveEntryInstance"/> answered, after the transfer committed (the claim moved to this worker, so the bind write is accepted):
+    /// a non-permanent bind as <c>DungeonMap::BindPlayerOrGroupOnEnter</c> makes for a solo entrant, and the held map goes back on its unload timer (an arrival then keeps it loaded). False when the save
+    /// is gone or the character is bound to a different instance of the map meanwhile (nothing is changed). A character already bound to that save, itself or through its group, stays as it is. World thread.
+    /// </summary>
+    public bool BindReservedEntry(ObjectGuid player, uint mapId, uint instanceId)
+    {
+        if (instanceId == 0 || FindSave(instanceId) is not { IsDeleted: false } save || save.MapId != mapId)
+        {
+            return false;
+        }
+
+        InstanceSave? bound = GetBoundSaveForSelfOrGroup(player, mapId);
+        if (bound is not null && bound != save)
+        {
+            return false;
+        }
+
+        if (bound is null)
+        {
+            BindPlayer(player, save, permanent: false);
+        }
+
+        Map map = GetOrCreateInstanceMap(save);
+        if (map.PlayerCount == 0 && _mapStates.TryGetValue(map, out InstanceMapState? state))
+        {
+            state.UnloadTimerMs = _options.EffectiveUnloadDelayMs;
+        }
+
+        return true;
     }
 
     private InstanceSave CreateSave(MapTemplate template)
