@@ -94,7 +94,7 @@ reagents (moving to a nearby forge or anvil when `RequiresSpellFocus` demands on
 Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
 "needs a group of N" goal: `PlayerbotGroupCoordinator` matches bots by goal, team, level and role, the leader invites the others
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
-live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
+live; `.playerbot groups`): `docs/areas/playbots-groups.md` (its approach-point choice and the 30 s refused-walk bailout are described there).
 
 A target number of bots kept online, spread over level bands and zones and held back by the world's tick time, is the population
 manager (`World:Playerbots:Population`, off by default, live; `.playerbot population`): `docs/areas/playbots-population.md`.
@@ -352,7 +352,17 @@ first corner on walkable ground from which the ordinary query is a route, refusi
 `SteepEscapeClimbYards` (1.5) above the bot (`PlayerbotSteepGroundTests`; on the real terrain
 `FromIronwandersSlope_TheBotWalksDownToTheIceClawBear`). The stall watch also gives the goal up again after every further stall bound
 without progress (`PlayerbotStallWatch.GiveUps`, `StallGiveUps` on the brain), not only when the stall begins; the stall is still counted
-and logged once.
+and logged once. Kills the bot had loot rights to count as progress (`Fingerprint.Kills`, once per death; a respawn of the same creature is a new
+kill): a level-capped bot with full bags killing a no-coin beast at its spawn is not stalled (bot QA #1465). Kills alone keep the stall
+clock reset for `KillProgressBounds` (3) stall bounds since another field changed or the bot moved; after that a kill loop stalls like any
+other (the death-loop watch counts only the bot's own deaths and does not guard it). The stall's diagnostic snapshot is
+taken at the start of `GiveUpStalledGoal` (`StallSnapshot`), before the give-up stops the bot and the same think plans a new leg.
+Explore holds for a pending candidate plan until the first think after `ExplorePendingMaxMs` (10 s) has passed, and traces `explore-pending` (then the short wander leg
+runs). The wander leg turns away from rays that end in another walking-graph component than the bot's own (up to 6 headings), traces each
+refusal streak as `wander-refused:<no-path|shortfall|advance|component>` (first and every fifth), and after 8 refusals inside one 10-yard
+cell takes one region-graph leg (only with the optional think budget) toward the ground it last wandered from on this map and instance, else
+its home's centre, when that place is at least 30 yd away and in the bot's own walking component (a count is dropped when the bot leaves
+the cell, changes map or is away from wandering for 30 s). A candidate held pending past the bound has its cell set aside (bot QA #1464).
 
 **Ashenvale quest 6562 (bot QA #199).** Je'neu Sancrea (entry 12736) is an overworld ender on map 1 at
 (3355.07, 1033.14, 6.03), not a creature inside Blackfathom Deeps (map 48). From the recorded stall at

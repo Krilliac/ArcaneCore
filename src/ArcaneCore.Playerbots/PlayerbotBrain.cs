@@ -128,6 +128,56 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private uint _restUntilMs;
     private PlayerbotConsumableKind _restKind;
     private int _roamDirection;
+
+    /// <summary>
+    /// How long (world ms) the plan toward one explore candidate may stay <see cref="PlanOutcome.Pending"/> before Explore stops holding for it and
+    /// walks its short wander leg meanwhile (a path job's wait is bounded at <see cref="PlayerbotOptions.PathJobWaitMaxMs"/>, and a stale
+    /// answer restarts it: live 2026-10-24, bot QA #1465, bots standing at the spawns of creature 7460 until the stall watch).
+    /// </summary>
+    internal const uint ExplorePendingMaxMs = 10_000;
+
+    private uint _explorePendingSpawn;
+    private uint _explorePendingSince;
+    private uint _explorePendingLast;
+    private bool _explorePendingTraced;
+    private bool _wanderPendingTraced;
+
+    /// <summary>The most headings one wander think tries while rays end in another walking component (<see cref="WanderLegEndInOwnComponent"/>).</summary>
+    internal const int WanderComponentTries = 6;
+
+    /// <summary>Refusals within one <see cref="WanderRefusalCellYards"/> cell after which Explore takes a region-graph leg out of it.</summary>
+    internal const int WanderRegionLegRefusals = 8;
+
+    /// <summary>The side (yards) of the cells <see cref="WanderRegionLegRefusals"/> counts in.</summary>
+    internal const float WanderRefusalCellYards = 10f;
+
+    private int _wanderCellX, _wanderCellY, _wanderCellRefusals;
+    private bool _wanderCellValid;
+
+    /// <summary>Where the bot last started a wander leg that walked (the ground the region-graph leg of a boxed-in wander heads back to).</summary>
+    private System.Numerics.Vector3? _wanderGoodGround;
+    private uint _wanderGroundMap;
+    private uint _wanderGroundInstance;
+    private uint _wanderCellMap;
+    private uint _wanderCellLastMs;
+
+    /// <summary>
+    /// Test seam for the region-graph leg of a boxed-in wander (<see cref="PlayerbotNavigation.PlanRegionLeg"/> when null): plans a leg toward
+    /// <c>goal</c>. A fake graph cannot be built without navigation tiles, so the 8-refusal trigger is tested through this.
+    /// </summary>
+    internal Func<Player, System.Numerics.Vector3, (PlanOutcome Outcome, PlayerbotRoute? Route)>? WanderRegionLegPlanner { get; set; }
+
+    /// <summary>
+    /// Test seam for the walking component of a place (<see cref="PlayerbotNavigation.ComponentAt"/> when null): -1 for a place on no region.
+    /// Set before the first think; world thread.
+    /// </summary>
+    internal Func<Player, System.Numerics.Vector3, int>? WanderComponentProbe { get; set; }
+
+    /// <summary>Wander rays the component pre-check turned away from another component (tests, inspection).</summary>
+    internal int WanderComponentRotations { get; private set; }
+
+    /// <summary>Region-graph legs taken out of a boxed-in wander cell (tests, inspection).</summary>
+    internal int WanderRegionLegs { get; private set; }
     private int _exploreRefusals;
 
     /// <summary>
@@ -314,6 +364,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>Single-line diagnostic snapshot of the bot's state and recent trace history.</summary>
     internal string FormatDiagnosticSnapshot(Player player) => _trace.FormatSnapshot(player, this);
 
+    /// <summary>
+    /// The diagnostic snapshot taken at the start of <see cref="GiveUpStalledGoal"/>, before the give-up stops the bot and the same think plans a
+    /// new leg (a snapshot taken after read <c>moving:yes</c> for a bot that had stood still). The feature logs it with the stall and clears it.
+    /// </summary>
+    internal string? StallSnapshot { get; set; }
+
+    private int _snapshotStallCount;
+
     /// <summary>A goal this bot's stall set aside for every bot (<see cref="PlayerbotSharedSetAsides.Report"/>), until the feature logs it.</summary>
     internal PlayerbotSharedSetAside? SharedSetAside { get; set; }
 
@@ -356,6 +414,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
     /// <summary>The most health and mana seen while resting (<see cref="Fingerprint"/>): a rise is progress for the stall watch.</summary>
     private ulong _restMark;
+
+    /// <summary>Kills the bot had loot rights to (a stall-watch fingerprint field: a level-capped bot killing respawns is progressing).</summary>
+    private uint _lootedKills;
+
+    /// <summary>Kills the bot had loot rights to, as the stall watch counts them (tests, inspection).</summary>
+    internal uint LootedKills => _lootedKills;
+
+    /// <summary>The corpse last counted in <see cref="_lootedKills"/>, so the several thinks spent looting it count once.</summary>
+    private ObjectGuid _killCredited;
     private bool _deathIntentRetired;
     private int _stopped;
     // Creatures the bot could not path to (or looped trying to reach): skipped for a while, so the next think does
@@ -1325,6 +1392,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotThinkProbe.Phase("combat");
         if (target.IsAlive)
         {
+            _killCredited = default; // alive: the next death of this creature (a respawn keeps its guid) is a new kill
             // The soft claim on the mob being walked to (refreshed each think; ended once it is tagged).
             _contention.Claim(player.Guid.Value, target, _session.World.NowMs);
 
@@ -1510,6 +1578,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             return;
         }
 
+        // A kill with loot rights is progress for the stall watch even when it pays nothing a bot can keep (level cap, full bags, a no-coin beast).
+        // Counted once per death: the thinks spent on one corpse share the credit, and a respawn (the same creature object, the same guid) is a
+        // new kill, because the target seen alive again clears it (the combat branch above).
+        if (_killCredited != target.Guid)
+        {
+            _killCredited = target.Guid;
+            _lootedKills++;
+        }
+
         bool hasBagSpace = HasFreeBagSlot(player);
         if (!hasBagSpace)
         {
@@ -1692,6 +1769,13 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     internal void GiveUpStalledGoal(Player player, bool shareable = true)
     {
         uint now = _session.World.NowMs;
+        // Before the give-up stops the bot and the think plans a new leg. Taken once per reported stall (the feature logs a stall once);
+        // the repeated give-ups of one stall do not build the string again.
+        if (StallCount != _snapshotStallCount)
+        {
+            _snapshotStallCount = StallCount;
+            StallSnapshot = FormatDiagnosticSnapshot(player);
+        }
         _trace.Record(now, string.Create(CultureInfo.InvariantCulture, $"stall-giveup:{_goal}/{TargetEntry}/{QuestId}"));
         // Asked before this bot reports: a cell other bots already found a dead end is one at this bot's first stall.
         bool worldPin = _stall.IsWorldPin(player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now);
@@ -2037,7 +2121,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         _restMark = _goal == PlayerbotGoalKind.Rest ? Math.Max(_restMark, vitals) : 0;
         PlayerbotThinkProbe.Phase("stall hits");
         return new(player.Level, player.GetUInt32(UpdateFields.PlayerXp), player.Money, items, quests, rewarded, objectives, spells, _restMark,
-            _killObserver?.ProgressHitsBy(player) ?? 0);
+            _killObserver?.ProgressHitsBy(player) ?? 0, _lootedKills);
     }
 
     /// <summary>
@@ -3347,15 +3431,27 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         // differ). Only after a refusal turn anywhere. The old golden-angle-from-zero choice sent each leg
         // ~137 degrees from the last one, so a bot that lost its route every few thinks ran in circles.
         PlayerbotThinkProbe.Phase("explore wander plan");
-        System.Numerics.Vector3 destination = WanderLegEnd(player, new(player.X, player.Y, player.Z), player.Orientation);
+        SyncWanderCell(player);
+        if (_wanderCellRefusals >= WanderRegionLegRefusals && budget && HasOptionalThinkBudget(15.0) && TryWanderRegionLeg(player, elapsedMs)) return;
+        int roamBefore = _roamDirection;
+        System.Numerics.Vector3 destination = WanderLegEndInOwnComponent(player, new(player.X, player.Y, player.Z), player.Orientation,
+            out bool otherComponent);
         ExploreWanderPlans++;
         int strongRefusals = Risk.StrongRefusals;
-        if (PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route) == PlanOutcome.Pending)
+        bool shortfall = false;
+        PlanOutcome wanderPlan = PlanOutcome.Refused;
+        if (!otherComponent)
+            wanderPlan = PlayerbotNavigation.PlanWander(player, destination, _options, ref _tileWait, _session.World.NowMs, out _route, out shortfall);
+        else _route = null;
+        if (wanderPlan == PlanOutcome.Pending)
         {
+            if (!_wanderPendingTraced) _trace.Record(_session.World.NowMs, "wander-pending");
+            _wanderPendingTraced = true;
             AbandonRoute();
-            _roamDirection--; // the same leg again once the tile is in
+            _roamDirection = roamBefore; // the same leg again once the tile is in (every rotation of this think undone)
             return;
         }
+        _wanderPendingTraced = false;
         if (_route is { } wanderRoute)
         {
             // A pause (no budget, rooted, falling) is not a refusal: the leg stays and is walked when movement resumes.
@@ -3375,13 +3471,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 AbandonRoute();
                 _exploreRefusals++;
-                TraceWanderRefusal();
+                NoteWanderRefusal(player, "advance");
                 PlayerbotMovementControl.Stop(_session, player);
             }
             else
             {
                 _exploreRefusals = 0;
                 _exploreRefusalTraced = false;
+                _wanderCellRefusals = 0;
+                _wanderGoodGround = new(player.X, player.Y, player.Z);
+                _wanderGroundMap = player.MapId;
+                _wanderGroundInstance = player.Map?.InstanceId ?? 0;
                 MarkLeg(wanderRoute, townWalk: false);
                 ChainWanderLeg(player, elapsedMs); // a leg shorter than the think gap's walk is chained at once
             }
@@ -3390,7 +3490,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         {
             _exploreRefusals++;
             _exploreRingRefused = Risk.StrongRefusals != strongRefusals;
-            TraceWanderRefusal();
+            NoteWanderRefusal(player, otherComponent ? "component" : shortfall ? "shortfall" : "no-path");
             if (_exploreRefusals >= 2 && TryWanderToMeshPoint(player, elapsedMs)) return;
             PlayerbotMovementControl.Stop(_session, player);
         }
@@ -3405,14 +3505,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         => _home is { } area && area.MapId == (player.Map?.MapId ?? player.MapId)
             && (area.DistanceTo(point.X, point.Y) > area.ExploreRadius
                 || (area.ZoneClipped && !area.InZone(point.X, point.Y, point.Z)));
-
-    /// <summary>Records "wander-refused" once per refusal episode. A give-up presets the count (GiveUpStalledGoal), so a count test hid every later refusal.</summary>
-    private void TraceWanderRefusal()
-    {
-        if (_exploreRefusalTraced) return;
-        _exploreRefusalTraced = true;
-        _trace.Record(_session.World.NowMs, "wander-refused");
-    }
 
     /// <summary>Mesh points sampled per think by the wander fallback.</summary>
     private const int WanderMeshSamples = 4;
@@ -3476,6 +3568,153 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             ChainWanderLeg(player, elapsedMs);
             return true;
         }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the plan toward explore candidate <paramref name="spawn"/> has been pending for more than <see cref="ExplorePendingMaxMs"/>
+    /// (world ms, one streak: the same candidate, holds no more than three think gaps apart, at least <see cref="TileWait.GapMs"/>). Records <c>explore-pending</c> once
+    /// per streak. True: Explore stops holding and walks its short wander leg meanwhile, as it does for a refused candidate.
+    /// </summary>
+    private bool ExplorePendingExpired(Player player, uint spawn, uint now)
+    {
+        // The streak survives the bot's own think gap (about 13 s live, more when thinks run slow): holds are one think apart, so the
+        // allowance is a few thinks, never less than the tile wait's gap.
+        uint thinkGap = Math.Max(PlayerbotMotion.ThinkGapMs(player), (uint)Math.Max(_options.ThinkIntervalMs, 0));
+        uint allowed = Math.Max(TileWait.GapMs, thinkGap * 3);
+        if (_explorePendingSince == 0 || _explorePendingSpawn != spawn || unchecked(now - _explorePendingLast) > allowed)
+        {
+            _explorePendingSpawn = spawn;
+            _explorePendingSince = now == 0 ? 1u : now;
+            _explorePendingTraced = false;
+        }
+
+        _explorePendingLast = now;
+        if (!_explorePendingTraced)
+        {
+            _explorePendingTraced = true;
+            _trace.Record(now, "explore-pending");
+        }
+
+        return unchecked(now - _explorePendingSince) > ExplorePendingMaxMs;
+    }
+
+    /// <summary>
+    /// A wander leg was refused for <paramref name="reason"/> (<c>no-path</c>: the path query had no route; <c>shortfall</c>: the route stopped
+    /// short of the ray's end; <c>advance</c>: the walk would not start; <c>component</c>: every heading tried ended in another walking
+    /// component). Traced as <c>wander-refused:reason</c> at the first refusal of a streak and again at every fifth, and counted in the
+    /// bot's 10-yard cell: <see cref="WanderRegionLegRefusals"/> of them there call for a region-graph leg out (<see cref="TryWanderRegionLeg"/>).
+    /// The caller has already counted the refusal in <c>_exploreRefusals</c>.
+    /// </summary>
+    private void NoteWanderRefusal(Player player, string reason)
+    {
+        // The first refusal of an episode (a give-up presets the count, GiveUpStalledGoal, so the count alone hid every later one) and every fifth.
+        if (!_exploreRefusalTraced || _exploreRefusals % 5 == 0)
+        {
+            _exploreRefusalTraced = true;
+            _trace.Record(_session.World.NowMs, "wander-refused:" + reason);
+        }
+
+        SyncWanderCell(player);
+        _wanderCellRefusals++;
+        _wanderCellLastMs = _session.World.NowMs;
+    }
+
+    /// <summary>
+    /// Points the refusal count at the bot's present 10-yard cell: a bot that left the cell, changed map or instance, or was away from
+    /// wandering for 30 s starts counting again, and the ground remembered on another map is forgotten.
+    /// </summary>
+    private void SyncWanderCell(Player player)
+    {
+        int cellX = (int)MathF.Floor(player.X / WanderRefusalCellYards), cellY = (int)MathF.Floor(player.Y / WanderRefusalCellYards);
+        uint now = _session.World.NowMs;
+        if (!_wanderCellValid || cellX != _wanderCellX || cellY != _wanderCellY || player.MapId != _wanderCellMap
+            || unchecked(now - _wanderCellLastMs) > 30_000u)
+        {
+            _wanderCellValid = true;
+            _wanderCellX = cellX;
+            _wanderCellY = cellY;
+            _wanderCellMap = player.MapId;
+            _wanderCellRefusals = 0;
+        }
+
+        _wanderCellLastMs = _wanderCellRefusals == 0 ? now : _wanderCellLastMs;
+        if (_wanderGoodGround is not null && (_wanderGroundMap != player.MapId || _wanderGroundInstance != (player.Map?.InstanceId ?? 0)))
+            _wanderGoodGround = null;
+    }
+
+    private int WanderComponentOf(Player player, System.Numerics.Vector3 point)
+        => WanderComponentProbe is { } probe ? probe(player, point) : PlayerbotNavigation.ComponentAt(player, point);
+
+    /// <summary>
+    /// <see cref="WanderLegEnd"/>, except that a ray whose end lies in another walking component than the bot's own (the region graph with
+    /// steep slopes excluded: a plateau cut off by slopes, Feralas' Twin Colossals, live 2026-10-24 bot QA #1464) is turned to the next heading, up
+    /// to <see cref="WanderComponentTries"/> times. Both components must be decided (a place on no region is kept), and a bot on a mesh
+    /// fragment is not judged (its escapes belong to the planner). <paramref name="otherComponent"/> is true when every heading tried ended in
+    /// another component: the first ray is returned and the caller counts a <c>component</c> refusal without a path query.
+    /// </summary>
+    private System.Numerics.Vector3 WanderLegEndInOwnComponent(Player player, System.Numerics.Vector3 from, float orientation, out bool otherComponent)
+    {
+        otherComponent = false;
+        System.Numerics.Vector3 first = WanderLegEnd(player, from, orientation);
+        if (WanderComponentProbe is null && PlayerbotNavigation.IsOnMeshFragment(player)) return first;
+        int own = WanderComponentOf(player, from);
+        if (own < 0) return first;
+        System.Numerics.Vector3 candidate = first;
+        for (int turn = 0; turn < WanderComponentTries; turn++)
+        {
+            int end = WanderComponentOf(player, candidate);
+            if (end < 0 || end == own) return candidate;
+            WanderComponentRotations++;
+            if (turn + 1 < WanderComponentTries) candidate = WanderLegEnd(player, from, orientation, turn + 1);
+        }
+
+        otherComponent = true;
+        return first;
+    }
+
+    /// <summary>
+    /// Eight or more refused wander legs inside one 10-yard cell: the bot is boxed in by broken ground. Takes one region-graph leg
+    /// (<see cref="PlayerbotNavigation.PlanRegionLeg"/>) toward the ground it last walked a wander leg from (else its home's centre), when that
+    /// lies in the bot's own walking component, rather than wait for the stall watch. True when the leg was taken. The count is cleared on a
+    /// take and halved on a miss, so a miss is retried after four more refusals.
+    /// </summary>
+    private bool TryWanderRegionLeg(Player player, uint elapsedMs)
+    {
+        System.Numerics.Vector3 here = new(player.X, player.Y, player.Z);
+        System.Numerics.Vector3? goal = _wanderGoodGround;
+        if (goal is null && _home is { } area && (player.Map?.MapId ?? player.MapId) == area.MapId)
+            goal = new System.Numerics.Vector3(area.Centre.X, area.Centre.Y, area.Centre.Z);
+        if (goal is not { } target || System.Numerics.Vector2.DistanceSquared(new(here.X, here.Y), new(target.X, target.Y)) < 30f * 30f
+            || WanderComponentOf(player, target) is var comp && (comp < 0 || comp != WanderComponentOf(player, here)))
+        {
+            _wanderCellRefusals /= 2;
+            return false;
+        }
+
+        PlayerbotThinkProbe.Phase("explore wander region leg");
+        PlayerbotRoute? leg;
+        PlanOutcome plan;
+        if (WanderRegionLegPlanner is { } planner) (plan, leg) = planner(player, target);
+        else plan = PlayerbotNavigation.PlanRegionLeg(player, target, _options, ref _tileWait, _session.World.NowMs, out leg);
+        if (plan == PlanOutcome.Route && leg is not null)
+        {
+            _route = leg;
+            if (PlayerbotNavigation.TryAdvance(_session, leg, _options, elapsedMs, _session.World.NowMs))
+            {
+                _trace.Record(_session.World.NowMs, "wander-regionleg");
+                WanderRegionLegs++;
+                _wanderCellRefusals = 0;
+                _exploreRefusals = 0;
+                MarkLeg(leg, townWalk: true); // not chained onward: it heads for known ground, not along a ray
+                return true;
+            }
+
+            AbandonRoute();
+        }
+
+        _wanderCellRefusals /= 2;
         return false;
     }
 
@@ -3629,13 +3868,14 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// Westfall-Duskwood border inside the circle). Back in is the centre first, then, while legs are refused, a fan around it (InwardLeg).
     /// Takes the next direction of the rotation (<c>_roamDirection</c>).
     /// </summary>
-    private System.Numerics.Vector3 WanderLegEnd(Player player, System.Numerics.Vector3 from, float orientation)
+    private System.Numerics.Vector3 WanderLegEnd(Player player, System.Numerics.Vector3 from, float orientation, int rotate = 0)
     {
         int attempt = _roamDirection++;
         float spread = (((attempt + (int)(player.Guid.Low % 7)) * 0.618034f) % 1f) - 0.5f;
         float turnSign = (player.Guid.Low & 1) == 0 ? 1f : -1f;
-        float angle = _exploreRefusals >= 1
-            ? orientation + (turnSign * _exploreRefusals * 2.39996323f)
+        int turns = _exploreRefusals + rotate;
+        float angle = turns >= 1
+            ? orientation + (turnSign * turns * 2.39996323f)
             : orientation + (spread * MathF.PI * 2f / 3f);
         // A ray refused for a ring of strong creatures stays full length: a short one fits inside the ring, is taken, and the bot paces
         // there instead of being boxed in and escaping through a gap (PlayerbotRisk.Refused; PlayerbotRingEscapeTests, red since d302bdd4).
@@ -3894,7 +4134,15 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             ? PlanOutcome.Route
             : PlayerbotNavigation.PlanToward(player, destination, _options, ref _tileWait, now, out walk);
         _route = walk;
-        if (atlasPlan == PlanOutcome.Pending) return true;
+        if (atlasPlan == PlanOutcome.Pending)
+        {
+            if (!ExplorePendingExpired(player, chosen.Spawn.Guid, now)) return true;
+            // Held too long: set the candidate's cell aside so Explore does not alternate between it and the wander leg for ever.
+            BlockExploreCell(chosen);
+            _explorePendingSince = 0;
+            return false;
+        }
+        _explorePendingSince = 0;
         float flatDistSq = (destination.X - player.X) * (destination.X - player.X) + (destination.Y - player.Y) * (destination.Y - player.Y);
         if (atlasPlan == PlanOutcome.Refused
             || _route is not { Points.Count: > 0 } plannedRoute

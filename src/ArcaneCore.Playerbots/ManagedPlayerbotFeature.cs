@@ -2506,7 +2506,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 ActiveBot? leader = FindOrderedBot(bots, botId);
                 string? context = leader?.Session.Player is { } player ? leader.Brain.QaReportContext(player, report) : null;
-                string? diag = leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null;
+                string? diag = groups.TakeStallDiagnostic(botId) ?? (leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null);
                 LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null, context, diag: diag);
             }
         }
@@ -2911,7 +2911,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 active.StallsLogged, report, active.Brain.StallOutsideHome, active.Brain.SharedSetAside,
                 willLogStall && report is not null ? active.Brain.QaReportContext(driven, report) : null,
                 awaitRelease,
-                willLogStall ? active.Brain.FormatDiagnosticSnapshot(driven) : null);
+                willLogStall ? active.Brain.StallSnapshot ?? active.Brain.FormatDiagnosticSnapshot(driven) : null);
+            active.Brain.StallSnapshot = null;
             if (sharedLogged) active.Brain.SharedSetAside = null;
             IReadOnlyList<string> unreachable = active.Brain.TakeUnreachableReports();
             if (unreachable.Count > 0)
