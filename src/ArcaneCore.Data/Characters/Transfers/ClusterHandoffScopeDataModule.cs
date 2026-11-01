@@ -5,7 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ArcaneCore.Data.Characters.Transfers;
 
 /// <summary>
-/// Characters schema 73 (renumber at merge): <c>cluster_world_handoff.open_scope</c> and its unique index, so a handoff is open per ownership scope
+/// Characters schema 73: <c>cluster_world_handoff.open_scope</c> and its unique index, so a handoff is open per ownership scope
 /// (the realm-wide <c>world</c> row, or one <c>worker:&lt;shard&gt;</c>) and two shards can hand off at the same time. The older <c>open_key</c> unique
 /// index stays: only a <c>world</c> handoff sets it, so Realm-mode behaviour (one open handoff) is unchanged. A handoff opened before this schema has no
 /// open scope; the store treats an unresolved row with an open key and no open scope as a <c>world</c> handoff. Released modules (v62) are frozen, which is
