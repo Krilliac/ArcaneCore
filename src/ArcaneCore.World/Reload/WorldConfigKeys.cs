@@ -819,6 +819,9 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("Pvp:Defense:MaxActiveCallsPerZone", o => o.Pvp.Defense.MaxActiveCallsPerZone, (o, v) => o.Pvp.Defense.MaxActiveCallsPerZone = v, PlayerbotPvpDefenseOptions.CheckCallsPerZone),
         LivePlayerbotsValue("Pvp:Defense:MaxOpenCallsPerMap", o => o.Pvp.Defense.MaxOpenCallsPerMap, (o, v) => o.Pvp.Defense.MaxOpenCallsPerMap = v, PlayerbotPvpDefenseOptions.CheckCallsPerMap),
         LivePlayerbotsValue("Pvp:Defense:ProvokeThrottleSeconds", o => o.Pvp.Defense.ProvokeThrottleSeconds, (o, v) => o.Pvp.Defense.ProvokeThrottleSeconds = v, PlayerbotPvpDefenseOptions.CheckProvokeThrottle),
+        LivePlayerbotsValue("Pvp:Defense:GraceSeconds", o => o.Pvp.Defense.GraceSeconds, (o, v) => o.Pvp.Defense.GraceSeconds = v, PlayerbotPvpDefenseOptions.CheckGrace),
+        LivePlayerbotsValue("Pvp:Defense:MergeRadiusYards", o => o.Pvp.Defense.MergeRadiusYards, (o, v) => o.Pvp.Defense.MergeRadiusYards = v, PlayerbotPvpDefenseOptions.CheckMergeRadius),
+        LivePlayerbotsValue("Pvp:Defense:MaxOpenSeconds", o => o.Pvp.Defense.MaxOpenSeconds, (o, v) => o.Pvp.Defense.MaxOpenSeconds = v, PlayerbotPvpDefenseOptions.CheckMaxOpen),
         LivePlayerbotsValue("Social:WarMode:HuntRadiusYards", o => o.Social.WarMode.HuntRadiusYards, (o, v) => o.Social.WarMode.HuntRadiusYards = v,
             v => v is >= Playerbots.BotSocial.PlayerbotWarModeOptions.MinHuntRadiusYards and <= Playerbots.BotSocial.PlayerbotWarModeOptions.MaxHuntRadiusYards ? null : $"must be {Playerbots.BotSocial.PlayerbotWarModeOptions.MinHuntRadiusYards}..{Playerbots.BotSocial.PlayerbotWarModeOptions.MaxHuntRadiusYards}"),
 
