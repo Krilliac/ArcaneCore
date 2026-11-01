@@ -20,6 +20,11 @@ namespace ArcaneCore.World.Persistence;
 /// (<see cref="WorldWriterGuard.ProbeShardFree"/>): a character claimed by a dead shard whose lock is free and whose heartbeat is stale is taken over instead of refusing the login.
 /// </para>
 /// <para>
+/// Every successful claim (<see cref="CharacterClaimOutcome.Claimed"/>, <see cref="CharacterClaimOutcome.AlreadyHeld"/> or a take-over) is given a per-character claim ticket, a monotonic generation
+/// (<see cref="ClaimWithTicketAsync"/>). A release carries the ticket of the login that is releasing and runs only while that ticket is the newest live one of the character, so a newer login
+/// (which claimed before or after the release was scheduled) always invalidates the releases of older logins: a session replacement or a quick relogin never loses its claim.
+/// </para>
+/// <para>
 /// Thread-safe. A claim and a release of the same character never interleave (a striped async gate), and a login that claims while an earlier logout's release is still waiting for its flush
 /// supersedes that release, so a release can never delete the claim of a session that logged in after it was scheduled. A release whose flush is not durable keeps the claim (the retained
 /// saves need it) and retries a few times; a claim that is still kept is refreshed by the next login of that character on this shard and is taken over when this incarnation dies.
@@ -37,6 +42,9 @@ public sealed class CharacterClaimService(
     private readonly Dictionary<int, object> _pendingReleases = [];
     private readonly ConcurrentDictionary<Task, byte> _inFlight = new();
     private readonly CancellationTokenSource _stop = new();
+    private readonly Dictionary<int, List<long>> _liveTickets = [];
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, System.Runtime.CompilerServices.StrongBox<long>> _bound = new();
+    private long _generation;
     private int _disposed;
 
     /// <summary>Delay before a release is retried after a flush that was not durable, times the attempt number (test seam).</summary>
@@ -68,20 +76,32 @@ public sealed class CharacterClaimService(
     /// no token, it is not a worker-shard token, or no <see cref="EfTransferDecisionStore"/> is registered. A store failure propagates (the login is refused as failed).
     /// </summary>
     public async Task<CharacterClaimResult> ClaimAsync(int characterId, CharacterOwnershipToken? token, CancellationToken cancellationToken = default)
+        => (await ClaimWithTicketAsync(characterId, token, cancellationToken).ConfigureAwait(false)).Result;
+
+    /// <summary>
+    /// <see cref="ClaimAsync"/> that also returns the login's claim ticket: a monotonic generation (greater than zero) for every claimed outcome, including
+    /// <see cref="CharacterClaimOutcome.AlreadyHeld"/>; zero when nothing was claimed (refused, or no claim exists in this mode). Pass it to <see cref="ScheduleRelease"/>.
+    /// </summary>
+    public async Task<(CharacterClaimResult Result, long Ticket)> ClaimWithTicketAsync(int characterId, CharacterOwnershipToken? token, CancellationToken cancellationToken = default)
     {
         if (token is null || !CharacterOwnershipScopes.IsWorker(token.Scope) || services.GetService<EfTransferDecisionStore>() is not { } store)
-            return new CharacterClaimResult(CharacterClaimOutcome.NotWorkerScope, null, null);
+            return (new CharacterClaimResult(CharacterClaimOutcome.NotWorkerScope, null, null), 0);
 
         SemaphoreSlim gate = GateOf(characterId);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             CharacterClaimResult result = await store.TryClaimCharacterAsync((ulong)characterId, token, BuildReapPolicy(), cancellationToken).ConfigureAwait(false);
+            long ticket = 0;
             if (result.IsClaimed)
             {
+                ticket = Interlocked.Increment(ref _generation);
                 lock (_pendingGate)
                 {
                     _pendingReleases.Remove(characterId); // this login owns the claim now: a release still waiting for its flush must not delete it
+                    if (!_liveTickets.TryGetValue(characterId, out List<long>? live))
+                        _liveTickets[characterId] = live = [];
+                    live.Add(ticket); // newer than every ticket handed out before: the releases of older logins are invalid from here on
                 }
             }
             else
@@ -89,7 +109,7 @@ public sealed class CharacterClaimService(
                 logger?.LogWarning("character {Character} login refused: claim outcome {Outcome} (held by {Scope})", characterId, result.Outcome, result.PreviousScope ?? "no one");
             }
 
-            return result;
+            return (result, ticket);
         }
         finally
         {
@@ -102,8 +122,10 @@ public sealed class CharacterClaimService(
     /// waits on). Call it after the logout snapshot was queued (the world thread, after <c>RemovePlayer</c>), and also for a login that claimed but never entered the world. Returns at once;
     /// the flush and the release run in the background. A no-op without a worker-shard token or a store. <paramref name="isOnline"/> (thread-safe) is asked just before the delete: a character that
     /// is online again keeps its claim (a second login attempt of the same character that failed must not strip the first one's claim).
+    /// <paramref name="ticket"/> is the releasing login's claim ticket (<see cref="ClaimWithTicketAsync"/>): the release is skipped unless it is still the newest live ticket of the
+    /// character, so a login that claimed after this one (before or after this call) keeps its claim. Zero means an unticketed release (only the marker supersession applies).
     /// </summary>
-    public void ScheduleRelease(int characterId, CharacterOwnershipToken? token, Func<bool>? isOnline = null)
+    public void ScheduleRelease(int characterId, CharacterOwnershipToken? token, Func<bool>? isOnline = null, long ticket = 0)
     {
         if (Volatile.Read(ref _disposed) != 0 || token is null || !CharacterOwnershipScopes.IsWorker(token.Scope)
             || services.GetService<EfTransferDecisionStore>() is not { } store)
@@ -112,10 +134,16 @@ public sealed class CharacterClaimService(
         object marker = new();
         lock (_pendingGate)
         {
+            if (ticket != 0 && !IsNewestLive(characterId, ticket))
+            {
+                RemoveTicketLocked(characterId, ticket);
+                return; // a newer login claimed first: its claim is not this logout's to release (and its own pending release, if any, stays registered)
+            }
+
             _pendingReleases[characterId] = marker;
         }
 
-        Task release = Task.Run(() => ReleaseAsync(store, characterId, token, marker, isOnline));
+        Task release = Task.Run(() => ReleaseAsync(store, characterId, token, marker, isOnline, ticket));
         _inFlight[release] = 0;
         _ = release.ContinueWith(done => _inFlight.TryRemove(done, out _), TaskScheduler.Default);
     }
@@ -123,7 +151,47 @@ public sealed class CharacterClaimService(
     /// <summary>Completes when every release scheduled so far has finished (shutdown and tests).</summary>
     public Task DrainAsync() => Task.WhenAll(_inFlight.Keys);
 
-    private async Task ReleaseAsync(EfTransferDecisionStore store, int characterId, CharacterOwnershipToken token, object marker, Func<bool>? isOnline)
+    /// <summary>Binds a login's claim ticket to its player object so the logout path can find it (<see cref="TicketOf"/>). Ignored for ticket zero.</summary>
+    public void BindTicket(object owner, long ticket)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        if (ticket != 0)
+            _bound.AddOrUpdate(owner, new System.Runtime.CompilerServices.StrongBox<long>(ticket));
+    }
+
+    /// <summary>The claim ticket bound to <paramref name="owner"/>, or zero when it has none.</summary>
+    public long TicketOf(object owner)
+    {
+        ArgumentNullException.ThrowIfNull(owner);
+        return _bound.TryGetValue(owner, out System.Runtime.CompilerServices.StrongBox<long>? box) ? box.Value : 0;
+    }
+
+    /// <summary>
+    /// A login that claimed but was refused entry because the character is online under an older login (which keeps the claim): its ticket stops counting,
+    /// so the older login's release is valid again.
+    /// </summary>
+    public void AbandonTicket(int characterId, long ticket)
+    {
+        if (ticket == 0)
+            return;
+        lock (_pendingGate)
+        {
+            RemoveTicketLocked(characterId, ticket);
+        }
+    }
+
+    /// <summary>Caller holds <c>_pendingGate</c>.</summary>
+    private void RemoveTicketLocked(int characterId, long ticket)
+    {
+        if (ticket != 0 && _liveTickets.TryGetValue(characterId, out List<long>? live) && live.Remove(ticket) && live.Count == 0)
+            _liveTickets.Remove(characterId);
+    }
+
+    /// <summary>Caller holds <c>_pendingGate</c>.</summary>
+    private bool IsNewestLive(int characterId, long ticket)
+        => _liveTickets.TryGetValue(characterId, out List<long>? live) && live.Count > 0 && live.Max() == ticket;
+
+    private async Task ReleaseAsync(EfTransferDecisionStore store, int characterId, CharacterOwnershipToken token, object marker, Func<bool>? isOnline, long ticket)
     {
         try
         {
@@ -152,6 +220,12 @@ public sealed class CharacterClaimService(
                 {
                     if (!_pendingReleases.TryGetValue(characterId, out object? current) || !ReferenceEquals(current, marker))
                         return; // a login claimed the character meanwhile: the claim is that session's now
+                    if (ticket != 0 && !IsNewestLive(characterId, ticket))
+                    {
+                        _pendingReleases.Remove(characterId);
+                        return; // a newer login holds a newer ticket: the claim is that login's
+                    }
+
                     _pendingReleases.Remove(characterId);
                 }
 
@@ -176,6 +250,16 @@ public sealed class CharacterClaimService(
                 logger.LogFault("persist.character-claim-release", ex, "releasing the claim of character {Character} failed; it stays until the next login refreshes it", characterId);
             else
                 FaultLedger.Shared.Record("persist.character-claim-release", ex);
+        }
+        finally
+        {
+            if (ticket != 0)
+            {
+                lock (_pendingGate)
+                {
+                    RemoveTicketLocked(characterId, ticket);
+                }
+            }
         }
     }
 

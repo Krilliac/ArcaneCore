@@ -412,12 +412,13 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         // Worker fencing scope: the per-character claim (cluster_transfer_owner) must be this worker's before the character is attached, or the write fence refuses every
         // claim-checked save of it. A live owner elsewhere or a transfer in flight refuses the login; a dead shard's claim is taken over (with the login-time reap,
         // Cluster:Fencing:ReapDeadOwners). Realm scope claims nothing. Released again at logout (CharacterClaimFeature) or, below, when this login does not enter the world.
+        long claimTicket = 0; // this login's claim ticket (0: nothing claimed); a newer login's claim invalidates this login's releases
         if (session.Services.GetService<CharacterClaimService>() is { } claims)
         {
             CharacterClaimResult claim;
             try
             {
-                claim = await claims.ClaimAsync(character.Id, session.World.CharacterOwnership).ConfigureAwait(false);
+                (claim, claimTicket) = await claims.ClaimWithTicketAsync(character.Id, session.World.CharacterOwnership).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -442,6 +443,8 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             Home = home,
             CharacterOwnership = session.World.CharacterOwnership,
         };
+        if (claimTicket != 0)
+            session.Services.GetService<CharacterClaimService>()?.BindTicket(player, claimTicket); // the logout release finds it through the player
 
         // Per-character data owned by features (vmangos Player::LoadFromDB: inventory, spells,
         // quest status …). The player is not yet visible to the world thread. Fail closed.
@@ -466,13 +469,13 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"load error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] a feature failed to load character {Guid}", session.RemoteEndpoint, character.Id);
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
-            ReleaseUnenteredClaim(session, character.Id);
+            ReleaseUnenteredClaim(session, character.Id, claimTicket);
             return;
         }
 
         if (!session.TryBeginLogin())
         {
-            ReleaseUnenteredClaim(session, character.Id);
+            ReleaseUnenteredClaim(session, character.Id, claimTicket);
             return;
         }
 
@@ -484,9 +487,15 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         world.Post(() => EnterWorld(session, world, character, player, account));
     }
 
-    /// <summary>A login that claimed the character but never put it into the world: the logout path will not run, so release the claim (a no-op when none was taken).</summary>
-    private static void ReleaseUnenteredClaim(WorldSession session, int characterId)
-        => session.Services.GetService<CharacterClaimService>()?.ScheduleRelease(characterId, session.World.CharacterOwnership, () => session.World.IsOnline(ObjectGuid.Player((uint)characterId)));
+    /// <summary>
+    /// A login that claimed the character but never put it into the world: the logout path will not run, so release the claim (a no-op when none was taken). Releases only what this login
+    /// claimed: <paramref name="claimTicket"/> is this login's ticket, and a newer login's claim (a session replacement) makes the release a no-op.
+    /// </summary>
+    private static void ReleaseUnenteredClaim(WorldSession session, int characterId, long claimTicket)
+        => session.Services.GetService<CharacterClaimService>()?.ScheduleRelease(characterId, session.World.CharacterOwnership, () => session.World.IsOnline(ObjectGuid.Player((uint)characterId)), claimTicket);
+
+    private static long ClaimTicketOf(WorldSession session, Player player)
+        => session.Services.GetService<CharacterClaimService>()?.TicketOf(player) ?? 0;
 
     /// <summary>World thread: send the login sequence and put the player into its map.</summary>
     private static void EnterWorld(WorldSession session, WorldRuntime world, CharacterRecord character, Player player, AccountLoginPackets account)
@@ -494,13 +503,16 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         if (world.IsOnline(player.Guid))
         {
             session.AbortLogin();
+            // The character is online under an older login that keeps its claim: this login's ticket must not invalidate that login's release.
+            if (session.Services.GetService<CharacterClaimService>() is { } duplicateClaims)
+                duplicateClaims.AbandonTicket(character.Id, duplicateClaims.TicketOf(player));
             session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginDuplicateCharacter));
             return;
         }
 
         if (!session.TryEnterWorld(player))
         {
-            ReleaseUnenteredClaim(session, character.Id);
+            ReleaseUnenteredClaim(session, character.Id, ClaimTicketOf(session, player));
             return; // the client disconnected while the character loaded
         }
 
@@ -522,7 +534,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"resolve map error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not resolve the login map of '{Name}'", session.RemoteEndpoint, player.Name);
             session.Kick("login map could not be resolved");
-            ReleaseUnenteredClaim(session, character.Id); // never added to the world, so the logout path will not release it
+            ReleaseUnenteredClaim(session, character.Id, ClaimTicketOf(session, player)); // never added to the world, so the logout path will not release it
             return;
         }
 
@@ -540,7 +552,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"add to world error={ex.GetType().Name}: {ex.Message}");
             session.Logger.LogError(ex, "[{Endpoint}] could not add '{Name}' to the world", session.RemoteEndpoint, player.Name);
             session.Kick();
-            ReleaseUnenteredClaim(session, character.Id); // never added to the world, so the logout path will not release it
+            ReleaseUnenteredClaim(session, character.Id, ClaimTicketOf(session, player)); // never added to the world, so the logout path will not release it
             return;
         }
 

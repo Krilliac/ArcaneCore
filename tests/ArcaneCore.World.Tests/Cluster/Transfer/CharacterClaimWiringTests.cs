@@ -186,6 +186,90 @@ public sealed class CharacterClaimWiringTests
     }
 
     [Fact]
+    public async Task AReleaseOfAnOlderLogin_NeverDeletesANewerLoginsClaim_WhenTheNewerClaimCameFirst_SessionReplacement()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var services = new ServiceCollection();
+        services.AddSingleton(rig.Store);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        (CharacterClaimResult first, long ticket1) = await claims.ClaimWithTicketAsync(34, a);
+        (CharacterClaimResult second, long ticket2) = await claims.ClaimWithTicketAsync(34, a); // the replacing session claims while the first still holds it
+        Assert.Equal(CharacterClaimOutcome.Claimed, first.Outcome);
+        Assert.Equal(CharacterClaimOutcome.AlreadyHeld, second.Outcome);
+        Assert.True(ticket1 > 0);
+        Assert.True(ticket2 > ticket1); // every claimed outcome, AlreadyHeld included, gets a newer ticket
+
+        claims.ScheduleRelease(34, a, () => false, ticket1); // the replaced session's ReleaseUnenteredClaim, scheduled after the newer claim
+        await claims.DrainAsync();
+        Assert.Equal(a, rig.Store.GetActiveOwnership(34)); // the replacing session's claim survives
+
+        claims.ScheduleRelease(34, a, () => false, ticket2); // the newest login's own release still works
+        await claims.DrainAsync();
+        Assert.Null(rig.Store.GetActiveOwnership(34));
+    }
+
+    [Fact]
+    public async Task ALogoutRelease_PostedAfterAQuickRelogin_KeepsTheRelogInsClaim_AndTheRelogInsOwnLogoutReleasesIt()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var services = new ServiceCollection();
+        services.AddSingleton(rig.Store);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        (_, long loggedOut) = await claims.ClaimWithTicketAsync(35, a); // the login that is now logging out
+        (_, long relogin) = await claims.ClaimWithTicketAsync(35, a); // the quick relogin claimed before the posted logout release ran
+        Assert.True(relogin > loggedOut);
+
+        claims.ScheduleRelease(35, a, () => false, loggedOut); // the posted ScheduleRelease of the logout runs now; the relogin has not entered the world yet, so isOnline says false
+        await claims.DrainAsync();
+        Assert.Equal(a, rig.Store.GetActiveOwnership(35));
+
+        claims.ScheduleRelease(35, a, () => false, relogin);
+        await claims.DrainAsync();
+        Assert.Null(rig.Store.GetActiveOwnership(35));
+    }
+
+    [Fact]
+    public async Task AnAbandonedLoginsTicket_StopsInvalidatingTheOlderLoginsRelease()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var services = new ServiceCollection();
+        services.AddSingleton(rig.Store);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        (_, long older) = await claims.ClaimWithTicketAsync(36, a);
+        (_, long duplicate) = await claims.ClaimWithTicketAsync(36, a); // a second login of the online character, refused entry in EnterWorld
+        claims.AbandonTicket(36, duplicate); // the older login keeps the claim, so its release is valid again
+
+        claims.ScheduleRelease(36, a, () => false, older);
+        await claims.DrainAsync();
+        Assert.Null(rig.Store.GetActiveOwnership(36));
+    }
+
+    [Fact]
+    public async Task TheClaimTicket_IsBoundToThePlayerObject_ForTheLogoutPath()
+    {
+        var services = new ServiceCollection();
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+        var player = new object();
+
+        Assert.Equal(0L, claims.TicketOf(player));
+        claims.BindTicket(player, 7);
+        Assert.Equal(7L, claims.TicketOf(player));
+    }
+
+    [Fact]
     public async Task TwoConcurrentFirstClaims_OfTheSameCharacter_ExactlyOneWins_AndTheLoserIsRefusedNotThrown()
     {
         using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);

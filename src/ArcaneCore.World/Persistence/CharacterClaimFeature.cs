@@ -20,11 +20,19 @@ public sealed class CharacterClaimFeature(IServiceProvider services) : IWorldFea
         ArgumentNullException.ThrowIfNull(world);
         world.PlayerLoggingOut += player =>
         {
-            if (world.IsRetiringTransferredPlayer || services.GetService<CharacterClaimService>() is not { } claims)
+            if (services.GetService<CharacterClaimService>() is not { } claims)
                 return;
             int characterId = (int)player.Guid.Low;
+            long ticket = claims.TicketOf(player); // the claim ticket of the login that put this player into the world
+            if (world.IsRetiringTransferredPlayer)
+            {
+                claims.AbandonTicket(characterId, ticket); // the claim moved with the commit: nothing to release, and the ticket stops counting
+                return;
+            }
+
             CharacterOwnershipToken? token = player.CharacterOwnership ?? world.CharacterOwnership;
-            world.Post(() => claims.ScheduleRelease(characterId, token, () => world.IsOnline(ObjectGuid.Player((uint)characterId))));
+            // The release carries this login's ticket: a login that claims the character after this logout (a quick relogin that claimed before the posted release runs) invalidates it.
+            world.Post(() => claims.ScheduleRelease(characterId, token, () => world.IsOnline(ObjectGuid.Player((uint)characterId)), ticket));
         };
     }
 }
