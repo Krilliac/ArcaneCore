@@ -369,8 +369,10 @@ public sealed partial class TeleportService
         }
 
         // Player::TeleportTo (Player.cpp:1861-1864): "don't let enter battlegrounds without assigned battleground id" — only the
-        // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map.
-        if (target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
+        // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map. A battleground map another worker
+        // owns is not judged here: this worker holds no match binding for it, so the router (the coordinator that placed the match) decides
+        // eligibility, and the owning worker's own arrival check applies on landing.
+        if (!remote && target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
         {
             return false;
         }

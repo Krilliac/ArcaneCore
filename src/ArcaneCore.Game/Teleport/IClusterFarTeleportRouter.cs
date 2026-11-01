@@ -11,9 +11,11 @@ namespace ArcaneCore.Game.Teleport;
 /// <para>
 /// Every source path that ends in <see cref="TeleportService.TeleportTo(Player, uint, float, float, float, float, TeleportOptions)"/>
 /// (hearthstone, summon, portals, GM tele and worldport, spirit release, dungeon entry) reaches this hook. A destination this worker owns
-/// never reaches the router. Not covered: a ship or zeppelin whose next map is unowned. <c>TransportSystem.TeleportTransport</c> holds the
-/// ship before it calls <c>TeleportTo</c>, so the router never sees it; moving a ship and its passengers across workers is not routed here.
-/// Battleground entry is gated locally by <see cref="TeleportService.BattlegroundEntryAllowed"/> before the router is asked.
+/// never reaches the router. A ship or zeppelin whose next map is unowned stays held on its own worker, but each player aboard is handed to
+/// <c>TeleportTo</c> (with <see cref="TeleportOptions.NotLeaveTransport"/>) once through <c>TransportSystem.TeleportPassengerToUnownedMap</c>,
+/// so the router sees one request per player; the ship and its creatures do not move between workers.
+/// Battleground entry to a map this worker does not own is not gated by <see cref="TeleportService.BattlegroundEntryAllowed"/> (that state
+/// belongs to the worker holding the match): the router decides whether the player may enter it.
 /// </para>
 /// <para>
 /// Thread affinity: called on the world thread, possibly inside a map update. Implementations must not block it, and must defer anything

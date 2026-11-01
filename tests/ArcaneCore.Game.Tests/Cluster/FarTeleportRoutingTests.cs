@@ -24,6 +24,7 @@ public sealed class FarTeleportRoutingTests
             new MapTemplate(0, 0, MapType.Common, 12, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
             new MapTemplate(1, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Kalimdor", ""),
             new MapTemplate(33, 0, MapType.Instance, 0, 5, 0, -1, 0, 0, "Dungeon", ""),
+            new MapTemplate(489, 0, MapType.Battleground, 0, 10, 0, -1, 0, 0, "Battleground", ""),
         ],
         [new AreaTemplate(12, 0, 0, 0, 0, 0, "Elwynn", 0, 0)],
         [], [], []);
@@ -178,9 +179,75 @@ public sealed class FarTeleportRoutingTests
         {
             Assert.True(world.Owns(33, 1));
 
-            teleports.TeleportTo(player, 33, 10, 20, 30, 0);
+            Assert.True(teleports.TeleportTo(player, 33, 10, 20, 30, 0));
 
             Assert.Empty(router.Calls);
+        }
+    }
+
+    [Fact]
+    public void ABattlegroundAnotherWorkerOwns_CallsTheRouterOnce_EvenWithTheLocalGateSet()
+    {
+        (WorldRuntime world, TeleportService teleports, Player player, FakeSession session, RecordingRouter router) = Setup("0", allowInstanceMaps: false);
+        using (world)
+        {
+            int gateCalls = 0;
+            teleports.BattlegroundEntryAllowed = (_, _) =>
+            {
+                gateCalls++;
+                return true;
+            };
+            Assert.False(world.Owns(489, 1));
+
+            Assert.True(teleports.TeleportTo(player, 489, 10, 20, 30, 0));
+            world.RunTick(50);
+
+            Assert.Equal(489u, Assert.Single(router.Calls).Destination.MapId);
+            Assert.Equal(0, gateCalls); // eligibility of a remote battleground is the router's call, not this worker's match binding
+            Assert.DoesNotContain(session.Sent, p => p.Opcode is WorldOpcode.SmsgTransferPending or WorldOpcode.SmsgNewWorld);
+        }
+    }
+
+    [Fact]
+    public void ABattlegroundAnotherWorkerOwns_WithoutALocalBinding_StillReachesTheRouter()
+    {
+        (WorldRuntime world, TeleportService teleports, Player player, _, RecordingRouter router) = Setup("0", allowInstanceMaps: false);
+        using (world)
+        {
+            Assert.Null(teleports.BattlegroundEntryAllowed);
+
+            Assert.True(teleports.TeleportTo(player, 489, 10, 20, 30, 0));
+
+            Assert.Single(router.Calls);
+        }
+    }
+
+    [Fact]
+    public void AnOwnedBattleground_StillNeedsTheLocalBinding_AndNeverCallsTheRouter()
+    {
+        (WorldRuntime world, TeleportService teleports, Player player, _, RecordingRouter router) = Setup("0", allowInstanceMaps: true);
+        using (world)
+        {
+            Assert.True(world.Owns(489, 1));
+
+            Assert.False(teleports.TeleportTo(player, 489, 10, 20, 30, 0)); // BattlegroundEntryAllowed unset
+
+            Assert.Empty(router.Calls);
+        }
+    }
+
+    [Fact]
+    public void ASecondHearthstoneRequestInTheSameTick_ReachesTheRouterAgain_WhichRefusesDuplicates()
+    {
+        (WorldRuntime world, TeleportService teleports, Player player, _, RecordingRouter router) = Setup("0");
+        using (world)
+        {
+            player.Home = new HomeBind(1, 0, 1000, 2000, 30);
+
+            Assert.True(teleports.TeleportToHomebind(player));
+            Assert.True(teleports.TeleportToHomebind(player)); // a second request in the same tick reaches the router again; it refuses duplicates
+
+            Assert.Equal(2, router.Calls.Count);
         }
     }
 
