@@ -950,7 +950,13 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
         if (_worker is { } worker)
         {
-            worker.Logout(player.Guid);
+            // A retire after a committed cluster transfer is not a logout: the player lives on at the target node, and a Logout would
+            // clear the holder's invitation (accept -> far transfer to the holder) or mark a queued player offline.
+            if (!World.IsRetiringTransferredPlayer)
+            {
+                worker.Logout(player.Guid);
+            }
+
             return;
         }
 

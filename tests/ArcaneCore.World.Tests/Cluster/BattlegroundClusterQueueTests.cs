@@ -1,8 +1,18 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
+using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.WorldData;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.Battlegrounds;
+using ArcaneCore.World.Persistence;
+using ArcaneCore.World.Teleport;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster;
@@ -84,13 +94,79 @@ public sealed class BattlegroundClusterQueueTests
         public void Submit(string workerId, BattlegroundCommand command) => holder.Submit(workerId, command);
     }
 
-    /// <summary>The worker's teleport service as the cluster sees it: an unowned map goes to the far router.</summary>
-    private sealed class FarRouterSpy
+    /// <summary>The far-transfer seam of a worker: records every transfer the teleport service hands over.</summary>
+    private sealed class RecordingRouter : IClusterFarTeleportRouter
     {
-        public readonly List<(ObjectGuid Player, TeleportDestination Destination)> Transfers = [];
+        public List<(Player Player, TeleportDestination Destination)> Calls { get; } = [];
 
-        public void Apply(BattlegroundEnterNotice notice)
-            => Transfers.Add((notice.Player, new TeleportDestination(notice.MapId, notice.X, notice.Y, notice.Z, notice.Orientation)));
+        public bool TryBeginTransfer(Player player, TeleportDestination destination, TeleportOptions options)
+        {
+            Calls.Add((player, destination));
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// A real world with the teleport and battleground features attached, configured as a plain worker that owns map 0 only, so the battleground map
+    /// is another node's: the production path from a holder's notice to the teleport service.
+    /// </summary>
+    private sealed class WorkerWorld : IDisposable
+    {
+        private static readonly MapContent Content = new(
+            [
+                new MapTemplate(0, 0, MapType.Common, 12, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+                new MapTemplate(WsgMap, 0, MapType.Battleground, 0, 10, 0, -1, 0, 0, "Battleground", ""),
+            ],
+            [new AreaTemplate(12, 0, 0, 0, 0, 0, "Elwynn", 0, 0)],
+            [], [], []);
+
+        private readonly ServiceProvider _services;
+
+        public WorkerWorld(string workerId, IBattlegroundHolderLink holder)
+        {
+            ServiceCollection collection = new();
+            collection.AddLogging();
+            collection.AddSingleton<ILogger<TeleportFeature>>(NullLogger<TeleportFeature>.Instance);
+            collection.AddSingleton<TeleportFeature>();
+            _services = collection.BuildServiceProvider();
+            World = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0, CommandTimeBudgetMs = 0 },
+                new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
+                NullLogger<WorldRuntime>.Instance);
+            Assert.True(MapOwnership.TryParse("0", allowInstanceMaps: true, out MapOwnership ownership, out string? error), error);
+            World.Ownership = ownership;
+            var teleport = _services.GetRequiredService<TeleportFeature>();
+            teleport.Attach(World);
+            teleport.Maps.Load(Content);
+            teleport.Teleports.ClusterFarRouter = Router;
+            Feature = new BattlegroundFeature(_services, _services.GetRequiredService<IServiceScopeFactory>(), NullLoggerFactory.Instance);
+            Feature.Attach(World);
+            Feature.ConfigureWorker(workerId, holder);
+        }
+
+        public WorldRuntime World { get; }
+
+        public BattlegroundFeature Feature { get; }
+
+        public RecordingRouter Router { get; } = new();
+
+        public Player AddPlayer(uint id)
+        {
+            var character = new CharacterRecord
+            {
+                Id = (int)id, AccountId = 1, Name = "Bgworker" + id, Race = 1, Class = 1, Gender = 0, Level = 60, MapId = 0, ZoneId = 12, X = 0, Y = 0, Z = 83.5f,
+            };
+            var player = new Player(character, new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), new NullPlayerSession());
+            World.AddPlayer(player);
+            World.RunTick(50);
+            return player;
+        }
+
+        public void Dispose()
+        {
+            Feature.StopAsync().GetAwaiter().GetResult();
+            World.Dispose();
+            _services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
     }
 
     private sealed class Rig
@@ -193,7 +269,9 @@ public sealed class BattlegroundClusterQueueTests
         rig.QueueTwoWorkers();
         rig.Manager.Update(1000);
         rig.Links.Sent.Clear();
-        var router = new FarRouterSpy();
+        using var worker = new WorkerWorld(WorkerA, new ToHolder(rig.Holder));
+        Player player = worker.AddPlayer(1);
+        Assert.Equal(Alliance[0], player.Guid);
 
         rig.A.Port(new BattlegroundPortRequest(Alliance[0], WsgMap, Action: 1, Level: 60, Deserter: false));
         rig.B.Port(new BattlegroundPortRequest(Horde[0], WsgMap, Action: 1, Level: 60, Deserter: false));
@@ -207,15 +285,42 @@ public sealed class BattlegroundClusterQueueTests
         Assert.Equal(Horde[0], hordeEnter.Player);
         Assert.Equal(2, rig.Holder.RemotePlayerCount);
 
-        router.Apply(allianceEnter);
-        router.Apply(hordeEnter);
-        Assert.Equal(new TeleportDestination(WsgMap, 1.5f, 2.5f, 3.5f, 0.5f), router.Transfers[0].Destination);
-        Assert.Equal(new TeleportDestination(WsgMap, -1.5f, -2.5f, -3.5f, 1.5f), router.Transfers[1].Destination);
         Assert.Equal(Assert.Single(rig.Manager.RunningBattlegrounds).InstanceId, allianceEnter.InstanceId);
+        Assert.Equal(new TeleportDestination(WsgMap, -1.5f, -2.5f, -3.5f, 1.5f), new TeleportDestination(hordeEnter.MapId, hordeEnter.X, hordeEnter.Y, hordeEnter.Z, hordeEnter.Orientation));
+
+        // The notice reaches the worker's feature, which runs the production path: the teleport service sees a map this node does not own
+        // and hands the player to the far-transfer router with the match's map and the team's start location.
+        worker.Feature.ReceiveNotice(allianceEnter);
+        worker.World.RunTick(50);
+        (Player moved, TeleportDestination destination) = Assert.Single(worker.Router.Calls);
+        Assert.Same(player, moved);
+        Assert.Equal(new TeleportDestination(WsgMap, 1.5f, 2.5f, 3.5f, 0.5f), destination);
 
         // The holder's manager bound both players to the match, so the arrival on the holder adds them.
         Assert.True(rig.Manager.EnterBattleground(Alliance[0]));
         Assert.True(rig.Manager.EnterBattleground(Horde[0]));
+    }
+
+    [Fact]
+    public void ARetireAfterATransfer_DoesNotLogTheAcceptedPlayerOutAtTheHolder()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+        rig.Manager.Update(1000);
+        using var worker = new WorkerWorld(WorkerA, new ToHolder(rig.Holder));
+        Player player = worker.AddPlayer(1);
+        Assert.Equal(Alliance[0], player.Guid);
+
+        rig.A.Port(new BattlegroundPortRequest(Alliance[0], WsgMap, Action: 1, Level: 60, Deserter: false));
+        rig.Holder.Pump();
+
+        // The far transfer to the holder committed: the worker retires the player. That is a handoff, not a logout, so the holder keeps its invitation.
+        Assert.True(worker.World.DetachPlayerForTransfer(player));
+        Assert.True(worker.World.RetireDetachedPlayer(player));
+        rig.Holder.Pump();
+
+        Assert.Equal(4, rig.Holder.RemotePlayerCount);
+        Assert.True(rig.Manager.EnterBattleground(Alliance[0]));
     }
 
     [Fact]
