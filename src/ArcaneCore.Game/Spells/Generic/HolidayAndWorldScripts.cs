@@ -254,3 +254,45 @@ public sealed class TowerCaptureScript : ISpellScript
         }
     }
 }
+
+/// <summary>
+/// Lunar Festival Lunar Teleport Caps (Holiday - Lunar Teleport Cap: Stormwind 26406, Ironforge 26408, Darnassus 26409, Undercity 26410, Thunder
+/// Bluff 26412, Orgrimmar 26414; SCRIPT_EFFECT). vmangos has no C++ case for them: the spell_scripts rows (migrations 20210727201033_world.sql and
+/// 20220205202111_world.sql, command 15 CAST_SPELL by the player on itself, the cap's own team by condition 2/3) make a player of the city's team
+/// cast that city's elder teleport (26454 Stormwind, 26452 Ironforge, 26450 Darnassus, 26456 Undercity, 26455 Thunder Bluff, 26453 Orgrimmar)
+/// and a player of the other team cast Port to Moonglade (26451).
+/// </summary>
+[SpellScript(26406, 26408, 26409, 26410, 26412, 26414)]
+public sealed class LunarTeleportCapScript : ISpellScript
+{
+    public const uint PortToMoonglade = 26451;
+
+    private static readonly Dictionary<uint, (Team Team, uint ElderTeleport)> s_caps = new()
+    {
+        [26406] = (Team.Alliance, 26454),
+        [26408] = (Team.Alliance, 26452),
+        [26409] = (Team.Alliance, 26450),
+        [26410] = (Team.Horde, 26456),
+        [26412] = (Team.Horde, 26455),
+        [26414] = (Team.Horde, 26453),
+    };
+
+    /// <summary>The spell the player casts on itself: the elder teleport for the cap city's team, Port to Moonglade for the other team; 0 for a spell that is no cap.</summary>
+    public static uint TeleportFor(uint capSpellId, Team team)
+        => s_caps.TryGetValue(capSpellId, out (Team Team, uint ElderTeleport) cap) ? (cap.Team == team ? cap.ElderTeleport : PortToMoonglade) : 0;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Target is not Player player)
+        {
+            return;
+        }
+
+        uint spellId = TeleportFor(context.Spell.Id, player.Team);
+        if (spellId != 0)
+        {
+            GadgetCasts.Cast(context, player, player, spellId);
+        }
+    }
+}

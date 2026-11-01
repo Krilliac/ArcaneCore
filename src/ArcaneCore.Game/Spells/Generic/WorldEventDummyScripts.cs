@@ -100,6 +100,37 @@ public sealed class CrystalPrisonScript : ISpellScript
     }
 }
 
+/// <summary>
+/// Muglash's Brazier Trap 20863 (vmangos SpellEffects.cpp:340-358): the creature target (Muglash) continues his escort (vmangos sets EventAI phase
+/// 2; here his <see cref="ArcaneCore.Game.Creatures.Scripts.MuglashAI"/> takes the brazier-out event unless it already has), and the Naga Brazier (178247) within
+/// 30 yd of the caster can no longer be used.
+/// </summary>
+[SpellScript(20863)]
+public sealed class MuglashBrazierTrapScript : ISpellScript
+{
+    public const uint NagaBrazier = 178247;
+    public const float BrazierRange = 30f;
+
+    public void OnEffectExecute(SpellEffectContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        if (context.Target is not Creature target)
+        {
+            return;
+        }
+
+        if (target.AI is ArcaneCore.Game.Creatures.Scripts.MuglashAI { BrazierExtinguished: false } muglash)
+        {
+            muglash.OnBrazierUsed();
+        }
+
+        if (WorldDummyHelpers.NearestObject(context.Caster, NagaBrazier, BrazierRange) is { } brazier)
+        {
+            brazier.Flags |= GameObjectFlags.NoInteract;
+        }
+    }
+}
+
 /// <summary>Forgiveness 28697 (vmangos SpellEffects.cpp:1329-1345, SM Ashbringer event): the caster kills the living target.</summary>
 [SpellScript(28697)]
 public sealed class ForgivenessScript : ISpellScript
