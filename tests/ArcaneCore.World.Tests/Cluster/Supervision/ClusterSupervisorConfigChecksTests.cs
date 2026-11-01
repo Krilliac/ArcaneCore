@@ -107,6 +107,32 @@ public sealed class ClusterSupervisorConfigChecksTests
     }
 
     [Fact]
+    public void AStandbyChild_MayNameTheShardOfTheActiveWorld_ButTwoActiveChildrenMayNot()
+    {
+        const string scope = " --Cluster:Fencing:Scope=Worker";
+        // The standby takes over the active world's durable scope, so it carries the active's shard id (start-cluster.ps1 -Standby); it has its own node id and owner node.
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a" + scope);
+        AddWorld(values, "a-standby", "worker",
+            "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=standby-a --Cluster:Worker:NodeId=standby-a --Cluster:Fencing:Shard=node-a --Cluster:Worker:Standby=true" + scope);
+        Assert.Empty(Errors(values));
+
+        // Without the standby flag the same shard is a clash.
+        Dictionary<string, string?> clash = Base();
+        AddWorld(clash, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a" + scope);
+        AddWorld(clash, "b", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=standby-a --Cluster:Worker:NodeId=standby-a --Cluster:Fencing:Shard=node-a" + scope);
+        ConfigIssue error = Assert.Single(Errors(clash));
+        Assert.Contains("shard", error.Problem, StringComparison.Ordinal);
+
+        // A standby still needs its own node id and owner node.
+        Dictionary<string, string?> sameNode = Base();
+        AddWorld(sameNode, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a" + scope);
+        AddWorld(sameNode, "a-standby", "worker",
+            "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=node-a --Cluster:Fencing:Shard=node-a --Cluster:Worker:Standby=true" + scope);
+        Assert.Equal(2, Errors(sameNode).Length);
+    }
+
+    [Fact]
     public void ANumericWorkerScope_IsParsedLikeTheName_SoCaseOnlyShardClashesAreStillRefused()
     {
         // CharacterFencingScope.Worker = 1: the configuration binder accepts the number, so the check must too.

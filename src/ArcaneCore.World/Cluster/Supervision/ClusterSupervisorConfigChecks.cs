@@ -116,7 +116,10 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
 
                 // Worker fencing scope: the durable scope and the shard advisory lock are named after the shard, compared without regard to case, so two shard ids that differ only in case are one shard.
                 string scopeText = args.GetValueOrDefault("Cluster:Fencing:Scope") ?? configuration["Cluster:Fencing:Scope"] ?? string.Empty;
-                if (Enum.TryParse(scopeText, ignoreCase: true, out CharacterFencingScope scopeValue) && Enum.IsDefined(scopeValue) && scopeValue == CharacterFencingScope.Worker) // names and numbers, as the options binder reads them
+                // A standby (--Cluster:Worker:Standby=true) deliberately names the shard of the active world it takes over from (Cluster:Fencing:Shard, so its promotion claims the same durable scope);
+                // it claims and locks nothing until then, so it is not a second claimant of that shard (tools/ops/live/start-cluster.ps1 -Standby).
+                bool isStandby = bool.TryParse(args.GetValueOrDefault("Cluster:Worker:Standby") ?? configuration["Cluster:Worker:Standby"], out bool standbyFlag) && standbyFlag;
+                if (Enum.TryParse(scopeText, ignoreCase: true, out CharacterFencingScope scopeValue) && Enum.IsDefined(scopeValue) && scopeValue == CharacterFencingScope.Worker && !isStandby) // names and numbers, as the options binder reads them
                 {
                     string shardText = args.GetValueOrDefault("Cluster:Fencing:Shard") ?? configuration["Cluster:Fencing:Shard"] ?? string.Empty;
                     string shard = (string.IsNullOrWhiteSpace(shardText) ? nodeId : shardText).Trim();

@@ -53,10 +53,29 @@ public sealed class ClusterOptions
 
     /// <summary>With more than one worker: the index of the worker new sessions open on (Gateway:LoginWorker).</summary>
     public int LoginWorkerIndex { get; init; }
+
+    /// <summary>The security level of the account the fixture creates (default Player). A scenario that types GM or administrator commands needs a higher one.</summary>
+    public AccountSecurity Security { get; init; } = AccountSecurity.Player;
+
+    /// <summary>
+    /// With more than one worker: turns the per-player transfer hosting on (<c>Cluster:Worker:Transfers:Enabled</c> on every worker, <c>Gateway:Transfers:Enabled</c> on the gateway, which then also
+    /// reads the characters database). Default false: the cluster is the one the other scenarios run, with no control channel.
+    /// </summary>
+    public bool Transfers { get; init; }
+
+    /// <summary>
+    /// With more than one worker: the index of the worker that gets a standby process (a second world started with <c>Cluster:Worker:Standby=true</c> that shares the worker's shard) and the whole-World
+    /// handoff hosting (<c>Cluster:Worker:Handoff:Enabled</c> on every worker and the standby, <c>Gateway:Handoff:Enabled</c> and the slot's standby entry on the gateway). Null, the default, starts no standby.
+    /// There is no supervisor in this fixture, so a retired source is not relaunched.
+    /// </summary>
+    public int? StandbyWorkerIndex { get; init; }
 }
 
 /// <summary>One launched world worker.</summary>
 public sealed record ClusterWorkerInfo(int Index, string NodeId, int ClientPort, int LinkPort, IReadOnlyList<int> OwnedMaps);
+
+/// <summary>The standby process of one worker's slot (<see cref="ClusterOptions.StandbyWorkerIndex"/>): its own node id and ports, and the index of the worker it stands behind.</summary>
+public sealed record ClusterStandbyInfo(int ForWorkerIndex, string NodeId, int ClientPort, int LinkPort);
 
 /// <summary>
 /// The real <c>ArcaneCore.Gateway</c>, the realm daemon and fenced <c>ArcaneCore.World</c> worker(s) as subprocesses of the test process,
@@ -100,6 +119,8 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private string _worldConnection = string.Empty;
     private int _realmPort;
     private int _gatewayPort;
+    private ClusterStandbyInfo? _standby;
+    private ChildProcess? _standbyProcess;
 
     private ClusterProcessFixture(ClusterOptions options)
     {
@@ -128,6 +149,26 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
 
     /// <summary>The launched workers in index order.</summary>
     public IReadOnlyList<ClusterWorkerInfo> Workers => _workers;
+
+    /// <summary>The standby process, or null when <see cref="ClusterOptions.StandbyWorkerIndex"/> is not set.</summary>
+    public ClusterStandbyInfo? Standby => _standby;
+
+    /// <summary>Whether the standby process is still running (false when there is none).</summary>
+    public bool IsStandbyRunning => _standbyProcess is { HasExited: false };
+
+    /// <summary>
+    /// Runs a read-only <c>SELECT count(*)</c> (or any single-bigint query) on the cluster's characters database, for a scenario that asserts on the journal tables
+    /// (<c>cluster_transfer_decision</c>, <c>cluster_world_handoff</c>). The statement is the test's own text, never player input.
+    /// </summary>
+    public async Task<long> CharactersScalarAsync(string sql, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        var builder = new NpgsqlConnectionStringBuilder(_charactersConnection) { Pooling = false };
+        await using var connection = new NpgsqlConnection(builder.ConnectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(sql, connection);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture);
+    }
 
     /// <summary>Launch the cluster. Throws <see cref="InvalidOperationException"/> when <see cref="SkipReason"/> is set; a failed start disposes what it launched.</summary>
     public static async Task<ClusterProcessFixture> StartAsync(ClusterOptions? options = null, CancellationToken cancellationToken = default)
@@ -191,6 +232,15 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             {
                 throw new ArgumentOutOfRangeException(nameof(options), "LoginWorkerIndex must name a worker.");
             }
+
+            if (options.StandbyWorkerIndex is { } standby && (standby < 0 || standby >= options.WorkerCount))
+            {
+                throw new ArgumentOutOfRangeException(nameof(options), "StandbyWorkerIndex must name a worker.");
+            }
+        }
+        else if (options.Transfers || options.StandbyWorkerIndex is not null)
+        {
+            throw new ArgumentException("Transfers and a standby need more than one worker (the gateway's Workers list names the slots).", nameof(options));
         }
     }
 
@@ -211,6 +261,11 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                 _options.WorkerCount > 1 ? _options.WorkerMaps![index] : []));
         }
 
+        if (_options.StandbyWorkerIndex is { } standbyFor)
+        {
+            _standby = new ClusterStandbyInfo(standbyFor, _workers[standbyFor].NodeId + "-standby", FreePort(), FreePort());
+        }
+
         await PrepareDatabasesAsync(cancellationToken).ConfigureAwait(false);
 
         string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
@@ -223,10 +278,23 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             _workerProcesses[worker.Index] = child;
         }
 
+        if (_standby is { } standbyInfo)
+        {
+            _standbyProcess = ChildProcess.Start(
+                standbyInfo.NodeId, "world", "ArcaneCore.World", Path.Combine(_root, standbyInfo.NodeId), StandbyEnvironment(standbyInfo), secrets);
+            _children.Add(_standbyProcess);
+        }
+
         _children.Add(ChildProcess.Start("gateway", "gateway", "ArcaneCore.Gateway", Path.Combine(_root, "gateway"), GatewayEnvironment(), secrets));
 
         var listeners = new List<(string Name, int Port)> { ("realm", _realmPort), ("gateway", _gatewayPort) };
         listeners.AddRange(_workers.Select(worker => (worker.NodeId + " client listener", worker.ClientPort)));
+        if (_standby is { } standbyListener)
+        {
+            // A standby opens no client listener until it is promoted; its gateway link listener is the readiness signal.
+            listeners.Add((standbyListener.NodeId + " link listener", standbyListener.LinkPort));
+        }
+
         foreach ((string name, int port) in listeners)
         {
             await WaitForListenerAsync(name, port, cancellationToken).ConfigureAwait(false);
@@ -292,7 +360,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                 Username = AccountName,
                 Salt = salt,
                 Verifier = verifier,
-                Security = AccountSecurity.Player,
+                Security = _options.Security,
             }, cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -348,9 +416,37 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             env["Cluster__Node__Role"] = "MapWorker";
         }
 
+        // The opt-in control channel (design _wf/handoff-control-DESIGN.md section 2.6): both keys stay off unless the scenario asks for them.
+        if (_options.StandbyWorkerIndex is not null)
+        {
+            env["Cluster__Worker__Handoff__Enabled"] = "true";
+        }
+
+        if (_options.Transfers)
+        {
+            env["Cluster__Worker__Transfers__Enabled"] = "true";
+        }
+
         AddDatabase(env, "Auth", _authConnection);
         AddDatabase(env, "Characters", _charactersConnection);
         AddDatabase(env, "World", _worldConnection);
+        return env;
+    }
+
+    /// <summary>
+    /// The standby of one worker: the worker's environment with its own node id, owner node and ports, <c>Cluster:Worker:Standby=true</c>, and the worker's shard
+    /// (<c>Cluster:Fencing:Shard</c>), so that its promotion takes over that worker's durable scope. It claims nothing and opens no client listener until promoted.
+    /// </summary>
+    private Dictionary<string, string> StandbyEnvironment(ClusterStandbyInfo standby)
+    {
+        ClusterWorkerInfo active = _workers[standby.ForWorkerIndex];
+        Dictionary<string, string> env = WorldEnvironment(active);
+        env["World__Port"] = standby.ClientPort.ToString(CultureInfo.InvariantCulture);
+        env["Cluster__Fencing__OwnerNode"] = standby.NodeId;
+        env["Cluster__Fencing__Shard"] = active.NodeId;
+        env["Cluster__Worker__Port"] = standby.LinkPort.ToString(CultureInfo.InvariantCulture);
+        env["Cluster__Worker__NodeId"] = standby.NodeId;
+        env["Cluster__Worker__Standby"] = "true";
         return env;
     }
 
@@ -380,10 +476,32 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                 {
                     env[$"{prefix}Maps__{map.ToString(CultureInfo.InvariantCulture)}"] = worker.OwnedMaps[map].ToString(CultureInfo.InvariantCulture);
                 }
+
+                if (_standby is { } standby && standby.ForWorkerIndex == worker.Index)
+                {
+                    env[prefix + "StandbyNodeId"] = standby.NodeId;
+                    env[prefix + "StandbyAddress"] = IPAddress.Loopback.ToString();
+                    env[prefix + "StandbyPort"] = standby.LinkPort.ToString(CultureInfo.InvariantCulture);
+                }
             }
         }
 
         AddDatabase(env, "Auth", _authConnection);
+        if (_options.Transfers || _standby is not null)
+        {
+            // The gateway coordinates from the journal in the characters database (read validate-only: it creates and upgrades nothing; the fixture initialised the schema).
+            AddDatabase(env, "Characters", _charactersConnection);
+            if (_standby is not null)
+            {
+                env["Gateway__Handoff__Enabled"] = "true";
+            }
+
+            if (_options.Transfers)
+            {
+                env["Gateway__Transfers__Enabled"] = "true";
+            }
+        }
+
         return env;
     }
 
