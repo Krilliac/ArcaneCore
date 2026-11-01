@@ -693,22 +693,39 @@ public sealed class WorldHost(
         if (token is null)
             throw new InvalidOperationException($"the worker scope '{scope}' could not be claimed: a live world owns the same shard, its maps overlap another active worker, or a Combined world owns the characters database");
 
-        if (writerGuard is not null && !writerGuard.ProbeRealmFree())
+        bool realmFree;
+        try
         {
-            try
-            {
-                await store.ReleaseAsync(token, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("world-host.release-ownership", ex);
-                logger.LogError(ex, "The worker scope '{Scope}' claim could not be released after a Combined world was found holding the realm writer lock", scope);
-            }
+            realmFree = writerGuard is null || writerGuard.ProbeRealmFree();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The probe itself failed (the server is unreachable): the claim just written must not stay active, so the same contract holds as for a held lock.
+            await ReleaseWorkerClaimAsync(store, token, scope).ConfigureAwait(false);
+            logger.LogError(ex, "The realm writer lock could not be probed for the worker scope '{Scope}'; the claim was released", scope);
+            throw;
+        }
 
+        if (!realmFree)
+        {
+            await ReleaseWorkerClaimAsync(store, token, scope).ConfigureAwait(false);
             throw new InvalidOperationException($"a Combined world holds the characters database realm writer lock; the worker scope '{scope}' claim was released and this worker does not start");
         }
 
         return token;
+    }
+
+    private async Task ReleaseWorkerClaimAsync(ICharacterOwnershipStore store, CharacterOwnershipToken token, string scope)
+    {
+        try
+        {
+            await store.ReleaseAsync(token, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("world-host.release-ownership", ex);
+            logger.LogError(ex, "The worker scope '{Scope}' claim could not be released after the realm writer lock check", scope);
+        }
     }
 
     /// <summary>
@@ -731,6 +748,7 @@ public sealed class WorldHost(
     /// <summary>Starts recording this worker's heartbeat on its ownership row every <see cref="CharacterFencingOptions.HeartbeatSeconds"/> (Worker scope only). A heartbeat the row refuses means the shard was reclaimed or reaped: the save queue goes terminal and the host stops.</summary>
     private void StartHeartbeat(CharacterOwnershipToken token)
     {
+        // Not synchronised: start, promote and stop are sequenced by the host lifecycle (StopHeartbeatAsync does its exchange only after both have returned).
         if (_heartbeatStop is not null) return;
         _heartbeatStop = new CancellationTokenSource();
         CancellationToken stop = _heartbeatStop.Token;

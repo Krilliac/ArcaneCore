@@ -15,6 +15,7 @@ using ArcaneCore.World.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -28,7 +29,8 @@ namespace ArcaneCore.World.Tests.Cluster;
 /// Step C3 of the per-worker character writer lock (_wf/writer-lock-DESIGN.md): the world host in <c>Cluster:Fencing:Scope=Worker</c>. Several in-process hosts share one
 /// SQLite characters file (allowed only through <c>AllowSqliteWorkerScope</c>, which exists for exactly these tests), each with its own container and writer guard, so the
 /// database sees independent clients as it would from separate processes. The shard sidecar locks and the durable <c>worker:&lt;shard&gt;</c> rows are the real ones.
-/// MariaDB and PostgreSQL behaviour of the same store calls is covered by the provider suites (TwoWorldFencingProviderTests and the Data ownership tests).
+/// This suite is SQLite-only; the same worker-scope host paths on MariaDB and PostgreSQL (shard advisory lock, claim-then-probe through the realm lock, reclaim) are the
+/// <c>WorkerScope*</c> cases in <c>TwoWorldFencingProviderTests</c>, which run where <c>ARCANECORE_TEST_MARIADB</c> / <c>ARCANECORE_TEST_POSTGRES</c> name a server.
 /// </summary>
 public sealed class WorldHostWorkerScopeTests
 {
@@ -288,6 +290,39 @@ public sealed class WorldHostWorkerScopeTests
         handOver(); // nothing deferred without social and instance features: a no-op that must not throw
     }
 
+    [Fact]
+    public async Task AWorkerHost_PrimesTheItemIdAllocator_BeforeTheFeaturesAttach_WithRequireDurableIdsSet()
+    {
+        using var directory = new TempDirectory("arcanecore-workerscope-", sqlite: true);
+        await using Scratch db = await Scratch.CreateAsync(directory);
+
+        // The feature takes an item guid inside Attach. With the allocator primed after the attach (or RequireDurableIds left false) this start fails or the flags below differ.
+        await using HostKit worker = db.NewWorker(ShardA, "0,1", configure: services => services.AddSingleton<ItemsFeature>());
+        await worker.Host.StartAsync(CancellationToken.None);
+
+        Assert.True(worker.Feature.Attached);
+        Assert.True(worker.Feature.ItemAllocatorHadBlocksAtAttach, "the item allocator had no durable block when the feature attached");
+        Assert.True(worker.Feature.RequireDurableIdsAtAttach, "RequireDurableIds was not set for a Worker-scope host when the feature attached");
+        Assert.NotNull(worker.Feature.ItemIdTakenAtAttach);
+        ItemsFeature items = worker.Services.GetRequiredService<ItemsFeature>();
+        Assert.True(items.GuidAllocator.RequireDurableIds);
+        Assert.NotNull(items.GuidAllocator.BlockAllocator);
+        Assert.True(items.GuidAllocator.BlockAllocator!.RemainingCount > 0); // the id came out of a reserved block, which is still being drawn from
+    }
+
+    [Fact]
+    public async Task AWorkerHost_WithoutAnIdReservationStore_RefusesToStart()
+    {
+        using var directory = new TempDirectory("arcanecore-workerscope-", sqlite: true);
+        await using Scratch db = await Scratch.CreateAsync(directory);
+
+        await using HostKit worker = db.NewWorker(ShardA, "0,1", configure: services => services.RemoveAll<IIdRangeReservationStore>());
+        InvalidOperationException refused = await Assert.ThrowsAsync<InvalidOperationException>(() => worker.Host.StartAsync(CancellationToken.None));
+
+        Assert.Contains("durable id range reservation store", refused.Message);
+        Assert.False(worker.Feature.Attached);
+    }
+
     private static async Task SaveAsync(HostKit host, CharacterState state)
     {
         await using AsyncServiceScope scope = host.Scopes.CreateAsyncScope();
@@ -365,7 +400,7 @@ public sealed class WorldHostWorkerScopeTests
             return await serviceScope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().GetCurrentAsync(scope);
         }
 
-        public HostKit NewWorker(string shard, string ownedMaps, TimeSpan? heartbeat = null, bool allowSqlite = true, ClusterNodeRole role = ClusterNodeRole.MapWorker)
+        public HostKit NewWorker(string shard, string ownedMaps, TimeSpan? heartbeat = null, bool allowSqlite = true, ClusterNodeRole role = ClusterNodeRole.MapWorker, Action<IServiceCollection>? configure = null)
         {
             var fencing = new CharacterFencingOptions
             {
@@ -376,13 +411,13 @@ public sealed class WorldHostWorkerScopeTests
                 AllowSqliteWorkerScope = allowSqlite,
             };
             var worker = new GatewayWorkerOptions { Enabled = true, NodeId = "node-" + shard, OwnedMaps = ownedMaps };
-            return HostKit.Create(BuildServices(fenced: true), Database, fencing, worker, new ClusterNodeOptions { Role = role }, heartbeat);
+            return HostKit.Create(BuildServices(fenced: true, configure), Database, fencing, worker, new ClusterNodeOptions { Role = role }, heartbeat);
         }
 
         public HostKit NewCombined()
             => HostKit.Create(BuildServices(fenced: true), Database, new CharacterFencingOptions { Enabled = true, OwnerNode = "combined" }, null, null, null);
 
-        private ServiceProvider BuildServices(bool fenced)
+        private ServiceProvider BuildServices(bool fenced, Action<IServiceCollection>? configure = null)
         {
             var settings = new Dictionary<string, string?>
             {
@@ -396,6 +431,7 @@ public sealed class WorldHostWorkerScopeTests
             services.AddLogging();
             services.AddCharacterDatabase(configuration);
             services.AddSingleton<IWorldFeature, Feature>();
+            configure?.Invoke(services);
             return services.BuildServiceProvider();
         }
 
@@ -422,6 +458,7 @@ public sealed class WorldHostWorkerScopeTests
         public WorldWriterGuard Guard { get; }
         public Feature Feature { get; }
         public IServiceScopeFactory Scopes { get; }
+        public IServiceProvider Services => _services;
 
         public static HostKit Create(ServiceProvider services, IOptions<DatabaseOptions> database, CharacterFencingOptions fencing, GatewayWorkerOptions? worker, ClusterNodeOptions? node, TimeSpan? heartbeat)
         {
@@ -447,11 +484,24 @@ public sealed class WorldHostWorkerScopeTests
         }
     }
 
-    private sealed class Feature : IWorldFeature
+    /// <summary>Records what the item id allocator looked like at the moment the host attached it, and takes an item guid there when an <see cref="ItemsFeature"/> is registered.</summary>
+    private sealed class Feature(IServiceProvider services) : IWorldFeature
     {
         public bool Attached { get; private set; }
+        public bool ItemAllocatorHadBlocksAtAttach { get; private set; }
+        public bool RequireDurableIdsAtAttach { get; private set; }
+        public uint? ItemIdTakenAtAttach { get; private set; }
 
-        public void Attach(WorldRuntime world) => Attached = true;
+        public void Attach(WorldRuntime world)
+        {
+            Attached = true;
+            if (services.GetService<ItemsFeature>() is { } items)
+            {
+                ItemAllocatorHadBlocksAtAttach = items.GuidAllocator.BlockAllocator is not null;
+                RequireDurableIdsAtAttach = items.GuidAllocator.RequireDurableIds;
+                ItemIdTakenAtAttach = items.GuidAllocator.Next(); // throws under RequireDurableIds when no block allocator is configured
+            }
+        }
     }
 
     /// <summary>Hands out consecutive blocks per scope, in memory.</summary>
