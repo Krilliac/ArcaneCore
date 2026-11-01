@@ -101,6 +101,11 @@ internal sealed class GatewayStandbyLink
                 IPEndPoint endpoint = _target;
                 var client = new GatewaySessionLinkClient(
                     config.ToManifest(_server.Incarnation), endpoint, config.LinkSecret, _server.Loggers.CreateLogger<GatewaySessionLinkClient>(), _server.Warden?.Posture);
+
+                // A standby carries no sessions, so a control submit on this link is not from a player or operator: answer it as what it is, not with the "hosting is off" text of a link without a handler.
+                client.ControlSubmitReceived += submit => client.SendControlSubmitReply(new ControlSubmitReply(
+                    submit.RequestId, false, Guid.Empty,
+                    $"slot '{_slotNode}': the request arrived on the control link of the standby process, which carries no sessions; control submits are taken on the worker link", ControlReasonCode.StandbyLink));
                 try
                 {
                     using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);

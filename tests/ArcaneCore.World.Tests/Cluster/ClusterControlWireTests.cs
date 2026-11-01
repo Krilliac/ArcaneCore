@@ -286,7 +286,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     public void ControlSubmitReply_GoldenBytes()
     {
         byte[] frame = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(13, true, Op, "no"));
-        Assert.Equal(Concat([31], [13, 0, 0, 0, 0, 0, 0, 0], [1], Op.ToByteArray(), [2, 0, 0, 0], "no"u8.ToArray()), frame);
+        Assert.Equal(Concat([31], [13, 0, 0, 0, 0, 0, 0, 0], [1], Op.ToByteArray(), [2, 0, 0, 0], "no"u8.ToArray(), [0]), frame);
     }
 
     [Fact]
@@ -294,7 +294,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     {
         byte[] frame = ClusterControlWire.EncodeNotice(new ControlNotice(ControlNoticeKind.TransferOutcome, 5, 7, 9, Op, ControlNoticeOutcome.Aborted, "x"));
         Assert.Equal(
-            Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [2], [1, 0, 0, 0], "x"u8.ToArray()),
+            Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [2], [1, 0, 0, 0], "x"u8.ToArray(), [0]),
             frame);
     }
 

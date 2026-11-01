@@ -53,9 +53,9 @@ public sealed class GatewayTransferOptions
 
 /// <summary>
 /// What <see cref="GatewayTransferService.SubmitAsync"/> answered: whether the gateway took the transfer and why not, and, when it did, the task that ends with the outcome (it never faults for a transfer failure;
-/// cancelling the service's stop token settles it like any other failure).
+/// cancelling the service's stop token settles it like any other failure). <see cref="Code"/> is the structured form of <see cref="Reason"/> that goes to the worker on the wire.
 /// </summary>
-public sealed record GatewayTransferSubmission(bool Accepted, string Reason, Guid TransferId, Task<PlayerTransferOutcome>? Completion);
+public sealed record GatewayTransferSubmission(bool Accepted, string Reason, Guid TransferId, Task<PlayerTransferOutcome>? Completion, ControlReasonCode Code = ControlReasonCode.None);
 
 /// <summary>
 /// <see cref="ITransferGatewayRouter"/> for the gateway's own coordinator: the same router, except that a route switch for a session that is no longer staged is done, not an error. After the commit the transfer
@@ -335,12 +335,12 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         ArgumentNullException.ThrowIfNull(request);
         if (Volatile.Read(ref _stopped) != 0)
         {
-            return Refused(request, "the gateway is stopping");
+            return Refused(request, ControlReasonCode.GatewayStopping, "the gateway is stopping");
         }
 
         if (!_sessionExists(request.SessionGeneration))
         {
-            return Refused(request, $"session {request.SessionGeneration} is not an open client session of this gateway");
+            return Refused(request, ControlReasonCode.SessionNotOpen, $"session {request.SessionGeneration} is not an open client session of this gateway");
         }
 
         WorkerNodeId target;
@@ -348,19 +348,20 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         {
             if (!_mapRouter.TryGetWorker(explicitTarget, out ClusterWorkerStatus status) || !status.CanAcceptPlayer)
             {
-                return Refused(request, $"target worker '{explicitTarget}' is not ready or has no available capacity ({ClusterMapPlacementTable.FailureWorkerNotReady})");
+                return Refused(request, ControlReasonCode.TargetNotReady, $"target worker '{explicitTarget}' is not ready or has no available capacity ({ClusterMapPlacementTable.FailureWorkerNotReady})");
             }
 
             target = explicitTarget;
         }
         else if (!_mapRouter.TryResolveTargetWorker(request.TargetMapId, request.TargetInstanceId, out target, out string? failure))
         {
-            return Refused(request, $"target map ({request.TargetMapId}, instance {request.TargetInstanceId}) cannot be routed: {failure ?? ClusterMapPlacementTable.FailureNoEligibleWorker}");
+            return Refused(
+                request, CodeOfPlacementFailure(failure), $"target map ({request.TargetMapId}, instance {request.TargetInstanceId}) cannot be routed: {failure ?? ClusterMapPlacementTable.FailureNoEligibleWorker}");
         }
 
         if (target == request.SourceWorkerId)
         {
-            return Refused(request, "the source and the target are the same worker; use a local teleport");
+            return Refused(request, ControlReasonCode.SameWorker, "the source and the target are the same worker; use a local teleport");
         }
 
         if (_admittedGateways is { } admitted)
@@ -374,19 +375,19 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
                 }
                 catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
                 {
-                    return Refused(request, $"worker '{involved.Value}' could not be asked how many gateways it admits ({ex.Message})");
+                    return Refused(request, ControlReasonCode.WorkerUnreachable, $"worker '{involved.Value}' could not be asked how many gateways it admits ({ex.Message})");
                 }
 
                 if (gateways > 1)
                 {
-                    return Refused(request, $"worker '{involved.Value}' reports {gateways} admitted gateways; a transfer needs exactly one gateway per realm");
+                    return Refused(request, ControlReasonCode.MultipleGateways, $"worker '{involved.Value}' reports {gateways} admitted gateways; a transfer needs exactly one gateway per realm");
                 }
             }
         }
 
         if (!_machine.TryBeginTransfer(request.SourceWorkerId.Value, target.Value, out IDisposable? lease, out string reason))
         {
-            return Refused(request, reason);
+            return Refused(request, ControlReasonCode.SlotBusy, reason);
         }
 
         bool started = false;
@@ -394,19 +395,19 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         {
             if (await UnresolvedHandoffOfAsync([request.SourceWorkerId.Value, target.Value], cancellationToken).ConfigureAwait(false) is { } blockedBy)
             {
-                return Refused(request, blockedBy);
+                return Refused(request, ControlReasonCode.Unresolved, blockedBy);
             }
 
             if (!_running.TryAdd(request.TransferId, 0))
             {
-                return Refused(request, $"transfer {request.TransferId} is already running");
+                return Refused(request, ControlReasonCode.AlreadyRunning, $"transfer {request.TransferId} is already running");
             }
 
             if (Volatile.Read(ref _stopped) != 0)
             {
                 // StopAsync ran between the first check and the registration above: it may already have seen the service idle, so this transfer must not start.
                 _running.TryRemove(request.TransferId, out _);
-                return Refused(request, "the gateway is stopping");
+                return Refused(request, ControlReasonCode.GatewayStopping, "the gateway is stopping");
             }
 
             PlayerTransferRequest pinned = request with { ExplicitTargetWorkerId = target };
@@ -442,14 +443,14 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
 
         if (submit.Body is not ControlTransferSubmit body)
         {
-            link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this request kind is not available over the control channel"));
+            link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this request kind is not available over the control channel", ControlReasonCode.UnsupportedKind));
             return;
         }
 
         string node = worker.NodeId;
         if (!_slotSet.Contains(node))
         {
-            link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, body.TransferId, $"worker '{node}' is not a transfer slot of this gateway"));
+            link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, body.TransferId, $"worker '{node}' is not a transfer slot of this gateway", ControlReasonCode.NotATransferSlot));
             return;
         }
 
@@ -458,15 +459,13 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
             || connection.AccountId != body.AccountId)
         {
             link.SendControlSubmitReply(new ControlSubmitReply(
-                submit.RequestId, false, body.TransferId, $"session {body.SessionGeneration} of account {body.AccountId} is not open on the link of worker '{node}'"));
+                submit.RequestId, false, body.TransferId, $"session {body.SessionGeneration} of account {body.AccountId} is not open on the link of worker '{node}'", ControlReasonCode.SessionNotOpen));
             return;
         }
 
-        var request = new PlayerTransferRequest(
-            body.TransferId, body.CharacterGuid, body.AccountId, body.SessionGeneration, new WorkerNodeId(node),
-            body.SourceMapId, body.SourceInstanceId, body.TargetMapId, body.TargetInstanceId, body.TargetPosition, body.SourceToken);
+        PlayerTransferRequest request = RequestOf(node, body);
         GatewayTransferSubmission submission = await SubmitAsync(request, _runs.Token).ConfigureAwait(false);
-        link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, submission.Accepted, submission.TransferId, submission.Reason));
+        link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, submission.Accepted, submission.TransferId, submission.Reason, submission.Code));
         if (!submission.Accepted || submission.Completion is not { } completion)
         {
             return;
@@ -482,7 +481,15 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
 
         ControlNoticeOutcome result = outcome.Succeeded ? ControlNoticeOutcome.Completed : ControlNoticeOutcome.Aborted;
         string text = outcome.Succeeded ? string.Empty : outcome.FailureMessage ?? outcome.FailureCode ?? "the transfer was aborted";
-        current.SendControlNotice(new ControlNotice(ControlNoticeKind.TransferOutcome, body.SessionGeneration, body.AccountId, body.CharacterGuid, body.TransferId, result, text));
+        ControlReasonCode code = outcome.Succeeded ? ControlReasonCode.None : OutcomeCode(outcome.FailureCode);
+        current.SendControlNotice(new ControlNotice(ControlNoticeKind.TransferOutcome, body.SessionGeneration, body.AccountId, body.CharacterGuid, body.TransferId, result, text, code));
+    }
+
+    /// <summary>The reason code of an aborted transfer: a placement failure keeps its specific code (capacity, not ready, no worker), anything else is <see cref="ControlReasonCode.TransferAborted"/>.</summary>
+    internal static ControlReasonCode OutcomeCode(string? failureCode)
+    {
+        ControlReasonCode placement = failureCode is null ? ControlReasonCode.Unspecified : CodeOfPlacementFailure(failureCode);
+        return placement == ControlReasonCode.Unspecified ? ControlReasonCode.TransferAborted : placement;
     }
 
     /// <inheritdoc />
@@ -621,7 +628,32 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         return null;
     }
 
-    private static GatewayTransferSubmission Refused(PlayerTransferRequest request, string reason) => new(false, reason, request.TransferId, null);
+    private static GatewayTransferSubmission Refused(PlayerTransferRequest request, ControlReasonCode code, string reason) => new(false, reason, request.TransferId, null, code);
+
+    /// <summary>
+    /// The transfer request a worker's submit stands for. <paramref name="sourceNode"/> is the slot node id of the link the submit arrived on (never a name the frame carries). A ship passenger keeps its
+    /// transport (the retail <c>TELE_TO_NOT_LEAVE_TRANSPORT</c> option): the intent rides with the request instead of being lost at the gateway (design risk R7).
+    /// </summary>
+    internal static PlayerTransferRequest RequestOf(string sourceNode, ControlTransferSubmit body) => new(
+        body.TransferId, body.CharacterGuid, body.AccountId, body.SessionGeneration, new WorkerNodeId(sourceNode),
+        body.SourceMapId, body.SourceInstanceId, body.TargetMapId, body.TargetInstanceId, body.TargetPosition, body.SourceToken)
+    {
+        NotLeaveTransport = (body.Options & ControlTransferOptions.NotLeaveTransport) != 0,
+    };
+
+    /// <summary>
+    /// The wire reason code of a placement failure string (<see cref="ClusterMapPlacementTable"/> <c>Failure*</c>, the coordinator's failure codes): the gateway maps its own strings here so a worker never
+    /// parses them. A capacity limit is its own code (the retail "instance full" abort); an unknown string is <see cref="ControlReasonCode.NoEligibleWorker"/> when null, else <see cref="ControlReasonCode.Unspecified"/>.
+    /// </summary>
+    internal static ControlReasonCode CodeOfPlacementFailure(string? failure) => failure switch
+    {
+        null => ControlReasonCode.NoEligibleWorker,
+        ClusterMapPlacementTable.FailureWorkerAtPlayerCapacity or ClusterMapPlacementTable.FailureWorkerAtInstanceCapacity => ControlReasonCode.TargetAtCapacity,
+        ClusterMapPlacementTable.FailureWorkerNotReady or ClusterMapPlacementTable.FailureWorkerDraining or ClusterMapPlacementTable.FailureWorkerUnknown => ControlReasonCode.TargetNotReady,
+        ClusterMapPlacementTable.FailureNoEligibleWorker or ClusterMapPlacementTable.FailureMapUnassigned or ClusterMapPlacementTable.FailureInstanceUnbound
+            or ClusterMapPlacementTable.FailureInvalidInstanceId => ControlReasonCode.NoEligibleWorker,
+        _ => ControlReasonCode.Unspecified,
+    };
 
     /// <summary>
     /// The journal rows <see cref="RecoverOnceAsync"/> may resolve: those between two of this gateway's slots that are not running here, do not belong to a world handoff (its own recovery finishes them) and whose slots are not

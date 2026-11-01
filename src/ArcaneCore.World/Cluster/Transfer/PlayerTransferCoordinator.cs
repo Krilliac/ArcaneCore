@@ -142,7 +142,11 @@ public sealed record PlayerTransferRequest(
     uint TargetInstanceId,
     TransferPosition TargetPosition,
     CharacterOwnershipToken SourceOwnershipToken,
-    WorkerNodeId? ExplicitTargetWorkerId = null);
+    WorkerNodeId? ExplicitTargetWorkerId = null)
+{
+    /// <summary>The player keeps the transport it stands on (the retail <c>TELE_TO_NOT_LEAVE_TRANSPORT</c> option), set from the submit's <c>ControlTransferOptions.NotLeaveTransport</c>.</summary>
+    public bool NotLeaveTransport { get; init; }
+}
 
 /// <summary>Outcome of a coordinated transfer or recovery operation.</summary>
 public sealed record PlayerTransferOutcome(

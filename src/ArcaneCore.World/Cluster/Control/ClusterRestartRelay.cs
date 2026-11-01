@@ -11,7 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ArcaneCore.World.Cluster.Control;
 
 /// <summary>What the gateway answered to an operator's restart request: whether it took it, why not, and the operation id the verdict and the journal are filed under.</summary>
-public sealed record ClusterRestartSubmission(bool Accepted, string Reason, Guid OperationId);
+public sealed record ClusterRestartSubmission(bool Accepted, string Reason, Guid OperationId, ControlReasonCode Code = ControlReasonCode.None);
 
 /// <summary>
 /// The worker end of the operator <c>.cluster restart</c> when the whole-World handoff is coordinated by the gateway (design _wf/handoff-control-DESIGN.md section 3.4).
@@ -100,11 +100,13 @@ public sealed class ClusterRestartRelay(TimeSpan? replyTimeout = null, ILogger<C
             }
 
             ControlSubmitReply reply = await waiting.Task.WaitAsync(_replyTimeout, cancellationToken).ConfigureAwait(false);
-            return new ClusterRestartSubmission(reply.Accepted, reply.Reason, reply.OperationId);
+            return new ClusterRestartSubmission(reply.Accepted, reply.Reason, reply.OperationId, reply.Code);
         }
         catch (TimeoutException)
         {
-            return Refused("the gateway did not answer in time; check '.cluster handoff status'");
+            return Refused(
+                $"the gateway did not answer within {_replyTimeout.TotalSeconds:0.#} s: no gateway service seems to handle operator restarts (is Gateway:Handoff:Enabled on at the gateway?). " +
+                "If it is, the request may still be running; check '.cluster handoff status'.");
         }
         finally
         {
