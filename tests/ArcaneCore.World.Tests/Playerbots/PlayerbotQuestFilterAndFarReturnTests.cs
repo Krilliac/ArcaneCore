@@ -142,6 +142,90 @@ public sealed class PlayerbotQuestFilterAndFarReturnTests
     }
 
     /// <summary>
+    /// Audit cid 43: the quests phase's starter search ran out of its 25 ms budget on the first quests of the first giver every think, so
+    /// the quests after them were never judged. Driven through <c>PlayerbotQuestGoals.FindStarterThink</c> (the real FindCandidate loop with
+    /// its giver gate, judged skip, break and Judged calls, inside BeginThink/EndThink) with the phase's budget already spent on the think clock:
+    /// each think judges one quest and the next carries on with the ones not yet judged, until the supported quest is reached.
+    /// </summary>
+    [Fact]
+    public async Task QuestsPhase_WithItsBudgetSpent_JudgesOneQuestPerThink_AndLaterThinksReachTheQuestsNotYetJudged()
+    {
+        var fixture = new UnsupportedMechanicsFixture();
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: services =>
+        {
+            services.AddSingleton<IQuestContentStore>(fixture);
+            services.AddSingleton<ICreatureDataStore>(fixture);
+            services.AddScoped<ILootDataStore>(_ => fixture);
+            services.AddSingleton<ICharacterQuestStore>(new MemoryQuestStore());
+            services.AddSingleton(new FactionTemplateCatalog(
+            [
+                new FactionTemplateRecord(1, 1, 0, OwnMask: 3, FriendlyMask: 2, HostileMask: 8),
+                new FactionTemplateRecord(UnsupportedMechanicsFixture.FriendlyFaction, 0, 0, OwnMask: 2, FriendlyMask: 3, HostileMask: 0),
+                new FactionTemplateRecord(UnsupportedMechanicsFixture.HostileFaction, 0, 0, OwnMask: 8, FriendlyMask: 0, HostileMask: 3),
+            ]));
+        });
+        WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+        try
+        {
+            await host.WaitForWorldAsync(
+                () => session.Player!.Map?.FindObject(UnsupportedMechanicsFixture.GiverGuid) is Creature
+                    && host.WorldServices.GetRequiredService<ArcaneCore.World.GameObjects.GameObjectLootFeature>().LootContent.RowCount > 0,
+                "quest giver spawned and loot loaded");
+            await host.World.InvokeAsync(() =>
+            {
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: new OpenPathfinder());
+                Player player = session.Player!;
+                QuestNpcServices services = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
+                services.Options.RewardMode = QuestRewardMode.AllowlistOnly;
+                services.Options.OrdinaryRewardQuestIds =
+                [
+                    UnsupportedMechanicsFixture.LazyPeonsQuest,
+                    UnsupportedMechanicsFixture.DungeonQuest,
+                    UnsupportedMechanicsFixture.GameObjectQuest,
+                    UnsupportedMechanicsFixture.SpellCastQuest,
+                    UnsupportedMechanicsFixture.ExplorationQuest,
+                    UnsupportedMechanicsFixture.OffMapCreatureQuest,
+                    UnsupportedMechanicsFixture.GameObjectItemQuest,
+                    UnsupportedMechanicsFixture.SupportedKillQuest,
+                ];
+                player.VisibleObjects.Add(UnsupportedMechanicsFixture.GiverGuid);
+                var goals = new PlayerbotQuestGoals(session, new PlayerbotOptions { Enabled = true });
+                var clock = new PlayerbotThinkProbeTests.ManualClock();
+                var probe = new PlayerbotThinkProbe(clock);
+                probe.Begin();
+                try
+                {
+                    uint chosen = 0;
+                    int thinks = 0;
+                    int judgedBefore = 0;
+                    while (chosen == 0 && thinks < 12)
+                    {
+                        thinks++;
+                        // The phase began 50 ms ago on the think clock: the 25 ms budget is spent before the first giver is looked at.
+                        chosen = goals.FindStarterThink(player, PlayerbotThinkProbe.Timestamp() - clock.TicksFor(50));
+                        if (chosen != 0) break;
+                        Assert.True(goals.Scan.Evaluated <= 1, $"think {thinks} judged {goals.Scan.Evaluated} quests with the budget spent");
+                        Assert.True(goals.Scan.JudgedCount > judgedBefore,
+                            $"think {thinks} judged nothing new: the search restarted from the first quest ({goals.Scan.JudgedCount} remembered)");
+                        judgedBefore = goals.Scan.JudgedCount;
+                    }
+
+                    Assert.Equal(UnsupportedMechanicsFixture.SupportedKillQuest, chosen);
+                    Assert.True(thinks > 1, "the quests before the supported one must have cost earlier thinks");
+                    Assert.Equal(0, goals.Scan.JudgedCount); // a quest was chosen: the next pass starts over
+                }
+                finally { probe.End(); }
+                return true;
+            });
+        }
+        finally
+        {
+            session.Kick();
+            await session.ManagedClosed;
+        }
+    }
+
+    /// <summary>
     /// Quest 2681 "The Stones That Bind Us": its kill objectives (Blasted Lands servants 7668-7671, ReqSpellCast 0) are creatures whose EventAI
     /// holds them at 1 health from spawn (event 11, action 42) until Shackle Shatter hits them. A plain attack never kills them, so the bot
     /// neither takes the quest nor hunts those entries. Controls: a servant whose death prevention is also lifted by an ordinary event (a health
