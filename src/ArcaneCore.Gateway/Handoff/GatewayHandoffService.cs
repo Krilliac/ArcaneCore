@@ -294,6 +294,23 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
     /// <summary>The slots that can be handed off (those with a standby configured), by <c>Gateway:Workers:N:NodeId</c>.</summary>
     public IReadOnlyCollection<string> Slots => _slots.Keys;
 
+    /// <summary>
+    /// Set by the gateway's transfer service (<c>Gateway:Transfers:Enabled</c>, design section 5): <see cref="HandoffAsync"/> enters it before its pre-flight, so a slot with player transfers running or unresolved is refused, and
+    /// from then on its transfers are refused until the handoff ends. Null (the default): no coordination, the handoff behaves as before.
+    /// </summary>
+    internal ArcaneCore.Gateway.Transfers.IGatewayHandoffGuard? Guard { get; set; }
+
+    /// <summary>The process names (<c>Cluster:Worker:NodeId</c>) of the slot's active and standby processes, or just <paramref name="slotNode"/> for a slot without a standby.</summary>
+    internal IReadOnlyList<string> NodeNames(string slotNode)
+    {
+        if (_slots.TryGetValue(slotNode, out GatewayHandoffSlot? slot))
+        {
+            return [slotNode, slot.ActiveNode, slot.StandbyNode];
+        }
+
+        return [slotNode];
+    }
+
     /// <summary>The handoffs running on this service (the host's stop waits for them).</summary>
     public WorldHandoffInFlight InFlight => _inFlight;
 
@@ -381,6 +398,7 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
         {
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _runs.Token);
             CancellationToken token = linked.Token;
+            using IDisposable? guard = Guard is null ? null : await Guard.EnterHandoffAsync(slotNode, token).ConfigureAwait(false);
             await ReconcileSlotAsync(slot, token).ConfigureAwait(false);
             LinkControlChannel active = ActiveChannel(slotNode)
                 ?? throw new WorldHandoffUnavailableException($"the worker link of slot '{slotNode}' is down");

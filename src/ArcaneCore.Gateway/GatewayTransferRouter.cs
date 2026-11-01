@@ -204,6 +204,18 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
     }
 
     /// <summary>
+    /// Whether transfer <paramref name="transferId"/> is staged on session <paramref name="sessionGeneration"/> right now. False for a session that is gone, one that never staged it (a gateway restarted
+    /// after the commit holds no staged routes: the staged state is in memory only) and one that already switched or cancelled.
+    /// </summary>
+    public bool IsStaged(Guid transferId, long sessionGeneration)
+    {
+        lock (_gate)
+        {
+            return _staged.TryGetValue(sessionGeneration, out Staged? staged) && staged.TransferId == transferId;
+        }
+    }
+
+    /// <summary>
     /// Whether a server packet of the session <paramref name="generation"/> stamped with the link owner epoch <paramref name="ownerEpoch"/> is current:
     /// false for a generation retired by a commit, and for an epoch that differs from the one the session was committed under.
     /// </summary>
