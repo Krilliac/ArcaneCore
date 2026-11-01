@@ -8,6 +8,7 @@ using ArcaneCore.World.Features;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Teleport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -32,11 +33,30 @@ public sealed class ClusterFarTeleportFeature(IServiceProvider services) : IWorl
     public GatewayClusterFarTeleportRouter? Router => _router;
 
     /// <summary>Whether a world with these options routes far teleports: worker mode, not a standby, transfers on, a non-empty owned map list.</summary>
-    internal static bool ShouldRoute(GatewayWorkerOptions worker, WorkerTransferControlOptions transfers)
+    internal static bool ShouldRoute(GatewayWorkerOptions worker, WorkerTransferControlOptions transfers) => ShouldRoute(worker, transfers, promoted: false);
+
+    /// <summary>
+    /// As <see cref="ShouldRoute(GatewayWorkerOptions, WorkerTransferControlOptions)"/>, for a world that may have been a standby: <c>Cluster:Worker:Standby</c> stays true in the options for the life of the process,
+    /// so a standby that was <paramref name="promoted"/> (its features attach only then) routes like an active worker.
+    /// </summary>
+    internal static bool ShouldRoute(GatewayWorkerOptions worker, WorkerTransferControlOptions transfers, bool promoted)
     {
         ArgumentNullException.ThrowIfNull(worker);
         ArgumentNullException.ThrowIfNull(transfers);
-        return worker.Enabled && !worker.Standby && transfers.Enabled && !string.IsNullOrWhiteSpace(worker.OwnedMaps);
+        return worker.Enabled && (!worker.Standby || promoted) && transfers.Enabled && !string.IsNullOrWhiteSpace(worker.OwnedMaps);
+    }
+
+    /// <summary>
+    /// Hands <paramref name="router"/> to the link host as the sink of the gateway's replies and notices. The endpoint resolves the router once, when it starts; a standby has none then (its features attach at
+    /// promotion), so the promotion installs it here. A null host (the endpoint is stopped) is a no-op.
+    /// </summary>
+    internal static void InstallSubmitSink(GatewaySessionLinkHost? host, GatewayClusterFarTeleportRouter router)
+    {
+        ArgumentNullException.ThrowIfNull(router);
+        if (host is not null)
+        {
+            host.SubmitSink = router;
+        }
     }
 
     public void Attach(WorldRuntime world)
@@ -44,7 +64,9 @@ public sealed class ClusterFarTeleportFeature(IServiceProvider services) : IWorl
         ArgumentNullException.ThrowIfNull(world);
         GatewayWorkerOptions? worker = services.GetService<IOptions<GatewayWorkerOptions>>()?.Value;
         WorkerTransferControlOptions? transfers = services.GetService<IOptions<WorkerTransferControlOptions>>()?.Value;
-        if (worker is null || transfers is null || !ShouldRoute(worker, transfers))
+        // A standby attaches its features only when WorldHost.PromoteAsync runs, after it cleared IsStandby: an attach with the standby option set is therefore a promoted standby.
+        bool promoted = worker is { Standby: true } && services.GetServices<IHostedService>().OfType<WorldHost>().FirstOrDefault() is { IsStandby: false };
+        if (worker is null || transfers is null || !ShouldRoute(worker, transfers, promoted))
         {
             return;
         }
@@ -82,7 +104,13 @@ public sealed class ClusterFarTeleportFeature(IServiceProvider services) : IWorl
     private async Task InstallAsync(WorldRuntime world, CancellationToken cancellationToken)
     {
         GatewayClusterFarTeleportRouter? router = _router;
-        if (router is null || services.GetService<TeleportFeature>()?.TeleportsIfAttached is not { } teleports)
+        if (router is null)
+        {
+            return;
+        }
+
+        InstallSubmitSink(services.GetService<GatewayWorkerEndpoint>()?.Host, router);
+        if (services.GetService<TeleportFeature>()?.TeleportsIfAttached is not { } teleports)
         {
             return;
         }

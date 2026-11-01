@@ -36,10 +36,13 @@ namespace ArcaneCore.World.Cluster.Control;
 /// </para>
 /// Thread-safe: <see cref="HandleAsync"/> runs concurrently; passes are serialised.
 /// </summary>
-public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDisposable
+public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDisposable, IDisposable
 {
     /// <summary>How often the journal is re-read while the worker holds an operation (design section 3.5: 2 s).</summary>
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>The shortest interval accepted: <see cref="PeriodicTimer"/> works in whole milliseconds and refuses less.</summary>
+    public static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(1);
 
     /// <summary>Failed passes after which an operation is dropped with an anomaly.</summary>
     public const int MaxAttempts = 30;
@@ -69,7 +72,7 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
     {
         ArgumentNullException.ThrowIfNull(inner);
         TimeSpan every = interval ?? DefaultInterval;
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(every, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThan(every, MinInterval);
         _inner = inner;
         _handoff = handoff;
         _transfers = transfers;
@@ -109,7 +112,11 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
             {
                 lock (_gate)
                 {
-                    _held.Remove((request.Kind, request.OperationId));
+                    // A start verb of the same operation that is still running may take the world after this end verb: keep the entry, the next pass reads the journal.
+                    if (_held.TryGetValue((request.Kind, request.OperationId), out Held? ending) && ending.Running == 0)
+                    {
+                        _held.Remove((request.Kind, request.OperationId));
+                    }
                 }
             }
 
@@ -201,9 +208,20 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
             _logger.LogFault("cluster.self-heal", ex, "Self-heal of {Kind} operation {Operation} failed (attempt {Attempt})", kind, operation, entry.Attempts);
             if (entry.Attempts >= MaxAttempts)
             {
+                bool dropped;
                 lock (_gate)
                 {
-                    RemoveIfSame(kind, operation, entry);
+                    // Not while a start verb of the operation still runs: it may yet take the world, so the entry stays and the next pass tries again.
+                    dropped = entry.Running == 0;
+                    if (dropped)
+                    {
+                        RemoveIfSame(kind, operation, entry);
+                    }
+                }
+
+                if (!dropped)
+                {
+                    return;
                 }
 
                 AnomalyLedger.Shared.Report(
@@ -223,6 +241,12 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
         WorldHandoffRecord? record = await handoff.Journal.GetAsync(operation, ct).ConfigureAwait(false);
         if (record is null)
         {
+            return HealResult.Gone;
+        }
+
+        if (!WorkerNodeNames.Equal(record.SourceWorkerId, source.WorkerId))
+        {
+            _logger.LogWarning("Self-heal: handoff {Operation} names source {Source} in the journal, this worker is {Worker}; not healing it", operation, record.SourceWorkerId.Value, source.WorkerId.Value);
             return HealResult.Gone;
         }
 
@@ -251,6 +275,12 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
         TransferDecisionRecord? record = await transfers.Journal.GetDecisionAsync(operation, ct).ConfigureAwait(false);
         if (record is null)
         {
+            return HealResult.Gone;
+        }
+
+        if (!WorkerNodeNames.Equal(record.SourceWorkerId, source.WorkerId))
+        {
+            _logger.LogWarning("Self-heal: transfer {Operation} names source {Source} in the journal, this worker is {Worker}; not healing it", operation, record.SourceWorkerId.Value, source.WorkerId.Value);
             return HealResult.Gone;
         }
 
@@ -372,6 +402,22 @@ public sealed class WorkerSelfHealService : IGatewayControlHandler, IAsyncDispos
                 }
             }
         }
+    }
+
+    /// <summary>Stops the loop without waiting for it (use <see cref="DisposeAsync"/> to wait). What the worker holds stays as it is (the process is ending).</summary>
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+        }
+
+        _stop.Cancel();
     }
 
     /// <summary>Stops the loop. What the worker holds stays as it is (the process is ending).</summary>

@@ -1,7 +1,9 @@
+using System.Data.Common;
 using System.Net;
 using System.Net.Sockets;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Characters;
@@ -322,7 +324,7 @@ public sealed class WorldHost(
             // Worker scope misconfigured (an invalid shard id, or SQLite without AllowSqliteWorkerScope): nothing is held; the standby stays a standby, as for the other lock failures.
             throw new InvalidOperationException($"the worker shard writer lock cannot be taken with this configuration ({ex.Message}); refusing to promote, the standby stays a standby", ex);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Data.Common.DbException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DbException)
         {
             // Not contention: the lock could not be created, or the database server could not be asked for it. Nothing is held; the standby stays a standby.
             throw new InvalidOperationException($"the characters database writer lock could not be taken ({ex.GetType().Name}: {ex.Message}); refusing to promote, the standby stays a standby", ex);
@@ -770,22 +772,53 @@ public sealed class WorldHost(
     /// The reclaim guard (handoff-control design, commit C12). Between the epoch takeover and the promotion of the standby, the shard row already names the standby's incarnation but the
     /// old process may still be dead or dying: a relaunched copy of it that holds the shard lock would otherwise read that row as a dead incarnation and take the shard back from the
     /// handoff's target. A committed, unresolved handoff of this scope whose target is another incarnation therefore refuses the reclaim; recovery rolls that handoff forward. Handoffs that are
-    /// resolved, aborted, still pre-commit (they never changed the row) or that target this very incarnation do not block. A world without a handoff journal has nothing to consult.
+    /// resolved, aborted, still pre-commit (they never changed the row) or that target this very incarnation do not block. A world without a handoff journal has nothing to consult, and neither has one whose characters database
+    /// predates the journal (no <c>cluster_world_handoff</c> table, see <see cref="IsMissingHandoffTable"/>): that is no committed handoff, not a failure.
     /// </summary>
     private async Task RefuseReclaimDuringCommittedHandoffAsync(string scope, CancellationToken cancellationToken)
     {
         await using AsyncServiceScope serviceScope = scopes.CreateAsyncScope();
-        if (serviceScope.ServiceProvider.GetService<ArcaneCore.Kernel.Cluster.Transfer.IWorldHandoffStore>() is not { } journal)
+        if (serviceScope.ServiceProvider.GetService<IWorldHandoffStore>() is not { } journal)
             return;
-        foreach (ArcaneCore.Kernel.Cluster.Transfer.WorldHandoffRecord record in await journal.GetUnresolvedAsync(cancellationToken).ConfigureAwait(false))
+        IReadOnlyList<WorldHandoffRecord> unresolved;
+        try
         {
-            if (record.DecisionState != ArcaneCore.Kernel.Cluster.Transfer.PlayerTransferDecisionState.Committed
+            unresolved = await journal.GetUnresolvedAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsMissingHandoffTable(ex))
+        {
+            logger.LogInformation("The characters database has no cluster_world_handoff table (an older schema): no committed handoff to guard the reclaim of '{Scope}' against", scope);
+            return;
+        }
+
+        foreach (WorldHandoffRecord record in unresolved)
+        {
+            if (record.DecisionState != PlayerTransferDecisionState.Committed
                 || record.SourceOwnershipToken.Scope != scope
                 || record.TargetOwnershipToken?.Incarnation == _incarnation)
                 continue;
             logger.LogWarning("Refusing to reclaim the worker scope '{Scope}': handoff {HandoffId} is committed to another incarnation ({TargetIncarnation}) and not yet resolved", scope, record.HandoffId, record.TargetOwnershipToken?.Incarnation);
             throw new InvalidOperationException($"the worker scope '{scope}' belongs to the committed handoff {record.HandoffId}, which has not been promoted yet; this world cannot reclaim it until recovery resolves that handoff");
         }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="ex"/> (or an exception it wraps) is the database saying the <c>cluster_world_handoff</c> table does not exist: SQLite "no such table", MySQL/MariaDB error 1146 "doesn't exist",
+    /// PostgreSQL 42P01 "does not exist". Any other failure is a real one and propagates: a guard that fails open on an unreachable journal would let a relaunched copy take the shard back.
+    /// </summary>
+    internal static bool IsMissingHandoffTable(Exception ex)
+    {
+        for (Exception? e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is DbException
+                && e.Message.Contains("cluster_world_handoff", StringComparison.OrdinalIgnoreCase)
+                && (e.Message.Contains("no such table", StringComparison.OrdinalIgnoreCase)
+                    || e.Message.Contains("doesn't exist", StringComparison.OrdinalIgnoreCase)
+                    || e.Message.Contains("does not exist", StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>Starts recording this worker's heartbeat on its ownership row every <see cref="CharacterFencingOptions.HeartbeatSeconds"/> (Worker scope only). A heartbeat the row refuses means the shard was reclaimed or reaped: the save queue goes terminal and the host stops.</summary>

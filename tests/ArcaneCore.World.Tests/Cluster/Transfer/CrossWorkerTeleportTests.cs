@@ -211,7 +211,7 @@ public sealed class CrossWorkerTeleportTests : IDisposable
 
         Assert.True(router.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));
         _session.Clear();
-        router.OnSubmitReply(new ControlSubmitReply(_submits[1].Submit.RequestId, false, Guid.Empty, "target map (1, instance 0) cannot be routed: worker-at-player-capacity"));
+        router.OnSubmitReply(new ControlSubmitReply(_submits[1].Submit.RequestId, false, Guid.Empty, "target map (1, instance 0) cannot be routed: worker-at-player-capacity", ControlReasonCode.Capacity));
         await FlushWorldAsync();
 
         (WorldOpcode _, byte[] payload) = Assert.Single(_session.Sent, sent => sent.Opcode == WorldOpcode.SmsgTransferAborted);
@@ -287,7 +287,7 @@ public sealed class CrossWorkerTeleportTests : IDisposable
             rig.Client.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, true, body.TransferId, string.Empty));
             rig.Client.SendControlNotice(new ControlNotice(
                 ControlNoticeKind.TransferOutcome, body.SessionGeneration, body.AccountId, body.CharacterGuid, body.TransferId, ControlNoticeOutcome.Aborted,
-                "target map (1, instance 0) cannot be routed: worker-at-player-capacity"));
+                "target map (1, instance 0) cannot be routed: worker-at-player-capacity", ControlReasonCode.Capacity));
         };
 
         Assert.True(linked.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));

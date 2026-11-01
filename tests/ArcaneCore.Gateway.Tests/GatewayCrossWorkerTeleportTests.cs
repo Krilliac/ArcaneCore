@@ -123,8 +123,10 @@ public sealed class GatewayCrossWorkerTeleportTests
         do
         {
             told = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgMessagechat, cts.Token); // the login message of the day arrives as a chat frame first
+            // The gateway's internal refusal text never reaches the client; only the generic line does.
+            Assert.DoesNotContain("admitted gateways", Encoding.UTF8.GetString(told.Payload), StringComparison.Ordinal);
         }
-        while (!Encoding.UTF8.GetString(told.Payload).Contains("admitted gateways", StringComparison.Ordinal));
+        while (!Encoding.UTF8.GetString(told.Payload).Contains(GatewayClusterFarTeleportRouter.PlayerFailureText, StringComparison.Ordinal));
         await Cluster.WaitUntilAsync(() => Task.FromResult(router.InFlightCount == 0), cts.Token);
         Assert.True(await cluster.Eastern.World.InvokeAsync(() => cluster.Eastern.World.FindOnlinePlayer(guid) is { Map.MapId: 0 }, cts.Token));
         Assert.Null(await cluster.Store.GetDecisionAsync(router.LastTransferId, cts.Token));

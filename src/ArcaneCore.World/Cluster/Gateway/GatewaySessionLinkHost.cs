@@ -530,10 +530,17 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Receives the gateway's answers to <see cref="TrySendControlSubmit"/> and its <see cref="ControlNotice"/>s. Set once, before <see cref="Start"/>. With none set both are dropped
+    /// Receives the gateway's answers to <see cref="TrySendControlSubmit"/> and its <see cref="ControlNotice"/>s. Normally set before <see cref="Start"/>; a standby that is promoted installs it afterwards (the far-teleport feature
+    /// only exists then), so the field is read with acquire semantics on the receive loops. With none set both are dropped
     /// (a worker whose opt-in transfer key is off submits nothing and has no use for a notice).
     /// </summary>
-    public IGatewayControlSubmitSink? SubmitSink { get; set; }
+    public IGatewayControlSubmitSink? SubmitSink
+    {
+        get => Volatile.Read(ref _submitSink);
+        set => Volatile.Write(ref _submitSink, value);
+    }
+
+    private IGatewayControlSubmitSink? _submitSink;
 
     private void OnSubmitReply(ControlSubmitReply reply)
     {
