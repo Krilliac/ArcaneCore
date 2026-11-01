@@ -180,7 +180,7 @@ public sealed class ChatSanitizeTests
         {
             WorldSession session = (WorldSession)(await host.PlayerAsync("Speaker")).Session;
 
-            await speaker.SendChatAsync(ChatType.Say, Language.Common, "look |TInterface\Icons\x:32|t here");
+            await speaker.SendChatAsync(ChatType.Say, Language.Common, "look |TInterface\\Icons\\x:32|t here");
             await speaker.SendChatAsync(ChatType.Say, Language.Common, Item);
             Assert.Equal(Item, (await listener.ReadChatAsync()).Text); // the invalid line was handled before this one
 
