@@ -399,9 +399,9 @@ public sealed class PlayerbotQaAllFaultsTests : IDisposable
         var reports = new List<HangStackReport>();
         capture.Captured = reports.Add;
 
-        Assert.True(capture.TryCapture(0, "hang", 2336));
+        Assert.True(capture.TryCapture(0, "hang", runningMicros: 2_336_000));
         await capture.Last;
-        Assert.True(capture.TryCapture(20_000_000, "hang", 9000));
+        Assert.True(capture.TryCapture(20_000_000, "hang", runningMicros: 9_000_000));
         await capture.Last;
 
         Assert.Equal(2, reports.Count);

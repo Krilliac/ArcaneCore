@@ -40,7 +40,7 @@ public static class FaultObservers
     private static volatile IFaultObserver[] _observers = [];
 
     [ThreadStatic]
-    private static bool _dispatching;
+    private static bool t_dispatching;
 
     /// <summary>Whether any observer is registered.</summary>
     public static bool Any => _observers.Length > 0;
@@ -62,12 +62,12 @@ public static class FaultObservers
     public static void Notify(FaultObservation kind, Exception exception, bool ledgerRecorded)
     {
         IFaultObserver[] observers = _observers;
-        if (observers.Length == 0 || _dispatching)
+        if (observers.Length == 0 || t_dispatching)
         {
             return;
         }
 
-        _dispatching = true;
+        t_dispatching = true;
         try
         {
             foreach (IFaultObserver observer in observers)
@@ -84,7 +84,7 @@ public static class FaultObservers
         }
         finally
         {
-            _dispatching = false;
+            t_dispatching = false;
         }
     }
 

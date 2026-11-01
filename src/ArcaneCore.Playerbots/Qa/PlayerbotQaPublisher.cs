@@ -735,10 +735,6 @@ internal sealed class PlayerbotQaPublisher
         return true;
     }
 
-    /// <summary>
-    /// The spell caps on top of the hourly one: at most <see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerPass"/> spell issues per pass and
-    /// <see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerDay"/> per rolling day. Other kinds are not limited by them.
-    /// </summary>
     /// <summary>Whether the hourly create cap of the finding's lane (server faults have their own) allows one more issue; logs the finding as pending when not.</summary>
     private bool CreateAllowed(QaFindingView finding, DateTime now)
     {
@@ -755,6 +751,10 @@ internal sealed class PlayerbotQaPublisher
         return false;
     }
 
+    /// <summary>
+    /// The spell caps on top of the hourly one: at most <see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerPass"/> spell issues per pass and
+    /// <see cref="PlayerbotQaGitHubOptions.MaxSpellIssuesPerDay"/> per rolling day. Other kinds are not limited by them.
+    /// </summary>
     private bool SpellCreateAllowed(QaFindingView finding, Pass pass, DateTime now)
     {
         if (!QaKinds.Of(finding.Kind).SpellKind) return true;

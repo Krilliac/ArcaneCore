@@ -92,7 +92,7 @@ public sealed class CrashHandler : IDisposable
         set => _dumpAnnouncer = value;
     }
 
-    /// <summary>Whether the first-chance hook is attached (Debug Kernel build with the option on).</summary>
+    /// <summary>Whether the first-chance hook is attached (Debug Kernel build with the option on, or any build while an <see cref="IFaultObserver"/> is registered).</summary>
     public bool FirstChanceHooked => _firstChanceHooked;
 
     /// <summary>
@@ -128,7 +128,10 @@ public sealed class CrashHandler : IDisposable
         _options = options;
         _sink = sink;
         _providers = providers ?? [];
-        HookFirstChance();
+        lock (InstallGate)
+        {
+            HookFirstChance();
+        }
     }
 
     /// <summary>Render the report this handler would write for <paramref name="exception"/>, with the current providers.</summary>
