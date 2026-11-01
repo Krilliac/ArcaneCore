@@ -759,10 +759,33 @@ public sealed class WorldHost(
         CharacterOwnershipToken? current = await store.GetCurrentAsync(scope, cancellationToken).ConfigureAwait(false);
         if (current is null || current.Incarnation == _incarnation)
             return null;
+        await RefuseReclaimDuringCommittedHandoffAsync(scope, cancellationToken).ConfigureAwait(false);
         CharacterOwnershipToken? reclaimed = await store.TryReclaimAsync(current, _fencing.OwnerNode, _incarnation, maps, cancellationToken).ConfigureAwait(false);
         if (reclaimed is not null)
             logger.LogWarning("Reclaimed the worker scope '{Scope}' from the dead incarnation {OldIncarnation} (epoch {OldEpoch}) at epoch {Epoch}: its writer lock was free, so that process is gone", scope, current.Incarnation, current.Epoch, reclaimed.Epoch);
         return reclaimed;
+    }
+
+    /// <summary>
+    /// The reclaim guard (handoff-control design, commit C12). Between the epoch takeover and the promotion of the standby, the shard row already names the standby's incarnation but the
+    /// old process may still be dead or dying: a relaunched copy of it that holds the shard lock would otherwise read that row as a dead incarnation and take the shard back from the
+    /// handoff's target. A committed, unresolved handoff of this scope whose target is another incarnation therefore refuses the reclaim; recovery rolls that handoff forward. Handoffs that are
+    /// resolved, aborted, still pre-commit (they never changed the row) or that target this very incarnation do not block. A world without a handoff journal has nothing to consult.
+    /// </summary>
+    private async Task RefuseReclaimDuringCommittedHandoffAsync(string scope, CancellationToken cancellationToken)
+    {
+        await using AsyncServiceScope serviceScope = scopes.CreateAsyncScope();
+        if (serviceScope.ServiceProvider.GetService<ArcaneCore.Kernel.Cluster.Transfer.IWorldHandoffStore>() is not { } journal)
+            return;
+        foreach (ArcaneCore.Kernel.Cluster.Transfer.WorldHandoffRecord record in await journal.GetUnresolvedAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (record.DecisionState != ArcaneCore.Kernel.Cluster.Transfer.PlayerTransferDecisionState.Committed
+                || record.SourceOwnershipToken.Scope != scope
+                || record.TargetOwnershipToken?.Incarnation == _incarnation)
+                continue;
+            logger.LogWarning("Refusing to reclaim the worker scope '{Scope}': handoff {HandoffId} is committed to another incarnation ({TargetIncarnation}) and not yet resolved", scope, record.HandoffId, record.TargetOwnershipToken?.Incarnation);
+            throw new InvalidOperationException($"the worker scope '{scope}' belongs to the committed handoff {record.HandoffId}, which has not been promoted yet; this world cannot reclaim it until recovery resolves that handoff");
+        }
     }
 
     /// <summary>Starts recording this worker's heartbeat on its ownership row every <see cref="CharacterFencingOptions.HeartbeatSeconds"/> (Worker scope only). A heartbeat the row refuses means the shard was reclaimed or reaped: the save queue goes terminal and the host stops.</summary>

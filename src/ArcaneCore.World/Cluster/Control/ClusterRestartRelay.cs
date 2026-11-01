@@ -44,6 +44,7 @@ public sealed class ClusterRestartRelay(TimeSpan? replyTimeout = null, ILogger<C
     private readonly TimeSpan _replyTimeout = replyTimeout ?? TimeSpan.FromSeconds(10);
     private readonly ILogger _logger = logger ?? NullLogger<ClusterRestartRelay>.Instance;
     private readonly ConcurrentDictionary<ulong, TaskCompletionSource<ControlSubmitReply>> _pending = new();
+    private const ulong RelayIdBit = 1UL << 63;
     private long _nextRequestId;
     private volatile GatewaySessionLinkHost? _host;
     private volatile WorldGatewaySessionAcceptor? _acceptor;
@@ -87,7 +88,7 @@ public sealed class ClusterRestartRelay(TimeSpan? replyTimeout = null, ILogger<C
             return Refused("your session does not come through a gateway link");
         }
 
-        ulong requestId = (ulong)Interlocked.Increment(ref _nextRequestId);
+        ulong requestId = RelayIdBit | (ulong)Interlocked.Increment(ref _nextRequestId); // the far-teleport router counts up from 1 on the same link; the top bit keeps the two id spaces apart
         var waiting = new TaskCompletionSource<ControlSubmitReply>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[requestId] = waiting;
         try

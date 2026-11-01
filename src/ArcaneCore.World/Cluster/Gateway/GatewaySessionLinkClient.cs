@@ -472,9 +472,10 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeRequest(request));
 
     /// <summary>
-    /// Raised on the link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmit"/> frame (a worker asks the gateway to start an operation). An event so
-    /// that the operator-restart handler and the transfer handler can both listen: each answers with <see cref="SendControlSubmitReply"/> only for the body kind it owns.
-    /// Handlers must not block and must not throw; one that throws is logged and the link goes on.
+    /// Raised on the link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmit"/> frame (a worker asks the gateway to start an operation, design section 2.3). An event so that the
+    /// operator-restart handler (body kind 1) and the transfer handler (body kind 2) can both listen: each answers with <see cref="SendControlSubmitReply"/> only for the body kind it owns.
+    /// Handlers must not block and must not throw; one that throws is logged and answered with a refusal. With no handler at all the worker is answered with a refusal here,
+    /// so its request never waits for a reply that cannot come.
     /// </summary>
     public event Action<ControlSubmit>? ControlSubmitReceived;
 
@@ -482,19 +483,29 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     public bool SendControlSubmitReply(ControlSubmitReply reply) =>
         _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeSubmitReply(reply));
 
-    /// <summary>Tells the worker about an outcome for one of its sessions (contract 5). False when the link is down.</summary>
+    /// <summary>Tells the worker the outcome of an operation it submitted, or text for an operator (contract 5). False when the link is down.</summary>
     public bool SendControlNotice(ControlNotice notice) =>
         _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeNotice(notice));
 
+    /// <summary>Whether the client session with this generation is open on this link.</summary>
+    public bool HasSession(long sessionGeneration) => _sessions.ContainsKey(sessionGeneration);
+
     private void OnControlSubmit(ControlSubmit submit)
     {
+        if (ControlSubmitReceived is not { } handler)
+        {
+            SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this gateway hosts no cluster operations (Gateway:Transfers:Enabled is off)"));
+            return;
+        }
+
         try
         {
-            ControlSubmitReceived?.Invoke(submit);
+            handler(submit);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the control submit handler failed", _worker);
+            SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "the gateway failed to take the request"));
         }
     }
 

@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Control;
+using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Handoff;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Cluster.Transfer.Remote;
@@ -102,7 +103,8 @@ internal sealed record GatewayTransferWiring(
     IReadOnlyCollection<ITransferTargetWorker> Targets,
     Func<WorkerNodeId, Guid, CancellationToken, Task<bool>>? IncarnationCheck,
     Func<long, bool> SessionExists,
-    Func<string, IReadOnlyList<string>> SlotNames)
+    Func<string, IReadOnlyList<string>> SlotNames,
+    Func<WorkerNodeId, CancellationToken, Task<int>>? AdmittedGateways = null)
 {
     public static GatewayTransferWiring ForServer(GatewayServer server, GatewayHandoffService? handoffs, ILoggerFactory loggers)
     {
@@ -126,6 +128,12 @@ internal sealed record GatewayTransferWiring(
         }
 
         // Design 4.3, pre-commit row: the remote target's incarnation must still be the one the transfer reserved under.
+        // Orchestrator decision Q1: one gateway per realm. The worker's TargetDescribe (every transfer-enabled worker answers it, source or target) reports how many distinct gateways it has admitted.
+        async Task<int> Gateways(WorkerNodeId worker, CancellationToken cancellationToken) =>
+            remoteTargets.TryGetValue(worker, out RemoteTransferTargetWorker? remote)
+                ? (await remote.RefreshAsync(cancellationToken).ConfigureAwait(false)).AdmittedGateways
+                : throw new InvalidOperationException($"worker '{worker.Value}' is not a configured slot");
+
         Task<bool> Check(WorkerNodeId worker, Guid transferId, CancellationToken cancellationToken) =>
             remoteTargets.TryGetValue(worker, out RemoteTransferTargetWorker? target) ? target.IncarnationUnchangedSinceReserveAsync(transferId, cancellationToken) : Task.FromResult(false);
 
@@ -139,7 +147,8 @@ internal sealed record GatewayTransferWiring(
             targets,
             Check,
             generation => server.FindConnection(generation) is IGatewayTransferSession { IsOpen: true },
-            node => handoffs?.NodeNames(node) ?? new[] { node });
+            node => handoffs?.NodeNames(node) ?? new[] { node },
+            Gateways);
     }
 }
 
@@ -167,6 +176,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     private readonly Func<WorkerNodeId, Guid, CancellationToken, Task<bool>>? _incarnationCheck;
     private readonly Func<long, bool> _sessionExists;
     private readonly Func<string, IReadOnlyList<string>> _slotNames;
+    private readonly Func<WorkerNodeId, CancellationToken, Task<int>>? _admittedGateways;
     private readonly HashSet<string> _slotSet;
     private readonly PlayerTransferCoordinator _coordinator;
     private readonly PlayerTransferCoordinatorHost _host;
@@ -204,6 +214,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         }
 
         _server = server;
+        server.ControlSubmitHandler = HandleSubmitAsync;
         if (handoffs is not null)
         {
             handoffs.Guard = this;
@@ -231,6 +242,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         _incarnationCheck = wiring.IncarnationCheck;
         _sessionExists = wiring.SessionExists;
         _slotNames = wiring.SlotNames;
+        _admittedGateways = wiring.AdmittedGateways;
         _slotSet = new HashSet<string>(wiring.SlotNodes, StringComparer.Ordinal);
         _machine = new GatewaySlotStateMachine(wiring.SlotNodes);
         _coordinator = new PlayerTransferCoordinator(wiring.MapRouter, store, wiring.GatewayRouter, wiring.Sources, wiring.Targets);
@@ -290,6 +302,10 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         if (_server is not null)
         {
             _server.WorkerLinkUp -= OnWorkerLinkUp;
+            if (_server.ControlSubmitHandler is { } installed && ReferenceEquals(installed.Target, this))
+            {
+                _server.ControlSubmitHandler = null; // a worker's request is refused from now on, not queued behind a stopped service
+            }
         }
 
         await _runs.CancelAsync().ConfigureAwait(false);
@@ -347,6 +363,27 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
             return Refused(request, "the source and the target are the same worker; use a local teleport");
         }
 
+        if (_admittedGateways is { } admitted)
+        {
+            foreach (WorkerNodeId involved in new[] { request.SourceWorkerId, target })
+            {
+                int gateways;
+                try
+                {
+                    gateways = await admitted(involved, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
+                {
+                    return Refused(request, $"worker '{involved.Value}' could not be asked how many gateways it admits ({ex.Message})");
+                }
+
+                if (gateways > 1)
+                {
+                    return Refused(request, $"worker '{involved.Value}' reports {gateways} admitted gateways; a transfer needs exactly one gateway per realm");
+                }
+            }
+        }
+
         if (!_machine.TryBeginTransfer(request.SourceWorkerId.Value, target.Value, out IDisposable? lease, out string reason))
         {
             return Refused(request, reason);
@@ -385,6 +422,67 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
                 lease!.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Takes a worker's <see cref="ControlSubmit"/> (design section 2.3, commit C10) and answers on the link it arrived on. The source worker of the transfer is the slot node id of that link
+    /// (<c>Gateway:Workers:N:NodeId</c>, the id the slot state machine and the journal scan key on), never a name the frame carries; the session must be open on that very link with the account the frame names.
+    /// A refusal answers at once with its reason; an accepted transfer answers with its id and, when it ends, sends a <see cref="ControlNotice"/> of kind transfer outcome on the source's link (the
+    /// completed outcome too, so the source clears its in-flight entry). A kind other than a transfer request is refused (the operator restart path is a later commit). Never throws for a transfer failure.
+    /// </summary>
+    internal async Task HandleSubmitAsync(GatewayWorkerLink worker, ControlSubmit submit)
+    {
+        ArgumentNullException.ThrowIfNull(worker);
+        ArgumentNullException.ThrowIfNull(submit);
+        GatewaySessionLinkClient? link = worker.Link;
+        if (link is null)
+        {
+            return; // the link went down while the request was being taken; the worker's pending request ended with it
+        }
+
+        if (submit.Body is not ControlTransferSubmit body)
+        {
+            link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this request kind is not available over the control channel"));
+            return;
+        }
+
+        string node = worker.NodeId;
+        if (!_slotSet.Contains(node))
+        {
+            link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, body.TransferId, $"worker '{node}' is not a transfer slot of this gateway"));
+            return;
+        }
+
+        if (!link.HasSession(body.SessionGeneration)
+            || _server?.FindConnection(body.SessionGeneration) is not { } connection
+            || connection.AccountId != body.AccountId)
+        {
+            link.SendControlSubmitReply(new ControlSubmitReply(
+                submit.RequestId, false, body.TransferId, $"session {body.SessionGeneration} of account {body.AccountId} is not open on the link of worker '{node}'"));
+            return;
+        }
+
+        var request = new PlayerTransferRequest(
+            body.TransferId, body.CharacterGuid, body.AccountId, body.SessionGeneration, new WorkerNodeId(node),
+            body.SourceMapId, body.SourceInstanceId, body.TargetMapId, body.TargetInstanceId, body.TargetPosition, body.SourceToken);
+        GatewayTransferSubmission submission = await SubmitAsync(request, _runs.Token).ConfigureAwait(false);
+        link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, submission.Accepted, submission.TransferId, submission.Reason));
+        if (!submission.Accepted || submission.Completion is not { } completion)
+        {
+            return;
+        }
+
+        PlayerTransferOutcome outcome = await completion.ConfigureAwait(false);
+        // The source's link may have been replaced while the transfer ran (a reconnect): the notice goes to whichever link of the slot is up now.
+        GatewaySessionLinkClient? current = worker.Link;
+        if (current is null)
+        {
+            return;
+        }
+
+        ControlNoticeOutcome result = outcome.Succeeded ? ControlNoticeOutcome.Completed : ControlNoticeOutcome.Aborted;
+        string text = outcome.Succeeded ? string.Empty : outcome.FailureMessage ?? outcome.FailureCode ?? "the transfer was aborted";
+        current.SendControlNotice(new ControlNotice(ControlNoticeKind.TransferOutcome, body.SessionGeneration, body.AccountId, body.CharacterGuid, body.TransferId, result, text));
     }
 
     /// <inheritdoc />

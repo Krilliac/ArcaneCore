@@ -58,6 +58,19 @@ public interface IGatewayControlHandler
     Task<ControlReply> HandleAsync(ControlRequest request, GatewayControlContext context, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// The worker's end of what it submits to the gateway (<see cref="ControlSubmit"/>, design _wf/handoff-control-DESIGN.md sections 2.1 and 4.5): receives the gateway's answer to a submit and the
+/// notices it sends about an operation. Called on the link's receive loop; implementations must not block and must not throw (an exception is logged).
+/// </summary>
+public interface IGatewayControlSubmitSink
+{
+    /// <summary>The gateway accepted or refused a <see cref="ControlSubmit"/> of this worker.</summary>
+    void OnSubmitReply(ControlSubmitReply reply);
+
+    /// <summary>The gateway tells the worker the outcome of an operation it submitted, or text for an operator.</summary>
+    void OnNotice(ControlNotice notice);
+}
+
 /// <summary>The acceptor's answer: <see cref="AuthResponseCode.Ok"/> with a session, or a refusal code for the client.</summary>
 public readonly record struct GatewaySessionAcceptResult(AuthResponseCode Code, string? Reason, IGatewayRemoteSession? Session)
 {
@@ -448,10 +461,10 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                         OnControlRequest(link, ClusterControlWire.DecodeRequest(body.Span));
                         break;
                     case GatewayWorkerFrameType.ControlSubmitReply:
-                        OnControlSubmitReply(ClusterControlWire.DecodeSubmitReply(body.Span));
+                        OnSubmitReply(ClusterControlWire.DecodeSubmitReply(body.Span));
                         break;
                     case GatewayWorkerFrameType.ControlNotice:
-                        OnControlNotice(ClusterControlWire.DecodeNotice(body.Span));
+                        OnNotice(ClusterControlWire.DecodeNotice(body.Span));
                         break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
@@ -517,6 +530,57 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     }
 
     /// <summary>
+    /// Receives the gateway's answers to <see cref="TrySendControlSubmit"/> and its <see cref="ControlNotice"/>s. Set once, before <see cref="Start"/>. With none set both are dropped
+    /// (a worker whose opt-in transfer key is off submits nothing and has no use for a notice).
+    /// </summary>
+    public IGatewayControlSubmitSink? SubmitSink { get; set; }
+
+    private void OnSubmitReply(ControlSubmitReply reply)
+    {
+        try
+        {
+            SubmitSink?.OnSubmitReply(reply);
+            ControlSubmitReplyReceived?.Invoke(reply);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.control", ex, "The control submit reply handler failed");
+        }
+    }
+
+    private void OnNotice(ControlNotice notice)
+    {
+        try
+        {
+            SubmitSink?.OnNotice(notice);
+            ControlNoticeReceived?.Invoke(notice);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.control", ex, "The control notice handler failed");
+        }
+    }
+
+    /// <summary>
+    /// Sends a <see cref="ControlSubmit"/> (contract 5) on the admitted link that carries the session <paramref name="sessionGeneration"/>: the gateway checks that the session is open on the link the
+    /// request arrives on. False when no admitted link has that session or the link is down; the answer arrives at <see cref="SubmitSink"/>.
+    /// </summary>
+    public bool TrySendControlSubmit(long sessionGeneration, ControlSubmit submit)
+    {
+        ArgumentNullException.ThrowIfNull(submit);
+        byte[] frame = ClusterControlWire.EncodeSubmit(submit);
+        foreach (Link link in _links.Values)
+        {
+            if (link.Admitted && link.Sessions.ContainsKey(sessionGeneration))
+            {
+                return link.Channel.TryEnqueue(frame);
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Sends a transfer control frame on the admitted link that carries the session <paramref name="sessionGeneration"/>. False when no admitted link has
     /// that session (the gateway restarted or the client left) or the link is down.
     /// </summary>
@@ -535,58 +599,18 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     }
 
     /// <summary>
-    /// Raised on a link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmitReply"/> frame (the gateway's answer to a <see cref="TrySendControlSubmit"/>).
+    /// Raised on a link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmitReply"/> frame (the gateway's answer to a <see cref="TrySendControlSubmit"/>), after <see cref="SubmitSink"/>
+    /// saw it. Several submitters share the link (the far-teleport router and the operator-restart relay), so each ignores a reply whose request id it does not own.
     /// Handlers must not block and must not throw; one that throws is logged and the link goes on.
     /// </summary>
     public event Action<ControlSubmitReply>? ControlSubmitReplyReceived;
 
     /// <summary>
-    /// Raised on a link's receive loop for every <see cref="GatewayWorkerFrameType.ControlNotice"/> frame (the gateway tells this worker about an outcome for one of its sessions).
+    /// Raised on a link's receive loop for every <see cref="GatewayWorkerFrameType.ControlNotice"/> frame, after <see cref="SubmitSink"/> saw it. Kind <see cref="ControlNoticeKind.OperatorText"/> is
+    /// the operator-restart relay's, kind <see cref="ControlNoticeKind.TransferOutcome"/> the far-teleport router's; each ignores the other's.
     /// Handlers must not block and must not throw; one that throws is logged and the link goes on.
     /// </summary>
     public event Action<ControlNotice>? ControlNoticeReceived;
-
-    private void OnControlSubmitReply(ControlSubmitReply reply)
-    {
-        try
-        {
-            ControlSubmitReplyReceived?.Invoke(reply);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            _logger.LogFault("cluster.control", ex, "The control submit reply handler failed");
-        }
-    }
-
-    private void OnControlNotice(ControlNotice notice)
-    {
-        try
-        {
-            ControlNoticeReceived?.Invoke(notice);
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            _logger.LogFault("cluster.control", ex, "The control notice handler failed");
-        }
-    }
-
-    /// <summary>
-    /// Sends a <see cref="ControlSubmit"/> on the admitted link that carries the session <paramref name="sessionGeneration"/> (the operator's or the player's own session: the
-    /// gateway judges the request by the link it arrives on). False when no admitted link has that session or the link is down; the answer arrives on <see cref="ControlSubmitReplyReceived"/>.
-    /// </summary>
-    public bool TrySendControlSubmit(long sessionGeneration, ControlSubmit submit)
-    {
-        ArgumentNullException.ThrowIfNull(submit);
-        foreach (Link link in _links.Values)
-        {
-            if (link.Admitted && link.Sessions.ContainsKey(sessionGeneration))
-            {
-                return link.Channel.TryEnqueue(ClusterControlWire.EncodeSubmit(submit));
-            }
-        }
-
-        return false;
-    }
 
     /// <summary>
     /// A control request of an admitted gateway: answered on the same link, off the receive loop (a verb may take a minute: a freeze, a flush, a promotion). The decoder
