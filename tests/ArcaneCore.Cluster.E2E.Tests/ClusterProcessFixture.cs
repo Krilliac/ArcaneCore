@@ -9,6 +9,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
+using ArcaneCore.Data.Content.Items;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
@@ -79,6 +80,15 @@ public sealed class ClusterOptions
 
     /// <summary>Extra environment variables for the first launch of the gateway only (not for <see cref="ClusterProcessFixture.RestartGatewayAsync"/>); the crash-mid-transfer scenarios use it to hold the coordinator at a stage.</summary>
     public IReadOnlyDictionary<string, string>? FirstGatewayEnvironment { get; init; }
+
+    /// <summary>Copper a new character starts with (<c>CharacterCreation:StartPlayerMoney</c> on every worker); 0, the default, leaves the retail option unset.</summary>
+    public long StartPlayerMoney { get; init; }
+
+    /// <summary>
+    /// When set, the world database gets an item template with this entry and a <c>playercreateinfo_item</c> row giving one of it to a human warrior (the race and class the scenario
+    /// client creates), so a new character owns a persisted <c>item_instance</c> row. Null, the default, seeds nothing.
+    /// </summary>
+    public uint? StartingItemEntry { get; init; }
 }
 
 /// <summary>One launched world worker.</summary>
@@ -387,6 +397,18 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             await provider.GetRequiredService<WorldDbInitializer>().InitializeAsync(cancellationToken).ConfigureAwait(false);
 
             await using AsyncServiceScope scope = provider.CreateAsyncScope();
+            if (_options.StartingItemEntry is { } startingItem)
+            {
+                // Human (race 1) warrior (class 1): the character the scenario client creates (ScenarioWire.CharacterCreate).
+                await using WorldDbContext world = await scope.ServiceProvider.GetRequiredService<IDbContextFactory<WorldDbContext>>().CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+                world.Set<ItemTemplateRow>().Add(new ItemTemplateRow
+                {
+                    Entry = startingItem, Class = 7, Name = "Crash Test Cloth", DisplayId = 3776, Quality = 1, AllowableClass = -1, AllowableRace = -1, Stackable = 20,
+                });
+                world.Set<PlayerCreateInfoItemRow>().Add(new PlayerCreateInfoItemRow { Race = 1, Class = 1, ItemId = startingItem, Amount = 1 });
+                await world.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             AuthDbContext auth = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
             // The initializer seeds a row as Stopped (offline in the list). This fixture's row is unmanaged: State Unknown, no Offline flag,
             // so the realm list shows it online whatever the worker has reported yet.
@@ -470,6 +492,11 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         if (_options.Transfers)
         {
             env["Cluster__Worker__Transfers__Enabled"] = "true";
+        }
+
+        if (_options.StartPlayerMoney > 0)
+        {
+            env["CharacterCreation__StartPlayerMoney"] = _options.StartPlayerMoney.ToString(CultureInfo.InvariantCulture);
         }
 
         AddDatabase(env, "Auth", _authConnection);
