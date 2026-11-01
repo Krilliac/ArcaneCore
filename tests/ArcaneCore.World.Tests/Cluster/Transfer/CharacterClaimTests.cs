@@ -72,7 +72,7 @@ public sealed class CharacterClaimTests
         Assert.Equal(a.Scope, taken.PreviousScope);
         Assert.Equal(b, rig.Store.GetActiveOwnership(11));
         await rig.WriteAsync(11, b);
-        await AssertRefusedAsync<CharacterClaimRejectedException>(() => rig.WriteAsync(11, a)); // the zombie's claim is gone
+        await AssertRefusedAsync<CharacterOwnershipRejectedException>(() => rig.WriteAsync(11, a)); // the zombie's scope token is stale (its shard was reclaimed), which the write fence refuses before the claim is even looked at
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public sealed class CharacterClaimTests
         Assert.Equal(CharacterClaimOutcome.Claimed, again.Outcome); // same shard, new incarnation: no liveness question
         Assert.Null(again.PreviousScope);
         await rig.WriteAsync(12, restarted);
-        await AssertRefusedAsync<CharacterClaimRejectedException>(() => rig.WriteAsync(12, a));
+        await AssertRefusedAsync<CharacterOwnershipRejectedException>(() => rig.WriteAsync(12, a)); // the old incarnation's scope token is stale, refused before the claim check
     }
 
     [Fact]

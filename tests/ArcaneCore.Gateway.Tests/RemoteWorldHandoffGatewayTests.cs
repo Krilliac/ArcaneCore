@@ -386,7 +386,11 @@ public sealed class RemoteWorldHandoffGatewayTests
             }
         }
 
-        Assert.Contains("is not a standby", refusal.Message, StringComparison.Ordinal);
+        // The pre-flight describes the source first: the promoted B registered no handoff source (only a non-standby configuration does), so it answers "holds no characters ownership" before A is even looked at.
+        // Either refusal is the pre-flight; what matters is that it came before any journal row.
+        Assert.True(
+            refusal.Message.Contains("is not a standby", StringComparison.Ordinal) || refusal.Message.Contains("holds no characters ownership", StringComparison.Ordinal),
+            refusal.Message);
         Assert.Empty(await rig.Store.GetUnresolvedAsync(cts.Token));
     }
 

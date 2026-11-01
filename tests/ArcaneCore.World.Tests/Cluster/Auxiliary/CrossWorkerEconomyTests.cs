@@ -65,7 +65,7 @@ public sealed class CrossWorkerEconomyTests
         Assert.Equal(EconomyForwardStatus.Invalid, (await cluster.ClientOnB.WriteAuctionAsync(bare)).Status);
         Assert.Single(await cluster.A.OnWorld(() => cluster.A.Feature.Auctions.ToList()));
 
-        var commit = new EconomyCommitRequest(Guid.NewGuid(), [], [new CreateEscrowItem(item), new InsertAuction(listing)]);
+        var commit = new EconomyCommitRequest(Guid.NewGuid(), [], [new MintEscrowItem(item), new InsertAuction(listing)]);
         Assert.Equal(EconomyForwardStatus.Ok, (await cluster.ClientOnB.WriteAuctionAsync(commit)).Status);
 
         AuctionView listed = await cluster.A.OnWorld(() => cluster.A.Feature.Auctions.Single(v => v.Auction.Id == listing.Id));
@@ -92,7 +92,7 @@ public sealed class CrossWorkerEconomyTests
             Id = 2, HouseId = House, ItemGuid = item.Guid, ItemEntry = item.Entry, ItemCount = 1,
             SellerId = SellerId, StartBid = 30, Buyout = 300, ExpireTime = now + 7200, Deposit = 1,
         };
-        var insert = new EconomyCommitRequest(Guid.NewGuid(), [], [new CreateEscrowItem(item), new InsertAuction(listing)]);
+        var insert = new EconomyCommitRequest(Guid.NewGuid(), [], [new MintEscrowItem(item), new InsertAuction(listing)]);
         Assert.Equal(EconomyForwardStatus.Ok, (await cluster.ClientOnB.WriteAuctionAsync(insert)).Status);
         var buyout = new EconomyCommitRequest(Guid.NewGuid(), [], [new DeleteAuction(listing), new DeleteEscrowItem(item.Guid)]);
         Assert.Equal(EconomyForwardStatus.Ok, (await cluster.ClientOnB.WriteAuctionAsync(buyout)).Status);

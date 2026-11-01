@@ -117,6 +117,79 @@ Database.Auth.Provider = MariaDb
 # Database.Auth.WriterLockDatabase =
 
 #
+#    Database.Characters.ConnectionString
+#        Description: The connection string of this component's database. The shipped files carry
+#                     the development placeholder user arcane; change it for any real deployment.
+#        Type: string
+#        Default: ""
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Characters.ConnectionString = ""
+
+#
+#    Database.Characters.Provider
+#        Description: The relational engine of this component's database (Database:Auth,
+#                     Database:Characters or Database:World). Values: MariaDb, MySql, PostgreSql,
+#                     Sqlite.
+#        Type: DatabaseProvider
+#        Default: MariaDb
+#        Allowed: MariaDb | MySql | PostgreSql | Sqlite
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+Database.Characters.Provider = MariaDb
+
+#
+#    Database.Characters.SqliteBusyTimeoutMs
+#        Description: SQLite only: this component's busy timeout in milliseconds (0..60000),
+#                     overriding Database:SqliteBusyTimeoutMs. Unset inherits it. Other engines
+#                     ignore it.
+#        Type: int?
+#        Default: (not set)
+#        Allowed: a whole number from 0 to 60000
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Characters.SqliteBusyTimeoutMs =
+
+#
+#    Database.Characters.SqliteSynchronous
+#        Description: SQLite only: this component's PRAGMA synchronous (Full or Normal), overriding
+#                     Database:SqliteSynchronous. Unset inherits it. Normal avoids the fsync stall
+#                     at every commit but can lose the most recent commits on power loss or an OS
+#                     crash; it is applied only when the database is in WAL mode, otherwise the
+#                     database stays on Full and an error is logged. Other engines ignore it.
+#                     Values: Full, Normal.
+#        Type: SqliteSynchronousMode?
+#        Default: (not set)
+#        Allowed: Full | Normal
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Characters.SqliteSynchronous =
+
+#
+#    Database.Characters.WriterLockDatabase
+#        Description: PostgreSQL only: the existing maintenance database the single-writer advisory
+#                     lock is taken in (overrides Database:WriterLockDatabase; unset inherits it,
+#                     default postgres). PostgreSQL scopes advisory locks to the database a session
+#                     is connected to, so every world must take the lock in the same database, and
+#                     it must exist before the characters database does. The login needs CONNECT on
+#                     it. Only the characters database takes the single-writer lock, so this key has
+#                     an effect under Database:Characters only and the realm daemon ignores it;
+#                     under Database:Auth and Database:World it does nothing. MariaDB, MySQL and
+#                     SQLite ignore it.
+#        Type: string
+#        Default: (not set)
+#        Allowed: text
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#database
+#
+# Database.Characters.WriterLockDatabase =
+
+#
 #    Database.ConnectionString
 #        Description: The connection string for any component that has no Database:<Component>
 #                     sub-section of its own. The shipped Realm file uses this single-database form.
@@ -835,7 +908,9 @@ Gateway.WorkerPort = 8095
 #                     port, optional maps). When empty, the single-worker keys WorkerAddress and
 #                     WorkerPort describe one entry named LegacyWorkerNodeId; when set, those two
 #                     keys are ignored. Every worker must accept the same LinkSecret, RealmId and
-#                     manifest values.
+#                     manifest values. An entry may also name a standby process (StandbyNodeId,
+#                     StandbyAddress, StandbyPort), the target of a whole-World handoff of that slot
+#                     (needs Gateway:Handoff:Enabled).
 #        Type: List<GatewayWorkerEntry>
 #        Default: (empty list)
 #        Allowed: a list: numbered keys 0, 1, 2, ...; each entry is a group of keys
@@ -855,6 +930,160 @@ Gateway.WorkerPort = 8095
 #        Docs: docs/reference/configuration.md#gateway
 #
 Gateway.WorldSchemaVersion = 67
+
+#----------------------------------------------------------------------------
+# Gateway:Control
+#----------------------------------------------------------------------------
+
+#
+#    Gateway.Control.Activate
+#        Description: Reply timeout of Activate (the target starts the retail arrival). Default 60
+#                     s.
+#        Type: TimeSpan
+#        Default: 00:01:00
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaycontrol
+#
+Gateway.Control.Activate = 00:01:00
+
+#
+#    Gateway.Control.Default
+#        Description: Reply timeout of the quick verbs: Describe, Warm, StopAdmissions, Resume,
+#                     ReleaseWriterLock, Retire, TargetDescribe, Reserve, Install, Discard,
+#                     ResumeSource, RetireSource. Default 10 s.
+#        Type: TimeSpan
+#        Default: 00:00:10
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaycontrol
+#
+Gateway.Control.Default = 00:00:10
+
+#
+#    Gateway.Control.Flush
+#        Description: Reply timeout of Flush (every captured save made durable). Default 60 s.
+#        Type: TimeSpan
+#        Default: 00:01:00
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaycontrol
+#
+Gateway.Control.Flush = 00:01:00
+
+#
+#    Gateway.Control.Freeze
+#        Description: Reply timeout of Freeze and Suspend (the world thread plus a durable flush).
+#                     Default 30 s.
+#        Type: TimeSpan
+#        Default: 00:00:30
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaycontrol
+#
+Gateway.Control.Freeze = 00:00:30
+
+#
+#    Gateway.Control.Promote
+#        Description: Reply timeout of Promote (the standby takes the writer lock and runs as the
+#                     active world). Default 120 s.
+#        Type: TimeSpan
+#        Default: 00:02:00
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaycontrol
+#
+Gateway.Control.Promote = 00:02:00
+
+#----------------------------------------------------------------------------
+# Gateway:Handoff
+#----------------------------------------------------------------------------
+
+#
+#    Gateway.Handoff.AnomalyAfter
+#        Description: How long a handoff may stay unresolved before the gateway raises an
+#                     error-severity anomaly (it keeps retrying).
+#        Type: TimeSpan
+#        Default: 00:10:00
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewayhandoff
+#
+Gateway.Handoff.AnomalyAfter = 00:10:00
+
+#
+#    Gateway.Handoff.Enabled
+#        Description: true lets this gateway coordinate whole-World handoffs and finish interrupted
+#                     ones from the journal: it connects to the characters database
+#                     (Database:Characters:*, schema validation only, nothing is created or
+#                     upgraded), keeps a control link to each slot's standby
+#                     (Gateway:Workers:N:StandbyNodeId) and opens a control channel to every worker.
+#                     The workers must have Cluster:Worker:Handoff:Enabled on. false, the default,
+#                     changes nothing.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewayhandoff
+#
+Gateway.Handoff.Enabled = false
+
+#
+#    Gateway.Handoff.RecoveryInterval
+#        Description: How often the gateway looks for unresolved handoffs in the journal and
+#                     recovers them (before the epoch takeover they abort, after it they roll
+#                     forward). A failing recovery backs off up to 60 s.
+#        Type: TimeSpan
+#        Default: 00:00:05
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewayhandoff
+#
+Gateway.Handoff.RecoveryInterval = 00:00:05
+
+#----------------------------------------------------------------------------
+# Gateway:Transfers
+#----------------------------------------------------------------------------
+
+#
+#    Gateway.Transfers.AnomalyAfter
+#        Description: How long a player transfer may stay unresolved before the gateway raises an
+#                     error-severity anomaly (it keeps retrying). Default 10 minutes.
+#        Type: TimeSpan
+#        Default: 00:10:00
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaytransfers
+#
+Gateway.Transfers.AnomalyAfter = 00:10:00
+
+#
+#    Gateway.Transfers.Enabled
+#        Description: true lets this gateway coordinate cross-worker player transfers and finish
+#                     interrupted ones from the journal: it connects to the characters database
+#                     (Database:Characters:*, schema validation only, nothing is created or
+#                     upgraded) and opens a control channel to every worker. The workers must have
+#                     Cluster:Worker:Transfers:Enabled on. false, the default, changes nothing.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaytransfers
+#
+Gateway.Transfers.Enabled = false
+
+#
+#    Gateway.Transfers.RecoveryInterval
+#        Description: How often the gateway looks for unresolved player transfers in the journal and
+#                     recovers them (before the commit they abort, after it they roll forward).
+#                     Default 5 s.
+#        Type: TimeSpan
+#        Default: 00:00:05
+#        Allowed: a time span, [d.]hh:mm:ss
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#gatewaytransfers
+#
+Gateway.Transfers.RecoveryInterval = 00:00:05
 
 ###############################################################################
 # LOGGING

@@ -30,6 +30,8 @@ How to read the tables:
 - [`Cluster:Peer`](#clusterpeer)
 - [`Cluster:Supervisor`](#clustersupervisor)
 - [`Cluster:Worker`](#clusterworker)
+- [`Cluster:Worker:Handoff`](#clusterworkerhandoff)
+- [`Cluster:Worker:Transfers`](#clusterworkertransfers)
 - [`Combat`](#combat)
 - [`Conditions`](#conditions)
 - [`Creatures`](#creatures)
@@ -41,6 +43,9 @@ How to read the tables:
 - [`Enchanting`](#enchanting)
 - [`GameObjects`](#gameobjects)
 - [`Gateway`](#gateway)
+- [`Gateway:Control`](#gatewaycontrol)
+- [`Gateway:Handoff`](#gatewayhandoff)
+- [`Gateway:Transfers`](#gatewaytransfers)
 - [`HotReload`](#hotreload)
 - [`ItemRandomProperties`](#itemrandomproperties)
 - [`ItemSets`](#itemsets)
@@ -396,6 +401,18 @@ How to read the tables:
 | `Cluster:Worker:VersionsFromDatabase` | `bool` | `true` | - | `true`, the default, advertises the versions the databases record (characters and world schema version rows, and a content revision derived from the world schema version; an unreadable version refuses to link) instead of the three labels below, so a worker and gateway on mixed versions are refused at admission. The worker logs the values it advertises at start. `false` advertises the labels (the explicit override; tests and operators who pin them). The gateway has no database access: set its Gateway:* labels to the values the worker logs, or every gateway is refused. |
 | `Cluster:Worker:WorldSchemaVersion` | `int` | `67` | - | World schema version both ends must agree on (an override label, used only while `VersionsFromDatabase` is false). |
 
+## `Cluster:Worker:Handoff`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Worker:Handoff:Enabled` | `bool` | `false` | - | `true` lets an admitted gateway drive this worker's side of a whole-World handoff over the gateway link (Describe, Warm, StopAdmissions, Freeze, Flush, Resume, ReleaseWriterLock, Retire, Promote; needs Cluster:Worker:Enabled). `false`, the default, answers every handoff request Disabled. |
+
+## `Cluster:Worker:Transfers`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Cluster:Worker:Transfers:Enabled` | `bool` | `false` | - | `true` builds this worker's production transfer source and target and lets an admitted gateway drive them over the gateway link (TargetDescribe, Reserve, Install, Activate, Discard, Suspend, ResumeSource, RetireSource; needs Cluster:Worker:Enabled). `false`, the default, answers every transfer request Disabled. |
+
 ## `Combat`
 
 | Key | Type | Default | Reload | Meaning |
@@ -642,8 +659,34 @@ How to read the tables:
 | `Gateway:RealmId` | `int` | `1` | - | Must equal the worker's Cluster:Worker:RealmId. |
 | `Gateway:WorkerAddress` | `string` | `"127.0.0.1"` | - | Address of the world worker's gateway listener (Cluster:Worker:BindAddress). Used only while `Workers` is empty. |
 | `Gateway:WorkerPort` | `int` | `8095` | - | Port of the world worker's gateway listener (Cluster:Worker:Port). Used only while `Workers` is empty. |
-| `Gateway:Workers` | `List<GatewayWorkerEntry>` | `[]` | - | The world workers this gateway links to, one link each (node id, address, port, optional maps). When empty, the single-worker keys `WorkerAddress` and `WorkerPort` describe one entry named `LegacyWorkerNodeId`; when set, those two keys are ignored. Every worker must accept the same `LinkSecret`, `RealmId` and manifest values. |
+| `Gateway:Workers` | `List<GatewayWorkerEntry>` | `[]` | - | The world workers this gateway links to, one link each (node id, address, port, optional maps). When empty, the single-worker keys `WorkerAddress` and `WorkerPort` describe one entry named `LegacyWorkerNodeId`; when set, those two keys are ignored. Every worker must accept the same `LinkSecret`, `RealmId` and manifest values. An entry may also name a standby process (StandbyNodeId, StandbyAddress, StandbyPort), the target of a whole-World handoff of that slot (needs Gateway:Handoff:Enabled). |
 | `Gateway:WorldSchemaVersion` | `int` | `67` | - | The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only. |
+
+## `Gateway:Control`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Gateway:Control:Activate` | `TimeSpan` | `00:01:00` | - | Reply timeout of Activate (the target starts the retail arrival). Default 60 s. |
+| `Gateway:Control:Default` | `TimeSpan` | `00:00:10` | - | Reply timeout of the quick verbs: Describe, Warm, StopAdmissions, Resume, ReleaseWriterLock, Retire, TargetDescribe, Reserve, Install, Discard, ResumeSource, RetireSource. Default 10 s. |
+| `Gateway:Control:Flush` | `TimeSpan` | `00:01:00` | - | Reply timeout of Flush (every captured save made durable). Default 60 s. |
+| `Gateway:Control:Freeze` | `TimeSpan` | `00:00:30` | - | Reply timeout of Freeze and Suspend (the world thread plus a durable flush). Default 30 s. |
+| `Gateway:Control:Promote` | `TimeSpan` | `00:02:00` | - | Reply timeout of Promote (the standby takes the writer lock and runs as the active world). Default 120 s. |
+
+## `Gateway:Handoff`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Gateway:Handoff:AnomalyAfter` | `TimeSpan` | `00:10:00` | - | How long a handoff may stay unresolved before the gateway raises an error-severity anomaly (it keeps retrying). |
+| `Gateway:Handoff:Enabled` | `bool` | `false` | - | `true` lets this gateway coordinate whole-World handoffs and finish interrupted ones from the journal: it connects to the characters database (Database:Characters:*, schema validation only, nothing is created or upgraded), keeps a control link to each slot's standby (Gateway:Workers:N:StandbyNodeId) and opens a control channel to every worker. The workers must have Cluster:Worker:Handoff:Enabled on. `false`, the default, changes nothing. |
+| `Gateway:Handoff:RecoveryInterval` | `TimeSpan` | `00:00:05` | - | How often the gateway looks for unresolved handoffs in the journal and recovers them (before the epoch takeover they abort, after it they roll forward). A failing recovery backs off up to 60 s. |
+
+## `Gateway:Transfers`
+
+| Key | Type | Default | Reload | Meaning |
+|---|---|---|---|---|
+| `Gateway:Transfers:AnomalyAfter` | `TimeSpan` | `00:10:00` | - | How long a player transfer may stay unresolved before the gateway raises an error-severity anomaly (it keeps retrying). Default 10 minutes. |
+| `Gateway:Transfers:Enabled` | `bool` | `false` | - | `true` lets this gateway coordinate cross-worker player transfers and finish interrupted ones from the journal: it connects to the characters database (Database:Characters:*, schema validation only, nothing is created or upgraded) and opens a control channel to every worker. The workers must have Cluster:Worker:Transfers:Enabled on. `false`, the default, changes nothing. |
+| `Gateway:Transfers:RecoveryInterval` | `TimeSpan` | `00:00:05` | - | How often the gateway looks for unresolved player transfers in the journal and recovers them (before the commit they abort, after it they roll forward). Default 5 s. |
 
 ## `HotReload`
 

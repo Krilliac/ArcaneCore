@@ -144,7 +144,7 @@ public sealed class CharacterClaimWiringTests
         Assert.True(CharacterClaimService.Admits(realm));
         Assert.Null(rig.Store.GetActiveOwnership(30));
 
-        CharacterClaimResult claimed = await claims.ClaimAsync(31, a);
+        (CharacterClaimResult claimed, long ticket) = await claims.ClaimWithTicketAsync(31, a);
         Assert.Equal(CharacterClaimOutcome.Claimed, claimed.Outcome);
         Assert.True(CharacterClaimService.Admits(claimed));
         CharacterClaimResult refused = await claims.ClaimAsync(31, b);
@@ -155,11 +155,14 @@ public sealed class CharacterClaimWiringTests
         await claims.DrainAsync();
         Assert.Equal(a, rig.Store.GetActiveOwnership(31));
 
-        claims.ScheduleRelease(31, a, () => true); // the character is online again: it keeps the claim
+        // A release only deletes with the ticket of the login that is releasing (an unticketed one never deletes a claim a live login holds).
+        claims.ScheduleRelease(31, a, () => true, ticket); // the character is online again: it keeps the claim
         await claims.DrainAsync();
         Assert.Equal(a, rig.Store.GetActiveOwnership(31));
 
-        claims.ScheduleRelease(31, a, () => false);
+        (CharacterClaimResult again, long secondTicket) = await claims.ClaimWithTicketAsync(31, a);
+        Assert.Equal(CharacterClaimOutcome.AlreadyHeld, again.Outcome);
+        claims.ScheduleRelease(31, a, () => false, secondTicket);
         await claims.DrainAsync();
         Assert.Null(rig.Store.GetActiveOwnership(31));
     }

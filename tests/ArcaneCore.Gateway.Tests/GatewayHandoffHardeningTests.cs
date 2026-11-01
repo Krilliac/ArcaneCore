@@ -357,6 +357,7 @@ public sealed class GatewayHandoffHardeningTests
     /// <summary>Runs the host's options-validation start step (the IStartupValidator that ValidateOnStart registers; Host.StartAsync calls it) and returns everything it reported ("" when it passed or nothing is registered).</summary>
     private static string StartValidation(IServiceProvider provider)
     {
+#pragma warning disable SYSLIB0066 // the synchronous validator is what ValidateOnStart registers; that is the thing under test
         IStartupValidator? validator = provider.GetService<IStartupValidator>();
         if (validator is null)
         {
@@ -365,6 +366,7 @@ public sealed class GatewayHandoffHardeningTests
 
         Exception? failure = Record.Exception(validator.Validate);
         return failure?.ToString() ?? string.Empty;
+#pragma warning restore SYSLIB0066
     }
 
     private static async Task<ControlDescribePayload> DescribeAsync(LinkControlChannel channel, CancellationToken token)
@@ -654,7 +656,7 @@ public sealed class GatewayHandoffHardeningTests
             // The retired A logs its player out as it stops: every write it still attempts is refused by the characters fence (epoch N), nothing else fails.
             if (stopFailure is not null)
             {
-                Assert.All(Leaves(stopFailure), leaf => Assert.IsType<ArcaneCore.Data.Characters.Ownership.CharacterOwnershipRejectedException>(leaf));
+                Assert.All(Leaves(stopFailure), leaf => Assert.IsType<ArcaneCore.Kernel.Characters.CharacterOwnershipRejectedException>(leaf));
             }
         }
 
