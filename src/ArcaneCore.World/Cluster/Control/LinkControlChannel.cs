@@ -60,7 +60,8 @@ public sealed record LinkControlTimeouts
 /// <item><description>When the link ends, every pending request fails at once with <see cref="ControlLinkLostException"/>, and so does every later one.</description></item>
 /// <item><description>The channel never resends: the caller (the handoff or transfer coordinator) owns the retry rule (a mutating verb is not repeated before the point of no return).</description></item>
 /// </list>
-/// Owns the client's <see cref="GatewaySessionLinkClient.ControlReplyReceived"/> handler (one channel per client); it does not own the client, which the caller disposes.
+/// Owns the client's <see cref="GatewaySessionLinkClient.ControlReplyReceived"/> handler (one channel per client: the constructor throws <see cref="InvalidOperationException"/> for a client that
+/// already has a handler, and the creator attaches before the client is shared); it does not own the client, which the caller disposes.
 /// Thread-safe: any number of requests may be pending; the reply handler runs on the link's receive loop and never blocks.
 /// </summary>
 public sealed class LinkControlChannel
@@ -76,6 +77,12 @@ public sealed class LinkControlChannel
     public LinkControlChannel(GatewaySessionLinkClient client, LinkControlTimeouts? timeouts = null, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(client);
+        if (client.ControlReplyReceived is not null)
+        {
+            // One channel per client: a second one would replace the first one's reply handler and strand its pending requests until their timeouts.
+            throw new InvalidOperationException($"the link client to worker {client.WorkerEndPoint} already has a control reply handler; one control channel per client");
+        }
+
         _client = client;
         _timeouts = timeouts ?? new LinkControlTimeouts();
         _logger = logger ?? NullLogger.Instance;
