@@ -25,7 +25,7 @@ public sealed class PlayerbotRivalryWarParityWorldTests
 
     private sealed record Outcome(
         long StartMs, SortedDictionary<string, string> SeededRows, SortedDictionary<string, string> FinalRows,
-        List<PlayerbotRivalrySend> Sends, List<(ulong Emoter, uint Emote, string Target)> Heard, Dictionary<string, ulong> Guids, Dictionary<string, Guid> Bots);
+        List<PlayerbotRivalrySend> Sends, List<PlayerbotRivalrySend> WarPhaseSends, List<(ulong Emoter, uint Emote, string Target)> Heard, Dictionary<string, ulong> Guids, Dictionary<string, Guid> Bots);
 
     private static SortedDictionary<string, string> NormalRows(SocialWorld world, Dictionary<string, ulong> guids)
     {
@@ -49,6 +49,11 @@ public sealed class PlayerbotRivalryWarParityWorldTests
             o.Social.Rivalry.Emotes.RudeAtBots = rudeAtBots;
             o.Social.Rivalry.Emotes.FriendlyAffinity = 0;
         }, chat: true);
+        // War Mode on also turns the bots' own brains loose on a grudge (the hunt and attack on sight), on real time: a bot that has started a fight is not idle and the
+        // lane skips it, so how many passes the bots got before a fight began would decide what the test sees. This test is about the lane and the memory, so no
+        // target is ever inside either radius and the brains leave the three bots standing where they are.
+        world.Options.Social.WarMode.HuntRadiusYards = 0;
+        world.Options.Pvp.Initiate.RadiusYards = 0;
         await world.AddBotAsync("Rvpara");
         await world.AddBotAsync("Rvparb");
         await world.AddBotAsync("Rvparc", race: RivalryKit.Undead);
@@ -85,8 +90,10 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         long start = startMs ?? RivalryKit.TimeWhere(t => RivalryKit.GreetPasses(b, c, t)
             && PlayerbotRivalryRules.PickGreeting(PlayerbotStance.Neutral, PlayerbotRivalryRules.PickRoll(b, c, t)) != PlayerbotSocialEmotes.TextEmotes.Nod);
 
+        List<PlayerbotRivalrySend> warPhaseSends = [];
         for (int minute = 0; minute < WarMinutes + QuietMinutes; minute++)
         {
+            if (minute == WarMinutes) warPhaseSends = [.. RivalryKit.Lane(world).Sends]; // what the lane sent while War Mode was on (the same minutes in the calm world)
             if (warWorld && minute == WarMinutes) world.Options.Social.WarMode.Enabled = false;
             int before = RivalryKit.Lane(world).Sends.Count;
             await RivalryKit.RunAsync(world, start + minute * 60_000L);
@@ -96,7 +103,7 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         var heard = new List<(ulong Emoter, uint Emote, string Target)>();
         await Task.Delay(1500);
         heard.AddRange((await RivalryKit.ListenAsync(player)).Emotes);
-        return new Outcome(start, seeded, NormalRows(world, guids), [.. RivalryKit.Lane(world).Sends], heard, guids, new Dictionary<string, Guid>(world.Bots));
+        return new Outcome(start, seeded, NormalRows(world, guids), [.. RivalryKit.Lane(world).Sends], warPhaseSends, heard, guids, new Dictionary<string, Guid>(world.Bots));
     }
 
     [Theory]
@@ -123,9 +130,10 @@ public sealed class PlayerbotRivalryWarParityWorldTests
         int sentByC = calm.Sends.Count(s => s.Bot == cBot && s.Target == bTarget);
         Assert.True(heardFromC > sentByC, $"calm: C emoted at B {heardFromC} times and the lane sent {sentByC}: no bot answered");
 
-        // War world: the war layer decides toward a bot too. B holds a war grudge against C, so it never greets it, and with RudeAtBots it is rude to it.
-        Assert.DoesNotContain(war.Sends, s => s.Bot == war.Bots["Rvparb"] && s.Target == cTarget && s.TargetIsBot && !s.Rude);
-        Assert.Equal(rudeAtBots, war.Sends.Any(s => s.TargetIsBot && s.Rude)); // a bot sends one rude emote per ten minutes, so which of its rivals gets it is not fixed
+        // War world, while War Mode was on (the first WarMinutes passes; after it the normal layer decides again, where B has no relation to C and greets it like any
+        // stranger): the war layer decides toward a bot too. B holds a war grudge against C, so it never greets it, and with RudeAtBots it is rude to it.
+        Assert.DoesNotContain(war.WarPhaseSends, s => s.Bot == war.Bots["Rvparb"] && s.Target == cTarget && s.TargetIsBot && !s.Rude);
+        Assert.Equal(rudeAtBots, war.WarPhaseSends.Any(s => s.TargetIsBot && s.Rude)); // a bot sends one rude emote per ten minutes, so which of its rivals gets it is not fixed
 
         // The assertion the test exists for. Toward a bot the war layer now decides what the bots do to each other (no greeting, with RudeAtBots a rude emote, and which
         // rival gets a bot's one rude emote is not fixed), and the events of those emotes land in the normal layers of the pairs involved like any other, so the rows of the
