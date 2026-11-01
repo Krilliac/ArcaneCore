@@ -189,6 +189,7 @@ internal static class CharacterOwnershipGuard
             _ => throw new NotSupportedException($"no ownership fence lock for provider {db.Database.ProviderName}"),
         };
 
+        bool isMariaDb = db.Database.ProviderName == "Pomelo.EntityFrameworkCore.MySql";
         await using DbCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         void Add(string name, object value)
@@ -201,10 +202,21 @@ internal static class CharacterOwnershipGuard
 
         if (token is null)
         {
-            // Tokenless: allowed only while no row at all is active. The worker claim's gate UPDATE on 'world' waits behind this shared lock.
+            // Tokenless: allowed only while no row at all is active. Two statements, in this order. (1) Share-lock the inactive 'world' row: from here
+            // a worker claim's gate UPDATE waits behind this lock until the caller's transaction ends. If a claim held the row first, this blocks
+            // until it commits, then the row's re-check sees it still inactive (the claim only bumps its sequence), so (1) alone cannot see the claim.
+            // (2) therefore asks "is any row active" as a separate statement taken after the lock: under READ COMMITTED it gets a fresh snapshot, and
+            // on MariaDB it is a locking read (a current read), so the REPEATABLE READ snapshot cannot hide a claim that committed while (1) waited.
             command.CommandText = $"SELECT 1 FROM {table} WHERE {scope} = 'world' AND {active} = FALSE "
-                + $"AND {sql.DelimitIdentifier("write_sequence")} < {long.MaxValue} "
-                + $"AND NOT EXISTS (SELECT 1 FROM {table} WHERE {active} = TRUE){lockClause}";
+                + $"AND {sql.DelimitIdentifier("write_sequence")} < {long.MaxValue}{lockClause}";
+            await DbConnectionOpen.EnsureOpenAsync(db.Database, cancellationToken).ConfigureAwait(false);
+            if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+                return false;
+
+            await using DbCommand anyActive = connection.CreateCommand();
+            anyActive.Transaction = transaction;
+            anyActive.CommandText = $"SELECT 1 FROM {table} WHERE {active} = TRUE{(isMariaDb ? lockClause : string.Empty)}";
+            return await anyActive.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null;
         }
         else
         {

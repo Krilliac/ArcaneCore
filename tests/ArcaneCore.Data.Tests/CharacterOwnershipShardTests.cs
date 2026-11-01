@@ -3,6 +3,7 @@ using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Xunit;
 
@@ -148,6 +149,48 @@ public sealed class CharacterOwnershipShardTests : IAsyncLifetime
         await Run(connection, s => s.ReleaseAsync(worker));
         await using (IDbContextTransaction after = await probe.Database.BeginTransactionAsync())
             await CharacterOwnershipGuard.VerifyAsync(probe, null, default);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TokenlessWrite_BlockedBehindAClaimsGate_IsRefusedWhenTheClaimCommits(DatabaseProvider provider)
+    {
+        // SQLite has one writer, so the interleaving cannot occur there; the sequential test above covers it.
+        if (provider == DatabaseProvider.Sqlite)
+            return;
+
+        DatabaseConnectionOptions connection = await SetupAsync(provider);
+        await using CharacterDbContext claim = TestContexts.Create<CharacterDbContext>(connection);
+        await using CharacterDbContext writer = TestContexts.Create<CharacterDbContext>(connection);
+        await using IDbContextTransaction claimTx = await claim.Database.BeginTransactionAsync();
+        using (CharacterWriteFence.Exempt())
+        {
+            // The worker claim's gate: lock the inactive 'world' row, then insert and activate the shard row, all still uncommitted.
+            int gated = await claim.Set<CharacterOwnershipRow>()
+                .Where(r => r.Scope == "world" && !r.Active)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.WriteSequence, r => r.WriteSequence + 1));
+            Assert.Equal(1, gated);
+            claim.Set<CharacterOwnershipRow>().Add(new CharacterOwnershipRow
+            {
+                Scope = ShardA,
+                Epoch = 1,
+                WriteSequence = 1,
+                Active = true,
+                OwnerNode = "node-a",
+                OwnerIncarnation = Guid.NewGuid().ToString("D"),
+                OwnedMaps = "1",
+            });
+            await claim.SaveChangesAsync();
+        }
+
+        // A tokenless writer starts now: it must wait on the gate's row lock rather than pass.
+        await using IDbContextTransaction writerTx = await writer.Database.BeginTransactionAsync();
+        Task verify = Task.Run(() => CharacterOwnershipGuard.VerifyAsync(writer, null, default));
+        await Task.Delay(1500);
+        Assert.False(verify.IsCompleted, "the tokenless writer passed while a worker claim held the gate");
+
+        await claimTx.CommitAsync();
+        await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => verify.WaitAsync(TimeSpan.FromSeconds(60)));
     }
 
     [Theory]

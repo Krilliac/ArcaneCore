@@ -435,9 +435,10 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         {
             if (stored is null)
                 return true; // that worker owns every map
-            foreach (uint map in ParseMaps(stored))
+            foreach (string part in stored.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
-                if (ownedMaps.Contains(map))
+                // An entry that does not parse is treated as overlapping (fail closed), not skipped.
+                if (!uint.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out uint map) || ownedMaps.Contains(map))
                     return true;
             }
         }
