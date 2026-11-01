@@ -7,9 +7,9 @@ namespace ArcaneCore.World.Tests.Spells.ContractSweep;
 /// The spell_script_target rows the Lunar Festival rocket, cluster and launcher spells need for target 46 (TARGET_LOCATION_SCRIPT_NEAR_CASTER) to
 /// resolve in the sweep. Type 1 (creature) rows are the firework creature that casts the rocket or cluster spell, derived from
 /// <see cref="FireworkCatalog"/>, which mirrors vmangos npcs_special.cpp:1008-1043 and the rows of vmangos
-/// sql/migrations/20210727201033_world.sql:172-184 (26344-26356, 26300-26362, 26483-26515, the Lucky Rocket Cluster's extra rows). Spell 30163
+/// sql/migrations/20210727201033_world.sql:172-290 (26344-26356, 26300-26362, 26483-26515, the Lucky Rocket Cluster's extra rows). Spell 30163
 /// (Copy of Rocket PURPLE) takes the Small Purple Rocket creature. The type 0 (game object) rows are the unconditioned launcher rows of the same
-/// migration (conditionId 0, :186-260): the rocket spells against firework launchers 180771, 180850 and 180868, the cluster spells against
+/// migration (conditionId 0, rocket rows :186-224, cluster rows :292-348): the rocket spells against firework launchers 180771, 180850 and 180868, the cluster spells against
 /// cluster launchers 180772, 180859, 180869 and 180874.
 /// </summary>
 internal static class SweepFireworkRows

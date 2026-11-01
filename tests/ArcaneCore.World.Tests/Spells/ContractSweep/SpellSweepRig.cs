@@ -115,7 +115,7 @@ internal sealed class SpellSweepRig : IDisposable
         var objectFeature = _services.GetRequiredService<GameObjectLootFeature>();
         Objects = objectFeature.GetOrCreateSystem(Map);
         // Merge the focus stand-ins into the content the feature already holds, so any template the sweep gains later is kept.
-        uint[] focusIds = [.. store.All.Where(s => s.RequiresSpellFocus != 0).Select(s => s.RequiresSpellFocus).Distinct()];
+        uint[] focusIds = [.. store.All.Where(s => IsStagedFocus(s.RequiresSpellFocus)).Select(s => s.RequiresSpellFocus).Distinct()];
         GameObjectContent existing = objectFeature.Content;
         HashSet<uint> focusEntries = [.. focusIds.Select(id => FocusEntryBase + id)];
         objectFeature.ReplaceContent(new GameObjectContent(
@@ -204,6 +204,12 @@ internal sealed class SpellSweepRig : IDisposable
     /// <summary>The reach of a stand-in focus object (gameobject_template data1): the 35 yards of the Lunar Festival launcher (vmangos 180868).</summary>
     private const uint FocusRadius = 35;
 
+    /// <summary>
+    /// The only focus ids the sweep stages: 1351 (Lunar Festival rockets and launchers) and 1352 (clusters). Every other focus spell (forges, anvils,
+    /// cooking fires) keeps answering RequiresSpellFocus, so its coverage and baseline lines are unchanged by the firework lane.
+    /// </summary>
+    private static bool IsStagedFocus(uint focusId) => focusId is 1351 or 1352;
+
     private static GameObjectTemplate FocusTemplate(uint focusId)
     {
         var data = new uint[GameObjectTemplate.DataCount];
@@ -218,10 +224,10 @@ internal sealed class SpellSweepRig : IDisposable
     /// <summary>
     /// Place the spell focus object a Player cast of a RequiresSpellFocus spell needs (vmangos Spell::CheckItems, Spell.cpp:7230-7243: a spawned
     /// GAMEOBJECT_TYPE_SPELL_FOCUS object whose data0 is the focus id and whose radius reaches the caster) at the caster's position.
-    /// Null when the spell needs no focus.
+    /// Null when the spell needs no focus or a focus the sweep does not stage (see <see cref="IsStagedFocus"/>).
     /// </summary>
     public GameObject? StageSpellFocus(SpellInfo spell, WorldObject caster)
-        => spell.RequiresSpellFocus == 0 ? null : Objects.Summon(FocusEntryBase + spell.RequiresSpellFocus, caster.X, caster.Y, caster.Z, 0);
+        => !IsStagedFocus(spell.RequiresSpellFocus) ? null : Objects.Summon(FocusEntryBase + spell.RequiresSpellFocus, caster.X, caster.Y, caster.Z, 0);
 
     /// <summary>
     /// Exceptions caught since the last <see cref="TakeFaults"/>: every fault the engine counted in <see cref="FaultLedger.Shared"/> (logged

@@ -19,8 +19,8 @@ public sealed class SweepSpellFocusTests
     public void StageSpellFocus_ForAFocusSpell_PlacesAnObjectAtTheCaster()
     {
         SpellSweepCatalog catalog = SpellSweepCatalog.Shared;
-        SpellInfo focusSpell = catalog.Spells.FirstOrDefault(s => s.RequiresSpellFocus != 0)
-            ?? throw new InvalidOperationException("Spell.dbc has no spell with a spell focus");
+        SpellInfo focusSpell = catalog.Spells.FirstOrDefault(s => s.RequiresSpellFocus is 1351 or 1352)
+            ?? throw new InvalidOperationException("Spell.dbc has no firework spell with focus 1351 or 1352");
         using var rig = new SpellSweepRig(new SpellStore([.. catalog.Spells, SweepHelperSpells.SelfDummySpell()], [], []), RealClientDbcFactAttribute.DbcDirectory);
         Player caster = rig.AddPlayer(Class.Warrior, 60);
         try
@@ -48,6 +48,23 @@ public sealed class SweepSpellFocusTests
         try
         {
             Assert.Null(rig.StageSpellFocus(plain, caster));
+        }
+        finally
+        {
+            rig.RemovePlayer(caster);
+        }
+    }
+
+    [RealClientDbcFact]
+    public void StageSpellFocus_ForANonFireworkFocusSpell_ReturnsNull()
+    {
+        SpellSweepCatalog catalog = SpellSweepCatalog.Shared;
+        SpellInfo other = catalog.Spells.First(s => s.RequiresSpellFocus != 0 && s.RequiresSpellFocus is not (1351 or 1352));
+        using var rig = new SpellSweepRig(new SpellStore([.. catalog.Spells, SweepHelperSpells.SelfDummySpell()], [], []), RealClientDbcFactAttribute.DbcDirectory);
+        Player caster = rig.AddPlayer(Class.Warrior, 60);
+        try
+        {
+            Assert.Null(rig.StageSpellFocus(other, caster));
         }
         finally
         {
