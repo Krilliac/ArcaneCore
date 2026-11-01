@@ -64,6 +64,7 @@ public sealed class SocialFeature(
     private volatile bool _stopping;
     private Task? _stopped;
     private ClusterPresencePublisher? _presence;
+    private CrossWorkerSocial? _crossWorker;
     private readonly Dictionary<ulong, PresenceSnapshot> _presenceSent = [];
 
     /// <summary>The social state (world thread only).</summary>
@@ -180,6 +181,13 @@ public sealed class SocialFeature(
         _writes.Start();
         // Realm presence (M15.2): registered only when the node wires a publisher (cluster hosting, or Combined with the in-process authority).
         _presence = services?.GetService<ClusterPresencePublisher>();
+        // Friends on other workers (S3c): their status comes from the realm directory when this node has one.
+        if (services?.GetService<ArcaneCore.Kernel.Cluster.Social.IRealmPresenceDirectory>() is { } realmDirectory)
+        {
+            _crossWorker = new CrossWorkerSocial(realmDirectory, _logger);
+            _context.Friends.Remote = _crossWorker;
+        }
+
         world.PlayerLoggedIn += OnLoggedIn;
         world.PlayerLoggingOut += OnLoggingOut;
         _guildsLoaded = Task.Run(LoadGuildsAsync);
@@ -197,6 +205,11 @@ public sealed class SocialFeature(
     internal void RunPeriodicStatsPass()
     {
         RefreshPresence();
+        if (_crossWorker is { } crossWorker && _world is { } crossWorld)
+        {
+            crossWorker.Tick(crossWorld, Context);
+        }
+
         if (!PeriodicStatsPass)
         {
             return;
