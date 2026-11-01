@@ -64,6 +64,7 @@ public sealed class NaxxramasSpellTests
     private static SpellTestKit Kit(params SpellInfo[] spells)
     {
         var kit = new SpellTestKit(spells);
+        kit.System.Units = new MapObjectResolver();
         SpellScriptDispatcher.Install(kit.System, SpellScriptRegistry.Discover(typeof(SpellScriptRegistry).Assembly));
         kit.World.GetMap(0).Combat.SpellMitigation = kit.System;
         return kit;
