@@ -171,6 +171,8 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("MaxBulkCommand", o => o.MaxBulkCommand, (o, v) => o.MaxBulkCommand = v,
             v => v is >= 1 and <= PlayerbotOptions.MaxBotsCeiling ? null : $"must be 1..{PlayerbotOptions.MaxBotsCeiling}"),
 
+        // Quest-goal choice: PlayerbotQuestGoals reads the shared options on every think.
+        LivePlayerbots("DropGreyQuests", o => o.DropGreyQuests, (o, v) => o.DropGreyQuests = v),
         // Not a vmangos key: how bot movement reaches the world (client packets through the handlers, or applied by the server).
         // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The playerbot options not listed here are read at start.
         LivePlayerbots("MovementPackets", o => o.MovementPackets, (o, v) => o.MovementPackets = v),
@@ -673,6 +675,7 @@ public static class WorldConfigKeys
         LivePlayerbots("Social:Emotes:Enabled", o => o.Social.Emotes.Enabled, (o, v) => o.Social.Emotes.Enabled = v),
         LivePlayerbots("Social:Rivalry:Enabled", o => o.Social.Rivalry.Enabled, (o, v) => o.Social.Rivalry.Enabled = v),
         LivePlayerbots("Social:Rivalry:AllowOptOut", o => o.Social.Rivalry.AllowOptOut, (o, v) => o.Social.Rivalry.AllowOptOut = v),
+        LivePlayerbots("Social:Invites:AllowOptOut", o => o.Social.Invites.AllowOptOut, (o, v) => o.Social.Invites.AllowOptOut = v),
         LivePlayerbots("Social:Rivalry:Emotes:Enabled", o => o.Social.Rivalry.Emotes.Enabled, (o, v) => o.Social.Rivalry.Emotes.Enabled = v),
         LivePlayerbots("Social:Rivalry:Emotes:RivalEmotes", o => o.Social.Rivalry.Emotes.RivalEmotes, (o, v) => o.Social.Rivalry.Emotes.RivalEmotes = v),
         LivePlayerbots("Social:Rivalry:Emotes:RudeAtBots", o => o.Social.Rivalry.Emotes.RudeAtBots, (o, v) => o.Social.Rivalry.Emotes.RudeAtBots = v),
