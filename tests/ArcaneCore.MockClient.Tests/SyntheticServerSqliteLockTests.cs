@@ -16,6 +16,7 @@ namespace ArcaneCore.MockClient.Tests;
 public sealed class SyntheticServerSqliteLockTests
 {
     [Fact]
+    [Trait("Category", "Timing")] // wall-bound: the point is surviving a real SQLite lock held past 1 s against the shipped 5 s bound
     public async Task AWriteOfTheServer_WaitsOutAnotherConnectionsWriteLockHeldPastOneSecond()
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));

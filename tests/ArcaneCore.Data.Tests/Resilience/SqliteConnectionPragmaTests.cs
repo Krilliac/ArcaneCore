@@ -401,6 +401,7 @@ public sealed class SqliteConnectionPragmaTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // wall-bound: SQLite's busy handler sleeps the real busy_timeout; only a lower bound is asserted
     public async Task ContenderBlocksForAtLeastTheConfiguredBusyTimeoutBeforeSqliteBusy()
     {
         // Lower bound only, so machine load can lengthen the wait but never fail the test. Windows sleep granularity is why the bound
