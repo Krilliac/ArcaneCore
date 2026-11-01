@@ -113,6 +113,9 @@ public sealed class AntiCheatOptions
     /// <summary>The account autoban on repeated kicks.</summary>
     public AntiCheatAutobanOptions Autoban { get; set; } = new();
 
+    /// <summary>The never-castable-spell honeypot (a deviation from retail, off by default).</summary>
+    public SpellHoneypotOptions SpellHoneypot { get; set; } = new();
+
     /// <summary>A copy (the live options are replaced, never edited in place, so a check never sees half a change).</summary>
     public AntiCheatOptions Clone()
     {
@@ -120,6 +123,7 @@ public sealed class AntiCheatOptions
         copy.SpeedClock = (SpeedClockOptions)SpeedClock.Clone();
         copy.Log = (AntiCheatLogOptions)Log.Clone();
         copy.Autoban = Autoban.Clone();
+        copy.SpellHoneypot = SpellHoneypot.Clone();
         return copy;
     }
 
@@ -172,6 +176,7 @@ public sealed class AntiCheatOptions
         problems.AddRange(SpeedClock.Validate());
         problems.AddRange(Log.Validate());
         problems.AddRange(Autoban.Validate());
+        problems.AddRange(SpellHoneypot.Validate());
         return problems;
     }
 
