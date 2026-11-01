@@ -3,6 +3,8 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.Kernel.Quests;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.PacketHeuristics;
@@ -112,8 +114,9 @@ public sealed class HandlerFuzzInvariantTests
     }
 
     /// <summary>
-    /// The fuzz fixture's content reaches the service handlers: stock, trainer spells, quests the creature starts and ends, taxi nodes and
-    /// a path between them, and loot for the chest and the creature. Loaded through the store interfaces the host reads at startup.
+    /// The fuzz fixture's content lists cover stock, trainer spells, quests the creature starts and ends, taxi nodes and
+    /// a path between them, and loot for the chest and the creature, read through the store interfaces the host loads at startup.
+    /// This checks the content object only, not that a running fuzz host resolves it.
     /// </summary>
     [Fact]
     public async Task FuzzFixtureContent_HasVendorTrainerQuestTaxiAndLoot()
