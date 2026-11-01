@@ -89,31 +89,76 @@ public enum ControlNoticeOutcome : byte
 }
 
 /// <summary>
-/// Why the gateway refused a submit or ended a transfer without completing it. The worker decides what a player sees from this code, never from the free text (which carries node ids, account ids and exception
-/// text and is for logs only). Values are wire values: never renumber.
+/// Why the gateway refused or ended an operation, carried next to the free text of a <see cref="ControlSubmitReply"/> and a <see cref="ControlNotice"/> so a worker never parses the text
+/// (the text is for logs and operators; the code is what a worker acts on). The values are wire values: add at the end, never renumber.
 /// </summary>
 public enum ControlReasonCode : byte
 {
-    /// <summary>No structured reason (a completed outcome, operator text, or a sender that does not classify).</summary>
+    /// <summary>No refusal: an accepted request, a completed transfer or plain operator text.</summary>
     None = 0,
 
-    /// <summary>The target worker or instance is full (retail <c>TRANSFER_ABORT_MAX_PLAYERS</c>).</summary>
-    Capacity = 1,
+    /// <summary>A refusal the gateway has no more specific code for (read the text).</summary>
+    Unspecified = 1,
 
-    /// <summary>No worker owns the target map.</summary>
-    NoOwner = 2,
+    /// <summary>The gateway runs no service that takes this request (its handoff or transfer hosting is off).</summary>
+    NotHosted = 2,
 
-    /// <summary>A transfer of this character or slot is already running or unresolved.</summary>
-    AlreadyRunning = 3,
+    /// <summary>The link the request arrived on is a standby link; control submits are taken on the worker link only.</summary>
+    StandbyLink = 3,
 
-    /// <summary>The transfer was aborted after it started.</summary>
-    Aborted = 4,
+    /// <summary>The submit kind is not available over the control channel.</summary>
+    UnsupportedKind = 4,
 
-    /// <summary>The request kind or the feature is not available on this gateway.</summary>
-    NotAvailable = 5,
+    /// <summary>The gateway is stopping.</summary>
+    GatewayStopping = 5,
 
-    /// <summary>The gateway failed internally.</summary>
-    Internal = 6,
+    /// <summary>The worker whose link carried the request is not a transfer slot of this gateway.</summary>
+    NotATransferSlot = 6,
+
+    /// <summary>The player's session is not open on the link the request arrived on, or not with the account it names.</summary>
+    SessionNotOpen = 7,
+
+    /// <summary>No worker owns the target map (or none is eligible).</summary>
+    NoEligibleWorker = 8,
+
+    /// <summary>The target worker is not ready (unknown, not announced, draining).</summary>
+    TargetNotReady = 9,
+
+    /// <summary>The target worker is at its player or instance capacity (the retail "instance full" case).</summary>
+    Capacity = 10,
+
+    /// <summary>The source and the target are the same worker.</summary>
+    SameWorker = 11,
+
+    /// <summary>A worker involved reports more than one admitted gateway.</summary>
+    MultipleGateways = 12,
+
+    /// <summary>A worker involved could not be asked, or its link is down.</summary>
+    WorkerUnreachable = 13,
+
+    /// <summary>A slot involved is busy with another transfer or handoff.</summary>
+    SlotBusy = 14,
+
+    /// <summary>A slot involved has an unresolved handoff or transfer in the journal.</summary>
+    Unresolved = 15,
+
+    /// <summary>The same transfer id is already running.</summary>
+    AlreadyRunning = 16,
+
+    /// <summary>The gateway failed while taking the request.</summary>
+    GatewayFailure = 17,
+
+    /// <summary>An accepted transfer ended without moving the player (aborted before the commit, or failed).</summary>
+    TransferAborted = 18,
+
+    /// <summary>The account may not make this request (not active, below the security the command needs, or the worker's claim contradicts the account database).</summary>
+    NotPermitted = 19,
+
+    /// <summary>The request names a worker or slot the gateway does not know.</summary>
+    UnknownWorker = 20,
+
+    /// <summary>The request's arguments are malformed.</summary>
+    InvalidRequest = 21,
 }
 
 /// <summary>Option bits of a transfer request (<see cref="ControlTransferSubmit.Options"/>).</summary>
@@ -221,10 +266,16 @@ public sealed record ControlTransferSubmit(
 /// <summary>Worker to gateway: starts an operation.</summary>
 public sealed record ControlSubmit(ulong RequestId, ControlSubmitBody Body);
 
-/// <summary>Gateway to worker: whether the gateway accepted a <see cref="ControlSubmit"/> and the operation id it runs under.</summary>
+/// <summary>
+/// Gateway to worker: whether the gateway accepted a <see cref="ControlSubmit"/> and the operation id it runs under. <paramref name="Reason"/> is free text for logs; <paramref name="Code"/> is the
+/// structured reason (<see cref="ControlReasonCode.None"/> when accepted) and is the last byte of the frame.
+/// </summary>
 public sealed record ControlSubmitReply(ulong RequestId, bool Accepted, Guid OperationId, string Reason, ControlReasonCode Code = ControlReasonCode.None);
 
-/// <summary>Gateway to worker: text for an operator or the outcome of a transfer, addressed by session generation, account and character.</summary>
+/// <summary>
+/// Gateway to worker: text for an operator or the outcome of a transfer, addressed by session generation, account and character. <paramref name="Code"/> is the structured reason of a refused,
+/// aborted or failed outcome (the last byte of the frame).
+/// </summary>
 public sealed record ControlNotice(
     ControlNoticeKind Kind, long SessionGeneration, int AccountId, ulong CharacterGuid, Guid OperationId, ControlNoticeOutcome Outcome, string Text, ControlReasonCode Code = ControlReasonCode.None);
 
@@ -642,12 +693,17 @@ public static class ClusterControlWire
     internal static byte[] EncodeSubmitReply(ControlSubmitReply reply)
     {
         ArgumentNullException.ThrowIfNull(reply);
+        if (!Enum.IsDefined(reply.Code))
+        {
+            throw new ArgumentException($"unknown reason code {(byte)reply.Code}", nameof(reply));
+        }
+
         var w = new Writer(GatewayWorkerFrameType.ControlSubmitReply);
         w.UInt64(reply.RequestId);
         w.Bool(reply.Accepted);
         w.Guid(reply.OperationId);
         w.TextTruncated(reply.Reason);
-        w.Byte(CheckCode(reply.Code));
+        w.Byte((byte)reply.Code);
         return w.ToArray();
     }
 
@@ -658,7 +714,7 @@ public static class ClusterControlWire
         bool accepted = r.Bool();
         Guid operationId = r.Guid();
         string reason = r.Text();
-        ControlReasonCode code = ReadCode(ref r);
+        ControlReasonCode code = DecodeReasonCode(r.Byte(), "ControlSubmitReply");
         r.End();
         return new ControlSubmitReply(requestId, accepted, operationId, reason, code);
     }
@@ -678,6 +734,11 @@ public static class ClusterControlWire
             throw new ArgumentException($"unknown notice outcome {(byte)notice.Outcome}", nameof(notice));
         }
 
+        if (!Enum.IsDefined(notice.Code))
+        {
+            throw new ArgumentException($"unknown reason code {(byte)notice.Code}", nameof(notice));
+        }
+
         var w = new Writer(GatewayWorkerFrameType.ControlNotice);
         w.Byte((byte)notice.Kind);
         w.Int64(notice.SessionGeneration);
@@ -686,7 +747,7 @@ public static class ClusterControlWire
         w.Guid(notice.OperationId);
         w.Byte((byte)notice.Outcome);
         w.TextTruncated(notice.Text);
-        w.Byte(CheckCode(notice.Code));
+        w.Byte((byte)notice.Code);
         return w.ToArray();
     }
 
@@ -710,29 +771,18 @@ public static class ClusterControlWire
         }
 
         string text = r.Text();
-        ControlReasonCode code = ReadCode(ref r);
+        ControlReasonCode code = DecodeReasonCode(r.Byte(), "ControlNotice");
         r.End();
         return new ControlNotice((ControlNoticeKind)kind, generation, accountId, characterGuid, operationId, (ControlNoticeOutcome)outcome, text, code);
     }
 
     // ------------------------------------------------------------------ helpers
 
-    private static byte CheckCode(ControlReasonCode code)
+    private static ControlReasonCode DecodeReasonCode(byte code, string frame)
     {
-        if (!Enum.IsDefined(code))
-        {
-            throw new ArgumentException($"unknown reason code {(byte)code}", nameof(code));
-        }
-
-        return (byte)code;
-    }
-
-    private static ControlReasonCode ReadCode(ref Reader r)
-    {
-        byte code = r.Byte();
         if (!Enum.IsDefined((ControlReasonCode)code))
         {
-            throw new InvalidDataException($"control frame with unknown reason code {code}");
+            throw new InvalidDataException($"{frame} with unknown reason code {code}");
         }
 
         return (ControlReasonCode)code;

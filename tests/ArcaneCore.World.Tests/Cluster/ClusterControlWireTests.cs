@@ -301,21 +301,21 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     [Fact]
     public void ControlReasonCode_ValuesArePinned()
     {
-        Assert.Equal(new[] { 0, 1, 2, 3, 4, 5, 6 }, Values<ControlReasonCode>());
+        Assert.Equal(Enumerable.Range(0, 22).ToArray(), Values<ControlReasonCode>());
     }
 
     [Fact]
     public void ControlSubmitReply_AndNotice_CarryTheReasonCode_GoldenBytes()
     {
         byte[] reply = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(13, false, Op, "no", ControlReasonCode.Capacity));
-        Assert.Equal(Concat([31], [13, 0, 0, 0, 0, 0, 0, 0], [0], Op.ToByteArray(), [2, 0, 0, 0], "no"u8.ToArray(), [1]), reply);
+        Assert.Equal(Concat([31], [13, 0, 0, 0, 0, 0, 0, 0], [0], Op.ToByteArray(), [2, 0, 0, 0], "no"u8.ToArray(), [10]), reply);
         byte[] notice = ClusterControlWire.EncodeNotice(
-            new ControlNotice(ControlNoticeKind.TransferOutcome, 5, 7, 9, Op, ControlNoticeOutcome.Refused, "x", ControlReasonCode.NoOwner));
+            new ControlNotice(ControlNoticeKind.TransferOutcome, 5, 7, 9, Op, ControlNoticeOutcome.Refused, "x", ControlReasonCode.NoEligibleWorker));
         Assert.Equal(
-            Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [3], [1, 0, 0, 0], "x"u8.ToArray(), [2]),
+            Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [3], [1, 0, 0, 0], "x"u8.ToArray(), [8]),
             notice);
         Assert.Equal(ControlReasonCode.Capacity, ClusterControlWire.DecodeSubmitReply(reply.AsSpan(1)).Code);
-        Assert.Equal(ControlReasonCode.NoOwner, ClusterControlWire.DecodeNotice(notice.AsSpan(1)).Code);
+        Assert.Equal(ControlReasonCode.NoEligibleWorker, ClusterControlWire.DecodeNotice(notice.AsSpan(1)).Code);
     }
 
     [Fact]

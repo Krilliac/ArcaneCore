@@ -120,7 +120,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     /// <summary>The account once authenticated (0 before).</summary>
     public int AccountId => Volatile.Read(ref _accountId);
 
-    /// <summary>The authenticated account's name (empty before authentication). Written once, before the account is claimed.</summary>
+    /// <summary>
+    /// The account name as the client typed it at login (empty before authentication). Written once, <em>after</em> the connection claimed the account in <see cref="GatewayAccountClaims"/> and
+    /// before the session is opened on a worker, so a connection found through <see cref="GatewayAccountClaims.Find"/> can still read empty for an instant; a caller that needs the name must also
+    /// check the session generation or the link. It is not normalised (the case the client used), so match it case-insensitively.
+    /// </summary>
     internal string AccountName => _accountName;
 
     /// <summary>The worker link the session is forwarded on now (the promoted world's after a handoff), or null before the session opened.</summary>

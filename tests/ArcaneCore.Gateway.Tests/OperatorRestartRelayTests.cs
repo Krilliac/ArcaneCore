@@ -85,6 +85,30 @@ public sealed class OperatorRestartRelayTests
     }
 
     [Fact]
+    public async Task ASlotIdNamedAfterTheBlueGreenSwap_TargetsTheProcessThatIsActiveNow()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token);
+        await using Operator op = await rig.ConnectOperatorAsync(AccountSecurity.Administrator, cts.Token);
+        var driver = new GatewaySlotHandoffDriver(rig.Service);
+        Assert.Equal(NodeA, driver.SlotOf(NodeA));
+        Assert.Null(driver.SlotOf(NodeB)); // before the swap B is the standby, not an active process
+
+        ClusterRestartSubmission started = await op.Relay.SubmitRestartAsync(op.Session, AccountSecurity.Administrator, NodeA, cts.Token);
+        Assert.True(started.Accepted, started.Reason);
+        await op.ReadSystemTextAsync("handed off", cts.Token);
+
+        // The swap happened: the slot key is still NodeA, its active process is B now.
+        GatewayHandoffSlot slot = rig.Service.SlotOf(NodeA)!;
+        Assert.Equal(NodeB, slot.ActiveNode);
+        Assert.Equal(NodeA, slot.StandbyNode);
+        Assert.Equal(NodeA, driver.SlotOf(NodeA)); // the slot id still names the slot, whose active process is B
+        Assert.Equal(NodeA, driver.SlotOf(NodeB)); // and so does the process that is active now
+        Assert.True(slot.IsActive(NodeB));
+        Assert.Null(driver.SlotOf("no-such-worker"));
+    }
+
+    [Fact]
     public async Task AnAbortedHandoff_SendsItsVerdictToTheOperatorOnA()
     {
         using var cts = new CancellationTokenSource(Deadline);
@@ -139,6 +163,7 @@ public sealed class OperatorRestartRelayTests
 
         Assert.False(refused.Accepted);
         Assert.Contains("Unknown worker", refused.Reason);
+        Assert.Equal(ControlReasonCode.UnknownWorker, refused.Code);
         Assert.Empty(await rig.Store.GetUnresolvedAsync(cts.Token));
     }
 

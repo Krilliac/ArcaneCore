@@ -7,7 +7,7 @@ public static class GatewayLinkManifest
 {
     /// <summary>
     /// The contract version both ends of a gateway link advertise. 5: the unified control frames 28-32 (ControlRequest, ControlReply, ControlSubmit,
-    /// ControlSubmitReply, ControlNotice); the link closes on any unknown frame, so a version 4 peer is refused at admission instead.
+    /// ControlSubmitReply, ControlNotice; the last two end with a reason-code byte, ControlReasonCode); the link closes on any unknown frame, so a version 4 peer is refused at admission instead.
     /// 4: the worker sends WorkerStatus frames (tick counter, sessions, countdown state) for
     /// the gateway's realm liveness writer; a gateway of version 3 would close the link on the unknown frame, so it is refused at admission instead.
     /// 3: mutual link proof (the worker proves the secret to the gateway too)

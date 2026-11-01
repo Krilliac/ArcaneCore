@@ -84,12 +84,30 @@ public sealed class GatewayServer : BackgroundService
     /// </summary>
     internal Func<GatewayWorkerLink, ControlSubmit, Task>? ControlSubmitHandler { get; set; }
 
+    /// <summary>
+    /// True while the gateway's operator-restart service (<c>GatewayRestartOrchestration</c>, hosted with <c>Gateway:Handoff:Enabled</c>) listens for <see cref="ControlRestartSubmit"/> frames on the worker
+    /// links. It answers those itself; with it off the gateway answers them with a <see cref="ControlReasonCode.NotHosted"/> refusal instead of leaving the worker to time out.
+    /// </summary>
+    internal volatile bool RestartSubmitsHandled;
+
     private void RouteControlSubmit(GatewayWorkerLink worker, ControlSubmit submit)
     {
+        if (submit.Body is ControlRestartSubmit)
+        {
+            if (!RestartSubmitsHandled)
+            {
+                worker.Link?.SendControlSubmitReply(new ControlSubmitReply(
+                    submit.RequestId, false, Guid.Empty, "this gateway hosts no operator restart (Gateway:Handoff:Enabled is off)", ControlReasonCode.NotHosted));
+            }
+
+            return; // answered by GatewayRestartOrchestration, subscribed to the same link event
+        }
+
         Func<GatewayWorkerLink, ControlSubmit, Task>? handler = ControlSubmitHandler;
         if (handler is null)
         {
-            worker.Link?.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this gateway hosts no player transfers (Gateway:Transfers:Enabled is off)"));
+            worker.Link?.SendControlSubmitReply(new ControlSubmitReply(
+                submit.RequestId, false, Guid.Empty, "this gateway hosts no player transfers (Gateway:Transfers:Enabled is off)", ControlReasonCode.NotHosted));
             return;
         }
 
@@ -105,7 +123,7 @@ public sealed class GatewayServer : BackgroundService
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogError(ex, "The control submit {RequestId} of worker {Node} failed", submit.RequestId, worker.NodeId);
-            worker.Link?.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "the gateway failed to take the request"));
+            worker.Link?.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "the gateway failed to take the request", ControlReasonCode.GatewayFailure));
         }
     }
 
@@ -785,6 +803,7 @@ public sealed class GatewayWorkerLink
     private long _reconnects;
     private TaskCompletionSource _linkUp = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource? _retarget;
+    private TaskCompletionSource? _backoffWake;
     private Func<GatewaySessionLinkClient?, GatewaySessionLinkClient, CancellationToken, Task>? _migrate;
     private GatewaySessionLinkClient? _draining;
 
@@ -873,6 +892,10 @@ public sealed class GatewayWorkerLink
         {
             Volatile.Read(ref _retarget)?.TrySetResult();
         }
+
+        // With no link the supervisor may be sitting out a retry backoff (up to 30 s) toward the endpoint the slot just left: wake it so the new endpoint is tried at once (the hold budget of a
+        // handoff whose source died is spent waiting for exactly this connection).
+        Volatile.Read(ref _backoffWake)?.TrySetResult();
     }
 
     /// <summary>
@@ -944,13 +967,8 @@ public sealed class GatewayWorkerLink
             if (_controlSubmit is { } routeSubmit)
             {
                 // A worker's request to start an operation (a far teleport): answered on this link by the gateway's transfer service.
-                link.ControlSubmitReceived += submit =>
-                {
-                    if (submit.Body is ControlTransferSubmit)
-                    {
-                        routeSubmit(this, submit); // kind 2; kind 1 (operator restart) is answered by GatewayRestartOrchestration, subscribed to the same event
-                    }
-                };
+                // Kind 2 (transfer) is answered by the transfer service; kind 1 (operator restart) by GatewayRestartOrchestration, subscribed to the same event, or refused here when it is off.
+                link.ControlSubmitReceived += submit => routeSubmit(this, submit);
             }
 
             try
@@ -972,16 +990,32 @@ public sealed class GatewayWorkerLink
                 Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Backoff);
                 GatewayMeters.CountLinkFailure(_config.NodeId);
                 _logger.LogWarning("Worker link {Node} to {Worker} not established ({Message}); retrying in {Delay}", NodeId, worker, ex.Message, nextDelay);
+                var wake = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Interlocked.Exchange(ref _backoffWake, wake); // a full fence: Retarget stores _target and then reads this field, this publishes it and then reads _target
+                bool woken = true;
                 try
                 {
-                    await Task.Delay(nextDelay, stoppingToken).ConfigureAwait(false);
+                    if (!Equals(_target, worker))
+                    {
+                        wake.TrySetResult(); // retargeted while this attempt was connecting: no wait at all
+                    }
+
+                    await wake.Task.WaitAsync(nextDelay, stoppingToken).ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    woken = false; // the backoff elapsed
                 }
                 catch (OperationCanceledException)
                 {
                     return;
                 }
+                finally
+                {
+                    Volatile.Write(ref _backoffWake, null);
+                }
 
-                nextDelay = TimeSpan.FromTicks(Math.Min(nextDelay.Ticks * 2, MaxLinkRetryDelay.Ticks));
+                nextDelay = woken ? delay : TimeSpan.FromTicks(Math.Min(nextDelay.Ticks * 2, MaxLinkRetryDelay.Ticks));
                 continue;
             }
 
@@ -1067,9 +1101,15 @@ public sealed class GatewayWorkerLink
 
             if (retarget.Task.IsCompleted && Volatile.Read(ref _migrate) is not null)
             {
-                if (Interlocked.Exchange(ref _draining, link) is { } superseded && !ReferenceEquals(superseded, link))
+                // One link is kept at a time. An earlier kept link that still carries sessions (the retarget moved on before its sessions were migrated) is the one to keep, and the newer link,
+                // which carries none, is closed instead: disposing the older one would disconnect those players. Otherwise the older one nobody uses is closed, never leaked.
+                GatewaySessionLinkClient? older = Volatile.Read(ref _draining);
+                GatewaySessionLinkClient kept = older is not null && older.IsConnected && older.SessionCount > 0 && link.SessionCount == 0 ? older : link;
+                GatewaySessionLinkClient? dropped = ReferenceEquals(kept, link) ? older : link;
+                Volatile.Write(ref _draining, kept);
+                if (dropped is not null && !ReferenceEquals(dropped, kept))
                 {
-                    await superseded.DisposeAsync().ConfigureAwait(false); // an earlier kept link nobody moved: never leaked
+                    await dropped.DisposeAsync().ConfigureAwait(false);
                 }
 
                 continue; // the link is kept open: the next registration moves its sessions, then closes it

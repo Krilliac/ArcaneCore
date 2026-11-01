@@ -95,6 +95,9 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
         public PlayerTransferBundle? GetActiveBundle(ulong characterGuid) =>
             _activePlayers.TryGetValue(characterGuid, out PlayerTransferBundle? bundle) ? bundle : null;
 
+        public PlayerTransferBundle? GetPassiveBundle(Guid transferId) =>
+            _passiveShadows.TryGetValue(transferId, out PlayerTransferBundle? bundle) ? bundle : null;
+
         public CharacterOwnershipToken? GetHeldToken(ulong characterGuid) =>
             _heldTokens.TryGetValue(characterGuid, out CharacterOwnershipToken? token) ? token : null;
 
@@ -347,6 +350,51 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
             SourceOwnershipToken: sourceToken);
 
         return (mapTable, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, seededBundle);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ExecuteTransferAsync_CarriesTheStayAboardIntent_ToTheTargetsInstalledAndActivatedBundle(bool durable, bool notLeaveTransport)
+    {
+        var (_, _, _, _, targetWorker, coordinator, request, _) = await CreateFixtureAsync(durable);
+        bool? installed = null;
+
+        PlayerTransferOutcome outcome = await coordinator.ExecuteTransferAsync(
+            request with { NotLeaveTransport = notLeaveTransport },
+            afterStageHook: (stage, _, _) =>
+            {
+                if (stage == PlayerTransferStage.InstallPassive)
+                {
+                    installed = targetWorker.GetPassiveBundle(request.TransferId)?.NotLeaveTransport;
+                }
+
+                return Task.CompletedTask;
+            });
+
+        Assert.True(outcome.Succeeded);
+        Assert.Equal(notLeaveTransport, installed);
+        Assert.Equal(notLeaveTransport, targetWorker.GetActiveBundle(request.CharacterGuid)!.NotLeaveTransport);
+    }
+
+    [Fact]
+    public void TransferBundleJson_RoundTripsTheStayAboardIntent_AndReadsAnOlderRowAsFalse()
+    {
+        PlayerTransferBundle bundle = PlayerTransferValidatorTests.CreateSampleValidBundle(
+            transferId: Guid.NewGuid(),
+            characterGuid: 4242UL,
+            sourceWorker: new WorkerNodeId("worker-ek"),
+            targetWorker: new WorkerNodeId("worker-kalimdor"),
+            sourceToken: new CharacterOwnershipToken("char:4242", 7, Guid.NewGuid())) with { NotLeaveTransport = true };
+
+        string json = PlayerTransferBundleJson.Serialize(bundle);
+        Assert.True(PlayerTransferBundleJson.Deserialize(json).NotLeaveTransport);
+
+        string older = json.Replace("\"NotLeaveTransport\":true", "\"Unrelated\":0", StringComparison.Ordinal);
+        Assert.NotEqual(json, older);
+        Assert.False(PlayerTransferBundleJson.Deserialize(older).NotLeaveTransport);
     }
 
     [Theory]

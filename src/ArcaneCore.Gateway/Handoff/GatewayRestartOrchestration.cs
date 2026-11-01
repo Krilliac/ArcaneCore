@@ -108,8 +108,9 @@ public sealed class GatewayRestartOrchestration : IHostedService
     private readonly ILogger _logger;
     private readonly ConditionalWeakTable<GatewaySessionLinkClient, object> _attached = new();
     private readonly ConcurrentDictionary<Task, byte> _runs = new();
-    private readonly CancellationTokenSource _stopping = new();
-    private int _started;
+    private readonly Lock _lifecycle = new();
+    private CancellationTokenSource? _stopping; // guarded by _lifecycle: created by StartAsync, cancelled and disposed by StopAsync (a later StartAsync makes a new one)
+    private bool _started; // guarded by _lifecycle
 
     /// <param name="requester">Asks the supervisor to relaunch the retired process; null uses this process's supervisor channel (not supervised: the restart is reported as not queued).</param>
     public GatewayRestartOrchestration(GatewayServer server, GatewayHandoffService handoff, IWorkerRestartRequester? requester = null, ILoggerFactory? loggers = null)
@@ -133,9 +134,14 @@ public sealed class GatewayRestartOrchestration : IHostedService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        if (Interlocked.Exchange(ref _started, 1) == 0)
+        lock (_lifecycle)
         {
-            _server.WorkerLinkUp += OnWorkerLinkUp;
+            if (!_started)
+            {
+                _started = true;
+                _stopping = new CancellationTokenSource();
+                _server.WorkerLinkUp += OnWorkerLinkUp;
+            }
         }
 
         // Links that came up before this service started.
@@ -144,20 +150,43 @@ public sealed class GatewayRestartOrchestration : IHostedService
             Attach(worker.Link);
         }
 
+        _server.RestartSubmitsHandled = true; // set after the attach: from now on a restart submit is ours to answer; with this service off the server refuses it
+
         return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _server.WorkerLinkUp -= OnWorkerLinkUp;
-        await _stopping.CancelAsync().ConfigureAwait(false);
+        CancellationTokenSource? stopping;
+        lock (_lifecycle)
+        {
+            if (!_started)
+            {
+                return;
+            }
+
+            _started = false; // a later StartAsync starts the service again
+            stopping = _stopping;
+            _stopping = null;
+            _server.WorkerLinkUp -= OnWorkerLinkUp;
+            _server.RestartSubmitsHandled = false; // a restart submit that arrives from now on is refused by the server, never left unanswered
+        }
+
         try
         {
-            await Task.WhenAll(_runs.Keys).WaitAsync(cancellationToken).ConfigureAwait(false);
+            await stopping!.CancelAsync().ConfigureAwait(false);
+            try
+            {
+                await Task.WhenAll(_runs.Keys).WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+            {
+                _logger.LogWarning("Gateway operator restart: {Count} run(s) still going when the stop wait ended", _runs.Count);
+            }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or TimeoutException)
+        finally
         {
-            _logger.LogWarning("Gateway operator restart: {Count} run(s) still going when the stop wait ended", _runs.Count);
+            stopping!.Dispose(); // runs that outlive the wait hold only the token, which stays cancelled
         }
     }
 
@@ -184,23 +213,36 @@ public sealed class GatewayRestartOrchestration : IHostedService
             return; // transfer requests are not ours
         }
 
-        Task run = Task.Run(() => HandleAsync(link, submit.RequestId, restart), CancellationToken.None);
+        CancellationToken stopping;
+        lock (_lifecycle)
+        {
+            if (_stopping is not { } source)
+            {
+                // Not running (stopped, or stopping while the server still counted this service as handling): never leave the worker waiting. The server may answer too; the worker takes the first.
+                link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "the gateway is stopping", ControlReasonCode.GatewayStopping));
+                return;
+            }
+
+            stopping = source.Token;
+        }
+
+        Task run = Task.Run(() => HandleAsync(link, submit.RequestId, restart, stopping), CancellationToken.None);
         _runs[run] = 0;
         _ = run.ContinueWith(static (done, state) => ((ConcurrentDictionary<Task, byte>)state!).TryRemove(done, out _), _runs, CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
-    private async Task HandleAsync(GatewaySessionLinkClient link, ulong requestId, ControlRestartSubmit request)
+    private async Task HandleAsync(GatewaySessionLinkClient link, ulong requestId, ControlRestartSubmit request, CancellationToken stopping)
     {
         GatewayClientConnection? connection = null;
         Guid operation = Guid.Empty;
         try
         {
-            (string? refusal, AccountSecurity security, connection) = await CheckAsync(link, request, _stopping.Token).ConfigureAwait(false);
+            (string? refusal, ControlReasonCode code, AccountSecurity security, connection) = await CheckAsync(link, request, stopping).ConfigureAwait(false);
             if (refusal is not null)
             {
                 _logger.LogWarning("Operator restart of account {Account} refused: {Reason}", request.AccountId, refusal);
-                link.SendControlSubmitReply(new ControlSubmitReply(requestId, false, Guid.Empty, refusal));
+                link.SendControlSubmitReply(new ControlSubmitReply(requestId, false, Guid.Empty, refusal, code));
                 return;
             }
 
@@ -212,41 +254,53 @@ public sealed class GatewayRestartOrchestration : IHostedService
             }
 
             using IDisposable idScope = _driver.UseHandoffId(operation);
-            ClusterRestartResult result = await _orchestration.RunAsync(security, connection!.AccountName, request.Arguments.Trim(), _stopping.Token).ConfigureAwait(false);
-            Notify(connection, request.AccountId, operation, ToOutcome(result.Outcome), result.Message);
+            ClusterRestartResult result = await _orchestration.RunAsync(security, connection!.AccountName, request.Arguments.Trim(), stopping).ConfigureAwait(false);
+            ControlNoticeOutcome verdict = ToOutcome(result.Outcome);
+            Notify(connection, request.AccountId, operation, verdict, result.Message, verdict == ControlNoticeOutcome.Completed ? ControlReasonCode.None : ControlReasonCode.Unspecified);
         }
-        catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
         {
             _logger.LogWarning("Operator restart of account {Account} was cancelled by the gateway stopping", request.AccountId);
+            if (operation == Guid.Empty)
+            {
+                link.SendControlSubmitReply(new ControlSubmitReply(requestId, false, Guid.Empty, "the gateway is stopping", ControlReasonCode.GatewayStopping));
+            }
+            else if (connection is not null)
+            {
+                // The request was accepted ("started" is on the operator's screen) and the gateway stops before it finished: say so, with the id the journal knows it under.
+                Notify(
+                    connection, request.AccountId, operation, ControlNoticeOutcome.Failed,
+                    $"The gateway stopped while the restart ran; it may be unfinished. Check '.cluster handoff status {operation:D}' once the gateway is back.", ControlReasonCode.GatewayStopping);
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogFault("cluster.operator-restart", ex, "Operator restart of account {Account} failed", request.AccountId);
             if (operation == Guid.Empty)
             {
-                link.SendControlSubmitReply(new ControlSubmitReply(requestId, false, Guid.Empty, "the gateway could not check the request; see its log"));
+                link.SendControlSubmitReply(new ControlSubmitReply(requestId, false, Guid.Empty, "the gateway could not check the request; see its log", ControlReasonCode.GatewayFailure));
             }
             else if (connection is not null)
             {
-                Notify(connection, request.AccountId, operation, ControlNoticeOutcome.Failed, "Cluster restart failed unexpectedly; see the gateway log and '.cluster handoff status'.");
+                Notify(connection, request.AccountId, operation, ControlNoticeOutcome.Failed, "Cluster restart failed unexpectedly; see the gateway log and '.cluster handoff status'.", ControlReasonCode.GatewayFailure);
             }
         }
     }
 
     /// <summary>Everything the gateway believes about a restart request before it runs one; a non-null first element is the reason to refuse.</summary>
-    private async Task<(string? Refusal, AccountSecurity Security, GatewayClientConnection? Connection)> CheckAsync(
+    private async Task<(string? Refusal, ControlReasonCode Code, AccountSecurity Security, GatewayClientConnection? Connection)> CheckAsync(
         GatewaySessionLinkClient link, ControlRestartSubmit request, CancellationToken cancellationToken)
     {
         string worker = request.Arguments.Trim();
         if (worker.Length == 0 || worker.Any(char.IsWhiteSpace))
         {
-            return ("Syntax: .cluster restart $worker", AccountSecurity.Player, null);
+            return ("Syntax: .cluster restart $worker", ControlReasonCode.InvalidRequest, AccountSecurity.Player, null);
         }
 
         GatewayClientConnection? connection = _server.Claims.Find(request.AccountId);
         if (connection is null || connection.SessionGeneration != request.SessionGeneration || !ReferenceEquals(connection.CurrentLink, link))
         {
-            return ("the request does not come from the link that carries your session", AccountSecurity.Player, null);
+            return ("the request does not come from the link that carries your session", ControlReasonCode.SessionNotOpen, AccountSecurity.Player, null);
         }
 
         Account? stored;
@@ -257,29 +311,30 @@ public sealed class GatewayRestartOrchestration : IHostedService
 
         if (stored is null || stored.Id != request.AccountId || stored.Status != AccountStatus.Active)
         {
-            return ("the account is not known or not active", AccountSecurity.Player, null);
+            return ("the account is not known or not active", ControlReasonCode.NotPermitted, AccountSecurity.Player, null);
         }
 
         if (request.ClaimedSecurityLevel > (byte)stored.Security)
         {
-            return ("the security level the worker claimed contradicts the account database", AccountSecurity.Player, null);
+            return ("the security level the worker claimed contradicts the account database", ControlReasonCode.NotPermitted, AccountSecurity.Player, null);
         }
 
         if (stored.Security < AccountSecurity.Administrator)
         {
-            return ("This command is not available to you.", AccountSecurity.Player, null);
+            return ("This command is not available to you.", ControlReasonCode.NotPermitted, AccountSecurity.Player, null);
         }
 
+        // A slot id names the slot's current active process, also after a blue/green swap (the slot key never changes; the handoff drains whichever process is active now).
         if (_driver.SlotOf(worker) is null)
         {
-            return ($"Unknown worker '{worker}'; nothing was done.", AccountSecurity.Player, null);
+            return ($"Unknown worker '{worker}'; nothing was done.", ControlReasonCode.UnknownWorker, AccountSecurity.Player, null);
         }
 
-        return (null, stored.Security, connection);
+        return (null, ControlReasonCode.None, stored.Security, connection);
     }
 
     /// <summary>Sends the verdict to the operator's connection, but only if it is still the connection the request came from (a newer login of the account is not the operator).</summary>
-    private void Notify(GatewayClientConnection operatorConnection, int accountId, Guid operation, ControlNoticeOutcome outcome, string text)
+    private void Notify(GatewayClientConnection operatorConnection, int accountId, Guid operation, ControlNoticeOutcome outcome, string text, ControlReasonCode code = ControlReasonCode.None)
     {
         GatewayClientConnection? current = _server.Claims.Find(accountId);
         if (current is null || !ReferenceEquals(current, operatorConnection) || current.CurrentLink is not { } link)
@@ -288,7 +343,7 @@ public sealed class GatewayRestartOrchestration : IHostedService
             return;
         }
 
-        if (!link.SendControlNotice(new ControlNotice(ControlNoticeKind.OperatorText, current.SessionGeneration, accountId, 0, operation, outcome, text)))
+        if (!link.SendControlNotice(new ControlNotice(ControlNoticeKind.OperatorText, current.SessionGeneration, accountId, 0, operation, outcome, text, code)))
         {
             _logger.LogWarning("Operator restart {Operation}: the operator's link is down; verdict not delivered: {Text}", operation, text);
         }

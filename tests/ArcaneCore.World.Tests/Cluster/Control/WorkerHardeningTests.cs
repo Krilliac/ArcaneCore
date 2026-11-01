@@ -76,7 +76,7 @@ public sealed class WorkerHardeningTests : IDisposable
         Assert.True(router.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));
         const string internalText = "worker 'world-b' (account 5, session generation 42) failed: System.InvalidOperationException: secret detail";
 
-        router.OnSubmitReply(new ControlSubmitReply(_submits[0].Submit.RequestId, false, Guid.Empty, internalText, ControlReasonCode.NoOwner));
+        router.OnSubmitReply(new ControlSubmitReply(_submits[0].Submit.RequestId, false, Guid.Empty, internalText, ControlReasonCode.NoEligibleWorker));
         await FlushWorldAsync();
 
         byte[] expected = ChatPackets.BuildSystemMessage(GatewayClusterFarTeleportRouter.PlayerFailureText);
@@ -100,7 +100,7 @@ public sealed class WorkerHardeningTests : IDisposable
         var body = (ControlTransferSubmit)_submits[0].Submit.Body;
 
         router.OnNotice(new ControlNotice(
-            ControlNoticeKind.TransferOutcome, Generation, AccountId, body.CharacterGuid, body.TransferId, ControlNoticeOutcome.Failed, "node world-b incarnation changed (account 5)", ControlReasonCode.Aborted));
+            ControlNoticeKind.TransferOutcome, Generation, AccountId, body.CharacterGuid, body.TransferId, ControlNoticeOutcome.Failed, "node world-b incarnation changed (account 5)", ControlReasonCode.TransferAborted));
         await FlushWorldAsync();
 
         (WorldOpcode _, byte[] payload) = Assert.Single(_session.Sent, sent => sent.Opcode == WorldOpcode.SmsgMessagechat);

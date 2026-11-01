@@ -494,7 +494,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     {
         if (ControlSubmitReceived is not { } handler)
         {
-            SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this gateway hosts no cluster operations (Gateway:Transfers:Enabled is off)"));
+            SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "this gateway link takes no control submits (its handoff and transfer hosting is off)", ControlReasonCode.NotHosted));
             return;
         }
 
@@ -505,7 +505,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the control submit handler failed", _worker);
-            SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "the gateway failed to take the request"));
+            SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, false, Guid.Empty, "the gateway failed to take the request", ControlReasonCode.GatewayFailure));
         }
     }
 
