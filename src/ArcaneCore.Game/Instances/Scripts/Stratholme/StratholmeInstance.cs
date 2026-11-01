@@ -874,9 +874,5 @@ public sealed class StratholmeInstance(Map instance) : ScriptedInstance(instance
         }
     }
 
-    private static float DistanceSquared(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-        return dx * dx + dy * dy + dz * dz;
-    }
+    private static float DistanceSquared(WorldObject a, WorldObject b) => WorldGeometry.DistanceSq3D(a, b);
 }
