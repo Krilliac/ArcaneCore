@@ -16,7 +16,6 @@ using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.TestSupport;
-using Microsoft.Extensions.Logging;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
 
