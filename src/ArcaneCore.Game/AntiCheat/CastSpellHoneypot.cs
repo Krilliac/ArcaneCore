@@ -39,7 +39,9 @@ public sealed class SpellHoneypotOptions
 
 /// <summary>
 /// The honeypot decision (pure, any thread): is this cast request a trap, and what is the finding. The refusal itself is the spell
-/// system's ordinary one; this only decides whether a signal is recorded. A GM or any exempt session is never flagged.
+/// system's ordinary one; this only decides whether a signal is recorded. A GM or any exempt session is never flagged (a GM is trapped only if
+/// an operator raises <c>ExemptSecurity</c> above GameMaster, the same trade-off as <see cref="SpellHoneypotOptions.ToolSpellIds"/>).
+/// Trap sources: the inert registry, <see cref="Spells.Gm.CustomSpellRegistry"/>, the configured tool ids and the World layer's built-in catalog.
 /// </summary>
 public static class CastSpellHoneypot
 {
@@ -47,8 +49,8 @@ public static class CastSpellHoneypot
     public const string Detail = "cast of a never-castable spell (honeypot)";
 
     /// <summary>
-    /// Whether <paramref name="spellId"/> is a trap: NeverCast, TestSpell or Deprecated in <see cref="DeliberatelyInertSpells"/>, listed in
-    /// <see cref="SpellHoneypotOptions.ToolSpellIds"/>, or one of <paramref name="builtInToolSpellIds"/> (the World layer passes the GM first-login
+    /// Whether <paramref name="spellId"/> is a trap: NeverCast, TestSpell or Deprecated in <see cref="DeliberatelyInertSpells"/>, in
+    /// <see cref="Spells.Gm.CustomSpellRegistry"/>, listed in <see cref="SpellHoneypotOptions.ToolSpellIds"/>, or one of <paramref name="builtInToolSpellIds"/> (the World layer passes the GM first-login
     /// tool catalog, which lives above Game).
     /// </summary>
     public static bool IsTrap(SpellHoneypotOptions options, uint spellId, IReadOnlySet<uint>? builtInToolSpellIds = null)

@@ -10,6 +10,8 @@ namespace ArcaneCore.Game.Spells.Gm;
 /// Candidates are filtered before they are taught (<see cref="Unsuitable"/>): a spell that needs a reagent, a spell focus, a shapeshift stance or an
 /// equipped item would fail for a staff account with none of them, and a spell with no visual would be a silent cast.
 /// </para>
+/// A triggered cast of a registry spell on a player below the entry's security (an item or script that triggers one of these ids for an ordinary
+/// player) is refused with NotKnown too; that is intended, the ids are staff tools.
 /// Stateless; every member is safe from any thread (the world thread in practice).
 /// </summary>
 public sealed class GmSpellbook : ISpellHandlerModule
@@ -29,7 +31,7 @@ public sealed class GmSpellbook : ISpellHandlerModule
         ArgumentNullException.ThrowIfNull(spell);
         foreach (SpellReagent reagent in spell.Reagents)
         {
-            if (reagent.Item != 0 && reagent.Count != 0)
+            if (reagent.ItemId != 0 && reagent.Count != 0)
             {
                 return "needs a reagent";
             }
