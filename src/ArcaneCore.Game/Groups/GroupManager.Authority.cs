@@ -30,6 +30,12 @@ public sealed partial class GroupManager
             return false;
         }
 
+        if (command.Kind is GroupCommandKind.Accept or GroupCommandKind.Decline)
+        {
+            // The answer ends the invite this worker mirrors; the holder's events confirm it.
+            _invitedTo.Remove(actor.Guid);
+        }
+
         Authority!.Forward(command);
         return true;
     }
@@ -60,6 +66,16 @@ public sealed partial class GroupManager
             return;
         }
 
+        if (ev.InviteCancelled)
+        {
+            _invitedTo.Remove(guid);
+        }
+
+        if (ev.InviterGuid != 0 && player is not null)
+        {
+            MirrorInvite(player, ev);
+        }
+
         if (ev.DepartedGroupId != 0)
         {
             ApplyDeparture(guid, ev.DepartedGroupId, ev.Disbanded);
@@ -84,6 +100,29 @@ public sealed partial class GroupManager
         {
             player.Session.Send(packet.Opcode, packet.Payload);
         }
+    }
+
+    /// <summary>
+    /// Keeps the pending invite of a character of this worker visible to <see cref="GetInvite"/> (the playerbots answer invites from it): a not yet created group led by the inviter with
+    /// the character as its invitee. Ended by an <see cref="GroupEvent.InviteCancelled"/> event or by the character's own accept or decline.
+    /// </summary>
+    private void MirrorInvite(Player invitee, GroupEvent ev)
+    {
+        var inviter = new ObjectGuid(ev.InviterGuid);
+        string name = context.World.FindOnlinePlayer(inviter)?.Name ?? string.Empty;
+        if (name.Length == 0)
+        {
+            GroupPacket? notice = ev.Packets.FirstOrDefault(p => p.Opcode == WorldOpcode.SmsgGroupInvite);
+            if (notice is not null)
+            {
+                int end = Array.IndexOf(notice.Payload, (byte)0);
+                name = System.Text.Encoding.UTF8.GetString(notice.Payload, 0, end < 0 ? notice.Payload.Length : end);
+            }
+        }
+
+        var pending = new Group(0) { LeaderGuid = inviter, LeaderName = name };
+        pending.AddInvite(invitee.Guid);
+        _invitedTo[invitee.Guid] = pending;
     }
 
     /// <summary>Install the holder's state of a group; raises the member and leader events for what differs from the previous mirror.</summary>

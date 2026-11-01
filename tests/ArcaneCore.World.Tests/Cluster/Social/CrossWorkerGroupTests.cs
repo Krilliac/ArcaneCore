@@ -277,6 +277,123 @@ public sealed class CrossWorkerGroupTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PendingInvite_IsVisibleToGetInviteOnTheInviteesWorker_UntilItEnds()
+    {
+        // The playerbots answer an invite only while GetInvite shows it, so the invitee's worker mirrors it from the holder's invite notice.
+        (Player alice, _) = await Login(_a, AliceId, "Alice");
+        (Player bob, _) = await Login(_b, BobId, "Bob");
+        (Player carol, _) = await Login(_b, CarolId, "Carol");
+        Assert.Null(_b.Context.Groups.GetInvite(bob.Guid));
+
+        await On(_a, () => _a.Context.Groups.Invite(alice, "Bob"));
+        await Settle();
+        Group? pending = _b.Context.Groups.GetInvite(bob.Guid);
+        Assert.NotNull(pending);
+        Assert.Equal(alice.Guid, pending!.LeaderGuid);
+        Assert.Equal("Alice", pending.LeaderName);
+        Assert.False(pending.IsCreated);
+
+        // Accepting ends it (the group list replaces it).
+        await On(_b, () => _b.Context.Groups.Accept(bob));
+        await Settle();
+        Assert.Null(_b.Context.Groups.GetInvite(bob.Guid));
+        Assert.NotNull(_b.Context.Groups.GetGroup(bob.Guid));
+
+        // The leader withdraws an invite that is still pending: the invitee's worker drops its copy.
+        await On(_a, () => _a.Context.Groups.Invite(alice, "Carol"));
+        await Settle();
+        Assert.NotNull(_b.Context.Groups.GetInvite(carol.Guid));
+        await On(_a, () => _a.Context.Groups.UninviteByName(alice, "Carol"));
+        await Settle();
+        Assert.Null(_b.Context.Groups.GetInvite(carol.Guid));
+    }
+
+    [Fact]
+    public async Task PendingInvite_Decline_AndSameWorkerInvite_AreVisibleToGetInvite()
+    {
+        (Player alice, _) = await Login(_a, AliceId, "Alice");
+        (Player bob, _) = await Login(_a, BobId, "Bob");
+
+        // Both on one worker: this worked before the holder took over and must still.
+        await On(_a, () => _a.Context.Groups.Invite(alice, "Bob"));
+        await Settle();
+        Assert.NotNull(_a.Context.Groups.GetInvite(bob.Guid));
+
+        await On(_a, () => _a.Context.Groups.Decline(bob));
+        Assert.Null(_a.Context.Groups.GetInvite(bob.Guid));
+        await Settle();
+        Assert.Null(_a.Context.Groups.GetInvite(bob.Guid));
+        Assert.Empty(_holder.Groups.Groups);
+    }
+
+    [Fact]
+    public async Task OfflineLeader_IsReplacedByTheHolder_AndNeverByAMirror()
+    {
+        long now = 1_000;
+        _holder.Groups.UnixSecondsClock = () => now;
+        _a.Context.Groups.UnixSecondsClock = () => now;
+        _b.Context.Groups.UnixSecondsClock = () => now;
+        (Player alice, _) = await Login(_a, AliceId, "Alice");
+        (Player bob, RecordingSession bobSession) = await Login(_b, BobId, "Bob");
+        await On(_a, () => _a.Context.Groups.Invite(alice, "Bob"));
+        await Settle();
+        await On(_b, () => _b.Context.Groups.Accept(bob));
+        await Settle();
+        bobSession.Clear();
+
+        // Bob's worker has no Alice, but the holder does: the mirror must not pick a new leader on its own, however long the delay.
+        now += 400;
+        await On(_b, () => _b.Context.Groups.UpdateOfflineLeaders());
+        await Settle();
+        Assert.Equal(alice.Guid, _b.Context.Groups.GetGroup(bob.Guid)!.LeaderGuid);
+        Assert.Empty(bobSession.Of(WorldOpcode.SmsgGroupSetLeader));
+        _holder.Groups.UpdateOfflineLeaders();
+        Assert.Equal(alice.Guid, _holder.Groups.GetGroup(alice.Guid)!.LeaderGuid);
+
+        // Alice goes offline for real: nothing before the delay (300 s), then the holder hands the group to the online member.
+        await On(_a, () => _a.Context.Groups.OnLoggingOut(alice));
+        await Settle();
+        Assert.Equal(PresenceMutationResult.Applied, _directory.TryRemove(AliceId, long.MaxValue, long.MaxValue));
+        now += 299;
+        _holder.Groups.UpdateOfflineLeaders();
+        Assert.Equal(alice.Guid, _holder.Groups.GetGroup(bob.Guid)!.LeaderGuid);
+
+        now += 1;
+        _holder.Groups.UpdateOfflineLeaders();
+        await Settle();
+        Assert.Equal(bob.Guid, _holder.Groups.GetGroup(bob.Guid)!.LeaderGuid);
+        Assert.Equal(bob.Guid, _b.Context.Groups.GetGroup(bob.Guid)!.LeaderGuid);
+        Assert.Single(bobSession.Of(WorldOpcode.SmsgGroupSetLeader));
+    }
+
+    [Fact]
+    public async Task MeetingStoneGroups_AreNotFormedOrFilledLocally_InClusterMode()
+    {
+        (Player alice, _) = await Login(_a, AliceId, "Alice");
+        (Player bob, _) = await Login(_a, BobId, "Bob");
+        (Player carol, _) = await Login(_a, CarolId, "Carol");
+
+        // A group made on the worker would never reach the holder (its members could not leave it); the queue is off, and the manager refuses.
+        Group? formed = null;
+        await On(_a, () => formed = _a.Context.Groups.CreateLfgGroup(alice, bob));
+        Assert.Null(formed);
+        Assert.Null(_a.Context.Groups.GetGroup(alice.Guid));
+        Assert.Empty(_holder.Groups.Groups);
+
+        // A group the holder owns cannot be filled from the worker either.
+        await On(_a, () => _a.Context.Groups.Invite(alice, "Bob"));
+        await Settle();
+        await On(_a, () => _a.Context.Groups.Accept(bob));
+        await Settle();
+        Group mirrored = _a.Context.Groups.GetGroup(alice.Guid)!;
+        bool added = true;
+        await On(_a, () => added = _a.Context.Groups.AddLfgMember(mirrored, carol));
+        Assert.False(added);
+        Assert.Null(_a.Context.Groups.GetGroup(carol.Guid));
+        Assert.Equal(2, _holder.Groups.GetGroup(alice.Guid)!.MemberCount);
+    }
+
+    [Fact]
     public async Task Invite_WithoutAGroupAuthority_StaysLocal()
     {
         // A manager with no link behaves as before (single process): the invite is decided on the spot.

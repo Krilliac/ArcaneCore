@@ -917,6 +917,12 @@ public sealed partial class GroupManager(SocialContext context)
         _leaderPassGroups.Clear();
         foreach (Group candidate in _memberOf.Values)
         {
+            // A group mirrored from the holder is not decided here: the leader may well be online on another worker. The holder runs the pass (GroupAuthority.UpdateOfflineLeaders).
+            if (Authority is not null && _replicaById.TryGetValue(candidate.Id, out Group? mirrored) && ReferenceEquals(mirrored, candidate))
+            {
+                continue;
+            }
+
             if (_leaderPassSeen.Add(candidate))
             {
                 _leaderPassGroups.Add(candidate);

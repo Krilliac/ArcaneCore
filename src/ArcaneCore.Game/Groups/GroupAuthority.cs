@@ -92,7 +92,8 @@ public sealed record GroupReplica(
 /// <summary>
 /// What the holder tells the worker of one online character after a command: the group state to install (<see cref="Replica"/>), or that the character left
 /// <see cref="DepartedGroupId"/> (<see cref="Disbanded"/> when the whole group ended), the inviter when this is an invite notice (the worker applies the character's ignore list
-/// before showing it), and the packets for the character's session.
+/// before showing it), and the packets for the character's session. <see cref="InviteCancelled"/> says the character's pending invite ended (accepted, declined, withdrawn or
+/// the inviter's group ended), so the worker drops the invite it mirrors for <see cref="GroupManager.GetInvite"/>.
 /// </summary>
 public sealed record GroupEvent(
     ulong RecipientGuid,
@@ -100,7 +101,8 @@ public sealed record GroupEvent(
     uint DepartedGroupId,
     bool Disbanded,
     ulong InviterGuid,
-    IReadOnlyList<GroupPacket> Packets);
+    IReadOnlyList<GroupPacket> Packets,
+    bool InviteCancelled = false);
 
 /// <summary>The path from a worker's <see cref="GroupManager"/> to the group authority (in-process at the holder, over the peer link elsewhere). Never blocks the caller.</summary>
 public interface IGroupAuthorityLink
@@ -115,7 +117,9 @@ public interface IGroupAuthorityLink
 /// the group list and party packets of each online member, wherever it is, and the group state each member's worker mirrors (<see cref="GroupReplica"/>).
 /// <para>
 /// Not modelled here (the worker keeps them local): battleground raids, the ignore list of an invitee (the invitee's worker checks it and answers with
-/// <see cref="GroupCommandKind.RefuseIgnored"/>), and the pvp/dead/afk bits of the group list status (the holder only knows online and offline; the stats pass carries the rest).
+/// <see cref="GroupCommandKind.RefuseIgnored"/>; so the inviter gets PARTY_RESULT Ok and then IgnoringYou, where vmangos answers IgnoringYou first), the pvp/dead/afk bits of the group
+/// list status (the holder only knows online and offline; the stats pass carries the rest), and the meeting stone queue (off in cluster roles: it forms and fills parties
+/// synchronously). These rules restate the vmangos group rules over realm presence instead of sharing <see cref="GroupManager"/>'s; a rule changed in one must be changed in the other.
 /// </para>
 /// <para>
 /// Thread-safety: one lock guards all state; <see cref="Execute"/> and <see cref="Drain"/> may be called from any thread. Memory: the groups, plus at most
@@ -149,6 +153,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         public uint DepartedGroupId;
         public bool Disbanded;
         public ulong Inviter;
+        public bool InviteCancelled;
         public readonly List<GroupPacket> Packets = [];
     }
 
@@ -827,6 +832,49 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         }
     }
 
+    /// <summary>
+    /// vmangos@0e3ff01 src/game/World.cpp:2063-2072 and Group/Group.cpp:1448-1471 (as <see cref="GroupManager.UpdateOfflineLeaders"/>): a group whose leader has been offline for
+    /// <see cref="SocialOptions.OfflineLeaderDelaySeconds"/> gets an online assistant first, then another online member, as its leader; with nobody online the offline leader stays.
+    /// Run by the holder about once a second; the workers never do this for their mirrors.
+    /// </summary>
+    public void UpdateOfflineLeaders()
+    {
+        int delay = Options.OfflineLeaderDelaySeconds;
+        if (delay <= 0)
+        {
+            return;
+        }
+
+        lock (_gate)
+        {
+            _drafts.Clear();
+            long now = UnixSecondsClock();
+            try
+            {
+                foreach (Group group in _memberOf.Values.Where(g => g.IsCreated).Distinct().ToArray())
+                {
+                    if (IsOnline(group.LeaderGuid))
+                    {
+                        group.LeaderLastOnlineUnixSeconds = now;
+                        continue;
+                    }
+
+                    if (now - group.LeaderLastOnlineUnixSeconds < delay || !ChooseLeader(group, onlineOnly: true))
+                    {
+                        continue;
+                    }
+
+                    Broadcast(group, WorldOpcode.SmsgGroupSetLeader, GroupPackets.BuildName(group.LeaderName));
+                    SendUpdate(group);
+                }
+            }
+            finally
+            {
+                Flush();
+            }
+        }
+    }
+
     // ---- group mechanics (vmangos Group.cpp) -----------------------------------------------------------------------------------------------------
 
     /// <summary>vmangos Player::CanUninviteFromGroup.</summary>
@@ -955,7 +1003,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     }
 
     /// <summary>vmangos Group::_chooseLeader: an online member, in raids an assistant first; otherwise the first member.</summary>
-    private void ChooseLeader(Group group)
+    private bool ChooseLeader(Group group, bool onlineOnly = false)
     {
         GroupMemberSlot? first = null;
         GroupMemberSlot? chosen = null;
@@ -976,11 +1024,14 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
             break;
         }
 
-        chosen ??= first ?? group.Members.FirstOrDefault();
-        if (chosen is not null)
+        chosen ??= first ?? (onlineOnly ? null : group.Members.FirstOrDefault());
+        if (chosen is null)
         {
-            ChangeLeader(group, chosen);
+            return false;
         }
+
+        ChangeLeader(group, chosen);
+        return true;
     }
 
     private void ChangeLeader(Group group, GroupMemberSlot slot)
@@ -1037,6 +1088,10 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
         if (_invitedTo.GetValueOrDefault(guid) == group)
         {
             _invitedTo.Remove(guid);
+            if (IsOnline(guid))
+            {
+                DraftOf(guid).InviteCancelled = true;
+            }
         }
     }
 
@@ -1152,7 +1207,7 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
                 _queues[worker] = queue;
             }
 
-            queue.Enqueue(new GroupEvent(guid.Value, draft.Replica, draft.DepartedGroupId, draft.Disbanded, draft.Inviter, draft.Packets.ToArray()));
+            queue.Enqueue(new GroupEvent(guid.Value, draft.Replica, draft.DepartedGroupId, draft.Disbanded, draft.Inviter, draft.Packets.ToArray(), draft.InviteCancelled));
             while (queue.Count > MaxQueuedEventsPerWorker)
             {
                 queue.Dequeue();

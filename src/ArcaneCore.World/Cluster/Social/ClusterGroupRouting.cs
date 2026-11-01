@@ -99,6 +99,7 @@ internal static class GroupWireCodec
             w.Write(e.DepartedGroupId);
             w.Write(e.Disbanded);
             w.Write(e.InviterGuid);
+            w.Write(e.InviteCancelled);
             w.Write(e.Packets.Count);
             foreach (GroupPacket p in e.Packets)
             {
@@ -145,6 +146,7 @@ internal static class GroupWireCodec
             uint departed = r.ReadUInt32();
             bool disbanded = r.ReadBoolean();
             ulong inviter = r.ReadUInt64();
+            bool inviteCancelled = r.ReadBoolean();
             int packetCount = ReadCount(r);
             var packets = new GroupPacket[packetCount];
             for (int k = 0; k < packetCount; k++)
@@ -152,7 +154,7 @@ internal static class GroupWireCodec
                 packets[k] = new GroupPacket((WorldOpcode)r.ReadUInt16(), ReadBytes(r));
             }
 
-            events.Add(new GroupEvent(recipient, replica, departed, disbanded, inviter, packets));
+            events.Add(new GroupEvent(recipient, replica, departed, disbanded, inviter, packets, inviteCancelled));
         }
 
         return events;

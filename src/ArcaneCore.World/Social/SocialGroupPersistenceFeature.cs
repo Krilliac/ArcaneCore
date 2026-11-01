@@ -166,6 +166,8 @@ public sealed class SocialGroupPersistenceFeature(IServiceProvider services, ISe
                 _holding = true;
             }
 
+            // The offline-leader handover of the whole realm runs here, at the holder, about once a second (the workers' mirrors never do it).
+            authority.UpdateOfflineLeaders();
             current = authority.Snapshots();
         }
         else

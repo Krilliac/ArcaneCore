@@ -45,6 +45,8 @@ public sealed class PresenceWireGoldenTests
         Assert.Equal(18, (byte)PresenceOp.Logout);
         Assert.Equal(19, (byte)PresenceOp.ChannelModerate);
         Assert.Equal(20, (byte)PresenceOp.ChannelState);
+        Assert.Equal(21, (byte)PresenceOp.GroupCommand);
+        Assert.Equal(22, (byte)PresenceOp.GroupDrain);
     }
 
     [Fact]
