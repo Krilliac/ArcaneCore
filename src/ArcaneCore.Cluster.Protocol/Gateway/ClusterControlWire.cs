@@ -88,6 +88,34 @@ public enum ControlNoticeOutcome : byte
     Failed = 4,
 }
 
+/// <summary>
+/// Why the gateway refused a submit or ended a transfer without completing it. The worker decides what a player sees from this code, never from the free text (which carries node ids, account ids and exception
+/// text and is for logs only). Values are wire values: never renumber.
+/// </summary>
+public enum ControlReasonCode : byte
+{
+    /// <summary>No structured reason (a completed outcome, operator text, or a sender that does not classify).</summary>
+    None = 0,
+
+    /// <summary>The target worker or instance is full (retail <c>TRANSFER_ABORT_MAX_PLAYERS</c>).</summary>
+    Capacity = 1,
+
+    /// <summary>No worker owns the target map.</summary>
+    NoOwner = 2,
+
+    /// <summary>A transfer of this character or slot is already running or unresolved.</summary>
+    AlreadyRunning = 3,
+
+    /// <summary>The transfer was aborted after it started.</summary>
+    Aborted = 4,
+
+    /// <summary>The request kind or the feature is not available on this gateway.</summary>
+    NotAvailable = 5,
+
+    /// <summary>The gateway failed internally.</summary>
+    Internal = 6,
+}
+
 /// <summary>Option bits of a transfer request (<see cref="ControlTransferSubmit.Options"/>).</summary>
 [Flags]
 public enum ControlTransferOptions : byte
@@ -194,11 +222,11 @@ public sealed record ControlTransferSubmit(
 public sealed record ControlSubmit(ulong RequestId, ControlSubmitBody Body);
 
 /// <summary>Gateway to worker: whether the gateway accepted a <see cref="ControlSubmit"/> and the operation id it runs under.</summary>
-public sealed record ControlSubmitReply(ulong RequestId, bool Accepted, Guid OperationId, string Reason);
+public sealed record ControlSubmitReply(ulong RequestId, bool Accepted, Guid OperationId, string Reason, ControlReasonCode Code = ControlReasonCode.None);
 
 /// <summary>Gateway to worker: text for an operator or the outcome of a transfer, addressed by session generation, account and character.</summary>
 public sealed record ControlNotice(
-    ControlNoticeKind Kind, long SessionGeneration, int AccountId, ulong CharacterGuid, Guid OperationId, ControlNoticeOutcome Outcome, string Text);
+    ControlNoticeKind Kind, long SessionGeneration, int AccountId, ulong CharacterGuid, Guid OperationId, ControlNoticeOutcome Outcome, string Text, ControlReasonCode Code = ControlReasonCode.None);
 
 /// <summary>
 /// Encoding of the unified control frames (<see cref="GatewayWorkerFrameType.ControlRequest"/> to <see cref="GatewayWorkerFrameType.ControlNotice"/>, contract 5):
@@ -619,6 +647,7 @@ public static class ClusterControlWire
         w.Bool(reply.Accepted);
         w.Guid(reply.OperationId);
         w.TextTruncated(reply.Reason);
+        w.Byte(CheckCode(reply.Code));
         return w.ToArray();
     }
 
@@ -629,8 +658,9 @@ public static class ClusterControlWire
         bool accepted = r.Bool();
         Guid operationId = r.Guid();
         string reason = r.Text();
+        ControlReasonCode code = ReadCode(ref r);
         r.End();
-        return new ControlSubmitReply(requestId, accepted, operationId, reason);
+        return new ControlSubmitReply(requestId, accepted, operationId, reason, code);
     }
 
     // ------------------------------------------------------------------ ControlNotice (32)
@@ -656,6 +686,7 @@ public static class ClusterControlWire
         w.Guid(notice.OperationId);
         w.Byte((byte)notice.Outcome);
         w.TextTruncated(notice.Text);
+        w.Byte(CheckCode(notice.Code));
         return w.ToArray();
     }
 
@@ -679,11 +710,33 @@ public static class ClusterControlWire
         }
 
         string text = r.Text();
+        ControlReasonCode code = ReadCode(ref r);
         r.End();
-        return new ControlNotice((ControlNoticeKind)kind, generation, accountId, characterGuid, operationId, (ControlNoticeOutcome)outcome, text);
+        return new ControlNotice((ControlNoticeKind)kind, generation, accountId, characterGuid, operationId, (ControlNoticeOutcome)outcome, text, code);
     }
 
     // ------------------------------------------------------------------ helpers
+
+    private static byte CheckCode(ControlReasonCode code)
+    {
+        if (!Enum.IsDefined(code))
+        {
+            throw new ArgumentException($"unknown reason code {(byte)code}", nameof(code));
+        }
+
+        return (byte)code;
+    }
+
+    private static ControlReasonCode ReadCode(ref Reader r)
+    {
+        byte code = r.Byte();
+        if (!Enum.IsDefined((ControlReasonCode)code))
+        {
+            throw new InvalidDataException($"control frame with unknown reason code {code}");
+        }
+
+        return (ControlReasonCode)code;
+    }
 
     private static void CheckVerb(ControlKind kind, ControlVerb verb)
     {

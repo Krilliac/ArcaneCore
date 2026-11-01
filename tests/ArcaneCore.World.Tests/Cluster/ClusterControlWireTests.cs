@@ -286,7 +286,7 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     public void ControlSubmitReply_GoldenBytes()
     {
         byte[] frame = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(13, true, Op, "no"));
-        Assert.Equal(Concat([31], [13, 0, 0, 0, 0, 0, 0, 0], [1], Op.ToByteArray(), [2, 0, 0, 0], "no"u8.ToArray()), frame);
+        Assert.Equal(Concat([31], [13, 0, 0, 0, 0, 0, 0, 0], [1], Op.ToByteArray(), [2, 0, 0, 0], "no"u8.ToArray(), [0]), frame);
     }
 
     [Fact]
@@ -294,8 +294,41 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     {
         byte[] frame = ClusterControlWire.EncodeNotice(new ControlNotice(ControlNoticeKind.TransferOutcome, 5, 7, 9, Op, ControlNoticeOutcome.Aborted, "x"));
         Assert.Equal(
-            Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [2], [1, 0, 0, 0], "x"u8.ToArray()),
+            Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [2], [1, 0, 0, 0], "x"u8.ToArray(), [0]),
             frame);
+    }
+
+    [Fact]
+    public void ControlReasonCode_ValuesArePinned()
+    {
+        Assert.Equal(new[] { 0, 1, 2, 3, 4, 5, 6 }, Values<ControlReasonCode>());
+    }
+
+    [Fact]
+    public void ControlSubmitReply_AndNotice_CarryTheReasonCode_GoldenBytes()
+    {
+        byte[] reply = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(13, false, Op, "no", ControlReasonCode.Capacity));
+        Assert.Equal(Concat([31], [13, 0, 0, 0, 0, 0, 0, 0], [0], Op.ToByteArray(), [2, 0, 0, 0], "no"u8.ToArray(), [1]), reply);
+        byte[] notice = ClusterControlWire.EncodeNotice(
+            new ControlNotice(ControlNoticeKind.TransferOutcome, 5, 7, 9, Op, ControlNoticeOutcome.Refused, "x", ControlReasonCode.NoOwner));
+        Assert.Equal(
+            Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [3], [1, 0, 0, 0], "x"u8.ToArray(), [2]),
+            notice);
+        Assert.Equal(ControlReasonCode.Capacity, ClusterControlWire.DecodeSubmitReply(reply.AsSpan(1)).Code);
+        Assert.Equal(ControlReasonCode.NoOwner, ClusterControlWire.DecodeNotice(notice.AsSpan(1)).Code);
+    }
+
+    [Fact]
+    public void ReasonCode_UnknownValue_IsRefusedOnEncodeAndDecode()
+    {
+        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(1, false, Op, "", (ControlReasonCode)99)));
+        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeNotice(new ControlNotice(ControlNoticeKind.OperatorText, 1, 1, 1, Op, ControlNoticeOutcome.None, "", (ControlReasonCode)99)));
+        byte[] reply = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(1, false, Op, ""))[1..];
+        reply[^1] = 99;
+        Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeSubmitReply(reply));
+        byte[] notice = ClusterControlWire.EncodeNotice(new ControlNotice(ControlNoticeKind.OperatorText, 1, 2, 3, Op, ControlNoticeOutcome.None, ""))[1..];
+        notice[^1] = 99;
+        Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeNotice(notice));
     }
 
     // ------------------------------------------------------------------ round trips
