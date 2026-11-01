@@ -13,7 +13,6 @@ using ArcaneCore.World.Cluster.Control;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Transfer;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Transfer;
@@ -26,6 +25,20 @@ namespace ArcaneCore.World.Tests.Cluster.Transfer;
 /// </summary>
 public sealed class CrossWorkerTeleportTests : IDisposable
 {
+    /// <summary>A clock that only moves when the test advances it. The router's expiry reads <see cref="TimeProvider.GetTimestamp"/> and <see cref="TimeProvider.GetElapsedTime(long, long)"/>; one tick is 100 ns.</summary>
+    private sealed class ManualTimeProvider : TimeProvider
+    {
+        private long _ticks;
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Interlocked.Read(ref _ticks);
+
+        public override DateTimeOffset GetUtcNow() => new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero) + TimeSpan.FromTicks(Interlocked.Read(ref _ticks));
+
+        public void Advance(TimeSpan by) => Interlocked.Add(ref _ticks, by.Ticks);
+    }
+
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(15);
     private const string Secret = "cross-worker-teleport-secret-0123456789";
     private const int AccountId = 5;
@@ -167,7 +180,7 @@ public sealed class CrossWorkerTeleportTests : IDisposable
     [Fact]
     public void AnInFlightTransferThatNeverGetsANotice_ExpiresSoTheCharacterCanTryAgain()
     {
-        var time = new FakeTimeProvider();
+        var time = new ManualTimeProvider();
         GatewayClusterFarTeleportRouter router = NewRouter(time);
         Assert.True(router.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));
         Assert.False(router.TryBeginTransfer(_player, Kalimdor, TeleportOptions.None));

@@ -409,6 +409,26 @@ public sealed class WorkerControlServiceTests
         Assert.Equal(1, describe.AdmittedGateways); // the rig has one gateway link
     }
 
+    [Fact]
+    public async Task Transfer_TargetDescribe_OnASourceOnlyWorker_AnswersTheGatewayCount_ButOffersNoCapacity()
+    {
+        var store = new InMemoryTransferDecisionStore();
+        await using Rig rig = await Rig.StartAsync(TransferService(store, new FakeTransferSource(), null));
+
+        ControlReply reply = await rig.SendAsync(ControlKind.PlayerTransfer, Guid.NewGuid(), ControlVerb.TargetDescribe);
+
+        Assert.Equal(ControlStatus.Ok, reply.Status);
+        var describe = Assert.IsType<ControlTargetDescribePayload>(reply.Payload);
+        Assert.Equal(1, describe.AdmittedGateways);
+        Assert.Equal(Guid.Empty, describe.Incarnation);
+        Assert.False(describe.AdmissionOpen);
+        Assert.Equal(0, describe.FreeReservations);
+
+        TransferDecisionRecord row = await NewTransferAsync(store, PlayerTransferStage.Reserve);
+        ControlReply reserve = await rig.SendAsync(ControlKind.PlayerTransfer, row.TransferId, ControlVerb.Reserve, new ControlReserveArguments(row.CharacterGuid, 1, 0));
+        Assert.Equal(ControlStatus.Refused, reserve.Status); // it can never be a target
+    }
+
     // ------------------------------------------------------------------ opt-in keys
 
     [Fact]
