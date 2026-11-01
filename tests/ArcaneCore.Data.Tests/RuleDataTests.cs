@@ -44,7 +44,7 @@ public sealed class RuleDataTests : IAsyncLifetime
         await using WorldDbContext read = TestContexts.Create<WorldDbContext>(cs);
         RuleContent loaded = await new EfRuleContentStore(read).LoadAsync();
 
-        Assert.Equal(34, PlayerbotLadderContent.Goals.Count);
+        Assert.Equal(35, PlayerbotLadderContent.Goals.Count);
         Assert.Equal(PlayerbotLadderContent.Goals, loaded.Goals);
         Assert.Equal(PlayerbotLadderContent.Rules, loaded.Rules);
         Assert.Equal(PlayerbotLadderContent.Actions, loaded.Actions);

@@ -531,7 +531,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     }
 
     /// <summary>What <see cref="PlayerbotEscapes"/> reads about the retreat; <paramref name="victim"/> is the nearest living enemy.</summary>
-    private static EscapeSituation SituationOf(Player player, IReadOnlyList<Creature> enemyList, out Creature? victim)
+    internal static EscapeSituation SituationOf(Player player, IReadOnlyList<Creature> enemyList, out Creature? victim)
     {
         victim = enemyList.Where(e => e.IsAlive && ReferenceEquals(e.Map, player.Map)).OrderBy(e => Distance(player, e)).FirstOrDefault();
         int within8 = 0, within10 = 0;
@@ -545,7 +545,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
 
         return new EscapeSituation(player.Class, player.MaxHealth == 0 ? 0 : player.Health * 100f / player.MaxHealth,
             player.Combat.IsInCombat, within8, within10, victim is not null && Distance(player, victim) <= PlayerbotClassRotation.MeleeRange + 1f,
-            victim is not null, ShapeshiftService.GetForm(player) == ShapeshiftForm.Cat);
+            victim is not null, ShapeshiftService.GetForm(player) == ShapeshiftForm.Cat, Events.PlayerbotWorldPvpObjectives.Carries(player));
     }
 
     /// <summary>An escape that is known, castable at its target now and (unless <paramref name="ignoreUsed"/>) not used yet this retreat.</summary>

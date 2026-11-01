@@ -214,13 +214,18 @@ internal static partial class PlayerbotMotion
     /// <summary>
     /// Lifts the refusal of one place: removes the blacklist entries within <see cref="SamePlaceYards"/> of <paramref name="destination"/>
     /// and nothing else. The other refused places, the loop pattern and the rejection count stay (<see cref="ForgetLoops"/> clears them
-    /// all, which a caller that may run again and again would turn into a guard that never trips). 2D like <see cref="IsBlacklisted"/>, whose refusal it lifts. Thread affinity: the world update, as
+    /// all, which a caller that may run again and again would turn into a guard that never trips). It lifts every entry within that distance whichever goal put it there, so callers use it only for a place that is their own plan. Allocation-free. 2D like <see cref="IsBlacklisted"/>, whose refusal it lifts. Thread affinity: the world update, as
     /// the rest of the motion state.
     /// </summary>
     internal static void Unblacklist(Player player, Vector3 destination)
     {
         if (!States.TryGetValue(player, out MotionState? state) || state.Blacklist.Count == 0) return;
-        state.Blacklist.RemoveAll(entry => Vector2.Distance(Flat(entry.Destination), Flat(destination)) <= SamePlaceYards);
+        var entries = state.Blacklist;
+        Vector2 at = Flat(destination);
+        for (int i = entries.Count - 1; i >= 0; i--)
+        {
+            if (Vector2.Distance(Flat(entries[i].Destination), at) <= SamePlaceYards) entries.RemoveAt(i);
+        }
     }
 
     /// <summary>
