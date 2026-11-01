@@ -252,6 +252,9 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
         if (_refused.Count > 256) _refused.Clear();
     }
 
+    /// <summary>The "invites off" store (set by the social feature; null: nobody has opted out). A player in it gets no invitation by affinity.</summary>
+    internal PlayerbotInviteOptOut? InviteOptOut { get; set; }
+
     /// <summary>
     /// A bot-led guild's master or officer (a guild whose leader is no registered bot is left alone, as in <see cref="Recruit"/>) invites a guildless same-team character (player or bot) it likes (<see cref="WorthInviting"/>), at most
     /// one invitation per character per <see cref="PlayerbotSocialGuildOptions.GuildInviteCooldownDays"/> and one per guild per
@@ -282,6 +285,8 @@ internal sealed class PlayerbotGuildMembership(ILogger logger)
             foreach (PlayerbotRelation relation in recorder.Memory.Relations(inviter.Id))
             {
                 if (!WorthInviting(recorder.Memory, options, relation)) continue;
+                if (InviteOptOut is { } optOut && pass.World.FindOnlinePlayer(new ObjectGuid(relation.OtherGuid)) is { Session: WorldSession { IsManaged: false } } asked
+                    && optOut.IsOptedOut(asked.Guid.Value, asked.AccountId)) continue; // "invites off": a real player who opted out is never asked unasked
                 if (pass.World.FindOnlinePlayer(new ObjectGuid(relation.OtherGuid)) is not { IsAlive: true } other || other.Team != inviter.Player.Team) continue;
                 if (other.IsGameMaster || guilds.GetGuildOf(other) is not null || guilds.InvitedTo(other) != 0) continue;
                 if (_offeredAt.TryGetValue(other.Guid.Low, out long at) && pass.NowMs - at < cooldownMs) continue;
