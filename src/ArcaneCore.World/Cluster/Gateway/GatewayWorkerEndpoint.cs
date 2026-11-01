@@ -43,7 +43,8 @@ public sealed class GatewayWorkerEndpoint(
     IOptions<WardenOptions>? wardenOptions = null,
     GatewayWardenManifestVerifier? wardenVerifier = null,
     ServerLifecycleFeature? lifecycle = null,
-    WorldLoginAdmission? loginAdmission = null) : IHostedService, IAsyncDisposable
+    WorldLoginAdmission? loginAdmission = null,
+    IServiceProvider? rootServices = null) : IHostedService, IAsyncDisposable
 {
     private static readonly TimeSpan PendingBanStopWait = TimeSpan.FromSeconds(5);
 
@@ -68,6 +69,17 @@ public sealed class GatewayWorkerEndpoint(
     /// <summary>The running link host (null before start).</summary>
     public GatewaySessionLinkHost? Host => _host;
 
+    /// <summary>The node incarnation the running link advertises in its manifest (<see cref="Guid.Empty"/> before start).</summary>
+    internal Guid LinkIncarnation { get; private set; }
+
+    /// <summary>
+    /// The incarnation the link advertises: the <see cref="WorldHost.Incarnation"/> of this process (the one a handoff's epoch takeover hands the characters
+    /// ownership to, so a standby is addressed by the same id on the link and in the ownership row), else the ownership token's incarnation, else a random one
+    /// (a hand-built endpoint without a world host).
+    /// </summary>
+    internal static Guid ResolveLinkIncarnation(WorldHost? worldHost, Guid? ownershipIncarnation)
+        => worldHost?.Incarnation ?? ownershipIncarnation ?? Guid.NewGuid();
+
     public async Task StartAsync(CancellationToken cancellationToken)
     {
         GatewayWorkerOptions config = options.Value;
@@ -89,8 +101,11 @@ public sealed class GatewayWorkerEndpoint(
         Acceptor = new WorldGatewaySessionAcceptor(scopes, opcodes, world, registry, sessionOptions.Value, loggers, admission);
         // Owner epoch: the fenced ownership token's epoch when fencing holds one, else 1 (unfenced single node), as the
         // readiness probe reports it. A change after a takeover makes every older packet stale.
+        // The world host is registered as an IHostedService only; by now every hosted service exists, so the lookup creates nothing.
+        WorldHost? worldHost = rootServices?.GetServices<IHostedService>().OfType<WorldHost>().FirstOrDefault();
+        LinkIncarnation = ResolveLinkIncarnation(worldHost, world.CharacterOwnership?.Incarnation);
         _host = new GatewaySessionLinkHost(
-            config.ToManifest(world.CharacterOwnership?.Incarnation ?? Guid.NewGuid(), versions),
+            config.ToManifest(LinkIncarnation, versions),
             Acceptor,
             () => world.CharacterOwnership is { Epoch: > 0 } token ? token.Epoch : 1,
             config.LinkSecret,
