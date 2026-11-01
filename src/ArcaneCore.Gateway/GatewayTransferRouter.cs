@@ -584,7 +584,7 @@ internal sealed class GatewayLinkClientAdapter(GatewaySessionLinkClient client) 
 /// with the node id the coordinator names (the node ids of <c>Gateway:Workers</c>). The target session's packets go to the client as they arrive, as long
 /// as the router still considers the session's generation and the link's owner epoch current.
 /// </summary>
-internal sealed class GatewayServerTransferEnvironment(GatewayServer server, Func<GatewayTransferRouter> router) : IGatewayTransferEnvironment
+internal sealed class GatewayServerTransferEnvironment(GatewayServer server) : IGatewayTransferEnvironment
 {
     public IGatewayTransferSession? FindSession(long sessionGeneration) => server.FindConnection(sessionGeneration);
 
@@ -595,7 +595,7 @@ internal sealed class GatewayServerTransferEnvironment(GatewayServer server, Fun
             return null;
         }
 
-        var sink = new TargetSink(session, router());
+        var sink = new TargetSink(session, server.Transfers);
         GatewaySessionOpenReply reply = await link.OpenAsync(server.NextGeneration, generation =>
         {
             sink.Generation = generation;
