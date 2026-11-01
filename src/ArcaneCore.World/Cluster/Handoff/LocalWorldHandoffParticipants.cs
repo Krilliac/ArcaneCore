@@ -129,12 +129,17 @@ public sealed class LocalWorldHandoffSource(
 
     public Task RetireAsync(CancellationToken cancellationToken)
     {
+        int[] moved;
         lock (_gate)
         {
             _retired = true;
             admission.Close(RetiredReason);
+            moved = [.. _frozenCharacters];
         }
 
+        // The characters this world froze now belong to the new owner: the save queue drops their waiting and retained snapshots and skips later ones
+        // (one informational line), instead of attempting writes the fence must refuse. Only the frozen characters are named; any other character keeps its writes.
+        saveQueue.RetireCharacters(moved);
         return Task.CompletedTask;
     }
 
