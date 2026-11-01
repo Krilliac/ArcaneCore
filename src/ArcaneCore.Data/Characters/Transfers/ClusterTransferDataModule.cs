@@ -55,6 +55,9 @@ public sealed class ClusterWorldHandoffRow
     /// <summary><see cref="ClusterTransferDataModule.OpenHandoffKey"/> while the handoff is unresolved, null after; unique, so only one handoff is open at a time.</summary>
     public string? OpenKey { get; set; }
 
+    /// <summary>The ownership scope this handoff moves while it is unresolved (<c>world</c> or <c>worker:&lt;shard&gt;</c>), null after; unique, so one handoff is open per scope (<see cref="ClusterHandoffScopeDataModule"/>, schema 73). Null on a handoff opened before that schema: those are always <c>world</c> handoffs.</summary>
+    public string? OpenScope { get; set; }
+
     public string SourceWorker { get; set; } = string.Empty;
     public string TargetWorker { get; set; } = string.Empty;
     public int Stage { get; set; }

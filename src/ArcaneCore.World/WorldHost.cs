@@ -310,6 +310,11 @@ public sealed class WorldHost(
         {
             throw new InvalidOperationException($"the characters database writer lock is held elsewhere (the old world is still running); refusing to promote, the standby stays a standby: {ex.Message}", ex);
         }
+        catch (WorkerScopeConfigurationException ex)
+        {
+            // Worker scope misconfigured (an invalid shard id, or SQLite without AllowSqliteWorkerScope): nothing is held; the standby stays a standby, as for the other lock failures.
+            throw new InvalidOperationException($"the worker shard writer lock cannot be taken with this configuration ({ex.Message}); refusing to promote, the standby stays a standby", ex);
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Data.Common.DbException)
         {
             // Not contention: the lock could not be created, or the database server could not be asked for it. Nothing is held; the standby stays a standby.
@@ -681,7 +686,8 @@ public sealed class WorldHost(
         CharacterOwnershipToken? token;
         if (_fencing is { HasTakeover: true, TakeoverEpoch: { } takeoverEpoch, TakeoverIncarnation: { } takeoverIncarnation })
         {
-            token = await store.TryTakeoverAsync(new CharacterOwnershipToken(scope, takeoverEpoch, takeoverIncarnation), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
+            // The takeover also writes this worker's owned maps: a handed-over shard must not keep the old owner's map set.
+            token = await store.TryTakeoverAsync(new CharacterOwnershipToken(scope, takeoverEpoch, takeoverIncarnation), _fencing.OwnerNode, _incarnation, maps, cancellationToken).ConfigureAwait(false);
         }
         else
         {

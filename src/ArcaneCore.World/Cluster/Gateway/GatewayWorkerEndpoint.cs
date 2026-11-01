@@ -333,7 +333,8 @@ public static class GatewayWorkerServiceCollectionExtensions
     {
         services.PostConfigure<Data.DatabaseOptions>(database => database.Upgrade.ValidateOnly = true);
         services.RemoveAll<WorldWriterGuard>();
-        // Keeps the database options but defers the lock: Acquire (WorldStartup, WorldHost.StartAsync) takes nothing while the active world holds it; WorldHost.PromoteAsync takes it.
+        // Keeps the database options but defers the lock: Acquire (WorldStartup, WorldHost.StartAsync) takes nothing while the active world holds it; WorldHost.PromoteAsync takes it
+        // (the realm lock, or in Worker scope the shard lock of the worker it replaces: the standby sets Cluster:Fencing:Shard explicitly, see CharacterFencingOptions.ValidateWorkerScope).
         services.AddSingleton(sp => new WorldWriterGuard(sp.GetService<Microsoft.Extensions.Options.IOptions<Data.DatabaseOptions>>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<WorldWriterGuard>>(), deferUntilPromotion: true,
             lifetime: sp.GetService<IHostApplicationLifetime>(), drain: sp.GetService<ArcaneCore.World.Persistence.ShutdownDrain>(),

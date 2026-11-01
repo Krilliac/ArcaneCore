@@ -196,15 +196,44 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         return Token(row);
     }
 
-    public async Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// A handoff's takeover (compare-and-swap of the observed epoch and incarnation to the next epoch under <paramref name="newIncarnation"/>). A worker shard
+    /// keeps the owned map set it has (the caller does not change what the shard owns) and gets a fresh heartbeat; use the overload with an owned map set when
+    /// the new owner's maps differ.
+    /// </summary>
+    public Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, CancellationToken cancellationToken = default)
+        => TakeoverCoreAsync(observed, ownerNode, newIncarnation, setMaps: false, ownedMaps: null, cancellationToken);
+
+    /// <summary>
+    /// A handoff's takeover of a worker shard that also writes the new owner's <paramref name="ownedMaps"/> (null owns every map) in the same transaction as the epoch swap, so a
+    /// handed-over shard does not keep the old owner's map set (design _wf/writer-lock-DESIGN.md step C7). Gated like a claim: the 'world' row must be inactive and the maps must not
+    /// overlap another active worker, else null (the row is untouched). The 'world' scope owns every map and takes none.
+    /// </summary>
+    public Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+        => TakeoverCoreAsync(observed, ownerNode, newIncarnation, setMaps: true, ownedMaps, cancellationToken);
+
+    private async Task<CharacterOwnershipToken?> TakeoverCoreAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, bool setMaps, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(observed);
         ValidateScope(observed.Scope);
         ValidateToken(observed);
         Validate(observed.Scope, ownerNode, newIncarnation);
+        bool worker = CharacterOwnershipScopes.IsWorker(observed.Scope);
+        if (setMaps && !worker && ownedMaps is not null)
+            throw new ArgumentException("the world ownership scope owns every map", nameof(ownedMaps));
+        bool writeMaps = setMaps && worker;
+        string? storedMaps = writeMaps && ownedMaps is not null ? FormatMaps(ownedMaps) : null;
         string incarnation = newIncarnation.ToString("D");
         using IDisposable exempt = CharacterWriteFence.Exempt();
         await using var tx = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        if (writeMaps
+            && (!await LockGateAsync(cancellationToken).ConfigureAwait(false)
+                || await OverlapsOtherActiveWorkerAsync(observed.Scope, ownedMaps, cancellationToken).ConfigureAwait(false)))
+        {
+            await tx.RollbackAsync(cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+
         int changed = await db.Set<CharacterOwnershipRow>()
             .Where(r => r.Scope == observed.Scope && r.Active && r.Epoch == observed.Epoch && r.Epoch < long.MaxValue
                 && r.WriteSequence < long.MaxValue && r.OwnerIncarnation == observed.Incarnation.ToString("D"))
@@ -220,12 +249,22 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
             return null;
         }
 
-        if (CharacterOwnershipScopes.IsWorker(observed.Scope))
+        if (worker)
         {
             // A handoff moves a live shard, so the new owner starts with a fresh heartbeat (the world row has none).
             long now = NowUnixMs();
-            await db.Set<CharacterOwnershipRow>().Where(r => r.Scope == observed.Scope)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.HeartbeatAtMs, (long?)now), cancellationToken).ConfigureAwait(false);
+            if (writeMaps)
+            {
+                await db.Set<CharacterOwnershipRow>().Where(r => r.Scope == observed.Scope)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(r => r.OwnedMaps, storedMaps)
+                        .SetProperty(r => r.HeartbeatAtMs, (long?)now), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await db.Set<CharacterOwnershipRow>().Where(r => r.Scope == observed.Scope)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.HeartbeatAtMs, (long?)now), cancellationToken).ConfigureAwait(false);
+            }
         }
 
         CharacterOwnershipRow row = await db.Set<CharacterOwnershipRow>().AsNoTracking().SingleAsync(r => r.Scope == observed.Scope, cancellationToken).ConfigureAwait(false);
