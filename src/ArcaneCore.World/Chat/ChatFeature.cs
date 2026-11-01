@@ -386,12 +386,11 @@ public sealed class ChatFeature : IWorldFeature
     }
 
     /// <summary>The receiving half of <c>ChatHandlers.Whisper</c> (vmangos MasterPlayer::Whisper) for a whisperer on another worker; every outcome is answered to the whisperer.</summary>
-    private static void ApplyClusterWhisper(WorldRuntime world, ClusterChatRouting cluster, Player receiver, ClusterChatFrame request)
+    private void ApplyClusterWhisper(WorldRuntime world, ClusterChatRouting cluster, Player receiver, ClusterChatFrame request)
     {
         var whisperer = new ObjectGuid(request.SenderGuid);
         var answering = new ClusterChatSender(receiver.Guid.Value, receiver.Name, receiver.AccountId);
         var senderSecurity = (AccountSecurity)request.SenderSecurity;
-        ChatFeature? chat = receiver.Session.Services.GetService<ChatFeature>();
 
         void Answer(ulong noted, params ClusterChatPacket[] packets) => cluster.SendReply(
             answering,
@@ -400,7 +399,7 @@ public sealed class ChatFeature : IWorldFeature
 
         // A plain player cannot see a staff member who does not accept its whispers: the same notice as for an offline target.
         if (senderSecurity == AccountSecurity.Player && receiver.Security > AccountSecurity.Player
-            && chat is not null && !chat.AcceptsWhispersFrom(receiver, whisperer))
+            && !AcceptsWhispersFrom(receiver, whisperer))
         {
             Answer(0, new ClusterChatPacket(WorldOpcode.SmsgChatPlayerNotFound, ChatPackets.BuildPlayerNotFound(receiver.Name)));
             return;

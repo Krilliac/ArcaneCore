@@ -896,7 +896,7 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
         // security level, so for a plain player the other workers' entries are listed only while staff are never hidden (GmLevelInWhoList at its maximum).
         if (entries.Count < WhoMaxEntries
             && session.Services.GetService<ChatFeature>()?.Cluster is { } cluster
-            && (session.Security != AccountSecurity.Player || options.GmLevelInWhoList >= AccountSecurity.Administrator))
+            && session.Security >= AccountSecurity.Administrator)
         {
             AskerWho asker = new(session.Security, player.Team, player.ZoneId, askerMap, askerInstance);
             var filter = new RealmWhoFilter(

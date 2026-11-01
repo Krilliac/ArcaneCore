@@ -510,6 +510,10 @@ public sealed class ClusterChatRouting : IAsyncDisposable
     /// </summary>
     public int PumpOnce()
     {
+        // Chat is delivered through the worker queue; the gateway copy of each delivery has no consumer in a cluster realm (every worker shares one gateway id), so it is
+        // discarded here to keep the holder from retaining it forever.
+        _ = _router.DrainGatewayDeliveries(_gatewayId);
+
         Action<ClusterChatDelivery>? deliver = Deliver;
         if (deliver is null)
         {

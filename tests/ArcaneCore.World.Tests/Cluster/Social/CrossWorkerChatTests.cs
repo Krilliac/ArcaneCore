@@ -246,12 +246,37 @@ public sealed class CrossWorkerChatTests : IAsyncDisposable
     }
 
     [Fact]
-    public void Pump_LeavesDeliveriesQueuedWhileNoOneListens()
+    public async Task Pump_LeavesDeliveriesQueuedWhileNoOneListens_AndHandsThemOverOnceSomeoneDoes()
     {
         Register(_a, 1, "Alice", 5);
         Register(_b, 2, "Bob", 7);
+        _a.Routing.SendWhisper(Sender(1, "Alice"), "bob", Line(ClusterChatFrameKind.Whisper, "later"), () => { });
+        await _a.Routing.FlushAsync();
+
         _b.Routing.Deliver = null;
         Assert.Equal(0, _b.Routing.PumpOnce());
+        Assert.Empty(_b.Received);
+
+        _b.Routing.Deliver = _b.Received.Add;
+        Assert.Equal(1, _b.Routing.PumpOnce());
+        Assert.Equal("later", Assert.Single(_b.Received).Frame.Text);
+    }
+
+    [Fact]
+    public async Task Pump_LeavesNothingQueuedAtTheHolder()
+    {
+        Register(_a, 1, "Alice", 5, guildId: 9);
+        Register(_b, 2, "Bob", 7, guildId: 9);
+
+        _a.Routing.SendToGuild(Sender(1, "Alice"), 9, Line(ClusterChatFrameKind.Guild, "gm"));
+        await _a.Routing.FlushAsync();
+        Assert.Equal(1, _b.Routing.PumpOnce());
+        Assert.Equal(0, _a.Routing.PumpOnce()); // the speaker's own copy, if the router queued one, is dropped as served locally
+
+        // The gateway copy of every delivery is discarded by the pump, the worker copy was handed over: nothing stays on the holder.
+        Assert.Empty(_router.DrainGatewayDeliveries(GatewayId));
+        Assert.Empty(_router.DrainWorkerDeliveries("worker-b"));
+        Assert.Empty(_router.DrainWorkerDeliveries("worker-a"));
     }
 
     // ---- golden bytes --------------------------------------------------------------------------------------------------------------------------
