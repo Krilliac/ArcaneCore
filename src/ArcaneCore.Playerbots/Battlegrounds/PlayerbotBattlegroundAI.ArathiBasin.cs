@@ -35,6 +35,19 @@ internal sealed partial class PlayerbotBattlegroundAI
     /// <summary>The coordinator's roles of the bots of this bot's team in its match: the team plan orders exactly these.</summary>
     internal void SetTeamRoles(IReadOnlyDictionary<ObjectGuid, PlayerbotBattlegroundRole> roles) => _teamRoles = roles;
 
+    /// <summary>
+    /// The corpse run's hook (<see cref="PlayerbotRecovery.ContestedObjectiveNear"/>): whether an Arathi Basin node being assaulted lies at
+    /// <paramref name="at"/> (<see cref="PlayerbotArathiBasinTactics.BodyNodeYards"/>). Other battlegrounds have none.
+    /// </summary>
+    private bool ContestedObjectiveNear(Player player, Vector3 at)
+    {
+        if (_match is not ArathiBasin ab) return false;
+        var nodes = new List<PlayerbotAbNode>(ArathiBasin.NodeCount);
+        foreach (IGrouping<int, (int Node, GameObject Banner)> node in Banners(player, ArathiBasin.NodeCount).GroupBy(b => b.Node).OrderBy(g => g.Key))
+            nodes.Add(new PlayerbotAbNode(node.Key, Position(node.First().Banner), ab.NodeStatus(node.Key)));
+        return PlayerbotArathiBasinTactics.ContestedNodeNear(nodes, at, PlayerbotArathiBasinTactics.BodyNodeYards);
+    }
+
     private void PlayArathiBasin(Player player, ArathiBasin ab, Team team, PlayerbotBattlegroundRole role, uint interval)
     {
         List<(int Node, GameObject Banner)> banners = Banners(player, ArathiBasin.NodeCount);
