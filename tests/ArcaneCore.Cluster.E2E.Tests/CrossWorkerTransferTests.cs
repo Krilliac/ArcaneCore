@@ -110,7 +110,9 @@ public sealed class CrossWorkerTransferTests
 
         await replacement.LogoutAsync(ct);
 
-        // No stale write from the old owner: the character row holds the new map after both sessions are gone.
+        // No stale write from the old owner: the character row holds the new map after both sessions are gone. SMSG_LOGOUT_COMPLETE only queues the final
+        // save, so the row is read once the claim is released, which happens only after the character's last write is durable.
+        Assert.True(await WaitForClaimReleasedAsync(cluster, guid, ct), "The logout must release the character's claim once its final save is durable.");
         Assert.Equal((long)KalimdorMap, await ReadCharacterMapAsync(cluster, guid, ct));
     }
 
@@ -147,6 +149,7 @@ public sealed class CrossWorkerTransferTests
 
         await session.LogoutAsync(ct);
         Assert.Single(await ReadDecisionsAsync(cluster, guid, ct));
+        Assert.True(await WaitForClaimReleasedAsync(cluster, guid, ct), "The logout must release the character's claim once its final save is durable.");
         Assert.Equal((long)DeadminesMap, await ReadCharacterMapAsync(cluster, guid, ct));
     }
 
@@ -288,6 +291,29 @@ public sealed class CrossWorkerTransferTests
             }
 
             await Task.Delay(250, ct);
+        }
+    }
+
+    /// <summary>
+    /// True once the character's owner row is gone: a logout releases the claim only after every queue holding the character's writes is durable
+    /// (CharacterClaimService.ScheduleRelease), so the final save is in the row by then. False if it is still there after 45 seconds.
+    /// </summary>
+    private static async Task<bool> WaitForClaimReleasedAsync(ClusterProcessFixture cluster, long guid, CancellationToken ct)
+    {
+        using var releaseCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        releaseCts.CancelAfter(TimeSpan.FromSeconds(45));
+        try
+        {
+            while (await ReadOwnerAsync(cluster, guid, releaseCts.Token) is not null)
+            {
+                await Task.Delay(100, releaseCts.Token);
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (releaseCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            return false;
         }
     }
 
