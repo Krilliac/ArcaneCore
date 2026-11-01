@@ -136,7 +136,7 @@ public sealed class DatabaseOptions
 
     public DatabaseConnectionOptions? Auth { get; set; }
 
-    [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]
+    [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World | Kernel.Configuration.ConfigDaemon.Gateway)]
     public DatabaseConnectionOptions? Characters { get; set; }
 
     [Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.World)]

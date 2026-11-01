@@ -42,7 +42,9 @@ public sealed class GatewayServer : BackgroundService
         ILoggerFactory loggers,
         IOptions<NetProtectionOptions>? protection = null,
         GatewayWarden? warden = null,
-        GatewayRealmLiveness? realmLiveness = null)
+        GatewayRealmLiveness? realmLiveness = null,
+        IOptions<GatewayHandoffOptions>? handoff = null,
+        IOptions<GatewayControlOptions>? control = null)
     {
         ArgumentNullException.ThrowIfNull(scopes);
         ArgumentNullException.ThrowIfNull(options);
@@ -54,12 +56,34 @@ public sealed class GatewayServer : BackgroundService
         _protection = protection;
         Warden = warden;
         _realmLiveness = realmLiveness;
+        // Gateway:Handoff:Enabled turns the control channels on; Gateway:Control:* are their reply timeouts. Off (the default), no worker link gets a channel.
+        ControlTimeouts = handoff?.Value.Enabled == true ? (control?.Value ?? new GatewayControlOptions()).ToTimeouts() : null;
         _logger = loggers.CreateLogger<GatewayServer>();
         Transfers = new GatewayTransferRouter(new GatewayServerTransferEnvironment(this));
     }
 
     /// <summary>The gateway side of cross-worker player transfers: buffers, replays and re-points sessions on the worker coordinator's control frames.</summary>
     public GatewayTransferRouter Transfers { get; }
+
+    /// <summary>The reply timeouts of the control channels (<c>Gateway:Control:*</c>), or null when <c>Gateway:Handoff:Enabled</c> is off and the worker links carry no channel.</summary>
+    internal ArcaneCore.World.Cluster.Control.LinkControlTimeouts? ControlTimeouts { get; }
+
+    /// <summary>This gateway process's link incarnation (the manifest every link it opens advertises, so a worker counts all of them as one gateway).</summary>
+    internal Guid Incarnation => _incarnation;
+
+    /// <summary>The link supervisor of the worker with node id <paramref name="nodeId"/>, or null when none is configured (or before start).</summary>
+    internal GatewayWorkerLink? FindWorker(string nodeId)
+    {
+        foreach (GatewayWorkerLink worker in _workers)
+        {
+            if (string.Equals(worker.NodeId, nodeId, StringComparison.Ordinal))
+            {
+                return worker;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>The connection whose current session generation is <paramref name="generation"/>, or null.</summary>
     internal GatewayClientConnection? FindConnection(long generation)
@@ -520,7 +544,7 @@ public sealed class GatewayServer : BackgroundService
         {
             GatewayWorkerEntry entry = entries[index];
             IPEndPoint endpoint = index == 0 && _worker is { } retargeted ? retargeted : new IPEndPoint(IPAddress.Parse(entry.Address), entry.Port);
-            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness, Transfers);
+            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness, Transfers, ControlTimeouts);
         }
 
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
@@ -661,6 +685,8 @@ public sealed class GatewayWorkerLink
     private readonly GatewayRealmLiveness? _realmLiveness;
     private readonly GatewayTransferRouter? _transfers;
     private readonly int[] _maps;
+    private readonly ArcaneCore.World.Cluster.Control.LinkControlTimeouts? _controlTimeouts;
+    private volatile ArcaneCore.World.Cluster.Control.LinkControlChannel? _control;
     private volatile IPEndPoint _target;
     private volatile IPEndPoint? _connected;
     private volatile GatewaySessionLinkClient? _link;
@@ -683,9 +709,11 @@ public sealed class GatewayWorkerLink
         ILogger logger,
         GatewayRouteTable routes,
         GatewayRealmLiveness? realmLiveness = null,
-        GatewayTransferRouter? transfers = null)
+        GatewayTransferRouter? transfers = null,
+        ArcaneCore.World.Cluster.Control.LinkControlTimeouts? controlTimeouts = null)
     {
         ArgumentNullException.ThrowIfNull(routes);
+        _controlTimeouts = controlTimeouts;
         _transfers = transfers;
         _routes = routes;
         _realmLiveness = realmLiveness;
@@ -716,6 +744,12 @@ public sealed class GatewayWorkerLink
 
     /// <summary>The registered link, or null while it is down.</summary>
     public GatewaySessionLinkClient? Link => _link is { IsConnected: true } link ? link : null;
+
+    /// <summary>
+    /// The control channel of the registered link (design _wf/handoff-control-DESIGN.md section 2.4), or null while the link is down or <c>Gateway:Handoff:Enabled</c> is off.
+    /// One channel per link: a reconnect or a retarget builds a new one, and the old one fails its pending requests when its link ends.
+    /// </summary>
+    public ArcaneCore.World.Cluster.Control.LinkControlChannel? ControlChannel => _control is { IsConnected: true } channel ? channel : null;
 
     /// <summary>Completes when this link is registered (the current registration, or the next).</summary>
     public Task WaitForLinkAsync(CancellationToken cancellationToken) => Volatile.Read(ref _linkUp).Task.WaitAsync(cancellationToken);
@@ -828,6 +862,11 @@ public sealed class GatewayWorkerLink
             _connected = worker;
             _lastError = null;
             _routes.LinkUp(NodeId, link.WorkerOwnedMaps, link.WorkerAllowsInstanceMaps);
+            if (_controlTimeouts is { } timeouts)
+            {
+                _control = new ArcaneCore.World.Cluster.Control.LinkControlChannel(link, timeouts, _loggers.CreateLogger<ArcaneCore.World.Cluster.Control.LinkControlChannel>());
+            }
+
             _link = link;
             Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Ready);
             if (registrations++ > 0)
@@ -875,6 +914,7 @@ public sealed class GatewayWorkerLink
 
             Volatile.Write(ref _linkUp, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
             _link = null;
+            _control = null;
             _connected = null;
             _routes.LinkDown(NodeId);
             if (retarget.Task.IsCompleted)

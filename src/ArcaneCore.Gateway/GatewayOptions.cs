@@ -39,7 +39,8 @@ public sealed class GatewayOptions
     /// <summary>
     /// The world workers this gateway links to, one link each (node id, address, port, optional maps). When empty, the single-worker keys
     /// <see cref="WorkerAddress"/> and <see cref="WorkerPort"/> describe one entry named <see cref="LegacyWorkerNodeId"/>; when set, those two
-    /// keys are ignored. Every worker must accept the same <see cref="LinkSecret"/>, <see cref="RealmId"/> and manifest values.
+    /// keys are ignored. Every worker must accept the same <see cref="LinkSecret"/>, <see cref="RealmId"/> and manifest values. An entry may also name a standby
+    /// process (StandbyNodeId, StandbyAddress, StandbyPort), the target of a whole-World handoff of that slot (needs Gateway:Handoff:Enabled).
     /// </summary>
     public List<GatewayWorkerEntry> Workers { get; set; } = [];
 
@@ -124,6 +125,24 @@ public sealed class GatewayOptions
             if (entry.Maps is null || entry.Maps.Any(map => map < 0))
             {
                 problems.Add($"{prefix}:Maps: map ids must not be negative.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.StandbyNodeId))
+            {
+                if (!seen.Add(entry.StandbyNodeId))
+                {
+                    problems.Add($"{prefix}:StandbyNodeId: '{entry.StandbyNodeId}' is used by another node id.");
+                }
+
+                if (string.IsNullOrWhiteSpace(entry.StandbyAddress) || !IPAddress.TryParse(entry.StandbyAddress, out _))
+                {
+                    problems.Add($"{prefix}:StandbyAddress: must be a valid IP address.");
+                }
+
+                if (entry.StandbyPort is < 1 or > IPEndPoint.MaxPort)
+                {
+                    problems.Add($"{prefix}:StandbyPort: must be 1..{IPEndPoint.MaxPort}.");
+                }
             }
         }
 
@@ -234,4 +253,107 @@ public sealed class GatewayWorkerEntry
 
     /// <summary>Map ids this worker owns; empty means it is not map-restricted. Surfaced in the link state for map-aware routing.</summary>
     public int[] Maps { get; set; } = [];
+
+    /// <summary>
+    /// The standby process of this worker's slot (its Cluster:Worker:NodeId, with Cluster:Worker:Standby on): the target of a whole-World handoff of this slot. Empty, the default, means the
+    /// slot has no standby and cannot be handed off. The gateway keeps a session-less control link to it (needs Gateway:Handoff:Enabled); it must differ from every other node id.
+    /// </summary>
+    public string StandbyNodeId { get; set; } = string.Empty;
+
+    /// <summary>Address of the standby's gateway listener (its Cluster:Worker:BindAddress). Used only when <see cref="StandbyNodeId"/> is set.</summary>
+    public string StandbyAddress { get; set; } = "127.0.0.1";
+
+    /// <summary>Port of the standby's gateway listener (its Cluster:Worker:Port). Used only when <see cref="StandbyNodeId"/> is set.</summary>
+    public int StandbyPort { get; set; } = 8096;
+}
+
+/// <summary>
+/// The opt-in key of the gateway's whole-World handoff hosting (<c>Gateway:Handoff:Enabled</c>, design _wf/handoff-control-DESIGN.md sections 2.6 and 3). Off, the default: the gateway
+/// opens no characters database connection, no standby link and no control channel, and behaves exactly as before.
+/// </summary>
+[ConfigDaemons(ConfigDaemon.Gateway)]
+public sealed class GatewayHandoffOptions
+{
+    public const string SectionName = "Gateway:Handoff";
+
+    /// <summary>`true` lets this gateway coordinate whole-World handoffs and finish interrupted ones from the journal: it connects to the characters database (Database:Characters:*, schema validation only, nothing is created or upgraded), keeps a control link to each slot's standby (Gateway:Workers:N:StandbyNodeId) and opens a control channel to every worker. The workers must have Cluster:Worker:Handoff:Enabled on. `false`, the default, changes nothing.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>How often the gateway looks for unresolved handoffs in the journal and recovers them (before the epoch takeover they abort, after it they roll forward). A failing recovery backs off up to 60 s.</summary>
+    public TimeSpan RecoveryInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long a handoff may stay unresolved before the gateway raises an error-severity anomaly (it keeps retrying).</summary>
+    public TimeSpan AnomalyAfter { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Every problem with the bound values, as <c>Gateway:Handoff:Key: problem</c> lines; empty when valid.</summary>
+    public IReadOnlyList<string> Validate()
+    {
+        var problems = new List<string>();
+        if (RecoveryInterval <= TimeSpan.Zero)
+        {
+            problems.Add($"{SectionName}:RecoveryInterval: must be positive.");
+        }
+
+        if (AnomalyAfter <= TimeSpan.Zero)
+        {
+            problems.Add($"{SectionName}:AnomalyAfter: must be positive.");
+        }
+
+        return problems;
+    }
+}
+
+/// <summary>
+/// How long the gateway waits for the worker's reply to each control verb (<c>Gateway:Control:*</c>, design _wf/handoff-control-DESIGN.md section 2.4). Bound to
+/// <see cref="ArcaneCore.World.Cluster.Control.LinkControlTimeouts"/> by the hosting. Read only while <c>Gateway:Handoff:Enabled</c> is on.
+/// </summary>
+[ConfigDaemons(ConfigDaemon.Gateway)]
+public sealed class GatewayControlOptions
+{
+    public const string SectionName = "Gateway:Control";
+
+    /// <summary>Reply timeout of the quick verbs: Describe, Warm, StopAdmissions, Resume, ReleaseWriterLock, Retire, TargetDescribe, Reserve, Install, Discard, ResumeSource, RetireSource. Default 10 s.</summary>
+    public TimeSpan Default { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>Reply timeout of Freeze and Suspend (the world thread plus a durable flush). Default 30 s.</summary>
+    public TimeSpan Freeze { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Reply timeout of Flush (every captured save made durable). Default 60 s.</summary>
+    public TimeSpan Flush { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Reply timeout of Activate (the target starts the retail arrival). Default 60 s.</summary>
+    public TimeSpan Activate { get; set; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>Reply timeout of Promote (the standby takes the writer lock and runs as the active world). Default 120 s.</summary>
+    public TimeSpan Promote { get; set; } = TimeSpan.FromSeconds(120);
+
+    /// <summary>The timeouts the link control channels of this gateway use.</summary>
+    public ArcaneCore.World.Cluster.Control.LinkControlTimeouts ToTimeouts() => new()
+    {
+        Default = Default,
+        Freeze = Freeze,
+        Flush = Flush,
+        Activate = Activate,
+        Promote = Promote,
+    };
+
+    /// <summary>Every problem with the bound values, as <c>Gateway:Control:Key: problem</c> lines; empty when valid.</summary>
+    public IReadOnlyList<string> Validate()
+    {
+        var problems = new List<string>();
+        Check(Default, nameof(Default), problems);
+        Check(Freeze, nameof(Freeze), problems);
+        Check(Flush, nameof(Flush), problems);
+        Check(Activate, nameof(Activate), problems);
+        Check(Promote, nameof(Promote), problems);
+        return problems;
+
+        static void Check(TimeSpan value, string name, List<string> problems)
+        {
+            if (value <= TimeSpan.Zero)
+            {
+                problems.Add($"{SectionName}:{name}: must be positive.");
+            }
+        }
+    }
 }
