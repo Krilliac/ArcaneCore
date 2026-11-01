@@ -78,6 +78,13 @@ public static class ClusterPresenceHosting
                     sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterChatRouting>());
             });
             services.AddHostedService(sp => new ChatRoutingStarter(sp.GetRequiredService<ClusterChatRouting>()));
+
+            // Group operations through the Social holder (S3a): same condition as chat, so Combined mode keeps the group manager authoritative.
+            services.TryAddSingleton(sp => new ClusterGroupRouting(
+                sp.GetRequiredService<LeaseRoutedPresence>(),
+                sp.GetRequiredService<RealmAuthorityLeaseKeeper>().NodeId,
+                sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterGroupRouting>()));
+            services.AddHostedService(sp => new GroupRoutingStarter(sp.GetRequiredService<ClusterGroupRouting>()));
         }
 
         return services;
@@ -85,6 +92,18 @@ public static class ClusterPresenceHosting
 
     /// <summary>Starts the chat pump with the host and disposes the routing at stop (the container also disposes it; disposal is idempotent).</summary>
     private sealed class ChatRoutingStarter(ClusterChatRouting routing) : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            routing.Start(ChatPumpInterval);
+            return Task.CompletedTask;
+        }
+
+        public async Task StopAsync(CancellationToken cancellationToken) => await routing.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Starts the group event pump with the host and disposes the routing at stop (disposal is idempotent).</summary>
+    private sealed class GroupRoutingStarter(ClusterGroupRouting routing) : IHostedService
     {
         public Task StartAsync(CancellationToken cancellationToken)
         {

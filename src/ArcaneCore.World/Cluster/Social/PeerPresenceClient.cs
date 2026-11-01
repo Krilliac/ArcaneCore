@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.World.Cluster.Peer;
 
@@ -11,7 +12,7 @@ namespace ArcaneCore.World.Cluster.Social;
 /// <see cref="TimeoutException"/> or <see cref="InvalidOperationException"/>. A reply over the link's payload limit (a very large Snapshot or Broadcast) is a refusal.
 /// Thread-safe: no state of its own.
 /// </summary>
-public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter
+public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport
 {
     /// <summary>Most bounded batches one <see cref="DrainWorkerDeliveries"/> call fetches.</summary>
     public const int MaxDrainBatches = 64;
@@ -27,6 +28,21 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
         using BinaryReader r = Task.Run(() => SendAsync(op, write)).GetAwaiter().GetResult();
         return read(r);
     }
+
+    // ---- IGroupAuthorityTransport --------------------------------------------------------------------------------------------------------------
+
+    public void ExecuteGroupCommand(string workerId, GroupCommand command)
+        => Send(
+            PresenceOp.GroupCommand,
+            w =>
+            {
+                w.Write(workerId);
+                GroupWireCodec.WriteCommand(w, command);
+            },
+            static _ => true);
+
+    public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId)
+        => string.IsNullOrWhiteSpace(workerId) ? [] : Send(PresenceOp.GroupDrain, w => w.Write(workerId), GroupWireCodec.ReadEvents);
 
     // ---- IPresenceAuthority --------------------------------------------------------------------------------------------------------------------
 
@@ -210,7 +226,7 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 /// Thread-safe if <c>holdsSocial</c> and <c>remote</c> are.
 /// </summary>
 public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> holdsSocial, Func<PeerPresenceClient?> remote)
-    : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter
+    : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport
 {
     private IPresenceAuthority Authority => holdsSocial() ? local : Remote;
 
@@ -228,6 +244,20 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
         => Authority.RemoveAsync(characterGuid, presenceVersion, sessionGeneration, workerId, cancellationToken);
 
     public Task<IReadOnlyList<PresenceKick>> DrainKicksAsync(string workerId, CancellationToken cancellationToken = default) => Authority.DrainKicksAsync(workerId, cancellationToken);
+
+    public void ExecuteGroupCommand(string workerId, GroupCommand command)
+    {
+        if (holdsSocial())
+        {
+            local.ExecuteGroupCommand(workerId, command);
+        }
+        else
+        {
+            Remote.ExecuteGroupCommand(workerId, command);
+        }
+    }
+
+    public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId) => holdsSocial() ? local.DrainGroupEvents(workerId) : Remote.DrainGroupEvents(workerId);
 
     public int Count => Directory.Count;
 

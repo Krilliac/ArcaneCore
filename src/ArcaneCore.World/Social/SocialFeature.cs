@@ -181,6 +181,18 @@ public sealed class SocialFeature(
         _writes.Start();
         // Realm presence (M15.2): registered only when the node wires a publisher (cluster hosting, or Combined with the in-process authority).
         _presence = services?.GetService<ClusterPresencePublisher>();
+        // Groups through the Social holder (S3a): only where the cluster hosting registered the routing (cluster roles); otherwise the group manager stays authoritative.
+        if (services?.GetService<ClusterGroupRouting>() is { } groupRouting)
+        {
+            SocialContext groupContext = _context;
+            groupContext.Groups.Authority = groupRouting;
+            groupRouting.Deliver = ev => world.Post(() => groupContext.Groups.ApplyAuthorityEvent(ev));
+            if (services.GetService<PresenceHolderService>() is { } holder)
+            {
+                holder.Groups.Options = Options;
+                holder.Groups.IdBlockAllocatorSource = () => groupContext.Groups.IdBlockAllocator;
+            }
+        }
         // Friends on other workers (S3c): their status comes from the realm directory when this node has one.
         if (services?.GetService<ArcaneCore.Kernel.Cluster.Social.IRealmPresenceDirectory>() is { } realmDirectory)
         {

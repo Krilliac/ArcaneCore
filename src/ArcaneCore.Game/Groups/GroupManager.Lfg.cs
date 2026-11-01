@@ -20,6 +20,11 @@ public sealed partial class GroupManager
     {
         ArgumentNullException.ThrowIfNull(leader);
         ArgumentNullException.ThrowIfNull(member);
+        if (Authority is not null)
+        {
+            return null; // the meeting stone queue is off in cluster mode: a group made here would never reach the holder
+        }
+
         if (leader.Guid == member.Guid || GetGroup(leader.Guid) is not null || GetGroup(member.Guid) is not null
             || GetInvite(leader.Guid) is not null || GetInvite(member.Guid) is not null)
         {
@@ -49,6 +54,11 @@ public sealed partial class GroupManager
     {
         ArgumentNullException.ThrowIfNull(group);
         ArgumentNullException.ThrowIfNull(member);
+        if (Authority is not null)
+        {
+            return false;
+        }
+
         return group.IsCreated && !group.IsFull && GetGroup(member.Guid) is null && GetInvite(member.Guid) is null
             && AddMember(group, member.Guid, member.Name);
     }

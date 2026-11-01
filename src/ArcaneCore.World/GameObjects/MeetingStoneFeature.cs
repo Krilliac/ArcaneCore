@@ -58,6 +58,13 @@ public sealed class MeetingStoneFeature(IServiceProvider services, ILogger<Meeti
             return;
         }
 
+        if (groups.Authority is not null)
+        {
+            // Groups are served by the Social lease holder in cluster roles; the queue forms and fills parties synchronously, which a forwarded command cannot answer.
+            logger.LogInformation("Meeting stones: groups are served by the Social lease holder, the queue is off");
+            return;
+        }
+
         var queue = new LfgQueue(new SocialLfgGroups(groups, world, services.GetService<CharacterDirectory>()));
         var options = new MeetingStoneOptions();
         services.GetService<IConfiguration>()?.GetSection(MeetingStoneOptions.SectionName).Bind(options);
