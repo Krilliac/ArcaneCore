@@ -933,7 +933,8 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
     [Trait("Category", "Timing")] // asserts a Stopwatch budget while a background thread holds the gate
     public void AnUngatedDrape_IsTimedInsideTheGate_SoTheWaitForAnotherMapIsNotChargedToThePathBudget()
     {
-        const int HoldMs = 50;
+        // Long against scheduling jitter: the charge threshold is HoldMs / 2, so a preempted shared attempt stays under it while a charged gate wait does not.
+        const int HoldMs = 200;
         using var world = new WorldRuntime(
             new WorldRuntimeOptions
             {
@@ -950,6 +951,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         WorldCollision.Of(world).Install(pathfinder: paths);
         using var pool = new NavJobSystem(threads: 2);
         system.PathJobs = pool;
+        system.PathBudget = CreaturePathBudget.Unlimited; // a slow shared attempt must not exhaust the 12 ms drape budget and defer the apply (the charge is measured either way)
         (Player player, _) = AddPlayer(world, 1, 0, 0);
         world.GetMap(1, 0); // a second map: the maps phase runs on the map threads (and the serial gate is real) only with two or more
         using Scene s = new(world, system, player, Assert.Single(system.Creatures), paths, pool);
