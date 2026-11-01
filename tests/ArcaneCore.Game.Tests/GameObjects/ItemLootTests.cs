@@ -228,9 +228,10 @@ public sealed class ItemLootTests
         Assert.NotNull(rig.Player.Inventory.GetItemByGuid(box.Guid)); // loot is left: the item stays
     }
 
-    private static ItemRandomProperties PropertySource(uint id)
+    // The catalog also knows the properties of earlier sources (alsoKnown): a stored property is applied by looking its row up in the live catalog.
+    private static ItemRandomProperties PropertySource(uint id, params uint[] alsoKnown)
         => new(
-            new ItemRandomPropertyCatalog([new ItemRandomPropertyRecord(id, "of Test", [74, 75, 0])], [new ItemEnchantmentChance(5, id, 100f)]),
+            new ItemRandomPropertyCatalog([.. alsoKnown.Append(id).Select(known => new ItemRandomPropertyRecord(known, "of Test", [74, 75, 0]))], [new ItemEnchantmentChance(5, id, 100f)]),
             () => 10f);
 
     [Fact]
@@ -249,7 +250,7 @@ public sealed class ItemLootTests
         Assert.Equal(1001, Assert.Single(box.Loot!.Items).RandomPropertyId); // the persistent state carries it
 
         // A different source from here on: only the stored property can still produce 1001.
-        rig.Player.Inventory.RandomProperties = PropertySource(2002);
+        rig.Player.Inventory.RandomProperties = PropertySource(2002, 1001);
         Assert.Equal(LootResult.Ok, rig.Loot.OpenItem(rig.Player, box));
         LootBag again = Assert.IsType<LootBag>(rig.Loot.OpenLootOf(rig.Player));
         LootItem shown = Assert.Single(again.Items);

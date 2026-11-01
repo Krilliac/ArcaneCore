@@ -103,7 +103,7 @@ public sealed class QueuedMeleeBlockTests
         w.WriteUInt32(dealt);
         w.WriteUInt32(0);       // absorbed
         w.WriteInt32(0);        // resisted
-        w.WriteUInt32(0);       // VICTIMSTATE_NORMAL
+        w.WriteUInt32((uint)VictimState.Normal); // VICTIMSTATE_NORMAL (1, vmangos SharedDefines.h)
         w.WriteUInt32(0);       // attacker state
         w.WriteUInt32(HeroicStrike);
         w.WriteUInt32(blocked);
@@ -117,7 +117,7 @@ public sealed class QueuedMeleeBlockTests
         w.WritePackedGuid(rig.Caster.Guid.Value);
         w.WriteUInt32(HeroicStrike);
         w.WriteUInt32(dealt);
-        w.WriteByte(1);         // physical school
+        w.WriteByte((byte)SpellSchool.Normal); // physical school (the school index, 0; the attacker state above carries the mask)
         w.WriteUInt32(0);       // absorbed
         w.WriteUInt32(0);       // resisted
         w.WriteByte(0);         // periodic

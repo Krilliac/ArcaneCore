@@ -65,6 +65,10 @@ public sealed class DispelCharmedSummonTests
         creature.MapId = 0;
         map.AddObject(creature);
         kit.World.RunTick(0);
+        // MoveFollow of the charm needs the movement owner a real spawn gets from its creature system.
+        var creatures = new CreatureMapSystem(map, new CreatureContent([template], [], [], [], []), random: new Random(1));
+        map.AddUpdater(creatures);
+        creature.Motion.Initialize(IdleMovementGenerator.Instance, creatures, start: false);
         creature.Level = 20;
         creature.MaxHealth = creature.Health = 100;
         creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, 1, TotemSlots.None, 0) { Charm = new CharmInfo(ReactState.Passive) };
