@@ -652,6 +652,9 @@ public sealed class TradeOfferedItemMoveTests
         await ReadStatusAsync(rig.Receiver!, TradeStatus.OpenWindow, rig.Token);
         await rig.Sender.SendAsync(WorldOpcode.CmsgSetTradeItem, [0, InventorySlots.Bag0, slot], rig.Token);
         await rig.Receiver!.ReadUntilAsync(WorldOpcode.SmsgTradeStatusExtended, rig.Token);
+        // A new item is a real change, so the sender is sent one BACK_TO_TRADE of its own (TradeNegotiated). Taking it here leaves SyncAsync's
+        // wait to be satisfied only by the bounce of its own accept; a leftover one would end that wait before the earlier opcode ran.
+        await ReadStatusAsync(rig.Sender, TradeStatus.BackToTrade, rig.Token);
     }
 
     /// <summary>The sender accepts first (after the anti-scam delay); the recipient is told.</summary>
