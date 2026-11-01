@@ -66,6 +66,10 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     // Whole-World handoff: true while the packets of the freeze are held for the handoff (the hold lives in _redirectHeld, guarded by _redirectGate), and whether
     // the character is in the world now (SMSG_LOGIN_VERIFY_WORLD seen, no SMSG_LOGOUT_COMPLETE since): only then does the promoted world have a player to load.
     private bool _handoffHolding;
+    // Where the current handoff hold began (guarded by _redirectGate): the link the connection forwarded on, and the worker slot that asked for the hold (null when the hold
+    // began inside HandOffAsync). A release keys on these, not on the link the connection forwards on now, which a per-player transfer or a redirect may have changed.
+    private GatewaySessionLinkClient? _handoffHoldLink;
+    private object? _handoffHoldOwner;
     private volatile bool _inWorld;
 
     /// <summary>CMSG_PLAYER_LOGIN was forwarded and the worker has not answered it yet (neither SMSG_LOGIN_VERIFY_WORLD nor SMSG_CHARACTER_LOGIN_FAILED).</summary>
@@ -578,7 +582,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     /// Whole-World handoff, step 1 (the source froze): start holding this connection's client packets instead of forwarding them to <paramref name="link"/>, so
     /// the input sent during the freeze reaches the promoted world. False when the connection is not forwarding on that link or a hold or redirect is already in place.
     /// </summary>
-    internal bool BeginHandoffHold(GatewaySessionLinkClient link)
+    internal bool BeginHandoffHold(GatewaySessionLinkClient link, object? owner = null)
     {
         lock (_redirectGate)
         {
@@ -589,12 +593,18 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
             _redirectHeld = [];
             _handoffHolding = true;
+            _handoffHoldLink = link;
+            _handoffHoldOwner = owner;
             return true;
         }
     }
 
-    /// <summary>The handoff aborted: replay the held packets to the worker this connection is still on, in order, and forward again. A connection that does not hold is untouched.</summary>
-    internal void EndHandoffHold()
+    /// <summary>
+    /// The handoff aborted: replay the held packets to the worker this connection is still on, in order, and forward again. A connection that does not hold is untouched.
+    /// With <paramref name="holdLink"/> or <paramref name="holdOwner"/> given, only a hold that began on that link or was asked for by that worker slot is released
+    /// (whatever link the connection forwards on now); with both null every hold is released.
+    /// </summary>
+    internal void EndHandoffHold(GatewaySessionLinkClient? holdLink = null, object? holdOwner = null)
     {
         bool delivered = true;
         lock (_redirectGate)
@@ -604,7 +614,16 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                 return;
             }
 
+            if ((holdLink is not null || holdOwner is not null)
+                && !(holdLink is not null && ReferenceEquals(_handoffHoldLink, holdLink))
+                && !(holdOwner is not null && ReferenceEquals(_handoffHoldOwner, holdOwner)))
+            {
+                return;
+            }
+
             _handoffHolding = false;
+            _handoffHoldLink = null;
+            _handoffHoldOwner = null;
             List<HeldPacket>? held = _redirectHeld;
             _redirectHeld = null;
             if (held is not null)
@@ -655,6 +674,12 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
             }
 
             _redirectHeld ??= [];
+            if (!_handoffHolding)
+            {
+                _handoffHoldLink = from;
+                _handoffHoldOwner = null;
+            }
+
             _handoffHolding = true;
             oldGeneration = SessionGeneration;
         }
@@ -723,6 +748,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
                 _redirectHeld = null;
                 _handoffHolding = false;
+                _handoffHoldLink = null;
+                _handoffHoldOwner = null;
             }
 
             from.CloseSession(oldGeneration, ClusterSessionDetachReason.Transferred);
@@ -771,6 +798,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         lock (_redirectGate)
         {
             _handoffHolding = false;
+            _handoffHoldLink = null;
+            _handoffHoldOwner = null;
         }
 
         EndRedirect(from, oldGeneration, reason);
