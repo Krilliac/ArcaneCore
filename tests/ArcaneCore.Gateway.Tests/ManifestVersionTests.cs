@@ -53,11 +53,22 @@ public sealed class ManifestVersionTests : IDisposable
     [Fact]
     public void OverrideLabels_StillWork_AndIgnoreTheDatabases()
     {
-        var options = new GatewayWorkerOptions { CharactersSchemaVersion = 7, WorldSchemaVersion = 8, ContentRevision = "pinned" };
+        var options = new GatewayWorkerOptions { VersionsFromDatabase = false, CharactersSchemaVersion = 7, WorldSchemaVersion = 8, ContentRevision = "pinned" };
         GatewayManifestVersions worker = GatewayManifestVersions.Resolve(options, 40, 12);
 
         Assert.Equal(new GatewayManifestVersions(7, 8, "pinned"), worker);
         Assert.True(GatewayManifest(7, 8, "pinned").TryAdmit(WorkerManifest(options, worker), out string? reason), reason);
+    }
+
+    [Fact]
+    public void DefaultWorkerAndDefaultGateway_AdmitEachOther()
+    {
+        var workerOptions = new GatewayWorkerOptions();
+        GatewayManifestVersions worker = GatewayManifestVersions.Resolve(
+            workerOptions, CharacterDbContext.Schema.CurrentVersion, WorldDbContext.Schema.CurrentVersion);
+        ClusterNodeManifest gateway = new GatewayOptions().ToManifest(Guid.NewGuid());
+
+        Assert.True(gateway.TryAdmit(WorkerManifest(workerOptions, worker), out string? reason), reason);
     }
 
     [Theory]
