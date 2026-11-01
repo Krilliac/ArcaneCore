@@ -62,6 +62,8 @@ internal sealed partial class PlayerbotBrain
             ? _options.Pvp.Initiate.RadiusYards + HuntChaseMarginYards
             : _engagedReason == PlayerbotEngageReason.Grudge
             ? _options.Social.WarMode.HuntRadiusYards + HuntChaseMarginYards
+            : _engagedReason == PlayerbotEngageReason.Defense
+            ? DefenseEngageYards + HuntChaseMarginYards
             : PvpPursuitYards;
         // A target in an exempt area that keeps attacking the bot is still fought (self-defense); otherwise the reason's rule decides.
         if ((PlayerbotHostility.MayEngage(player, target, _engagedReason, null, _options.Social.WarMode.SharedSwitch(), _options.Pvp.Initiate)
@@ -195,7 +197,7 @@ internal sealed partial class PlayerbotBrain
 
     // A group with a real player in it follows that player's orders (or the group coordinator's), not the hunt. A member who is offline counts as real
     // unless the social recorder knows it as a bot.
-    private bool InGroupWithRealPlayer(Player player)
+    internal bool InGroupWithRealPlayer(Player player)
     {
         if (_session.Services.GetService<ArcaneCore.World.Social.SocialFeature>()?.Context.Groups.GetGroup(player.Guid) is not { } group) return false;
         foreach (ArcaneCore.Game.Groups.GroupMemberSlot slot in group.Members)

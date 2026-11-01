@@ -1,3 +1,5 @@
+using ArcaneCore.Game;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Game.Channels;
 using ArcaneCore.Game.Entities;
@@ -31,6 +33,9 @@ internal sealed class PlayerbotDefenseLane
     /// <summary>The most callers of one call tried for a line per pass (the freshest first).</summary>
     internal const int CallersTried = 3;
 
+    /// <summary>The most bots examined for a response per pass (a cursor walks the rest at later passes).</summary>
+    internal const int CandidatesPerPass = 256;
+
     /// <summary>The topic of a call line (the speech limiter and the log name it; never the text).</summary>
     internal const string Topic = "defense-call";
 
@@ -39,11 +44,21 @@ internal sealed class PlayerbotDefenseLane
     private readonly HashSet<int> _openIds = [];
     private readonly List<DefenseCall> _calls = [];
     private readonly List<(ulong Guid, long LastMs)> _callers = [];
+    private readonly List<Pick> _picks = [];
+    private readonly int[] _arrived = new int[CallsPerPass];
+    private readonly int[] _pickedDefenders = new int[CallsPerPass];
+    private readonly int[] _pickedJoiners = new int[CallsPerPass];
+    private readonly int[] _attackerMin = new int[CallsPerPass];
+    private readonly int[] _attackerMax = new int[CallsPerPass];
+    private int _cursor;
     private IReadOnlyDictionary<uint, WorldMapAreaBounds>? _bounds;
     private string? _boundsPath;
 
     /// <summary>Call lines queued so far (tests and status).</summary>
     internal int Announced { get; private set; }
+
+    /// <summary>Responders assigned so far (tests and status).</summary>
+    internal int Assigned { get; private set; }
 
     /// <summary>Calls the lane remembers as announced or given up on (tests: it is cut to the open calls).</summary>
     internal int Remembered => _announced.Count;
@@ -70,6 +85,7 @@ internal sealed class PlayerbotDefenseLane
             }
 
             if (options.Announce && pass.Chat is { IsActive: true } chat) Announce(pass, chat, options, now);
+            if (options.MaxRespondersPerSide > 0) Respond(pass, board, options);
         }
         finally
         {
@@ -111,6 +127,141 @@ internal sealed class PlayerbotDefenseLane
                     break;
             }
         }
+    }
+
+    private readonly record struct Pick(int Call, int Tier, float Yards, ulong Guid, PlayerbotSocialBot Bot, DefenseSide Side);
+
+    private static readonly Comparison<Pick> ByPick = static (a, b) =>
+    {
+        int c = a.Call.CompareTo(b.Call);
+        if (c != 0) return c;
+        c = a.Tier.CompareTo(b.Tier);
+        if (c != 0) return c;
+        c = a.Yards.CompareTo(b.Yards);
+        return c != 0 ? c : a.Guid.CompareTo(b.Guid);
+    };
+
+    /// <summary>
+    /// Responder selection (design 1.4): at most <see cref="CallsPerPass"/> open calls and <see cref="CandidatesPerPass"/> bots per pass, round robin over the pass's bots
+    /// with a cursor, deterministic (no random draw): the order is call, activity tier (explore, grind, home before quest, gather, mount; vendor and train bots are never
+    /// taken), distance, guid. A candidate is free (<see cref="PlayerbotHelpLane.IsFree"/>, which also leaves out a responder), has no defend post, stay or engagement,
+    /// is not in a group with a real player, stands on the call's map instance within <see cref="PlayerbotPvpDefenseOptions.RespondRadiusYards"/> of its centre without water between,
+    /// and may flag (<see cref="PlayerbotHelpRules.MayFlag"/>). Same team as the caller: a defender, level window against the caller. Other team: a joiner, only with War Mode
+    /// or <see cref="PlayerbotPvpDefenseOptions.BothSides"/>, level window against the attackers. Defenders are capped at <see cref="PlayerbotPvpDefenseOptions.MaxRespondersPerSide"/>;
+    /// joiners at the lesser of that and (defenders that have arrived + live callers + 1), so reinforcements do not gank the caller before a defender is there.
+    /// </summary>
+    private void Respond(PlayerbotSocialPass pass, PlayerbotDefenseBoard board, PlayerbotPvpDefenseOptions options)
+    {
+        IReadOnlyList<PlayerbotSocialBot> bots = pass.Bots;
+        int calls = Math.Min(CallsPerPass, _calls.Count);
+        if (bots.Count == 0 || calls == 0) return;
+        bool warMode = pass.Options.WarMode.Enabled;
+        bool joiners = warMode || options.BothSides;
+        long now = board.NowMs;
+        for (int c = 0; c < calls; c++)
+        {
+            DefenseCall call = _calls[c];
+            _pickedDefenders[c] = _pickedJoiners[c] = 0;
+            int arrived = 0;
+            foreach (ulong guid in call.Defenders)
+            {
+                if (pass.ByCharacter.TryGetValue((uint)(guid & 0xFFFFFFFFUL), out PlayerbotSocialBot? defender) && defender.Brain is { DefenseArrived: true }) arrived++;
+            }
+
+            _arrived[c] = arrived + call.LiveCallerCount(now) + 1;
+            _attackerMin[c] = int.MaxValue;
+            _attackerMax[c] = -1;
+            if (!joiners) continue;
+            foreach (ulong guid in call.Attackers)
+            {
+                if (pass.World.FindOnlinePlayer(new ObjectGuid(guid)) is not { IsAlive: true } attacker) continue;
+                _attackerMin[c] = Math.Min(_attackerMin[c], attacker.Level);
+                _attackerMax[c] = Math.Max(_attackerMax[c], attacker.Level);
+            }
+        }
+
+        _picks.Clear();
+        int examined = Math.Min(CandidatesPerPass, bots.Count);
+        for (int i = 0; i < examined; i++)
+        {
+            PlayerbotSocialBot bot = bots[(_cursor + i) % bots.Count];
+            if (!Eligible(bot, out int tier)) continue;
+            Player player = bot.Player;
+            for (int c = 0; c < calls; c++)
+            {
+                if (!Candidate(options, warMode, _calls[c], c, player, out DefenseSide side, out float yards)) continue;
+                _picks.Add(new Pick(c, tier, yards, player.Guid.Value, bot, side));
+                break;
+            }
+        }
+
+        _cursor = (_cursor + examined) % bots.Count;
+        _picks.Sort(ByPick);
+        foreach (Pick pick in _picks)
+        {
+            DefenseCall call = _calls[pick.Call];
+            if (pick.Side == DefenseSide.Defender)
+            {
+                if (call.Defenders.Count >= options.MaxRespondersPerSide) continue;
+            }
+            else if (call.Joiners.Count >= Math.Min(options.MaxRespondersPerSide, _arrived[pick.Call])) continue;
+
+            PlayerbotBrain brain = pick.Bot.Brain!;
+            if (!brain.RequestDefense(call.Id, pick.Side)) continue;
+            if (!board.Assign(call.Id, pick.Guid, pick.Side))
+            {
+                brain.CancelDefense(call.Id);
+                continue;
+            }
+
+            Assigned++;
+        }
+
+        _picks.Clear();
+    }
+
+    /// <summary>The bot-side facts that do not depend on the call: free, no post, stay or engagement, no real player in its group, and a tier that may leave.</summary>
+    private static bool Eligible(PlayerbotSocialBot bot, out int tier)
+    {
+        tier = 0;
+        if (!PlayerbotHelpLane.IsFree(bot) || bot.Brain is not { } brain) return false;
+        if (brain.Defend is not null || brain.Stay is not null || brain.EngagedPlayer is not null || brain.InGroupWithRealPlayer(bot.Player)) return false;
+        switch (brain.Goal)
+        {
+            case PlayerbotGoalKind.Explore or PlayerbotGoalKind.Grind or PlayerbotGoalKind.Home:
+                return true;
+            case PlayerbotGoalKind.Quest or PlayerbotGoalKind.Gather or PlayerbotGoalKind.Mount:
+                tier = 1;
+                return true;
+            default:
+                return false; // Vendor and Train (tier 2) stay where they are
+        }
+    }
+
+    private bool Candidate(PlayerbotPvpDefenseOptions options, bool warMode, DefenseCall call, int index, Player player, out DefenseSide side, out float yards)
+    {
+        side = DefenseSide.Defender;
+        yards = 0f;
+        if (player.Map is not { } map || player.MapId != call.MapId || map.InstanceId != call.InstanceId) return false;
+        float dx = player.X - call.Centre.X, dy = player.Y - call.Centre.Y;
+        yards = MathF.Sqrt((dx * dx) + (dy * dy));
+        if (yards > options.RespondRadiusYards) return false;
+        if (ArcaneCore.World.Playerbots.Population.PopulationTownProgression.SeparatedByWater(call.MapId, player.X, player.Y, call.MapId, call.Centre.X, call.Centre.Y)) return false;
+        if (!PlayerbotHelpRules.MayFlag(player, warMode)) return false;
+        if (player.Team == call.CallerTeam)
+        {
+            if (player.Level + options.MaxLevelBelow < call.Level || player.Level > call.Level + options.MaxLevelAbove) return false;
+            if (call.Defenders.Count + _pickedDefenders[index] >= options.MaxRespondersPerSide) return false;
+            _pickedDefenders[index]++;
+            return true;
+        }
+
+        if (!(warMode || options.BothSides) || _attackerMax[index] < 0) return false;
+        side = DefenseSide.Joiner;
+        if (player.Level + options.MaxLevelBelow < _attackerMin[index] || player.Level > _attackerMax[index] + options.MaxLevelAbove) return false;
+        if (call.Joiners.Count + _pickedJoiners[index] >= Math.Min(options.MaxRespondersPerSide, _arrived[index])) return false;
+        _pickedJoiners[index]++;
+        return true;
     }
 
     private enum Said : byte { No, Yes, Never }
