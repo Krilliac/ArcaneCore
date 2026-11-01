@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Guilds;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.World.Cluster.Peer;
 
@@ -12,7 +13,7 @@ namespace ArcaneCore.World.Cluster.Social;
 /// <see cref="TimeoutException"/> or <see cref="InvalidOperationException"/>. A reply over the link's payload limit (a very large Snapshot or Broadcast) is a refusal.
 /// Thread-safe: no state of its own.
 /// </summary>
-public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport
+public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport
 {
     /// <summary>Most bounded batches one <see cref="DrainWorkerDeliveries"/> call fetches.</summary>
     public const int MaxDrainBatches = 64;
@@ -43,6 +44,22 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 
     public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId)
         => string.IsNullOrWhiteSpace(workerId) ? [] : Send(PresenceOp.GroupDrain, w => w.Write(workerId), GroupWireCodec.ReadEvents);
+
+    // ---- IGuildHolderTransport ------------------------------------------------------------------------------------------------------------------
+
+    public void ForwardGuildRequest(string workerId, long requestId, GuildRequest request)
+        => Send(
+            PresenceOp.GuildForward,
+            w =>
+            {
+                w.Write(workerId);
+                w.Write(requestId);
+                GuildWireCodec.WriteRequest(w, request);
+            },
+            static _ => true);
+
+    public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId)
+        => string.IsNullOrWhiteSpace(workerId) ? [] : Send(PresenceOp.GuildDrain, w => w.Write(workerId), GuildWireCodec.ReadEvents);
 
     // ---- IPresenceAuthority --------------------------------------------------------------------------------------------------------------------
 
@@ -226,7 +243,7 @@ public sealed class PeerPresenceClient(PeerLinkClient link) : IPresenceAuthority
 /// Thread-safe if <c>holdsSocial</c> and <c>remote</c> are.
 /// </summary>
 public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> holdsSocial, Func<PeerPresenceClient?> remote)
-    : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport
+    : IPresenceAuthority, IRealmPresenceDirectory, IClusterSocialRouter, IGroupAuthorityTransport, IGuildHolderTransport
 {
     private IPresenceAuthority Authority => holdsSocial() ? local : Remote;
 
@@ -258,6 +275,20 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
     }
 
     public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId) => holdsSocial() ? local.DrainGroupEvents(workerId) : Remote.DrainGroupEvents(workerId);
+
+    public void ForwardGuildRequest(string workerId, long requestId, GuildRequest request)
+    {
+        if (holdsSocial())
+        {
+            local.ForwardGuildRequest(workerId, requestId, request);
+        }
+        else
+        {
+            Remote.ForwardGuildRequest(workerId, requestId, request);
+        }
+    }
+
+    public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId) => holdsSocial() ? local.DrainGuildEvents(workerId) : Remote.DrainGuildEvents(workerId);
 
     public int Count => Directory.Count;
 

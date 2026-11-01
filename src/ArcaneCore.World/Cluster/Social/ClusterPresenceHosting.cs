@@ -85,6 +85,20 @@ public static class ClusterPresenceHosting
                 sp.GetRequiredService<RealmAuthorityLeaseKeeper>().NodeId,
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterGroupRouting>()));
             services.AddHostedService(sp => new GroupRoutingStarter(sp.GetRequiredService<ClusterGroupRouting>()));
+
+            // Guilds and charters through the Social holder (S3b2): the holder's guild manager decides, every other worker forwards and keeps a replica.
+            services.TryAddSingleton(sp =>
+            {
+                RealmAuthorityLeaseKeeper keeper = sp.GetRequiredService<RealmAuthorityLeaseKeeper>();
+                return new PeerGuildHolderLink(
+                    sp.GetRequiredService<LeaseRoutedPresence>(),
+                    sp.GetRequiredService<PresenceHolderService>().Guilds,
+                    keeper.NodeId,
+                    () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null,
+                    sp.GetRequiredService<ILoggerFactory>().CreateLogger<PeerGuildHolderLink>());
+            });
+            services.TryAddSingleton<ArcaneCore.Game.Guilds.IGuildHolderLink>(sp => sp.GetRequiredService<PeerGuildHolderLink>());
+            services.AddHostedService(sp => new GuildLinkStarter(sp.GetRequiredService<PeerGuildHolderLink>()));
         }
 
         return services;
@@ -112,6 +126,18 @@ public static class ClusterPresenceHosting
         }
 
         public async Task StopAsync(CancellationToken cancellationToken) => await routing.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Starts the guild event pump with the host and disposes the link at stop (disposal is idempotent).</summary>
+    private sealed class GuildLinkStarter(PeerGuildHolderLink link) : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            link.Start(ChatPumpInterval);
+            return Task.CompletedTask;
+        }
+
+        public async Task StopAsync(CancellationToken cancellationToken) => await link.DisposeAsync().ConfigureAwait(false);
     }
 
     /// <summary>Starts the publisher's flush loop with the host; the publisher itself is disposed by the container.</summary>

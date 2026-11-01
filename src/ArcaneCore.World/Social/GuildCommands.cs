@@ -211,6 +211,7 @@ public sealed class GuildCommands : ICommandGroup
         GuildAdminResult.RankInvalid => "That rank does not exist in the guild.",
         GuildAdminResult.CharacterNotFound => "Player not found.",
         GuildAdminResult.NotLoaded => "Guilds are not loaded yet.",
+        GuildAdminResult.NotHolder => "This worker is not the Social holder; run the command on the node that holds the Social lease.",
         _ => "Failed.",
     };
 }

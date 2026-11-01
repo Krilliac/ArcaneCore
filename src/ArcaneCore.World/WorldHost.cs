@@ -87,6 +87,13 @@ public sealed class WorldHost(
     /// <summary>This process's ownership incarnation: the one a handoff's epoch takeover hands the characters ownership to.</summary>
     public Guid Incarnation => _incarnation;
 
+    /// <summary>
+    /// Worker scope with a valid explicit Cluster:Worker:OwnedMaps: the maps this world serves, which a handoff's epoch takeover writes to the shard's ownership row
+    /// (the standby serves its configured maps, so the durable row must say the same). Null in Realm scope or when the list is not usable (StartAsync refuses that).
+    /// </summary>
+    public IReadOnlyCollection<uint>? WorkerOwnedMaps
+        => IsWorkerScope && _worker is not null && CharacterFencingOptions.TryGetOwnedMaps(_worker, out IReadOnlyCollection<uint> maps, out _) ? maps : null;
+
     /// <summary>The durable owner node name this world claims under (Cluster:Fencing:OwnerNode).</summary>
     public string OwnerNode => _fencing.OwnerNode;
 
@@ -164,6 +171,16 @@ public sealed class WorldHost(
                     .GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync(cancellationToken).ConfigureAwait(false);
                 directory.Load(identities);
 
+                // A node with a cluster role (Cluster:Node:Role other than Combined) first takes the realm singleton leases it can get (before the item load below, whose orphaned-loot sweep runs only for the maintenance holder), then attaches
+                // only the features its role runs (the auction bot and AutoBroadcast only for a lease it holds). Combined attaches everything, as always.
+                Func<IWorldFeature, bool>? admit = null;
+                Cluster.Social.ClusterNodeRole role = nodeOptions?.Value.Role ?? Cluster.Social.ClusterNodeRole.Combined;
+                if (role != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
+                {
+                    await leaseKeeper.AcquireAtStartAsync(_incarnation, cancellationToken).ConfigureAwait(false);
+                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
+                }
+
                 // Item content before any feature attaches: creatures built while the features attach (script and world-state spawns, the first
                 // grid spawns) resolve their creature_equip_template items through it, and an unloaded store would warn and leave the slots empty.
                 // A failed load is not fatal here: it is not cached, the next request (a login) retries and fails closed itself.
@@ -177,16 +194,6 @@ public sealed class WorldHost(
                     {
                         logger.LogWarning(ex, "Item templates could not be loaded at startup; they load on first use and creature equipment resolves after that");
                     }
-                }
-
-                // A node with a cluster role (Cluster:Node:Role other than Combined) first takes the realm singleton leases it can get, then attaches
-                // only the features its role runs (the auction bot and AutoBroadcast only for a lease it holds). Combined attaches everything, as always.
-                Func<IWorldFeature, bool>? admit = null;
-                Cluster.Social.ClusterNodeRole role = nodeOptions?.Value.Role ?? Cluster.Social.ClusterNodeRole.Combined;
-                if (role != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
-                {
-                    await leaseKeeper.AcquireAtStartAsync(_incarnation, cancellationToken).ConfigureAwait(false);
-                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
                 }
 
                 // The durable id allocators are primed BEFORE the features attach (writer-lock design section 3, point 5): an id taken while a feature attaches
@@ -309,6 +316,11 @@ public sealed class WorldHost(
         catch (Data.Characters.Ownership.CharacterDatabaseAlreadyOwnedException ex)
         {
             throw new InvalidOperationException($"the characters database writer lock is held elsewhere (the old world is still running); refusing to promote, the standby stays a standby: {ex.Message}", ex);
+        }
+        catch (WorkerScopeConfigurationException ex)
+        {
+            // Worker scope misconfigured (an invalid shard id, or SQLite without AllowSqliteWorkerScope): nothing is held; the standby stays a standby, as for the other lock failures.
+            throw new InvalidOperationException($"the worker shard writer lock cannot be taken with this configuration ({ex.Message}); refusing to promote, the standby stays a standby", ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Data.Common.DbException)
         {
@@ -446,7 +458,9 @@ public sealed class WorldHost(
             handOver += () =>
             {
                 social.Context.Groups.IdBlockAllocator = groupAlloc;
+                social.Context.Groups.RequireDurableIds = requireDurableIds;
                 social.Context.Guilds.IdBlockAllocator = guildAlloc;
+                social.Context.Guilds.RequireDurableIds = requireDurableIds;
                 social.Context.Petitions.IdBlockAllocator = petitionAlloc;
                 social.Context.Petitions.RequireDurableIds = requireDurableIds;
             };
@@ -456,7 +470,11 @@ public sealed class WorldHost(
         {
             var instanceAlloc = new DurableIdBlockAllocator(IdRangeScopes.Instance, blockSize, lowWatermark, reserveAsync);
             await instanceAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
-            handOver += () => instances.Instances.IdBlockAllocator = instanceAlloc;
+            handOver += () =>
+            {
+                instances.Instances.IdBlockAllocator = instanceAlloc;
+                instances.Instances.RequireDurableIds = requireDurableIds;
+            };
         }
 
         if (services.GetService<Economy.EconomyFeature>() is { } economy)
@@ -464,6 +482,7 @@ public sealed class WorldHost(
             var mailAlloc = new DurableIdBlockAllocator(IdRangeScopes.Mail, blockSize, lowWatermark, reserveAsync);
             await mailAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
             economy.MailIdAllocator = mailAlloc;
+            economy.RequireDurableIds = requireDurableIds;
 
             var auctionAlloc = new DurableIdBlockAllocator(IdRangeScopes.Auction, blockSize, lowWatermark, reserveAsync);
             await auctionAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
@@ -681,7 +700,8 @@ public sealed class WorldHost(
         CharacterOwnershipToken? token;
         if (_fencing is { HasTakeover: true, TakeoverEpoch: { } takeoverEpoch, TakeoverIncarnation: { } takeoverIncarnation })
         {
-            token = await store.TryTakeoverAsync(new CharacterOwnershipToken(scope, takeoverEpoch, takeoverIncarnation), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
+            // The takeover also writes this worker's owned maps: a handed-over shard must not keep the old owner's map set.
+            token = await store.TryTakeoverAsync(new CharacterOwnershipToken(scope, takeoverEpoch, takeoverIncarnation), _fencing.OwnerNode, _incarnation, maps, cancellationToken).ConfigureAwait(false);
         }
         else
         {

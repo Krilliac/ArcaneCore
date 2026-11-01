@@ -390,6 +390,7 @@ public sealed class PetitionManager
     {
         if (_context.World.FindOnlinePlayer(target) is not { } other)
         {
+            OfferToOtherWorker(player, itemGuid, target);
             return;
         }
 
@@ -633,9 +634,71 @@ public sealed class PetitionManager
                 return true;
             case GuildRequestKind.PetitionTurnIn:
                 return ServeTurnIn(actor, request);
+            case GuildRequestKind.PetitionOffer:
+                return ServeOffer(actor, new ObjectGuid(request.Item), ObjectGuid.Player(request.A), request.B != 0);
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// An offer whose target is not on this worker: the holder checks the target against the authoritative guild state and sends it the signature list wherever it is online;
+    /// any other worker forwards the offer. Without a link the target is simply not online.
+    /// </summary>
+    private void OfferToOtherWorker(Player player, ObjectGuid itemGuid, ObjectGuid target)
+    {
+        if (_context.Guilds.Link is not { } link || !target.IsPlayer)
+        {
+            return;
+        }
+
+        bool held = PetitionOfHeldCharter(player, itemGuid) is not null;
+        if (link.IsHolder)
+        {
+            ServeOffer(GuildActor.Of(player), itemGuid, target, held);
+            return;
+        }
+
+        link.Forward(new GuildRequest(GuildRequestKind.PetitionOffer, player.Guid, Item: itemGuid.Value, A: target.Low, B: held ? 1u : 0u), null);
+    }
+
+    /// <summary>
+    /// The holder's half of <see cref="Offer"/> for a target on another worker: the same checks in the same order (team, guilded, invited, then the charter), against the
+    /// authoritative state. <paramref name="held"/> is what the offerer's own worker saw in its bags. True when the signature list was sent.
+    /// </summary>
+    private bool ServeOffer(GuildActor offerer, ObjectGuid itemGuid, ObjectGuid target, bool held)
+    {
+        if (_context.Guilds.FindOnlineCharacter(target) is not { } other)
+        {
+            return false;
+        }
+
+        if (!_context.Options.AllowTwoSideGuild && offerer.Team != other.Team)
+        {
+            SendResult(offerer, GuildCommand.Create, string.Empty, GuildCommandError.NotAllied);
+            return false;
+        }
+
+        if (_context.Guilds.GetGuildOf(other.Guid.Low) is not null)
+        {
+            SendResult(offerer, GuildCommand.Invite, offerer.Name, GuildCommandError.AlreadyInGuildS);
+            return false;
+        }
+
+        if (_context.Guilds.InvitedTo(other.Guid) != 0)
+        {
+            SendResult(offerer, GuildCommand.Invite, offerer.Name, GuildCommandError.AlreadyInvitedToGuildS);
+            return false;
+        }
+
+        if (!held || GetByCharter(itemGuid) is not { } petition)
+        {
+            return false;
+        }
+
+        _context.Guilds.SendTo(other.Guid, WorldOpcode.SmsgPetitionShowSignatures,
+            PetitionPackets.BuildShowSignatures(itemGuid, offerer.Guid, petition.Id, petition.Signatures));
+        return true;
     }
 
     /// <summary>The holder's half of <see cref="TurnIn"/> for an owner on another worker: the same checks against the authoritative state, then the founding.</summary>

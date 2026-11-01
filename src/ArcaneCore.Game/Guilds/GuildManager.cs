@@ -70,7 +70,10 @@ public sealed partial class GuildManager(SocialContext context)
     /// </summary>
     public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
 
-    private int AllocateGuildId()
+    /// <summary>When true (Worker mode) a guild id is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
+    internal int AllocateGuildId()
     {
         if (IdBlockAllocator is { } allocator)
         {
@@ -78,6 +81,13 @@ public sealed partial class GuildManager(SocialContext context)
             if (allocated >= _nextId && allocated < int.MaxValue)
                 _nextId = allocated + 1;
             return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Guild,
+                $"Guild id allocator for scope '{IdRangeScopes.Guild}' is not primed with a durable block (fail-closed in Worker mode).");
         }
 
         if (!IsAuthority)
@@ -1417,6 +1427,7 @@ public sealed partial class GuildManager(SocialContext context)
             case GuildRequestKind.PetitionSign:
             case GuildRequestKind.PetitionTurnIn:
             case GuildRequestKind.PetitionCharacterDeleted:
+            case GuildRequestKind.PetitionOffer:
                 return context.Petitions.Serve(request);
         }
 
@@ -1545,6 +1556,10 @@ public sealed partial class GuildManager(SocialContext context)
     private OnlineView? FindOnline(ObjectGuid guid)
         => context.World.FindOnlinePlayer(guid) is { } local ? ViewOf(local) : Link?.FindOnline(guid) is { } remote ? ViewOf(remote) : null;
 
+    /// <summary>A character that is online, here or on another worker, as the rules of a petition offer need it (name, team); null when it is online nowhere.</summary>
+    internal GuildRemoteCharacter? FindOnlineCharacter(ObjectGuid guid)
+        => FindOnline(guid) is { } v ? new GuildRemoteCharacter(v.Guid, v.Name, v.Team, v.Level, v.Class, v.ZoneId, v.Afk, v.Dnd) : null;
+
     private static OnlineView ViewOf(Player p) => new(p.Guid, p.Name, p.Team, p.Level, (byte)p.Class, p.ZoneId, p.IsAfk, p.IsDnd, p);
 
     private static OnlineView ViewOf(GuildRemoteCharacter r) => new(r.Guid, r.Name, r.Team, r.Level, r.Class, r.ZoneId, r.Afk, r.Dnd, null);
@@ -1620,6 +1635,9 @@ public enum GuildRequestKind : byte
 
     /// <summary>The character <see cref="GuildRequest.Actor"/> was deleted: its petition and signatures go.</summary>
     PetitionCharacterDeleted = 34,
+
+    /// <summary>The actor offers the charter whose item guid is <see cref="GuildRequest.Item"/> to the character <see cref="GuildRequest.A"/> (a player guid), who is online on another worker; <see cref="GuildRequest.B"/> is 1 when the actor's worker saw the charter in its bags.</summary>
+    PetitionOffer = 35,
 }
 
 /// <summary>

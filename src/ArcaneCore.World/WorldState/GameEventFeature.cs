@@ -34,6 +34,14 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     private GameEventStatusWriter? _writer;
     private readonly object _disabledGate = new();
     private Task _disabledWrites = Task.CompletedTask;
+    private ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? _leaseKeeper;
+
+    /// <summary>
+    /// Whether this node makes the durable game-event writes (the running set and the <c>.event enable/disable</c> flag): always on a node with no lease keeper (Combined, tests), on a clustered node
+    /// only while it holds the <see cref="ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState"/> lease (not released, not lost). Every node still runs the events in memory
+    /// (their spawns and quests belong to the maps each node owns); a non-holder only reads the stored state (writer-lock design section 4, row 9; Q10).
+    /// </summary>
+    public bool HoldsWorldStateLease => _leaseKeeper is not { } keeper || keeper.Holds(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.WorldState);
 
     /// <summary>The running service (null before the feature is attached). With the feature off it exists but never starts an event.</summary>
     public GameEventService? Service => _service;
@@ -54,6 +62,7 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
+        _leaseKeeper = services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>();
         _hooks = WorldStateHooks.For(world);
         services.GetService<IConfiguration>()?.GetSection(GameEventOptions.SectionName).Bind(_hooks.GameEventSettings);
         // Disabled: the tables are still loaded (spawns listed in them stay out of the world, as in vmangos while no event runs),
@@ -98,7 +107,7 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             }
         }
 
-        _writer = hasStatusStore ? new GameEventStatusWriter(services, logger) : null;
+        _writer = hasStatusStore ? new GameEventStatusWriter(services, logger, () => HoldsWorldStateLease) : null;
         UseContent(content, active, _writer);
     }
 
@@ -263,6 +272,12 @@ public sealed class GameEventFeature(IServiceProvider services, ILogger<GameEven
             {
                 try
                 {
+                    if (!HoldsWorldStateLease)
+                    {
+                        logger.LogInformation("game event {EventId} disabled flag not stored: this node does not hold the worldstate lease (the flag holds in memory until restart)", eventId);
+                        return;
+                    }
+
                     using IServiceScope scope = services.CreateScope();
                     if (scope.ServiceProvider.GetService<IGameEventDataStore>() is { } store)
                     {
@@ -350,8 +365,9 @@ public sealed class GameEventMailDelivery(
 /// <summary>
 /// Writes the set of running events to <see cref="IGameEventStatusStore"/> off the world thread: the latest set wins, writes never
 /// overlap, a failure is logged and retained for the next change (or the shutdown flush) and never reaches the world thread.
+/// With <c>mayWrite</c> returning false (a clustered node that does not hold the worldstate lease) nothing is written and the set is dropped, not retained: the holder owns the stored set.
 /// </summary>
-internal sealed class GameEventStatusWriter(IServiceProvider services, ILogger logger) : IGameEventStatusSink
+internal sealed class GameEventStatusWriter(IServiceProvider services, ILogger logger, Func<bool>? mayWrite = null) : IGameEventStatusSink
 {
     private readonly object _gate = new();
     private IReadOnlyCollection<ushort>? _pending;
@@ -425,6 +441,11 @@ internal sealed class GameEventStatusWriter(IServiceProvider services, ILogger l
 
     private async Task<bool> WriteAsync(IReadOnlyCollection<ushort> set)
     {
+        if (mayWrite is not null && !mayWrite())
+        {
+            return true; // not the worldstate holder: the stored set is the holder's to write
+        }
+
         try
         {
             using IServiceScope scope = services.CreateScope();

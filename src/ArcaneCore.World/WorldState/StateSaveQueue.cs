@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters.Cluster;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.World.WorldState;
@@ -9,6 +10,8 @@ namespace ArcaneCore.World.WorldState;
 /// does the same with its saved variables: memory is the truth and <c>ObjectMgr::_SaveVariable</c> queues the row through
 /// the asynchronous <c>WorldDatabase.PExecute</c>. A failed write is logged and the value stays the in-memory truth; the
 /// key's next change writes again. <see cref="FlushAsync"/> waits for every queued value (the feature's StopAsync).
+/// A store that refuses the write because this node does not hold the realm lease for it (<see cref="RealmLeaseNotHeldException"/>, the worldstate lease of the
+/// durable world state) is not a fault: the value stays the in-memory truth, the holder writes the stored one, and the refusal is only counted (<see cref="Skipped"/>).
 /// </summary>
 internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILogger? logger, string what)
     where TKey : notnull
@@ -23,6 +26,11 @@ internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILog
     public long Written => Interlocked.Read(ref _written);
 
     private long _written;
+
+    /// <summary>Writes the store refused because this node is not the lease holder (diagnostics, tests).</summary>
+    public long Skipped => Interlocked.Read(ref _skipped);
+
+    private long _skipped;
 
     /// <summary>Queue <paramref name="state"/> as the value to store for <paramref name="key"/>; never blocks on storage.</summary>
     public void Save(TKey key, TState state)
@@ -82,6 +90,11 @@ internal sealed class StateSaveQueue<TKey, TState>(Func<TState, Task> save, ILog
         {
             await save(state).ConfigureAwait(false);
             Interlocked.Increment(ref _written);
+        }
+        catch (RealmLeaseNotHeldException ex)
+        {
+            Interlocked.Increment(ref _skipped);
+            logger?.LogDebug("the {What} state was not stored: {Reason}", what, ex.Message);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

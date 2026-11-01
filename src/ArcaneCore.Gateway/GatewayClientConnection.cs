@@ -63,6 +63,13 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     private int _redirected;
     private readonly Lock _redirectGate = new();
     private List<HeldPacket>? _redirectHeld;
+    // Whole-World handoff: true while the packets of the freeze are held for the handoff (the hold lives in _redirectHeld, guarded by _redirectGate), and whether
+    // the character is in the world now (SMSG_LOGIN_VERIFY_WORLD seen, no SMSG_LOGOUT_COMPLETE since): only then does the promoted world have a player to load.
+    private bool _handoffHolding;
+    private volatile bool _inWorld;
+
+    /// <summary>CMSG_PLAYER_LOGIN was forwarded and the worker has not answered it yet (neither SMSG_LOGIN_VERIFY_WORLD nor SMSG_CHARACTER_LOGIN_FAILED).</summary>
+    private volatile bool _loginPending;
     private PendingAuth? _pending;
     private string? _kickReason;
     private GatewayWardenSession? _warden;
@@ -269,6 +276,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         if (opcode == WorldOpcode.CmsgPlayerLogin && payload.Length <= GatewaySessionWire.MaxAdoptPacketBytes)
         {
             Volatile.Write(ref _loginPacket, new LoginPacket(payload, _packetReceivedMs));
+            _loginPending = true;
         }
 
         // A staged cross-worker transfer holds the packets of the freeze; a generation the session left is dropped (GatewayTransferRouter).
@@ -544,7 +552,269 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     void IGatewaySessionSink.OnServerPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)
     {
         GatewayMeters.CountForwarded(_server.Options.NodeId, "to_client", payload.Length);
+        TrackWorldState(opcode);
         Send(opcode, payload);
+    }
+
+    /// <summary>Whether the character is in the world, from the worker's own login and logout answers.</summary>
+    private void TrackWorldState(WorldOpcode opcode)
+    {
+        if (opcode == WorldOpcode.SmsgLoginVerifyWorld)
+        {
+            _inWorld = true;
+            _loginPending = false;
+        }
+        else if (opcode == WorldOpcode.SmsgCharacterLoginFailed)
+        {
+            _loginPending = false;
+        }
+        else if (opcode == WorldOpcode.SmsgLogoutComplete)
+        {
+            _inWorld = false;
+        }
+    }
+
+    /// <summary>
+    /// Whole-World handoff, step 1 (the source froze): start holding this connection's client packets instead of forwarding them to <paramref name="link"/>, so
+    /// the input sent during the freeze reaches the promoted world. False when the connection is not forwarding on that link or a hold or redirect is already in place.
+    /// </summary>
+    internal bool BeginHandoffHold(GatewaySessionLinkClient link)
+    {
+        lock (_redirectGate)
+        {
+            if (!ReferenceEquals(_link, link) || _state != ConnectionState.Forwarding || _redirectHeld is not null)
+            {
+                return false;
+            }
+
+            _redirectHeld = [];
+            _handoffHolding = true;
+            return true;
+        }
+    }
+
+    /// <summary>The handoff aborted: replay the held packets to the worker this connection is still on, in order, and forward again. A connection that does not hold is untouched.</summary>
+    internal void EndHandoffHold()
+    {
+        bool delivered = true;
+        lock (_redirectGate)
+        {
+            if (!_handoffHolding)
+            {
+                return;
+            }
+
+            _handoffHolding = false;
+            List<HeldPacket>? held = _redirectHeld;
+            _redirectHeld = null;
+            if (held is not null)
+            {
+                long generation = SessionGeneration;
+                foreach (HeldPacket packet in held)
+                {
+                    if (_link is not { } link || !link.SendClientPacket(generation, packet.Opcode, packet.Payload, packet.ReceivedMs))
+                    {
+                        delivered = false;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!delivered)
+        {
+            Kick("the worker link is gone");
+        }
+    }
+
+    /// <summary>True while this connection forwards on <paramref name="link"/>.</summary>
+    internal bool IsForwardingOn(GatewaySessionLinkClient link) => _state == ConnectionState.Forwarding && ReferenceEquals(_link, link);
+
+    /// <summary>
+    /// Whole-World handoff, step 2 (B is promoted and its link is up): re-point this connection from <paramref name="from"/> (the retiring world's link) to
+    /// <paramref name="to"/> without disconnecting the client. A character in the world is adopted by B with its buffered CMSG_PLAYER_LOGIN (B loads the save
+    /// A captured at the freeze); B's SMSG_LOGIN_VERIFY_WORLD (same map and position as the save: u32 map, x, y, z, o) reaches the client as SMSG_TRANSFER_PENDING
+    /// followed by SMSG_NEW_WORLD, the same-map world port the 1.12.1 client accepts (design section 5.5), and the client's MSG_MOVE_WORLDPORT_ACK then reaches B.
+    /// A connection still at character select just opens a plain session on B. The packets held since the freeze (and during this call) are replayed to B in order
+    /// once it accepted, then the session on A closes. Any failure disconnects the client (the same remedy as a refused login redirect). Returns whether the client moved.
+    /// </summary>
+    internal async Task<bool> HandOffAsync(GatewaySessionLinkClient from, GatewaySessionLinkClient to, CancellationToken cancellationToken)
+    {
+        LoginPacket? login = Volatile.Read(ref _loginPacket);
+        bool inWorld = _inWorld;
+
+        // A login that A never answered (CMSG_PLAYER_LOGIN sent, no SMSG_LOGIN_VERIFY_WORLD yet) is adopted too, so B answers it; that answer reaches the client
+        // as the plain SMSG_LOGIN_VERIFY_WORLD it is waiting for, not as a world port.
+        bool adopt = inWorld || _loginPending;
+        long oldGeneration;
+        lock (_redirectGate)
+        {
+            if (_state != ConnectionState.Forwarding || !ReferenceEquals(_link, from) || (_redirectHeld is not null && !_handoffHolding))
+            {
+                return false;
+            }
+
+            _redirectHeld ??= [];
+            _handoffHolding = true;
+            oldGeneration = SessionGeneration;
+        }
+
+        long newGeneration = 0;
+        try
+        {
+            if (adopt && login is null)
+            {
+                throw new InvalidOperationException("the character is in the world but no login packet was seen");
+            }
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(RedirectTimeout);
+            var sink = new HandoffSink(this, TrackWorldState, Send, inWorld);
+            GatewaySessionOpenReply reply;
+            if (adopt)
+            {
+                reply = await to.AdoptAsync(
+                    _server.NextGeneration,
+                    generation =>
+                    {
+                        newGeneration = generation;
+                        return new GatewaySessionAdoptRequest(CreateOpenRequest(generation), (uint)WorldOpcode.CmsgPlayerLogin, login!.Payload, login!.ReceivedMs);
+                    },
+                    sink,
+                    timeout.Token).ConfigureAwait(false);
+            }
+            else
+            {
+                reply = await to.OpenAsync(
+                    _server.NextGeneration,
+                    generation =>
+                    {
+                        newGeneration = generation;
+                        return CreateOpenRequest(generation);
+                    },
+                    sink,
+                    timeout.Token).ConfigureAwait(false);
+            }
+
+            GatewayMeters.CountSessionOpen(_server.Options.NodeId, reply.Accepted ? "handoff" : "handoff_refused");
+            if (!reply.Accepted)
+            {
+                _logger.LogInformation("[{Endpoint}] the promoted world refused the handed-off session: {Code} ({Reason})", RemoteEndpoint, reply.RefusalCode, reply.Reason);
+                EndHandoff(from, oldGeneration, "the promoted world refused the session");
+                return false;
+            }
+
+            bool delivered = true;
+            lock (_redirectGate)
+            {
+                _link = to;
+                Interlocked.Exchange(ref _generation, newGeneration);
+                if (_redirectHeld is { } held)
+                {
+                    foreach (HeldPacket packet in held)
+                    {
+                        if (!to.SendClientPacket(newGeneration, packet.Opcode, packet.Payload, packet.ReceivedMs))
+                        {
+                            delivered = false;
+                            break;
+                        }
+                    }
+                }
+
+                _redirectHeld = null;
+                _handoffHolding = false;
+            }
+
+            from.CloseSession(oldGeneration, ClusterSessionDetachReason.Transferred);
+            _logger.LogInformation("[{Endpoint}] session moved to the promoted world (generation {Generation})", RemoteEndpoint, newGeneration);
+            if (!delivered)
+            {
+                Kick("the worker link is gone");
+                return false;
+            }
+
+            if (_state == ConnectionState.Closed)
+            {
+                // The client left while the session moved: Close ran against the old link and saw the old generation.
+                long left = Interlocked.Exchange(ref _generation, 0);
+                if (left != 0)
+                {
+                    to.CloseSession(left, ClusterSessionDetachReason.ClientDisconnect);
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (ex is not (OperationCanceledException or InvalidOperationException))
+            {
+                FaultLedger.Shared.Record("cluster.gateway-client", ex);
+            }
+
+            if (newGeneration != 0)
+            {
+                to.CloseSession(newGeneration, ClusterSessionDetachReason.Transferred);
+            }
+
+            _logger.LogWarning("[{Endpoint}] world handoff of the session failed ({Error}); closing", RemoteEndpoint, ex.Message);
+            EndHandoff(from, oldGeneration, "the world handoff failed");
+            return false;
+        }
+    }
+
+    /// <summary>A handoff move that did not complete: the old session closes, the held packets are dropped and the client is disconnected.</summary>
+    private void EndHandoff(GatewaySessionLinkClient from, long oldGeneration, string reason)
+    {
+        lock (_redirectGate)
+        {
+            _handoffHolding = false;
+        }
+
+        EndRedirect(from, oldGeneration, reason);
+    }
+
+    /// <summary>Writes one frame to the client (the connection's encrypted send).</summary>
+    internal delegate void ClientFrameWriter(WorldOpcode opcode, ReadOnlySpan<byte> payload);
+
+    /// <summary>
+    /// The session on the promoted world, as the client sees it. For a character that was in the world, the first SMSG_LOGIN_VERIFY_WORLD becomes
+    /// SMSG_TRANSFER_PENDING (u32 map) + SMSG_NEW_WORLD (the same u32 map and four floats), the pair vmangos sends for a far teleport (Player::ExecuteTeleportFar);
+    /// everything else passes unchanged to <paramref name="inner"/> (the connection). <paramref name="trackWorldState"/> and <paramref name="write"/> are the
+    /// connection's own state tracker and client writer.
+    /// </summary>
+    internal sealed class HandoffSink(IGatewaySessionSink inner, Action<WorldOpcode> trackWorldState, ClientFrameWriter write, bool synthesizeWorldPort) : IGatewaySessionSink
+    {
+        private const int NewWorldPayloadLength = sizeof(uint) + (4 * sizeof(float));
+
+        private bool _synthesized;
+
+        public void OnOpened(GatewaySessionOpenReply reply)
+        {
+            // The client was answered and the cipher engaged at the first open.
+        }
+
+        public void OnServerPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+        {
+            if (synthesizeWorldPort && !_synthesized && opcode == WorldOpcode.SmsgLoginVerifyWorld && payload.Length == NewWorldPayloadLength)
+            {
+                _synthesized = true;
+                trackWorldState(opcode);
+                write(WorldOpcode.SmsgTransferPending, payload[..sizeof(uint)]);
+                write(WorldOpcode.SmsgNewWorld, payload);
+                return;
+            }
+
+            inner.OnServerPacket(opcode, payload);
+        }
+
+        public void OnClosed(ClusterSessionDetachReason reason) => inner.OnClosed(reason);
+
+        // The sink stays the session's sink on the promoted world for its whole life: a later login redirect (character select on a map another worker owns)
+        // must be resolved by the connection as before the handoff, not refused by the interface default.
+        public bool OnRedirect(GatewaySessionRedirect redirect) => inner.OnRedirect(redirect);
     }
 
     /// <summary>

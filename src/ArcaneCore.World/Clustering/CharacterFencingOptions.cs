@@ -133,6 +133,8 @@ public sealed class CharacterFencingOptions
             throw new WorkerScopeConfigurationException("Cluster:Fencing:Scope=Worker requires Cluster:Worker:Enabled = true");
         if (role != ClusterNodeRole.MapWorker)
             throw new WorkerScopeConfigurationException("Cluster:Fencing:Scope=Worker requires Cluster:Node:Role=MapWorker");
+        if (worker.Standby && string.IsNullOrWhiteSpace(Shard))
+            throw new WorkerScopeConfigurationException("a standby worker takes over the shard of the worker it replaces: set Cluster:Fencing:Shard explicitly (its NodeId differs from the active worker's)");
         ResolveScope(worker.NodeId);
         if (!TryGetOwnedMaps(worker, out _, out string? error))
             throw new WorkerScopeConfigurationException($"Cluster:Fencing:Scope=Worker: {error}");

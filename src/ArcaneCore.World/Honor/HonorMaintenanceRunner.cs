@@ -1,8 +1,11 @@
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.World.Characters.Creation;
+using ArcaneCore.World.Cluster.Social;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -14,6 +17,9 @@ namespace ArcaneCore.World.Honor;
 /// maintenance days on, and update the players who are online in memory exactly as the transaction updated the rows. A failing
 /// transaction changes nothing, leaves the maintenance days where they were and is retried on the next run, so a week is never
 /// applied twice. Queued writes are drained first, so what the calculation reads is what the players have earned.
+/// <para>In a cluster the calculation is not idempotent across nodes (<c>StoredHk +=</c>), so it runs only on the node that holds the
+/// <see cref="RealmAuthorityScopes.Maintenance"/> lease (writer-lock design sections 2b and 4, row 6): a non-holder returns 0 without reading or writing, and a lease lost
+/// between weeks stops the run before the next week is applied. A node with no lease keeper (Combined, tests) always runs.</para>
 /// </summary>
 public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFactory scopes, ILogger logger)
 {
@@ -34,6 +40,12 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
             return 0; // a host without persistence has no weekly calculation
         }
 
+        RealmAuthorityLeaseKeeper? keeper = scope.ServiceProvider.GetService<RealmAuthorityLeaseKeeper>();
+        if (keeper is not null && !keeper.Holds(RealmAuthorityScopes.Maintenance))
+        {
+            return 0; // another node holds the maintenance lease (or this one lost it): the weekly calculation is not this node's to run
+        }
+
         HonorMaintenanceState state = await store.GetMaintenanceAsync(cancellationToken).ConfigureAwait(false) ?? InitialState(gameDay, options);
         IReadOnlyList<HonorPeriod> periods = HonorMaintenancePlanner.Periods(state.LastDay, state.NextDay, gameDay);
         if (periods.Count == 0)
@@ -45,6 +57,12 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
         int applied = 0;
         foreach (HonorPeriod period in periods)
         {
+            if (keeper is not null && !keeper.Holds(RealmAuthorityScopes.Maintenance))
+            {
+                logger.LogWarning("Honor maintenance stopped: this node no longer holds the {Scope} lease; the remaining weeks stay due for the holder", RealmAuthorityScopes.Maintenance);
+                break;
+            }
+
             // Every queued write for anyone is attempted before the week is read (retained failures are not retried here).
             await honor.FlushAsync().ConfigureAwait(false);
             IReadOnlyList<HonorWeeklyScore> scores = await store.ListWeeklyScoresAsync(period.WeekBegin, period.WeekEnd, cancellationToken).ConfigureAwait(false);
@@ -55,6 +73,7 @@ public sealed class HonorMaintenanceRunner(HonorFeature honor, IServiceScopeFact
             await honor.WeekGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
+                LeaseFencedWrite.RequireHeld(keeper, RealmAuthorityScopes.Maintenance); // refuses (throws, nothing written) when the lease was lost or given back since the check above; the store then verifies the lease row itself
                 await store.ApplyMaintenanceAsync(
                     new HonorMaintenanceBatch(plan.Updates, period.DeleteCpBefore, new HonorMaintenanceState(period.NewLast, period.NewNext, false), protectors),
                     cancellationToken).ConfigureAwait(false);

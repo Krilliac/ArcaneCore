@@ -37,7 +37,10 @@ public sealed partial class GroupManager(SocialContext context)
     /// </summary>
     public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
 
-    private uint AllocateGroupId()
+    /// <summary>When true (Worker mode) a group id is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
+    internal uint AllocateGroupId()
     {
         if (IdBlockAllocator is { } allocator)
         {
@@ -45,6 +48,13 @@ public sealed partial class GroupManager(SocialContext context)
             if (allocated >= _nextId && allocated < uint.MaxValue)
                 _nextId = allocated + 1;
             return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Group,
+                $"Group id allocator for scope '{IdRangeScopes.Group}' is not primed with a durable block (fail-closed in Worker mode).");
         }
 
         if (_nextId == 0)

@@ -103,6 +103,9 @@ public sealed partial class InstanceManager : IMapResolver
     /// </summary>
     public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
 
+    /// <summary>When true (Worker mode) an instance id is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
     private uint NextRawInstanceId()
     {
         if (IdBlockAllocator is { } allocator)
@@ -111,6 +114,13 @@ public sealed partial class InstanceManager : IMapResolver
             if (allocated >= _nextInstanceId && allocated < (uint)int.MaxValue)
                 _nextInstanceId = allocated + 1;
             return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Instance,
+                $"Instance id allocator for scope '{IdRangeScopes.Instance}' is not primed with a durable block (fail-closed in Worker mode).");
         }
 
         if (_nextInstanceId == 0 || _nextInstanceId > (uint)int.MaxValue)

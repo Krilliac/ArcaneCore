@@ -64,7 +64,7 @@ public sealed record WorldHandoffRecord(
 /// </summary>
 public interface IWorldHandoffStore
 {
-    /// <summary>Records a new handoff at <see cref="WorldHandoffStage.Begun"/>. Refused while another handoff is unresolved.</summary>
+    /// <summary>Records a new handoff at <see cref="WorldHandoffStage.Begun"/>. Refused while another handoff of the same ownership scope (the source token's scope: 'world', or one worker shard) is unresolved; handoffs of different worker shards may be open at once.</summary>
     Task<WorldHandoffRecord> BeginAsync(
         Guid handoffId,
         WorkerNodeId sourceWorkerId,
@@ -88,6 +88,22 @@ public interface IWorldHandoffStore
         string targetOwnerNode,
         Guid targetIncarnation,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <see cref="CommitEpochTakeoverAsync(Guid, string, Guid, CancellationToken)"/> of a worker shard that also writes the new owner's <paramref name="targetOwnedMaps"/>
+    /// to the shard's ownership row in the same transaction as the epoch swap (design _wf/writer-lock-DESIGN.md step C7), so the handed-over shard does not keep the old owner's
+    /// map set. The takeover is gated like a worker claim (the realm row must be inactive, the maps must not overlap another active worker): a refusal returns null, changing nothing.
+    /// The default is for a store that has no per-worker map sets: it accepts only null (the plain takeover).
+    /// </summary>
+    Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(
+        Guid handoffId,
+        string targetOwnerNode,
+        Guid targetIncarnation,
+        IReadOnlyCollection<uint>? targetOwnedMaps,
+        CancellationToken cancellationToken)
+        => targetOwnedMaps is null
+            ? CommitEpochTakeoverAsync(handoffId, targetOwnerNode, targetIncarnation, cancellationToken)
+            : throw new NotSupportedException("this handoff store has no per-worker owned map sets");
 
     /// <summary>Records <see cref="WorldHandoffStage.Rerouted"/> on a committed handoff.</summary>
     Task<WorldHandoffRecord> MarkReroutedAsync(Guid handoffId, CancellationToken cancellationToken = default);

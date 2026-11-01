@@ -50,6 +50,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     private uint _lastAuctionId;
     private uint _lastTextId;
     private bool _stopping;
+    private ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper? _leaseKeeper;
 
     public EconomyFeature(IServiceProvider services, IServiceScopeFactory scopes, ILogger<EconomyFeature> logger,
         TimeProvider? timeProvider = null)
@@ -92,6 +93,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
         _items = _services.GetService<ItemsFeature>();
         _directory = _services.GetService<CharacterDirectory>();
+        _leaseKeeper = _services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>();
         Settlements.Attach(world, _services.GetService<CharacterSaveQueue>(), _services.GetService<TeleportFeature>());
         using (IServiceScope scope = _scopes.CreateScope())
         {
@@ -225,6 +227,19 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         }
     }
 
+    /// <summary>When true (Worker mode) a mail, auction or item text id is never taken from the in-memory counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
+    private void ThrowIfDurableRequired(string scope)
+    {
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                scope,
+                $"Economy id allocator for scope '{scope}' is not primed with a durable block (fail-closed in Worker mode).");
+        }
+    }
+
     public DurableIdBlockAllocator? MailIdAllocator { get; set; }
 
     public DurableIdBlockAllocator? AuctionIdAllocator { get; set; }
@@ -240,6 +255,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return next;
         }
 
+        ThrowIfDurableRequired(IdRangeScopes.Mail);
         return Interlocked.Increment(ref _lastMailId);
     }
 
@@ -253,6 +269,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return next;
         }
 
+        ThrowIfDurableRequired(IdRangeScopes.Auction);
         return Interlocked.Increment(ref _lastAuctionId);
     }
 
@@ -269,6 +286,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
             return next;
         }
 
+        ThrowIfDurableRequired(IdRangeScopes.ItemText);
         return Interlocked.Increment(ref _lastTextId);
     }
 
@@ -469,8 +487,9 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     /// <summary>World thread: expire auctions from the cache and letters from storage.</summary>
     public void RunExpirySweep()
     {
-        // Only the Economy lease holder runs expiry (auctions, letters, recovery): a worker that forwards its requests would settle the same rows twice.
-        if (!Enabled || _stopping || !IsEconomyHolder)
+        // Only the Economy lease holder runs expiry (auctions, letters, recovery): a worker that forwards its requests, or a worker that does not hold the
+        // economy lease, would settle the same rows twice (writer-lock design section 2b: the sweep ran on every worker before).
+        if (!Enabled || _stopping || !IsEconomyHolder || !HoldsEconomyLease)
         {
             return;
         }
@@ -572,6 +591,12 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
         get => _holderLink;
         set => _holderLink = value;
     }
+
+    /// <summary>
+    /// Whether this node holds the <see cref="ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy"/> lease: always on a node with no lease keeper (Combined, tests),
+    /// on a clustered node only while the keeper reports the lease held (not released, not lost). Gates the expiry sweep and the auction recovery sweep.
+    /// </summary>
+    public bool HoldsEconomyLease => _leaseKeeper is not { } keeper || keeper.Holds(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Economy);
 
     /// <summary>Whether this node runs the economy singletons (expiry and the forwarded-request service).</summary>
     public bool IsEconomyHolder => _holderLink is null;
