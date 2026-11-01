@@ -88,9 +88,12 @@ internal static class SchemaChangeDecider
                 Dictionary<string, object?> expected = new(StringComparer.Ordinal) { [seed.KeyColumn] = seed.KeyValue };
                 foreach ((string column, object? value) in seed.Values)
                     expected.Add(column, value);
-                if (expected.Count == operation.Columns.Length
-                    && operation.Columns.All(column => expected.ContainsKey(column))
-                    && operation.Columns.Select((column, index) => Equals(expected[column], operation.Values[row, index])).All(match => match))
+                // A later step may add nullable columns to a seeded table; the frozen seed of the earlier step omits them and
+                // the model's HasData row carries null for them, so an operation column the seed omits is accepted when it is null.
+                if (expected.Keys.All(column => operation.Columns.Contains(column, StringComparer.Ordinal))
+                    && operation.Columns.Select((column, index) => expected.TryGetValue(column, out object? want)
+                        ? Equals(want, operation.Values[row, index])
+                        : operation.Values[row, index] is null).All(match => match))
                 {
                     matched = true;
                     break;

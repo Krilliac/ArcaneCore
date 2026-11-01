@@ -60,9 +60,12 @@ internal static class CharacterOwnershipGuard
     {
         // The schema row doubles as a serialized inactive gate. A local-mode save locks it for
         // the caller's transaction, so a claim cannot slip in after the missing-token decision.
+        // A tokened save is checked against its own scope's row (the combined World's 'world', or a worker shard's); an untokened one against 'world'.
+        string scope = token?.Scope ?? CharacterOwnershipScopes.World;
         CharacterOwnershipRow? row = await db.Set<CharacterOwnershipRow>()
-            .AsNoTracking().SingleOrDefaultAsync(r => r.Scope == "world", cancellationToken).ConfigureAwait(false);
-        if (row is null)
+            .AsNoTracking().SingleOrDefaultAsync(r => r.Scope == scope, cancellationToken).ConfigureAwait(false);
+        // A worker row is inserted at first claim, so a missing one under a token is a stale token, not an uninitialised schema.
+        if (row is null && string.Equals(scope, CharacterOwnershipScopes.World, StringComparison.Ordinal))
             throw new InvalidOperationException("the characters ownership fence row is missing; schema initialization is incomplete");
 
         bool stale;
@@ -81,7 +84,7 @@ internal static class CharacterOwnershipGuard
         }
 
         if (stale)
-            throw new CharacterOwnershipRejectedException(token?.Scope ?? "world", token?.Epoch ?? row.Epoch);
+            throw new CharacterOwnershipRejectedException(scope, token?.Epoch ?? row!.Epoch);
     }
 
     /// <summary>
@@ -102,8 +105,10 @@ internal static class CharacterOwnershipGuard
             command.Transaction = transaction;
             if (token is null)
             {
+                // Tokenless: allowed only while no row at all is active (the 'world' row and every worker shard row).
                 command.CommandText = $"UPDATE {table} SET {sequence} = {sequence} + 1 WHERE {sql.DelimitIdentifier("scope")} = 'world' "
-                    + $"AND {sql.DelimitIdentifier("active")} = 0 AND {sequence} < {long.MaxValue}";
+                    + $"AND {sql.DelimitIdentifier("active")} = 0 AND {sequence} < {long.MaxValue} "
+                    + $"AND NOT EXISTS (SELECT 1 FROM {table} WHERE {sql.DelimitIdentifier("active")} = 1)";
             }
             else
             {
@@ -126,19 +131,21 @@ internal static class CharacterOwnershipGuard
             return;
 
         // Refused: say whether that is a stale token or a database that was never initialised.
-        long? epoch = await ReadEpochAsync(db, connection, transaction, cancellationToken).ConfigureAwait(false);
-        if (epoch is null)
+        string scope = token?.Scope ?? CharacterOwnershipScopes.World;
+        long? epoch = await ReadEpochAsync(db, connection, transaction, scope, cancellationToken).ConfigureAwait(false);
+        if (epoch is null && string.Equals(scope, CharacterOwnershipScopes.World, StringComparison.Ordinal))
             throw new InvalidOperationException("the characters ownership fence row is missing; schema initialization is incomplete");
-        throw new CharacterOwnershipRejectedException(token?.Scope ?? "world", token?.Epoch ?? epoch.Value);
+        throw new CharacterOwnershipRejectedException(scope, token?.Epoch ?? epoch!.Value);
     }
 
-    private static async Task<long?> ReadEpochAsync(DbContext db, DbConnection connection, DbTransaction transaction, CancellationToken cancellationToken)
+    private static async Task<long?> ReadEpochAsync(DbContext db, DbConnection connection, DbTransaction transaction, string scope, CancellationToken cancellationToken)
     {
         ISqlGenerationHelper sql = db.GetService<ISqlGenerationHelper>();
         await using DbCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = $"SELECT {sql.DelimitIdentifier("epoch")} FROM {sql.DelimitIdentifier(CharacterOwnershipDataModule.Table)} "
-            + $"WHERE {sql.DelimitIdentifier("scope")} = 'world'";
+            + $"WHERE {sql.DelimitIdentifier("scope")} = @scope";
+        AddParameter(command, "@scope", scope);
         object? value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is null or DBNull ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
@@ -156,7 +163,8 @@ internal static class CharacterOwnershipGuard
         if (token is null)
         {
             return await db.Set<CharacterOwnershipRow>()
-                .Where(r => r.Scope == "world" && !r.Active && r.WriteSequence < long.MaxValue)
+                .Where(r => r.Scope == "world" && !r.Active && r.WriteSequence < long.MaxValue
+                    && !db.Set<CharacterOwnershipRow>().Any(o => o.Active))
                 .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.WriteSequence, r => r.WriteSequence + 1), cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -181,6 +189,11 @@ internal static class CharacterOwnershipGuard
             _ => throw new NotSupportedException($"no ownership fence lock for provider {db.Database.ProviderName}"),
         };
 
+        // The tokenless path runs a second statement (any active row?) after the 'world' row share lock is held. On PostgreSQL that
+        // statement is a plain read: under READ COMMITTED it gets a fresh snapshot, which is what makes it correct. Under REPEATABLE
+        // READ or SERIALIZABLE it would not, but then statement 1 (FOR SHARE on a 'world' row a concurrent claim updated) raises a
+        // serialization failure, so the outcome is still a refusal. On MariaDB the statement is a locking read (a current read).
+        bool isMariaDb = db.Database.ProviderName == "Pomelo.EntityFrameworkCore.MySql";
         await using DbCommand command = connection.CreateCommand();
         command.Transaction = transaction;
         void Add(string name, object value)
@@ -193,12 +206,25 @@ internal static class CharacterOwnershipGuard
 
         if (token is null)
         {
+            // Tokenless: allowed only while no row at all is active. Two statements, in this order. (1) Share-lock the inactive 'world' row: from here
+            // a worker claim's gate UPDATE waits behind this lock until the caller's transaction ends. If a claim held the row first, this blocks
+            // until it commits, then the row's re-check sees it still inactive (the claim only bumps its sequence), so (1) alone cannot see the claim.
+            // (2) therefore asks "is any row active" as a separate statement taken after the lock: under READ COMMITTED it gets a fresh snapshot, and
+            // on MariaDB it is a locking read (a current read), so the REPEATABLE READ snapshot cannot hide a claim that committed while (1) waited.
             command.CommandText = $"SELECT 1 FROM {table} WHERE {scope} = 'world' AND {active} = FALSE "
                 + $"AND {sql.DelimitIdentifier("write_sequence")} < {long.MaxValue}{lockClause}";
+            await DbConnectionOpen.EnsureOpenAsync(db.Database, cancellationToken).ConfigureAwait(false);
+            if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
+                return false;
+
+            await using DbCommand anyActive = connection.CreateCommand();
+            anyActive.Transaction = transaction;
+            anyActive.CommandText = $"SELECT 1 FROM {table} WHERE {active} = TRUE{(isMariaDb ? lockClause : string.Empty)}";
+            return await anyActive.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null;
         }
         else
         {
-            if (!string.Equals(token.Scope, "world", StringComparison.Ordinal))
+            if (!CharacterOwnershipScopes.IsValid(token.Scope))
                 return false;
             command.CommandText = $"SELECT 1 FROM {table} WHERE {scope} = @scope AND {active} = TRUE "
                 + $"AND {sql.DelimitIdentifier("epoch")} = @epoch AND {sql.DelimitIdentifier("owner_incarnation")} = @incarnation{lockClause}";

@@ -32,6 +32,11 @@ public sealed class SchemaSeedValidationTests
         SchemaDefinition accepted = Definition(seed);
         Assert.NotNull(SchemaChangeDecider.ReadModel(db, accepted));
 
+        // The model's HasData row also carries the nullable owned_maps / heartbeat_at_ms columns a later step adds; the frozen
+        // 5-column seed omits them and IsDeclaredSeed accepts them as null. Spelling the two columns out is accepted too.
+        EnsureRowChange eightColumns = seed with { Values = new Dictionary<string, object?>(seed.Values) { ["owned_maps"] = null, ["heartbeat_at_ms"] = null } };
+        Assert.NotNull(SchemaChangeDecider.ReadModel(db, Definition(eightColumns)));
+
         EnsureRowChange wrongValue = seed with { Values = new Dictionary<string, object?>(seed.Values) { ["epoch"] = 1L } };
         Assert.Throws<InvalidOperationException>(() => SchemaChangeDecider.ReadModel(db, Definition(wrongValue)));
 
