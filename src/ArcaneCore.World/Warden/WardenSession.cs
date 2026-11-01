@@ -29,10 +29,17 @@ public sealed record WardenVerdict(string Reason, WardenAction Action, bool IsPr
 /// never strikes. Repeated Log verdicts are reported at most once per <see cref="WardenOptions.ProtocolReportIntervalSeconds"/>, then as
 /// one count; <see cref="Flush"/> reports the held count when the session ends. A failed scan uses its own action or
 /// <see cref="WardenOptions.Action"/>.
+/// Login-time scans (<see cref="WardenCheckOptions.InitialLogin"/>, and the scripted scans under <see cref="WardenOptions.ScriptedScans"/>)
+/// go out right after MODULE_INITIALIZE, and the follow-ups a scripted scan queues go out as soon as its reply is handled (vmangos
+/// Warden::RequestScans, EnqueueScans). Under <see cref="WardenOptions.ConfirmFailedScans"/> a failed scan is rescanned alone before it
+/// counts (MaNGOS Zero WardenEnforcementPolicy).
 /// Thread-safe: the packet arrives on the session task, the update on the world thread; every member runs under one lock.
 /// </summary>
 public sealed class WardenSession
 {
+    /// <summary>The most reply bytes one request may ask for (vmangos Warden.hpp MaxReply); applied to queued scans.</summary>
+    private const int MaxReply = 256;
+
     private readonly object _lock = new();
     private readonly WardenCryptoContext _crypto;
     private readonly WardenOptions _options;
@@ -52,6 +59,26 @@ public sealed class WardenSession
     private int _suppressed;
     private string _lastSuppressed = string.Empty;
 
+    // Login-time scans (InitialLogin), the follow-up queue (initial and scripted scans, vmangos m_enqueuedScans) and the isolated
+    // confirmation rescans (MaNGOS Zero WardenCheckPlanner m_confirmationQueue). Requests take confirmations first, then the queue, then
+    // the rotation, and a queue or confirmation goes out as soon as the previous reply is handled.
+    private readonly IReadOnlyList<WardenCheck> _initial;
+    private readonly List<WardenCheck> _queue = [];
+    private readonly List<WardenCheck> _confirmations = [];
+    private readonly HashSet<uint> _confirming = [];
+    private readonly HashSet<(uint CheckId, WardenCheckOutcome Outcome)> _audited = [];
+    private readonly WardenScriptedScans? _scripted;
+    private BatchSource _pendingSource;
+    private int _pendingRotationCount;
+    private int _batchesSinceHookCheck;
+
+    private enum BatchSource
+    {
+        Rotation,
+        Queue,
+        Confirmation,
+    }
+
     /// <summary>Create the session's Warden. <paramref name="sessionKey"/> is the 40-byte login key K; it is not retained.</summary>
     /// <param name="checks">The scans to run; null runs <c>options.Checks</c>.</param>
     public WardenSession(ReadOnlySpan<byte> sessionKey, WardenOptions options, Action<byte[]> send, Action<WardenVerdict> report, Random? random = null, IReadOnlyList<WardenCheckOptions>? checks = null)
@@ -68,15 +95,23 @@ public sealed class WardenSession
         _random = random ?? new Random();
         _module = module;
         var checks = new List<WardenCheck>();
+        var initial = new List<WardenCheck>();
         foreach (WardenCheckOptions check in configured ?? options.Checks)
         {
             if (WardenCheck.TryCreate(check, out WardenCheck? valid) is null)
             {
-                checks.Add(valid!);
+                // vmangos WardenScanMgr::GetRandomScans: an InitialLogin scan is sent only when login scans are asked for, never in the rotation.
+                (check.InitialLogin ? initial : checks).Add(valid!);
             }
         }
 
+        _initial = initial;
         _checks = checks.Count > 0 ? checks : [WardenCheck.Timing];
+        if (options.ScriptedScans)
+        {
+            _scripted = new WardenScriptedScans(_queue.Add, reason => _report(new WardenVerdict(reason, WardenAction.Log, false, null)));
+        }
+
         _nextCheck = _random.Next(_checks.Count); // a random start in the rotation, so a short session does not always run the same leading checks
     }
 
@@ -84,6 +119,21 @@ public sealed class WardenSession
 
     /// <summary>The session's own clock in milliseconds (advanced by <see cref="Update"/>).</summary>
     public long ClockMs { get; private set; }
+
+    /// <summary>The scripted scans' per-session state when <see cref="WardenOptions.ScriptedScans"/> is on, else null (diagnostics, tests).</summary>
+    internal WardenScriptedScans? Scripted => _scripted;
+
+    /// <summary>Scans waiting to be sent ahead of the rotation: confirmation rescans and queued login or scripted scans (diagnostics, tests).</summary>
+    internal int QueuedScans
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _confirmations.Count + _queue.Count;
+            }
+        }
+    }
 
     /// <summary>Protocol verdicts held back by the report interval and not yet reported as a count (diagnostics, tests).</summary>
     public int HeldVerdicts
@@ -203,7 +253,24 @@ public sealed class WardenSession
                     _crypto.InstallModuleKeys(WardenModuleProfile.ClientKeySeed, WardenModuleProfile.ServerKeySeed);
                     SendPlain(WardenCodec.ModuleInitialize()); // the first body under the module's keys; the module does not acknowledge it
                     State = WardenState.Ready;
-                    ScheduleScan(first: true);
+
+                    // vmangos Warden::HandlePacket HASH_RESULT: after InitializeClient, RequestScans(SelectScans(InitialLogin)) at once.
+                    // Every login scan is queued (vmangos keeps a random NumScans of them); they go out in back-to-back requests.
+                    _queue.AddRange(_initial);
+                    if (_scripted is not null)
+                    {
+                        _queue.AddRange(_scripted.InitialLoginScans());
+                    }
+
+                    if (_queue.Count > 0)
+                    {
+                        RequestScans();
+                    }
+                    else
+                    {
+                        ScheduleScan(first: true);
+                    }
+
                     return;
             }
         }
@@ -252,14 +319,48 @@ public sealed class WardenSession
         }
     }
 
+    /// <summary>
+    /// Send the next request: one confirmation rescan alone (MaNGOS Zero CheckPlanPurpose::Confirmation), else the queued scans (up to
+    /// ScansPerRequest and the module's 256-byte reply limit, vmangos Warden::RequestScans / MaxReply), else the rotation, which also
+    /// carries the scripted EndScene hook check once per pass.
+    /// </summary>
     private void RequestScans()
     {
-        int count = Math.Min(_options.ScansPerRequest, _checks.Count);
-        var batch = new List<WardenCheck>(count);
-        for (int i = 0; i < count; i++)
+        var batch = new List<WardenCheck>();
+        _pendingRotationCount = 0;
+        if (_confirmations.Count > 0)
         {
-            batch.Add(_checks[_nextCheck]);
-            _nextCheck = (_nextCheck + 1) % _checks.Count;
+            _pendingSource = BatchSource.Confirmation;
+            batch.Add(_confirmations[0]);
+            _confirmations.RemoveAt(0);
+        }
+        else if (_queue.Count > 0)
+        {
+            _pendingSource = BatchSource.Queue;
+            int reply = 0;
+            while (_queue.Count > 0 && batch.Count < _options.ScansPerRequest && (batch.Count == 0 || reply + _queue[0].MaxReplySize <= MaxReply))
+            {
+                reply += _queue[0].MaxReplySize;
+                batch.Add(_queue[0]);
+                _queue.RemoveAt(0);
+            }
+        }
+        else
+        {
+            _pendingSource = BatchSource.Rotation;
+            WardenCheck? hook = TakeHookCheck();
+            int count = Math.Min(_options.ScansPerRequest - (hook is null ? 0 : 1), _checks.Count);
+            for (int i = 0; i < count; i++)
+            {
+                batch.Add(_checks[_nextCheck]);
+                _nextCheck = (_nextCheck + 1) % _checks.Count;
+            }
+
+            _pendingRotationCount = count;
+            if (hook is not null)
+            {
+                batch.Add(hook);
+            }
         }
 
         _pending = batch;
@@ -272,22 +373,137 @@ public sealed class WardenSession
     private void HandleCheckResult(byte[] plain)
     {
         IReadOnlyList<WardenCheck> pending = _pending!;
-        List<WardenCheck>? failed = WardenCodec.CheckResult(plain, pending);
-        if (failed is null)
+        List<(WardenCheck Check, WardenCheckOutcome Outcome)>? outcomes = WardenCodec.CheckOutcomes(plain, pending);
+        if (outcomes is null)
         {
             Fail("malformed scan reply or checksum"); // vmangos Warden.cpp:587-594
             return;
         }
 
+        bool confirmation = _pendingSource == BatchSource.Confirmation;
         _pending = null;
         _batchRetried = false;
         Forgive();
         State = WardenState.Ready;
-        ScheduleScan();
-        foreach (WardenCheck check in failed)
+
+        // The whole reply is valid: scripted scans may now store what they read and queue their next stage (vmangos ReadScanResults).
+        foreach ((WardenCheck check, _) in outcomes)
         {
-            string what = check.Source.Comment.Length > 0 ? check.Source.Comment : check.Kind.ToString();
-            _report(new WardenVerdict($"failed scan {check.Id} ({what})", check.Source.Action ?? _options.Action, false, check.Id));
+            check.ApplyScript();
+        }
+
+        foreach ((WardenCheck check, WardenCheckOutcome outcome) in outcomes)
+        {
+            Judge(check, outcome, confirmation);
+        }
+
+        // Follow-ups and confirmations are requested at once (vmangos ReadScanResults: RequestScans({}); MaNGOS Zero planner: confirmations
+        // are immediate); otherwise the next rotation request waits for its gap.
+        if (_confirmations.Count > 0 || _queue.Count > 0)
+        {
+            RequestScans();
+        }
+        else
+        {
+            ScheduleScan();
+        }
+    }
+
+    /// <summary>
+    /// Report one scan's outcome. Without <see cref="WardenOptions.ConfirmFailedScans"/> a failed scan takes its action at once (vmangos
+    /// Warden::ReadScanResults ApplyPenalty). With it, the MaNGOS Zero evidence policy (WardenEnforcementPolicy::EvaluateBatch) applies: an
+    /// eligible failure is queued for one isolated rescan (once per check while pending, and not again for an outcome already audited), the
+    /// rescan's outcome is classified (cleared, audit, incident), and a failure that cannot be confirmed acts only if its class is actionable.
+    /// </summary>
+    private void Judge(WardenCheck check, WardenCheckOutcome outcome, bool confirmation)
+    {
+        string what = check.Source.Comment.Length > 0 ? check.Source.Comment : check.Kind.ToString();
+        string detail = check.FailureDetail is { } d ? $": {d}" : string.Empty;
+        WardenAction action = check.Source.Action ?? _options.Action;
+        if (!_options.ConfirmFailedScans)
+        {
+            if (WardenEvidence.IsFailure(outcome))
+            {
+                _report(new WardenVerdict($"failed scan {check.Id} ({what}){detail}", action, false, check.Id));
+            }
+
+            return;
+        }
+
+        if (confirmation)
+        {
+            _confirming.Remove(check.Id);
+            switch (WardenEvidence.ClassifyConfirmed(check.EvidenceClass, outcome))
+            {
+                case WardenConfirmedDisposition.Cleared:
+                    _report(new WardenVerdict($"scan {check.Id} ({what}) passed its confirmation rescan; no finding", WardenAction.Log, false, check.Id));
+                    break;
+                case WardenConfirmedDisposition.Incident:
+                    _report(new WardenVerdict($"failed scan {check.Id} ({what}){detail}; confirmed by an isolated rescan", action, false, check.Id));
+                    break;
+                default:
+                    _audited.Add((check.Id, outcome));
+                    _report(new WardenVerdict($"scan {check.Id} ({what}) confirmed {outcome}{detail}; {check.EvidenceClass} evidence is logged only", WardenAction.Log, false, check.Id));
+                    break;
+            }
+
+            return;
+        }
+
+        if (!WardenEvidence.IsFailure(outcome))
+        {
+            return;
+        }
+
+        if (WardenEvidence.NeedsConfirmation(check, outcome))
+        {
+            if (!_audited.Contains((check.Id, outcome)) && _confirming.Add(check.Id))
+            {
+                _confirmations.Add(check);
+            }
+
+            return;
+        }
+
+        // Not confirmable (timing, scripted): actionable evidence acts at once, health and corroboration evidence is logged.
+        _report(new WardenVerdict($"failed scan {check.Id} ({what}){detail}", WardenEvidence.IsActionable(check.EvidenceClass) ? action : WardenAction.Log, false, check.Id));
+    }
+
+    /// <summary>
+    /// The scripted EndScene hook check for a rotation request, once per pass through the rotation (so it runs about as often as any one
+    /// configured check; vmangos draws it from the same random pool), or null when EndScene is not known.
+    /// </summary>
+    private WardenCheck? TakeHookCheck()
+    {
+        if (_scripted?.HookCheck is not { } hook)
+        {
+            return null;
+        }
+
+        int batchesPerPass = Math.Max(1, (_checks.Count + _options.ScansPerRequest - 1) / _options.ScansPerRequest);
+        if (++_batchesSinceHookCheck < batchesPerPass)
+        {
+            return null;
+        }
+
+        _batchesSinceHookCheck = 0;
+        return hook;
+    }
+
+    /// <summary>Put a failed request's scans back where they came from, so the retry sends the same scans.</summary>
+    private void RequeuePending()
+    {
+        switch (_pendingSource)
+        {
+            case BatchSource.Rotation:
+                _nextCheck = (_nextCheck - _pendingRotationCount + _checks.Count) % _checks.Count; // the hook check rides the next pass
+                break;
+            case BatchSource.Queue:
+                _queue.InsertRange(0, _pending!);
+                break;
+            case BatchSource.Confirmation:
+                _confirmations.InsertRange(0, _pending!);
+                break;
         }
     }
 
@@ -351,7 +567,7 @@ public sealed class WardenSession
         if (failedState == WardenState.AwaitingCheckResult)
         {
             // Re-run a failed batch once so one bad reply does not skip its checks (a failed retry has already kicked above).
-            _nextCheck = (_nextCheck - _pending!.Count + _checks.Count) % _checks.Count;
+            RequeuePending();
             _batchRetried = true;
             _pending = null;
             State = WardenState.Ready;

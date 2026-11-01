@@ -76,12 +76,25 @@ public sealed class GatewayWardenManifestVerifier
         foreach (WardenCheckOptions check in options.Checks.OrderBy(c => c.Id))
         {
             checks.Append(CultureInfo.InvariantCulture,
-                $"{check.Id}|{(int)check.Kind}|{check.Module}|{check.Address}|{check.Expected}|{check.Path}|{check.Pattern}|{check.DriverName}|{check.DriverPath}|{check.Wanted}|{(check.Action is { } a ? (int)a : -1)};");
+                $"{check.Id}|{(int)check.Kind}|{check.Module}|{check.Address}|{check.Expected}|{check.Path}|{check.Pattern}|{check.DriverName}|{check.DriverPath}|{check.Wanted}|{(check.Action is { } a ? (int)a : -1)}");
+
+            // Fields added after the first manifest are appended only when set, so existing manifests keep their fingerprint.
+            if (check.Kind == WardenCheckKind.ApiHook)
+            {
+                checks.Append(CultureInfo.InvariantCulture, $"|fn={check.Function}|len={check.Length}");
+            }
+
+            if (check.InitialLogin)
+            {
+                checks.Append("|initial");
+            }
+
+            checks.Append(';');
         }
 
         string fingerprint = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(checks.ToString())).AsSpan(0, 8));
         return string.Create(CultureInfo.InvariantCulture,
-            $"enabled={(options.Enabled ? 1 : 0)};action={(int)options.Action};protocol={(int)options.ProtocolAction};strikes={options.MaxProtocolFailures};report={options.ProtocolReportIntervalSeconds};exempt={(int)options.ExemptSecurity};timeout={options.ResponseTimeoutSeconds};scan={options.ScanIntervalMinSeconds}-{options.ScanIntervalMaxSeconds};perRequest={options.ScansPerRequest};chunk={options.ChunkSize};ban={options.BanSeconds};checks={options.Checks.Count}:{fingerprint}");
+            $"enabled={(options.Enabled ? 1 : 0)};action={(int)options.Action};protocol={(int)options.ProtocolAction};strikes={options.MaxProtocolFailures};report={options.ProtocolReportIntervalSeconds};exempt={(int)options.ExemptSecurity};timeout={options.ResponseTimeoutSeconds};scan={options.ScanIntervalMinSeconds}-{options.ScanIntervalMaxSeconds};perRequest={options.ScansPerRequest};chunk={options.ChunkSize};ban={options.BanSeconds};checks={options.Checks.Count}:{fingerprint}{(options.ScriptedScans ? ";scripted=1" : string.Empty)}{(options.ConfirmFailedScans ? ";confirm=1" : string.Empty)}");
     }
 
     /// <summary>The posture a gateway sends with its verdicts: this manifest without its module bytes.</summary>
