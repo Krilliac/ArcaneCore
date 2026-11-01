@@ -7,7 +7,7 @@ namespace ArcaneCore.Data.World.Rules;
 
 /// <summary>
 /// World schema 64: the shipped bot content (docs/superpowers/specs/2026-10-28-rule-engine-design.md, phase P1). No new table: the step
-/// seeds <c>playerbot_goal</c> with the goal catalogue (the 18 goal kinds and the 16 ladder rungs) and the bot goal ladder as rules
+/// seeds <c>playerbot_goal</c> with the goal catalogue as released (the 18 goal kinds 0-17 and the 16 ladder rungs; goal 18 is seeded by <see cref="PlayerbotWorldPvpGoalDataModule"/>, world 67) and the bot goal ladder as rules
 /// (<c>rule</c> ids 10001-10016, one <c>bot.propose_goal</c> action each in <c>rule_action</c>), all from <see cref="PlayerbotLadderContent"/>.
 /// A row is inserted only when its key is absent, so a server's edit of a shipped row (a weight, <c>enabled</c>) survives a later upgrade,
 /// and the step is idempotent.
@@ -23,7 +23,7 @@ public sealed class PlayerbotLadderDataModule : IDataModule
 
     public IReadOnlyList<SchemaChange> SchemaChanges { get; } =
     [
-        .. PlayerbotLadderContent.Goals.Select(g => (SchemaChange)new EnsureRowChange(
+        .. PlayerbotLadderContent.Goals.Where(g => g.GoalId != PlayerbotWorldPvpGoalDataModule.WorldPvpGoalId).Select(g => (SchemaChange)new EnsureRowChange(
             PlayerbotGoalDataModule.Table, "goal_id", g.GoalId, new Dictionary<string, object?>
             {
                 ["name"] = g.Name,
