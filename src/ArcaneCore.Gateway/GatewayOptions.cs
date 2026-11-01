@@ -33,10 +33,20 @@ public sealed class GatewayOptions
     /// <summary>A client whose unsent data exceeds this many bytes (it stopped reading) is disconnected (World:MaxOutboundBytes).</summary>
     public long MaxOutboundBytes { get; set; } = 8 * 1024 * 1024;
 
-    /// <summary>Address of the world worker's gateway listener (Cluster:Worker:BindAddress).</summary>
+    /// <summary>
+    /// The world workers this gateway links to, one link each (node id, address, port, optional maps). When empty, the single-worker keys
+    /// <see cref="WorkerAddress"/> and <see cref="WorkerPort"/> describe one entry named <see cref="LegacyWorkerNodeId"/>; when set, those two
+    /// keys are ignored. Every worker must accept the same <see cref="LinkSecret"/>, <see cref="RealmId"/> and manifest values.
+    /// </summary>
+    public List<GatewayWorkerEntry> Workers { get; set; } = [];
+
+    /// <summary>Node id given to the entry made from <see cref="WorkerAddress"/> and <see cref="WorkerPort"/>.</summary>
+    public const string LegacyWorkerNodeId = "worker";
+
+    /// <summary>Address of the world worker's gateway listener (Cluster:Worker:BindAddress). Used only while <see cref="Workers"/> is empty.</summary>
     public string WorkerAddress { get; set; } = "127.0.0.1";
 
-    /// <summary>Port of the world worker's gateway listener (Cluster:Worker:Port).</summary>
+    /// <summary>Port of the world worker's gateway listener (Cluster:Worker:Port). Used only while <see cref="Workers"/> is empty.</summary>
     public int WorkerPort { get; set; } = 8095;
 
     /// <summary>The shared link secret (Cluster:Worker:LinkSecret on the worker): at least 16 characters, or the gateway refuses to start.</summary>
@@ -62,6 +72,54 @@ public sealed class GatewayOptions
 
     public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
         ClusterRole.Gateway, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion);
+
+    /// <summary>The worker entries the gateway links to: <see cref="Workers"/>, or one entry made from the single-worker keys.</summary>
+    public IReadOnlyList<GatewayWorkerEntry> EffectiveWorkers() => Workers.Count > 0
+        ? Workers
+        : [new GatewayWorkerEntry { NodeId = LegacyWorkerNodeId, Address = WorkerAddress, Port = WorkerPort }];
+
+    /// <summary>Every problem with <see cref="Workers"/> (empty when it is empty: the single-worker keys are validated instead).</summary>
+    public IReadOnlyList<string> ValidateWorkers()
+    {
+        var problems = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int index = 0; index < Workers.Count; index++)
+        {
+            GatewayWorkerEntry? entry = Workers[index];
+            string prefix = $"{SectionName}:Workers:{index}";
+            if (entry is null)
+            {
+                problems.Add($"{prefix}: must not be empty.");
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(entry.NodeId))
+            {
+                problems.Add($"{prefix}:NodeId: must not be empty.");
+            }
+            else if (!seen.Add(entry.NodeId))
+            {
+                problems.Add($"{prefix}:NodeId: '{entry.NodeId}' is used by an earlier entry.");
+            }
+
+            if (string.IsNullOrWhiteSpace(entry.Address) || !IPAddress.TryParse(entry.Address, out _))
+            {
+                problems.Add($"{prefix}:Address: must be a valid IP address.");
+            }
+
+            if (entry.Port is < 1 or > IPEndPoint.MaxPort)
+            {
+                problems.Add($"{prefix}:Port: must be 1..{IPEndPoint.MaxPort}.");
+            }
+
+            if (entry.Maps is null || entry.Maps.Any(map => map < 0))
+            {
+                problems.Add($"{prefix}:Maps: map ids must not be negative.");
+            }
+        }
+
+        return problems;
+    }
 
     /// <summary>Every problem with the bound values, as <c>Gateway:Key: problem</c> lines; empty when valid.</summary>
     public IReadOnlyList<string> Validate()
@@ -97,14 +155,21 @@ public sealed class GatewayOptions
             problems.Add($"{SectionName}:MaxOutboundBytes: must be positive.");
         }
 
-        if (string.IsNullOrWhiteSpace(WorkerAddress) || !IPAddress.TryParse(WorkerAddress, out _))
+        if (Workers.Count > 0)
         {
-            problems.Add($"{SectionName}:WorkerAddress: must be a valid IP address.");
+            problems.AddRange(ValidateWorkers());
         }
-
-        if (WorkerPort is < 1 or > IPEndPoint.MaxPort)
+        else
         {
-            problems.Add($"{SectionName}:WorkerPort: must be 1..{IPEndPoint.MaxPort}.");
+            if (string.IsNullOrWhiteSpace(WorkerAddress) || !IPAddress.TryParse(WorkerAddress, out _))
+            {
+                problems.Add($"{SectionName}:WorkerAddress: must be a valid IP address.");
+            }
+
+            if (WorkerPort is < 1 or > IPEndPoint.MaxPort)
+            {
+                problems.Add($"{SectionName}:WorkerPort: must be 1..{IPEndPoint.MaxPort}.");
+            }
         }
 
         if (LinkRetryDelay < TimeSpan.Zero)
@@ -139,4 +204,20 @@ public sealed class GatewayOptions
 
         return problems;
     }
+}
+
+/// <summary>One world worker the gateway links to (<c>Gateway:Workers:N</c>).</summary>
+public sealed class GatewayWorkerEntry
+{
+    /// <summary>The worker's name in logs, metrics and link state; unique among the entries.</summary>
+    public string NodeId { get; set; } = string.Empty;
+
+    /// <summary>Address of the worker's gateway listener (its Cluster:Worker:BindAddress).</summary>
+    public string Address { get; set; } = "127.0.0.1";
+
+    /// <summary>Port of the worker's gateway listener (its Cluster:Worker:Port).</summary>
+    public int Port { get; set; } = 8095;
+
+    /// <summary>Map ids this worker owns; empty means it is not map-restricted. Surfaced in the link state for map-aware routing.</summary>
+    public int[] Maps { get; set; } = [];
 }

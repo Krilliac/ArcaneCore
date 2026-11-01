@@ -60,6 +60,47 @@ public sealed class ConfDistTests : IDisposable
     private static IConfigurationRoot LoadConf(string path) => new ConfigurationBuilder().Add(new ConfConfigurationSource { Path = path }).Build();
 
     [Fact]
+    public void Generator_PrintsTheEnforcedRangeOfARangedWholeNumber()
+    {
+        ConfigEntry ranged = new("X", "X:CreateWithinHours", "int", "24", "A new issue is opened within this many hours (0..8760; 0 = only since start-up).", "restart", RawDefault: "24");
+        ConfKey key = Assert.Single(ConfCatalogGenerator.Build([ranged]).Keys);
+        Assert.Equal("a whole number from 0 to 8760", key.Allowed);
+
+        ConfigEntry unranged = ranged with { Path = "X:Plain", Meaning = "No range stated." };
+        Assert.Equal("a whole number, -2147483648 to 2147483647", Assert.Single(ConfCatalogGenerator.Build([unranged]).Keys).Allowed);
+
+        ConfigEntry overridden = ranged with { Path = "X:Over", AllowedOverride = "custom text" };
+        Assert.Equal("custom text", Assert.Single(ConfCatalogGenerator.Build([overridden]).Keys).Allowed);
+
+        ConfigEntry notWhole = ranged with { Path = "X:Real", TypeText = "double", Meaning = "A factor (0..10)." };
+        Assert.DoesNotContain("from 0 to 10", Assert.Single(ConfCatalogGenerator.Build([notWhole]).Keys).Allowed);
+    }
+
+    [Fact]
+    public void Generator_NeverPrintsARangeThatExcludesTheDefault()
+    {
+        ConfigEntry off = new("X", "X:Gap", "int", "0", "Gap (50..10000). 0 (the default) means automatic.", "restart", RawDefault: "0");
+        Assert.Equal("a whole number, -2147483648 to 2147483647", Assert.Single(ConfCatalogGenerator.Build([off]).Keys).Allowed);
+    }
+
+    [Fact]
+    public void ZeroMeansOffKeys_AllowedTextNamesZero()
+    {
+        ConfKey gap = Generated.Keys.Single(k => k.Path == "World:Playerbots:ThinkStarvedGapMs");
+        Assert.Equal("a whole number: 0 (the report is off) or 1000 to 3600000", gap.Allowed);
+        ConfKey brake = Generated.Keys.Single(k => k.Path == "World:Playerbots:Population:RushBrakeP95Ms");
+        Assert.Contains("0 (", brake.Allowed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CreateWithinHours_AllowedTextIsItsRange_AndTheDefaultStays24()
+    {
+        ConfKey key = Generated.Keys.Single(k => k.Path == "World:Playerbots:Qa:GitHub:CreateWithinHours");
+        Assert.Equal("a whole number from 0 to 8760", key.Allowed);
+        Assert.Equal("24", key.Default);
+    }
+
+    [Fact]
     public void ConfCatalog_MatchesTheCommittedEmbeddedCatalog()
     {
         ConfCatalog generated = Generated;

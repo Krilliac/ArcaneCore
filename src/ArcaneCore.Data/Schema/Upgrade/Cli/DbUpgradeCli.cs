@@ -47,6 +47,9 @@ public static partial class DbUpgradeCli
           dbc dump <File> [--id N] [--json]   print named fields from a build-5875 DBC with WoWDBDefs signedness (no database connection)
           copy          move a component's rows to another database (SQLite to PostgreSQL or MariaDB, or any pair): creates the target schema, copies every
                         table, resets the key counters, verifies row counts and content, then runs check on the target
+          backup        write a verified consistent copy (VACUUM INTO, integrity_check) of each SQLite database as <component>.db into --backup-dir
+          verify        read-only comparison of each component in the configured Database section (the source) with the target database
+                        (ARCANE_DB_TARGET_*, as for copy): per table the row count and a digest of every value read through the model column types
 
         options:
           --component auth|characters|world|all   which component(s) to act on (default all)
@@ -55,15 +58,15 @@ public static partial class DbUpgradeCli
           --no-fail-on-pending                    status, plan: exit 0 when an upgrade is pending (for set -e scripts)
           --apply                                 migrate-codex: migrate (without it the command is a read-only dry run)
           --confirm-backup                        upgrade, migrate-codex: you have a backup of every database with pending steps
-          --backup-dir <directory>                upgrade, migrate-codex: also write a verified copy of each SQLite database there
+          --backup-dir <directory>                upgrade, migrate-codex: also write a verified copy of each SQLite database there; backup: where it writes (required)
           --allow-active-sessions                 upgrade, migrate-codex, copy: do not refuse when other sessions are connected
           --lock-timeout <seconds>                upgrade, migrate-codex, copy: how long to wait for another process's schema lock (default 60)
           --dbc-dir <directory>                   dbc: the build-5875 DBC directory (default ClientData:DbcDirectory)
           --out <directory>                       export-updates: the update root to write (normally sql/updates)
-          --source-provider sqlite|mariadb|mysql|postgresql   copy: the source engine (default: the configured Database section); with --source-connection
-          --source-connection <connection string> copy: the source database (one component only; prefer the configured Database section, a flag shows in the process list)
-          --target-provider <engine>              copy: the target engine (or ARCANE_DB_TARGET_PROVIDER)
-          --target-connection <connection string> copy: the target database (one component only; or ARCANE_DB_TARGET_<AUTH|CHARACTERS|WORLD>_CONNECTION, ARCANE_DB_TARGET_CONNECTION)
+          --source-provider sqlite|mariadb|mysql|postgresql   copy, verify: the source engine (default: the configured Database section); with --source-connection
+          --source-connection <connection string> copy, verify: the source database (one component only; prefer the configured Database section, a flag shows in the process list)
+          --target-provider <engine>              copy, verify: the target engine (or ARCANE_DB_TARGET_PROVIDER)
+          --target-connection <connection string> copy, verify: the target database (one component only; or ARCANE_DB_TARGET_<AUTH|CHARACTERS|WORLD>_CONNECTION, ARCANE_DB_TARGET_CONNECTION)
           --replace                               copy: empty the target component's tables first (without it a target that holds rows is refused)
 
         configuration: the Database section (appsettings.json, environment variables such as
@@ -72,7 +75,7 @@ public static partial class DbUpgradeCli
 
         exit codes: 0 ok, 1 unexpected failure, 2 usage or configuration, 3 upgrade pending (status, plan),
         4 refused (newer database, unknown state, blocker, active sessions), 5 drift (dbc: a dangling id or bad DBC), 6 database unreachable,
-        7 schema lock timeout, 8 backup not confirmed, 9 copy verification failed
+        7 schema lock timeout, 8 backup not confirmed, 9 copy or verify found a table that differs
         """;
 
     /// <summary>The commands the tool accepts (the closed set the argument parser enforces; the runbook must name each).</summary>
@@ -132,6 +135,8 @@ public static partial class DbUpgradeCli
                 "export-updates" => await run.ExportUpdatesAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "dbc" => await run.DbcAsync(arguments, cancellationToken).ConfigureAwait(false),
                 "copy" => await run.CopyAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "backup" => await run.BackupAsync(arguments, cancellationToken).ConfigureAwait(false),
+                "verify" => await run.VerifyAsync(arguments, cancellationToken).ConfigureAwait(false),
                 _ => throw new UsageException($"unknown command '{arguments.Command}'"),
             };
         }

@@ -237,7 +237,7 @@ public sealed class ChestGoldAndConditionTests
         Rig rig = CreateRig([GoSpawn(1, FreeChestEntry, 3, 0)]);
         (Player player, FakeSession session) = rig.Join(1);
         var asked = new List<(Player Player, uint Condition)>();
-        rig.Loot.Conditions = (p, condition) =>
+        rig.Loot.Conditions = (p, _, condition) =>
         {
             asked.Add((p, condition));
             return condition == MeetsCondition;
@@ -269,7 +269,7 @@ public sealed class ChestGoldAndConditionTests
         (Player alice, FakeSession aliceSession) = rig.Join(1);
         (Player bob, _) = rig.Join(2, 1, 0);
         rig.Groups.Create(LootMethod.FreeForAll, alice, bob);
-        rig.Loot.Conditions = (p, condition) => condition == MeetsCondition && ReferenceEquals(p, bob);
+        rig.Loot.Conditions = (p, _, condition) => condition == MeetsCondition && ReferenceEquals(p, bob);
 
         aliceSession.Clear();
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Single(FreeChestEntry).Guid));

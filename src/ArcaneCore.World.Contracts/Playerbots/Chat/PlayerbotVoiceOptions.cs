@@ -44,7 +44,7 @@ public sealed class PlayerbotVoiceOptions
 
     /// <summary>
     /// Trade calls (on by default): WTS for tradeable surplus in the bot's bags (no grey, no bind-on-pickup or bound item, no quest item,
-    /// nothing it would wear itself) at <see cref="PriceMultiplier"/> times the vendor price, and WTB for the reagents of the recipes it
+    /// nothing it would wear itself) at the price the trade desk quotes (the auction price book, else the reference price; <see cref="PriceMultiplier"/> only for an item with no such price), and WTB for the reagents of the recipes it
     /// wants; in Trade in a capital, now and then in General elsewhere (<see cref="GeneralSharePercent"/>). A real player who whispers the
     /// seller about the item is told the price and where the bot is.
     /// </summary>
@@ -53,7 +53,7 @@ public sealed class PlayerbotVoiceOptions
     /// <summary>The least seconds between two trade calls of one bot (60..86400).</summary>
     public int TradeRepeatSeconds { get; set; } = 900;
 
-    /// <summary>A WTS price is the item's vendor price times this (1..50), rounded the way players price.</summary>
+    /// <summary>The vendor price times this (1..50) is the WTS price only for an item with no auction or reference price; every other WTS post asks what the trade desk quotes.</summary>
     public int PriceMultiplier { get; set; } = 4;
 
     /// <summary>Items worth less than this many copper at a vendor (per stack) are not offered (0..1000000).</summary>

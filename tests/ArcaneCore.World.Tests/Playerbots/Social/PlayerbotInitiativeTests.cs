@@ -316,7 +316,13 @@ public sealed class PlayerbotInitiativeTests
 
     // --- comments -----------------------------------------------------------------------------------------------------------------
 
+    // Timing: the passes here are explicit (PassAsync calls Initiative.Run with a chosen nowMs), so no think or wall wait gates the remark. What the test cannot pin is the
+    // bot itself: the host runs on the real clock, so the bot's own think keeps running between the passes, and Initiative.Run skips a bot that is not
+    // PlayerbotHelpLane.IsFree (in combat, or on a goal outside IsFreeGoal). The rare is a hostile (faction 14) creature 10 yards away, in sight of a bot whose
+    // thinks may engage it or change its goal, so Lane.Comments can stay 0 (flake ledger 2026-10-29: expected 1, actual 0). Which of those happened in that
+    // failure was not recorded; the fix is to hold the bot's own thinks off (a frozen bot or a manual clock host), not another wait.
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ARareCreatureInSight_IsRemarkedOn_OncePerBotGap_AndNotWhenSwitchedOff()
     {
         await using SocialWorld world = await StartAsync();

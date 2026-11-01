@@ -354,7 +354,13 @@ public sealed class PlayerbotWorldBossWorldTests
         Assert.Equal(0, counts.Of(PlayerbotWorldBossOutcomes.Killed));
     }
 
+    // Timing: the one failure seen (flake ledger 2026-10-29: Expected 2, Actual 1) means the raid ended after its first wipe by a path other than the second
+    // wipe: PlayerbotGroupCoordinator.cs increments raid.Wipes and calls Finish("wiped") in the same branch, so a second wipe cannot end it unseen. The manual
+    // clock fixes game time, but the bots' thinks that fight, die and walk back between the wipes use wall-clock budgets (PlayerbotThinkProbe.MsSince), so
+    // under load a bot can stall or leave the group (stalled, regroup-timeout, too-few) before the second pull. Which path ended it was not recorded;
+    // the failure message below now carries the trace with the "gave up ..." note. Until it is seen, this runs in the serial timing stage.
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task WithMaxWipesTwo_TheFirstWipeRegroups_AndTheSecondEndsTheAttempt()
     {
         // The generic Wiped arm gives up at the const MaxFailures (2) for every other group; this raid counts its own wipes against MaxWipes.
@@ -379,8 +385,9 @@ public sealed class PlayerbotWorldBossWorldTests
         }), await world.TraceAsync());
 
         Assert.True(regrouped, "no regroup after the first wipe: " + await world.TraceAsync());
+        // The world runs on the manual clock with a 2,400 s game budget; the trace names the reason a raid ended without its second wipe (the "gave up ... : <reason>" note).
+        Assert.True(Noted(world, "disbanded (wiped)"), "the raid ended without its second wipe (wipes seen: " + mostWipes + "): " + await world.TraceAsync());
         Assert.Equal(2, mostWipes);
-        Assert.True(Noted(world, "disbanded (wiped)"), await world.TraceAsync());
         Assert.Equal(1, counts.Of(PlayerbotWorldBossOutcomes.Wiped));
     }
 

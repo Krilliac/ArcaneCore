@@ -90,6 +90,7 @@ public sealed class PlayerbotOptions
     /// until a pass is measured), so a rotation that is slow for every bot alike raises nothing. The think budget is still sized
     /// from this value unraised.
     /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number: 0 (the report is off) or 1000 to 3600000")]
     public int ThinkStarvedGapMs { get; set; } = 10_000;
 
     /// <summary>

@@ -601,6 +601,34 @@ public sealed class PlayerbotPopulationFeatureTests
     }
 
     [Fact]
+    public async Task ABotTheBattlegroundCoordinatorDrives_IsNotParked_EvenOverTheBudget()
+    {
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1);
+        world.Ticks.Set(200, 10);
+        await world.PassAsync();
+        await world.WaitForSettledAsync(1);
+        Guid bot = Assert.Single(world.Members.Snapshot).BotId;
+
+        // The bot walks to a battlemaster (Travel is a phase the coordinator drives). The coordinator has no public way to start that
+        // without a battlemaster and a roll, so the followed bot is put in its table directly, as its own scan would.
+        var coordinator = world.Host.WorldServices.GetRequiredService<ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator>();
+        var tracked = (Dictionary<Guid, ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator.Tracked>)typeof(ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundCoordinator)
+            .GetField("_tracked", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(coordinator)!;
+        await world.Host.World.InvokeAsync(() =>
+        {
+            tracked[bot] = new(bot, "Popbot") { Phase = ArcaneCore.World.Playerbots.Battlegrounds.PlayerbotBattlegroundPhase.Travel, PhaseSinceMs = world.Host.World.NowMs };
+            return true;
+        });
+        Assert.True(await world.Host.World.InvokeAsync(() => coordinator.Drives(bot)));
+
+        world.Ticks.Set(200, 80);
+        PopulationStatus status = await world.PassAsync();
+        Assert.Equal("over-budget", status.State);
+        Assert.Contains("parked 0", status.Reason);
+        Assert.Equal(1, world.RunningCount);
+    }
+
+    [Fact]
     public async Task ADisabledPopulation_DoesNothing_AndEnablingItLetsTheTimerRunPasses()
     {
         await using PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
@@ -694,6 +722,32 @@ public sealed class PlayerbotPopulationFeatureTests
 
         Assert.Contains("moved 1", status.Reason);
         Assert.Equal(PopulationTestHost.Westfall, Assert.Single(world.Members.Snapshot).ZoneId);
+    }
+
+    [Fact]
+    public async Task ABotThatBecomesPartyDrivenAfterThePassCapturedIt_IsNotRelocated()
+    {
+        var veto = new TestPlacementVeto();
+        await using PopulationTestHost world = await PopulationTestHost.StartAsync(o => o.Population.TargetOnline = 1, withRelocation: true,
+            configureServices: services => services.AddSingleton<IPopulationPlacementVeto>(veto));
+        Guid bot = await StartOneBotInElwynnAsync(world);
+        await using WorldTestClient master = await world.Host.EnterWorldAsync("POPMASTER", "Popmaster");
+
+        await SetBotAsync(world, bot, 20, PopulationTestHost.Elwynn);
+        world.Population.ExcludedZones = [];
+        world.Ticks.Set(200, 10);
+        // The capture asks the veto after it has read the bot as autonomous: leashing the bot there is the player's invitation
+        // arriving between the capture and the teleport (the pass awaits the store in between).
+        veto.OnCheck = id =>
+        {
+            veto.OnCheck = null;
+            Assert.True(world.Bots.Leash(id, world.Host.World.OnlinePlayers.Single(p => p.Name == "Popmaster"), stay: true).Success);
+        };
+        PopulationStatus status = await world.PassAsync();
+
+        Assert.True(world.Bots.IsPartyDriven(bot), "the bot was leashed during the capture");
+        Assert.DoesNotContain("moved", status.Reason);
+        Assert.Equal(PopulationTestHost.Elwynn, Assert.Single(world.Members.Snapshot).ZoneId);
     }
 
     [Theory]
@@ -1443,7 +1497,14 @@ public sealed class PlayerbotPopulationFeatureTests
     {
         public HashSet<Guid> Owned { get; } = [];
 
-        public bool OwnsPlacement(Guid botId) => Owned.Contains(botId);
+        /// <summary>Run once, on the world thread, the next time the population asks about a bot (after it has read the bot's autonomy).</summary>
+        public Action<Guid>? OnCheck { get; set; }
+
+        public bool OwnsPlacement(Guid botId)
+        {
+            OnCheck?.Invoke(botId);
+            return Owned.Contains(botId);
+        }
     }
 
     private static async Task PollAsync(Func<bool> condition, string what)

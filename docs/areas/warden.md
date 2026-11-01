@@ -2,8 +2,9 @@
 
 Off by default (`Warden:Enabled`). Code: `src/ArcaneCore.World/Warden/`.
 
-Ported from MaNGOS Zero `src/game/Warden/` (module delivery, handshake, RC4 keys, module initialization) and vmangos
-`src/game/Anticheat/WardenAnticheat/` (the memory, page and driver scan formats and the penalty).
+Ported from MaNGOS Zero `src/game/Warden/` (module delivery, handshake, RC4 keys, module initialization, the evidence classes and
+confirmation rescans) and vmangos `src/game/Anticheat/WardenAnticheat/` (the scan formats including API hooks, the login-scan flag, the
+scripted SYSTEM_INFO and EndScene scans, and the penalty).
 
 ## Flow
 
@@ -28,7 +29,8 @@ Scans come from two places:
 - **The world table `warden_checks`.** This is world schema version 49, in vmangos's `warden_scans` layout.
   - It is seeded on an empty table with the 94 vmangos rows that apply to build 5875: 80 memory, 6 MPQ, 4 page A and 4 module-by-name.
   - vmangos is GPL-2.0-or-later, so the rows can ship under ArcaneCore's GPL-3.0.
-  - Rows whose build range excludes 5875 are skipped. So are API-hook rows (type 6, not ported) and rows that don't parse.
+  - Rows whose build range excludes 5875 are skipped, and so are rows that don't parse. API-hook rows (type 6) run; vmangos ships none for this build.
+  - Flag 0x08 (vmangos `ScanFlags::InitialLogin`) makes a row a login scan (see below). The other flags need no handling.
   - `penalty` -1 uses `Action`; 0, 1 and 2 mean Log, Kick and Ban.
   - `Warden:LoadFromDatabase` (default true) turns this source off.
 - **`Warden:Checks` in config.** These are added to the table's scans, and a configured `Id` replaces the table row with that id.
@@ -43,7 +45,9 @@ Scans come from two places:
     { "Id": 1003, "Kind": "Driver", "DriverName": "evil", "DriverPath": "\\Device\\Evil", "Wanted": false, "Action": "Ban" },
     { "Id": 1004, "Kind": "ModuleByName", "Module": "tamia.dll", "Wanted": false },
     { "Id": 1005, "Kind": "Mpq", "Path": "World\\Generic\\x.m2", "Expected": "<40 hex chars, or empty: must be absent>" },
-    { "Id": 1006, "Kind": "Lua", "Path": "SomeGlobal", "Expected": "", "Wanted": false }
+    { "Id": 1006, "Kind": "Lua", "Path": "SomeGlobal", "Expected": "", "Wanted": false },
+    { "Id": 1007, "Kind": "ApiHook", "Module": "kernel32.dll", "Function": "GetTickCount", "Expected": "<40 hex chars>", "Address": 0, "Length": 5 },
+    { "Id": 1008, "Kind": "Memory", "Address": 4198400, "Expected": "558BEC", "InitialLogin": true }
   ]
 }
 ```
@@ -56,14 +60,60 @@ Fields by kind:
 - **ModuleByName:** the DLL name, upper-cased and sent as HMAC-SHA1.
 - **Mpq:** a file path and the expected SHA-1. An empty `Expected` means the file must not exist.
 - **Lua:** a global variable name and the value a clean client reports. An empty `Expected` means only existence is checked, using `Wanted`.
+- **ApiHook:** vmangos `WindowsHookScan` (opcode 0x7E). `Module` is the DLL, `Function` the export. `Expected` is the 20-byte SHA-1 the
+  client compares with `Length` bytes (0-255) at `Address` past the detour's jump target. A 0x4A reply (detoured) fails the scan.
+- **InitialLogin** (any kind): the scan runs once, right after MODULE_INITIALIZE, and never in the rotation (vmangos
+  `Warden::HandlePacket` sends `SelectScans(InitialLogin)` after the handshake). Every login scan is sent, in back-to-back requests of up
+  to `ScansPerRequest`; vmangos sends a random `NumScans` of them.
 
 For page, driver and module checks, `Wanted` says whether the pattern, driver or module should be present.
+
+## Scripted scans
+
+`ScriptedScans` (default false) adds the vmangos scripted scans (`WardenWin::LoadScriptedScans`, code in `WardenScans.cs`). Each is a
+memory read at a build 5875 address, and its reply chooses the next read, which goes out as soon as the reply is handled:
+
+- **Warden and SYSTEM_INFO locate** (at login): the module pointer, its WardenSysInfo pointer, then the 36-byte Windows SYSTEM_INFO. A
+  failed read, an architecture other than x86, or a processor type other than 386, 486 or 586 fails the scan.
+- **EndScene locate** (at login): `g_theGxDevicePtr`, its rendering API (OpenGL stops here: its EndScene is not known), then three
+  pointers to the Direct3D EndScene. A failed read, a null device or an unknown API fails the scan.
+- **EndScene hook check** (in the rotation, once per pass, after EndScene is found): its first 16 bytes. An INT3 or JMP hook is logged.
+  For a JMP, 200 bytes at the target are read and logged as a probable bot when the deobfuscated code starts with pushfd, pushad
+  (WRobot) or a full read collapses to under 15 bytes. As in vmangos these are log lines, not failed scans.
+
+Scripted scans have check id 0 and use `Action`.
+
+## Evidence and confirmation rescans
+
+`ConfirmFailedScans` (default false) applies the MaNGOS Zero evidence policy (`WardenEvidence.cpp`, `WardenEnforcementPolicy.cpp`).
+Each kind has an evidence class: timing is protocol health, memory and MPQ are integrity invariants, Lua and scripted scans corroborate,
+and page, driver, module and API-hook scans are threat signatures.
+
+- A failed scan of any kind but timing and scripted is sent again alone, at once (an isolated confirmation rescan), and nothing is
+  reported yet.
+- The rescan decides. A match clears it (one log line). A confirmed mismatch of an integrity or threat-signature scan takes the scan's
+  action. A confirmed unreadable result, or a confirmed corroboration mismatch, is logged once, and the same check and outcome are not
+  rescanned again in that session.
+- A failed timing or scripted scan cannot be confirmed: it is logged (timing, corroboration), never acted on.
+
+Without the option a failed scan takes its action at once, as before.
 
 ## Gaps
 
 - **Not verified against a live 1.12.1 client.** The page, driver and module opcodes (0xB2 / 0xBF / 0x71 / 0xD9) come from TrinityCore's table for this module.
 - **No Lua rows ship.** vmangos's 5875 set has none.
 - **Re-seeding.** An empty table is seeded again at every start. Delete the rows you don't want instead of emptying the table, or set `LoadFromDatabase` to false.
-- **Windows only.** The 5875 auth session does not carry the platform, so a Mac client cannot load the module. It gets `ProtocolAction`, and is kicked after `MaxProtocolFailures` strikes even under Log.
+- **Windows only; Mac clients are documented, not supported.** The 5875 auth session does not carry the platform, so a Mac client cannot
+  load the Windows module. It gets `ProtocolAction`, and is kicked after `MaxProtocolFailures` strikes even under Log. vmangos has a
+  separate Mac path (`WardenMac`: no module, Maiev string-hash scans only, with its own `ScanFlags::Mac` rows); it is not ported, and every
+  scan here, including the scripted and login scans, is a Windows scan.
 - **Ban lands after the kick.** A Ban verdict disconnects the client at once and writes the ban row afterwards, off the world thread, so until the row commits (a stalled database can hold the write for a long time) the account can log in again, any number of times; each reconnect that fails a scan starts another ban write. When a write commits, the ban store publishes the status change and `BanEnforcementFeature` kicks any live session of the account, and the world rejects the account from then on. A failed write leaves the account free: it is recorded in the fault ledger (`warden.ban`) and the log, and the kick stands. Shutdown waits up to 5 s for writes in flight; one still pending then is recorded as `warden.ban-stop` (the ban may be lost), and a ban that starts after shutdown began is not waited for.
-- **Not ported:** API-hook scans, the vmangos sysinfo and EndScene scripted scans, the `InitialLogin` scan flag, and MaNGOS Zero's evidence classes and confirmation rescans.
+- **Scripted scans are unverified and off by default.** vmangos runs them on every session; they read fixed build 5875 addresses that have
+  not been checked against a live 1.12.1 client here.
+- **Not ported from the scripted scans:** vmangos writes the SYSTEM_INFO to a `system_fingerprint_usage` log table and holds
+  SMSG_CHAR_ENUM until it has been read; here it is kept on the session only, and the character list is not held back. vmangos's other
+  scripted scans (CWorld::enables, anti-AFK, Proxifier, hypervisor drivers, click-to-move, the string-hash scan) are not ported.
+- **Evidence classes are fixed per kind** (memory and MPQ integrity, Lua corroboration, page, driver, module and API hook threat
+  signature). MaNGOS Zero lets each catalogue row choose its class; ArcaneCore has no per-check override. Confirmation dispositions are
+  log lines, not MaNGOS Zero's persisted audit and incident rows.
+- **Request size.** Queued (login, scripted, confirmation) requests keep to vmangos's 256-byte reply limit; the rotation does not check it.

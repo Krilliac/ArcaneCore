@@ -10,7 +10,7 @@ namespace ArcaneCore.Data.World.Warden;
 /// of <see cref="Str"/>, <see cref="Data"/> and <see cref="Result"/> depends on <see cref="Type"/>, the vmangos WindowsScanType:
 /// 0 memory (Str module, Result expected hex), 1 module by name (Str name, Result "1" wanted), 2 / 3 page A / B (Data pattern hex,
 /// Result wanted), 4 MPQ file hash (Str path, Result SHA-1 hex or empty for "must be absent"), 5 Lua (Str variable, Data the value a
-/// clean client reports, or empty with Result wanted), 6 API hook (not run), 7 driver (Str name, Data path, Result wanted), 8 timing.
+/// clean client reports, or empty with Result wanted), 6 API hook (Str module, Data proc, Result SHA-1, Address offset, Length), 7 driver (Str name, Data path, Result wanted), 8 timing.
 /// </summary>
 public sealed class WardenCheckRow
 {
@@ -28,7 +28,7 @@ public sealed class WardenCheckRow
 
     public string Result { get; set; } = string.Empty;
 
-    /// <summary>vmangos ScanFlags (kept for reference; ArcaneCore filters by build).</summary>
+    /// <summary>vmangos ScanFlags. ArcaneCore honours 0x08 (InitialLogin: run once at login, not in the rotation); the others are kept for reference.</summary>
     public uint Flags { get; set; }
 
     /// <summary>-1 for the configured action, else 0 log, 1 kick, 2 ban (vmangos WardenActions).</summary>

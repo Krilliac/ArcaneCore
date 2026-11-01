@@ -1,4 +1,6 @@
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 
@@ -56,6 +58,29 @@ public sealed class ConditionEvaluator(ConditionTable table, ConditionContext co
         ArgumentNullException.ThrowIfNull(player);
         return Table.Find(conditionId) is { } condition
             && Meets(condition, new Subject(player, null), source is null ? default : new Subject(null, source), player.Map) == true;
+    }
+
+    /// <summary>
+    /// vmangos IsConditionSatisfied(conditionId, player, map, source, CONDITION_FROM_LOOT) as LootItem::AllowedForPlayer asks it
+    /// (LootMgr.cpp:370-373, 1226): the player is the target and the loot target (creature, game object or a player) the source, so a
+    /// <see cref="ConditionFlags.SwapTargets"/> row tests the loot target as the target (a battleground insignia's dead player). A missing
+    /// condition is false; a null <paramref name="source"/> is no source. World thread.
+    /// </summary>
+    public bool IsSatisfiedWithSource(uint conditionId, Player player, WorldObject? source)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        Subject subject = source switch
+        {
+            Player sourcePlayer => new Subject(sourcePlayer, null),
+            Creature creature => new Subject(null, new NpcInfo(creature.Guid, creature.Entry, creature.Spawn?.Guid ?? creature.Guid.Low,
+                (NpcFlags)creature.NpcFlags, creature.MapId, creature.X, creature.Y, creature.Z, creature.BoundingRadius, creature.IsAlive,
+                IsHostile: false, creature.Combat.IsInCombat, (creature.UnitFlags & UnitFlags.NotSelectable) != 0, creature.DefaultGossipMenuId)),
+            GameObject go => new Subject(null, new NpcInfo(go.Guid, go.Entry, go.Spawn?.Guid ?? go.Guid.Low, NpcFlags.None, go.MapId,
+                go.X, go.Y, go.Z, go.BoundingRadius, IsAlive: true, IsHostile: false, IsInCombat: false, IsNotSelectable: false, GossipMenuId: 0,
+                IsGameObject: true)),
+            _ => default,
+        };
+        return Table.Find(conditionId) is { } condition && Meets(condition, new Subject(player, null), subject, player.Map) == true;
     }
 
     /// <summary>

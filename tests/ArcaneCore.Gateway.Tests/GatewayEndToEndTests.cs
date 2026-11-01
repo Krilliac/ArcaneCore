@@ -172,6 +172,151 @@ public sealed class GatewayEndToEndTests
     }
 
     [Fact]
+    public async Task SingleWorkerKeys_StillWork_AsOneLinkNamedWorker()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Stack stack = await Stack.StartAsync(cts.Token);
+
+        GatewayWorkerLinkInfo only = Assert.Single(stack.Gateway.LinkStates());
+        Assert.Equal(GatewayOptions.LegacyWorkerNodeId, only.NodeId);
+        Assert.Equal(GatewayWorkerLinkStatus.Ready, only.Status);
+        Assert.Equal(stack.Endpoint.Host!.BoundEndPoint.Port, only.EndPoint.Port);
+        Assert.Same(stack.Gateway.Link, Assert.Single(stack.Gateway.Workers).Link);
+        Assert.Equal(only.EndPoint, stack.Gateway.WorkerEndPoint);
+    }
+
+    [Fact]
+    public async Task TwoWorkers_AreBothLinked_AndRestartingOneKeepsTheSessionsOnTheOther()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(cts.Token);
+        GatewayWorkerEndpoint workerA = await StartWorkerAsync(server, 0, cts.Token);
+        GatewayWorkerEndpoint workerB = await StartWorkerAsync(server, 0, cts.Token);
+        int portA = workerA.Host!.BoundEndPoint.Port;
+        int portB = workerB.Host!.BoundEndPoint.Port;
+        GatewayServer gateway = CreateGateway(server, new GatewayOptions
+        {
+            Workers =
+            [
+                new GatewayWorkerEntry { NodeId = "w-a", Address = IPAddress.Loopback.ToString(), Port = portA, Maps = [0] },
+                new GatewayWorkerEntry { NodeId = "w-b", Address = IPAddress.Loopback.ToString(), Port = portB, Maps = [1] },
+            ],
+        });
+        await gateway.StartAsync(cts.Token);
+        GatewayWorkerEndpoint? restartedA = null;
+        try
+        {
+            await gateway.WaitForAllLinksAsync(cts.Token);
+            Assert.Equal(new[] { "w-a", "w-b" }, gateway.LinkStates().Select(state => state.NodeId));
+            Assert.All(gateway.LinkStates(), state => Assert.Equal(GatewayWorkerLinkStatus.Ready, state.Status));
+            Assert.Equal(new[] { 0 }, gateway.LinkStates()[0].Maps);
+            Assert.Equal(new[] { 1 }, gateway.LinkStates()[1].Maps);
+
+            // Two logins spread over the two links: the second goes to the link with fewer sessions.
+            await server.AddAccountAsync("MULTIONE", "PASSWORD", cts.Token);
+            await server.AddAccountAsync("MULTITWO", "PASSWORD", cts.Token);
+            await using WorldClient first = await LoginAsync(server, gateway, "MULTIONE", cts.Token);
+            await using WorldClient second = await LoginAsync(server, gateway, "MULTITWO", cts.Token);
+            await WaitUntilAsync(() => Task.FromResult(workerA.Acceptor!.Sessions.Count == 1 && workerB.Acceptor!.Sessions.Count == 1), cts.Token);
+
+            // Which client sits on worker A?
+            string onA = Assert.Single(workerA.Acceptor!.Sessions.Values).Session.RemoteEndpoint;
+            WorldClient clientOnA = onA == first.LocalEndPoint!.ToString() ? first : second;
+            WorldClient clientOnB = ReferenceEquals(clientOnA, first) ? second : first;
+
+            // Worker A goes away: its client is disconnected, the other worker's client keeps working.
+            await workerA.StopAsync(CancellationToken.None);
+            await AssertDisconnectedAsync(clientOnA, cts.Token);
+            await clientOnB.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, cts.Token);
+            WorldFrame list = await clientOnB.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, cts.Token);
+            Assert.Equal(0, list.Payload[0]);
+            Assert.Single(workerB.Acceptor!.Sessions);
+            Assert.Equal(GatewayWorkerLinkStatus.Ready, gateway.LinkStates()[1].Status);
+            Assert.Equal(0, gateway.LinkStates()[1].Reconnects);
+
+            // Worker A comes back on the same port: its link re-registers on its own, and logins are admitted to it again.
+            restartedA = await StartWorkerAsync(server, portA, cts.Token);
+            await WaitUntilAsync(() => Task.FromResult(gateway.LinkStates()[0] is { Status: GatewayWorkerLinkStatus.Ready, Reconnects: >= 1 }), cts.Token);
+            await server.AddAccountAsync("MULTITHREE", "PASSWORD", cts.Token);
+            await using WorldClient third = await LoginAsync(server, gateway, "MULTITHREE", cts.Token);
+            await WaitUntilAsync(() => Task.FromResult(restartedA.Acceptor!.Sessions.Count == 1), cts.Token);
+            Assert.Single(workerB.Acceptor!.Sessions);
+        }
+        finally
+        {
+            await gateway.StopAsync(CancellationToken.None);
+            gateway.Dispose();
+            if (restartedA is not null)
+            {
+                await restartedA.StopAsync(CancellationToken.None);
+            }
+
+            await workerB.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task WorkerThatIsDown_DoesNotBlockLoginsOnTheOtherWorker()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(cts.Token);
+        GatewayWorkerEndpoint live = await StartWorkerAsync(server, 0, cts.Token);
+        GatewayServer gateway = CreateGateway(server, new GatewayOptions
+        {
+            Workers =
+            [
+                new GatewayWorkerEntry { NodeId = "w-down", Address = IPAddress.Loopback.ToString(), Port = FreePort() },
+                new GatewayWorkerEntry { NodeId = "w-live", Address = IPAddress.Loopback.ToString(), Port = live.Host!.BoundEndPoint.Port },
+            ],
+        });
+        await gateway.StartAsync(cts.Token);
+        try
+        {
+            await gateway.WaitForLinkAsync(cts.Token);
+            await server.AddAccountAsync("MULTIDOWN", "PASSWORD", cts.Token);
+            await using WorldClient client = await LoginAsync(server, gateway, "MULTIDOWN", cts.Token);
+            await WaitUntilAsync(() => Task.FromResult(live.Acceptor!.Sessions.Count == 1), cts.Token);
+            await WaitUntilAsync(() => Task.FromResult(gateway.LinkStates()[0] is { Failures: >= 1, LastError: not null }), cts.Token);
+            Assert.NotEqual(GatewayWorkerLinkStatus.Ready, gateway.LinkStates()[0].Status);
+            Assert.Equal(GatewayWorkerLinkStatus.Ready, gateway.LinkStates()[1].Status);
+        }
+        finally
+        {
+            await gateway.StopAsync(CancellationToken.None);
+            gateway.Dispose();
+            await live.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public void WorkerEntries_AreValidated_AndTheSingleWorkerKeysMapToOneEntry()
+    {
+        var legacy = new GatewayOptions { WorkerAddress = "10.0.0.5", WorkerPort = 9001 };
+        GatewayWorkerEntry one = Assert.Single(legacy.EffectiveWorkers());
+        Assert.Equal((GatewayOptions.LegacyWorkerNodeId, "10.0.0.5", 9001), (one.NodeId, one.Address, one.Port));
+        Assert.Empty(legacy.Validate());
+
+        var bad = new GatewayOptions
+        {
+            WorkerAddress = "not-an-ip", // ignored once Workers is set
+            Workers =
+            [
+                new GatewayWorkerEntry { NodeId = "a", Address = "127.0.0.1", Port = 8095 },
+                new GatewayWorkerEntry { NodeId = "a", Address = "nope", Port = 0, Maps = [-1] },
+                new GatewayWorkerEntry { NodeId = " ", Address = "127.0.0.1", Port = 8096 },
+            ],
+        };
+        IReadOnlyList<string> problems = bad.Validate();
+        Assert.Contains(problems, p => p.StartsWith("Gateway:Workers:1:NodeId:", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.StartsWith("Gateway:Workers:1:Address:", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.StartsWith("Gateway:Workers:1:Port:", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.StartsWith("Gateway:Workers:1:Maps:", StringComparison.Ordinal));
+        Assert.Contains(problems, p => p.StartsWith("Gateway:Workers:2:NodeId:", StringComparison.Ordinal));
+        Assert.DoesNotContain(problems, p => p.StartsWith("Gateway:WorkerAddress:", StringComparison.Ordinal));
+        Assert.Equal(5, problems.Count);
+    }
+
+    [Fact]
     public void WorkerMode_IsRegisteredOnlyWhenEnabled()
     {
         static bool Registered(Dictionary<string, string?> values)
@@ -209,6 +354,41 @@ public sealed class GatewayEndToEndTests
             NodeId = nodeId,
         }),
         server.Services.GetRequiredService<ILoggerFactory>());
+
+    private static GatewayServer CreateGateway(SyntheticArcaneServer server, GatewayOptions options)
+    {
+        options.BindAddress = IPAddress.Loopback.ToString();
+        options.Port = 0;
+        options.LinkSecret = Stack.Secret;
+        options.LinkRetryDelay = TimeSpan.FromMilliseconds(100);
+        return new GatewayServer(
+            server.Services.GetRequiredService<IServiceScopeFactory>(),
+            Options.Create(options),
+            server.Services.GetRequiredService<ILoggerFactory>());
+    }
+
+    private static async Task<GatewayWorkerEndpoint> StartWorkerAsync(SyntheticArcaneServer server, int port, CancellationToken token)
+    {
+        IServiceProvider services = server.Services;
+        var endpoint = new GatewayWorkerEndpoint(
+            services.GetRequiredService<IServiceScopeFactory>(),
+            Options.Create(new GatewayWorkerOptions { Enabled = true, Port = port, LinkSecret = Stack.Secret }),
+            services.GetRequiredService<IOptions<WorldSessionOptions>>(),
+            services.GetRequiredService<OpcodeTable>(),
+            server.World,
+            services.GetRequiredService<SessionRegistry>(),
+            services.GetRequiredService<ILoggerFactory>());
+        await endpoint.StartAsync(token);
+        return endpoint;
+    }
+
+    private static async Task<WorldClient> LoginAsync(SyntheticArcaneServer server, GatewayServer gateway, string account, CancellationToken token)
+    {
+        LogonResult logon = await LogonClient.AuthenticateAsync(server.RealmEndpoint, account, "PASSWORD", token);
+        WorldClient client = await WorldClient.ConnectAsync(gateway.ListenEndPoint, token);
+        Assert.Equal((byte)AuthResponseCode.Ok, await client.AuthenticateAsync(account, logon.SessionKey, token));
+        return client;
+    }
 
     private static int FreePort()
     {

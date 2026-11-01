@@ -30,8 +30,7 @@ public sealed class BuruEggAI(Creature creature) : CreatureAI(creature)
         // spell caster from SpellHitTarget, so apply those values at death.
         foreach (Player player in map.Players.Where(p => p.IsAlive).ToArray())
         {
-            float dx = Me.X - player.X, dy = Me.Y - player.Y, dz = Me.Z - player.Z;
-            float distance = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+            float distance = WorldGeometry.CenterDistance3D(Me, player);
             if (distance > 25) continue;
             uint damage = (uint)(100 + (25 - distance) / 25 * 400);
             map.Combat.DealDamage(Me, player, damage, direct: false, meleeDamage: false, startsCombat: false);
@@ -39,8 +38,7 @@ public sealed class BuruEggAI(Creature creature) : CreatureAI(creature)
         if (map.FindUpdater<CreatureMapSystem>()?.Creatures.FirstOrDefault(c => c.Entry == 15370 && c.IsAlive)
             is { } boss)
         {
-            float dx = Me.X - boss.X, dy = Me.Y - boss.Y, dz = Me.Z - boss.Z;
-            if (dx * dx + dy * dy + dz * dz <= 625)
+            if (WorldGeometry.DistanceSq3D(Me, boss) <= 625)
             {
                 map.Combat.DealDamage(Me, boss, boss.MaxHealth * 15 / 100,
                     direct: false, meleeDamage: false, startsCombat: false);

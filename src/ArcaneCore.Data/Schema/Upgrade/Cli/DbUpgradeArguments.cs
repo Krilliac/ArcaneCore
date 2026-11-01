@@ -15,7 +15,7 @@ internal sealed class DbUpgradeArguments
     internal static readonly string[] Flags =
         ["--confirm-backup", "--allow-active-sessions", "--script", "--json", "--no-fail-on-pending", "--apply", "--replace"];
 
-    internal static readonly string[] Commands = ["status", "plan", "check", "upgrade", "migrate-codex", "backup-info", "dbc", "export-updates", "copy"];
+    internal static readonly string[] Commands = ["status", "plan", "check", "upgrade", "migrate-codex", "backup-info", "dbc", "export-updates", "copy", "backup", "verify"];
 
     private static readonly Dictionary<string, string[]> s_allowed = new(StringComparer.Ordinal)
     {
@@ -28,6 +28,8 @@ internal sealed class DbUpgradeArguments
         ["dbc"] = ["--dbc-dir", "--json"],
         ["export-updates"] = ["--component", "--out"],
         ["copy"] = ["--component", "--source-provider", "--source-connection", "--target-provider", "--target-connection", "--replace", "--lock-timeout", "--allow-active-sessions"],
+        ["backup"] = ["--component", "--backup-dir"],
+        ["verify"] = ["--component", "--source-provider", "--source-connection", "--target-provider", "--target-connection"],
     };
 
     private readonly Dictionary<string, string> _values = new(StringComparer.Ordinal);

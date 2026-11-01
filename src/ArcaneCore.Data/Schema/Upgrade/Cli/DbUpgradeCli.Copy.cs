@@ -196,7 +196,7 @@ public static partial class DbUpgradeCli
             }
         }
 
-        private CopyEnd ResolveCopyEnd(Spec spec, DbUpgradeArguments a, bool isSource)
+        private CopyEnd ResolveCopyEnd(Spec spec, DbUpgradeArguments a, bool isSource, bool readOnlyTarget = false)
         {
             string role = isSource ? "source" : "target";
             string? connectionString = a.Value($"--{role}-connection");
@@ -243,7 +243,7 @@ public static partial class DbUpgradeCli
                 _secrets = [.. _secrets, connectionString];
             }
 
-            DatabaseConnectionOptions prepared = Prepare(resolved, readOnly: isSource, $"{spec.Name} {role}");
+            DatabaseConnectionOptions prepared = Prepare(resolved, readOnly: isSource || readOnlyTarget, $"{spec.Name} {role}");
             Spec named = spec with { Name = $"{spec.Name} {role}" };
             return new CopyEnd(resolved, new Target(named, prepared, Describe(prepared)));
         }

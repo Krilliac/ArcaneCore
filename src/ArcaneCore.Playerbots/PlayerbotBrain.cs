@@ -282,6 +282,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _townIdle.Rehomed();
             _quests.Home = value;
             _destinations.Home = value;
+            _trainers.Home = value;
+            _town.Home = value;
             _crafting.Home = value;
             DropIntent();
         }
@@ -297,6 +299,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
         PlayerbotHomeArea? active = _home is { } home && (player.Map?.MapId ?? player.MapId) == home.MapId ? home : null;
         _quests.Home = active;
         _destinations.Home = active;
+        _trainers.Home = active;
+        _town.Home = active;
         _crafting.Home = active;
     }
 
@@ -3557,8 +3561,38 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// </summary>
     private bool OutsideHome(Player player, System.Numerics.Vector3 point)
         => _home is { } area && area.MapId == (player.Map?.MapId ?? player.MapId)
-            && (area.DistanceTo(point.X, point.Y) > area.ExploreRadius
-                || (area.ZoneClipped && !area.InZone(point.X, point.Y, point.Z)));
+            && OutsideHomeLimits(area, player.X, player.Y, point);
+
+    /// <summary>
+    /// The home limits of <see cref="OutsideHome"/> for a bot standing at (<paramref name="fromX"/>, <paramref name="fromY"/>) and a mesh point
+    /// <paramref name="point"/> of the home's map. A point beyond <see cref="PlayerbotHomeArea.ExploreRadius"/> is outside, unless the bot itself is
+    /// beyond it and the point is nearer the centre than the bot (a bot in a pocket outside the circle must be able to wander back toward it: the
+    /// samples around it are all beyond the radius, and refusing every one left it no fallback). A clipped home is limited to its zone, except
+    /// one whose own centre has no known zone (<see cref="PlayerbotHomeArea.ZoneUnknown"/>), which has no zone to keep to and is limited by the
+    /// circle alone, as the walk home is (PlayerbotHome.cs): refusing every point there left the bot with no wander at all.
+    /// </summary>
+    internal static bool OutsideHomeLimits(PlayerbotHomeArea area, float fromX, float fromY, System.Numerics.Vector3 point)
+    {
+        float pointDistance = area.DistanceTo(point.X, point.Y);
+        if (pointDistance > area.ExploreRadius && pointDistance >= area.DistanceTo(fromX, fromY)) return true;
+        return area.ZoneClipped && !area.ZoneUnknown && !area.InZone(point.X, point.Y, point.Z);
+    }
+
+    /// <summary>Base wait (ms) before the mesh-point wander fallback is tried again after a think in which no sample gave a leg.</summary>
+    internal const uint WanderMeshBackoffBaseMs = 10_000;
+
+    /// <summary>
+    /// How long the mesh-point fallback stays off after <paramref name="empties"/> empty runs in a row (1 or fewer: the base, doubling per
+    /// further empty run up to eight times the base): a pocket with no walkable sample would otherwise pay the sampling and the exact plans at every think.
+    /// </summary>
+    internal static uint WanderMeshBackoffMs(int empties)
+        => WanderMeshBackoffBaseMs << Math.Clamp(empties - 1, 0, 3);
+
+    /// <summary>World time before which <see cref="TryWanderToMeshPoint"/> takes no samples (an empty run backed it off); 0: not backed off.</summary>
+    private uint _wanderMeshBackoffUntilMs;
+
+    /// <summary>Empty mesh-point fallback runs in a row (a mesh leg taken resets it; the back-off times out by itself, also after a change of map).</summary>
+    private int _wanderMeshEmpties;
 
     /// <summary>Mesh points sampled per think by the wander fallback.</summary>
     private const int WanderMeshSamples = 4;
@@ -3572,6 +3606,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private bool TryWanderToMeshPoint(Player player, uint elapsedMs)
     {
         if (player.Map is not { } map || map.Collision.MeshPoints is not { } mesh) return false;
+        uint startMs = _session.World.NowMs;
+        if (_wanderMeshBackoffUntilMs != 0 && unchecked((int)(startMs - _wanderMeshBackoffUntilMs)) < 0) return false;
+        bool budgetCut = false;
         _wanderRandom ??= new Random((int)(player.Guid.Low & 0x7fffffff));
         var here = new System.Numerics.Vector3(player.X, player.Y, player.Z);
         float minimum = ExploreLegLength(1);
@@ -3580,7 +3617,12 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             // Each exact plan is a synchronous world-thread search (a leg's node budget is under the path-job threshold): a think that
             // spent its optional budget takes none, the first included (the ray plans just before this already used some). The
             // fallback is tried again at the next think.
-            if (!HasOptionalThinkBudget(15.0)) break;
+            if (!HasOptionalThinkBudget(15.0))
+            {
+                budgetCut = true;
+                break;
+            }
+
             if (!mesh.TryGetRandomPointAround(map.MapId, here, ExploreLegYards, _wanderRandom, PlayerbotMoveCheck.MeshOptions, out System.Numerics.Vector3 point)
                 || !point.IsFinite()
                 || System.Numerics.Vector2.Distance(new(point.X, point.Y), new(here.X, here.Y)) < minimum
@@ -3608,6 +3650,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 _exploreRefusals = 0;
                 _exploreRefusalTraced = false;
+                _wanderMeshEmpties = 0;
+                _wanderMeshBackoffUntilMs = 0;
                 return true;
             }
             if (!PlayerbotNavigation.TryAdvance(_session, found, _options, elapsedMs, _session.World.NowMs))
@@ -3618,9 +3662,19 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreRefusals = 0;
             _exploreRefusalTraced = false;
             _trace.Record(_session.World.NowMs, "wander-mesh-point");
+            _wanderMeshEmpties = 0;
+            _wanderMeshBackoffUntilMs = 0;
             MarkLeg(found, townWalk: false);
             ChainWanderLeg(player, elapsedMs);
             return true;
+        }
+
+        // Every sample was unusable (a think cut short by its budget proves nothing and is tried again at the next think): back off.
+        if (!budgetCut)
+        {
+            _wanderMeshEmpties++;
+            uint until = unchecked(startMs + WanderMeshBackoffMs(_wanderMeshEmpties));
+            _wanderMeshBackoffUntilMs = until == 0 ? 1u : until;
         }
 
         return false;
@@ -3944,7 +3998,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 destination = InwardLeg(area, from, _exploreRefusals, player.Map);
             }
-            else if (area.ZoneClipped && (!HasOptionalThinkBudget(15.0) || !area.InZone(destination.X, destination.Y, destination.Z)))
+            else if (area.ZoneClipped && !area.ZoneUnknown && (!HasOptionalThinkBudget(15.0) || !area.InZone(destination.X, destination.Y, destination.Z)))
             {
                 destination = HasOptionalThinkBudget(15.0)
                     ? DeflectZoneBorderLeg(area, from, angle, spread >= 0f, _exploreRefusals, player.Map)

@@ -1086,7 +1086,11 @@ internal static partial class PlayerbotMotion
     private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate)
         => Validate(map, route, fromPoint, toPoint, from, candidate, out _);
 
-    private static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
+    /// <summary>
+    /// <see cref="Validate(Map, PlayerbotRoute, int, int, Vector3, Vector3)"/> with the reason a step was refused. Internal only so the
+    /// tests can read that reason; the mover itself calls it from this class.
+    /// </summary>
+    internal static Vector3? Validate(Map map, PlayerbotRoute route, int fromPoint, int toPoint, Vector3 from, Vector3 candidate,
         out string? rejectReason)
     {
         rejectReason = null;
@@ -1116,6 +1120,7 @@ internal static partial class PlayerbotMotion
         if (navigated)
         {
             float best = float.NaN;
+            bool legMeshFloor = false;
             foreach (float raise in MeshFloorProbes)
             {
                 float floor = ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, raise, maxCeilingZ);
@@ -1139,13 +1144,23 @@ internal static partial class PlayerbotMotion
                         && route.MeshPoints is not null
                         && candidate.Z - directFloor > PlayerbotMotionAnomalies.AirwalkYards)
                     {
-                        rejectReason = "NoGroundSupport";
-                        return null;
+                        // The leg's chord hangs over a drop, but the mesh it was planned on may still have a polygon here within the
+                        // leg's own heights (a steep ramp, a switchback, a tunnel floor the model probe misses): stand on it. A real
+                        // cliff has no polygon there and is still refused.
+                        if (!TryMeshFloorOnLeg(map, route, toPoint, from, candidate, out float meshFloor))
+                        {
+                            rejectReason = "NoGroundSupport";
+                            return null;
+                        }
+
+                        best = meshFloor;
+                        legMeshFloor = true;
                     }
                 }
             }
 
             Vector3 resolved = float.IsNaN(best) ? candidate : candidate with { Z = best + 0.05f };
+            bool resolvedSwapped = false; // the line-of-sight fallback below replaced the floor found above
             if (map.Collision.LineOfSight is { Enabled: true } los
                 && (resolved.Z != rawCandidate.Z || MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards))
             {
@@ -1158,11 +1173,13 @@ internal static partial class PlayerbotMotion
                         && los.IsInLineOfSight(map.MapId, fromChest, candidate with { Z = candidate.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
                     {
                         resolved = candidate;
+                        resolvedSwapped = true;
                     }
                     else if (rawCandidate.Z != resolved.Z
                         && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = rawCandidate.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true))
                     {
                         resolved = rawCandidate;
+                        resolvedSwapped = true;
                     }
                     else if (MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
                         && los.IsInLineOfSight(map.MapId, fromChest, rawCandidate with { Z = from.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true)
@@ -1170,6 +1187,7 @@ internal static partial class PlayerbotMotion
                     {
                         // Keeping the old height is only safe with a floor within reach under it (live: a dock edge over a seabed 20 yd down).
                         resolved = rawCandidate with { Z = from.Z };
+                        resolvedSwapped = true;
                     }
                     else if (hasMeshSurface && float.IsNaN(best) && resolved.Z > from.Z
                         && MathF.Abs(resolved.Z - from.Z) > PlayerbotMoveCheck.DirectStepMaxStepUpYards
@@ -1191,8 +1209,41 @@ internal static partial class PlayerbotMotion
                 }
             }
 
+            // The leg's mesh floor stands only as found: the line-of-sight fallback above must not swap it back for the chord over the
+            // drop (or the bot's own height), which the old refusal covered.
+            if (legMeshFloor && resolvedSwapped)
+            {
+                rejectReason = "NoGroundSupport";
+                return null;
+            }
+
             if (map.Collision.ClassifyUnderMap(resolved.X, resolved.Y, resolved.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind == UnderMapKind.UnderMap
                 && map.Collision.ClassifyUnderMap(from.X, from.Y, from.Z, PlayerbotMotionAnomalies.UnderMapYards).Kind != UnderMapKind.UnderMap)
+            {
+                // Under the terrain with no model or mesh floor in the under-map window: a mesh polygon within the leg's own heights
+                // (a WMO cave or tunnel below the terrain, the chord of a steep leg inside it) is the floor the route was planned on.
+                if (!TryMeshFloorOnLeg(map, route, toPoint, from, resolved, out float meshFloor))
+                {
+                    rejectReason = "NoGroundSupport";
+                    return null;
+                }
+
+                Vector3 raised = resolved with { Z = meshFloor + 0.05f };
+                if (map.Collision.LineOfSight is { Enabled: true } raisedLos
+                    && !raisedLos.IsInLineOfSight(map.MapId, new Vector3(from.X, from.Y, from.Z + PlayerbotMoveCheck.ChestYards),
+                        raised with { Z = raised.Z + PlayerbotMoveCheck.ChestYards }, ignoreM2: true)
+                    && !PlayerbotMotionAnomalies.StaysOnMesh(map, from, raised))
+                {
+                    rejectReason = "NoGroundSupport";
+                    return null;
+                }
+
+                resolved = raised;
+                legMeshFloor = true;
+            }
+
+            // One floor rule with the airwalk judge: a point stood on the leg's mesh floor is returned only if the judge agrees.
+            if (legMeshFloor && !PlayerbotMotionAnomalies.StandsOnFloor(map.Collision, resolved))
             {
                 rejectReason = "NoGroundSupport";
                 return null;
@@ -1226,6 +1277,35 @@ internal static partial class PlayerbotMotion
     {
         float floor = ResolveWalkFloor(map, x, y, z, 0f, z + 1.25f);
         return ValidHeight(floor) && z - floor <= PlayerbotMoveCheck.DirectStepMaxStepUpYards;
+    }
+
+    /// <summary>How far above and below the leg's own heights a mesh polygon still counts as the leg's floor (<see cref="TryMeshFloorOnLeg"/>).</summary>
+    internal const float MeshLegFloorSlackYards = 2f;
+
+    /// <summary>
+    /// Whether the navigation mesh has a polygon straight under or over <paramref name="at"/> whose surface lies within the leg's own
+    /// height range: from <paramref name="from"/> to the corner at <paramref name="toPoint"/>, widened by
+    /// <see cref="MeshLegFloorSlackYards"/> (<see cref="MapCollision.TryGetMeshFloor"/>, searched symmetrically about the point's own
+    /// height clamped into that range, so the polygon nearest to it wins), and no more than <see cref="PlayerbotMoveCheck.DirectStepMaxDrapeYards"/>
+    /// from the point unless the mesh walk from <paramref name="from"/> reaches it (<see cref="PlayerbotMotionAnomalies.StaysOnMesh"/>). The
+    /// mesh-route ground check asks this before it refuses a point for <c>NoGroundSupport</c>: the leg is a chord between corners, so
+    /// on a steep leg or inside a model below the terrain the point can lie far from every model floor while the mesh it was planned on
+    /// has a polygon right there. False when the map has no mesh, the tile is not loaded, or no polygon lies in that range.
+    /// </summary>
+    private static bool TryMeshFloorOnLeg(Map map, PlayerbotRoute route, int toPoint, Vector3 from, Vector3 at, out float height)
+    {
+        height = 0f;
+        if (route.Points.Count == 0 || !at.IsFinite()) return false;
+        float legEndZ = route.Points[Math.Clamp(toPoint, 0, route.Points.Count - 1)].Z;
+        float low = MathF.Min(from.Z, legEndZ) - MeshLegFloorSlackYards;
+        float high = MathF.Max(from.Z, legEndZ) + MeshLegFloorSlackYards;
+        if (!float.IsFinite(low) || !float.IsFinite(high)) return false;
+        float z = Math.Clamp(at.Z, low, high);
+        float d = MathF.Max(z - low, high - z);
+        if (!map.Collision.TryGetMeshFloor(at.X, at.Y, z, d, d, out height) || height < low || height > high) return false;
+        // A step the walk can take, or a polygon the mesh walk from the start reaches: never a drop to the bottom of the leg.
+        return MathF.Abs(height - at.Z) <= PlayerbotMoveCheck.DirectStepMaxDrapeYards
+            || PlayerbotMotionAnomalies.StaysOnMesh(map, from, at with { Z = height + 0.05f });
     }
 
     private static string MoveModeOf(PlayerbotRoute route, int fromPoint, int toPoint)

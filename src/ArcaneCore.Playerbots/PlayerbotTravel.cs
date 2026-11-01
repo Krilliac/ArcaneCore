@@ -1267,6 +1267,8 @@ internal sealed partial class PlayerbotTravel(PlayerbotOptions options) : IPlaye
             return StepResult.Failed;
         }
 
+        // Walking into this volume is the errand: it is not held back as a portal beside the landing (PlayerbotAreaTriggers.Want).
+        PlayerbotAreaTriggers.Want(player, leg.TriggerId, now);
         switch (journey.Walk.Step(session, player, options, leg.From.Position, elapsedMs, now, journey.SpendLeft(options.Travel), out string? walkWhy))
         {
             case JourneyWalk.Outcome.Yield:

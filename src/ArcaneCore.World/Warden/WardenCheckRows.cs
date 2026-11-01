@@ -6,9 +6,10 @@ namespace ArcaneCore.World.Warden;
 public static class WardenCheckRows
 {
     /// <summary>
-    /// The scan a row describes, or null with <paramref name="problem"/> when the row is for another build, is an API-hook scan (not
-    /// ported) or does not parse. A <c>Penalty</c> of -1 (or out of range) uses the configured action, as vmangos falls back to
-    /// Warden.DefaultPenalty.
+    /// The scan a row describes, or null with <paramref name="problem"/> when the row is for another build or does not parse. A
+    /// <c>Penalty</c> of -1 (or out of range) uses the configured action, as vmangos falls back to Warden.DefaultPenalty. Flag 0x08
+    /// (vmangos ScanFlags::InitialLogin) makes it a login-time scan; the other flags (Windows, OffsetsInitialized, ...) need no handling,
+    /// as every scan here is a Windows scan sent after MODULE_INITIALIZE.
     /// </summary>
     public static WardenCheckOptions? ToOptions(WardenCheckRow row, uint build, out string? problem)
     {
@@ -27,6 +28,7 @@ public static class WardenCheckRows
             Address = row.Address,
             Action = row.Penalty is >= 0 and <= 2 ? (WardenAction)row.Penalty : null,
             Wanted = wanted,
+            InitialLogin = (row.Flags & (uint)WardenScanFlags.InitialLogin) != 0,
         };
         switch (row.Type)
         {
@@ -52,6 +54,14 @@ public static class WardenCheckRows
                 check.Kind = WardenCheckKind.Lua;
                 check.Path = row.Str ?? string.Empty;
                 check.Expected = row.Data ?? string.Empty;
+                break;
+            case 6:
+                // vmangos WardenScanMgr::LoadFromDB API_CHECK: str is the module, data the proc, result the SHA-1, address and length.
+                check.Kind = WardenCheckKind.ApiHook;
+                check.Module = row.Str ?? string.Empty;
+                check.Function = row.Data ?? string.Empty;
+                check.Expected = row.Result;
+                check.Length = row.Length;
                 break;
             case 7:
                 check.Kind = WardenCheckKind.Driver;

@@ -922,8 +922,17 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         if (best is not { } chosen) return null;
         ItemTemplate t = chosen.Item.Template;
         bool stack = chosen.Offer == PlayerbotVoiceFacts.TradeOffer.Stack;
-        string price = PlayerbotVoiceFacts.Price(PlayerbotVoiceFacts.AskingPrice(t.SellPrice, t.Quality, options.PriceMultiplier));
-        return (t.Name, t.Entry, price, stack ? (int)chosen.Item.Count : 1);
+        // The post asks what the desk will quote: the price book's price (the reference price below the seller minimum), not the vendor multiple.
+        IPlayerbotDealPriceSource prices = services.GetService<ManagedPlayerbotFeature>()?.DealPrices ?? (IPlayerbotDealPriceSource)PlayerbotReferenceDealPrices.Instance;
+        return (t.Name, t.Entry, PostPrice(t, prices, options.PriceMultiplier), stack ? (int)chosen.Item.Count : 1);
+    }
+
+    /// <summary>The price text of a WTS post for one unit of <paramref name="template"/>: what the trade desk quotes a neutral partner for one unit from the same <paramref name="prices"/>.</summary>
+    internal static string PostPrice(ItemTemplate template, IPlayerbotDealPriceSource prices, int multiplier)
+    {
+        ArgumentNullException.ThrowIfNull(template);
+        ArgumentNullException.ThrowIfNull(prices);
+        return PlayerbotVoiceFacts.Price(PlayerbotVoiceFacts.DealAsk(prices.ReferencePerUnit(template), template.SellPrice, template.Quality, multiplier));
     }
 
     /// <summary>A reagent the bot's wanted recipes lack (a tradeable one), with how many, or null.</summary>
