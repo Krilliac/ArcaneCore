@@ -129,16 +129,21 @@ public sealed class GatewayWardenTests
 
         public ConcurrentQueue<(long Generation, ClusterWardenVerdict Verdict)> Applied { get; } = new();
 
-        public static async Task<Rig> StartAsync(GatewayWardenManifestVerifier verifier, CancellationToken token)
+        public static async Task<Rig> StartAsync(GatewayWardenManifestVerifier verifier, CancellationToken token, GatewayWardenPosture? linkPosture = null, bool open = true)
         {
             ConcurrentQueue<(long, ClusterWardenVerdict)>? applied = null;
             var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), new StubAcceptor(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0),
                 wardenVerifier: verifier, wardenVerdictAccepted: (generation, verdict) => applied!.Enqueue((generation, verdict)));
             host.Start();
-            var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), host.BoundEndPoint, Secret);
+            var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), host.BoundEndPoint, Secret, wardenPosture: linkPosture ?? verifier.ToPosture());
             await client.ConnectAsync(token);
             var result = new Rig { Host = host, Client = client };
             applied = result.Applied;
+            if (!open)
+            {
+                return result;
+            }
+
             GatewaySessionOpenReply reply = await client.OpenAsync(new GatewaySessionOpenRequest(1, 7, "ACCOUNT", 5875, "198.51.100.4:4000"), new GatewaySessionLinkTests.RecordingSink(), token);
             Assert.True(reply.Accepted);
             return result;
@@ -188,6 +193,64 @@ public sealed class GatewayWardenTests
         Assert.Contains("options mismatch", rig.Host.LastWardenRefusal, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(rig.Applied);
         Assert.Equal(0, rig.Host.AcceptedWardenVerdicts);
+    }
+
+    [Fact]
+    public async Task GatewayWithAMismatchedPosture_IsRefusedAtAdmission_AndCarriesNoSession()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        var mismatched = new GatewayWarden(1, Options(WardenAction.Ban), NullLogger.Instance);
+        await using Rig rig = await Rig.StartAsync(WorkerVerifier(Options(WardenAction.Kick)), cts.Token, mismatched.Posture, open: false);
+
+        await GatewaySessionLinkTests.WaitUntilAsync(() => rig.Host.LastWardenRefusal is not null, cts.Token);
+        Assert.Contains("options mismatch", rig.Host.LastWardenRefusal, StringComparison.OrdinalIgnoreCase);
+        GatewaySessionOpenReply reply = await rig.Client.OpenAsync(new GatewaySessionOpenRequest(1, 7, "ACCOUNT", 5875, "198.51.100.4:4000"), new GatewaySessionLinkTests.RecordingSink(), cts.Token);
+        Assert.False(reply.Accepted);
+        await GatewaySessionLinkTests.WaitUntilAsync(() => rig.Host.AdmittedLinkCount == 0, cts.Token);
+        Assert.Equal(0, rig.Host.SessionCount);
+    }
+
+    [Fact]
+    public async Task EnabledWorkerAndADisabledGateway_IsRefusedAtAdmission()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        var disabled = new GatewayWarden(1, new WardenOptions(), NullLogger.Instance);
+        await using Rig rig = await Rig.StartAsync(WorkerVerifier(Options()), cts.Token, disabled.Posture, open: false);
+
+        await GatewaySessionLinkTests.WaitUntilAsync(() => rig.Host.LastWardenRefusal is not null, cts.Token);
+        Assert.Contains("enabled mismatch", rig.Host.LastWardenRefusal, StringComparison.OrdinalIgnoreCase);
+        GatewaySessionOpenReply reply = await rig.Client.OpenAsync(new GatewaySessionOpenRequest(1, 7, "ACCOUNT", 5875, "198.51.100.4:4000"), new GatewaySessionLinkTests.RecordingSink(), cts.Token);
+        Assert.False(reply.Accepted);
+        Assert.Equal(0, rig.Host.SessionCount);
+    }
+
+    [Fact]
+    public async Task GatewayThatSendsNoPosture_CannotOpenASession_AgainstAWorkerWithAVerifier()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        GatewayWardenManifestVerifier verifier = WorkerVerifier(Options());
+        var host = new GatewaySessionLinkHost(Manifest(ClusterRole.Worker), new StubAcceptor(), () => 1, Secret, new IPEndPoint(IPAddress.Loopback, 0), wardenVerifier: verifier);
+        host.Start();
+        await using (host)
+        {
+            await using var client = new GatewaySessionLinkClient(Manifest(ClusterRole.Gateway), host.BoundEndPoint, Secret);
+            await client.ConnectAsync(cts.Token);
+            GatewaySessionOpenReply reply = await client.OpenAsync(new GatewaySessionOpenRequest(1, 7, "ACCOUNT", 5875, "198.51.100.4:4000"), new GatewaySessionLinkTests.RecordingSink(), cts.Token);
+            Assert.False(reply.Accepted);
+            Assert.Equal(0, host.SessionCount);
+        }
+    }
+
+    [Fact]
+    public void WardenPostureFrame_HasAPinnedTypeAndGoldenBytes_AndRoundTrips()
+    {
+        Assert.Equal((byte)19, (byte)GatewayWorkerFrameType.WardenPosture);
+        var posture = new GatewayWardenPosture(true, "ab", "x", 1);
+        byte[] frame = GatewaySessionWire.EncodeWardenPosture(posture);
+        Assert.Equal(
+            [(byte)19, 1, 1, 0, 0, 0, 2, 0, 0, 0, (byte)'a', (byte)'b', 1, 0, 0, 0, (byte)'x'],
+            frame);
+        Assert.Equal(posture, GatewaySessionWire.DecodeWardenPosture(frame.AsSpan(1)));
     }
 
     [Fact]

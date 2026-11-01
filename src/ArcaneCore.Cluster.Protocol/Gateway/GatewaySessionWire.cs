@@ -244,6 +244,41 @@ public static class GatewaySessionWire
             new GatewayWardenPosture(enabled, digest, options, revision));
     }
 
+    /// <summary>
+    /// The gateway's Warden posture (gateway to worker), sent once right after the link is admitted and before any SessionOpen. The worker
+    /// compares it with its own expected posture and refuses the link on a mismatch, so a gateway that scans differently (or not at all)
+    /// never carries a session. Body: enabled byte, check revision, digest text, options text.
+    /// </summary>
+    internal static byte[] EncodeWardenPosture(GatewayWardenPosture posture)
+    {
+        ArgumentNullException.ThrowIfNull(posture);
+        byte[] digest = Encoding.UTF8.GetBytes(posture.ModuleDigestHex);
+        byte[] options = Encoding.UTF8.GetBytes(posture.OptionsSummary);
+        if (digest.Length > MaxTextBytes || options.Length > MaxTextBytes)
+        {
+            throw new ArgumentException("Warden posture text too long for a WardenPosture frame", nameof(posture));
+        }
+
+        byte[] buffer = new byte[1 + 1 + 4 + 4 + digest.Length + 4 + options.Length];
+        var writer = new FrameWriter(buffer);
+        writer.Byte((byte)GatewayWorkerFrameType.WardenPosture);
+        writer.Byte(posture.Enabled ? (byte)1 : (byte)0);
+        writer.Int32(posture.CheckRevision);
+        writer.Text(digest);
+        writer.Text(options);
+        return buffer;
+    }
+
+    internal static GatewayWardenPosture DecodeWardenPosture(ReadOnlySpan<byte> body)
+    {
+        var reader = new FrameReader(body, "WardenPosture");
+        bool enabled = reader.Byte() != 0;
+        int revision = reader.Int32();
+        string digest = reader.Text();
+        string options = reader.Text();
+        return new GatewayWardenPosture(enabled, digest, options, revision);
+    }
+
     /// <summary>The text cut to at most <see cref="MaxTextBytes"/> UTF-8 bytes (whole characters only).</summary>
     private static string ClampText(string text)
     {

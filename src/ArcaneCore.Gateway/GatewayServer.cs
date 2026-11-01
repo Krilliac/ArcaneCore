@@ -223,7 +223,7 @@ public sealed class GatewayServer : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             IPEndPoint worker = WorkerEndPoint;
-            var link = new GatewaySessionLinkClient(config.ToManifest(_incarnation), worker, config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>());
+            var link = new GatewaySessionLinkClient(config.ToManifest(_incarnation), worker, config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), Warden?.Posture);
             try
             {
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);

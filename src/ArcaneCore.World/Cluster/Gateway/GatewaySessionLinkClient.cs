@@ -52,8 +52,11 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private long _nextRequestId;
     private long _droppedServerPackets;
     private volatile bool _registered;
+    private readonly GatewayWardenPosture? _wardenPosture;
 
-    public GatewaySessionLinkClient(ClusterNodeManifest gatewayManifest, IPEndPoint workerEndPoint, string linkSecret, ILogger? logger = null)
+    /// <param name="wardenPosture">The gateway's Warden posture, sent to the worker right after admission and before any session opens. A worker that
+    /// enforces a Warden posture refuses sessions on a link that sent none or a different one.</param>
+    public GatewaySessionLinkClient(ClusterNodeManifest gatewayManifest, IPEndPoint workerEndPoint, string linkSecret, ILogger? logger = null, GatewayWardenPosture? wardenPosture = null)
     {
         ArgumentNullException.ThrowIfNull(gatewayManifest);
         ArgumentNullException.ThrowIfNull(workerEndPoint);
@@ -68,6 +71,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         _worker = workerEndPoint;
         _linkSecret = linkSecret;
         _logger = logger ?? NullLogger.Instance;
+        _wardenPosture = wardenPosture;
     }
 
     /// <summary>True from a successful <see cref="ConnectAsync"/> until the link ends.</summary>
@@ -109,6 +113,11 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         if (!accepted)
         {
             throw new InvalidOperationException($"worker refused the gateway link: {reason}");
+        }
+
+        if (_wardenPosture is { } posture && !_channel.TryEnqueue(GatewaySessionWire.EncodeWardenPosture(posture)))
+        {
+            throw new InvalidOperationException("the worker link closed before the Warden posture could be sent");
         }
 
         _registered = true;

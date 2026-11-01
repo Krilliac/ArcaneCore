@@ -24,4 +24,7 @@ internal enum GatewayWorkerFrameType : byte
 
     // Warden on the gateway: a verdict the gateway reached about one of its sessions (gateway to worker only).
     WardenVerdict = 18,
+
+    // The gateway's Warden posture, sent once after admission and before any SessionOpen (gateway to worker only).
+    WardenPosture = 19,
 }

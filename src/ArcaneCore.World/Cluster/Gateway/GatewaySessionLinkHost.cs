@@ -289,6 +289,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
                 switch (type)
                 {
+                    case GatewayWorkerFrameType.WardenPosture:
+                        OnWardenPosture(link, body.Span);
+                        break;
                     case GatewayWorkerFrameType.SessionOpen:
                         OnOpen(link, body.Span, ct);
                         break;
@@ -458,6 +461,27 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// The gateway's Warden posture. With a verifier attached it must match this worker's expected posture; a mismatch closes the link
+    /// (protocol break, logged) so the gateway cannot carry sessions. Without a verifier the frame is ignored.
+    /// </summary>
+    private void OnWardenPosture(Link link, ReadOnlySpan<byte> body)
+    {
+        GatewayWardenPosture posture = GatewaySessionWire.DecodeWardenPosture(body);
+        if (_wardenVerifier is null)
+        {
+            return;
+        }
+
+        if (!_wardenVerifier.VerifyPeerPosture(posture, out string? mismatch))
+        {
+            Volatile.Write(ref _lastWardenRefusal, mismatch);
+            throw new InvalidDataException("gateway Warden posture refused: " + (mismatch ?? "mismatch"));
+        }
+
+        link.PostureProven = true;
+    }
+
     private void RefuseWardenVerdict(Link link, ClusterWardenVerdict verdict, string reason)
     {
         Interlocked.Increment(ref _refusedWardenVerdicts);
@@ -473,6 +497,15 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         {
             link.Channel.TryEnqueue(GatewaySessionWire.EncodeOpenReply(requestId, GatewaySessionOpenReply.Refuse(
                 AuthResponseCode.Failed, $"stale or invalid session generation {request.SessionGeneration} (highest {link.HighestGeneration})")));
+            return;
+        }
+
+        if (_wardenVerifier is not null && !link.PostureProven)
+        {
+            // The world skips its own Warden for gateway-backed sessions, so no session may open on a link whose gateway has not proven
+            // the same Warden posture (enabled flag, module digest, options, revision).
+            link.Channel.TryEnqueue(GatewaySessionWire.EncodeOpenReply(requestId, GatewaySessionOpenReply.Refuse(
+                AuthResponseCode.Unavailable, "the gateway has not proven a matching Warden posture")));
             return;
         }
 
@@ -579,6 +612,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         public string Remote { get; } = remote;
         public ConcurrentDictionary<long, LinkSession> Sessions { get; } = new();
         public volatile bool Admitted;
+
+        /// <summary>The gateway sent a WardenPosture frame that matched this worker's verifier. Receive loop only.</summary>
+        public bool PostureProven;
 
         /// <summary>Set under the host's source gate at admission, cleared by ReleaseSource; null before admission.</summary>
         public ClusterWardenVerdictSource? Source;

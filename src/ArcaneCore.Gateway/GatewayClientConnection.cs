@@ -426,7 +426,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         if (generation != 0 && _link is { } link && _server.Warden is { } gatewayWarden)
         {
             ClusterWardenAction wire = action == WardenAction.Ban ? ClusterWardenAction.Ban : ClusterWardenAction.Kick;
-            link.SendWardenVerdict(generation, (ushort)Math.Min(checkId ?? 0u, (uint)ushort.MaxValue), wire, reason, gatewayWarden.Posture);
+            if (!link.SendWardenVerdict(generation, (ushort)Math.Min(checkId ?? 0u, (uint)ushort.MaxValue), wire, reason, gatewayWarden.Posture))
+            {
+                _logger.LogWarning("[{Endpoint}] Warden {Action} verdict ({Reason}) could not be sent: the session is closed or the worker link is down",
+                    RemoteEndpoint, wire, reason);
+            }
         }
 
         Kick("Warden: " + reason);

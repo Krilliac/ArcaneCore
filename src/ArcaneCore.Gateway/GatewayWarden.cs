@@ -58,6 +58,11 @@ public sealed class GatewayWarden
         Posture = Verifier.ToPosture();
         if (manifest.Enabled)
         {
+            if (options.LoadFromDatabase)
+            {
+                _logger.LogWarning("Warden:LoadFromDatabase is true but the gateway has no world database: only Warden:Checks and the timing scan run here, not the warden_checks table");
+            }
+
             if (IsReady)
             {
                 _logger.LogInformation("Warden runs on the gateway (scan action {Action}, protocol action {ProtocolAction}, {Checks} configured scan(s))",
