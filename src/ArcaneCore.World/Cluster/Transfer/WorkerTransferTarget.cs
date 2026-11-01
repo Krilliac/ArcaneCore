@@ -706,6 +706,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         claims?.BindTicket(shadow, claimTicket);
         shadow.MapId = bundle.TargetMapId;
         shadow.Relocate(at.X, at.Y, at.Z, at.Orientation, _world.NowMs);
+        ApplyTransportIntent(shadow, bundle.NotLeaveTransport);
 
         if (!_entry.TryAttach(shadow))
         {
@@ -749,6 +750,19 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         Finish(slot);
         return true;
+    }
+
+    /// <summary>
+    /// Placement of a transferred player's stored transport seat (loaded from the database with the shadow): a far teleport leaves the transport unless told to
+    /// stay (vmangos Player::TeleportTo without TELE_TO_NOT_LEAVE_TRANSPORT, Player.cpp:1868-1872), so the seat is dropped; with the stay-aboard intent it is kept and
+    /// the map add boards the player if its ship sails on the target map. World thread.
+    /// </summary>
+    internal static void ApplyTransportIntent(Player shadow, bool notLeaveTransport)
+    {
+        if (!notLeaveTransport)
+        {
+            shadow.LoginTransportSeat = null;
+        }
     }
 
     /// <summary>On the world thread: drops the instance this slot's reservation allocated when the activation ends without binding it (the held map would otherwise never unload). An instance somebody is bound to stays.</summary>

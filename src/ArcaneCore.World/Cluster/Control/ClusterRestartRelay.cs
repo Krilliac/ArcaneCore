@@ -105,8 +105,8 @@ public sealed class ClusterRestartRelay(TimeSpan? replyTimeout = null, ILogger<C
         catch (TimeoutException)
         {
             return Refused(
-                $"the gateway did not answer within {_replyTimeout.TotalSeconds:0.#} s: no gateway service seems to handle operator restarts (is Gateway:Handoff:Enabled on at the gateway?). " +
-                "If it is, the request may still be running; check '.cluster handoff status'.");
+                $"the gateway did not answer within {_replyTimeout.TotalSeconds:0.#} s: the gateway may be busy or stuck. A gateway without the operator restart hosting answers at once (reason code NotHosted), so this is not that case. " +
+                "The request may still be running; check '.cluster handoff status'.");
         }
         finally
         {

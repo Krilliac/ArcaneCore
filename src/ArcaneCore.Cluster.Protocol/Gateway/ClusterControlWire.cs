@@ -150,6 +150,15 @@ public enum ControlReasonCode : byte
 
     /// <summary>An accepted transfer ended without moving the player (aborted before the commit, or failed).</summary>
     TransferAborted = 18,
+
+    /// <summary>The account may not make this request (not active, below the security the command needs, or the worker's claim contradicts the account database).</summary>
+    NotPermitted = 19,
+
+    /// <summary>The request names a worker or slot the gateway does not know.</summary>
+    UnknownWorker = 20,
+
+    /// <summary>The request's arguments are malformed.</summary>
+    InvalidRequest = 21,
 }
 
 /// <summary>Option bits of a transfer request (<see cref="ControlTransferSubmit.Options"/>).</summary>

@@ -294,7 +294,7 @@ public sealed class GatewayRestartOrchestration : IHostedService
         string worker = request.Arguments.Trim();
         if (worker.Length == 0 || worker.Any(char.IsWhiteSpace))
         {
-            return ("Syntax: .cluster restart $worker", ControlReasonCode.Unspecified, AccountSecurity.Player, null);
+            return ("Syntax: .cluster restart $worker", ControlReasonCode.InvalidRequest, AccountSecurity.Player, null);
         }
 
         GatewayClientConnection? connection = _server.Claims.Find(request.AccountId);
@@ -311,22 +311,23 @@ public sealed class GatewayRestartOrchestration : IHostedService
 
         if (stored is null || stored.Id != request.AccountId || stored.Status != AccountStatus.Active)
         {
-            return ("the account is not known or not active", ControlReasonCode.Unspecified, AccountSecurity.Player, null);
+            return ("the account is not known or not active", ControlReasonCode.NotPermitted, AccountSecurity.Player, null);
         }
 
         if (request.ClaimedSecurityLevel > (byte)stored.Security)
         {
-            return ("the security level the worker claimed contradicts the account database", ControlReasonCode.Unspecified, AccountSecurity.Player, null);
+            return ("the security level the worker claimed contradicts the account database", ControlReasonCode.NotPermitted, AccountSecurity.Player, null);
         }
 
         if (stored.Security < AccountSecurity.Administrator)
         {
-            return ("This command is not available to you.", ControlReasonCode.Unspecified, AccountSecurity.Player, null);
+            return ("This command is not available to you.", ControlReasonCode.NotPermitted, AccountSecurity.Player, null);
         }
 
+        // A slot id names the slot's current active process, also after a blue/green swap (the slot key never changes; the handoff drains whichever process is active now).
         if (_driver.SlotOf(worker) is null)
         {
-            return ($"Unknown worker '{worker}'; nothing was done.", ControlReasonCode.Unspecified, AccountSecurity.Player, null);
+            return ($"Unknown worker '{worker}'; nothing was done.", ControlReasonCode.UnknownWorker, AccountSecurity.Player, null);
         }
 
         return (null, ControlReasonCode.None, stored.Security, connection);

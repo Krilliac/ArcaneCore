@@ -402,6 +402,13 @@ public sealed class PlayerTransferCoordinator
                 DecisionRecord: aborted);
         }
 
+        // The source worker captured the player without knowing the teleport's options: stamp the stay-aboard intent here, so the journalled bundle and the
+        // bundle the target installs (both carry this JSON) tell the target whether the player keeps its transport seat.
+        if (request.NotLeaveTransport && !bundle.NotLeaveTransport)
+        {
+            bundle = bundle with { NotLeaveTransport = true };
+        }
+
         record = await _decisionStore.AdvancePreCommitStageAsync(
             request.TransferId,
             PlayerTransferStage.SuspendAndCapture,

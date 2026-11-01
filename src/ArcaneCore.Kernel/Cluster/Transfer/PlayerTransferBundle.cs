@@ -137,6 +137,9 @@ public sealed record PlayerTransferBundle
     public uint MovementFlags { get; init; }
     public ulong TransportGuid { get; init; }
     public TransferPosition? TransportOffset { get; init; }
+
+    /// <summary>The teleport kept the player on its transport (retail <c>TELE_TO_NOT_LEAVE_TRANSPORT</c>): the target keeps the stored transport seat instead of dropping it. Set by the coordinator from the request; false when absent from older journal rows.</summary>
+    public bool NotLeaveTransport { get; init; }
     public uint FallTime { get; init; }
     public TransferAckCounters AckCounters { get; init; }
     public TransferSpeedRates SpeedRates { get; init; } = TransferSpeedRates.Default;

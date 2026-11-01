@@ -58,6 +58,7 @@ public sealed class GatewayControlHardeningTests
             (ControlReasonCode.NoEligibleWorker, 8), (ControlReasonCode.TargetNotReady, 9), (ControlReasonCode.TargetAtCapacity, 10), (ControlReasonCode.SameWorker, 11),
             (ControlReasonCode.MultipleGateways, 12), (ControlReasonCode.WorkerUnreachable, 13), (ControlReasonCode.SlotBusy, 14), (ControlReasonCode.Unresolved, 15),
             (ControlReasonCode.AlreadyRunning, 16), (ControlReasonCode.GatewayFailure, 17), (ControlReasonCode.TransferAborted, 18),
+            (ControlReasonCode.NotPermitted, 19), (ControlReasonCode.UnknownWorker, 20), (ControlReasonCode.InvalidRequest, 21),
         ];
         Assert.Equal(pinned.Length, Enum.GetValues<ControlReasonCode>().Length);
         Assert.All(pinned, p => Assert.Equal(p.Value, (byte)p.Code));
