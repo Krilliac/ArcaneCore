@@ -121,7 +121,7 @@ public sealed class GatewayHandoffNodeKeyedTests
         const System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
 
         var connections = (System.Collections.Concurrent.ConcurrentDictionary<GatewayClientConnection, Task>)typeof(GatewayServer).GetField("_connections", Private)!.GetValue(gateway)!;
-        GatewayClientConnection connection = Assert.Single(connections.Keys.Where(c => c.IsForwardingOn(gateway.Workers[1].Link!)));
+        GatewayClientConnection connection = Assert.Single(connections.Keys, c => c.IsForwardingOn(gateway.Workers[1].Link!));
         System.Reflection.FieldInfo linkField = typeof(GatewayClientConnection).GetField("_link", Private)!;
         System.Reflection.FieldInfo holding = typeof(GatewayClientConnection).GetField("_handoffHolding", Private)!;
 
@@ -385,7 +385,9 @@ public sealed class GatewayHandoffNodeKeyedTests
 
             await using AsyncServiceScope scope = Eastern.Services.CreateAsyncScope();
             ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
-            await store.SaveStateAsync(new CharacterState(id, mapId, 1, 100f, 100f, 50f, 0f, 1, 0), token);
+            // The worlds run on Worker scope with fencing on: a tokenless write is refused while any ownership row is active, so write under the login world's own token.
+            CharacterOwnershipToken? owner = Eastern.Services.GetRequiredService<ICharacterOwnershipContext>().Current;
+            await store.SaveStateAsync(new CharacterState(id, mapId, 1, 100f, 100f, 50f, 0f, 1, 0, Ownership: owner), token);
             CharacterRecord saved = Assert.IsType<CharacterRecord>(await store.GetByIdAsync(id, token));
             Assert.Equal(mapId, saved.MapId);
             return id;

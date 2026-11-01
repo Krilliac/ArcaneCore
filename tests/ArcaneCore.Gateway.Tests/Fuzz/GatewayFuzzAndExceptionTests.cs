@@ -562,7 +562,7 @@ public sealed class GatewayFuzzAndExceptionTests
     {
         await using var worker = new WorkerRig();
         worker.Start();
-        ClusterNodeManifest gatewayManifest = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw-1", Guid.NewGuid(), 1, "dev", 1, 1);
+        ClusterNodeManifest gatewayManifest = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw-1", Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
 
         await using var client = new GatewaySessionLinkClient(gatewayManifest, worker.Host.BoundEndPoint, ValidSecret, NullLogger.Instance);
         await client.ConnectAsync(CancellationToken.None);
@@ -930,7 +930,7 @@ public sealed class GatewayFuzzAndExceptionTests
 
         byte[] sampleNonce = new byte[GatewaySessionWire.NonceBytes];
         rng.NextBytes(sampleNonce);
-        ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw-fuzz", Guid.NewGuid(), 1, "dev", 1, 1);
+        ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw-fuzz", Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
 
         byte[][] validBodies =
         [
@@ -1514,7 +1514,7 @@ public sealed class GatewayFuzzAndExceptionTests
 
         public WorkerRig()
         {
-            ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Worker, "worker-fuzz", Guid.NewGuid(), 1, "dev", 1, 1);
+            ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Worker, "worker-fuzz", Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
             Host = new GatewaySessionLinkHost(manifest, _acceptor, () => 1, ValidSecret, new IPEndPoint(IPAddress.Loopback, 0), NullLogger.Instance);
         }
 

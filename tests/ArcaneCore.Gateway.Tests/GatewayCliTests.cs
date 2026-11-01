@@ -89,7 +89,8 @@ public sealed class GatewayCliTests
         Assert.Equal(ExitCodes.Success, exit);
         Assert.Contains("ArcaneCore gateway daemon configuration (gateway.conf.dist)", stdout, StringComparison.Ordinal);
         Assert.Contains("Gateway.Port", stdout, StringComparison.Ordinal);
-        Assert.DoesNotContain("World.Port", stdout, StringComparison.Ordinal);
+        // The generated header's syntax example mentions World.Port in a comment; a World key line must not appear.
+        Assert.DoesNotContain(stdout.Split('\n'), line => line.StartsWith("World.", StringComparison.Ordinal));
     }
 
     [Fact]

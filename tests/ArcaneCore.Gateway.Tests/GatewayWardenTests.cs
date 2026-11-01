@@ -98,7 +98,7 @@ public sealed class GatewayWardenTests
 
     private static WardenOptions Options(WardenAction action = WardenAction.Kick) => new() { Enabled = true, Action = action };
 
-    private static ClusterNodeManifest Manifest(ClusterRole role) => GatewayLinkManifest.Create(role, role.ToString(), Guid.NewGuid(), 1, "dev", 1, 1);
+    private static ClusterNodeManifest Manifest(ClusterRole role) => GatewayLinkManifest.Create(role, role.ToString(), Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
 
     private sealed class StubSession : IGatewayRemoteSession
     {
