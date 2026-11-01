@@ -118,6 +118,12 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             throw new InvalidOperationException($"worker refused the gateway link: {reason}");
         }
 
+        // The clock reading goes first: the worker derives the offset it translates every client packet's receive stamp with.
+        if (!_channel.TryEnqueue(GatewaySessionWire.EncodeLinkClock((uint)Clock.Milliseconds())))
+        {
+            throw new InvalidOperationException("the worker link closed before the link clock could be sent");
+        }
+
         if (_wardenPosture is { } posture && !_channel.TryEnqueue(GatewaySessionWire.EncodeWardenPosture(posture)))
         {
             throw new InvalidOperationException("the worker link closed before the Warden posture could be sent");
@@ -191,8 +197,11 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         }
     }
 
-    /// <summary>Forward one client opcode. False when the session is not open or the link is down.</summary>
-    public bool SendClientPacket(long sessionGeneration, WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    /// <summary>
+    /// Forward one client opcode. False when the session is not open or the link is down. <paramref name="receivedMs"/> is the gateway
+    /// clock reading (<see cref="Clock.Milliseconds"/>, low 32 bits) when the client packet arrived; null stamps the moment of this call.
+    /// </summary>
+    public bool SendClientPacket(long sessionGeneration, WorldOpcode opcode, ReadOnlySpan<byte> payload, uint? receivedMs = null)
     {
         if (_channel is not { } channel || !_sessions.TryGetValue(sessionGeneration, out ClientSession? session))
         {
@@ -206,8 +215,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
                 return false;
             }
 
-            byte[] frame = GatewaySessionWire.EncodePacket(GatewayWorkerFrameType.SessionClientPacket, session.Generation, session.AccountId, 0,
-                session.Epoch, ++session.OutboundSequence, (uint)opcode, payload);
+            byte[] frame = GatewaySessionWire.EncodeClientPacket(session.Generation, session.AccountId, 0,
+                session.Epoch, ++session.OutboundSequence, (uint)opcode, payload, receivedMs ?? (uint)Clock.Milliseconds());
             return channel.TryEnqueue(frame);
         }
     }
@@ -240,7 +249,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
 
     /// <summary>Test seam: send an envelope exactly as given (sequence, epoch, account), bypassing the session's own counters.</summary>
     internal bool SendRawClientPacket(ClusterSessionPacket packet) =>
-        _channel is { } channel && channel.TryEnqueue(GatewaySessionWire.EncodePacket(GatewayWorkerFrameType.SessionClientPacket, packet));
+        _channel is { } channel && channel.TryEnqueue(GatewaySessionWire.EncodeClientPacket(packet, (uint)Clock.Milliseconds()));
 
     /// <summary>The client went away (or was superseded): tell the worker. The sink is not called.</summary>
     public void CloseSession(long sessionGeneration, ClusterSessionDetachReason reason)

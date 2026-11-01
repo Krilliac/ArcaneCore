@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Kernel.Diagnostics;
@@ -30,6 +31,13 @@ public interface IGatewayRemoteSession
 
     /// <summary>One client opcode, in sequence order, from the link's receive loop. Must not block.</summary>
     void Deliver(WorldOpcode opcode, byte[] payload);
+
+    /// <summary>
+    /// <see cref="Deliver(WorldOpcode, byte[])"/> with the time the gateway received the client packet, translated to this worker's
+    /// monotonic millisecond clock (<see cref="ArcaneCore.Kernel.Logging.Clock.Milliseconds"/>, low 32 bits). The movement anticheat judges
+    /// the packet at that time instead of the time it came off the link. The default ignores the time.
+    /// </summary>
+    void Deliver(WorldOpcode opcode, byte[] payload, uint receivedMs) => Deliver(opcode, payload);
 
     /// <summary>The gateway closed the session or the link was lost. Must not block.</summary>
     void CloseFromGateway(ClusterSessionDetachReason reason);
@@ -289,6 +297,14 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
                 switch (type)
                 {
+                    case GatewayWorkerFrameType.LinkClock:
+                        if (link.ClockOffset is not null)
+                        {
+                            throw new InvalidDataException("a second LinkClock frame");
+                        }
+
+                        link.ClockOffset = MovementClock.Estimate(GatewaySessionWire.DecodeLinkClock(body.Span), (uint)Clock.Milliseconds());
+                        break;
                     case GatewayWorkerFrameType.WardenPosture:
                         OnWardenPosture(link, body.Span);
                         break;
@@ -554,7 +570,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
     private void OnClientPacket(Link link, ReadOnlyMemory<byte> body)
     {
-        ClusterSessionPacket packet = GatewaySessionWire.DecodePacket(body);
+        ClusterSessionPacket packet = GatewaySessionWire.DecodeClientPacket(body, out uint gatewayReceivedMs);
         if (!link.Sessions.TryGetValue(packet.SessionGeneration, out LinkSession? session)
             || !session.TryAcceptInbound(packet, _ownerEpoch(), out IGatewayRemoteSession? target))
         {
@@ -569,7 +585,17 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             return;
         }
 
-        target!.Deliver((WorldOpcode)packet.Opcode, packet.Payload.ToArray());
+        // The gateway's stamp, moved to this worker's clock. Without a LinkClock frame (a gateway that skipped it) the worker keeps its own
+        // arrival time: the target's default Deliver ignores the stamp.
+        uint now = (uint)Clock.Milliseconds();
+        if (link.ClockOffset is { } clock)
+        {
+            target!.Deliver((WorldOpcode)packet.Opcode, packet.Payload.ToArray(), clock.ToWorld(gatewayReceivedMs, now));
+        }
+        else
+        {
+            target!.Deliver((WorldOpcode)packet.Opcode, packet.Payload.ToArray());
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -615,6 +641,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
         /// <summary>The gateway sent a WardenPosture frame that matched this worker's verifier. Receive loop only.</summary>
         public bool PostureProven;
+
+        /// <summary>The gateway-to-worker clock offset from the LinkClock frame; null until it arrives. Receive loop only.</summary>
+        public MovementClock? ClockOffset;
 
         /// <summary>Set under the host's source gate at admission, cleared by ReleaseSource; null before admission.</summary>
         public ClusterWardenVerdictSource? Source;

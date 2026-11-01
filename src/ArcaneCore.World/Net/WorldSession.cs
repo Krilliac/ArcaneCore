@@ -745,7 +745,7 @@ public sealed partial class WorldSession : IPlayerSession
     /// </summary>
     private static bool IsMalformed(Exception exception) => MalformedPacket.Is(exception);
 
-    private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload)
+    private async Task<bool> DispatchAsync(WorldOpcode opcode, byte[] payload, uint? receivedMs = null)
     {
         try
         {
@@ -827,7 +827,7 @@ public sealed partial class WorldSession : IPlayerSession
 
                     Interlocked.Increment(ref _queuedPackets);
                     Interlocked.Add(ref _queuedBytes, payload.Length);
-                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, (uint)Clock.Milliseconds(), _injectDispatch));
+                    _worldQueue.Enqueue(new QueuedPacket(handler, payload, receivedMs ?? (uint)Clock.Milliseconds(), _injectDispatch));
                     World.WakeIfManual();
                 }
                 else
