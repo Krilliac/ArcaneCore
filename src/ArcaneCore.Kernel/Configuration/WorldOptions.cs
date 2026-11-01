@@ -6,6 +6,7 @@ public sealed class WorldOptions
     public const string SectionName = "World";
 
     /// <summary>Interface to bind the world listener to.</summary>
+    [ConfigAllowed("an IPv4 or IPv6 address such as 0.0.0.0, 127.0.0.1 or ::1 (host names are not resolved)")]
     public string BindAddress { get; set; } = "0.0.0.0";
 
     /// <summary>World TCP port. Vanilla default is 8085 (Charter §3).</summary>

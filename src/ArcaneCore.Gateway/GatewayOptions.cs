@@ -16,6 +16,7 @@ public sealed class GatewayOptions
     public const string SectionName = "Gateway";
 
     /// <summary>Address the client listener binds.</summary>
+    [ConfigAllowed("an IPv4 or IPv6 address such as 0.0.0.0, 127.0.0.1 or ::1 (host names are not resolved)")]
     public string BindAddress { get; set; } = "0.0.0.0";
 
     /// <summary>Port clients connect to; the realm list must name it (realmlist address) instead of the world's World:Port.</summary>

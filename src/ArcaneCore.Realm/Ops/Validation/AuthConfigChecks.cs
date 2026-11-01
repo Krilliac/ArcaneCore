@@ -29,7 +29,9 @@ public sealed class AuthConfigChecks : IConfigCheck
         }
 
         string? port = configuration[PortKey];
-        if (!string.IsNullOrWhiteSpace(port)
+        // A present-but-empty port is an error too: the options binder skips an empty value for an int, so the daemon would silently listen on
+        // the default 3724 while the operator believes the key is set.
+        if (port is not null
             && !(int.TryParse(port, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int value) && value is >= 0 and <= 65535))
         {
             issues.Add(new ConfigIssue(ConfigSeverity.Error, PortKey, $"'{port}' is not a valid TCP port.",
