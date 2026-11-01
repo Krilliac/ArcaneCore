@@ -357,10 +357,10 @@ Kept inert (listed in `src/ArcaneCore.Game/Spells/DeliberatelyInertSpells.Resear
 
 `spell_script_target` rows now drive implicit unit targets 38 (nearest listed living creature/player or corpse) and 7 (source-area
 units filtered by entry and effect mask), following vmangos `Spell::CheckScriptTargeting` and `Spell::SetTargetMap`, and target 46 selects a
-location from the same rows (see "Implemented"). World schema 45 stores the rows. Game object script targets are selected only for
-`ACTIVATE_OBJECT` (targets 40, 51, 52); the other script target modes remain outside this slice.
+location from the same rows (see "Implemented"). World schema 45 stores the rows. Game object script targets are selected for target 46
+(any effect) and for `ACTIVATE_OBJECT` targets 40, 51 and 52; the other script target modes remain outside this slice.
 
-- Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); the implicit targets no spell uses are not registered; `SpellSystem.CanSelectImplicitTarget` and the QA gap check report any that a real spell does use.
+- Area, chain and cone target selection are implemented (`SpellSystem.Targeting.cs`, with a line-of-sight filter on area lists); implicit targets without a registered selector are reported rather than guessed; `SpellSystem.CanSelectImplicitTarget` and the QA gap check report any that a real spell does use.
 - Spell focus, non-warrior shapeshift forms, remaining facing and area restrictions.
   Eight-slot reagent costs and the build-5875 item-use path are now implemented
   in the local continuation; item cooldown packet metadata and remaining
@@ -370,7 +370,7 @@ location from the same rows (see "Implemented"). World schema 45 stores the rows
   and effective healing adds base distributed threat and enters combat.
 - Non-player far teleports. Player far teleports and shared creature lookup are connected in
   the integration candidate; non-player transfers remain unsupported.
-- Per-area script content (Naxxramas, Ahn'Qiraj, Blackwing Lair / Molten Core / Upper Blackrock Spire, dungeons, world events) registers through the per-area partials of `DeliberatelyInertSpells` and `PlayerbotQaSpellConsumers`; what an area has not yet handled stays in those registries as deliberately inert or as a QA consumer.
+- Per-area script content (Naxxramas, Ahn'Qiraj, Blackwing Lair / Molten Core / Upper Blackrock Spire, dungeons, world events) registers through the per-area partials of `DeliberatelyInertSpells` and `QaSpellConsumers`; what an area has not yet handled stays in those registries as deliberately inert or as a QA consumer.
 - The remaining effect and aura types, which are logged once as unsupported (see the ranking in "Handler modules and spell breadth").
 - Known gaps of the spell contract sweep (the `SpellContractSweepTests` ratchet): the four spells the sweep answers with `TargetIsPlayer` (1462 Beast Lore, 2650, 9455, 15057; `TargetIsPlayer` in the coverage file) have no contract checks, because the sweep casts them at a player target, which their creature-type mask refuses with that result before any check runs. A green sweep says nothing about these four.
 - Limits of the explicit hostile target gate (see "Implemented"). A triggered cast whose target the server chose on its own (procs, aura triggers, boss and instance scripts, casts from an aura holder) is not checked, although vmangos checks triggered casts too; this keeps server-internal triggers working. Script casts that do not receive the parent cast (for example from an aura or observer callback) do not inherit the client origin. `IsHostile` requires a living target, while vmangos calls `IsValidAttackTarget` with checkAlive=false, so a dead explicit target is refused here; for a game object caster the stand-in relation uses the same rule, which is stricter than vmangos. A client cast through `CMSG_USE_ITEM` for the later on-use spells is covered by a unit test of `CastSpell` with a parsed block, not by a packet-level test.
