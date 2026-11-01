@@ -55,7 +55,7 @@ public sealed class GatewayTransferOptions
 /// What <see cref="GatewayTransferService.SubmitAsync"/> answered: whether the gateway took the transfer and why not, and, when it did, the task that ends with the outcome (it never faults for a transfer failure;
 /// cancelling the service's stop token settles it like any other failure).
 /// </summary>
-public sealed record GatewayTransferSubmission(bool Accepted, string Reason, Guid TransferId, Task<PlayerTransferOutcome>? Completion);
+public sealed record GatewayTransferSubmission(bool Accepted, string Reason, Guid TransferId, Task<PlayerTransferOutcome>? Completion, ControlReasonCode Code = ControlReasonCode.None);
 
 /// <summary>
 /// <see cref="ITransferGatewayRouter"/> for the gateway's own coordinator: the same router, except that a route switch for a session that is no longer staged is done, not an error. After the commit the transfer
@@ -355,7 +355,10 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         }
         else if (!_mapRouter.TryResolveTargetWorker(request.TargetMapId, request.TargetInstanceId, out target, out string? failure))
         {
-            return Refused(request, $"target map ({request.TargetMapId}, instance {request.TargetInstanceId}) cannot be routed: {failure ?? ClusterMapPlacementTable.FailureNoEligibleWorker}");
+            return Refused(
+                request,
+                $"target map ({request.TargetMapId}, instance {request.TargetInstanceId}) cannot be routed: {failure ?? ClusterMapPlacementTable.FailureNoEligibleWorker}",
+                string.Equals(failure, ClusterMapPlacementTable.FailureWorkerAtPlayerCapacity, StringComparison.Ordinal) ? ControlReasonCode.Capacity : ControlReasonCode.None);
         }
 
         if (target == request.SourceWorkerId)
@@ -466,7 +469,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
             body.TransferId, body.CharacterGuid, body.AccountId, body.SessionGeneration, new WorkerNodeId(node),
             body.SourceMapId, body.SourceInstanceId, body.TargetMapId, body.TargetInstanceId, body.TargetPosition, body.SourceToken);
         GatewayTransferSubmission submission = await SubmitAsync(request, _runs.Token).ConfigureAwait(false);
-        link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, submission.Accepted, submission.TransferId, submission.Reason));
+        link.SendControlSubmitReply(new ControlSubmitReply(submit.RequestId, submission.Accepted, submission.TransferId, submission.Reason, submission.Code));
         if (!submission.Accepted || submission.Completion is not { } completion)
         {
             return;
@@ -481,8 +484,11 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         }
 
         ControlNoticeOutcome result = outcome.Succeeded ? ControlNoticeOutcome.Completed : ControlNoticeOutcome.Aborted;
+        ControlReasonCode code = !outcome.Succeeded && string.Equals(outcome.FailureCode, ClusterMapPlacementTable.FailureWorkerAtPlayerCapacity, StringComparison.Ordinal)
+            ? ControlReasonCode.Capacity
+            : ControlReasonCode.None;
         string text = outcome.Succeeded ? string.Empty : outcome.FailureMessage ?? outcome.FailureCode ?? "the transfer was aborted";
-        current.SendControlNotice(new ControlNotice(ControlNoticeKind.TransferOutcome, body.SessionGeneration, body.AccountId, body.CharacterGuid, body.TransferId, result, text));
+        current.SendControlNotice(new ControlNotice(ControlNoticeKind.TransferOutcome, body.SessionGeneration, body.AccountId, body.CharacterGuid, body.TransferId, result, text, code));
     }
 
     /// <inheritdoc />
@@ -621,7 +627,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
         return null;
     }
 
-    private static GatewayTransferSubmission Refused(PlayerTransferRequest request, string reason) => new(false, reason, request.TransferId, null);
+    private static GatewayTransferSubmission Refused(PlayerTransferRequest request, string reason, ControlReasonCode code = ControlReasonCode.None) => new(false, reason, request.TransferId, null, code);
 
     /// <summary>
     /// The journal rows <see cref="RecoverOnceAsync"/> may resolve: those between two of this gateway's slots that are not running here, do not belong to a world handoff (its own recovery finishes them) and whose slots are not
