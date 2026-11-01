@@ -353,7 +353,9 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         Func<uint, ObjectGuid, uint> allocator = _allocateInstance!;
         var guid = new ObjectGuid(characterGuid);
         uint allocated = await _world.InvokeAsync(() => allocator(targetMapId, guid), CancellationToken.None).ConfigureAwait(false);
-        if (allocated != 0 && !_world.Owns(targetMapId, allocated))
+        // The allocator answers 0 for a non-instanced map: the request then stands as instance 0 and must pass the plain ownership check (the probe above used a non-zero id,
+        // which MapOwnership accepts for any map while instance maps are allowed).
+        if (!_world.Owns(targetMapId, allocated))
         {
             return refused;
         }

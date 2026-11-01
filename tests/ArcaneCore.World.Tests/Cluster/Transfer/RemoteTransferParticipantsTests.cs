@@ -249,6 +249,32 @@ public sealed class RemoteTransferParticipantsTests
         }
     }
 
+    [Fact]
+    public async Task AnInstanceZeroRequest_ForAnUnlistedContinent_IsRefused_WhenTheWorkerOwnsOnlyOneMapPlusInstances()
+    {
+        var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new RecordingSaveQueue(), NullLogger<WorldRuntime>.Instance);
+        world.Ownership = new MapOwnership([new MapOwnership.Range(1, 1)], allowInstanceMaps: true);
+        world.Start();
+        try
+        {
+            var target = new WorkerTransferTarget(
+                TargetId, world, new NeverLoader(), new NeverEntry(),
+                allocateInstance: (mapId, _) => mapId == 33 ? 117u : 0u);
+
+            TransferSlotReservation unlisted = await target.ReserveSlotAsync(Guid.NewGuid(), 7, 0, 0);
+            TransferSlotReservation listed = await target.ReserveSlotAsync(Guid.NewGuid(), 8, 1, 0);
+            TransferSlotReservation dungeon = await target.ReserveSlotAsync(Guid.NewGuid(), 9, 33, 0);
+
+            Assert.False(unlisted.Reserved);
+            Assert.Equal(new TransferSlotReservation(true, 0), listed);
+            Assert.Equal(new TransferSlotReservation(true, 117), dungeon);
+        }
+        finally
+        {
+            world.Stop();
+        }
+    }
+
     // ------------------------------------------------------------------ rig
 
     private sealed class NeverLoader : ITransferShadowLoader
