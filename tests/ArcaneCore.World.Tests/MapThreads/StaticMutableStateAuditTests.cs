@@ -35,6 +35,7 @@ public sealed class StaticMutableStateAuditTests(ITestOutputHelper output)
         ["ArcaneCore.Game.Updates.BotLeanStats._ringBytes"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Updates.BotLeanStats._ringPackets"] = "process-wide counter, Interlocked",
         ["ArcaneCore.Game.Updates.BotLeanStats._updateBlocks"] = "process-wide counter, Interlocked",
+        ["ArcaneCore.World.Cluster.Transfer.TransferStageProbe._fired"] = "test-only stage hold latch, Interlocked.Exchange (fires once per process); only active when the test environment variable is set",
         ["ArcaneCore.World.Features.WorldCodeAssemblies._startup"] = "set once at start-up, before the world thread runs",
         ["ArcaneCore.World.Gm.Character.Boost.BoostEnvironment._sourcesCache"] = "reference to an immutable cache, replaced whole (a race only builds it twice)",
         ["ArcaneCore.World.Gm.Character.Boost.CharacterBoost._candidates"] = "reference to an immutable cache, replaced whole (a race only builds it twice)",

@@ -858,7 +858,10 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
             player.Level = 8;
             PlayerbotNavigation.SetStallWatch(player, brain.StallWatch);
             world.Session.ManagedBudget = new ManagedActionBudget(1);
-            typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(brain, [player, 500u]);
+            var probe = new PlayerbotThinkProbe(new PlayerbotThinkProbeTests.ManualClock()); // a frozen clock: the atlas find's 4 ms slice never runs out, so one think judges every spawn whatever the load
+            probe.Begin();
+            try { typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(brain, [player, 500u]); }
+            finally { probe.End(); }
             var candidate = (PlayerbotExploreAtlas.Candidate?)typeof(PlayerbotBrain)
                 .GetField("_exploreCandidate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(brain);
             return candidate?.Spawn.Guid;

@@ -5,7 +5,7 @@ logs in through `ArcaneCore.Gateway` and plays on a split cluster. Until the res
 transfer path are accepted by the mock client and the in-process tests only ([gateway](areas/gateway.md),
 [mock client](MOCK_CLIENT_ACCEPTANCE.md)).
 
-**Who does what.** The operator (Nathan) starts the cluster and the client and fills in the table. Nothing in the repository starts a
+**Who does what.** The operator (the maintainer) starts the cluster and the client and fills in the table. Nothing in the repository starts a
 server or a client for this run.
 
 ## Before you start
