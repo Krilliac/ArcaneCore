@@ -83,7 +83,18 @@ All are `SEC_ADMINISTRATOR`, after cMaNGOS `ahbotCommandTable`. The root exists 
 
 ## Gaps
 
-- Gameobject loot uses every `gameobject_loot_template` table. cMaNGOS only uses chests that are spawned and respawn.
-- There is no dynamic max level and no `MaxItemLevel` option.
-- After a seller is deleted, an auction with a standing bot bid is deleted with them. That bid row is then counted as spent.
-- A rebuild's refill shares the economy's 16 transaction slots, so a large refill can take several ticks.
+- The cMaNGOS option to ignore GM accounts when taking the dynamic level is not implemented: the dynamic max level counts every online character.
+
+## Level caps and loot sets
+
+- **Gameobject loot** uses only the `gameobject_loot_template` tables of objects that have a spawn which respawns (cMaNGOS reads the
+  same set), plus the entries a spawn can become through `gameobject_spawn_entry`.
+- **Dynamic max level.** With `DynamicMaxRequiredLevel` on, the required level cap is the highest level among the characters online,
+  refreshed every `DynamicRefreshMinutes` (default 10). With nobody online the cap in force stays; `MaxRequiredLevel` is the start value.
+  The item pool is rebuilt when the cap changes.
+- **`MaxItemLevel`** sets the item level cap directly. 0 (the default) keeps the cMaNGOS rule: no cap at a required level cap of 60 or
+  more, else the cap + 5.
+- **Deleted sellers.** When a seller is deleted, their auction goes with them and a standing bot bid on it is released (its copper is
+  not counted as spent).
+- **Rebuild refill.** `.ahbot rebuild` starts at most half of the economy's 16 transaction slots (8 listings in flight) per call, so
+  players' trades, mail and auctions keep slots. The rest of a large refill follows on the normal sell ticks.

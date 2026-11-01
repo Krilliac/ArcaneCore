@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Loot;
 using ArcaneCore.Kernel.Tuning;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 
 namespace ArcaneCore.Game.Economy.AuctionBot;
@@ -11,7 +12,8 @@ public sealed record AuctionBotLootSource(string Name, LootTableKind Kind, IRead
 /// The loot sources of the seller (cMaNGOS AuctionHouseBot::Initialize :62-90 and AddLootToItemMap :582-612): the creature loot
 /// tables split by creature rank, then the disenchant, fishing, gameobject and skinning tables. Each pass draws tables of each source
 /// at random and processes each one the configured number of times; the items that drop (not quest items, nor rows behind a
-/// condition, since no player is looting) feed the item map. The level caps and every other filter are the planner's.
+/// condition, since no player is looting) feed the item map. The gameobject source only takes the tables of objects that are spawned and
+/// respawn (cMaNGOS AuctionHouseBot::Initialize :85, spawntimesecsmax &gt; 0). The level caps and every other filter are the planner's.
 /// </summary>
 public sealed class AuctionBotLootSources
 {
@@ -19,8 +21,44 @@ public sealed class AuctionBotLootSources
     private readonly LootGenerator _generator;
     private readonly Random _random;
 
+    /// <summary>
+    /// The loot ids (<c>data1</c>) of the game objects that have a spawn which respawns (cMaNGOS: <c>gameobject_template</c> entries whose
+    /// <c>gameobject</c> row has <c>spawntimesecsmax</c> above 0; a spawn that can become other entries counts for each of them).
+    /// </summary>
+    public static HashSet<uint> RespawningLootIds(GameObjectContent content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        var entries = new HashSet<uint>();
+        foreach (GameObjectSpawn spawn in content.Spawns)
+        {
+            if ((spawn.SpawnTimeMaxSeconds ?? spawn.SpawnTimeSeconds) <= 0)
+            {
+                continue;
+            }
+
+            entries.Add(spawn.Entry);
+            foreach (uint alternative in content.GetSpawnEntries(spawn.Guid))
+            {
+                entries.Add(alternative);
+            }
+        }
+
+        var lootIds = new HashSet<uint>();
+        foreach (uint entry in entries)
+        {
+            if (content.FindTemplate(entry) is { } template && template.GetData(1) != 0)
+            {
+                lootIds.Add(template.GetData(1));
+            }
+        }
+
+        return lootIds;
+    }
+
     /// <param name="rankOf">The creature_template rank of a creature entry (0 normal, 1 elite, 2 rare elite, 3 world boss, 4 rare), or null.</param>
-    public AuctionBotLootSources(LootContent content, Func<uint, uint?> rankOf, AuctionBotOptions options, Random random, TuningCatalog? tuning = null)
+    /// <param name="respawningGameObjectLootIds">The gameobject loot tables that may feed the pool (<see cref="RespawningLootIds"/>); null takes every table.</param>
+    public AuctionBotLootSources(LootContent content, Func<uint, uint?> rankOf, AuctionBotOptions options, Random random, TuningCatalog? tuning = null,
+        IReadOnlySet<uint>? respawningGameObjectLootIds = null)
     {
         ArgumentNullException.ThrowIfNull(content);
         ArgumentNullException.ThrowIfNull(rankOf);
@@ -38,6 +76,7 @@ public sealed class AuctionBotLootSources
 
         uint[] Tables(LootTableKind kind) => [.. content.Rows.Where(r => r.Kind == kind).Select(r => r.Row.Entry).Distinct().Order()];
         uint[] Rank(uint rank) => byRank.TryGetValue(rank, out SortedSet<uint>? set) ? [.. set] : [];
+        uint[] gameObjectTables = [.. Tables(LootTableKind.GameObject).Where(t => respawningGameObjectLootIds is null || respawningGameObjectLootIds.Contains(t))];
         _sources =
         [
             new("creature normal", LootTableKind.Creature, Rank(0), options.ParseLoot("creature normal", tuning)),
@@ -47,7 +86,7 @@ public sealed class AuctionBotLootSources
             new("creature rare", LootTableKind.Creature, Rank(4), options.ParseLoot("creature rare", tuning)),
             new("disenchant", LootTableKind.Disenchant, Tables(LootTableKind.Disenchant), options.ParseLoot("disenchant", tuning)),
             new("fishing", LootTableKind.Fishing, Tables(LootTableKind.Fishing), options.ParseLoot("fishing", tuning)),
-            new("gameobject", LootTableKind.GameObject, Tables(LootTableKind.GameObject), options.ParseLoot("gameobject", tuning)),
+            new("gameobject", LootTableKind.GameObject, gameObjectTables, options.ParseLoot("gameobject", tuning)),
             new("skinning", LootTableKind.Skinning, Tables(LootTableKind.Skinning), options.ParseLoot("skinning", tuning)),
         ];
     }

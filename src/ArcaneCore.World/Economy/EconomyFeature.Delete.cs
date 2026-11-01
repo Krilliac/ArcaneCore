@@ -53,6 +53,7 @@ public sealed partial class EconomyFeature : ICharacterDeleteHook
         _mailboxes.Remove(id);
         Dictionary<uint, AuctionRecord> stillSold = sold.ToDictionary(a => a.Id);
         InvalidateDeletedAuctionRecoveries(id, stillSold);
+        var droppedBotBids = new List<uint>();
         foreach (AuctionView view in _auctions.Values.Where(v => v.Auction.SellerId == id || v.Auction.BidderId == id).ToList())
         {
             AuctionRecord auction = view.Auction;
@@ -75,12 +76,22 @@ public sealed partial class EconomyFeature : ICharacterDeleteHook
                 else
                 {
                     _auctions.Remove(auction.Id);
+                    if (HasBotBid(auction))
+                    {
+                        droppedBotBids.Add(auction.Id);
+                    }
                 }
             }
             else
             {
                 _auctions[auction.Id] = view with { Auction = auction with { BidderId = 0, Bid = 0 } };
             }
+        }
+
+        // The auction went with its seller, so the bot's standing bid never won: release its custody (not counted as spent).
+        foreach (uint auctionId in droppedBotBids)
+        {
+            RaiseBotBidSettled(auctionId, won: false);
         }
 
         RecoverAuctions();
