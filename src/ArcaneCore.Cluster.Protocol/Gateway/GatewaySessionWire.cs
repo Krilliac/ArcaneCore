@@ -32,6 +32,20 @@ public readonly record struct GatewaySessionOpenReply(bool Accepted, AuthRespons
 public sealed record GatewayWardenPosture(bool Enabled, string ModuleDigestHex, string OptionsSummary, int CheckRevision);
 
 /// <summary>
+/// The login worker's request (worker to gateway) to move a session to the worker that owns the saved map of the character the client
+/// asked to log in. Sent before any world state exists for the character: <see cref="MapId"/> and <see cref="InstanceId"/> name the map copy
+/// the gateway resolves through its route table.
+/// </summary>
+public sealed record GatewaySessionRedirect(long SessionGeneration, int AccountId, uint MapId, uint InstanceId);
+
+/// <summary>
+/// The gateway's request (gateway to worker) to re-open a redirected session on the map owner: the usual open request (the new generation, the
+/// authenticated account) plus the CMSG_PLAYER_LOGIN the client sent, which the gateway buffered. <see cref="LoginReceivedMs"/> is the gateway's
+/// receive time of that packet (its monotonic millisecond clock, low 32 bits). The worker answers with a <see cref="GatewaySessionOpenReply"/>.
+/// </summary>
+public sealed record GatewaySessionAdoptRequest(GatewaySessionOpenRequest Open, uint LoginOpcode, ReadOnlyMemory<byte> LoginPayload, uint LoginReceivedMs);
+
+/// <summary>
 /// Encoding of the Tier 3a session-link frames (<c>docs/design/hot-reload-tiers.md</c> §5.3). They ride the length-prefixed
 /// framing and the manifest handshake of <c>LoopbackGatewayWorkerHost</c>, and every packet frame carries the same
 /// <see cref="ClusterSessionPacket"/> envelope (generation, owner epoch, sequence). All integers little-endian. Every decoder
@@ -45,18 +59,24 @@ public static class GatewaySessionWire
     /// <summary>Longest account name or endpoint text a SessionOpen may carry.</summary>
     public const int MaxTextBytes = 256;
 
-    internal static byte[] EncodeOpen(long requestId, GatewaySessionOpenRequest request)
+    /// <summary>Longest buffered client packet a SessionAdopt may carry (CMSG_PLAYER_LOGIN is 8 bytes).</summary>
+    public const int MaxAdoptPacketBytes = 256;
+
+    internal static byte[] EncodeOpen(long requestId, GatewaySessionOpenRequest request) => EncodeOpenBody(GatewayWorkerFrameType.SessionOpen, requestId, request, 0);
+
+    /// <summary>The open request layout shared by SessionOpen and SessionAdopt (which appends its tail in <paramref name="tailBytes"/> more bytes).</summary>
+    private static byte[] EncodeOpenBody(GatewayWorkerFrameType type, long requestId, GatewaySessionOpenRequest request, int tailBytes)
     {
         byte[] name = Encoding.UTF8.GetBytes(request.AccountName);
         byte[] endpoint = Encoding.UTF8.GetBytes(request.ClientEndpoint);
         if (name.Length > MaxTextBytes || endpoint.Length > MaxTextBytes)
         {
-            throw new ArgumentException("account name or client endpoint too long for a SessionOpen frame", nameof(request));
+            throw new ArgumentException("account name or client endpoint too long for a " + type + " frame", nameof(request));
         }
 
-        byte[] buffer = new byte[1 + 8 + 8 + 4 + 4 + 4 + name.Length + 4 + endpoint.Length];
+        byte[] buffer = new byte[1 + 8 + 8 + 4 + 4 + 4 + name.Length + 4 + endpoint.Length + tailBytes];
         var writer = new FrameWriter(buffer);
-        writer.Byte((byte)GatewayWorkerFrameType.SessionOpen);
+        writer.Byte((byte)type);
         writer.Int64(requestId);
         writer.Int64(request.SessionGeneration);
         writer.Int32(request.AccountId);
@@ -70,12 +90,77 @@ public static class GatewaySessionWire
     {
         var reader = new FrameReader(body, "SessionOpen");
         long requestId = reader.Int64();
+        return (requestId, ReadOpenRequest(ref reader));
+    }
+
+    private static GatewaySessionOpenRequest ReadOpenRequest(ref FrameReader reader)
+    {
         long generation = reader.Int64();
         int accountId = reader.Int32();
         uint build = reader.UInt32();
         string name = reader.Text();
         string endpoint = reader.Text();
-        return (requestId, new GatewaySessionOpenRequest(generation, accountId, name, build, endpoint));
+        return new GatewaySessionOpenRequest(generation, accountId, name, build, endpoint);
+    }
+
+    /// <summary>
+    /// A SessionAdopt frame (gateway to worker): the SessionOpen layout exactly as <see cref="EncodeOpen"/> writes it, then the buffered login
+    /// packet: opcode (uint32), the gateway receive time (uint32), payload length (int32, at most <see cref="MaxAdoptPacketBytes"/>) and the payload.
+    /// </summary>
+    internal static byte[] EncodeAdopt(long requestId, GatewaySessionAdoptRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ReadOnlySpan<byte> payload = request.LoginPayload.Span;
+        if (payload.Length > MaxAdoptPacketBytes)
+        {
+            throw new ArgumentException($"buffered login packet of {payload.Length} B is over {MaxAdoptPacketBytes} B", nameof(request));
+        }
+
+        int tail = 4 + 4 + 4 + payload.Length;
+        byte[] buffer = EncodeOpenBody(GatewayWorkerFrameType.SessionAdopt, requestId, request.Open, tail);
+        int offset = buffer.Length - tail;
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(offset, 4), request.LoginOpcode);
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(offset + 4, 4), request.LoginReceivedMs);
+        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(offset + 8, 4), payload.Length);
+        payload.CopyTo(buffer.AsSpan(offset + 12));
+        return buffer;
+    }
+
+    internal static (long RequestId, GatewaySessionAdoptRequest Request) DecodeAdopt(ReadOnlySpan<byte> body)
+    {
+        var reader = new FrameReader(body, "SessionAdopt");
+        long requestId = reader.Int64();
+        GatewaySessionOpenRequest open = ReadOpenRequest(ref reader);
+        uint opcode = reader.UInt32();
+        uint receivedMs = reader.UInt32();
+        byte[] payload = reader.Bytes(MaxAdoptPacketBytes);
+        reader.End();
+        return (requestId, new GatewaySessionAdoptRequest(open, opcode, payload, receivedMs));
+    }
+
+    /// <summary>A SessionRedirect frame (worker to gateway): generation, account, map id and instance id of the map copy that owns the character.</summary>
+    internal static byte[] EncodeRedirect(GatewaySessionRedirect redirect)
+    {
+        ArgumentNullException.ThrowIfNull(redirect);
+        byte[] buffer = new byte[1 + 8 + 4 + 4 + 4];
+        var writer = new FrameWriter(buffer);
+        writer.Byte((byte)GatewayWorkerFrameType.SessionRedirect);
+        writer.Int64(redirect.SessionGeneration);
+        writer.Int32(redirect.AccountId);
+        writer.UInt32(redirect.MapId);
+        writer.UInt32(redirect.InstanceId);
+        return buffer;
+    }
+
+    internal static GatewaySessionRedirect DecodeRedirect(ReadOnlySpan<byte> body)
+    {
+        var reader = new FrameReader(body, "SessionRedirect");
+        long generation = reader.Int64();
+        int accountId = reader.Int32();
+        uint mapId = reader.UInt32();
+        uint instanceId = reader.UInt32();
+        reader.End();
+        return new GatewaySessionRedirect(generation, accountId, mapId, instanceId);
     }
 
     internal static byte[] EncodeOpenReply(long requestId, GatewaySessionOpenReply reply)
@@ -430,6 +515,27 @@ public static class GatewaySessionWire
         public uint UInt32() => BinaryPrimitives.ReadUInt32LittleEndian(Take(4));
 
         public long Int64() => BinaryPrimitives.ReadInt64LittleEndian(Take(8));
+
+        /// <summary>A length-prefixed (int32) byte block of at most <paramref name="maxLength"/> bytes, copied.</summary>
+        public byte[] Bytes(int maxLength)
+        {
+            int length = Int32();
+            if (length < 0 || length > maxLength)
+            {
+                throw new InvalidDataException($"{_frameName} byte block length {length} out of range");
+            }
+
+            return Take(length).ToArray();
+        }
+
+        /// <summary>Refuses a frame with bytes left after its last field.</summary>
+        public readonly void End()
+        {
+            if (_offset != _body.Length)
+            {
+                throw new InvalidDataException($"{_frameName} frame has {_body.Length - _offset} trailing bytes");
+            }
+        }
 
         public string Text()
         {

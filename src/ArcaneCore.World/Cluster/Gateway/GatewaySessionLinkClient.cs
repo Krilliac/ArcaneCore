@@ -26,6 +26,15 @@ public interface IGatewaySessionSink
 
     /// <summary>The worker closed the session, or the link was lost. Called at most once, never before <see cref="OnOpened"/>.</summary>
     void OnClosed(ClusterSessionDetachReason reason);
+
+    /// <summary>
+    /// The worker asked to move the session to the owner of a map (login redirect). Return true to take it over: the link then keeps the session
+    /// registered but silent (its packets and its close are no longer delivered to this sink) and the sink must end it with
+    /// <see cref="GatewaySessionLinkClient.CloseSession"/> once the target worker has taken the session. Return false to refuse: the link then
+    /// closes the session as <see cref="OnClosed"/> with <see cref="ClusterSessionDetachReason.WorkerClosed"/>. Called from the link's receive loop; must not block.
+    /// The default refuses.
+    /// </summary>
+    bool OnRedirect(GatewaySessionRedirect redirect) => false;
 }
 
 /// <summary>
@@ -160,11 +169,38 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     /// opens leave on the link in generation order however many clients log in at once: the worker refuses an open whose generation
     /// is not above the last one it saw. Both callbacks run under that lock: keep them short and non-blocking.
     /// </summary>
-    public async Task<GatewaySessionOpenReply> OpenAsync(
+    public Task<GatewaySessionOpenReply> OpenAsync(
         Func<long> nextGeneration, Func<long, GatewaySessionOpenRequest> requestFor, IGatewaySessionSink sink, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(nextGeneration);
         ArgumentNullException.ThrowIfNull(requestFor);
+        return OpenCoreAsync(nextGeneration, generation =>
+        {
+            GatewaySessionOpenRequest request = requestFor(generation);
+            return (request, new Func<long, byte[]>(requestId => GatewaySessionWire.EncodeOpen(requestId, request)));
+        }, sink, cancellationToken);
+    }
+
+    /// <summary>
+    /// The second half of a login redirect: ask this worker (the map owner) to open the session the gateway moved off the login worker, with the
+    /// buffered CMSG_PLAYER_LOGIN. Generation allocation, ordering, the reply and the sink behave exactly as in
+    /// <see cref="OpenAsync(Func{long}, Func{long, GatewaySessionOpenRequest}, IGatewaySessionSink, CancellationToken)"/>; the worker delivers the login packet to the new session itself,
+    /// so the client sees the login answers only after the reply. <paramref name="requestFor"/> runs under the same lock as there.
+    /// </summary>
+    public Task<GatewaySessionOpenReply> AdoptAsync(
+        Func<long> nextGeneration, Func<long, GatewaySessionAdoptRequest> requestFor, IGatewaySessionSink sink, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requestFor);
+        return OpenCoreAsync(nextGeneration, generation =>
+        {
+            GatewaySessionAdoptRequest adopt = requestFor(generation);
+            return (adopt.Open, new Func<long, byte[]>(requestId => GatewaySessionWire.EncodeAdopt(requestId, adopt)));
+        }, sink, cancellationToken);
+    }
+
+    private async Task<GatewaySessionOpenReply> OpenCoreAsync(
+        Func<long> nextGeneration, Func<long, (GatewaySessionOpenRequest Request, Func<long, byte[]> Frame)> build, IGatewaySessionSink sink, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nextGeneration);
         ArgumentNullException.ThrowIfNull(sink);
         GatewayLinkChannel channel = _channel ?? throw new InvalidOperationException("not connected");
         GatewaySessionOpenRequest request;
@@ -173,7 +209,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         lock (_openGate)
         {
             long generation = nextGeneration();
-            request = requestFor(generation);
+            Func<long, byte[]> frame;
+            (request, frame) = build(generation);
             if (request.SessionGeneration != generation)
             {
                 throw new InvalidOperationException($"the open request carries generation {request.SessionGeneration}, not the allocated {generation}");
@@ -187,7 +224,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             }
 
             _pendingOpens[requestId] = session;
-            if (!channel.TryEnqueue(GatewaySessionWire.EncodeOpen(requestId, request)))
+            if (!channel.TryEnqueue(frame(requestId)))
             {
                 _pendingOpens.TryRemove(requestId, out _);
                 _sessions.TryRemove(generation, out _);
@@ -308,6 +345,9 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
                     case GatewayWorkerFrameType.SessionServerPacket:
                         OnServerPacket(body);
                         break;
+                    case GatewayWorkerFrameType.SessionRedirect:
+                        OnRedirect(GatewaySessionWire.DecodeRedirect(body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
                         if (_sessions.TryGetValue(generation, out ClientSession? closing) && closing.AccountId == accountId
@@ -397,6 +437,58 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         session.Opened.TrySetResult(reply);
     }
 
+    /// <summary>
+    /// The worker asks to move an open session to another worker. A session that is not open, or whose account does not match, is ignored (counted as a
+    /// dropped packet would be). The sink decides: when it takes the redirect the session turns silent and stays registered until the sink closes it;
+    /// otherwise it is closed here as the worker closing it.
+    /// </summary>
+    private void OnRedirect(GatewaySessionRedirect redirect)
+    {
+        if (!_sessions.TryGetValue(redirect.SessionGeneration, out ClientSession? session) || session.AccountId != redirect.AccountId)
+        {
+            _logger.LogWarning("Worker link to {Worker}: redirect for unknown session (generation {Generation}, account {Account}); ignored", _worker, redirect.SessionGeneration, redirect.AccountId);
+            return;
+        }
+
+        bool taken = false;
+        lock (session.Gate)
+        {
+            if (!session.IsOpen || session.IsClosed || session.Redirected)
+            {
+                return;
+            }
+
+            session.Redirected = true;
+        }
+
+        try
+        {
+            taken = session.Sink.OnRedirect(redirect);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.gateway-client", ex);
+            AnomalyLedger.Shared.Report("cluster", "gateway-fault", $"session-{session.Generation}", $"phase=redirect error={ex.GetType().Name}: {ex.Message}", AnomalySeverity.Error);
+            _logger.LogFault("cluster.transport", ex, "Gateway session {Generation}: the redirect handler failed", session.Generation);
+        }
+
+        if (!taken)
+        {
+            lock (session.Gate)
+            {
+                session.Redirected = false;
+            }
+
+            if (_sessions.TryRemove(new KeyValuePair<long, ClientSession>(session.Generation, session)))
+            {
+                // The worker keeps a session that asked for a redirect open (LinkSession.TryRedirect), so a refused redirect must tell it to close
+                // the session; otherwise its LinkSession and WorldSession stay at the character screen until the link drops.
+                _channel?.TryEnqueue(GatewaySessionWire.EncodeClose(session.Generation, session.AccountId, ClusterSessionDetachReason.ClientDisconnect));
+                NotifyClosed(session, ClusterSessionDetachReason.WorkerClosed);
+            }
+        }
+    }
+
     private void OnServerPacket(ReadOnlyMemory<byte> body)
     {
         ClusterSessionPacket packet = GatewaySessionWire.DecodePacket(body);
@@ -405,7 +497,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             bool accept;
             lock (session.Gate)
             {
-                accept = session.IsOpen && !session.IsClosed && packet.AccountId == session.AccountId && packet.OwnerEpoch == session.Epoch
+                accept = session.IsOpen && !session.IsClosed && !session.Redirected && packet.AccountId == session.AccountId && packet.OwnerEpoch == session.Epoch
                     && packet.Sequence > session.LastInboundSequence;
                 if (accept)
                 {
@@ -434,7 +526,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         bool wasOpen;
         lock (session.Gate)
         {
-            wasOpen = session.IsOpen && !session.IsClosed;
+            // A redirected session belongs to the sink's hand-over now: its end (the worker's close, a lost link) is not the client's end.
+            wasOpen = session.IsOpen && !session.IsClosed && !session.Redirected;
             session.IsClosed = true;
         }
 
@@ -521,5 +614,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         public long LastInboundSequence;
         public bool IsOpen;
         public bool IsClosed;
+
+        /// <summary>The worker asked to move the session and the sink took it over; the session is silent until the sink closes it.</summary>
+        public bool Redirected;
     }
 }

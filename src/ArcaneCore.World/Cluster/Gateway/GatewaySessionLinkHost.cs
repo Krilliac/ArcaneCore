@@ -55,6 +55,13 @@ public readonly record struct GatewaySessionAcceptResult(AuthResponseCode Code, 
 public interface IGatewaySessionAcceptor
 {
     ValueTask<GatewaySessionAcceptResult> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="OpenAsync"/> for a session the gateway moved here from the login worker (SessionAdopt): the same authentication, and the
+    /// buffered CMSG_PLAYER_LOGIN is delivered to the new session before it starts. The default refuses (an acceptor that does not take adopted sessions).
+    /// </summary>
+    ValueTask<GatewaySessionAcceptResult> OpenAdoptedAsync(GatewaySessionAdoptRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken)
+        => ValueTask.FromResult(GatewaySessionAcceptResult.Refused(AuthResponseCode.Unavailable, "the worker does not adopt sessions"));
 }
 
 /// <summary>
@@ -311,6 +318,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                     case GatewayWorkerFrameType.SessionOpen:
                         OnOpen(link, body.Span, ct);
                         break;
+                    case GatewayWorkerFrameType.SessionAdopt:
+                        OnAdopt(link, body.Span, ct);
+                        break;
                     case GatewayWorkerFrameType.SessionClientPacket:
                         OnClientPacket(link, body);
                         break;
@@ -509,6 +519,18 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     private void OnOpen(Link link, ReadOnlySpan<byte> body, CancellationToken ct)
     {
         (long requestId, GatewaySessionOpenRequest request) = GatewaySessionWire.DecodeOpen(body);
+        BeginOpen(link, requestId, request, null, ct);
+    }
+
+    /// <summary>A session moved here by the gateway after a login redirect: the open rules of <see cref="OnOpen"/> apply unchanged (generation order, Warden posture).</summary>
+    private void OnAdopt(Link link, ReadOnlySpan<byte> body, CancellationToken ct)
+    {
+        (long requestId, GatewaySessionAdoptRequest adopt) = GatewaySessionWire.DecodeAdopt(body);
+        BeginOpen(link, requestId, adopt.Open, adopt, ct);
+    }
+
+    private void BeginOpen(Link link, long requestId, GatewaySessionOpenRequest request, GatewaySessionAdoptRequest? adopt, CancellationToken ct)
+    {
         if (request.SessionGeneration <= link.HighestGeneration || request.AccountId <= 0)
         {
             link.Channel.TryEnqueue(GatewaySessionWire.EncodeOpenReply(requestId, GatewaySessionOpenReply.Refuse(
@@ -528,15 +550,17 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         link.HighestGeneration = request.SessionGeneration;
         var session = new LinkSession(this, link, request.SessionGeneration, request.AccountId);
         link.Sessions[request.SessionGeneration] = session;
-        _ = OpenAsync(link, session, requestId, request, ct);
+        _ = OpenAsync(link, session, requestId, request, adopt, ct);
     }
 
-    private async Task OpenAsync(Link link, LinkSession session, long requestId, GatewaySessionOpenRequest request, CancellationToken ct)
+    private async Task OpenAsync(Link link, LinkSession session, long requestId, GatewaySessionOpenRequest request, GatewaySessionAdoptRequest? adopt, CancellationToken ct)
     {
         GatewaySessionAcceptResult result;
         try
         {
-            result = await _acceptor.OpenAsync(request, session, ct).ConfigureAwait(false);
+            result = adopt is null
+                ? await _acceptor.OpenAsync(request, session, ct).ConfigureAwait(false)
+                : await _acceptor.OpenAdoptedAsync(adopt, session, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -721,6 +745,23 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                 _closed = true;
                 _pending = null;
                 link.Channel.TryEnqueue(GatewaySessionWire.EncodeOpenReply(requestId, GatewaySessionOpenReply.Refuse(code, reason)));
+            }
+        }
+
+        /// <summary>
+        /// Ask the gateway to move this session to the owner of <paramref name="mapId"/> (login redirect): queues SessionRedirect after every packet
+        /// already sent. False when the session is closed or its open reply is not queued yet; the session itself stays open until the gateway closes it.
+        /// </summary>
+        public bool TryRedirect(uint mapId, uint instanceId)
+        {
+            lock (_gate)
+            {
+                if (_closed || _pending is not null)
+                {
+                    return false;
+                }
+
+                return link.Channel.TryEnqueue(GatewaySessionWire.EncodeRedirect(new GatewaySessionRedirect(Generation, AccountId, mapId, instanceId)));
             }
         }
 

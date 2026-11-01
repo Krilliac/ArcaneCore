@@ -146,6 +146,21 @@ public sealed class WorldGatewaySessionAcceptor(
         return GatewaySessionAcceptResult.Accepted(remote);
     }
 
+    /// <summary>
+    /// A session the gateway moved here after a login redirect: <see cref="OpenAsync"/>, then the buffered CMSG_PLAYER_LOGIN is queued to the new session
+    /// (it runs once the link host starts it), so the character logs in on this worker, which owns its map. Only CMSG_PLAYER_LOGIN is adopted.
+    /// </summary>
+    public async ValueTask<GatewaySessionAcceptResult> OpenAdoptedAsync(GatewaySessionAdoptRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.LoginOpcode != (uint)WorldOpcode.CmsgPlayerLogin)
+            return GatewaySessionAcceptResult.Refused(AuthResponseCode.Failed, "an adopted session carries CMSG_PLAYER_LOGIN only");
+
+        GatewaySessionAcceptResult result = await OpenAsync(request.Open, output, cancellationToken).ConfigureAwait(false);
+        result.Session?.Deliver(WorldOpcode.CmsgPlayerLogin, request.LoginPayload.ToArray());
+        return result;
+    }
+
     /// <summary>Stop every running session and wait for them (their closes are posted to the world thread, which still runs).</summary>
     public async Task StopAsync()
     {
