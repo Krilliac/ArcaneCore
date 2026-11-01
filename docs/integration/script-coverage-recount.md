@@ -4,8 +4,8 @@ ROADMAP item 9. This recount keys on creature entries, not script names: the cma
 
 ## Sources and method
 
-- Reference registrations: `D:/refs/mangos-classic/src/game/AI/ScriptDevAI/scripts` (cmangos classic; the brief names `src/scriptdev2`, which does not exist in this checkout, ScriptDevAI is its current location). Each `pNewScript->Name = "..."` block is one registration; its handler assignments (`GetAI`, `pGossipHello`, `pQuestAcceptNPC` ...) are recorded.
-- Script name to entry: `creature_template.ScriptName` in `D:/refs/classic-db/Full_DB/ClassicDB_1_12_1_z2815.sql.gz` (the cmangos classic world database). Spawn counts are `creature` rows with that `id` in the same dump. A script name with no creature_template row (game object, item, area trigger, spell, event, map/instance and example scripts) is not a creature script and is excluded.
+- Reference registrations: `src/game/AI/ScriptDevAI/scripts` in the cmangos mangos-classic checkout (cmangos classic; the brief names `src/scriptdev2`, which does not exist in this checkout, ScriptDevAI is its current location). Each `pNewScript->Name = "..."` block is one registration; its handler assignments (`GetAI`, `pGossipHello`, `pQuestAcceptNPC` ...) are recorded.
+- Script name to entry: `creature_template.ScriptName` in `Full_DB/ClassicDB_1_12_1_z2815.sql.gz` from the classic-db checkout (the cmangos classic world database). Spawn counts are `creature` rows with that `id` in the same dump. A script name with no creature_template row (game object, item, area trigger, spell, event, map/instance and example scripts) is not a creature script and is excluded.
 - ArcaneCore side (static scan; this lane runs no build or server): an entry counts as registered when (a) its numeric id appears on an entry-like line (Entry, Npc, Boss, Creature, Mob, Guard, Register, `const uint`, an indexer) in a C# file under `Creatures/Scripts`, `Creatures/AI`, `Instances/Scripts`, `Battlegrounds`, `Scripting` or `OutdoorPvP` of `src/ArcaneCore.Game` (lines about spells, quests, items, sounds and texts are skipped, and so are the generic engines `CreatureAI.cs`, `SmartScript.cs`, `EventAiEngine.cs`, `ArathiBasin.cs`, `SpellSystemCreatureCaster.cs`), (b) it is in `src/ArcaneCore.Game/Creatures/Scripts/Escorts/validated.json` (data-driven escorts, registered by the `CreatureAiFactory` constructor in `src/ArcaneCore.Game/Creatures/AI/CreatureAiServices.cs` through `EscortSpecCatalog`), or (c) the cmangos script name appears as a string literal in those directories (the guard names of `_factories` in `CreatureAiServices.cs`), or (d) a hand-checked mechanism outside those directories, listed here: `npc_war_effort` (the 33 war-effort NPCs have no script of their own; counter turn-ins run in the quest reward transaction, `src/ArcaneCore.Kernel/WorldData/WorldState/WarEffortCatalog.cs`, `docs/integration/aq-war-effort-phases-20261010.md`), `npc_spirit_guide` (`src/ArcaneCore.Game/Battlegrounds/SpiritGuideService.cs`), `npc_silithus_boss` (Colossus AI in `src/ArcaneCore.World/WorldState/WarEffortFeature.cs`). The professions masters of `world/npc_professions.cpp` are found by (a) in `src/ArcaneCore.Game/Crafting/ProfessionSpecializationGossip.cs`.
 - Caveats. The scan is an estimate in both directions: an id on an entry-like line for another purpose (a summon, a target filter) counts as registered although no AI is bound, and an entry registered through data other than the escort JSON (a DB `creature_ai_scripts` or `smart_scripts` row, a hot-loaded script) is reported missing. Read "registered" as an upper bound for C# registrations and "missing" as the candidate list that a spec agent confirms against `ScriptCatalog.Resolve` (`src/ArcaneCore.Game/Creatures/AI/ScriptCatalog.cs`). The ArcaneCore world database uses vmangos ScriptNames, which differ from cmangos names; that is why the join is by entry.
 - Reproduce: a short script over the inputs above (parse the `creature_template` INSERTs for `Entry` and `ScriptName`, the `creature` INSERTs for spawn counts, regex the registrations). It is not committed because its inputs are reference checkouts outside the repo.
@@ -174,7 +174,7 @@ None.
 | Entry | Name | cmangos ScriptName | Hooks | Spawns | Reference file |
 |---|---|---|---|---|---|
 | 2674 | Advanced Target Dummy | `npc_advanced_target_dummy` | AI | 0 | `world/npcs_special.cpp` |
-| 15717 | Ouro Trigger | `npc_ouro_trigger` | AI | 0 | `kalimdor/temple_of_ahnqiraj/boss_ouro.cpp` |
+| 15717 | Ouro Trigger | `npc_ouro_trigger` | AI | 0 | `kalimdor/temple_of_ahnqiraj/boss_ouro.cpp` (note: the Ouro boss AI in OuroAIs.cs:80-84 already stores and steers the summoned trigger; the trigger itself has no AI, so only add trigger-side behaviour) |
 | 16697 | Void Zone | `npc_aoe_damage_trigger` | AI | 0 | `world/npcs_special.cpp` |
 
 ## Registered entries (evidence)
@@ -188,7 +188,7 @@ First ArcaneCore file that carries the entry id, the script name or the escort J
 | 467 | `npc_defias_traitor` | `Creatures/Scripts/DefiasTraitorAI.cs` |
 | 646 | `boss_mr_smite` | `Instances/Scripts/Deadmines/DeadminesInstance.cs` |
 | 727 | `guard_dunmorogh` | `Creatures/Guards/GuardPostTable.cs` |
-| 1379 | `npc_miran` | `Battlegrounds/AlteracValley.cs` |
+| 1379 | `npc_miran` | `Creatures/AI/CreatureAiServices.cs:276` (MiranAI) |
 | 1423 | `guard_elwynnforest` | `Creatures/AI/CreatureAiServices.cs` |
 | 1735 | `guard_tirisfal` | `Creatures/AI/CreatureAiServices.cs` |
 | 1738 | `guard_tirisfal` | `Creatures/AI/CreatureAiServices.cs` |
@@ -241,7 +241,7 @@ First ArcaneCore file that carries the entry id, the script name or the escort J
 | 3977 | `boss_high_inquisitor_whitemane` | `Instances/Scripts/InstanceScriptedAis.cs` |
 | 4262 | `guard_darnassus` | `Creatures/Guards/GuardPostTable.cs` |
 | 4484 | `npc_feero_ironhand` | `Creatures/Scripts/FeeroIronhandAI.cs` |
-| 4500 | `npc_morokk` | `Battlegrounds/AlteracValley.Assaults.cs` |
+| 4500 | `npc_morokk` | `Creatures/AI/CreatureAiServices.cs:297` (MorokkAI) |
 | 4508 | `npc_willix_the_importer` | `Instances/Scripts/Classic/RazorfenKraulInstance.cs` |
 | 4624 | `guard_contested` | `Creatures/Guards/GuardPostTable.cs` |
 | 4700 | `npc_aged_dying_ancient_kodo` | `Creatures/Scripts/AgedDyingAncientKodoAI.cs` |
@@ -342,7 +342,7 @@ First ArcaneCore file that carries the entry id, the script name or the escort J
 | 10498 | `npc_spectral_tutor` | `Instances/Scripts/DungeonBossAis.cs` |
 | 10503 | `boss_jandice_barov` | `Instances/Scripts/DungeonBossAis.cs` |
 | 10556 | `npc_lazy_peon` | `Creatures/Scripts/LazyPeonAI.cs` |
-| 10638 | `npc_kanati` | `Battlegrounds/BattlegroundScores.cs` |
+| 10638 | `npc_kanati` | `Creatures/AI/CreatureAiServices.cs:279` (KanatiAI) |
 | 10646 | `npc_lakota_windsong` | `Creatures/Scripts/Escorts/validated.json` |
 | 10683 | `npc_rookery_hatcher` | `Instances/Scripts/BlackrockSpire/BlackrockSpireInstance.cs` |
 | 10812 | `boss_dathrohan_balnazzar` | `Instances/Scripts/DungeonBossAis.cs` |
@@ -533,5 +533,5 @@ The id is found only outside the script directories proper (the generic AI layer
 ## Notes for the follow-up lanes
 
 - Confirm each chosen entry against the running catalog (`ScriptCatalog.Resolve`) before specifying it: a false "registered" hides a missing script, a false "missing" wastes a lane.
-- Some cmangos scripts are covered in vmangos terms by `creature_ai_scripts` rows (`D:/refs/vmangos`) that already run in `CreatureEventAI`; check the entry there before porting C++ behaviour.
+- Some cmangos scripts are covered in vmangos terms by `creature_ai_scripts` rows (vmangos checkout) that already run in `CreatureEventAI`; check the entry there before porting C++ behaviour.
 - The hooks column is what the reference registers, not what a quest needs: read the quest chain in the reference database when specifying.
