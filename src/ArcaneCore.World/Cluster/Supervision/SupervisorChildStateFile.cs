@@ -4,8 +4,13 @@ using System.Text.Json;
 
 namespace ArcaneCore.World.Cluster.Supervision;
 
-/// <summary>One child the supervisor owned: its name, role, pid and the process start time that tells a recycled pid from the same process.</summary>
-public sealed record SupervisedChildRecord(string Name, string Role, int ProcessId, long StartTimeUtcMs);
+/// <summary>
+/// One child the supervisor owned: its name, role, pid and the process start time that tells a recycled pid from the same process.
+/// <paramref name="Standby"/> is the persisted blue/green role: true when the child runs (or is to be relaunched) as a standby
+/// (<c>--Cluster:Worker:Standby=true</c>), so a restarted supervisor keeps the swap. A standby whose process is not running is kept with
+/// <paramref name="ProcessId"/> 0 and <paramref name="StartTimeUtcMs"/> 0; such a record names no process and is never adopted or killed.
+/// </summary>
+public sealed record SupervisedChildRecord(string Name, string Role, int ProcessId, long StartTimeUtcMs, bool Standby = false);
 
 /// <summary>
 /// Looks at and terminates OS processes by pid, for the supervisor's restart reconciliation. The system implementation uses <see cref="Process"/>;
@@ -85,7 +90,7 @@ public sealed class SupervisorChildStateFile
 
             using FileStream stream = File.OpenRead(Path);
             List<SupervisedChildRecord>? records = JsonSerializer.Deserialize<List<SupervisedChildRecord>>(stream, Json);
-            return records is null ? [] : [.. records.Where(r => r is not null && !string.IsNullOrWhiteSpace(r.Name) && r.ProcessId > 0)];
+            return records is null ? [] : [.. records.Where(r => r is not null && !string.IsNullOrWhiteSpace(r.Name) && (r.ProcessId > 0 || (r.Standby && r.ProcessId == 0)))];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
