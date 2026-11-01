@@ -128,14 +128,13 @@ public sealed partial class GroupManager
     /// <summary>Install the holder's state of a group; raises the member and leader events for what differs from the previous mirror.</summary>
     private void ApplyReplica(GroupReplica r)
     {
-        bool isNew = !_replicaById.TryGetValue(r.GroupId, out Group? group);
+        bool isNew = !_replicaById.TryGetValue(r.GroupId, out Group? existing);
+        Group group = existing ?? new Group(r.GroupId);
         if (isNew)
         {
-            group = new Group(r.GroupId);
             _replicaById[r.GroupId] = group;
         }
 
-        group = group!;
         var before = new HashSet<ObjectGuid>(group.Members.Select(m => m.Guid));
         ObjectGuid oldLeader = group.LeaderGuid;
         group.IsCreated = true;

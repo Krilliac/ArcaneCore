@@ -327,7 +327,7 @@ public sealed class StandbyWorkerScopeTests
                 Enabled = true,
                 OwnerNode = node,
                 Scope = CharacterFencingScope.Worker,
-                Shard = explicitShard ? shard : null,
+                Shard = explicitShard ? shard : string.Empty,
                 AllowSqliteWorkerScope = allowSqlite,
             };
             var worker = new GatewayWorkerOptions { Enabled = true, Standby = standby, NodeId = node, OwnedMaps = ownedMaps };

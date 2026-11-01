@@ -210,7 +210,7 @@ public sealed class LeaseHeldStartupSweepTests
         Assert.Equal(0, world.Feature.PassesStarted);            // no pass ran, so no bot was created and no membership write was attempted
         Assert.Empty(await world.Owners.LoadAllAsync());          // no registry row and so no orphan bot character, however many passes were asked for
         Assert.Empty(world.Members.Snapshot);
-        Assert.Equal(0, world.Bots.Snapshot().Count);
+        Assert.Empty(world.Bots.Snapshot());
     }
 
     [Fact]
