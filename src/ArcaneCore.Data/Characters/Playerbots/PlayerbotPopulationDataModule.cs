@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
@@ -52,7 +54,7 @@ public sealed class PlayerbotPopulationDataModule : IDataModule, ICharacterDataC
 }
 
 /// <summary>EF store of the population membership.</summary>
-public sealed class EfPlayerbotPopulationStore(CharacterDbContext db) : IPlayerbotPopulationStore
+public sealed class EfPlayerbotPopulationStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IPlayerbotPopulationStore
 {
     public async Task<IReadOnlyList<PlayerbotPopulationMember>> LoadAllAsync(CancellationToken cancellationToken = default)
     {
@@ -64,6 +66,7 @@ public sealed class EfPlayerbotPopulationStore(CharacterDbContext db) : IPlayerb
     public async Task UpsertAsync(PlayerbotPopulationMember member, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(member);
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance); // a realm bot ledger: the maintenance lease holder writes it (writer-lock design section 2b; decision Q2)
         if (member.BotId == Guid.Empty || member.CharacterId <= 0 || member.CreatedUnix < 0 || member.UpdatedUnix < member.CreatedUnix)
             throw new ArgumentException("Population member identity or timestamps are invalid.", nameof(member));
 
@@ -95,7 +98,10 @@ public sealed class EfPlayerbotPopulationStore(CharacterDbContext db) : IPlayerb
     }
 
     public async Task<bool> DeleteAsync(Guid botId, CancellationToken cancellationToken = default)
-        => await CharacterWrites.InTransactionAsync(
+    {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance); // a realm bot ledger: the maintenance lease holder writes it (writer-lock design section 2b; decision Q2)
+        return await CharacterWrites.InTransactionAsync(
             db, () => db.Set<PlayerbotPopulationMemberRow>().Where(row => row.BotId == botId).ExecuteDeleteAsync(cancellationToken),
             cancellationToken).ConfigureAwait(false) == 1;
+    }
 }

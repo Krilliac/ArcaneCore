@@ -650,9 +650,11 @@ the real gateway, the mock client). Four steps: fencing, the decision store, sta
 - **Drain protocol.** `WorldHandoffCoordinator` with `LocalWorldHandoffSource` (A: close admission, park the simulation
   thread at a tick boundary after capturing every online player's save through the settlement path, then flush every
   per-character queue through `CharacterPersistenceBarrier`), `StandbyWorldHandoffTarget` (B: `WorldHost.PromoteAsync`)
-  and `GatewayWorldHandoffRouter` (`GatewayServer.RetargetWorkerAsync`). Abort before the takeover resumes A first and
+  and `GatewayWorldHandoffRouter` (`GatewayServer.HoldSessionsForHandoff` at the freeze, then
+`GatewayServer.RetargetWorkerSeamlessAsync`: B adopts each in-world character, the client sees a synthesized
+`SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`, the held input follows; a client whose move fails is disconnected). Abort before the takeover resumes A first and
   then journals the abort, so a failed journal write leaves A running and the handoff open (pre-commit) for
-  `RecoverAsync` to abort; after the takeover, roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (10).
+  `RecoverAsync` to abort; after the takeover, roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (11).
 
 Known limits of what is built (from the review of the groundwork; none is fixed yet):
 
@@ -675,12 +677,12 @@ Known limits of what is built (from the review of the groundwork; none is fixed 
   `StopAdmissionsAsync` can log in during the freeze; its writes on A are later fenced.
 - **The standby's link manifest incarnation** is a fresh `Guid`, not the host's `Incarnation`, so it never matches the
   incarnation the takeover hands the ownership to.
-- **`RetargetWorkerAsync` retries forever** while B's link host refuses (secret or manifest mismatch); the roll-forward
+- **The worker retarget retries forever** while B's link host refuses (secret or manifest mismatch); the roll-forward
   then depends on the caller's cancellation token, with no timeout or diagnostic of its own.
 
 Not built (from 5.3): the per-player production transfer workers (the handoff moves ownership and saved state, not live
-entities), gateway input buffering and PING answering during the freeze, one link per worker and a per-session reroute
-with synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` (clients on A are disconnected and log in again), the
+entities), gateway PING answering during the freeze (input is held, up to 256 packets per client), a real-client run of the
+seamless reroute (the world port ACK ordering and a passenger's transport form are unverified), the
 operator command (no remote trigger exists, so no new attack surface), a retire that stops A without attempting writes
 (its late writes are refused by the fence), Warden on the gateway, the forced spell-state save that only
 `PlayerLoggingOut` runs, and real-client or MariaDB/PostgreSQL runs. The freeze length is not measured.

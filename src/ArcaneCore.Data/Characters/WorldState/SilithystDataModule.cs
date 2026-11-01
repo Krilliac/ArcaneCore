@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +42,7 @@ public sealed class SilithystDataModule : IDataModule, ICharacterDataCleanup
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-public sealed class EfSilithystStore(CharacterDbContext db) : ISilithystStore
+public sealed class EfSilithystStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : ISilithystStore
 {
     public async Task<SilithystState?> LoadAsync(CancellationToken cancellationToken = default)
         => await db.Set<SilithystRow>().AsNoTracking().FirstOrDefaultAsync(r => r.Id == 1, cancellationToken) is { } row
@@ -49,6 +51,7 @@ public sealed class EfSilithystStore(CharacterDbContext db) : ISilithystStore
 
     public async Task SaveAsync(SilithystState state, CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         SilithystRow? row = await db.Set<SilithystRow>().FirstOrDefaultAsync(r => r.Id == 1, cancellationToken);
         if (row is null) db.Add(row = new SilithystRow { Id = 1 });
         row.GatheredAlliance = state.GatheredAlliance;

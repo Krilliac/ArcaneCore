@@ -368,19 +368,27 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         ValidateWorker(targetWorkerId, nameof(targetWorkerId));
         if (sourceWorkerId == targetWorkerId)
             throw new ArgumentException("A handoff needs two different worlds.", nameof(targetWorkerId));
-        if (sourceOwnershipToken.Scope != WorldScope || sourceOwnershipToken.Epoch <= 0 || sourceOwnershipToken.Incarnation == Guid.Empty)
-            throw new ArgumentException("A handoff moves the 'world' characters ownership; the source token must be a held world token.", nameof(sourceOwnershipToken));
+        if (!CharacterOwnershipScopes.IsValid(sourceOwnershipToken.Scope) || sourceOwnershipToken.Epoch <= 0 || sourceOwnershipToken.Incarnation == Guid.Empty)
+            throw new ArgumentException("A handoff moves one characters ownership scope ('world' or 'worker:<shard>'); the source token must be a held token of such a scope.", nameof(sourceOwnershipToken));
+        string openScope = sourceOwnershipToken.Scope;
+        bool isWorld = openScope == WorldScope;
 
         return await InTransactionAsync(async (db, ct) =>
         {
-            if (await db.Set<ClusterWorldHandoffRow>().AnyAsync(r => r.OpenKey != null, ct).ConfigureAwait(false))
-                throw new InvalidOperationException("Another handoff is unresolved; finish or abort it first.");
+            // One open handoff per scope (design _wf/writer-lock-DESIGN.md step C7): two shards may hand off at once. A 'world' handoff also sees one opened before
+            // schema 73 (open key, no open scope). The unique indexes on open_scope and open_key refuse a concurrent second one at SaveChanges.
+            bool open = isWorld
+                ? await db.Set<ClusterWorldHandoffRow>().AnyAsync(r => r.OpenKey != null || r.OpenScope == openScope, ct).ConfigureAwait(false)
+                : await db.Set<ClusterWorldHandoffRow>().AnyAsync(r => r.OpenScope == openScope, ct).ConfigureAwait(false);
+            if (open)
+                throw new InvalidOperationException($"Another handoff of '{openScope}' is unresolved; finish or abort it first.");
 
             long now = _clock();
             var row = new ClusterWorldHandoffRow
             {
                 HandoffId = Key(handoffId),
-                OpenKey = ClusterTransferDataModule.OpenHandoffKey,
+                OpenKey = isWorld ? ClusterTransferDataModule.OpenHandoffKey : null, // the legacy unique key serialises only realm-wide handoffs
+                OpenScope = openScope,
                 SourceWorker = sourceWorkerId.Value,
                 TargetWorker = targetWorkerId.Value,
                 Stage = (int)WorldHandoffStage.Begun,
@@ -420,8 +428,17 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     }
 
     /// <inheritdoc />
-    public async Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(
+    public Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(
         Guid handoffId, string targetOwnerNode, Guid targetIncarnation, CancellationToken cancellationToken = default)
+        => CommitEpochTakeoverCoreAsync(handoffId, targetOwnerNode, targetIncarnation, setMaps: false, targetOwnedMaps: null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(
+        Guid handoffId, string targetOwnerNode, Guid targetIncarnation, IReadOnlyCollection<uint>? targetOwnedMaps, CancellationToken cancellationToken)
+        => CommitEpochTakeoverCoreAsync(handoffId, targetOwnerNode, targetIncarnation, setMaps: true, targetOwnedMaps, cancellationToken);
+
+    private async Task<WorldHandoffRecord?> CommitEpochTakeoverCoreAsync(
+        Guid handoffId, string targetOwnerNode, Guid targetIncarnation, bool setMaps, IReadOnlyCollection<uint>? targetOwnedMaps, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(targetOwnerNode) || targetOwnerNode.Length > 128)
@@ -456,9 +473,20 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
             using (CharacterWriteFence.Exempt())
             {
                 string sourceIncarnation = row.SourceIncarnation;
+                string sourceScope = row.SourceScope;
                 long sourceEpoch = row.SourceEpoch;
+                bool writeMaps = setMaps && CharacterOwnershipScopes.IsWorker(sourceScope);
+                if (setMaps && !writeMaps && targetOwnedMaps is not null)
+                    throw new ArgumentException("the world ownership scope owns every map and takes no owned map set", nameof(targetOwnedMaps));
+                string? storedMaps = writeMaps && targetOwnedMaps is not null ? EfCharacterOwnershipStore.FormatMaps(targetOwnedMaps) : null;
+                // Gated like a worker claim, before anything is written: the realm row must be inactive (this locks it for the transaction) and the new maps must not overlap
+                // another active worker. A refusal changes nothing and the handoff stays abortable.
+                if (writeMaps
+                    && (!await EfCharacterOwnershipStore.LockGateAsync(db, ct).ConfigureAwait(false)
+                        || await EfCharacterOwnershipStore.OverlapsOtherActiveWorkerAsync(db, sourceScope, targetOwnedMaps, ct).ConfigureAwait(false)))
+                    return null;
                 int swapped = await db.Set<CharacterOwnershipRow>()
-                    .Where(o => o.Scope == WorldScope && o.Active && o.Epoch == sourceEpoch && o.OwnerIncarnation == sourceIncarnation
+                    .Where(o => o.Scope == sourceScope && o.Active && o.Epoch == sourceEpoch && o.OwnerIncarnation == sourceIncarnation
                         && o.Epoch < long.MaxValue && o.WriteSequence < long.MaxValue)
                     .ExecuteUpdateAsync(s => s
                         .SetProperty(o => o.OwnerNode, targetOwnerNode)
@@ -468,6 +496,24 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
                     .ConfigureAwait(false);
                 if (swapped == 0)
                     return null; // the source no longer holds the ownership: nothing changes, the handoff stays abortable
+                if (CharacterOwnershipScopes.IsWorker(sourceScope))
+                {
+                    // The new owner of a live shard starts with a fresh heartbeat (as CharacterOwnershipDataModule's takeover gives it) and, when the caller names them, its own
+                    // owned maps in this same transaction (a standby serves its configured maps, so the durable row must not keep the old owner's set).
+                    long heartbeat = _clock();
+                    if (writeMaps)
+                    {
+                        await db.Set<CharacterOwnershipRow>().Where(o => o.Scope == sourceScope)
+                            .ExecuteUpdateAsync(s => s
+                                .SetProperty(o => o.OwnedMaps, storedMaps)
+                                .SetProperty(o => o.HeartbeatAtMs, (long?)heartbeat), ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await db.Set<CharacterOwnershipRow>().Where(o => o.Scope == sourceScope)
+                            .ExecuteUpdateAsync(s => s.SetProperty(o => o.HeartbeatAtMs, (long?)heartbeat), ct).ConfigureAwait(false);
+                    }
+                }
             }
 
             foreach (ClusterTransferDecisionRow transfer in transfers)
@@ -510,6 +556,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
             {
                 row.State = (int)PlayerTransferDecisionState.Completed;
                 row.OpenKey = null;
+                row.OpenScope = null;
             }
 
             row.UpdatedAtUtcMs = _clock();
@@ -548,6 +595,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
             row.State = (int)PlayerTransferDecisionState.Aborted;
             row.AbortReason = reason;
             row.OpenKey = null;
+            row.OpenScope = null;
             row.UpdatedAtUtcMs = _clock();
             await db.SaveChangesAsync(ct).ConfigureAwait(false);
             return ToRecord(row);

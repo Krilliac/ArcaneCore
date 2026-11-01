@@ -87,6 +87,7 @@ public sealed partial class ManagedPlayerbotFeature
             foreach ((_, IReadOnlyList<int> characterIds) in removed)
                 foreach (int characterId in characterIds)
                     if (characterId > 0) survivors.UnionWith(ledger.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
+            if (!HoldsMaintenanceLease) return; // the stored trade ledger is the maintenance holder's to write; the memory above is already forgotten
             if (provider.GetService<IPlayerbotTradeRecordStore>() is not { } store) return;
             // One item's failure never skips the others: a survivor's rewrite must still run when a deleted bot's DELETE failed.
             foreach (Guid botId in gone)

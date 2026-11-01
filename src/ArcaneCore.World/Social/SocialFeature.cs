@@ -191,6 +191,7 @@ public sealed class SocialFeature(
             {
                 holder.Groups.Options = Options;
                 holder.Groups.IdBlockAllocatorSource = () => groupContext.Groups.IdBlockAllocator;
+                holder.Groups.RequireDurableIdsSource = () => groupContext.Groups.RequireDurableIds;
             }
         }
         // Friends on other workers (S3c): their status comes from the realm directory when this node has one.

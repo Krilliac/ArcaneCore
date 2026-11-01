@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
@@ -48,7 +50,7 @@ public sealed class NightmareDragonsDataModule : IDataModule, ICharacterDataClea
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-public sealed class EfNightmareDragonsStore(CharacterDbContext db) : INightmareDragonsStore
+public sealed class EfNightmareDragonsStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : INightmareDragonsStore
 {
     public async Task<NightmareDragonsState?> LoadAsync(CancellationToken cancellationToken = default)
         => await db.Set<NightmareDragonsRow>().AsNoTracking().FirstOrDefaultAsync(r => r.Id == 1, cancellationToken) is { } row
@@ -58,6 +60,7 @@ public sealed class EfNightmareDragonsStore(CharacterDbContext db) : INightmareD
 
     public async Task SaveAsync(NightmareDragonsState state, CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         NightmareDragonsRow? row = await db.Set<NightmareDragonsRow>().FirstOrDefaultAsync(r => r.Id == 1, cancellationToken);
         if (row is null) db.Add(row = new NightmareDragonsRow { Id = 1 });
         row.Perm1 = state.Permutation[0];

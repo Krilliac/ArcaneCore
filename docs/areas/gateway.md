@@ -134,9 +134,16 @@ capturing every online player's save), the saves and every per-character queue f
 then the **epoch takeover** (one transaction: the ownership row moves from A at epoch N to B at N + 1). Any failure
 before the takeover resumes A and then journals the abort (a failed journal write leaves A running and the handoff open
 for `RecoverAsync`); after it the handoff only rolls forward (`RecoverAsync` finishes a crashed
-one from the journal): promote B, reroute, retire A. The gateway reroute (`GatewayWorldHandoffRouter`,
-`GatewayServer.RetargetWorkerAsync`) moves the gateway's single worker link to B: **clients on A are disconnected and log
-in again** (no `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` carry-over, no input buffering during the freeze). A retired A
+one from the journal): promote B, reroute, retire A. The gateway side (`GatewayWorldHandoffRouter`) is seamless:
+when A freezes, the gateway holds every client's input (`GatewayServer.HoldSessionsForHandoff`, at most 256 packets per
+client, one past that is disconnected; an abort replays it to A). After B is promoted, `GatewayServer.RetargetWorkerSeamlessAsync`
+connects the gateway's worker link to B while the link to A is still open and re-points every session: B adopts the character
+with the client's buffered `CMSG_PLAYER_LOGIN` (it loads the save A captured at the freeze), B's `SMSG_LOGIN_VERIFY_WORLD`
+reaches the client as `SMSG_TRANSFER_PENDING` + `SMSG_NEW_WORLD` (same map and position as the save: the same-map world port
+the real client accepts, design section 5.5), the held input is delivered to B in order, and the link to A closes. A client at
+character select just gets a plain session on B. A client whose move fails (B refuses, 30 s timeout) is disconnected and logs
+in again. A **gateway restart still drops every client**: the sessions and their ciphers live in the gateway process. The loss
+contract of section 5.3 applies (loading screen; cast, combat, trade, loot and similar transients are cancelled). A retired A
 stays frozen; when its process stops, every write it still attempts is refused by the fence. The participants are not
 registered in DI and there is no cross-process control channel: one coordinator can drive them only when A, B and the
 gateway share a process (the tests). Known limits, including B crashing after the takeover, are listed in design
@@ -269,7 +276,7 @@ database. A dedicated `Social` or `Economy` process is not built.
 Tier 3b groundwork: `StandbyWorkerTests` (8: standby registration, standby without worker mode refused, a closed
 worker refuses opens, a standby owns and admits nothing, refused and retried promotion, a refused promotion of a
 released ownership claims nothing, a promoted standby takes a session and writes while the old world is fenced) and
-`WorldHandoffTests` (10: a full handoff with a player in the world through the gateway and the re-login landing on B;
+`WorldHandoffTests` (11: a full handoff with a player in the world through the gateway, B answering the input held during the freeze;
 an abort injected after each of the five pre-commit stages; a source that lost its ownership; a failed abort journal
 write that still resumes A; a crash after the takeover rolled forward by recovery; a crash before it aborted by
 recovery).
@@ -293,11 +300,9 @@ stage 4 (the target session opens at stage 4, after the passive shadow install).
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
 - The manifest's schema and content versions are operator labels, not read from the databases.
 - The gateway records its metrics but starts no Prometheus or OTLP exporter: it needs a scrape port of its own, which is not chosen yet.
-- Phase 3b's handoff needs a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5); the reroute itself is not built.
-- A gateway or World restart still drops every client. The 3b handoff above moves the ownership and the players' saved
-  state but still disconnects the clients (they log in again); a seamless reroute (one link per worker on the gateway,
-  per-session routing, synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`, input buffered during the freeze) and an
-  authenticated operator trigger are not built.
+- Phase 3b's handoff relies on a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5). The gateway's seamless reroute is built and tested in process only, not on a real client.
+- The seamless reroute is untested on a real client in three respects: B's whole login burst follows the synthesized `SMSG_NEW_WORLD` without waiting for `MSG_MOVE_WORLDPORT_ACK` (B ignores that ACK when no teleport is pending, whereas the spike added the player after it); a fresh login on B has re-login side effects (message of the day, friend and guild "came online" notices); and a character aboard a ship gets the plain 4-byte `SMSG_TRANSFER_PENDING`, not the transport form a passenger teleport sends.
+- A gateway or World restart still drops every client. An authenticated operator trigger for the handoff is not built.
 - The link protocol (channel, session wire, frame types, contracts, manifest) now lives in `ArcaneCore.Cluster.Protocol`, but the
   gateway still references `ArcaneCore.World` for `WorldSession` constants, `AddonInfo`, the build protocols (over Game), the session
   link client and the handoff router seam; those need their own split before the reference can go.

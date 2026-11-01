@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.EntityFrameworkCore;
@@ -36,7 +38,7 @@ public sealed class ElementalInvasionDataModule : IDataModule, ICharacterDataCle
     public Task DeleteCharacterDataAsync(CharacterDbContext db, int characterId, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
-public sealed class EfElementalInvasionStore(CharacterDbContext db) : IElementalInvasionStore
+public sealed class EfElementalInvasionStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IElementalInvasionStore
 {
     public async Task<IReadOnlyList<ElementalInvasionState>> LoadAsync(CancellationToken cancellationToken = default)
         => (await db.Set<ElementalInvasionRow>().AsNoTracking().ToListAsync(cancellationToken))
@@ -44,6 +46,7 @@ public sealed class EfElementalInvasionStore(CharacterDbContext db) : IElemental
 
     public async Task SaveAsync(ElementalInvasionState state, CancellationToken cancellationToken = default)
     {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.WorldState); // durable world state is the worldstate lease holder's to write (writer-lock design section 2b; decision Q10)
         ElementalInvasionRow? row = await db.Set<ElementalInvasionRow>().FirstOrDefaultAsync(r => r.Element == state.Element, cancellationToken);
         if (row is null) db.Add(row = new ElementalInvasionRow { Element = state.Element });
         row.Stage = state.Stage;

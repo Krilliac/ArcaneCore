@@ -36,6 +36,15 @@ public interface ICharacterOwnershipStore
             ? TryAcquireAsync(scope, ownerNode, incarnation, cancellationToken)
             : throw new NotSupportedException("this ownership store has no per-worker owned map sets");
 
+    /// <summary>
+    /// A handoff's takeover of a worker shard that also sets the shard's owned maps to <paramref name="ownedMaps"/> (null owns every map), so the new owner does not inherit the old owner's map set.
+    /// The default supports a store that has no per-worker map sets: it is the plain takeover, and refuses a map set it cannot record.
+    /// </summary>
+    Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+        => ownedMaps is null
+            ? TryTakeoverAsync(observed, ownerNode, newIncarnation, cancellationToken)
+            : throw new NotSupportedException("this ownership store has no per-worker owned map sets");
+
     /// <summary>Crash recovery of a worker shard: CAS the observed epoch and incarnation to the next epoch under <paramref name="newIncarnation"/>. The caller must hold the shard's advisory lock. Null when the row moved or the gate refuses.</summary>
     Task<CharacterOwnershipToken?> TryReclaimAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
         => throw new NotSupportedException("this ownership store has no per-worker scopes");

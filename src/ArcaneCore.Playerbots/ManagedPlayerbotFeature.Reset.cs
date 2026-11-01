@@ -448,7 +448,9 @@ public sealed partial class ManagedPlayerbotFeature
             IManagedPlayerbotStore registry = provider.GetRequiredService<IManagedPlayerbotStore>();
             if (await registry.FindAsync(bot.BotId, cancellationToken).ConfigureAwait(false) is { } row)
                 await registry.DeleteAsync(bot.BotId, row.AccountId, row.CharacterId, cancellationToken).ConfigureAwait(false);
-            if (provider.GetService<IPlayerbotPopulationStore>() is { } members
+            // The population membership ledger is the maintenance holder's to write (the store refuses otherwise): a non-holder leaves the row, and the holder's population pass
+            // deletes a member whose registry row is gone, so the rest of this cleanup must not stop here.
+            if (HoldsMaintenanceLease && provider.GetService<IPlayerbotPopulationStore>() is { } members
                 && await members.DeleteAsync(bot.BotId, cancellationToken).ConfigureAwait(false))
                 counts.MembersRemoved++;
             if (provider.GetService<IManagedPlayerbotHomeStore>() is { } homes) await homes.ClearAsync(bot.BotId, cancellationToken).ConfigureAwait(false);

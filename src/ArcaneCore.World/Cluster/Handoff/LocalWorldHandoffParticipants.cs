@@ -15,6 +15,8 @@ namespace ArcaneCore.World.Cluster.Handoff;
 /// epoch takeover any write it still attempted would be refused by the characters fence anyway. A player with a quest settlement in flight is not
 /// quiescent, so the freeze refuses (the handoff aborts and A resumes). After the epoch takeover the source also gives up A's characters database
 /// writer lock (<paramref name="writerGuard"/>, A's own guard, required) so B's promotion can take it; see <see cref="ReleaseWriterLockAsync"/>.
+/// The handoff moves the ownership scope A holds: <c>world</c> for a Combined world, or A's <c>worker:&lt;shard&gt;</c> row in Cluster:Fencing:Scope=Worker (then the lock released is A's shard
+/// lock, and handoffs of two different shards are independent; design _wf/writer-lock-DESIGN.md step C7).
 /// </summary>
 public sealed class LocalWorldHandoffSource(
     WorkerNodeId workerId,
@@ -206,6 +208,9 @@ public sealed class StandbyWorldHandoffTarget(WorkerNodeId workerId, WorldHost h
     public string OwnerNode => host.OwnerNode;
 
     public Guid Incarnation => host.Incarnation;
+
+    /// <summary>Worker scope: the standby's configured maps, written by the epoch takeover; null in Realm scope.</summary>
+    public IReadOnlyCollection<uint>? WorkerOwnedMaps => host.WorkerOwnedMaps;
 
     public Task WarmAsync(CancellationToken cancellationToken)
     {
