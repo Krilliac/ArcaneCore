@@ -429,6 +429,7 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
     private float _bestRouteLeft = float.PositiveInfinity;
     private bool _spiritHealer;
     private bool _preferSpiritHealer;
+    private bool _bgBodyRunDecided;
     private bool _healerRequested;
 
     // The PvP corpse wait of this death (PlayerbotRecoveryOptions.PvpCampWait): when the first wait began (-1: none yet; a Clear does not
@@ -631,6 +632,19 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
             LastStep = PlayerbotRecoveryStep.Fault;
             ReportStalled(player, now, "a living bot whose death was never released");
             throw new InvalidOperationException(Stalled);
+        }
+
+        // Once per death: a battleground ghost whose body lies at a contested objective runs back to it instead of waiting for the guide
+        // (PlayerbotRecoveryOptions.PvpCampWait; ArcaneCore choice, the retail client lets a ghost run back to its body as well).
+        if (ghost && !_bgBodyRunDecided && InBattleground(player) && player.Combat.Corpse is { } bgBody
+            && bgBody.MapId == player.MapId && ReferenceEquals(bgBody.Map, player.Map))
+        {
+            _bgBodyRunDecided = true;
+            var bodyAt = new Vector3(bgBody.X, bgBody.Y, bgBody.Z);
+            BattlegroundBodyRun = options.Recovery.PvpCampWait && ContestedObjectiveNear is { } contestedNear
+                && Vector3.Distance(new Vector3(player.X, player.Y, player.Z), bodyAt) <= BattlegroundBodyRunMaxYards && contestedNear(player, bodyAt);
+            if (BattlegroundBodyRun)
+                LoggerOf().LogInformation("Playerbot {Bot} runs back to its body at a contested objective instead of waiting for the spirit guide", player.Name);
         }
 
         // A battleground ghost does not walk back to its body nor look for the world's spirit healer: the graveyard's spirit guide
@@ -859,6 +873,7 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
         PvpCampAllies = 0;
         PvpCampGaveUp = false;
         BattlegroundBodyRun = false;
+        _bgBodyRunDecided = false;
         _spot = null;
         _spotKey = null;
         _progressMs = -1;
