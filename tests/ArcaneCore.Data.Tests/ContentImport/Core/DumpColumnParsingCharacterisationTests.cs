@@ -14,13 +14,13 @@ namespace ArcaneCore.Data.Tests.ContentImport.Core;
 /// </summary>
 public sealed class DumpColumnParsingCharacterisationTests
 {
-    private const string ConditionsColumns = "INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`) VALUES ";
+    private const string ConditionsColumns = "INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`,`comments`) VALUES ";
     private const string EnchantColumns = "CREATE TABLE `item_enchantment_template` (`entry` int, `ench` int, `chance` float, `patch_min` tinyint, `patch_max` tinyint);\nINSERT INTO `item_enchantment_template` VALUES ";
 
     private static ConditionsDumpImporter ReadConditions(string tuple)
     {
         var importer = new ConditionsDumpImporter();
-        importer.Read(new StringReader(ConditionsColumns + tuple + ";"));
+        importer.Read(new StringReader(ConditionsColumns + tuple[..^1] + ",'');"));
         return importer;
     }
 
@@ -72,12 +72,12 @@ public sealed class DumpColumnParsingCharacterisationTests
     }
 
     [Fact]
-    public void Conditions_AMissingValueColumn_IsTheVmangosRefusal_NotAParseError()
+    public void Conditions_AMissingCommentsColumn_IsTheVmangosRefusal_NotAParseError()
     {
         var importer = new ConditionsDumpImporter();
         InvalidDataException error = Assert.Throws<InvalidDataException>(() => importer.Read(new StringReader(
             "INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`flags`) VALUES (1,14,0,0,0);")));
-        Assert.StartsWith("the conditions rows have no value3/value4 columns: this is the vmangos layout", error.Message, StringComparison.Ordinal);
+        Assert.StartsWith("the conditions rows have no comments column: this is the vmangos layout", error.Message, StringComparison.Ordinal);
     }
 
     [Theory]

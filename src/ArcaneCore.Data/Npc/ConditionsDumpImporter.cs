@@ -15,9 +15,9 @@ public sealed record ConditionsImportReport(int Conditions, int Replaced, string
 
 /// <summary>
 /// Maps the <c>conditions</c> table of a cmangos classic-db dump (columns
-/// <c>condition_entry, type, value1, value2, value3, value4, flags[, comments]</c>) by column name. The numbering of the
-/// type column is cmangos's (mangos-classic Conditions.h:30-82); vmangos's table has a different layout (no value3/value4)
-/// and a different numbering, so a vmangos dump is refused instead of being read with the wrong meaning. The dump is GPL
+/// <c>condition_entry, type, value1, value2, value3, value4, flags, comments</c>) by column name. The numbering of the
+/// type column is cmangos's (mangos-classic Conditions.h:30-82); vmangos's table has no <c>comments</c> column
+/// and a different numbering, so a dump without it is refused as vmangos instead of being read with the wrong meaning. The dump is GPL
 /// data and is never committed; tests use hand-written rows.
 /// </summary>
 public sealed class ConditionsDumpImporter
@@ -49,10 +49,12 @@ public sealed class ConditionsDumpImporter
                 continue;
             }
 
-            if (!row.Has("value3") || !row.Has("value4"))
+            // The cmangos table (classic-db mangos.sql) has the `comments` column; vmangos's does not (its value1..value4 columns do not tell the
+            // two apart), and its type numbering differs, so the layout is told by `comments`.
+            if (!row.Has("comments"))
             {
                 throw new InvalidDataException(
-                    "the conditions rows have no value3/value4 columns: this is the vmangos layout, whose condition type numbering differs from "
+                    "the conditions rows have no comments column: this is the vmangos layout, whose condition type numbering differs from "
                     + "cmangos (classic-db). Only cmangos-numbered dumps can be imported.");
             }
 
