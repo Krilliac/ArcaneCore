@@ -600,6 +600,177 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("      Cluster__Supervisor__Processes__gateway__StartOrder=4", output, StringComparison.Ordinal);
     }
 
+    private static Dictionary<string, string> ChildArguments(string output, string keyPattern)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string line in output.Split('\n'))
+        {
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(
+                line.TrimEnd('\r'), "^ {6}Cluster__Supervisor__Processes__(" + keyPattern + ")__Arguments=(.*)$");
+            if (match.Success)
+            {
+                result[match.Groups[1].Value] = match.Groups[2].Value;
+            }
+        }
+
+        return result;
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_WithoutStandbyOrTransfers_AddsNoControlKeys_AndNoStandbyChild()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+
+        Assert.Equal(0, code);
+        Assert.DoesNotContain("Handoff:Enabled", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Transfers:Enabled", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Standby", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("standby-", output, StringComparison.Ordinal);
+        Assert.Empty(ChildArguments(output, "standby-[A-Za-z0-9]+"));
+        // The supervisor children keep their keys as names.
+        Assert.Contains("      Cluster__Supervisor__Processes__worker-EK__Name=worker-EK", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_Standby_AddsOneStandbyPerWorld_AndTheHandoffKeys_AndTheSupervisorAcceptsIt()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-Standby", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+
+        Assert.Equal(0, code);
+        Assert.False(started, "the plan started a process");
+        Assert.DoesNotContain(Secret, output, StringComparison.Ordinal);
+        Assert.DoesNotContain(PgPassword, output, StringComparison.Ordinal);
+        Assert.Contains("      Cluster__Supervisor__MinClusterProcesses=8", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Transfers:Enabled", output, StringComparison.Ordinal);
+
+        // The worlds are named by node id (the gateway asks the supervisor to relaunch a retired world by that name) and carry the handoff key.
+        Dictionary<string, string> worlds = SplitWorldArguments(output);
+        Assert.Equal(3, worlds.Count);
+        foreach ((string key, string arguments) in worlds)
+        {
+            string node = "worker:" + key["worker-".Length..];
+            Assert.Contains($"      Cluster__Supervisor__Processes__{key}__Name={node}", output, StringComparison.Ordinal);
+            Assert.Contains("--Cluster:Worker:Handoff:Enabled=true", arguments, StringComparison.Ordinal);
+            Assert.DoesNotContain("--Cluster:Worker:Standby", arguments, StringComparison.Ordinal);
+            // The supervisor relaunches a retired world as a standby by appending only Cluster:Worker:Standby=true,
+            // and a standby without an explicit shard fails ValidateWorkerScope, so each world names its own node id.
+            Assert.Equal(node, ArgumentValue(arguments, "Cluster:Fencing:Shard"));
+            Assert.Equal(node, ArgumentValue(arguments, "Cluster:Worker:NodeId"));
+        }
+
+        // One standby per world: its own node id, owner node and ports, the shard of the world it stands behind, no hang watch, the gateway's start-order group.
+        Dictionary<string, string> standbys = ChildArguments(output, "standby-[A-Za-z0-9]+");
+        Assert.Equal(new[] { "standby-EK", "standby-Kalimdor", "standby-instances" }.Order(StringComparer.Ordinal), standbys.Keys.Order(StringComparer.Ordinal));
+        var ports = new HashSet<string>(StringComparer.Ordinal);
+        foreach ((string key, string arguments) in standbys)
+        {
+            string slug = key["standby-".Length..];
+            Assert.Equal("standby:" + slug, ArgumentValue(arguments, "Cluster:Worker:NodeId"));
+            Assert.Equal("standby:" + slug, ArgumentValue(arguments, "Cluster:Fencing:OwnerNode"));
+            Assert.Equal("worker:" + slug, ArgumentValue(arguments, "Cluster:Fencing:Shard"));
+            Assert.Equal("true", ArgumentValue(arguments, "Cluster:Worker:Standby"));
+            Assert.Equal("true", ArgumentValue(arguments, "Cluster:Worker:Handoff:Enabled"));
+            Assert.Equal("Worker", ArgumentValue(arguments, "Cluster:Fencing:Scope"));
+            Assert.Equal("true", ArgumentValue(arguments, "Database:Upgrade:ValidateOnly"));
+            Assert.Equal(ArgumentValue(worlds["worker-" + slug], "Cluster:Worker:OwnedMaps"), ArgumentValue(arguments, "Cluster:Worker:OwnedMaps"));
+            Assert.Contains("      Cluster__Supervisor__Processes__" + key + "__Name=standby:" + slug, output, StringComparison.Ordinal);
+            Assert.Contains("      Cluster__Supervisor__Processes__" + key + "__HangTimeoutSeconds=0", output, StringComparison.Ordinal);
+            Assert.Contains("      Cluster__Supervisor__Processes__" + key + "__StartOrder=4", output, StringComparison.Ordinal);
+            Assert.True(ports.Add(ArgumentValue(arguments, "Cluster:Worker:Port")), "a standby link port repeats");
+            Assert.True(ports.Add(ArgumentValue(arguments, "World:Port")), "a standby client port repeats");
+        }
+
+        foreach (string arguments in worlds.Values)
+        {
+            Assert.True(ports.Add(ArgumentValue(arguments, "Cluster:Worker:Port")), "a standby port equals a world link port");
+            Assert.True(ports.Add(ArgumentValue(arguments, "World:Port")), "a standby port equals a world client port");
+        }
+
+        // The gateway names each slot's standby and turns the handoff hosting on.
+        string gateway = ChildArguments(output, "gateway").Single().Value;
+        Assert.Contains("--Gateway:Handoff:Enabled=true", gateway, StringComparison.Ordinal);
+        Assert.DoesNotContain("--Gateway:Transfers:Enabled", gateway, StringComparison.Ordinal);
+        for (int i = 0; i < 3; i++)
+        {
+            string standbyNode = ArgumentValue(gateway, $"Gateway:Workers:{i}:StandbyNodeId");
+            string activeNode = ArgumentValue(gateway, $"Gateway:Workers:{i}:NodeId");
+            Assert.Equal("standby:" + activeNode["worker:".Length..], standbyNode);
+            KeyValuePair<string, string> standby = standbys.Single(pair => ArgumentValue(pair.Value, "Cluster:Worker:NodeId") == standbyNode);
+            Assert.Equal(ArgumentValue(standby.Value, "Cluster:Worker:Port"), ArgumentValue(gateway, $"Gateway:Workers:{i}:StandbyPort"));
+            Assert.Equal("127.0.0.1", ArgumentValue(gateway, $"Gateway:Workers:{i}:StandbyAddress"));
+        }
+
+        // The supervisor accepts the environment: strict bind, per-child validation and its start-up checks (a standby shares its world's shard but has its own node and owner).
+        var settings = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (string line in output.Split('\n'))
+        {
+            System.Text.RegularExpressions.Match match = System.Text.RegularExpressions.Regex.Match(line.TrimEnd('\r'), "^ {6}(Cluster__[A-Za-z0-9_-]+)=(.*)$");
+            if (match.Success)
+            {
+                settings[match.Groups[1].Value.Replace("__", ":", StringComparison.Ordinal)] = match.Groups[2].Value;
+            }
+        }
+
+        IConfigurationRoot configuration = new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
+        var options = new ClusterSupervisorOptions();
+        configuration.GetSection(ClusterSupervisorOptions.SectionName).Bind(options, binder => binder.ErrorOnUnknownConfiguration = true);
+        Assert.Equal(8, options.Processes.Count);
+        Assert.Equal(8, options.MinClusterProcesses);
+        Assert.Empty(options.Validate());
+        Assert.All(options.Processes.Values, process => process.Validate());
+        Assert.DoesNotContain(new ClusterSupervisorConfigChecks().Check(configuration), issue => issue.Severity == ConfigSeverity.Error);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_Transfers_AddsTheTransferKeysOnly()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-Transfers", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+
+        Assert.Equal(0, code);
+        Assert.Contains("      Cluster__Supervisor__MinClusterProcesses=5", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Handoff:Enabled", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("standby", output, StringComparison.OrdinalIgnoreCase);
+        Dictionary<string, string> worlds = SplitWorldArguments(output);
+        Assert.Equal(3, worlds.Count);
+        Assert.All(worlds.Values, arguments => Assert.Contains("--Cluster:Worker:Transfers:Enabled=true", arguments, StringComparison.Ordinal));
+        string gateway = ChildArguments(output, "gateway").Single().Value;
+        Assert.Contains("--Gateway:Transfers:Enabled=true", gateway, StringComparison.Ordinal);
+        // The supervisor children keep their keys as names without -Standby.
+        Assert.Contains("      Cluster__Supervisor__Processes__worker-EK__Name=worker-EK", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_StandbyAndTransfers_GiveTheStandbysTheTransferKeyToo()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-Standby", "-Transfers", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+
+        Assert.Equal(0, code);
+        Dictionary<string, string> standbys = ChildArguments(output, "standby-[A-Za-z0-9]+");
+        Assert.Equal(3, standbys.Count);
+        Assert.All(standbys.Values, arguments => Assert.Contains("--Cluster:Worker:Transfers:Enabled=true", arguments, StringComparison.Ordinal));
+        string gateway = ChildArguments(output, "gateway").Single().Value;
+        Assert.Contains("--Gateway:Handoff:Enabled=true", gateway, StringComparison.Ordinal);
+        Assert.Contains("--Gateway:Transfers:Enabled=true", gateway, StringComparison.Ordinal);
+    }
+
+    [PwshTheory]
+    [InlineData("-Standby")]
+    [InlineData("-Transfers")]
+    [InlineData("-Gateway -Standby")]
+    public void StartCluster_StandbyAndTransfers_NeedTheSplitTopology(string arguments)
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, bool started) = RunLauncher("start-cluster.ps1", ["-Plan", .. arguments.Split(' ')], Secret);
+
+        Assert.NotEqual(0, code);
+        Assert.Contains("only mean something with -Topology Split", output, StringComparison.Ordinal);
+        Assert.False(started);
+    }
+
     [PwshFact]
     public void StartCluster_Plan_Split_WarnsAboutAMissingPgSecretFile_WithoutPrintingAnything()
     {

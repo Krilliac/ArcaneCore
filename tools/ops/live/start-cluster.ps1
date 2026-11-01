@@ -98,6 +98,20 @@
   anyway. Raise -HangTimeoutSeconds (0 turns hang detection off; allowed values 0 and 30 to 3600) or pass -NoDebugger when a debugging
   session must not cost a restart.
 
+  -Standby and -Transfers (-Topology Split only; both off by default, and without them the launch is exactly as described above)
+    -Standby    Whole-World handoff (docs/design/hot-reload-tiers.md 5.6, design _wf/handoff-control-DESIGN.md). Adds one standby child per world
+                (key standby-EK, standby-Kalimdor, standby-instances; node id standby:<slug>; its own link port, client port and heartbeat file after the
+                three worlds'), gives every world Cluster:Worker:Handoff:Enabled=true and the gateway Gateway:Handoff:Enabled=true with
+                Gateway:Workers:<i>:StandbyNodeId/StandbyAddress/StandbyPort. A standby is started with Cluster:Worker:Standby=true and the shard of the
+                world it stands behind (Cluster:Fencing:Shard=worker:<slug>, so its promotion takes over that world's durable scope; it has its own
+                OwnerNode and NodeId), claims and locks nothing, and is validate-only for the schema. Standbys start in the gateway's start-order group and run
+                without a hang watch. The supervisor children of the worlds are then named by node id (worker:EK, ...) instead of the key, because
+                the gateway asks the supervisor to relaunch a retired world as the slot's next standby ("restart by child name"). The gateway needs the
+                characters database (it already inherits the PostgreSQL environment; validate-only, a least-privilege role limited to cluster_world_handoff,
+                cluster_transfer_* and character_ownership is enough).
+    -Transfers  Per-player transfers between workers (a teleport to a map another worker owns): every world gets Cluster:Worker:Transfers:Enabled=true
+                and the gateway Gateway:Transfers:Enabled=true. Combines with -Standby (the standbys get the key too, so a promoted one behaves like the world it replaced).
+
   Locations come from ARCANECORE_LIVE_HOME and ARCANECORE_LIVE_PROFILE (or -LiveHome / -Profile); see docs/ops/tooling.md.
 .PARAMETER Plan
   Print every process, window title, command line, environment variable (secrets masked) and wait that would be used, then exit 0
@@ -138,6 +152,10 @@ param(
     [ValidateSet('EK', 'Kalimdor', 'instances')][string]$LeaseHolder = 'EK',
     # Split only: a path to the PostgreSQL secret file (default: ARCANECORE_PG_SECRET_FILE, else <profile>\.arcanecore\pg-cutover.json).
     [string]$PgSecretFile,
+    # Split only: one standby child per world and the whole-World handoff keys (see the help). Off by default.
+    [switch]$Standby,
+    # Split only: the per-player transfer keys on the workers and the gateway (see the help). Off by default.
+    [switch]$Transfers,
     # Prefer the environment variable: a parameter value shows in this shell's history.
     [string]$LinkSecret,
     [string]$HeartbeatPath,
@@ -164,6 +182,9 @@ if ($split) {
     $Gateway = $true
 } elseif ($PSBoundParameters.ContainsKey('LeaseHolder') -or $PSBoundParameters.ContainsKey('PgSecretFile')) {
     throw '-LeaseHolder and -PgSecretFile only mean something with -Topology Split.'
+}
+if (($Standby -or $Transfers) -and -not $split) {
+    throw '-Standby and -Transfers only mean something with -Topology Split: they need several workers behind the gateway.'
 }
 $images = @('Realm', 'World')
 if ($Gateway) { $images += 'Gateway' }
@@ -206,6 +227,18 @@ if ($split) {
     }
     $portMap['Gateway'] = $GatewayPort
     foreach ($world in $splitWorlds) { $portMap["Worker link $($world.Slug)"] = $world.WorkerPort }
+    if ($Standby) {
+        # One standby per world, numbered after the worlds: its own link port (the gateway's control link), client port (used once it is promoted) and node id.
+        for ($i = 0; $i -lt $splitWorlds.Count; $i++) {
+            $world = $splitWorlds[$i]
+            $index = $splitWorlds.Count + $i
+            $world | Add-Member -NotePropertyName Standby -NotePropertyValue ([pscustomobject]@{
+                Key = "standby-$($world.Slug)"; NodeId = "standby:$($world.Slug)"; WorkerPort = ($WorkerPort + $index); ClientPort = ($worldPortValue + 100 * $index)
+            })
+            $portMap["World standby $($world.Slug)"] = $world.Standby.ClientPort
+            $portMap["Standby link $($world.Slug)"] = $world.Standby.WorkerPort
+        }
+    }
     if (@($portMap.Values | Where-Object { $_ -gt 65535 }).Count -gt 0) { throw '-WorldPort / -WorkerPort leave a split port above 65535.' }
 } elseif ($Gateway) { $portMap['Gateway'] = $GatewayPort; $portMap['Worker link'] = $WorkerPort }
 $seenPorts = @{}
@@ -213,7 +246,7 @@ foreach ($entry in $portMap.GetEnumerator()) {
     if ($seenPorts.ContainsKey([int]$entry.Value)) { throw "the $($entry.Key) port and the $($seenPorts[[int]$entry.Value]) port are both $($entry.Value): each listener needs its own port." }
     $seenPorts[[int]$entry.Value] = $entry.Key
 }
-$childCount = if ($split) { 5 } elseif ($Gateway) { 3 } else { 2 }
+$childCount = if ($split) { $(if ($Standby) { 8 } else { 5 }) } elseif ($Gateway) { 3 } else { 2 }
 if (-not $PSBoundParameters.ContainsKey('MinClusterProcesses')) { $MinClusterProcesses = $childCount }
 if ($MinClusterProcesses -gt $childCount) { throw "-MinClusterProcesses $MinClusterProcesses is more than the $childCount process(es) this launch configures: the supervisor would refuse to start." }
 $captureDirs = Get-LiveDiagnosticsDirectories -LiveHome $LiveHome
@@ -279,11 +312,11 @@ $debuggerScript = Join-Path $diagDir 'attach-debugger.ps1'
 # One entry per supervised child: key -> settings. Arguments are command-line tokens of that child (a daemon's command line beats its
 # environment, so each child gets its own log file and the World children switch the inherited Cluster:Supervisor:Enabled off).
 $children = [ordered]@{}
-function Add-Child([string]$Key, [string]$Role, [string]$Image, [int]$Order, [string[]]$ExtraArguments, [int]$ChildRealmId, [int]$Port = 0, [string]$Maps = '', [bool]$Capture = $false) {
+function Add-Child([string]$Key, [string]$Role, [string]$Image, [int]$Order, [string[]]$ExtraArguments, [int]$ChildRealmId, [int]$Port = 0, [string]$Maps = '', [bool]$Capture = $false, [string]$DisplayName = '', [bool]$NoHangWatch = $false) {
     $log = Get-LiveLogSettings -LiveHome $LiveHome -LiveProfile $LiveProfile -LogStem $Key
     $children[$Key] = [pscustomobject]@{
         Key = $Key; Role = $Role; Executable = (Join-Path $bin $Image); Order = $Order; RealmId = $ChildRealmId
-        Port = $Port; Maps = $Maps; Capture = ($Capture -or $ChildRealmId -gt 0)
+        Port = $Port; Maps = $Maps; Capture = ($Capture -or $ChildRealmId -gt 0); DisplayName = $DisplayName; NoHangWatch = $NoHangWatch
         Arguments = ConvertTo-LiveArgumentString (@(ConvertTo-LiveConfigArguments $log) + @($ExtraArguments))
         LogFile = Join-Path (Join-Path $LiveHome 'logs') "$Key.console.log"
     }
@@ -320,8 +353,32 @@ if ($split) {
         if (-not $isLeaseHolder) { $splitArgs += '--Database:Upgrade:ValidateOnly=true' }
         # Every world is a MapWorker so ClusterRoleFeatureFilter lets the realm authority lease choose the one singleton runner.
         $splitArgs += '--Cluster:Node:Role=MapWorker'
-        Add-Child $world.Key 'worker' 'ArcaneCore.World.exe' $order $splitArgs $(if ($isLeaseHolder) { $RealmId } else { 0 }) $world.ClientPort ($world.Maps -join ',') $true
+        if ($Standby) {
+            $splitArgs += '--Cluster:Worker:Handoff:Enabled=true'
+            # A retired world is relaunched by the supervisor as the slot's next standby (it only appends Cluster:Worker:Standby=true);
+            # CharacterFencingOptions.ValidateWorkerScope rejects a standby without an explicit shard, so every world names its own.
+            $splitArgs += "--Cluster:Fencing:Shard=$($world.NodeId)"
+        }
+        if ($Transfers) { $splitArgs += '--Cluster:Worker:Transfers:Enabled=true' }
+        # With -Standby the supervisor child is named by node id: the gateway asks the supervisor to relaunch a retired world by that name.
+        Add-Child $world.Key 'worker' 'ArcaneCore.World.exe' $order $splitArgs $(if ($isLeaseHolder) { $RealmId } else { 0 }) $world.ClientPort ($world.Maps -join ',') $true $(if ($Standby) { $world.NodeId } else { '' })
         $order++
+    }
+    if ($Standby) {
+        # The standbys share the gateway's start-order group (no heartbeat of theirs is waited for), after the last world.
+        foreach ($world in $splitWorlds) {
+            $standbyWorld = $world.Standby
+            $standbyHeartbeat = Join-Path $heartbeatDirectory "world-standby-$($world.Slug).heartbeat"
+            $standbyArgs = @('--Cluster:Supervisor:Enabled=false', '--Ops:Watchdog:Heartbeat:Mode=File', "--Ops:Watchdog:Heartbeat:FilePath=$standbyHeartbeat",
+                "--World:Port=$($standbyWorld.ClientPort)", '--Cluster:Fencing:Enabled=true', '--Cluster:Fencing:Scope=Worker', "--Cluster:Fencing:OwnerNode=$($standbyWorld.NodeId)",
+                "--Cluster:Fencing:Shard=$($world.NodeId)",
+                '--Cluster:Worker:Enabled=true', "--Cluster:Worker:BindAddress=$WorkerAddress", "--Cluster:Worker:Port=$($standbyWorld.WorkerPort)",
+                "--Cluster:Worker:RealmId=$RealmId", "--Cluster:Worker:NodeId=$($standbyWorld.NodeId)",
+                "--Cluster:Worker:OwnedMaps=$($world.Maps -join ',')", "--Cluster:Worker:AllowInstanceMaps=$(([string]$world.AllowInstanceMaps).ToLowerInvariant())",
+                '--Cluster:Worker:Standby=true', '--Cluster:Worker:Handoff:Enabled=true', '--Database:Upgrade:ValidateOnly=true', '--Cluster:Node:Role=MapWorker')
+            if ($Transfers) { $standbyArgs += '--Cluster:Worker:Transfers:Enabled=true' }
+            Add-Child $standbyWorld.Key 'worker' 'ArcaneCore.World.exe' $order $standbyArgs 0 0 '' $false $standbyWorld.NodeId $true
+        }
     }
     $loginNode = ($splitWorlds | Where-Object { $_.Slug -eq $LeaseHolder }).NodeId
     $gatewayArgs = @("--Gateway:Port=$GatewayPort", "--Gateway:RealmId=$RealmId", "--Gateway:LoginWorker=$loginNode")
@@ -329,7 +386,12 @@ if ($split) {
         $world = $splitWorlds[$i]
         $gatewayArgs += @("--Gateway:Workers:${i}:NodeId=$($world.NodeId)", "--Gateway:Workers:${i}:Address=$WorkerAddress", "--Gateway:Workers:${i}:Port=$($world.WorkerPort)")
         for ($m = 0; $m -lt $world.Maps.Count; $m++) { $gatewayArgs += "--Gateway:Workers:${i}:Maps:${m}=$($world.Maps[$m])" }
+        if ($Standby) {
+            $gatewayArgs += @("--Gateway:Workers:${i}:StandbyNodeId=$($world.Standby.NodeId)", "--Gateway:Workers:${i}:StandbyAddress=$WorkerAddress", "--Gateway:Workers:${i}:StandbyPort=$($world.Standby.WorkerPort)")
+        }
     }
+    if ($Standby) { $gatewayArgs += '--Gateway:Handoff:Enabled=true' }
+    if ($Transfers) { $gatewayArgs += '--Gateway:Transfers:Enabled=true' }
     Add-Child 'gateway' 'gateway' 'ArcaneCore.Gateway.exe' $order $gatewayArgs 0 $GatewayPort
 } else {
     Add-Child 'world' $(if ($Gateway) { 'worker' } else { 'combined' }) 'ArcaneCore.World.exe' 1 $worldArgs $RealmId $worldPortValue
@@ -345,7 +407,7 @@ if ($split) {
 $clusterEnvironment = [ordered]@{ Cluster__Supervisor__Enabled = 'true'; Cluster__Supervisor__MinClusterProcesses = [string]$MinClusterProcesses }
 foreach ($child in $children.Values) {
     $prefix = "Cluster__Supervisor__Processes__$($child.Key)__"
-    $clusterEnvironment[$prefix + 'Name'] = $child.Key
+    $clusterEnvironment[$prefix + 'Name'] = if ($child.DisplayName) { $child.DisplayName } else { $child.Key }
     $clusterEnvironment[$prefix + 'Role'] = $child.Role
     $clusterEnvironment[$prefix + 'ExecutablePath'] = $child.Executable
     $clusterEnvironment[$prefix + 'Arguments'] = $child.Arguments
@@ -353,7 +415,7 @@ foreach ($child in $children.Values) {
     $clusterEnvironment[$prefix + 'LogFilePath'] = $child.LogFile
     $clusterEnvironment[$prefix + 'Console'] = $ChildConsole
     $clusterEnvironment[$prefix + 'StartOrder'] = [string]$child.Order
-    $clusterEnvironment[$prefix + 'HangTimeoutSeconds'] = [string]$HangTimeoutSeconds
+    $clusterEnvironment[$prefix + 'HangTimeoutSeconds'] = if ($child.NoHangWatch) { '0' } else { [string]$HangTimeoutSeconds }
     if ($child.RealmId -gt 0) { $clusterEnvironment[$prefix + 'RealmId'] = [string]$child.RealmId }
     if ($child.Capture) { $clusterEnvironment[$prefix + 'HangCapture'] = $HangCapture }
     if ($child.Maps) { $clusterEnvironment[$prefix + 'Maps'] = $child.Maps }
@@ -392,7 +454,7 @@ function New-ChildStep($Child, [int]$Port) {
         Program     = $Child.Executable
         Command     = $Child.Arguments
         Environment = $null
-        Wait        = "$name alive as a child of the supervisor and listening on port $Port (timeout $StartTimeoutSec s), then AboveNormal priority"
+        Wait        = $(if ($Port -gt 0) { "$name alive as a child of the supervisor and listening on port $Port (timeout $StartTimeoutSec s), then AboveNormal priority" } else { "$name alive as a child of the supervisor for 3 s (a standby opens no client listener until it is promoted; timeout $StartTimeoutSec s), then AboveNormal priority" })
         Note        = "working directory is the profile; the supervisor adds ARCANECORE_SUPERVISED_CHILD=$($Child.Key), ARCANECORE_SUPERVISOR_PROTOCOL=1, a per-run ARCANECORE_SUPERVISOR_TOKEN$(if ($Child.RealmId -gt 0) { ", ARCANECORE_SUPERVISED_REALM_ID=$($Child.RealmId)" }), and the child inherits the supervisor console's environment"
     }
 }
@@ -438,7 +500,7 @@ if ($planOnly) {
         "profile:    $LiveProfile",
         "build:      $configuration ($($build.Detail))",
         "ports:      $(($portMap.GetEnumerator() | ForEach-Object { "$($_.Key) $($_.Value)" }) -join ', ')",
-        "topology:   $(if ($split) { "split: realm + gateway + 3 workers ($(($splitWorlds | ForEach-Object { "$($_.NodeId) maps $($_.Maps -join ',')" }) -join '; ')), MapWorker on worker:$LeaseHolder, PostgreSQL from $pgSecretPath" } elseif ($Gateway) { "realm + gateway + worker$(if ($MapWorker) { ' (MapWorker)' })" } else { 'realm + combined world' }), MinClusterProcesses $MinClusterProcesses, RealmId $RealmId, hang timeout $HangTimeoutSeconds s, child console $ChildConsole",
+        "topology:   $(if ($split) { "split: realm + gateway + 3 workers$(if ($Standby) { ' + 3 standbys (whole-World handoff on)' })$(if ($Transfers) { ', player transfers on' }) ($(($splitWorlds | ForEach-Object { "$($_.NodeId) maps $($_.Maps -join ',')" }) -join '; ')), MapWorker on worker:$LeaseHolder, PostgreSQL from $pgSecretPath" } elseif ($Gateway) { "realm + gateway + worker$(if ($MapWorker) { ' (MapWorker)' })" } else { 'realm + combined world' }), MinClusterProcesses $MinClusterProcesses, RealmId $RealmId, hang timeout $HangTimeoutSeconds s, child console $ChildConsole",
         "heartbeat:  $HeartbeatPath",
         $(if ($HangCapture -eq 'None') { 'hang capture: None (a supervisor kill leaves no evidence)' } else { "hang capture: $HangCapture of the world child into $captureDirectory (timeout $HangCaptureTimeoutSeconds s)" }),
         $(if ($crashDumpPattern) { "crash dumps: inherited by every child from the supervisor console (DOTNET_DbgEnableMiniDump=1), file pattern $crashDumpPattern shared by all children; the pid tells them apart" } else { 'crash dumps: not set by this launch (-Diagnostics Standard, or kept from the environment)' }),

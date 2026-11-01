@@ -154,9 +154,9 @@ character select just gets a plain session on B. A client whose move fails (B re
 in again. A **gateway restart still drops every client**: the sessions and their ciphers live in the gateway process. The loss
 contract of section 5.3 applies (loading screen; cast, combat, trade, loot and similar transients are cancelled). A retired A
 stays frozen; when its process stops, every write it still attempts is refused by the fence. The participants are not
-registered in DI and there is no cross-process control channel: one coordinator can drive them only when A, B and the
-gateway share a process (the tests). Known limits, including B crashing after the takeover, are listed in design
-section 5.6.
+registered in DI unless the opt-in control channel is on (see [Handoff and transfers over the control channel](#handoff-and-transfers-over-the-control-channel-opt-in));
+without it one coordinator can drive them only when A, B and the gateway share a process (the tests). Known limits, including B crashing after the takeover,
+are listed in design section 5.6.
 
 Gateway side, lowest precedence first: `appsettings.json`, `gateway.conf` (or `--config <file>`, the same format as `world.conf`),
 `gateway.json` next to the executable, environment variables, the command line. The gateway also reads the `Database:Auth` section (the realm's auth database), `Net:Protection` and `Logging`.
@@ -289,6 +289,43 @@ released ownership claims nothing, a promoted standby takes a session and writes
 an abort injected after each of the five pre-commit stages; a source that lost its ownership; a failed abort journal
 write that still resumes A; a crash after the takeover rolled forward by recovery; a crash before it aborted by
 recovery).
+
+## Handoff and transfers over the control channel (opt-in)
+
+By default the whole-World handoff and the player transfer run only in process (the tests). Four keys, all `false` by default, host them across
+processes with the gateway as the one coordinator (design `_wf/handoff-control-DESIGN.md`; the tier view is
+[hot-reload-tiers.md](../design/hot-reload-tiers.md) section 5.6):
+
+| Key | Where | Effect when `true` |
+|---|---|---|
+| `Cluster:Worker:Handoff:Enabled` | worker (and standby) | The worker answers the handoff verbs of an admitted gateway (`Describe`, `Warm`, `StopAdmissions`, `Freeze`, `Flush`, `Resume`, `ReleaseWriterLock`, `Retire`, `Promote`); needs `Cluster:Worker:Enabled`. Off, it answers `Disabled` |
+| `Cluster:Worker:Transfers:Enabled` | worker (and standby) | The worker builds its production transfer source and target and answers the transfer verbs; a teleport to a map another worker owns becomes a transfer request. Off, it answers `Disabled` and the refusal of that teleport is unchanged |
+| `Gateway:Handoff:Enabled` | gateway | The gateway connects to the characters database (validate-only, nothing is created or upgraded), keeps a control link to each slot's standby, coordinates handoffs and operator restarts and recovers interrupted ones from the journal |
+| `Gateway:Transfers:Enabled` | gateway | The gateway coordinates cross-worker transfers and finishes interrupted ones from the journal |
+
+Each slot's standby is named on its worker entry: `Gateway:Workers:N:StandbyNodeId` (the standby's `Cluster:Worker:NodeId`, which must differ from
+every other node id), `StandbyAddress` and `StandbyPort` (its `Cluster:Worker:BindAddress` and `Cluster:Worker:Port`). The reply timeouts are
+`Gateway:Control:*` and the recovery cadence `Gateway:Handoff:*`. One gateway per realm is the contract: a worker reports how many gateways it has
+admitted and the coordinator refuses to begin when it is more than one. The gateway and every worker must run the same link contract version.
+
+Under the supervisor, a retired source is relaunched as the slot's next standby, addressed by child name, so the supervisor child of a world must be
+named by its node id. `start-cluster.ps1` does this itself:
+
+```
+pwsh -NoProfile -File tools/ops/live/start-cluster.ps1 -Topology Split -Standby -Transfers
+```
+
+`-Standby` (Split only) adds one standby per world (`standby-EK`, `standby-Kalimdor`, `standby-instances`; node ids `standby:EK` and so on; their own
+link and client ports after the three worlds'), starts it with `Cluster:Worker:Standby=true`, `Cluster:Fencing:Shard` set to the shard of the world it
+stands behind (so its promotion takes over that world's durable scope) and its own `Cluster:Fencing:OwnerNode` and node id, names the world children
+by node id, and sets the handoff keys on the worlds and the gateway. `-Transfers` sets the transfer keys on the worlds, the standbys and the gateway.
+`-Plan` prints all of it. Without either switch the launch is exactly the plain Split launch. The gateway needs the characters database; it inherits
+the PostgreSQL environment of the supervisor and only validates the schema, so a role limited to `cluster_world_handoff`, `cluster_transfer_*` and
+`character_ownership` is enough.
+
+Operator commands: `.cluster restart $worker` (Administrator) hands the slot off and asks the supervisor to relaunch the retired process as the next
+standby; `.cluster handoff status [$operationId]` (Game Master) shows the unresolved handoffs of the journal or one by id. The PostgreSQL end to end
+scenarios (a cross-worker teleport, `.cluster restart`) are `ClusterControlChannelScenarioTests`, skipped without `ARCANECORE_TEST_POSTGRES`.
 
 ## Cross-worker player transfer, gateway side (S5c)
 
