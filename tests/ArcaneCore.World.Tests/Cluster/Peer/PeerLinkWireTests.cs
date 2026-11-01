@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Peer;
 using Xunit;
