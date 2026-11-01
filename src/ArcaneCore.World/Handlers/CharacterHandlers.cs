@@ -30,6 +30,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
 {
     /// <summary>How long a login waits for the same character's previous session to leave the world.</summary>
     private static readonly TimeSpan DuplicateLoginWait = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DuplicateLoginPoll = TimeSpan.FromMilliseconds(100);
 
     /// <summary>The most characters the client can list (it cannot handle values larger than 10).</summary>
     private const int MaxListedCharacters = 10;
@@ -417,25 +418,55 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         CharacterClaimService? claimService = session.Services.GetService<CharacterClaimService>();
         if (claimService is { } claims)
         {
-            CharacterClaimResult claim;
-            try
+            // A live owner on another worker is, behind the gateway, usually a session of this account that is being replaced there: the gateway closed it for this
+            // login, but its logout (the save that writes the map it is on, then the claim release) has not finished, so the record read above can still name a
+            // map this worker owns. Wait for it as for a duplicate here (WaitUntilOfflineAsync), re-reading the record: once it names another worker's map the
+            // session moves there, once the claim is released this worker claims.
+            DateTime claimDeadline = DateTime.UtcNow + DuplicateLoginWait;
+            while (true)
             {
-                (claim, claimTicket) = await claims.ClaimWithTicketAsync(character.Id, session.World.CharacterOwnership).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                FaultLedger.Shared.Record("handler.char-login-claim", ex);
-                AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"claim error={ex.GetType().Name}: {ex.Message}");
-                session.Logger.LogError(ex, "[{Endpoint}] could not claim character {Guid}", session.RemoteEndpoint, character.Id);
-                session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
-                return;
-            }
+                CharacterClaimResult claim;
+                try
+                {
+                    (claim, claimTicket) = await claims.ClaimWithTicketAsync(character.Id, session.World.CharacterOwnership).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("handler.char-login-claim", ex);
+                    AnomalyLedger.Shared.Report("character", "login-load-failed", $"character {character.Id}", $"claim error={ex.GetType().Name}: {ex.Message}");
+                    session.Logger.LogError(ex, "[{Endpoint}] could not claim character {Guid}", session.RemoteEndpoint, character.Id);
+                    session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginFailed));
+                    return;
+                }
 
-            if (!CharacterClaimService.Admits(claim))
-            {
-                session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(
-                    claim.Outcome == CharacterClaimOutcome.RefusedLiveOwner ? CharResult.CharLoginDuplicateCharacter : CharResult.CharLoginFailed));
-                return;
+                if (CharacterClaimService.Admits(claim))
+                {
+                    break;
+                }
+
+                if (claim.Outcome != CharacterClaimOutcome.RefusedLiveOwner || !session.IsRemote || DateTime.UtcNow >= claimDeadline)
+                {
+                    session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(
+                        claim.Outcome == CharacterClaimOutcome.RefusedLiveOwner ? CharResult.CharLoginDuplicateCharacter : CharResult.CharLoginFailed));
+                    return;
+                }
+
+                await Task.Delay(DuplicateLoginPoll).ConfigureAwait(false);
+                CharacterRecord? current = await characters.GetByIdAsync(character.Id).ConfigureAwait(false);
+                if (current is null || current.AccountId != session.AccountId)
+                {
+                    session.Send(WorldOpcode.SmsgCharacterLoginFailed, CharacterPackets.BuildLoginFailed(CharResult.CharLoginNoCharacter));
+                    return;
+                }
+
+                if (!session.World.Owns(current.MapId, 0) && session.TryRedirectRemote(current.MapId, 0))
+                {
+                    session.Logger.LogInformation("[{Endpoint}] character {Guid} was saved on map {Map} by its previous session on another worker; redirecting the session",
+                        session.RemoteEndpoint, current.Id, current.MapId);
+                    return;
+                }
+
+                character = current;
             }
         }
 
@@ -594,7 +625,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
                 return false;
             }
 
-            await Task.Delay(100).ConfigureAwait(false);
+            await Task.Delay(DuplicateLoginPoll).ConfigureAwait(false);
         }
 
         return true;
