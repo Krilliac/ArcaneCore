@@ -119,8 +119,11 @@ public sealed class MapLocalStagesTests
             if (Environment.CurrentManagedThreadId != callerThread)
             {
                 ownerOnHelper |= TickOwner.CurrentMap is not null || !MapLocalStages.IsHelper;
-                Interlocked.Increment(ref taken);
-                release.Signal();
+                // Signal only for the first helper item: a helper loops on to further items and CountdownEvent.Signal throws at zero.
+                if (Interlocked.Increment(ref taken) == 1)
+                {
+                    release.Signal();
+                }
             }
             else if (item == 0)
             {
