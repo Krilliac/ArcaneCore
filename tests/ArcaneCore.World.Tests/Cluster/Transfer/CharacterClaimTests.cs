@@ -207,7 +207,7 @@ public sealed class CharacterClaimTests
         queueB.Start();
         queueB.Save(character, new CharacterRestState(75f, 2000, false));
         await queueB.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.Equal(75f, (await rig.RestOfAsync(character))!.RestBonus);
+        Assert.Equal(75f, (await rig.RestOfAsync(character))!.Value.RestBonus);
         await queueB.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
     }
 
@@ -269,7 +269,7 @@ public sealed class CharacterClaimTests
         await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(30));
         await queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
 
-        Assert.Equal(10f, (await rig.RestOfAsync(character))!.RestBonus); // the save itself went through
+        Assert.Equal(10f, (await rig.RestOfAsync(character))!.Value.RestBonus); // the save itself went through
         Assert.DoesNotContain(rig.Log.Texts, t => t.Contains("cluster_transfer_owner", StringComparison.OrdinalIgnoreCase));
     }
 
