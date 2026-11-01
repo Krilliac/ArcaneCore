@@ -91,7 +91,7 @@ later, and the comparison survives the 32-bit clock wrapping):
 * `MaxListingsPerHour` (10): the auctions one bot lists.
 * `HouseBuyoutsPerHour` (200) and `HouseListingsPerHour` (400): the same for all bots together at one auction house, counted per house
   id by `PlayerbotAuctionPace` (one per world, world thread only). A house limit is soft: it is checked when a bot sends and noted when
-  the house confirms, so bots with an action in flight together can overshoot it by their number (in-flight actions are not counted).
+  a buyout settles (the money fell or the item arrived; a settle that only took money counts) or when a bid still pending at an abort is booked, so bots with an action in flight together can overshoot it by their number (in-flight actions are not counted).
 
 The limits are read live and checked before every sell and every buyout; a count is noted only when the house confirms the listing or the
 buyout. 0 allows nothing. A capped listing or buying part ends gracefully and the visit goes on (mailbox).
@@ -327,7 +327,7 @@ NPC, loot or attack take the mount off first (`PlayerbotMount.DismountForAction`
 | `MoneyGoalCopperPerLevel` | `500` | The money floor per character level of the money goal, in copper (0..100000); 0: only the budget's reserve counts. |
 | `MaxBuyoutsPerHour` | `6` | The most auctions one bot buys out (reagents and upgrades together) in any 60 minutes of world time (0..100); 0 buys nothing. |
 | `MaxListingsPerHour` | `10` | The most auctions one bot lists in any 60 minutes of world time (0..100); 0 lists nothing. |
-| `HouseBuyoutsPerHour` | `200` | The most auctions all bots together buy out at one auction house in any 60 minutes (0..100000); 0 lets no bot buy there. A soft limit: bots with buyouts in flight together can overshoot it by their number. |
+| `HouseBuyoutsPerHour` | `200` | The most auctions all bots together buy out at one auction house in any 60 minutes (0..100000); 0 lets no bot buy there. A soft limit: it is checked when a bot sends, and a buyout counts when it settles (the money fell or the item arrived, a money-only settle included) or, for a bid still pending when the visit aborts, at the abort; bots with buyouts in flight together can overshoot it by their number. |
 | `HouseListingsPerHour` | `400` | The most auctions all bots together list at one auction house in any 60 minutes (0..100000); 0 lets no bot list there. A soft limit: bots with listings in flight together can overshoot it by their number. |
 | `ListSurplusConsumables` | `true` | List stacks of consumables beyond the keep count. |
 | `ConsumableKeepCount` | `20` | Per consumable entry, the count (1..200) a bot always keeps before a stack of it is surplus. |

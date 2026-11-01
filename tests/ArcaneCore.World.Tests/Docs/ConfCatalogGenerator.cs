@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.RegularExpressions;
 using ArcaneCore.Kernel.Configuration.Conf;
 
 namespace ArcaneCore.World.Tests.Docs;
@@ -58,13 +60,38 @@ internal static class ConfCatalogGenerator
         AllowedOf(entry),
         "docs/reference/configuration.md#" + ConfigReferenceRenderer.Anchor(entry.Section));
 
+    private static readonly Regex MeaningRange = new(@"\((-?\d+)\.\.(-?\d+)[;,)]", RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// The enforced range of a whole-number option, when its doc comment states one as "(min..max" (for example "(0..8760; 0 = ...)"): the
+    /// "Allowed" line then names that range instead of the whole type range. Null when the option is not a whole number, has an enum, or states no range.
+    /// </summary>
+    internal static string? RangedWholeNumber(ConfigEntry entry)
+    {
+        if (entry.EnumValues is not null) return null;
+        switch (ConfValue.StripNullable(entry.TypeText))
+        {
+            case "byte" or "sbyte" or "short" or "ushort" or "int" or "uint" or "long" or "ulong":
+                break;
+            default:
+                return null;
+        }
+
+        Match m = MeaningRange.Match(entry.Meaning);
+        if (!m.Success) return null;
+        if (!long.TryParse(m.Groups[1].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long min)
+            || !long.TryParse(m.Groups[2].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long max)
+            || min > max) return null;
+        return "a whole number from " + min.ToString(CultureInfo.InvariantCulture) + " to " + max.ToString(CultureInfo.InvariantCulture);
+    }
+
     private static string AllowedOf(ConfigEntry entry)
     {
         if (entry.AllowedOverride is { } allowed) return allowed;
         switch (entry.Kind)
         {
             case ConfKey.Scalar:
-                return ConfValue.AllowedText(entry.TypeText, entry.EnumValues);
+                return RangedWholeNumber(entry) ?? ConfValue.AllowedText(entry.TypeText, entry.EnumValues);
             default:
                 string noun = entry.Kind == ConfKey.Map ? "a map: one key per entry name" : "a list: numbered keys 0, 1, 2, ...";
                 return entry.ElementType == "object"
