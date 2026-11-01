@@ -143,7 +143,7 @@ The `Gateway` section:
 | `LinkSecret` | empty | Must equal the worker's link secret; at least 16 characters, or the gateway refuses to start |
 | `LinkRetryDelay` | `00:00:01` | First wait before reconnecting the link; doubles up to 30 s |
 | `NodeId` | `gateway` | Node id in the link manifest |
-| `RealmId`, `ContentRevision`, `CharactersSchemaVersion`, `WorldSchemaVersion` | `1`, `dev`, `1`, `1` | Must equal the worker's values or the link is refused |
+| `RealmId`, `ContentRevision`, `CharactersSchemaVersion`, `WorldSchemaVersion` | `1`, `world-schema-N`, the build's characters schema version, the build's world schema version (N is the world version) | Must equal the worker's values or the link is refused. A worker reads the real versions from its databases by default (`Cluster:Worker:VersionsFromDatabase`, `true`); `false` makes it advertise its `Cluster:Worker` `ContentRevision`/`CharactersSchemaVersion`/`WorldSchemaVersion` labels instead (explicit override, same defaults as the gateway's), and a worker whose database is behind the gateway's build is refused |
 
 These keys are in the generated configuration catalog (`ConfigDaemon.Gateway`, the `Gateway` section of the
 [configuration reference](../reference/configuration.md)), together with the shared sections the gateway also reads (`Database`,

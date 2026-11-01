@@ -56,4 +56,34 @@ public sealed partial class SpellSystem
             SpellCastFlags.Unknown9, [], [], targets), includeSelf: true);
         return true;
     }
+
+    /// <summary>
+    /// Commit-time cast of a <see cref="TradeEnchantmentPlan.CastOnCommit"/> plan that carries an item cast (a lockpick or key on the partner's
+    /// lockbox). The cast item is re-resolved from the caster's inventory by <see cref="TradeItemCastContext.CastItemGuid"/> and travels as
+    /// <see cref="SpellCast.CastItem"/>, as vmangos TradeHandler.cpp:362 (<c>SetCastItem</c>) does: open-lock-from-item rules, key matching,
+    /// the item and category cooldown and the SpellGo source all see the item. Its charge or stack was already paid by the staged
+    /// <see cref="TradeItemCastContext.Payment"/> and the cast is triggered, so nothing is taken twice. Duplicate callbacks are ignored.
+    /// </summary>
+    public bool CastCommittedTradeItemSpell(Guid operationId, Player caster, Item item, TradeEnchantmentPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(plan);
+        if (operationId == Guid.Empty || !plan.CastOnCommit || plan.ItemCast is not { } itemCast || plan.SpellSnapshot is not { } spell
+            || item.Guid.Low != plan.UpdatedRecipientItem.Guid || !caster.IsInWorld
+            || caster.Inventory.GetItemByGuid(itemCast.CastItemGuid) is not { } castItem
+            || !ReferenceEquals(castItem.Inventory, caster.Inventory) || castItem.Entry != itemCast.CastItemEntry
+            || _tradePublications.TryGetValue(plan, out _)) return false;
+
+        _tradePublications.Add(plan, new TradePublicationReceipt(operationId));
+        var targets = new SpellCastTargets
+        {
+            Mask = SpellCastTargetFlags.TradeItem,
+            Item = item.Guid,
+            ServerValidatedTradeItem = item,
+        };
+        return Prepare(caster, spell, targets, triggered: true, castItem: castItem, itemSpellIndex: itemCast.ClientSpellIndex,
+            itemCooldownMs: itemCast.ItemSpell.Cooldown, itemCategoryCooldownMs: itemCast.ItemSpell.CategoryCooldown,
+            itemCategory: itemCast.ItemSpell.Category == 0 ? null : itemCast.ItemSpell.Category) == SpellCastResult.CastOk;
+    }
 }

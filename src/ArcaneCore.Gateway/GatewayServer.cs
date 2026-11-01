@@ -30,6 +30,7 @@ public sealed class GatewayServer : BackgroundService
     private readonly Guid _incarnation = Guid.NewGuid();
     private TcpListener? _listener;
     private volatile GatewayWorkerLink[] _workers = [];
+    private volatile GatewayRouteTable _routes = new([]);
     private volatile IPEndPoint? _worker;
     private long _nextGeneration;
     private int _nextPick;
@@ -76,6 +77,9 @@ public sealed class GatewayServer : BackgroundService
 
     /// <summary>The bound client endpoint (after start).</summary>
     public IPEndPoint ListenEndPoint => (IPEndPoint)(_listener ?? throw new InvalidOperationException("not started")).LocalEndpoint;
+
+    /// <summary>The map-to-worker table (fed by link up and down from each worker's announced maps, with <c>Gateway:Workers:N:Maps</c> as the fallback). Replaced at start.</summary>
+    public GatewayRouteTable Routes => _routes;
 
     /// <summary>The worker links, in configuration order (empty before start).</summary>
     public IReadOnlyList<GatewayWorkerLink> Workers => _workers;
@@ -194,6 +198,17 @@ public sealed class GatewayServer : BackgroundService
             return null;
         }
 
+        if (_routes.TryGetLoginWorker(out string loginNode))
+        {
+            foreach (GatewayWorkerLink worker in workers)
+            {
+                if (string.Equals(worker.NodeId, loginNode, StringComparison.Ordinal) && worker.Link is { } login)
+                {
+                    return login;
+                }
+            }
+        }
+
         int start = (int)((uint)Interlocked.Increment(ref _nextPick) % (uint)workers.Length);
         GatewaySessionLinkClient? best = null;
         int bestSessions = int.MaxValue;
@@ -214,6 +229,28 @@ public sealed class GatewayServer : BackgroundService
         }
 
         return best;
+    }
+
+    /// <summary>
+    /// The registered link of the worker that owns the map copy, resolved through the <see cref="Routes"/> table (login redirect). Null when no ready
+    /// worker owns it or its link is not registered at this moment.
+    /// </summary>
+    internal GatewaySessionLinkClient? FindLinkForMap(uint mapId, uint instanceId)
+    {
+        if (!_routes.TryResolve(mapId, instanceId, out string nodeId))
+        {
+            return null;
+        }
+
+        foreach (GatewayWorkerLink worker in _workers)
+        {
+            if (string.Equals(worker.NodeId, nodeId, StringComparison.Ordinal))
+            {
+                return worker.Link;
+            }
+        }
+
+        return null;
     }
 
     private IPEndPoint ConfiguredWorker()
@@ -248,17 +285,19 @@ public sealed class GatewayServer : BackgroundService
         ArgumentOutOfRangeException.ThrowIfNegative(config.MaxConnectionsPerIp);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(config.MaxOutboundBytes);
         IReadOnlyList<GatewayWorkerEntry> entries = config.EffectiveWorkers();
+        var routes = new GatewayRouteTable(entries, config.LoginWorker);
         var workers = new GatewayWorkerLink[entries.Count];
         for (int index = 0; index < entries.Count; index++)
         {
             GatewayWorkerEntry entry = entries[index];
             IPEndPoint endpoint = index == 0 && _worker is { } retargeted ? retargeted : new IPEndPoint(IPAddress.Parse(entry.Address), entry.Port);
-            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger);
+            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes);
         }
 
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();
         _listener = listener;
+        _routes = routes;
         _workers = workers;
         GatewayMeters.Attach(this);
         Guard = new NetGuard(_protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp,
@@ -389,6 +428,7 @@ public sealed class GatewayWorkerLink
     private readonly ILoggerFactory _loggers;
     private readonly GatewayWarden? _warden;
     private readonly ILogger _logger;
+    private readonly GatewayRouteTable _routes;
     private readonly int[] _maps;
     private volatile IPEndPoint _target;
     private volatile IPEndPoint? _connected;
@@ -407,8 +447,11 @@ public sealed class GatewayWorkerLink
         Guid incarnation,
         ILoggerFactory loggers,
         GatewayWarden? warden,
-        ILogger logger)
+        ILogger logger,
+        GatewayRouteTable routes)
     {
+        ArgumentNullException.ThrowIfNull(routes);
+        _routes = routes;
         _entry = entry;
         _config = config;
         _incarnation = incarnation;
@@ -509,6 +552,7 @@ public sealed class GatewayWorkerLink
             Volatile.Write(ref _retarget, retarget);
             _connected = worker;
             _lastError = null;
+            _routes.LinkUp(NodeId, link.WorkerOwnedMaps, link.WorkerAllowsInstanceMaps);
             _link = link;
             Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Ready);
             if (registrations++ > 0)
@@ -536,6 +580,7 @@ public sealed class GatewayWorkerLink
             Volatile.Write(ref _linkUp, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
             _link = null;
             _connected = null;
+            _routes.LinkDown(NodeId);
             if (retarget.Task.IsCompleted)
             {
                 Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Connecting);

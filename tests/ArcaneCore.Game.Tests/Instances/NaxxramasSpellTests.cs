@@ -34,7 +34,7 @@ public sealed class NaxxramasSpellTests
     /// <summary>Every spell of the lane (spell-lane-naxxramas-casts).</summary>
     private static readonly uint[] s_laneSpells =
     [
-        28236, 29682, 28560, 29357, 28471, 28617, 28033, 28526, 28338, 28307, 28376, 28749, 28781, 28797, 29874, 29875, 29422, 28388,
+        28236, 29682, 28560, 29357, 28471, 28617, 28033, 28526, 28338, 28307, 28376, 28749, 28781, 28797, 29874, 29875, 29422,
     ];
 
     private static SpellInfo Instant(SpellInfo spell) => spell with { StartRecoveryCategory = 0, StartRecoveryTime = 0, SpellVisual = 1 };

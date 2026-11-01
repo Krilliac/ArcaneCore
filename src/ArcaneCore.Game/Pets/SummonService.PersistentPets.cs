@@ -761,11 +761,8 @@ public sealed partial class SummonService
             ApplyOwner(creature, owner, 0);
             InitPet(creature, SummonKind.Pet, owner, snapshot.PetNumber);
             creature.SetUInt32(UpdateFields.UnitFieldPetnumber, snapshot.PetNumber); // a permanent pet: SetPetNumber(n, true), Pet.cpp:262
-            if (owner.Class == Class.Hunter)
-            {
-                creature.IgnoreTemplateResistances = true; // a tamed beast loses its innate resistances (Patch 1.3.0)
-                creature.ApplyCreateResistances();
-            }
+            // A persistent pet is a HUNTER_PET by kind: a tamed beast loses its innate resistances (Patch 1.3.0), keyed on the pet and not the owner's class.
+            creature.MarkHunterPetKind();
 
             if (creature.Summon.Charm is { } initCharm)
             {

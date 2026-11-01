@@ -29,7 +29,10 @@ public sealed class AuthConfigChecks : IConfigCheck
         }
 
         string? port = configuration[PortKey];
-        if (!string.IsNullOrWhiteSpace(port)
+        // A present-but-empty port is an error too: ConfigurationBinder sends the empty value to the Int32 converter, which throws, and the
+        // binder rethrows that as InvalidOperationException, so options binding at realm start would crash the daemon (pinned by
+        // RealmStartupValidationTests.EmptyAuthPort_ThrowsWhenBoundAtStart). check-config reports it with exit 78 instead.
+        if (port is not null
             && !(int.TryParse(port, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int value) && value is >= 0 and <= 65535))
         {
             issues.Add(new ConfigIssue(ConfigSeverity.Error, PortKey, $"'{port}' is not a valid TCP port.",

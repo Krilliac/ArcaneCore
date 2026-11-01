@@ -310,14 +310,14 @@ do: they refuse to start on a database that lacks migrations and make the operat
 
 | Key | Values | Default | Meaning |
 |---|---|---|---|
-| `Database:Upgrade:Policy` | `Always`, `CreateOnly`, `Never` | `Always` | `Always`: create and upgrade. `CreateOnly`: create an empty database, resume an interrupted create, **refuse to adopt or upgrade** an existing one. `Never`: verify only, create nothing, not even a missing database (the retail behaviour) |
+| `Database:Upgrade:Policy` | `Always`, `CreateOnly`, `Never` | `Always` | `Always`: create and upgrade. `CreateOnly`: create an empty database, resume an interrupted create, **refuse to adopt or upgrade** an existing one. `Never`: verify only, create and seed nothing, not even a missing database (the retail behaviour) |
 | `Database:Upgrade:LockTimeoutSeconds` | 1 to 86400 | 60 | how long a start waits for another process's schema work |
 | `Database:Upgrade:ValidateOnly` | `true`, `false` | `false` | `true`: validate-only serving mode; verify that every component's schema is at the exact current version with all registered module tables present, executing zero DDL and zero seed inserts |
 
 A refused start prints one line (`database schema refused: ...`, passwords removed) and exits 4 (7 for a lock timeout)
 instead of crashing. Even `CreateOnly` creates a missing database and a fresh schema, which retail never does; `Never`
 (or `Database:Upgrade:ValidateOnly`) plus `arcane-db upgrade` is the retail-like pair, and startup seeding is serialized
-under the component schema lock (and skipped in validate-only mode).
+under the component schema lock (and skipped entirely under `Policy=Never` and under `ValidateOnly`: neither runs DDL or seed inserts).
 
 The content importer (`arcane-content-importer`) does not read `Database:Upgrade`; it has its own gate. `refresh` refuses a world whose schema is behind the importer's unless `--migrate` is given. `import`, `import-dbc`, `import-map-dbc`, `proc-events` and `spell-threat` use the same gate in its `CreateOnly` form: they still create a database that holds no schema, but refuse to upgrade an existing one (exit 3, nothing written) unless `--migrate` is given. Production worlds migrate through `arcane-db upgrade`; pass `--migrate` only for a throwaway or staging world.
 

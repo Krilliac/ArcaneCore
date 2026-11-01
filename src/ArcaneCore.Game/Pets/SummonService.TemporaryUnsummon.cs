@@ -46,7 +46,7 @@ public sealed partial class SummonService
             QueueCurrentPetSave(owner);
         }
 
-        Unsummon(pet);
+        Unsummon(pet, PetUnsummonReason.OwnerLeft);
         return true;
     }
 

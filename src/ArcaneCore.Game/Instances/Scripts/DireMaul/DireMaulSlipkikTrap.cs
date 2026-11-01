@@ -76,8 +76,7 @@ public sealed partial class DireMaulInstance
             return false;
         }
 
-        float dx = slipkik.X - trap.X, dy = slipkik.Y - trap.Y, dz = slipkik.Z - trap.Z;
-        if (dx * dx + dy * dy + dz * dz > FixedTrapReach * FixedTrapReach)
+        if (WorldGeometry.DistanceSq3D(slipkik, trap) > FixedTrapReach * FixedTrapReach)
         {
             return false;
         }

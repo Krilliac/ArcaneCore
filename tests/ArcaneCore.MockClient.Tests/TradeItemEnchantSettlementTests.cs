@@ -334,8 +334,8 @@ public sealed class TradeItemEnchantSettlementTests
             SpellFeature feature = rig.Server.Services.GetRequiredService<SpellFeature>();
             uint reagentEntry = sameEntryReagent ? CastEntry : ReagentEntry;
             feature.System.Store = new SpellStore([.. feature.System.Store.All,
-                new SpellInfo { Id = Spell, Effects = [new SpellEffectInfo { Effect = SpellEffectName.EnchantItem, MiscValue = (int)Enchant }], Reagents = [new SpellReagent((int)reagentEntry, reagentCount)] },
-                new SpellInfo { Id = Spell + 1, Effects = [new SpellEffectInfo { Effect = SpellEffectName.EnchantItem, MiscValue = (int)Enchant }] }], [], []);
+                new SpellInfo { Id = Spell, Targets = 0x10, Effects = [new SpellEffectInfo { Effect = SpellEffectName.EnchantItem, MiscValue = (int)Enchant }], Reagents = [new SpellReagent((int)reagentEntry, reagentCount)] },
+                new SpellInfo { Id = Spell + 1, Effects = [new SpellEffectInfo { Effect = SpellEffectName.EnchantItem, MiscValue = (int)Enchant }], Targets = 0x10 }], [], []);
             feature.System.ItemEnchantments = new ItemEnchantmentCatalog([new ItemEnchantmentDefinition(Enchant, [])]);
             var castSpells = new List<ItemSpell> { new(Spell, 0, charges, 0, 1200, 77, 3400) };
             if (secondSpell is { } extra) castSpells.Add(new ItemSpell(extra, 0, 0, 0, 0, 0, 0));

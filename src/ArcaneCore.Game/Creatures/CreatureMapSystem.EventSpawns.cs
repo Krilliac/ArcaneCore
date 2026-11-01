@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.Creatures;

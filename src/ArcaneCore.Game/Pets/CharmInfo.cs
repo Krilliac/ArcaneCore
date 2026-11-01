@@ -131,6 +131,12 @@ public sealed partial class CharmInfo
 
     public ReactState ReactState { get; internal set; }
 
+    /// <summary>
+    /// The faction template the unit had when a charm or possession took it (vmangos SpellAuras.cpp:3240 origFactionTemplate, stored by
+    /// SetOriginalFactionTemplate at :3271): a summon's is its owner's, not its template's. Null while the unit is not charmed.
+    /// </summary>
+    public uint? OriginalFactionTemplate { get; internal set; }
+
     /// <summary>vmangos Pet::IsEnabled: false greys the pet's bar out (a mounted owner); the packets then carry 0x8.</summary>
     public bool Enabled { get; internal set; } = true;
 

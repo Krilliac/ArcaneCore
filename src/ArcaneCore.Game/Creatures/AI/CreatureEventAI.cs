@@ -219,7 +219,7 @@ public class CreatureEventAI : AggressorAI
     }
 
     /// <summary>
-    /// cmangos <c>IsEligibleForDistancing() && !IsMainSpellPrevented(m_mainSpellInfo)</c> (UnitAI.cpp:1100-1104, 1126-1147): the first main spell is
+    /// cmangos <c>IsEligibleForDistancing() &amp;&amp; !IsMainSpellPrevented(m_mainSpellInfo)</c> (UnitAI.cpp:1100-1104, 1126-1147): the first main spell is
     /// ready, the caster is not silenced or pacified for it and, for a mana user, has more than twice its cost. True when the creature has no
     /// main spell or no spell caster is attached (nothing to gate on).
     /// </summary>

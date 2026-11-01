@@ -98,6 +98,9 @@ internal sealed partial class PlayerbotBattlegroundAI
     private uint _thinkElapsed;
     private bool _deathRetired;
 
+    /// <summary>The match of this bot's last <see cref="Play"/> (read by the contested-objective hook of the corpse run; world thread only).</summary>
+    private Battleground? _match;
+
     internal PlayerbotBattlegroundAI(WorldSession session, PlayerbotOptions options)
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
@@ -107,6 +110,7 @@ internal sealed partial class PlayerbotBattlegroundAI
         _chase = (goal, interval, chase) => WalkTo(_fighter!, goal, interval, toward: false, chase: chase);
         _dropRoute = () => _route = null;
         _recovery = new PlayerbotRecovery(session, options);
+        _recovery.ContestedObjectiveNear = ContestedObjectiveNear;
         var random = new Random(session.AccountId);
         _followAngle = (float)(random.NextDouble() * MathF.Tau);
         _followDistance = 3f + ((float)random.NextDouble() * 2f);
@@ -246,6 +250,7 @@ internal sealed partial class PlayerbotBattlegroundAI
     internal void Play(Player player, Battleground match, Team team, PlayerbotBattlegroundRole role, uint elapsedMs, PlayerbotWsgOrder? order = null)
     {
         EngagedThisThink = null;
+        _match = match;
         if (!player.IsInWorld)
         {
             PlayerbotMovementControl.Update(_session, player);
@@ -279,7 +284,8 @@ internal sealed partial class PlayerbotBattlegroundAI
             // Not before the gates open, nor after the end: the server refuses a reclaim outside a running match (vmangos
             // HandleReclaimCorpseOpcode, the BattleGround status check) and resurrects everyone at the end.
             if (match.Status == BattlegroundStatus.InProgress) _recovery.Update(player, interval);
-            Activity = _recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.AwaitAreaResurrection ? "spirit-guide" : "corpse-run";
+            Activity = _recovery.LastSpiritHealerStep == PlayerbotSpiritHealerStep.AwaitAreaResurrection ? "spirit-guide"
+                : _recovery.LastStep == PlayerbotRecoveryStep.WaitForEnemyPlayers ? "waiting-out-campers" : "corpse-run";
             return;
         }
 

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Kernel.Diagnostics;
@@ -31,6 +32,13 @@ public interface IGatewayRemoteSession
     /// <summary>One client opcode, in sequence order, from the link's receive loop. Must not block.</summary>
     void Deliver(WorldOpcode opcode, byte[] payload);
 
+    /// <summary>
+    /// <see cref="Deliver(WorldOpcode, byte[])"/> with the time the gateway received the client packet, translated to this worker's
+    /// monotonic millisecond clock (<see cref="ArcaneCore.Kernel.Logging.Clock.Milliseconds"/>, low 32 bits). The movement anticheat judges
+    /// the packet at that time instead of the time it came off the link. The default ignores the time.
+    /// </summary>
+    void Deliver(WorldOpcode opcode, byte[] payload, uint receivedMs) => Deliver(opcode, payload);
+
     /// <summary>The gateway closed the session or the link was lost. Must not block.</summary>
     void CloseFromGateway(ClusterSessionDetachReason reason);
 }
@@ -47,6 +55,13 @@ public readonly record struct GatewaySessionAcceptResult(AuthResponseCode Code, 
 public interface IGatewaySessionAcceptor
 {
     ValueTask<GatewaySessionAcceptResult> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="OpenAsync"/> for a session the gateway moved here from the login worker (SessionAdopt): the same authentication, and the
+    /// buffered CMSG_PLAYER_LOGIN is delivered to the new session before it starts. The default refuses (an acceptor that does not take adopted sessions).
+    /// </summary>
+    ValueTask<GatewaySessionAcceptResult> OpenAdoptedAsync(GatewaySessionAdoptRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken)
+        => ValueTask.FromResult(GatewaySessionAcceptResult.Refused(AuthResponseCode.Unavailable, "the worker does not adopt sessions"));
 }
 
 /// <summary>
@@ -246,7 +261,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                             reason = !proven ? "link proof missing or wrong (Cluster:Worker:LinkSecret)"
                                 : peer.Role != ClusterRole.Gateway ? $"peer role {peer.Role} is not Gateway"
                                 : reason;
-                            link.Channel.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloAckFrame(admitted, reason ?? string.Empty));
+                            link.Channel.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloAckFrame(admitted, reason ?? string.Empty, _workerManifest.OwnedMaps, _workerManifest.AllowInstanceMaps));
                             if (!admitted)
                             {
                                 _logger.LogWarning("Gateway link from {Remote} refused: {Reason}", link.Remote, reason);
@@ -289,11 +304,22 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
                 switch (type)
                 {
+                    case GatewayWorkerFrameType.LinkClock:
+                        if (link.ClockOffset is not null)
+                        {
+                            throw new InvalidDataException("a second LinkClock frame");
+                        }
+
+                        link.ClockOffset = MovementClock.Estimate(GatewaySessionWire.DecodeLinkClock(body.Span), (uint)Clock.Milliseconds());
+                        break;
                     case GatewayWorkerFrameType.WardenPosture:
                         OnWardenPosture(link, body.Span);
                         break;
                     case GatewayWorkerFrameType.SessionOpen:
                         OnOpen(link, body.Span, ct);
+                        break;
+                    case GatewayWorkerFrameType.SessionAdopt:
+                        OnAdopt(link, body.Span, ct);
                         break;
                     case GatewayWorkerFrameType.SessionClientPacket:
                         OnClientPacket(link, body);
@@ -493,6 +519,18 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     private void OnOpen(Link link, ReadOnlySpan<byte> body, CancellationToken ct)
     {
         (long requestId, GatewaySessionOpenRequest request) = GatewaySessionWire.DecodeOpen(body);
+        BeginOpen(link, requestId, request, null, ct);
+    }
+
+    /// <summary>A session moved here by the gateway after a login redirect: the open rules of <see cref="OnOpen"/> apply unchanged (generation order, Warden posture).</summary>
+    private void OnAdopt(Link link, ReadOnlySpan<byte> body, CancellationToken ct)
+    {
+        (long requestId, GatewaySessionAdoptRequest adopt) = GatewaySessionWire.DecodeAdopt(body);
+        BeginOpen(link, requestId, adopt.Open, adopt, ct);
+    }
+
+    private void BeginOpen(Link link, long requestId, GatewaySessionOpenRequest request, GatewaySessionAdoptRequest? adopt, CancellationToken ct)
+    {
         if (request.SessionGeneration <= link.HighestGeneration || request.AccountId <= 0)
         {
             link.Channel.TryEnqueue(GatewaySessionWire.EncodeOpenReply(requestId, GatewaySessionOpenReply.Refuse(
@@ -512,15 +550,17 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         link.HighestGeneration = request.SessionGeneration;
         var session = new LinkSession(this, link, request.SessionGeneration, request.AccountId);
         link.Sessions[request.SessionGeneration] = session;
-        _ = OpenAsync(link, session, requestId, request, ct);
+        _ = OpenAsync(link, session, requestId, request, adopt, ct);
     }
 
-    private async Task OpenAsync(Link link, LinkSession session, long requestId, GatewaySessionOpenRequest request, CancellationToken ct)
+    private async Task OpenAsync(Link link, LinkSession session, long requestId, GatewaySessionOpenRequest request, GatewaySessionAdoptRequest? adopt, CancellationToken ct)
     {
         GatewaySessionAcceptResult result;
         try
         {
-            result = await _acceptor.OpenAsync(request, session, ct).ConfigureAwait(false);
+            result = adopt is null
+                ? await _acceptor.OpenAsync(request, session, ct).ConfigureAwait(false)
+                : await _acceptor.OpenAdoptedAsync(adopt, session, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -554,7 +594,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
     private void OnClientPacket(Link link, ReadOnlyMemory<byte> body)
     {
-        ClusterSessionPacket packet = GatewaySessionWire.DecodePacket(body);
+        ClusterSessionPacket packet = GatewaySessionWire.DecodeClientPacket(body, out uint gatewayReceivedMs);
         if (!link.Sessions.TryGetValue(packet.SessionGeneration, out LinkSession? session)
             || !session.TryAcceptInbound(packet, _ownerEpoch(), out IGatewayRemoteSession? target))
         {
@@ -569,7 +609,17 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             return;
         }
 
-        target!.Deliver((WorldOpcode)packet.Opcode, packet.Payload.ToArray());
+        // The gateway's stamp, moved to this worker's clock. Without a LinkClock frame (a gateway that skipped it) the worker keeps its own
+        // arrival time: the target's default Deliver ignores the stamp.
+        uint now = (uint)Clock.Milliseconds();
+        if (link.ClockOffset is { } clock)
+        {
+            target!.Deliver((WorldOpcode)packet.Opcode, packet.Payload.ToArray(), clock.ToWorld(gatewayReceivedMs, now));
+        }
+        else
+        {
+            target!.Deliver((WorldOpcode)packet.Opcode, packet.Payload.ToArray());
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -615,6 +665,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
         /// <summary>The gateway sent a WardenPosture frame that matched this worker's verifier. Receive loop only.</summary>
         public bool PostureProven;
+
+        /// <summary>The gateway-to-worker clock offset from the LinkClock frame; null until it arrives. Receive loop only.</summary>
+        public MovementClock? ClockOffset;
 
         /// <summary>Set under the host's source gate at admission, cleared by ReleaseSource; null before admission.</summary>
         public ClusterWardenVerdictSource? Source;
@@ -692,6 +745,23 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                 _closed = true;
                 _pending = null;
                 link.Channel.TryEnqueue(GatewaySessionWire.EncodeOpenReply(requestId, GatewaySessionOpenReply.Refuse(code, reason)));
+            }
+        }
+
+        /// <summary>
+        /// Ask the gateway to move this session to the owner of <paramref name="mapId"/> (login redirect): queues SessionRedirect after every packet
+        /// already sent. False when the session is closed or its open reply is not queued yet; the session itself stays open until the gateway closes it.
+        /// </summary>
+        public bool TryRedirect(uint mapId, uint instanceId)
+        {
+            lock (_gate)
+            {
+                if (_closed || _pending is not null)
+                {
+                    return false;
+                }
+
+                return link.Channel.TryEnqueue(GatewaySessionWire.EncodeRedirect(new GatewaySessionRedirect(Generation, AccountId, mapId, instanceId)));
             }
         }
 

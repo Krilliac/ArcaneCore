@@ -412,7 +412,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
 
     // --- battlegrounds (world) ------------------------------------------------------------------------------------------------
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the pvp-camp-battleground lane.")]
+    [Fact]
     public async Task InABattleground_AtAContestedObjective_TheBotRunsBackToItsBody_AndReclaimsPastTwoEnemies()
     {
         await using Scene scene = await Scene.StartAsync(battleground: true, contested: true);
@@ -424,7 +424,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.True(scene.Bot.IsAlive));
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the pvp-camp-battleground lane.")]
+    [Fact]
     public async Task InABattleground_AtAContestedObjective_ThreeEnemiesAgainstTheBot_MakeItWait()
     {
         await using Scene scene = await Scene.StartAsync(battleground: true, contested: true);
@@ -439,7 +439,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.False(scene.Bot.IsAlive));
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the pvp-camp-battleground lane.")]
+    [Fact]
     public async Task InABattleground_ANodeListWithAContestedNodeAtTheBody_DecidesTheBodyRunThroughContestedNodeNear()
     {
         byte[] statuses = [ArathiBasin.StatusNeutral, ArathiBasin.StatusNeutral, ArathiBasin.StatusHordeContested, ArathiBasin.StatusNeutral, ArathiBasin.StatusNeutral];
@@ -464,7 +464,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.False(occupied.Recovery.PvpCampGaveUp);
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the pvp-camp-battleground lane.")]
+    [Fact]
     public async Task InABattleground_TheConfiguredNinetySecondWait_IsCappedAtOneSpiritGuideWave_ThenTheGuideTakesOver()
     {
         // Config 90 s (the default): the battleground caps it at AreaResurrectionIntervalMs (30 s).
@@ -488,7 +488,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.False(scene.Bot.IsAlive));
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the pvp-camp-battleground lane.")]
+    [Fact]
     public async Task InABattleground_WithNoContestedObjective_TheGhostKeepsToTheSpiritGuide_NotTheBody()
     {
         await using Scene scene = await Scene.StartAsync(battleground: true, contested: false);

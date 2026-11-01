@@ -30,7 +30,7 @@ internal static class PlaybotDefense
         }
 
         PlaybotObject? attacker = state.Objects
-            .Where(obj => (obj.Guid >> 48) == 0xF130
+            .Where(obj => (HighGuid)(obj.Guid >> 48) == HighGuid.Unit
                 && obj.Entry == attackEntry
                 && obj.Health is > 0
                 && obj.Flags is { } flags

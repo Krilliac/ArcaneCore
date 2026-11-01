@@ -1,4 +1,6 @@
 using System.Net;
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Cluster.Gateway;
@@ -16,6 +18,7 @@ public sealed class GatewayOptions
     public const string SectionName = "Gateway";
 
     /// <summary>Address the client listener binds.</summary>
+    [ConfigAllowed("an IPv4 or IPv6 address such as 0.0.0.0, 127.0.0.1 or ::1 (host names are not resolved)")]
     public string BindAddress { get; set; } = "0.0.0.0";
 
     /// <summary>Port clients connect to; the realm list must name it (realmlist address) instead of the world's World:Port.</summary>
@@ -40,6 +43,12 @@ public sealed class GatewayOptions
     /// </summary>
     public List<GatewayWorkerEntry> Workers { get; set; } = [];
 
+    /// <summary>
+    /// Node id of the worker new sessions open on (it must name a <see cref="Workers"/> entry, or <see cref="LegacyWorkerNodeId"/> in single-worker mode). While it is
+    /// down, sessions open on the ready link with the fewest sessions. Empty, the default, designates none: sessions always spread over the ready links.
+    /// </summary>
+    public string LoginWorker { get; set; } = string.Empty;
+
     /// <summary>Node id given to the entry made from <see cref="WorkerAddress"/> and <see cref="WorkerPort"/>.</summary>
     public const string LegacyWorkerNodeId = "worker";
 
@@ -61,14 +70,14 @@ public sealed class GatewayOptions
     /// <summary>Must equal the worker's Cluster:Worker:RealmId.</summary>
     public int RealmId { get; set; } = 1;
 
-    /// <summary>Must equal the worker's Cluster:Worker:ContentRevision.</summary>
-    public string ContentRevision { get; set; } = "dev";
+    /// <summary>The content revision this gateway advertises; must equal the worker's. Defaults to the revision derived from the world schema version this build targets (<see cref="GatewayManifestVersions.ContentRevisionFor"/>), which is what a default worker (Cluster:Worker:VersionsFromDatabase on) advertises once its database is at that version. Set it only to pin an explicit override (then set the worker's labels and Cluster:Worker:VersionsFromDatabase=false to match).</summary>
+    public string ContentRevision { get; set; } = GatewayManifestVersions.ContentRevisionFor(WorldDbContext.Schema.CurrentVersion);
 
-    /// <summary>Must equal the worker's Cluster:Worker:CharactersSchemaVersion.</summary>
-    public int CharactersSchemaVersion { get; set; } = 1;
+    /// <summary>The characters schema version this gateway advertises; defaults to the version this build targets. Explicit override only.</summary>
+    public int CharactersSchemaVersion { get; set; } = CharacterDbContext.Schema.CurrentVersion;
 
-    /// <summary>Must equal the worker's Cluster:Worker:WorldSchemaVersion.</summary>
-    public int WorldSchemaVersion { get; set; } = 1;
+    /// <summary>The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only.</summary>
+    public int WorldSchemaVersion { get; set; } = WorldDbContext.Schema.CurrentVersion;
 
     public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
         ClusterRole.Gateway, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion);
@@ -170,6 +179,11 @@ public sealed class GatewayOptions
             {
                 problems.Add($"{SectionName}:WorkerPort: must be 1..{IPEndPoint.MaxPort}.");
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(LoginWorker) && !EffectiveWorkers().Any(entry => string.Equals(entry?.NodeId, LoginWorker, StringComparison.Ordinal)))
+        {
+            problems.Add($"{SectionName}:LoginWorker: '{LoginWorker}' names no worker entry.");
         }
 
         if (LinkRetryDelay < TimeSpan.Zero)

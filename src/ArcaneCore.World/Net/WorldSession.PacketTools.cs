@@ -91,19 +91,19 @@ public sealed partial class WorldSession
     /// <summary>
     /// <see cref="DispatchAsync"/> for a packet the client sent (socket or gateway reader), behind the dispatcher gate when there is one.
     /// </summary>
-    private async ValueTask<bool> DispatchFromClientAsync(WorldOpcode opcode, byte[] payload, CancellationToken token)
+    private async ValueTask<bool> DispatchFromClientAsync(WorldOpcode opcode, byte[] payload, CancellationToken token, uint? receivedMs = null)
     {
         try
         {
             if (_dispatchGate is not { } gate)
             {
-                return await DispatchAsync(opcode, payload).ConfigureAwait(false);
+                return await DispatchAsync(opcode, payload, receivedMs).ConfigureAwait(false);
             }
 
             await gate.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                return await DispatchAsync(opcode, payload).ConfigureAwait(false);
+                return await DispatchAsync(opcode, payload, receivedMs).ConfigureAwait(false);
             }
             finally
             {

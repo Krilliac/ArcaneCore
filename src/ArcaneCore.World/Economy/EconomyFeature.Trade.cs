@@ -390,7 +390,12 @@ public sealed partial class EconomyFeature
             {
                 // A spell with no enchantment image (Pick Lock on the partner's lockbox) is cast for real on the committed item
                 // (vmangos TradeHandler.cpp:347-416 casts the stored spell on the trade-slot item once the trade completes).
-                if (caster.Player.IsInWorld)
+                if (plan.ItemCast is not null)
+                {
+                    // An item spell (lockpick, key) casts with its live cast item, cooldown and SpellGo provenance (vmangos TradeHandler.cpp:362).
+                    spells.CastCommittedTradeItemSpell(publicationId, caster.Player, item, plan);
+                }
+                else if (caster.Player.IsInWorld)
                 {
                     spells.CastSpell(caster.Player, spell.Id, new SpellCastTargets
                     {

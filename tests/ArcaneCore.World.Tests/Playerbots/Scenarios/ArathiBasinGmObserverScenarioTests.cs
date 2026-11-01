@@ -358,6 +358,35 @@ public sealed class ArathiBasinGmObserverScenarioTests
         });
     }
 
+    /// <summary>
+    /// The chat command <c>.gm on</c> itself, said by a socket client in the scenario harness, sets IsGameMaster (BuiltinCommands.GmMode calls
+    /// Player.SetGameMaster). The observer tests above call SetGameMaster directly; this one is the evidence the real command takes effect on the
+    /// harness' manual clock: the client says it only once its player is in the world, and the wait advances the clock while the chat packet crosses
+    /// the loopback.
+    /// </summary>
+    [Fact]
+    public async Task GmChatCommand_GmOn_SetsIsGameMaster()
+    {
+        await using ScenarioTestWorld world = await ScenarioTestWorld.StartAsync();
+        ScenarioReport report = await world.RunAsync(new Scenario("gm-chat-gm-on", async context =>
+        {
+            await using var gm = new GmTap(await world.EnterWorldAsync("GMCHATON", "Gmchaton", AccountSecurity.Administrator), "Gmchaton");
+            await context.StepAsync("the GM is in the world and not yet a game master", async () =>
+            {
+                await context.WaitUntilAsync("the GM player is in the world", () => context.World.FindOnlinePlayer(gm.Name) is { IsInWorld: true }, PacketWait);
+                ScenarioContext.Expect(!await context.ReadAsync(() => context.World.FindOnlinePlayer(gm.Name)!.IsGameMaster), "the GM starts as a game master");
+            });
+
+            await context.StepAsync("saying .gm on in chat makes the player a game master", async () =>
+            {
+                await gm.SayAsync(".gm on");
+                await context.WaitUntilAsync("IsGameMaster after .gm on", () => context.World.FindOnlinePlayer(gm.Name)!.IsGameMaster, PacketWait);
+                ScenarioContext.Expect(await context.ReadAsync(() => context.World.FindOnlinePlayer(gm.Name)!.IsGameMaster), "the GM is not a game master after .gm on");
+            });
+        }), new ScenarioRunOptions { StepTimeout = TimeSpan.FromSeconds(30), MaxDuration = TimeSpan.FromMinutes(2) });
+        Assert.True(report.Passed, report.ToString());
+    }
+
     private static GameObjectMapSystem Objects(ScenarioBot bot) => bot.RequirePlayer().Map!.FindUpdater<GameObjectMapSystem>()!;
 
     private static bool Spawned(ScenarioBot bot, uint spawnGuid) => Objects(bot).GameObjects.Any(g => g.Spawn?.Guid == spawnGuid && g.IsSpawned);
