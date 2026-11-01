@@ -114,6 +114,9 @@ public sealed class GatewayWorkerEndpoint(
             wardenVerifier,
             wardenVerifier is null ? null : ApplyWardenVerdict,
             BuildStatus);
+        // Opt-in control channel (Cluster:Worker:Handoff / Transfers:Enabled): registered only when a key is on, so a worker without one answers every control request Disabled.
+        // Resolved here, not in the constructor: building it looks up the world host among the hosted services, which would loop through this endpoint.
+        _host.ControlHandler = rootServices?.GetService<Control.WorkerControlService>();
         _host.Start();
         if (lifecycle is not null && _countdownHandler is null)
         {
@@ -333,6 +336,7 @@ public static class GatewayWorkerServiceCollectionExtensions
 
             services.AddSingleton<GatewayWorkerEndpoint>();
             services.AddHostedService(sp => sp.GetRequiredService<GatewayWorkerEndpoint>());
+            Transfer.WorkerTransferHosting.AddWorkerControl(services, configuration); // Cluster:Worker:Handoff / Transfers: the control channel's worker end, both keys off by default
         }
 
         return services;

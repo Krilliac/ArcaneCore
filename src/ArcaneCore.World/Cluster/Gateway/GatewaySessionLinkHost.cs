@@ -43,6 +43,21 @@ public interface IGatewayRemoteSession
     void CloseFromGateway(ClusterSessionDetachReason reason);
 }
 
+/// <summary>What the link host knows about the gateway side when it hands a control request to its handler.</summary>
+/// <param name="AdmittedGateways">How many distinct gateways (node and incarnation) have an open admitted link to this worker; the whole-World handoff is only defined for one.</param>
+public readonly record struct GatewayControlContext(int AdmittedGateways);
+
+/// <summary>
+/// Executes the unified control requests of an admitted gateway (<see cref="ControlRequest"/>, contract 5; design _wf/handoff-control-DESIGN.md section 2) and
+/// returns the reply the link host sends back on the same link. Implemented by <c>WorkerControlService</c>. Called off the link's receive loop, concurrently for
+/// concurrent requests; an exception it throws is answered as <see cref="ControlStatus.Failed"/>.
+/// </summary>
+public interface IGatewayControlHandler
+{
+    /// <summary>Runs one verb. <paramref name="cancellationToken"/> is cancelled when the link host stops.</summary>
+    Task<ControlReply> HandleAsync(ControlRequest request, GatewayControlContext context, CancellationToken cancellationToken);
+}
+
 /// <summary>The acceptor's answer: <see cref="AuthResponseCode.Ok"/> with a session, or a refusal code for the client.</summary>
 public readonly record struct GatewaySessionAcceptResult(AuthResponseCode Code, string? Reason, IGatewayRemoteSession? Session)
 {
@@ -108,6 +123,8 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     // monotonic: a superseded incarnation that reconnects never becomes newest again and never supersedes the live one.
     private readonly HashSet<ClusterWardenVerdictSource> _supersededSources = [];
     private readonly LogGate _dropGate = new(TimeSpan.FromSeconds(10));
+    // Control requests being answered; DisposeAsync waits for them (each ends at once: the handler's token is the host's stop token).
+    private readonly ConcurrentDictionary<Task, int> _controlRuns = new();
     private Task? _acceptTask;
     private int _nextLinkId;
     private long _droppedClientPackets;
@@ -214,6 +231,24 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
     /// <summary>Admitted gateway links.</summary>
     public int AdmittedLinkCount => _links.Values.Count(link => link.Admitted);
+
+    /// <summary>Distinct gateways (node id and incarnation) with at least one open admitted link: a gateway that holds several links counts once.</summary>
+    public int AdmittedGatewayCount
+    {
+        get
+        {
+            lock (_sourceGate)
+            {
+                return _openLinksBySource.Count;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Executes the <see cref="ControlRequest"/> frames of an admitted gateway. Set once, before <see cref="Start"/>. With none set (the worker's opt-in control keys are off)
+    /// every request is answered <see cref="ControlStatus.Disabled"/> and the link stays up: a gateway on contract 5 may ask, and an old worker closes the link instead.
+    /// </summary>
+    public IGatewayControlHandler? ControlHandler { get; set; }
 
     /// <summary>Test seam: awaited before every accept; an exception it throws behaves like a failed accept.</summary>
     internal Func<CancellationToken, ValueTask>? BeforeAcceptForTests { get; set; }
@@ -408,6 +443,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                     case GatewayWorkerFrameType.TransferAck:
                         OnTransferAck(GatewayTransferWire.DecodeAck(body.Span));
                         break;
+                    case GatewayWorkerFrameType.ControlRequest:
+                        OnControlRequest(link, ClusterControlWire.DecodeRequest(body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
                         if (link.Sessions.TryGetValue(generation, out LinkSession? closing) && closing.AccountId == accountId)
@@ -488,6 +526,63 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
         return false;
     }
+
+    /// <summary>
+    /// A control request of an admitted gateway: answered on the same link, off the receive loop (a verb may take a minute: a freeze, a flush, a promotion). The decoder
+    /// already refused malformed bytes (an <see cref="InvalidDataException"/> closes the link). Never throws.
+    /// </summary>
+    private void OnControlRequest(Link link, ControlRequest request)
+    {
+        CancellationToken stopping = _stop.Token;
+        Task run = Task.Run(() => AnswerControlAsync(link, request, stopping), CancellationToken.None);
+        _controlRuns[run] = 0;
+        _ = run.ContinueWith(
+            static (done, state) => ((ConcurrentDictionary<Task, int>)state!).TryRemove(done, out _),
+            _controlRuns, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private async Task AnswerControlAsync(Link link, ControlRequest request, CancellationToken stopping)
+    {
+        ControlReply reply;
+        if (ControlHandler is not { } handler)
+        {
+            reply = ControlFailure(request, ControlStatus.Disabled,
+                "this worker has no control service (Cluster:Worker:Handoff:Enabled and Cluster:Worker:Transfers:Enabled are off)");
+        }
+        else
+        {
+            try
+            {
+                reply = await handler.HandleAsync(request, new GatewayControlContext(AdmittedGatewayCount), stopping).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+            {
+                reply = ControlFailure(request, ControlStatus.Failed, "the worker is stopping");
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault("cluster.control", ex, "Control request {Verb} of operation {Operation} failed", request.Verb, request.OperationId);
+                reply = ControlFailure(request, ControlStatus.Failed, ex.Message);
+            }
+        }
+
+        byte[] frame;
+        try
+        {
+            frame = ClusterControlWire.EncodeReply(reply);
+        }
+        catch (ArgumentException ex)
+        {
+            // A handler that built a reply the wire cannot carry (a payload of the wrong type, too many maps, a bundle over the limit): the gateway still gets an answer.
+            _logger.LogFault("cluster.control", ex, "The reply to control request {Verb} of operation {Operation} could not be encoded", request.Verb, request.OperationId);
+            frame = ClusterControlWire.EncodeReply(ControlFailure(request, ControlStatus.Failed, "the reply could not be encoded: " + ex.Message));
+        }
+
+        link.Channel.TryEnqueue(frame);
+    }
+
+    private static ControlReply ControlFailure(ControlRequest request, ControlStatus status, string reason) =>
+        new(request.RequestId, request.Kind, request.OperationId, request.Verb, status, reason, ControlNoPayload.Instance);
 
     /// <summary>Open admitted links of one (node, incarnation); 0 when none. For tests and diagnostics.</summary>
     internal int OpenLinkCount(ClusterWardenVerdictSource source)
@@ -768,6 +863,8 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                 await receive.ConfigureAwait(false);
             }
         }
+
+        await Task.WhenAll(_controlRuns.Keys).ConfigureAwait(false); // each answer ends at once: the handler's token is cancelled above, and AnswerControlAsync never throws
 
         _stop.Dispose();
     }
