@@ -66,15 +66,17 @@ public sealed class PlayerbotDungeonAnchorPlansWorldTests : PlayerbotDungeonAnch
         Assert.Null(group.Find(healer35.Id));
     }
 
-    // --- a plan the Match steps accept, but that holds no waiting anchor -----------------------------------------------------
+    // --- a plan the qualifying rule alone would accept, but that holds no waiting anchor --------------------------------------
 
     [Fact]
-    public async Task APlanOfDerivedOnlyWaiters_FilledByAnInBandRecruit_IsNotFormed_WhenTheInBandAnchorIsLeftOutOfIt()
+    public async Task APlanOfDerivedOnlyWaiters_FilledByAnInBandRecruit_ReservesASlotForTheWaitingAnchor_InsteadOfLeavingItOut()
     {
         // Waiters: the anchor (a level-20 mage, in band 15-28, the YOUNGEST waiter) and five level-60 bots on a forming-group reason only (a warrior
         // and four mages, no healer). Fill takes the tank, the healer and then the rest oldest first, so with a free in-band priest recruited as the
-        // healer the plan is the five level-60 bots plus the priest minus one, and the anchor is left out. The recruit is in band, so the plan passes
-        // Match's needQualifying; only PlanAnchored (no waiting bot of the plan anchors) rejects it.
+        // healer the plan would be derived-only bots plus the priest, the anchor left out. The recruit is in band, so that plan would pass the
+        // qualifying rule; Match asks for an anchoring member (needAnchoring) and reserves the damage slot for the waiting anchor instead.
+        // (The anchor is within LevelRange of the level-60 bots, else they would stop waiting, so every window that holds them holds it too:
+        // PlanAnchored stays the coordinator's last guard but this setup cannot reach it.)
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], o =>
         {
             o.MoveSpeed = 0.1f; // bots crawl: the free recruit never walks to the quest giver
@@ -126,12 +128,16 @@ public sealed class PlayerbotDungeonAnchorPlansWorldTests : PlayerbotDungeonAnch
         });
         Assert.DoesNotContain(world.Coordinator.WaitingBots, w => w.BotId == priest.Id);
 
-        // No group of the five level-60 bots and the recruit may form in the window, and the recruit is never taken.
-        Assert.False(await world.RunUntilAsync(300_000, () => world.Coordinator.Groups.Count > 0 || Noted(world, "Freeheal is recruited")), await world.TraceAsync());
-        Assert.Equal(0, world.Coordinator.Totals.Formed);
-        Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == seed.Id);
-        Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == tank.Id);
-        Assert.DoesNotContain(world.Coordinator.WaitingBots, w => w.BotId == priest.Id);
+        // The recruit comes and the group forms with the anchor: the warrior tanks, the priest heals, the anchor takes the damage slot an
+        // older derived-only mage would have had.
+        Assert.True(await world.RunUntilAsync(300_000, () => world.Coordinator.Groups.Count > 0), await world.TraceAsync());
+        Assert.Contains(await EventsAsync(world), e => e.Contains("Freeheal is recruited", StringComparison.Ordinal));
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        Assert.Equal(3, group.Members.Count);
+        Assert.NotNull(group.Find(seed.Id));
+        Assert.NotNull(group.Find(tank.Id));
+        Assert.NotNull(group.Find(priest.Id));
+        Assert.All(mages, m => Assert.Null(group.Find(m.Id)));
     }
 
     // --- fit-lost finish ------------------------------------------------------------------------------------------------
