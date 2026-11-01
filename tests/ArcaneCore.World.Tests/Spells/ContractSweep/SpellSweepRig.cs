@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Bans;
 using ArcaneCore.World.Characters;
@@ -109,6 +110,8 @@ internal sealed class SpellSweepRig : IDisposable
         Creatures = Map.FindUpdater<CreatureMapSystem>() ?? AddUpdater(new CreatureMapSystem(Map, new CreatureContent([], [], [], [], []), random: new Random(1)));
         Objects = Map.FindUpdater<GameObjectMapSystem>();
         World.RunTick(0); // runs the creature feature's posted (empty) content install first, so the install below is the last one
+        Objects?.ReplaceContent(new GameObjectContent(
+            store.All.Where(s => s.RequiresSpellFocus != 0).Select(s => s.RequiresSpellFocus).Distinct().Select(FocusTemplate), [], [], [], []));
         _services.GetRequiredService<CreatureWorldFeature>().Install(new CreatureContent(DisplayTemplates(store), [], [], [], []));
     }
 
@@ -185,6 +188,31 @@ internal sealed class SpellSweepRig : IDisposable
     public CreatureMapSystem Creatures { get; }
 
     public GameObjectMapSystem? Objects { get; }
+
+    /// <summary>First entry of the stand-in spell focus objects: entry = this + the focus id (Spell.dbc RequiresSpellFocus = SpellFocusObject.dbc id).</summary>
+    public const uint FocusEntryBase = 3_000_000_000;
+
+    /// <summary>The reach of a stand-in focus object (gameobject_template data1): the 35 yards of the Lunar Festival launcher (vmangos 180868).</summary>
+    private const uint FocusRadius = 35;
+
+    private static GameObjectTemplate FocusTemplate(uint focusId)
+    {
+        var data = new uint[GameObjectTemplate.DataCount];
+        data[0] = focusId;
+        data[1] = FocusRadius;
+        return new GameObjectTemplate
+        {
+            Entry = FocusEntryBase + focusId, Type = (uint)GameObjectType.SpellFocus, DisplayId = 1, Name = $"Sweep spell focus {focusId}", Data = data,
+        };
+    }
+
+    /// <summary>
+    /// Place the spell focus object a Player cast of a RequiresSpellFocus spell needs (vmangos Spell::CheckItems, Spell.cpp:7230-7243: a spawned
+    /// GAMEOBJECT_TYPE_SPELL_FOCUS object whose data0 is the focus id and whose radius reaches the caster) at the caster's position.
+    /// Null when the map has no game object system or the spell needs no focus.
+    /// </summary>
+    public GameObject? StageSpellFocus(SpellInfo spell, WorldObject caster)
+        => spell.RequiresSpellFocus == 0 || Objects is null ? null : Objects.Summon(FocusEntryBase + spell.RequiresSpellFocus, caster.X, caster.Y, caster.Z, 0);
 
     /// <summary>
     /// Exceptions caught since the last <see cref="TakeFaults"/>: every fault the engine counted in <see cref="FaultLedger.Shared"/> (logged

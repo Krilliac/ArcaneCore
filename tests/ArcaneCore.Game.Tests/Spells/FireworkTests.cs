@@ -22,6 +22,9 @@ namespace ArcaneCore.Game.Tests.Spells;
 /// <item>Launcher spells (26286-26293, ...): effect 86 ACTIVATE_OBJECT (action 1, custom animation 0) at target 40 on the launcher object and effect 41
 /// SUMMON_WILD of the firework creature at target 46 (the launcher's position); the two effects come in either order.</item>
 /// </list>
+/// The spells carry the RequiresSpellFocus of their Spell.dbc rows (1351 on the rockets and launchers, 1352 on the clusters), the launcher object is a
+/// type 8 SPELL_FOCUS object with data0 = 1351 and data1 = 35 (vmangos gameobject_template 180868), and the rocket objects are type 8 too. The creatures that
+/// cast the rocket spells are not Players, so CheckItems skips their focus (Spell.cpp:7104-7106); a Player using a launcher is checked.
 /// References: vmangos Spell.cpp:446-600 (CheckScriptTargeting), SpellEffects.cpp EffectSummonObjectWild, EffectSummonWild, EffectActivateObject.
 /// </summary>
 public sealed class FireworkTests
@@ -32,6 +35,7 @@ public sealed class FireworkTests
     private const uint BlueClusterNpc = 15872, LargeBlueClusterNpc = 15911, LuckyClusterNpc = 15918;
     private const uint SmallRedLauncher = 26286, SmallBlueLauncherReversed = 26291;
     private const uint ScriptNearCasterLocation = 46, ScriptNearCasterObject = 40;
+    private const uint RocketFocus = 1351, ClusterFocus = 1352, LauncherFocusRadius = 35;
 
     private static SpellInfo RocketSpell(uint id, uint objectEntry, bool cluster) => Spell(id,
         Effect(SpellEffectName.SummonObjectWild, 1, (SpellImplicitTarget)ScriptNearCasterLocation, misc: (int)objectEntry)) with
@@ -42,6 +46,7 @@ public sealed class FireworkTests
         Duration = new SpellDuration(3_000, 0, 3_000),
         StartRecoveryCategory = 0,
         StartRecoveryTime = 0,
+        RequiresSpellFocus = cluster ? ClusterFocus : RocketFocus,
     };
 
     private static SpellInfo LauncherSpell(uint id, uint npcEntry, bool activateFirst)
@@ -55,6 +60,7 @@ public sealed class FireworkTests
             Duration = new SpellDuration(3_000, 0, 3_000),
             StartRecoveryCategory = 0,
             StartRecoveryTime = 0,
+            RequiresSpellFocus = RocketFocus,
         };
     }
 
@@ -64,8 +70,11 @@ public sealed class FireworkTests
         {
             Kit = new PetTestKit(spells, extraTemplates: [.. npcEntries.Select(entry => CreatureTestKit.Template(entry, b => b.Faction = 35))]);
             Objects = new GameObjectMapSystem(Kit.Map, new GameObjectContent(
-                [.. objectEntries.Select(entry => GameObjectTestKit.GoTemplate(entry, GameObjectType.Goober))], [], [], [], []));
+                [.. objectEntries.Select(entry => entry == Launcher
+                    ? GameObjectTestKit.GoTemplate(entry, GameObjectType.SpellFocus, (0, RocketFocus), (1, LauncherFocusRadius))
+                    : GameObjectTestKit.GoTemplate(entry, GameObjectType.SpellFocus))], [], [], [], []));
             Kit.Map.AddUpdater(Objects);
+            Kit.Spells.System.RegisterCastCheck(new SpellFocusCastCheck(map => ReferenceEquals(map, Kit.Map) ? Objects : null));
             Kit.Spells.System.Store = new SpellStore(Kit.Spells.Store.All, [], [], rows);
             (Player, Session) = Kit.AddPlayer(1);
             Kit.Spells.World.RunTick(0);
@@ -92,6 +101,10 @@ public sealed class FireworkTests
         public SpellCastResult CastFrom(Unit caster, uint spell)
             => Kit.Spells.System.CastSpell(caster, spell, SpellCastTargets.ForSelf(), triggered: true);
 
+        /// <summary>The Player casting at itself, untriggered: the path of a Player using a firework item or launcher, with the focus check in force.</summary>
+        public SpellCastResult PlayerCast(uint spell)
+            => Kit.Spells.System.CastSpell(Player, spell, SpellCastTargets.ForSelf(), triggered: false);
+
         public void Dispose() => Kit.Dispose();
     }
 
@@ -104,13 +117,16 @@ public sealed class FireworkTests
     [InlineData(30163u, RocketPurpleObject, SmallPurpleNpc)]
     public void Rocket_PutsTheRocketObjectWhereTheListedFireworkCreatureStands(uint spell, uint objectEntry, uint npcEntry)
     {
-        using var rig = new Rig([RocketSpell(spell, objectEntry, cluster: false)], [Row(spell, 1, npcEntry)], [npcEntry], [objectEntry]);
+        // The caster is another creature (not listed) a few yards away: only the script-target position can put the object at the listed one.
+        using var rig = new Rig([RocketSpell(spell, objectEntry, cluster: false)], [Row(spell, 1, npcEntry)], [npcEntry, SmallRedNpc], [objectEntry]);
         Creature npc = rig.SpawnNpc(npcEntry, 6, 4);
+        Creature caster = rig.SpawnNpc(SmallRedNpc, 3, 1);
 
-        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(npc, spell));
+        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(caster, spell));
 
         GameObject rocket = Assert.Single(rig.Objects.GameObjects, go => go.Entry == objectEntry);
         Assert.Equal((npc.X, npc.Y, npc.Z), (rocket.X, rocket.Y, rocket.Z));
+        Assert.NotEqual((caster.X, caster.Y), (rocket.X, rocket.Y));
     }
 
     [Fact]
@@ -137,33 +153,40 @@ public sealed class FireworkTests
     [InlineData(26357u)]
     public void ClusterRocket_PutsTheRocketObjectAtTheClusterCreature(uint spell)
     {
+        // The caster is another creature, not listed, inside the cluster range (5) but not at the cluster creature.
         using var rig = new Rig([RocketSpell(spell, RocketBlueObject, cluster: true)], [Row(spell, 1, BlueClusterNpc)],
-            [BlueClusterNpc], [RocketBlueObject]);
+            [BlueClusterNpc, SmallRedNpc], [RocketBlueObject]);
         Creature cluster = rig.SpawnNpc(BlueClusterNpc, 8, 2);
+        Creature caster = rig.SpawnNpc(SmallRedNpc, 5, 2);
 
-        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(cluster, spell));
+        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(caster, spell));
 
         GameObject rocket = Assert.Single(rig.Objects.GameObjects, go => go.Entry == RocketBlueObject);
         Assert.Equal((cluster.X, cluster.Y, cluster.Z), (rocket.X, rocket.Y, rocket.Z));
+        Assert.NotEqual((caster.X, caster.Y), (rocket.X, rocket.Y));
     }
 
     [Fact]
     public void ClusterRocket_FollowsTheClusterCreatureToEachBurstPoint()
     {
-        // npc_pats_firework_guyAI moves the creature (NearTeleport) before every burst; the object lands at the new point each time.
+        // vmangos npcs_special.cpp:1045-1209 npc_pats_firework_guyAI moves the creature (NearTeleportTo) before every burst; the object lands at the new point each time.
+        // The caster is another creature (not listed) kept 3 yards away, so only the script-target position can put the object at the cluster creature.
         using var rig = new Rig([RocketSpell(26300, RocketBlueObject, cluster: true), RocketSpell(26357, RocketBlueObject, cluster: true)],
-            [Row(26300, 1, BlueClusterNpc), Row(26357, 1, BlueClusterNpc)], [BlueClusterNpc], [RocketBlueObject]);
+            [Row(26300, 1, BlueClusterNpc), Row(26357, 1, BlueClusterNpc)], [BlueClusterNpc, SmallRedNpc], [RocketBlueObject]);
         Creature cluster = rig.SpawnNpc(BlueClusterNpc, 8, 2);
+        Creature caster = rig.SpawnNpc(SmallRedNpc, 11, 2);
         float groundZ = cluster.Z;
-        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(cluster, 26300));
+        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(caster, 26300));
 
         rig.Kit.Creatures.NearTeleport(cluster, 8, 2, groundZ + 8, 0);
-        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(cluster, 26357));
+        rig.Kit.Creatures.NearTeleport(caster, 11, 2, groundZ + 8, 0);
+        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(caster, 26357));
 
         GameObject[] rockets = [.. rig.Objects.GameObjects.Where(go => go.Entry == RocketBlueObject).OrderBy(go => go.Z)];
         Assert.Equal(2, rockets.Length);
         Assert.Equal(groundZ, rockets[0].Z, 2);
         Assert.Equal(groundZ + 8, rockets[1].Z, 2);
+        Assert.All(rockets, rocket => Assert.Equal(cluster.X, rocket.X, 2));
     }
 
     // Cluster Rocket BLUE BIG D (26483), N (26484) and U (26487) of the Large Blue Firework Cluster creature.
@@ -174,13 +197,15 @@ public sealed class FireworkTests
     public void ClusterBigRocket_PutsTheBigRocketObjectAtTheLargeClusterCreature(uint spell)
     {
         using var rig = new Rig([RocketSpell(spell, RocketBigBlueObject, cluster: true)], [Row(spell, 1, LargeBlueClusterNpc)],
-            [LargeBlueClusterNpc], [RocketBigBlueObject]);
+            [LargeBlueClusterNpc, SmallRedNpc], [RocketBigBlueObject]);
         Creature cluster = rig.SpawnNpc(LargeBlueClusterNpc, 5, 5);
+        Creature caster = rig.SpawnNpc(SmallRedNpc, 2, 5);
 
-        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(cluster, spell));
+        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(caster, spell));
 
         GameObject rocket = Assert.Single(rig.Objects.GameObjects, go => go.Entry == RocketBigBlueObject);
         Assert.Equal((cluster.X, cluster.Y, cluster.Z), (rocket.X, rocket.Y, rocket.Z));
+        Assert.NotEqual((caster.X, caster.Y), (rocket.X, rocket.Y));
     }
 
     [Fact]
@@ -188,13 +213,15 @@ public sealed class FireworkTests
     {
         // vmangos npcs_special.cpp Fireworks table: entry 15918 casts 26487 / 26484 / 26483 among others, so those spells also list 15918.
         using var rig = new Rig([RocketSpell(26484, RocketBigBlueObject, cluster: true)],
-            [Row(26484, 1, LargeBlueClusterNpc), Row(26484, 1, LuckyClusterNpc)], [LuckyClusterNpc], [RocketBigBlueObject]);
+            [Row(26484, 1, LargeBlueClusterNpc), Row(26484, 1, LuckyClusterNpc)], [LuckyClusterNpc, SmallRedNpc], [RocketBigBlueObject]);
         Creature lucky = rig.SpawnNpc(LuckyClusterNpc, 4, 1);
+        Creature caster = rig.SpawnNpc(SmallRedNpc, 1, 1);
 
-        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(lucky, 26484));
+        Assert.Equal(SpellCastResult.CastOk, rig.CastFrom(caster, 26484));
 
         GameObject rocket = Assert.Single(rig.Objects.GameObjects, go => go.Entry == RocketBigBlueObject);
         Assert.Equal((lucky.X, lucky.Y, lucky.Z), (rocket.X, rocket.Y, rocket.Z));
+        Assert.NotEqual((caster.X, caster.Y), (rocket.X, rocket.Y));
     }
 
     // Small Red Rocket (26286: activate, then summon) and Small Blue Rocket (26291: summon, then activate).
@@ -210,7 +237,8 @@ public sealed class FireworkTests
 
         Assert.Equal(SpellCastResult.CastOk, rig.Kit.Cast(rig.Player, spell));
 
-        Assert.Contains(rig.Session.Sent, packet => packet.Opcode == WorldOpcode.SmsgGameobjectCustomAnim);
+        byte[] expectedAnim = GameObjectPackets.CustomAnim(launcher.Guid, 0);
+        Assert.Contains(rig.Session.Sent, packet => packet.Opcode == WorldOpcode.SmsgGameobjectCustomAnim && packet.Payload.SequenceEqual(expectedAnim));
         Creature firework = Assert.Single(rig.NpcsOf(npcEntry));
         Assert.Equal((launcher.X, launcher.Y, launcher.Z), (firework.X, firework.Y, firework.Z));
         Assert.Equal(spell, firework.GetUInt32(UpdateFields.UnitCreatedBySpell));
@@ -238,9 +266,34 @@ public sealed class FireworkTests
             [SmallRedNpc], [Launcher]);
         rig.SpawnObject(Launcher, 60, 0);
 
-        rig.Kit.Cast(rig.Player, SmallRedLauncher);
+        Assert.Equal(SpellCastResult.RequiresSpellFocus, rig.Kit.Cast(rig.Player, SmallRedLauncher));
 
         Assert.Empty(rig.NpcsOf(SmallRedNpc));
         Assert.DoesNotContain(rig.Session.Sent, packet => packet.Opcode == WorldOpcode.SmsgGameobjectCustomAnim);
+    }
+
+    [Theory]
+    [InlineData(SmallRedLauncher, SmallRedNpc, true)]
+    [InlineData(SmallBlueLauncherReversed, SmallBlueNpc, false)]
+    public void PlayerUsingALauncher_UntriggeredNextToIt_Casts(uint spell, uint npcEntry, bool activateFirst)
+    {
+        // A Player using a firework item beside the launcher object is an untriggered cast: CheckItems needs the type 8 focus 1351 within data1 (35) yards.
+        using var rig = new Rig([LauncherSpell(spell, npcEntry, activateFirst)], [Row(spell, 0, Launcher)], [npcEntry], [Launcher]);
+        rig.SpawnObject(Launcher, 2, 1);
+
+        Assert.Equal(SpellCastResult.CastOk, rig.PlayerCast(spell));
+    }
+
+    [Fact]
+    public void PlayerUsingALauncher_UntriggeredWithNoFocusInRange_IsRefusedWithRequiresSpellFocus()
+    {
+        using var rig = new Rig([LauncherSpell(SmallRedLauncher, SmallRedNpc, activateFirst: true)], [Row(SmallRedLauncher, 0, Launcher)],
+            [SmallRedNpc], [Launcher]);
+
+        Assert.Equal(SpellCastResult.RequiresSpellFocus, rig.PlayerCast(SmallRedLauncher));
+
+        rig.SpawnObject(Launcher, 60, 0); // a launcher beyond the 35 yard focus radius does not count
+        Assert.Equal(SpellCastResult.RequiresSpellFocus, rig.PlayerCast(SmallRedLauncher));
+        Assert.Empty(rig.NpcsOf(SmallRedNpc));
     }
 }
