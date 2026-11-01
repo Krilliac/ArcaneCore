@@ -35,7 +35,7 @@ public sealed class DispelCharmedSummonTests
     public void CharmedPetSummon_WhoseOwnerFactionIsFriendly_IsTheFirstDispelPick_ThoughItsTemplateFactionIsNot()
     {
         using var kit = new SpellTestKit(
-            SpellTestKit.Spell(Charm, SpellTestKit.Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.Unit, AuraType.ModCharm)) with
+            SpellTestKit.Spell(Charm, SpellTestKit.Effect(SpellEffectName.ApplyAura, 60, SpellImplicitTarget.Unit, AuraType.ModCharm)) with // effect value = max charm level (CharmCastCheck), above the level-20 summon
             {
                 Dispel = 1, Duration = new SpellDuration(30000, 0, 30000), SpellVisual = 1, StartRecoveryCategory = 0, StartRecoveryTime = 0,
             },
@@ -84,7 +84,7 @@ public sealed class DispelCharmedSummonTests
 
         kit.System.CastSpell(creature, MagicBuff, SpellCastTargets.ForSelf(), triggered: true);
         // a third, hostile unit charms the pet: the faction before the charm is recorded at that moment
-        kit.System.CastSpell(enemyCharmer, Charm, SpellCastTargets.ForUnit(creature.Guid), triggered: true);
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(enemyCharmer, Charm, SpellCastTargets.ForUnit(creature.Guid), triggered: true));
         Assert.Equal((uint?)OwnerTemplate, creature.Summon!.Charm!.OriginalFactionTemplate);
         Assert.Equal(EnemyTemplate, creature.FactionTemplate);
 
