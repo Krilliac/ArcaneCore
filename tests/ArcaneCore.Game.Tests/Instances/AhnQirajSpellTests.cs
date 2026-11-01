@@ -6,6 +6,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Game.Tests.CreatureAi;
+using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Xunit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
