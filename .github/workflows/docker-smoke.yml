@@ -88,8 +88,9 @@ jobs:
           out=$(docker run --rm --user root --entrypoint bash arcanecore/world:smoke -c 'rm ArcaneCore.Playerbots.dll && dotnet ArcaneCore.World.dll' 2>&1)
           code=$?
           echo "$out"
-          test "$code" -eq 78
-          echo "$out" | grep -q "refuses to start"
+          test "$code" -eq 78 || { echo "expected exit code 78, got $code"; exit 1; }
+          echo "$out" | grep -q "refuses to start" || { echo "missing refusal message"; exit 1; }
+          echo "$out" | grep -q "ArcaneCore.Playerbots" || { echo "refusal does not name the Playerbots pack"; exit 1; }
 
   # Starts the real stack. Compose builds the images itself from the same Dockerfile; the job is independent of "build" so a failure in
   # one does not hide a failure in the other.

@@ -37,6 +37,8 @@ case "$config" in Debug | Release) ;; *) echo "configuration must be Debug or Re
 ext=""
 case "$rid" in win-*) ext=".exe" ;; esac
 
+# MSBuild resolves -p: paths against the project directory, not the caller's, so the output directory must be absolute.
+out=$(mkdir -p "$out" && cd "$out" && pwd)
 stage="$out/arcanecore-$rid"
 scratch="$out/.scratch-$rid"
 rm -rf "$stage" "$scratch"
