@@ -35,6 +35,6 @@ public static class DbUpgradeExitCodes
     /// <summary><c>upgrade</c> with pending steps and no confirmed backup (or a backup that could not be made); nothing was changed.</summary>
     public const int BackupNotConfirmed = 8;
 
-    /// <summary><c>copy</c>: the rows were copied but a table differs from its source (row count or content); the component's copy was rolled back and its target is as it was.</summary>
+    /// <summary><c>copy</c>: the rows were copied but a table differs from its source (row count or content); the component's copy was rolled back and its target is as it was. <c>verify</c>: a table differs between the two databases (nothing is written).</summary>
     public const int CopyVerifyFailed = 9;
 }

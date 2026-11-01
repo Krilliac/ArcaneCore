@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using ArcaneCore.Data;
+using ArcaneCore.Data.Schema.Upgrade.Cli;
 using ArcaneCore.TestSupport;
 using Microsoft.Data.Sqlite;
 using Npgsql;
@@ -83,57 +85,66 @@ public sealed class PgCutoverScriptTests : IDisposable
     }
 
     [PwshFact]
-    public void Verify_OfMatchingDatabases_ReportsEqualCounts_AndExitsZero()
+    public async Task Verify_OfMatchingDatabases_ReportsEqualCounts_AndExitsZero()
     {
-        BuildFixture(_profile);
-        BuildFixture(_target);
+        await BuildFixtureAsync(_profile);
+        CloneFixture(_profile, _target);
 
         (int code, string output) = Verify();
 
         Assert.True(code == 0, output);
-        Assert.Contains("OK   auth.account  rows=3", output, StringComparison.Ordinal);
-        Assert.Contains("OK   auth.account_access  rows=2", output, StringComparison.Ordinal);
-        Assert.Contains("OK   characters.character  rows=2", output, StringComparison.Ordinal);
-        Assert.Contains("OK   world.creature_template  rows=2", output, StringComparison.Ordinal);
+        Assert.Contains("OK   auth.ip_banned  rows=3", output, StringComparison.Ordinal);
+        Assert.Contains("OK   auth.account ", output, StringComparison.Ordinal);
         Assert.Contains("0 difference(s)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("FAIL", output, StringComparison.Ordinal);
     }
 
     [PwshFact]
-    public void Verify_FailsWhenARowWasDropped()
+    public async Task Verify_FailsWhenARowWasDropped()
     {
-        BuildFixture(_profile);
-        BuildFixture(_target);
-        Execute(Path.Combine(_target, "auth.db"), "DELETE FROM account WHERE id = 2");
+        await BuildFixtureAsync(_profile);
+        CloneFixture(_profile, _target);
+        Execute(Path.Combine(_target, "auth.db"), "DELETE FROM ip_banned WHERE Ip = '10.0.0.2'");
 
         (int code, string output) = Verify();
 
         Assert.Equal(1, code);
-        Assert.Contains("FAIL auth.account  source rows=3", output, StringComparison.Ordinal);
-        Assert.Contains("target rows=2", output, StringComparison.Ordinal);
-        Assert.Contains("OK   characters.character", output, StringComparison.Ordinal);
+        Assert.Contains("FAIL auth.ip_banned  source rows=3  target rows=2", output, StringComparison.Ordinal);
+        Assert.Contains("OK   auth.account", output, StringComparison.Ordinal);
     }
 
     [PwshFact]
-    public void Verify_FailsWhenAKeyChanged_EvenWithTheSameCount()
+    public async Task Verify_FailsWhenAKeyChanged_EvenWithTheSameCount()
     {
-        BuildFixture(_profile);
-        BuildFixture(_target);
-        Execute(Path.Combine(_target, "auth.db"), "UPDATE account_access SET realm = 9 WHERE account = 1 AND realm = 1");
+        await BuildFixtureAsync(_profile);
+        CloneFixture(_profile, _target);
+        Execute(Path.Combine(_target, "auth.db"), "UPDATE ip_banned SET Ip = '10.9.9.9' WHERE Ip = '10.0.0.1'");
 
         (int code, string output) = Verify();
 
         Assert.Equal(1, code);
-        Assert.Contains("FAIL auth.account_access", output, StringComparison.Ordinal);
+        Assert.Contains("FAIL auth.ip_banned", output, StringComparison.Ordinal);
+        Assert.Contains("CONTENT DIFFERS", output, StringComparison.Ordinal);
     }
 
     [PwshFact]
-    public void Verify_WarnsWhenTheWorldContentIsEmpty()
+    public async Task Verify_FailsWhenAnOtherColumnChanged()
     {
-        BuildFixture(_profile);
-        BuildFixture(_target);
-        Execute(Path.Combine(_profile, "world.db"), "DELETE FROM creature_template");
-        Execute(Path.Combine(_target, "world.db"), "DELETE FROM creature_template");
+        await BuildFixtureAsync(_profile);
+        CloneFixture(_profile, _target);
+        Execute(Path.Combine(_target, "auth.db"), "UPDATE ip_banned SET BanReason = 'changed' WHERE Ip = '10.0.0.3'");
+
+        (int code, string output) = Verify();
+
+        Assert.Equal(1, code);
+        Assert.Contains("FAIL auth.ip_banned", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public async Task Verify_WarnsWhenTheWorldContentIsEmpty()
+    {
+        await BuildFixtureAsync(_profile);
+        CloneFixture(_profile, _target);
 
         (int code, string output) = Verify();
 
@@ -144,23 +155,82 @@ public sealed class PgCutoverScriptTests : IDisposable
     [PwshFact]
     public void Verify_WithAnIncompleteSecretFile_NamesTheKey_AndNeverEchoesThePassword()
     {
-        BuildFixture(_profile);
         string secretFile = WriteSecretFile(host: string.Empty, port: "5432", user: "arcane", password: Canary);
 
-        (int code, string output) = Run("-Step", "Verify", "-LiveProfile", _profile, "-BinDir", AppContext.BaseDirectory, "-SecretFile", secretFile);
+        // No arcane-db exists in -BinDir: the secret file is checked first, so its problem is the one reported.
+        (int code, string output) = Run("-Step", "Verify", "-LiveProfile", _profile, "-BinDir", _root, "-SecretFile", secretFile);
 
         Assert.NotEqual(0, code);
         Assert.Contains("has no Host", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("arcane-db not found", output, StringComparison.Ordinal);
         Assert.DoesNotContain(Canary, output, StringComparison.Ordinal);
     }
 
+    [PwshFact]
+    public void Plan_WithAnIncompleteSecretFile_StillPrintsEveryStep()
+    {
+        string secretFile = WriteSecretFile(host: string.Empty, port: "5432", user: "arcane", password: Canary);
+
+        (int code, string output) = Run("-Plan", "-LiveProfile", _profile, "-SecretFile", secretFile);
+
+        Assert.True(code == 0, output);
+        Assert.Contains("STEP 8 ", output, StringComparison.Ordinal);
+        Assert.Contains("not read in -Plan", output, StringComparison.Ordinal);
+        Assert.DoesNotContain(Canary, output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public async Task Backup_WritesVerifiedCopies_AndRollbackRestoresThem_FromAnotherWorkingDirectory()
+    {
+        // The profile names its databases with relative paths (the live configuration); this process, and so the script, does not run in the profile.
+        await BuildFixtureAsync(_profile);
+        string backup = Path.Combine(_root, "backup");
+        string[] common = ["-LiveProfile", _profile, "-BackupDir", backup, "-BinDir", ArcaneDbDirectory(), "-Confirm", "-DaemonProcessName", "no-such-process-for-the-test"];
+
+        (int code, string output) = Run(["-Step", "Backup", .. common]);
+
+        Assert.True(code == 0, output);
+        Assert.Contains("backup verified", output, StringComparison.Ordinal);
+        foreach (string name in new[] { "auth.db", "characters.db", "world.db", "manifest.json" })
+        {
+            Assert.True(File.Exists(Path.Combine(backup, name)), $"{name} was not written to the backup directory\n{output}");
+        }
+
+        Execute(Path.Combine(_profile, "auth.db"), "DELETE FROM ip_banned");
+        (int refused, string refusedOutput) = Run(["-Step", "Verify", "-LiveProfile", _profile, "-BinDir", ArcaneDbDirectory(), "-TargetSqliteDir", backup]);
+        Assert.Equal(1, refused);
+        Assert.Contains("FAIL auth.ip_banned", refusedOutput, StringComparison.Ordinal);
+
+        (int restored, string restoredOutput) = Run(["-Step", "Rollback", .. common]);
+
+        Assert.True(restored == 0, restoredOutput);
+        Assert.Contains("restored auth.db", restoredOutput, StringComparison.Ordinal);
+        Assert.NotEmpty(Directory.GetFiles(_profile, "auth.db.pre-rollback-*"));
+        (int again, string againOutput) = Run(["-Step", "Verify", "-LiveProfile", _profile, "-BinDir", ArcaneDbDirectory(), "-TargetSqliteDir", backup]);
+        Assert.True(again == 0, againOutput);
+    }
+
+    [PwshFact]
+    public async Task Backup_RefusesADirectoryThatAlreadyHoldsDatabases()
+    {
+        await BuildFixtureAsync(_profile);
+        string backup = Path.Combine(_root, "backup");
+        Directory.CreateDirectory(backup);
+        File.WriteAllText(Path.Combine(backup, "auth.db"), "x");
+
+        (int code, string output) = Run("-Step", "Backup", "-LiveProfile", _profile, "-BackupDir", backup, "-BinDir", ArcaneDbDirectory(), "-Confirm", "-DaemonProcessName", "no-such-process-for-the-test");
+
+        Assert.Equal(2, code);
+        Assert.Contains("already holds .db files", output, StringComparison.Ordinal);
+    }
+
     [PostgresPwshFact]
-    public void Verify_AgainstPostgreSql_ReportsMatch_ThenFailsOnADroppedRow()
+    public async Task Verify_AgainstPostgreSql_ReportsMatch_ThenFailsOnADroppedRow()
     {
         string server = Environment.GetEnvironmentVariable(PostgresVariable)!;
         var builder = new NpgsqlConnectionStringBuilder(server.TrimEnd(';')) { Pooling = false, Database = "postgres" };
         string database = "arcane_pgcut_" + Guid.NewGuid().ToString("N")[..16];
-        BuildFixture(_profile);
+        await BuildFixtureAsync(_profile);
         string secretFile = WriteSecretFile(
             builder.Host ?? "localhost",
             builder.Port.ToString(CultureInfo.InvariantCulture),
@@ -179,36 +249,42 @@ public sealed class PgCutoverScriptTests : IDisposable
         try
         {
             builder.Database = database;
-            using (var db = new NpgsqlConnection(builder.ConnectionString))
-            {
-                db.Open();
-                using NpgsqlCommand fill = db.CreateCommand();
-                fill.CommandText =
-                    "CREATE TABLE auth_schema (version integer); INSERT INTO auth_schema VALUES (1);" +
-                    "CREATE TABLE account (id bigint PRIMARY KEY, name text);" +
-                    "INSERT INTO account VALUES (1, 'a'), (2, 'b'), (3, 'c');" +
-                    "CREATE TABLE account_access (account bigint, realm bigint, PRIMARY KEY (account, realm));" +
-                    "INSERT INTO account_access VALUES (1, 1), (1, 2);";
-                fill.ExecuteNonQuery();
-            }
+            string target = builder.ConnectionString;
+            var source = new DatabaseOptions { Auth = SqliteSection(Path.Combine(_profile, "auth.db")) };
+            var copyOutput = new StringWriter();
+            var copyError = new StringWriter();
+            int copied = await DbUpgradeCli.RunAsync(
+                ["copy", "--component", "auth"],
+                source,
+                copyOutput,
+                copyError,
+                dbcDirectory: null,
+                environment: name => name switch
+                {
+                    "ARCANE_DB_TARGET_PROVIDER" => "postgresql",
+                    "ARCANE_DB_TARGET_AUTH_CONNECTION" => target,
+                    _ => null,
+                },
+                CancellationToken.None);
+            Assert.True(copied == 0, copyOutput.ToString() + copyError);
 
-            string[] args = ["-Step", "Verify", "-LiveProfile", _profile, "-BinDir", AppContext.BaseDirectory, "-SecretFile", secretFile, "-Component", "auth"];
+            string[] args = ["-Step", "Verify", "-LiveProfile", _profile, "-BinDir", ArcaneDbDirectory(), "-SecretFile", secretFile, "-Component", "auth"];
             (int ok, string okOutput) = Run(args);
             Assert.True(ok == 0, okOutput);
-            Assert.Contains("OK   auth.account  rows=3", okOutput, StringComparison.Ordinal);
+            Assert.Contains("OK   auth.ip_banned  rows=3", okOutput, StringComparison.Ordinal);
             Assert.DoesNotContain(builder.Password ?? Canary, okOutput, StringComparison.Ordinal);
 
-            using (var db = new NpgsqlConnection(builder.ConnectionString))
+            using (var db = new NpgsqlConnection(target))
             {
                 db.Open();
                 using NpgsqlCommand drop = db.CreateCommand();
-                drop.CommandText = "DELETE FROM account WHERE id = 3";
+                drop.CommandText = "DELETE FROM ip_banned WHERE \"Ip\" = '10.0.0.3'";
                 drop.ExecuteNonQuery();
             }
 
             (int failed, string failedOutput) = Run(args);
             Assert.Equal(1, failed);
-            Assert.Contains("FAIL auth.account", failedOutput, StringComparison.Ordinal);
+            Assert.Contains("FAIL auth.ip_banned", failedOutput, StringComparison.Ordinal);
         }
         finally
         {
@@ -235,30 +311,73 @@ public sealed class PgCutoverScriptTests : IDisposable
         var literal = new Regex("Password=[^$*<\\s;\"'.]");
         Assert.DoesNotMatch(literal, script);
         Assert.DoesNotMatch(literal, runbook[section..]);
+
+        // Nor a Pwd= form or a JSON or assignment literal ("Password": "value", Password = value).
+        var other = new Regex("(?i)(?<![$.])\\b(?:Password|Pwd)\"?\\s*[:=]\\s*\"?[A-Za-z0-9]");
+        Assert.DoesNotMatch(other, script);
+        Assert.DoesNotMatch(other, runbook[section..]);
         Assert.DoesNotMatch(new Regex("(?i)(api[_-]?key|token|secret)\\s*[:=]\\s*['\"][^'\"]{8,}"), script);
     }
 
     private (int Code, string Output) Verify()
-        => Run("-Step", "Verify", "-LiveProfile", _profile, "-BinDir", AppContext.BaseDirectory, "-TargetSqliteDir", _target);
+        => Run("-Step", "Verify", "-LiveProfile", _profile, "-BinDir", ArcaneDbDirectory(), "-TargetSqliteDir", _target);
 
-    private static void BuildFixture(string directory)
+    /// <summary>
+    /// The directory of the arcane-db the solution build wrote (tools/ArcaneCore.DbUpgrade, same configuration as this test run). The script runs that tool
+    /// on its own runtime; the CI builds the whole solution before it tests, so it exists there. A missing build fails the test, it is never skipped.
+    /// </summary>
+    private static string ArcaneDbDirectory()
     {
+        string separator = Path.DirectorySeparatorChar.ToString();
+        string configuration = AppContext.BaseDirectory.Contains(separator + "Debug" + separator, StringComparison.Ordinal) ? "Debug" : "Release";
+        string bin = Path.Combine(RepositorySource.RequireRoot(), "tools", "ArcaneCore.DbUpgrade", "bin", configuration);
+        string? dll = Directory.Exists(bin)
+            ? Directory.EnumerateFiles(bin, "arcane-db.dll", SearchOption.AllDirectories).OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
+            : null;
+        Assert.True(dll is not null, $"arcane-db has not been built under {bin}; build ArcaneCore.slnx ({configuration}) before running these tests");
+        return Path.GetDirectoryName(dll)!;
+    }
+
+    private static DatabaseConnectionOptions SqliteSection(string path)
+        => new() { Provider = DatabaseProvider.Sqlite, ConnectionString = "Data Source=" + path };
+
+    /// <summary>
+    /// Real auth, characters and world databases (the schema bootstrap of arcane-db upgrade) in <paramref name="directory"/>, three rows in auth ip_banned,
+    /// and an appsettings.json that names the files with relative paths, as the live profile does.
+    /// </summary>
+    private static async Task BuildFixtureAsync(string directory)
+    {
+        var options = new DatabaseOptions
+        {
+            Auth = SqliteSection(Path.Combine(directory, "auth.db")),
+            Characters = SqliteSection(Path.Combine(directory, "characters.db")),
+            World = SqliteSection(Path.Combine(directory, "world.db")),
+        };
+        var output = new StringWriter();
+        var error = new StringWriter();
+        int code = await DbUpgradeCli.RunAsync(["upgrade"], options, output, error, CancellationToken.None);
+        Assert.True(code == 0, output.ToString() + error);
+        SqliteConnection.ClearAllPools();
         Execute(
             Path.Combine(directory, "auth.db"),
-            "CREATE TABLE auth_schema (version integer);",
-            "INSERT INTO auth_schema VALUES (1);",
-            "CREATE TABLE account (id integer PRIMARY KEY, name text);",
-            "INSERT INTO account VALUES (1, 'a'), (2, 'b'), (3, 'c');",
-            "CREATE TABLE account_access (account integer, realm integer, PRIMARY KEY (account, realm));",
-            "INSERT INTO account_access VALUES (1, 1), (1, 2);");
-        Execute(
-            Path.Combine(directory, "characters.db"),
-            "CREATE TABLE character (guid integer PRIMARY KEY, name text);",
-            "INSERT INTO character VALUES (10, 'x'), (11, 'y');");
-        Execute(
-            Path.Combine(directory, "world.db"),
-            "CREATE TABLE creature_template (entry integer PRIMARY KEY, name text);",
-            "INSERT INTO creature_template VALUES (100, 'p'), (101, 'q');");
+            "INSERT INTO ip_banned (Ip, BanDate, UnbanDate, BannedBy, BanReason) VALUES ('10.0.0.1', 0, 0, 'gm', 'a'), ('10.0.0.2', 0, 0, 'gm', 'b'), ('10.0.0.3', 0, 0, 'gm', 'c')");
+        File.WriteAllText(
+            Path.Combine(directory, "appsettings.json"),
+            "{ \"Database\": {"
+            + " \"Auth\": { \"Provider\": \"Sqlite\", \"ConnectionString\": \"Data Source=auth.db\" },"
+            + " \"Characters\": { \"Provider\": \"Sqlite\", \"ConnectionString\": \"Data Source=characters.db\" },"
+            + " \"World\": { \"Provider\": \"Sqlite\", \"ConnectionString\": \"Data Source=world.db\" } } }",
+            new UTF8Encoding(false));
+    }
+
+    /// <summary>The three database files of <paramref name="from"/> (and any journal beside them) copied into <paramref name="to"/>.</summary>
+    private static void CloneFixture(string from, string to)
+    {
+        SqliteConnection.ClearAllPools();
+        foreach (string file in Directory.GetFiles(from, "*.db*"))
+        {
+            File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
+        }
     }
 
     private static void Execute(string path, params string[] statements)
