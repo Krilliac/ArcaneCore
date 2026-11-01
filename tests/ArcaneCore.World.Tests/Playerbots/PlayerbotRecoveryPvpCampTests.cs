@@ -202,7 +202,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
 
     // --- the recovery with players (world) ------------------------------------------------------------------------------------
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
+    [Fact]
     public async Task Outnumbered_TheGhostStaysAtItsBody_WaitingForTheEnemyPlayers()
     {
         await using Scene scene = await Scene.StartAsync();
@@ -228,7 +228,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.Equal(1, anomalies.Count("recovery/waiting-out-campers")); // one report per death, not one per think
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
+    [Fact]
     public async Task Outnumbered_WhenTheEnemiesLeave_TheGhostReclaimsItsBody()
     {
         await using Scene scene = await Scene.StartAsync();
@@ -248,7 +248,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.Equal(Step.Reclaim, scene.Recovery.LastStep);
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
+    [Fact]
     public async Task Outnumbered_WhenAnEnemyDies_TheCountTurnsFavourable_AndTheGhostReclaims()
     {
         await using Scene scene = await Scene.StartAsync();
@@ -265,7 +265,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.True(scene.Bot.IsAlive));
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
+    [Fact]
     public async Task Outnumbered_WhenAnAllyArrives_TheGhostReclaims()
     {
         await using Scene scene = await Scene.StartAsync();
@@ -296,7 +296,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.True(scene.Bot.IsAlive));
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
+    [Fact]
     public async Task WithMarginZero_OneEnemyAgainstTheBot_MakesTheGhostWait()
     {
         await using Scene scene = await Scene.StartAsync(new PlayerbotRecoveryOptions { PvpCampMargin = 0 });
@@ -342,7 +342,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.True(scene.Bot.IsAlive));
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
+    [Fact]
     public async Task TheReclaimDelayIsStillWaitedOutFirst_BeforeTheEnemyPlayersAreWeighed()
     {
         await using Scene scene = await Scene.StartAsync(delayPassed: false);
@@ -355,7 +355,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.Equal(Step.WaitForEnemyPlayers, scene.Recovery.LastStep);
     }
 
-    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
+    [Fact]
     public async Task TheWaitIsBounded_AfterTheMaxWait_TheGhostTakesTheSpiritHealer_AndNeverReclaims()
     {
         await using Scene scene = await Scene.StartAsync(new PlayerbotRecoveryOptions { PvpCampMaxWaitSeconds = 5 });
