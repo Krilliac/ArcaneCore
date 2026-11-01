@@ -1,8 +1,9 @@
 """Finish a deploy-live.py run whose servers started but whose wait gave up before the post-start checks ran.
 
 Reads the run's report.json and the live databases (mode=ro only), runs the same checks deploy-live.py runs after the world starts,
-and, only if they all pass, marks the report healthy, records the new PIDs in the profile's standard-processes.json and opens the
-status console (supervising, as deploy-live.py does, and only when none runs for the port yet). It never starts, stops or signals a process.
+and, only if they all pass, marks the report healthy, records the new PIDs in the profile's standard-processes.json and, only when --status-console is given, opens the
+status console (supervising, as deploy-live.py does, and only when none runs for the port yet). It never starts, stops or signals a server
+process; the status console window is the only process it launches.
 
 Usage: py -3 tools/ops/deploy/deploy-post-checks.py --label live-w37-r1 [--deploy-dir DIR] [--status-console PS1] [--no-transports] [--no-optional-data] [--no-elevators]
 """
