@@ -292,7 +292,7 @@ public sealed class TwoWorldFencingProviderTests
     public async Task WorkerScope_ARestartedShardReclaimsItsDeadIncarnation_AndTheOldTokenIsRefused(DatabaseProvider provider)
     {
         await using ScratchCluster cluster = await ScratchCluster.CreateAsync(provider);
-        int id = await cluster.CreateCharacterAsync("WorkerReclaim");
+        int id = await cluster.CreateCharacterAsync("ShardReclaim");
         await using HostKit old = cluster.NewWorker("shard-a", "0,1");
         await old.Host.StartAsync(CancellationToken.None);
         CharacterOwnershipToken oldToken = old.World.CharacterOwnership!;
