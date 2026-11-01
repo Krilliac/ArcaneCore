@@ -922,21 +922,28 @@ public sealed class PlayerbotMountTests
             Player player = session.Player!;
             PlayerbotRidingTrips trips = FarTrips(host, session, new PlayerbotOptions { Enabled = true }, out _);
             player.Money = 10_000;
+            float startX = player.X, startY = player.Y, startZ = player.Z;
             session.ManagedBudget = new ManagedActionBudget(1);
             trips.Update(player, 500);
+            player.Relocate(startX, startY, startZ, player.Orientation);
             session.ManagedBudget = new ManagedActionBudget(1);
             Assert.True(trips.Update(player, 500));
             Assert.Equal(MountFixture.TrainerEntry, trips.TargetEntry);
 
             // No step can be taken (no packet budget): the bot closes no distance, and after the stuck time the only site is set aside.
-            // The stuck test compares the bot's stored position with the best distance seen, so that position is pinned where the walk
-            // started: a step the bot had already begun (a movement block that follows its motion, a tick between the two Updates on the
-            // real clock) must not count as progress and reset the stuck time. Everything here runs inside one world-thread callback.
-            float x = player.X, y = player.Y, z = player.Z;
+            // Everything here runs inside one world-thread callback, so no tick and no clock movement can touch the bot between the Updates
+            // (WorldClock.NowMs is the tick-start snapshot). The only writers of the stored position are inside Update itself: while the
+            // bot is moving, PlayerbotMotion.Follow still runs at a zero budget (a heartbeat is not budgeted) and its floor snaps
+            // (TrySnapDirectStepStart / TrySnapPlayerToFloor, SetPosition up to several yards in Z) move the bot after the first Update
+            // recorded its best distance. The stuck check (PlayerbotRidingTrips.Update) counts a drop of more than half a yard as progress
+            // and resets the stuck time, which is how Update returned true at StuckMs. Identified by reading the code; not reproduced.
+            // So the position is pinned (position only, WorldObject.Relocate keeps the movement state) to where the walk started, i.e. the
+            // position the best distance was taken from.
+            float x = startX, y = startY, z = startZ;
             session.ManagedBudget = new ManagedActionBudget(0);
-            player.Relocate(x, y, z, player.Orientation, host.World.NowMs);
+            player.Relocate(x, y, z, player.Orientation);
             trips.Update(player, 500);
-            player.Relocate(x, y, z, player.Orientation, host.World.NowMs);
+            player.Relocate(x, y, z, player.Orientation);
             Assert.False(trips.Update(player, PlayerbotRidingTrips.StuckMs));
             Assert.Equal(0u, trips.TargetEntry);
 

@@ -63,6 +63,13 @@ public sealed class PlayerbotVolunteerExpiryAndAnchorWorldTests : PlayerbotVolun
         {
             Quiet(options);
             options.Chat.Voice.Enabled = false; // the voice would take the queue
+            // Root cause of the old flake: GroupManager.Invite(bot, ..) with no group yet makes the bot an invitee of its own, not yet created
+            // group (vmangos AddLeaderInvite; GroupManager.cs Invite). PlayerbotPartyAI.OnInvite answers that pending invite on its intake pass, and
+            // with the default policy (Affinity: no allowlist entry, guild mate or friend for a bot inviting itself) it can send CMSG_GROUP_DECLINE: Decline -> UninviteFromGroup(bot) drops an
+            // uncreated group's invites, volunteer's included. The pass runs on the bot's think cadence, so whether it fell before the expiry
+            // varied. Anyone makes the bot accept instead, which is a no-op for a group leader (Accept returns at group.IsLeader), so the
+            // volunteer's invite stays until the test ends it.
+            options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone;
         });
         await world.World.PrepareCharacterAsync("VOLQ", "Volq", AccountSecurity.Player);
         var bot = await WaitingBotAsync(world, "Volqbot", Warrior, 1, []);
@@ -82,17 +89,26 @@ public sealed class PlayerbotVolunteerExpiryAndAnchorWorldTests : PlayerbotVolun
             });
         }
 
-        // The engaged state must hold on the world thread right before the final run: a failure below is then the expiry's, not a lost engagement.
-        (bool pending, bool grouped, int leftMs) = await world.OnWorldAsync(() =>
+        // The engaged state must hold on the world thread right after engaging and again one step before the expiry: a failure below is then the
+        // expiry's, not an engagement lost in between (the window that matters).
+        async Task AssertEngagedAsync(string when)
         {
-            ObjectGuid guid = Online(world, "Volq").Guid;
-            return (world.GroupManager.GetInvite(guid) is not null, world.GroupManager.GetGroup(guid) is not null, world.Coordinator.VolunteerRemainingMs(guid));
-        });
-        Assert.True(leftMs > 0, "the volunteer entry ran out before the player was engaged");
-        Assert.Equal(engaged == Engaged.InvitePending, pending);
-        Assert.Equal(engaged == Engaged.Grouped, grouped);
+            (bool pending, bool grouped, int leftMs) = await world.OnWorldAsync(() =>
+            {
+                ObjectGuid guid = Online(world, "Volq").Guid;
+                return (world.GroupManager.GetInvite(guid) is not null, world.GroupManager.GetGroup(guid) is not null, world.Coordinator.VolunteerRemainingMs(guid));
+            });
+            Assert.True(leftMs > 0, $"the volunteer entry ran out before the check {when}");
+            Assert.Equal(engaged == Engaged.InvitePending, pending);
+            Assert.Equal(engaged == Engaged.Grouped, grouped);
+        }
 
-        await world.RunAsync(EngageLeadMs + 3_000);
+        await AssertEngagedAsync("right after engaging");
+        const uint NearExpiryMs = 250;
+        await world.RunAsync(EngageLeadMs - NearExpiryMs);
+        await AssertEngagedAsync("one step before the expiry");
+
+        await world.RunAsync(NearExpiryMs + 3_000);
 
         var queued = await world.OnWorldAsync(() => world.Coordinator.TakeExpiredVolunteers());
         if (engaged == Engaged.Ungrouped) Assert.Equal(bot.Id, Assert.Single(queued).BotId);
