@@ -25,6 +25,7 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
     private readonly TaskCompletionSource<(bool Accepted, string Reason)> _helloAckTcs =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ConcurrentDictionary<long, TaskCompletionSource<ClusterSessionAttachResult>> _pendingAttaches = new();
+    private volatile string? _announcedOwnedMaps;
     private readonly ConcurrentDictionary<long, TaskCompletionSource<bool>> _pendingDetaches = new();
     private readonly ConcurrentDictionary<long, TaskCompletionSource<bool>> _pendingPacketAcks = new();
 
@@ -54,6 +55,12 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
     /// started and actively awaiting frames BEFORE the registration frame was sent and awaited.
     /// </summary>
     public bool ReceiveLoopStartedBeforeRegisterSent => _receiveLoopStartedBeforeRegisterSent;
+
+    /// <summary>
+    /// The owned map list (<c>0,1,30-40</c>) the worker announced in its HelloAck after <see cref="ConnectAndRegisterAsync"/>; null when it announced none
+    /// (an older worker), empty when it owns every map.
+    /// </summary>
+    public string? AnnouncedOwnedMaps => _announcedOwnedMaps;
 
     public async Task ConnectAndRegisterAsync(CancellationToken cancellationToken = default)
     {
@@ -218,6 +225,11 @@ public sealed class LoopbackGatewayWorkerClient : IGatewayWorkerTransport
                         }
 
                         string reason = len > 0 ? Encoding.UTF8.GetString(span.Slice(5, len)) : string.Empty;
+                        if (LoopbackGatewayWorkerHost.TryReadHelloAckOwnedMaps(span, out string announced, out _))
+                        {
+                            _announcedOwnedMaps = announced;
+                        }
+
                         _helloAckTcs.TrySetResult((accepted, reason));
                         break;
                     }

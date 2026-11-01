@@ -43,7 +43,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<long, ClientSession> _sessions = new();
     private readonly ConcurrentDictionary<long, ClientSession> _pendingOpens = new();
-    private readonly TaskCompletionSource<(bool Accepted, string Reason)> _helloAck = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<(bool Accepted, string Reason, string OwnedMaps, bool AllowInstanceMaps)> _helloAck = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _ended = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly LogGate _dropGate = new(TimeSpan.FromSeconds(10));
     private readonly Lock _openGate = new();
@@ -52,6 +52,8 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private long _nextRequestId;
     private long _droppedServerPackets;
     private volatile bool _registered;
+    private volatile string _workerOwnedMaps = string.Empty;
+    private volatile bool _workerAllowsInstanceMaps = true;
     private readonly GatewayWardenPosture? _wardenPosture;
 
     /// <param name="wardenPosture">The gateway's Warden posture, sent to the worker right after admission and before any session opens. A worker that
@@ -112,7 +114,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         // The receive loop runs before anything is awaited from the worker (CLUSTERING_DESIGN.md §4.4): the challenge,
         // the proof and the registration are all answered from it.
         _receive = Task.Run(ReceiveLoopAsync, CancellationToken.None);
-        (bool accepted, string reason) = await _helloAck.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        (bool accepted, string reason, string ownedMaps, bool allowInstanceMaps) = await _helloAck.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         if (!accepted)
         {
             throw new InvalidOperationException($"worker refused the gateway link: {reason}");
@@ -129,8 +131,16 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             throw new InvalidOperationException("the worker link closed before the Warden posture could be sent");
         }
 
+        _workerOwnedMaps = ownedMaps;
+        _workerAllowsInstanceMaps = allowInstanceMaps;
         _registered = true;
     }
+
+    /// <summary>The map list the worker announced in its HelloAck (<c>Cluster:Worker:OwnedMaps</c> text such as <c>0,1,30-40</c>); empty (also before registration, or from a worker that sent none) means it owns every map.</summary>
+    public string WorkerOwnedMaps => _workerOwnedMaps;
+
+    /// <summary>Whether the worker announced that it also runs instance copies of maps outside its list (true until it says otherwise).</summary>
+    public bool WorkerAllowsInstanceMaps => _workerAllowsInstanceMaps;
 
     /// <summary>
     /// Ask the worker to open a session whose generation the caller already chose. Accepted: <see cref="IGatewaySessionSink.OnOpened"/>
@@ -327,7 +337,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         {
             channel.Close();
             _registered = false;
-            _helloAck.TrySetResult((false, "the worker closed the link"));
+            _helloAck.TrySetResult((false, "the worker closed the link", string.Empty, true));
             foreach (ClientSession pending in _pendingOpens.Values)
             {
                 pending.Opened.TrySetResult(GatewaySessionOpenReply.Refuse(AuthResponseCode.Unavailable, "the worker link closed"));
@@ -443,7 +453,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         }
     }
 
-    private static (bool Accepted, string Reason) DecodeHelloAck(ReadOnlySpan<byte> span)
+    private static (bool Accepted, string Reason, string OwnedMaps, bool AllowInstanceMaps) DecodeHelloAck(ReadOnlySpan<byte> span)
     {
         if (span.Length < 5)
         {
@@ -456,7 +466,32 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             throw new InvalidDataException($"invalid HelloAck reason length ({length})");
         }
 
-        return (span[0] != 0, Encoding.UTF8.GetString(span.Slice(5, length)));
+        string reason = Encoding.UTF8.GetString(span.Slice(5, length));
+
+        // The tail appended by the map routing change; an ack from an older worker ends after the reason and reads as "owns every map".
+        string ownedMaps = string.Empty;
+        bool allowInstanceMaps = true;
+        int offset = 5 + length;
+        if (offset < span.Length)
+        {
+            if (span.Length - offset < 5)
+            {
+                throw new InvalidDataException($"truncated HelloAck map tail ({span.Length - offset} B)");
+            }
+
+            int ownedLength = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
+            offset += 4;
+            if (ownedLength < 0 || ownedLength > span.Length - offset - 1)
+            {
+                throw new InvalidDataException($"invalid HelloAck owned map length ({ownedLength})");
+            }
+
+            ownedMaps = Encoding.UTF8.GetString(span.Slice(offset, ownedLength));
+            offset += ownedLength;
+            allowInstanceMaps = span[offset] != 0;
+        }
+
+        return (span[0] != 0, reason, ownedMaps, allowInstanceMaps);
     }
 
     public async ValueTask DisposeAsync()

@@ -254,7 +254,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                             reason = !proven ? "link proof missing or wrong (Cluster:Worker:LinkSecret)"
                                 : peer.Role != ClusterRole.Gateway ? $"peer role {peer.Role} is not Gateway"
                                 : reason;
-                            link.Channel.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloAckFrame(admitted, reason ?? string.Empty));
+                            link.Channel.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloAckFrame(admitted, reason ?? string.Empty, _workerManifest.OwnedMaps, _workerManifest.AllowInstanceMaps));
                             if (!admitted)
                             {
                                 _logger.LogWarning("Gateway link from {Remote} refused: {Reason}", link.Remote, reason);
