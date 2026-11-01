@@ -47,7 +47,7 @@ public sealed class TradeOpenLockTests
         });
         (Player caster, _) = kit.AddPlayer(1);
         (Player recipient, _) = kit.AddPlayer(2, 2, 0);
-        Wire(caster, recipient, PickEntry, new ItemSpell(OpenLockSpell, 0, -1, 0, 0, 0, 0));
+        Wire(caster, recipient, PickEntry, new ItemSpell(OpenLockSpell, 0, 0, 0, 0, 0, 0));
         Item castItem = ItemTestData.Give(caster.Inventory, PickEntry);
         Item target = ItemTestData.Give(recipient.Inventory, ItemTestData.WornShortsword);
 
@@ -61,6 +61,56 @@ public sealed class TradeOpenLockTests
         ItemInstanceData before = target.ToData();
         Assert.Equal(before.Guid, plan.UpdatedRecipientItem.Guid);
         Assert.Equal(before.Enchantments, plan.UpdatedRecipientItem.Enchantments);
+    }
+
+    [Fact]
+    public void OpenLockItemSpell_WhosePaymentWouldDestroyTheItem_IsRefused_BecauseTheCommitCastNeedsTheLiveItem()
+    {
+        using var kit = new SpellTestKit(ItemSpellInfo(OpenLockSpell, SpellEffectName.OpenLock));
+        kit.System.RegisterEffectCheck(SpellEffectName.OpenLock, _ => SpellCastResult.CastOk);
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player recipient, _) = kit.AddPlayer(2, 2, 0);
+        Wire(caster, recipient, PickEntry, new ItemSpell(OpenLockSpell, 0, -1, 0, 0, 0, 0));
+        Item castItem = ItemTestData.Give(caster.Inventory, PickEntry);
+        Item target = ItemTestData.Give(recipient.Inventory, ItemTestData.WornShortsword);
+
+        Assert.Equal(SpellCastResult.ItemNotReady,
+            kit.System.TryPlanTradeItemEnchantment(caster, recipient, target, castItem, 0, out TradeEnchantmentPlan? plan));
+        Assert.Null(plan);
+    }
+
+    [Fact]
+    public void CommittedOpenLockItemSpell_CastsWithTheLiveCastItem_AppliesItsCooldown_AndRunsOnce()
+    {
+        using var kit = new SpellTestKit(ItemSpellInfo(OpenLockSpell, SpellEffectName.OpenLock));
+        kit.System.RegisterEffectCheck(SpellEffectName.OpenLock, _ => SpellCastResult.CastOk);
+        Item? castItemAtEffect = null;
+        Item? tradeItemAtEffect = null;
+        int runs = 0;
+        kit.System.RegisterEffect(SpellEffectName.OpenLock, context =>
+        {
+            runs++;
+            castItemAtEffect = context.Cast.CastItem;
+            tradeItemAtEffect = context.Cast.Targets.ServerValidatedTradeItem;
+        });
+        (Player caster, _) = kit.AddPlayer(1);
+        (Player recipient, _) = kit.AddPlayer(2, 2, 0);
+        Wire(caster, recipient, PickEntry, new ItemSpell(OpenLockSpell, 0, 0, 0, 5000, 0, 0));
+        Item castItem = ItemTestData.Give(caster.Inventory, PickEntry);
+        Item target = ItemTestData.Give(recipient.Inventory, ItemTestData.WornShortsword);
+        Assert.Equal(SpellCastResult.CastOk,
+            kit.System.TryPlanTradeItemEnchantment(caster, recipient, target, castItem, 0, out TradeEnchantmentPlan? plan));
+        Guid operation = Guid.NewGuid();
+
+        Assert.True(kit.System.CastCommittedTradeItemSpell(operation, caster, target, plan!));
+        kit.Advance(100);
+
+        Assert.Equal(1, runs);
+        Assert.Same(castItem, castItemAtEffect);
+        Assert.Same(target, tradeItemAtEffect);
+        Assert.Contains(kit.System.GetActiveCooldowns(caster), c => c.SpellId == OpenLockSpell && c.ItemId == PickEntry);
+        Assert.False(kit.System.CastCommittedTradeItemSpell(operation, caster, target, plan!));
+        Assert.Equal(1, runs);
     }
 
     [Fact]

@@ -97,6 +97,12 @@ public sealed partial class SpellSystem
         TradeItemCastContext context = new(castItem.Guid, castItem.Entry, clientSpellIndex, selected,
             castItem.BagSlot, castItem.Slot, overlapsCastItem,
             overlapsCastItem ? null : ItemUsePaymentPlan.Create(castItem));
+        // The commit-time cast needs the live cast item (vmangos TradeHandler.cpp:362 SetCastItem). The staged payment runs before it, so a
+        // plan whose payment removes the item (last charge of an expendable single item, or a reagent entry equal to the item) cannot be
+        // cast with its item and stays refused.
+        if (castOnCommit && (overlapsCastItem || context.Payment is not { After: not null }))
+            return SpellCastResult.ItemNotReady;
+
         plan = new TradeEnchantmentPlan(
             updatedRecipientItem!,
             Array.AsReadOnly(reagents.ToArray()),
