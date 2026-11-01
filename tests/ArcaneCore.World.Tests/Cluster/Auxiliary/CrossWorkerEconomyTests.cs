@@ -1,6 +1,7 @@
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Economy;
+using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Social;
