@@ -64,8 +64,9 @@ public sealed class ClusterOptions
     public bool Transfers { get; init; }
 
     /// <summary>
-    /// With more than one worker: when set, only this worker hosts instance copies (dungeons) of maps outside its list; every other worker is started with
-    /// <c>Cluster:Worker:AllowInstanceMaps=false</c>, so a dungeon entry from another worker has to cross to this one. Null leaves the default (every worker hosts instances).
+    /// With more than one worker: when set, every other worker is started with <c>Cluster:Worker:AllowInstanceMaps=false</c>, so it never hosts instance copies
+    /// of maps outside its list. This does not make the gateway route an instanceable map: the gateway resolves a far teleport (target instance 0) only through
+    /// the listed maps, so the instance worker must also list the dungeon map in <see cref="WorkerMaps"/>. Null leaves the default (every worker hosts instances).
     /// </summary>
     public int? InstanceWorkerIndex { get; init; }
 

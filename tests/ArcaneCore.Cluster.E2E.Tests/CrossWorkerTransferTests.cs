@@ -31,12 +31,14 @@ public sealed class CrossWorkerTransferTests
 
     private static readonly TimeSpan Deadline = TimeSpan.FromMinutes(5);
 
-    // Eastern Kingdoms (0, where a human starts) on the first worker; Kalimdor (1) on the second, which alone hosts dungeon instances,
-    // so a dungeon entry from the first worker has to cross. The account is a game master: .go xyz is how a client starts a far teleport.
+    // Eastern Kingdoms (0, where a human starts) on the first worker; Kalimdor (1) and the Deadmines (36) on the second, which alone hosts dungeon instances.
+    // The far-teleport router always submits target instance 0 and the gateway resolves that through the listed maps (an instanceable map outside every
+    // list is refused as unassigned), so the instance worker lists map 36: a dungeon entry from the first worker has to cross.
+    // The account is a game master: .go xyz is how a client starts a far teleport.
     private static ClusterOptions Crossing() => new()
     {
         WorkerCount = 2,
-        WorkerMaps = [[0], [1]],
+        WorkerMaps = [[0], [1, 36]],
         LoginWorkerIndex = 0,
         InstanceWorkerIndex = 1,
         Security = AccountSecurity.GameMaster,
@@ -95,13 +97,16 @@ public sealed class CrossWorkerTransferTests
         Assert.True(await WaitForCloseAsync(session, ct), "The first session must be closed by the replacing login.");
         await PingAsync(replacement, 0xBEEF, ct);
 
-        await replacement.LogoutAsync(ct);
+        // Checked while the replacing session is still online: the replacing login claims with the token the owner row already holds, so scope, epoch and
+        // incarnation stay. (A logout schedules the claim release, which deletes the owner row once the final save is durable, so it is not read after it.)
         DecisionRow only = Assert.Single(await ReadDecisionsAsync(cluster, guid, ct));
         Assert.Equal(decision.TransferId, only.TransferId);
         Assert.Equal(decision.SessionGeneration, only.SessionGeneration);
         Assert.Equal((int)PlayerTransferDecisionState.Completed, only.State);
         OwnerRow ownerAfter = Assert.IsType<OwnerRow>(await ReadOwnerAsync(cluster, guid, ct));
-        Assert.Equal(owner, ownerAfter); // the replacing login claims with the token the owner row already holds: scope, epoch and incarnation stay
+        Assert.Equal(owner, ownerAfter);
+
+        await replacement.LogoutAsync(ct);
 
         // No stale write from the old owner: the character row holds the new map after both sessions are gone.
         Assert.Equal((long)KalimdorMap, await ReadCharacterMapAsync(cluster, guid, ct));
@@ -113,7 +118,8 @@ public sealed class CrossWorkerTransferTests
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
         await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Crossing(), ct);
-        Assert.DoesNotContain((int)DeadminesMap, cluster.Workers[0].OwnedMaps.Concat(cluster.Workers[1].OwnedMaps));
+        Assert.DoesNotContain((int)DeadminesMap, cluster.Workers[0].OwnedMaps);
+        Assert.Contains((int)DeadminesMap, cluster.Workers[1].OwnedMaps);
 
         await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);
         var session = new ScenarioConnection(client);
@@ -221,12 +227,19 @@ public sealed class CrossWorkerTransferTests
     /// <summary>True once the server has closed this session's connection (a read fails with an I/O or socket error).</summary>
     private static async Task<bool> WaitForCloseAsync(ScenarioConnection session, CancellationToken ct)
     {
+        // A shorter budget than the fact's deadline, so a session that is never closed fails the caller's assert, not the whole fact with a cancellation.
+        using var closeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        closeCts.CancelAfter(TimeSpan.FromSeconds(45));
         for (int frames = 0; frames < 1024; frames++)
         {
             try
             {
-                await session.WaitForTrafficAsync(ct);
-                await session.ReadAsync(ct);
+                await session.WaitForTrafficAsync(closeCts.Token);
+                await session.ReadAsync(closeCts.Token);
+            }
+            catch (OperationCanceledException) when (closeCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                return false;
             }
             catch (Exception ex) when (ex is not MockProtocolException and (EndOfStreamException or SocketException or IOException { InnerException: SocketException }))
             {
@@ -244,7 +257,8 @@ public sealed class CrossWorkerTransferTests
 
     private sealed record OwnerRow(string Scope, long Epoch, string Incarnation, string? ActiveTransfer);
 
-    private sealed record ShardRow(string Scope, long Epoch, bool Active, string Incarnation);
+    // Incarnation is NULL on the realm-gate 'world' row (inactive under worker fencing).
+    private sealed record ShardRow(string Scope, long Epoch, bool Active, string? Incarnation);
 
     private static Task<IReadOnlyList<DecisionRow>> ReadDecisionsAsync(ClusterProcessFixture cluster, long guid, CancellationToken ct)
         => cluster.CharactersRowsAsync(
@@ -287,7 +301,7 @@ public sealed class CrossWorkerTransferTests
     private static Task<IReadOnlyList<ShardRow>> ReadShardsAsync(ClusterProcessFixture cluster, CancellationToken ct)
         => cluster.CharactersRowsAsync(
             "SELECT scope, epoch, active, owner_incarnation FROM character_ownership ORDER BY scope",
-            reader => new ShardRow(reader.GetString(0), reader.GetInt64(1), reader.GetBoolean(2), reader.GetString(3)),
+            reader => new ShardRow(reader.GetString(0), reader.GetInt64(1), reader.GetBoolean(2), reader.IsDBNull(3) ? null : reader.GetString(3)),
             ct);
 
     private static Task<long> ReadCharacterMapAsync(ClusterProcessFixture cluster, long guid, CancellationToken ct)
