@@ -70,6 +70,9 @@ public sealed partial class CreatureMapSystem
             ? spells.CastAtDestination(creature, spellId, x, y, z, triggered)
             : CreatureCastResult.NoSpellSystem;
 
+    /// <summary>See <see cref="ICreatureSpellCaster.CanCastMainSpell"/>; true without a spell caster.</summary>
+    public bool CanCastMainSpell(Creature creature, uint spellId) => _ai.Spells?.CanCastMainSpell(creature, spellId) ?? true;
+
     public bool HasAura(Unit unit, uint spellId) => _ai.Spells?.HasAura(unit, spellId) ?? false;
 
     public void InterruptCast(Creature creature) => _ai.Spells?.Interrupt(creature);

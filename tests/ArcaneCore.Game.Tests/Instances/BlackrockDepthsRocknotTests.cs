@@ -4,6 +4,7 @@ using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Instances.Scripts.Classic;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Npc;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
@@ -85,6 +86,60 @@ public sealed class BlackrockDepthsRocknotTests
         Assert.Equal(1, ai.Phase);
         Assert.Equal(0u, nagmara.NpcFlags & ((uint)NpcFlags.Gossip | (uint)NpcFlags.QuestGiver));
         Assert.Equal(0u, rocknot.NpcFlags & (uint)NpcFlags.QuestGiver);
+    }
+
+    private sealed class RewardSeam(bool rewarded) : IInstanceQuestRewards
+    {
+        public bool? IsRewarded(Player player, uint questId) => rewarded && questId == NagmaraAI.QuestPotionOfLove;
+        public void Update(Map map, uint diffMs) { }
+        public void OnPlayerRemoved(Map map, Player player) { }
+    }
+
+    private static NpcInfo InfoOf(Creature c)
+        => new(c.Guid, c.Template.Entry, c.Spawn?.Guid ?? 0, NpcFlags.Gossip | NpcFlags.QuestGiver, c.Map!.MapId,
+            c.X, c.Y, c.Z, c.BoundingRadius, true, false, false, false, 0);
+
+    [Fact]
+    public void PotionOfLove_AfterTheRewardTheRepeatLineAppearsAndRestartsTheScene()
+    {
+        using DungeonScriptHarness h = Harness();
+        h.Map.AddUpdater(new RewardSeam(true));
+        Creature nagmara = h.Creature(BlackrockDepthsInstance.NpcNagmara);
+        Creature rocknot = h.Creature(BlackrockDepthsInstance.NpcRocknot);
+        nagmara.NpcFlags |= (uint)NpcFlags.Gossip | (uint)NpcFlags.QuestGiver;
+        rocknot.NpcFlags |= (uint)NpcFlags.QuestGiver;
+        var ai = Assert.IsType<NagmaraAI>(nagmara.AI);
+        NpcInfo npc = InfoOf(nagmara);
+
+        ScriptedGossipMenu menu = Assert.IsType<ScriptedGossipMenu>(ai.Hello(h.Player, npc));
+        Assert.Equal(NagmaraAI.GossipNpcTextRepeat, menu.NpcTextId);
+        Assert.True(menu.ShowQuests);
+        ScriptedGossipItem item = Assert.Single(menu.Items);
+        Assert.Equal(NagmaraAI.GossipItemRepeat, item.Text);
+        Assert.Equal(0, ai.Phase);
+
+        Assert.False(ai.SelectReply(h.Player, npc, item.Sender, 99).Close); // another action does nothing
+        Assert.Equal(0, ai.Phase);
+
+        ScriptedGossipReply reply = ai.SelectReply(h.Player, npc, item.Sender, item.Action);
+        Assert.True(reply.Close);
+        Assert.Equal(1, ai.Phase);
+        Assert.Equal(0u, nagmara.NpcFlags & ((uint)NpcFlags.Gossip | (uint)NpcFlags.QuestGiver));
+        Assert.Equal(0u, rocknot.NpcFlags & (uint)NpcFlags.QuestGiver);
+    }
+
+    [Fact]
+    public void PotionOfLove_BeforeTheRewardTheRepeatLineIsNotOfferedOrAccepted()
+    {
+        using DungeonScriptHarness h = Harness();
+        h.Map.AddUpdater(new RewardSeam(false));
+        Creature nagmara = h.Creature(BlackrockDepthsInstance.NpcNagmara);
+        var ai = Assert.IsType<NagmaraAI>(nagmara.AI);
+        NpcInfo npc = InfoOf(nagmara);
+
+        Assert.Null(ai.Hello(h.Player, npc));
+        Assert.False(ai.SelectReply(h.Player, npc, 1, NagmaraAI.ActionRepeat).Close);
+        Assert.Equal(0, ai.Phase);
     }
 
     private static void Reach(RocknotAI ai, params uint[] pointIds)

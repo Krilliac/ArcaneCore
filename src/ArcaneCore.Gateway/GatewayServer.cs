@@ -41,7 +41,8 @@ public sealed class GatewayServer : BackgroundService
         IServiceScopeFactory scopes,
         IOptions<GatewayOptions> options,
         ILoggerFactory loggers,
-        IOptions<NetProtectionOptions>? protection = null)
+        IOptions<NetProtectionOptions>? protection = null,
+        GatewayWarden? warden = null)
     {
         ArgumentNullException.ThrowIfNull(scopes);
         ArgumentNullException.ThrowIfNull(options);
@@ -51,8 +52,18 @@ public sealed class GatewayServer : BackgroundService
         _options = options;
         _loggers = loggers;
         _protection = protection;
+        Warden = warden;
         _logger = loggers.CreateLogger<GatewayServer>();
     }
+
+    /// <summary>The gateway's Warden (null when none was registered: Warden stays on the world, as in a hand-built test server).</summary>
+    public GatewayWarden? Warden { get; }
+
+    /// <summary>
+    /// False when Warden is enabled on this gateway but unusable (invalid options, module missing or failing its digest check): the gateway
+    /// then answers every login with AUTH_UNAVAILABLE. True when Warden is off or usable.
+    /// </summary>
+    public bool IsWardenReady => Warden is null || Warden.IsReady;
 
     internal GatewayOptions Options => _options.Value;
 
@@ -126,6 +137,7 @@ public sealed class GatewayServer : BackgroundService
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
         listener.Start();
         _listener = listener;
+        GatewayMeters.Attach(this);
         Guard = new NetGuard(_protection?.Value ?? new NetProtectionOptions(), () => config.MaxConnections, () => config.MaxConnectionsPerIp,
             _logger, bindAddress: IPAddress.Parse(config.BindAddress));
         _logger.LogInformation("Gateway listening on {Endpoint}; worker link to {Worker}:{Port}", listener.LocalEndpoint, config.WorkerAddress, config.WorkerPort);
@@ -182,8 +194,15 @@ public sealed class GatewayServer : BackgroundService
                 await link.DisposeAsync().ConfigureAwait(false);
             }
 
+            GatewayMeters.Detach(this);
             _logger.LogInformation("Gateway stopped");
         }
+    }
+
+    public override void Dispose()
+    {
+        GatewayMeters.Detach(this);
+        base.Dispose();
     }
 
     private async Task RunConnectionAsync(GatewayClientConnection connection, IDisposable? lease, CancellationToken stoppingToken)
@@ -209,10 +228,11 @@ public sealed class GatewayServer : BackgroundService
         GatewayOptions config = _options.Value;
         TimeSpan delay = config.LinkRetryDelay > TimeSpan.Zero ? config.LinkRetryDelay : TimeSpan.FromSeconds(1);
         TimeSpan nextDelay = delay;
+        int linkRegistrations = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
             IPEndPoint worker = WorkerEndPoint;
-            var link = new GatewaySessionLinkClient(config.ToManifest(_incarnation), worker, config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>());
+            var link = new GatewaySessionLinkClient(config.ToManifest(_incarnation), worker, config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), Warden?.Posture);
             try
             {
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
@@ -226,6 +246,8 @@ public sealed class GatewayServer : BackgroundService
                 {
                     return;
                 }
+
+                GatewayMeters.CountLinkFailure(config.NodeId);
 
                 _logger.LogWarning("Worker link to {Worker} not established ({Message}); retrying in {Delay}", worker, ex.Message, nextDelay);
                 try
@@ -246,6 +268,11 @@ public sealed class GatewayServer : BackgroundService
             Volatile.Write(ref _retarget, retarget);
             _linkWorker = worker;
             _link = link;
+            if (linkRegistrations++ > 0)
+            {
+                GatewayMeters.CountLinkReconnect(config.NodeId);
+            }
+
             _logger.LogInformation("Worker link to {Worker} registered", worker);
             Volatile.Read(ref _linkUp).TrySetResult();
             try

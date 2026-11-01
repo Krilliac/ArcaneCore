@@ -6,7 +6,7 @@ namespace ArcaneCore.Game.Teleport;
 
 /// <summary>
 /// Front door to <see cref="AnomalyLedger"/> for the server-side outcome checks that concern a player whether a client or a bot
-/// drives it (teleport, death, session): the subject is the stable <c>player Name (guid N)</c> with N the decimal low part of the guid, as the other Game writers (MapCombat, the Locomotion observers, TransportAnomalies) write it, the detail is the caller's text
+/// drives it (teleport, death, session): the subject is the stable <c>player (guid N)</c> (never the name: the subject reaches public QA issues) with N the decimal low part of the guid, as the other Game writers (MapCombat, the Locomotion observers, TransportAnomalies) write it, the detail is the caller's text
 /// followed by <c>| map M at x,y,z</c>. Failure path only: callers format their detail after the check failed.
 /// </summary>
 public static class ServerAnomalies
@@ -36,9 +36,9 @@ public static class ServerAnomalies
         return SubjectOf(player.Name, player.Guid);
     }
 
-    /// <summary>The stable subject for a player known only by name and guid (a GM trace that outlives the <see cref="Player"/> lookup); identical to <see cref="SubjectOf(Player)"/> for the same player.</summary>
+    /// <summary>The stable subject for a player known only by name and guid (a GM trace that outlives the <see cref="Player"/> lookup); the name is ignored. Identical to <see cref="SubjectOf(Player)"/> for the same player.</summary>
     public static string SubjectOf(string playerName, ObjectGuid guid)
-        => string.Create(CultureInfo.InvariantCulture, $"player {playerName} (guid {guid.Low})");
+        => string.Create(CultureInfo.InvariantCulture, $"player (guid {guid.Low})");
 
     /// <summary>Report a failed check about <paramref name="player"/>.</summary>
     public static AnomalyRecording Report(Player player, string subsystem, string code, string detail, AnomalySeverity severity = AnomalySeverity.Warning)

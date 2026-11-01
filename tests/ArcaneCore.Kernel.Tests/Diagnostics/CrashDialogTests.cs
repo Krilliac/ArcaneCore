@@ -406,6 +406,70 @@ public sealed class CrashDialogTests : IDisposable
     }
 
     [Fact]
+    public void ClipboardText_RejectsNullArguments_AndKeepsAnEmptyTextAsTitleAndBlankLine()
+    {
+        Assert.Throws<ArgumentNullException>(() => CrashDialogTaskDialog.ClipboardText(null!, "text"));
+        Assert.Throws<ArgumentNullException>(() => CrashDialogTaskDialog.ClipboardText("title", null!));
+        Assert.Equal("title\r\n\r\n", CrashDialogTaskDialog.ClipboardText("title", string.Empty));
+    }
+
+    [Fact]
+    public void ClipboardText_IsTheUntruncatedTextTheBoxFitsToTheScreen()
+    {
+        // The box shows at most MaxBoxLines lines; what Copy puts on the clipboard is the complete text, so no line is lost to the cut.
+        string text = string.Join('\n', Enumerable.Range(1, CrashDialog.MaxBoxLines + 10).Select(static i => "line " + i));
+        string clipboard = CrashDialogTaskDialog.ClipboardText("t", text);
+        Assert.Contains("line " + (CrashDialog.MaxBoxLines + 10), clipboard, StringComparison.Ordinal);
+        Assert.DoesNotContain("more line(s)", clipboard, StringComparison.Ordinal);
+        Assert.Contains("more line(s)", CrashDialog.Fit(text, "report.txt"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MessageBoxPresenter_RejectsNullArguments_BeforeAnyWindowOpens()
+    {
+        Assert.Throws<ArgumentNullException>(() => MessageBoxCrashDialogPresenter.Instance.Show(null!, "text"));
+        Assert.Throws<ArgumentNullException>(() => MessageBoxCrashDialogPresenter.Instance.Show("title", null!));
+    }
+
+    [Fact]
+    public void MessageBoxPresenter_OffWindows_Throws_SoTheCallerRecordsItAndCarriesOn()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // on Windows Show opens a real window; the seam tests above use a recorder instead
+        }
+
+        Assert.Throws<PlatformNotSupportedException>(() => MessageBoxCrashDialogPresenter.Instance.Show("title", "text"));
+    }
+
+    [Fact]
+    public void TryShowFault_RejectsANullNotice()
+    {
+        Assert.Throws<ArgumentNullException>(() => CrashDialog.TryShowFault(true, null!));
+    }
+
+    [Fact]
+    public void Fit_KeepsExactlyMaxBoxLines_AndCountsTheDroppedOnesWhenItCuts()
+    {
+        string exact = string.Join('\n', Enumerable.Range(1, CrashDialog.MaxBoxLines).Select(static i => "l" + i));
+        Assert.Equal(exact, CrashDialog.Fit(exact, "full.txt"));
+
+        string over = exact + "\nextra one\nextra two";
+        string cut = CrashDialog.Fit(over, "full.txt");
+        Assert.EndsWith("... 2 more line(s) in full.txt", cut, StringComparison.Ordinal);
+        Assert.DoesNotContain("extra one", cut, StringComparison.Ordinal);
+        Assert.EndsWith("... 2 more line(s)", CrashDialog.Fit(over, null), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Fit_CutsALongLineAtMaxBoxLineLength_WithAnEllipsis()
+    {
+        string cut = CrashDialog.Fit(new string('x', CrashDialog.MaxBoxLineLength + 50), null);
+        Assert.Equal(new string('x', CrashDialog.MaxBoxLineLength) + "...", cut);
+        Assert.Equal(new string('y', CrashDialog.MaxBoxLineLength), CrashDialog.Fit(new string('y', CrashDialog.MaxBoxLineLength), null));
+    }
+
+    [Fact]
     public void ReportPathFor_IsPerDaemonAndTimestamped()
     {
         string path = CrashJournalPaths.ReportPathFor("/srv", "ArcaneCore.World", new DateTime(2026, 10, 27, 8, 30, 5, DateTimeKind.Utc));

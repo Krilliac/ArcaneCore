@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.WorldData.WorldState;
 using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.WorldState.Events;
@@ -33,6 +34,7 @@ public sealed partial class GameEventService : IGameEventState
     private readonly IGameEventStatusSink? _status;
     private readonly IGameEventAnnouncer? _announcer;
     private readonly Action<ushort, bool>? _persistDisabled;
+    private IGameEventMailSender? _mailSender;
     private bool _initialised;
     private DateOnly _computedFor;
 
@@ -130,6 +132,12 @@ public sealed partial class GameEventService : IGameEventState
         ArgumentNullException.ThrowIfNull(effects);
         _effects.Add(effects);
     }
+
+    /// <summary>
+    /// Set who delivers the <c>game_event_mail</c> letters (null: none are delivered). The mails of an event are sent when it starts
+    /// (not when it only resumes after a restart) and, for the negative event number, when it stops.
+    /// </summary>
+    public void SetMailSender(IGameEventMailSender? sender) => _mailSender = sender;
 
     /// <summary>Register a listener that is told after every start and stop.</summary>
     public void AddListener(IGameEventListener listener)
@@ -434,7 +442,12 @@ public sealed partial class GameEventService : IGameEventState
         RunEffects(e => e.UnspawnEvent(-eventId), "unspawn");
         RunEffects(e => e.UpdateCreatureData(eventId, true), "creature data");
         RunEffects(e => e.UpdateEventQuests(eventId, true), "event quests");
-        // The start mails (SendEventMails) are not delivered: there is no system-mail sender in this tree (docs/areas/game-events-weather.md).
+        // vmangos ApplyNewEvent (GameEventMgr.cpp:802-804): no mail when the start only resumes an event that ran before a restart.
+        if (!resume)
+        {
+            SendEventMails(eventId);
+        }
+
         Notify(eventId, true, resume);
     }
 
@@ -447,6 +460,8 @@ public sealed partial class GameEventService : IGameEventState
         RunEffects(e => e.SpawnEvent(-eventId), "spawn");
         RunEffects(e => e.UpdateCreatureData(eventId, false), "creature data");
         RunEffects(e => e.UpdateEventQuests(eventId, false), "event quests");
+        // vmangos UnApplyEvent (cpp:780) mails the rows of the NEGATIVE event number when the event stops.
+        SendEventMails(-eventId);
         Notify(eventId, false, false);
     }
 
@@ -455,6 +470,23 @@ public sealed partial class GameEventService : IGameEventState
         foreach (IGameEventEffects effects in _effects.ToArray())
         {
             Guarded(() => phase(effects), what);
+        }
+    }
+
+    /// <summary>
+    /// vmangos <c>GameEventMgr::SendEventMails</c> (GameEventMgr.cpp:1038-1061): each <c>game_event_mail</c> row of the signed event number
+    /// goes to the <see cref="IGameEventMailSender"/>, one call per row, in table order. Without a sender nothing is mailed.
+    /// </summary>
+    private void SendEventMails(int signedEvent)
+    {
+        if (_mailSender is not { } sender || !Rows.Mails.TryGetValue(signedEvent, out IReadOnlyList<GameEventMailRecord>? mails))
+        {
+            return;
+        }
+
+        foreach (GameEventMailRecord mail in mails)
+        {
+            Guarded(() => sender.Send(signedEvent, mail), $"mail of event {signedEvent}");
         }
     }
 
@@ -479,4 +511,16 @@ public sealed partial class GameEventService : IGameEventState
             _logger.LogError(ex, "game event {What} failed", what);
         }
     }
+}
+
+/// <summary>
+/// Delivers one <c>game_event_mail</c> row (vmangos <c>MailDraft(mailTemplateId)</c> from <c>MailSender(MAIL_CREATURE, senderEntry)</c> to
+/// the characters of <see cref="GameEventMailRecord.RaceMask"/>, restricted to those who finished <see cref="GameEventMailRecord.Quest"/>
+/// when it is set). World thread; the service calls it once per row and catches what it throws.
+/// </summary>
+public interface IGameEventMailSender
+{
+    /// <param name="signedEvent">The event number the row hangs off: positive on start, negative on stop.</param>
+    /// <param name="mail">The row.</param>
+    void Send(int signedEvent, GameEventMailRecord mail);
 }

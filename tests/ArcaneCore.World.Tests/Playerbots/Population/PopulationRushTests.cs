@@ -8,77 +8,10 @@ using ArcaneCore.World.Bots;
 
 namespace ArcaneCore.World.Tests.Playerbots.Population;
 
-/// <summary><c>.playerbot population rush</c>: the pacing, the brake, the caps and the commands. Real-time pacing and Stopwatch bounds, so Timing (serial, one isolated rerun).</summary>
+/// <summary><c>.playerbot population rush</c>: the brake, the caps and the commands against a live test host. Real-time pacing and Stopwatch bounds, so Timing (serial, one isolated rerun); the pure pacer, brake and halt logic is in <see cref="PopulationRushLogicTests"/>.</summary>
 [Trait("Category", "Timing")]
 public sealed class PopulationRushTests
 {
-    [Fact]
-    public void ThePacer_HandsOutTheRequestedRate_AndNeverMoreThanTwoSecondsOfBurst()
-    {
-        var pacer = new PopulationRushPacer();
-        int total = 0;
-        for (int i = 0; i < 200; i++) // ten seconds of 50 ms updates at 5 per second
-        {
-            pacer.Add(50, 5);
-            total += pacer.Take(int.MaxValue);
-        }
-
-        Assert.InRange(total, 49, 50);
-
-        pacer.Add(60_000, 5); // a stall: the burst is capped at two seconds' worth
-        Assert.Equal(10, pacer.Take(int.MaxValue));
-        Assert.Equal(0, pacer.Take(int.MaxValue));
-    }
-
-    [Fact]
-    public void TheBrake_PausesAfterNConsecutiveWindowsOverTheCeiling_AndResumesAfterNUnderTheResumeLine()
-    {
-        var options = new PlayerbotPopulationOptions { RushBrakeP95Ms = 500, RushBrakeWindows = 3, ResumeBelowPct = 80, RushBrakeWindowSeconds = 5 };
-        var brake = new PopulationRushBrake();
-        long total = 0, now = 1000;
-        PopulationRushBrakeChange Window(double p95)
-        {
-            total += 100;
-            now += 5000;
-            Assert.True(brake.WindowDue(now, total, 5000));
-            return brake.Observe(now, total, p95, options.RushCeilingMs(), options);
-        }
-
-        Assert.False(brake.WindowDue(now, total, 5000)); // the first call only starts the window
-        Assert.False(brake.WindowDue(now + 4999, total + 100, 5000)); // not five seconds yet
-        Assert.Equal(PopulationRushBrakeChange.None, Window(600));
-        Assert.Equal(PopulationRushBrakeChange.None, Window(499)); // under the ceiling: the count starts again
-        Assert.Equal(PopulationRushBrakeChange.None, Window(600));
-        Assert.Equal(PopulationRushBrakeChange.None, Window(600));
-        Assert.Equal(PopulationRushBrakeChange.Paused, Window(501));
-        Assert.True(brake.Paused);
-
-        Assert.Equal(PopulationRushBrakeChange.None, Window(450)); // between the resume line (400) and the ceiling: still paused
-        Assert.Equal(PopulationRushBrakeChange.None, Window(100));
-        Assert.Equal(PopulationRushBrakeChange.None, Window(100));
-        Assert.Equal(PopulationRushBrakeChange.Resumed, Window(100));
-        Assert.False(brake.Paused);
-
-        // A window is not counted twice: no new ticks, no new window.
-        Assert.False(brake.WindowDue(now + 5000, total, 5000)); // five seconds but no ticks: no evidence
-    }
-
-    private static async Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
-    {
-        PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
-        {
-            o.MaxBots = 6;
-            o.Population.Enabled = false;      // the rush needs no running population
-            o.Population.TargetOnline = 0;
-            o.Population.MaxCreatePerMinute = 1; // the rush bypasses it
-            o.Population.WindowTicks = 20;
-            o.Population.RushBrakeWindows = 3;
-            o.Population.RushBrakeWindowSeconds = 1;
-            configure?.Invoke(o);
-        }, dataStore: store);
-        return world;
-    }
-
     [Fact]
     public async Task Rush_StartedOnAColdWorld_WaitsForThePlacementSafetyData_InsteadOfHalting_AndThenCompletes()
     {
@@ -103,23 +36,6 @@ public sealed class PopulationRushTests
         PopulationRushStatus done = await WaitRushAsync(world, r => r.State != "running", "the rush to finish once the data is ready");
         Assert.Equal(("done", 2), (done.State, done.Created));
         await world.WaitForSettledAsync(2);
-    }
-
-    [Fact]
-    public void Rush_HaltsOnAFailedPlacementDataBuild_ButHoldsWhileTheBuildRuns()
-    {
-        var rush = new PopulationRush();
-        rush.Begin(5, 10, 0);
-
-        // The build is running: a hold, however many passes it takes.
-        for (int i = 0; i < 10; i++) Assert.False(rush.Report(5, 0, PopulationProvisioner.WaitingReason, null, i));
-        Assert.Equal("running", rush.Snapshot(100).State);
-
-        // The build failed and waits for its retry: the rush ends instead of waiting for good.
-        Assert.True(rush.Report(5, 0, PopulationProvisioner.WaitingReason + PopulationProvisioner.BuildFailedSuffix, null, 200));
-        PopulationRushStatus status = rush.Snapshot(200);
-        Assert.Equal("halted", status.State);
-        Assert.Contains("the last build failed", status.Reason);
     }
 
     private static async Task<PopulationRushStatus> WaitRushAsync(PopulationTestHost world, Func<PopulationRushStatus, bool> done, string what, int seconds = 20)
@@ -394,6 +310,22 @@ public sealed class PopulationRushTests
         Assert.Equal(3, world.Feature.RushStatus.Requested);
     }
 
+    private static async Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
+    {
+        PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.MaxBots = 6;
+            o.Population.Enabled = false;      // the rush needs no running population
+            o.Population.TargetOnline = 0;
+            o.Population.MaxCreatePerMinute = 1; // the rush bypasses it
+            o.Population.WindowTicks = 20;
+            o.Population.RushBrakeWindows = 3;
+            o.Population.RushBrakeWindowSeconds = 1;
+            configure?.Invoke(o);
+        }, dataStore: store);
+        return world;
+    }
+
     private static async Task<string> SayAsync(WorldTestClient admin, string command, Func<string, bool> reply)
     {
         await admin.SendChatAsync(ChatType.Say, Language.Common, command);
@@ -402,5 +334,77 @@ public sealed class PopulationRushTests
             string line = (await admin.ReadChatAsync()).Text;
             if (reply(line)) return line;
         }
+    }
+}
+
+/// <summary>The rush's pacer, brake and halt rule driven with explicit times and counts: no host, no wall clock, so no Timing trait.</summary>
+public sealed class PopulationRushLogicTests
+{
+    [Fact]
+    public void ThePacer_HandsOutTheRequestedRate_AndNeverMoreThanTwoSecondsOfBurst()
+    {
+        var pacer = new PopulationRushPacer();
+        int total = 0;
+        for (int i = 0; i < 200; i++) // ten seconds of 50 ms updates at 5 per second
+        {
+            pacer.Add(50, 5);
+            total += pacer.Take(int.MaxValue);
+        }
+
+        Assert.InRange(total, 49, 50);
+
+        pacer.Add(60_000, 5); // a stall: the burst is capped at two seconds' worth
+        Assert.Equal(10, pacer.Take(int.MaxValue));
+        Assert.Equal(0, pacer.Take(int.MaxValue));
+    }
+
+    [Fact]
+    public void TheBrake_PausesAfterNConsecutiveWindowsOverTheCeiling_AndResumesAfterNUnderTheResumeLine()
+    {
+        var options = new PlayerbotPopulationOptions { RushBrakeP95Ms = 500, RushBrakeWindows = 3, ResumeBelowPct = 80, RushBrakeWindowSeconds = 5 };
+        var brake = new PopulationRushBrake();
+        long total = 0, now = 1000;
+        PopulationRushBrakeChange Window(double p95)
+        {
+            total += 100;
+            now += 5000;
+            Assert.True(brake.WindowDue(now, total, 5000));
+            return brake.Observe(now, total, p95, options.RushCeilingMs(), options);
+        }
+
+        Assert.False(brake.WindowDue(now, total, 5000)); // the first call only starts the window
+        Assert.False(brake.WindowDue(now + 4999, total + 100, 5000)); // not five seconds yet
+        Assert.Equal(PopulationRushBrakeChange.None, Window(600));
+        Assert.Equal(PopulationRushBrakeChange.None, Window(499)); // under the ceiling: the count starts again
+        Assert.Equal(PopulationRushBrakeChange.None, Window(600));
+        Assert.Equal(PopulationRushBrakeChange.None, Window(600));
+        Assert.Equal(PopulationRushBrakeChange.Paused, Window(501));
+        Assert.True(brake.Paused);
+
+        Assert.Equal(PopulationRushBrakeChange.None, Window(450)); // between the resume line (400) and the ceiling: still paused
+        Assert.Equal(PopulationRushBrakeChange.None, Window(100));
+        Assert.Equal(PopulationRushBrakeChange.None, Window(100));
+        Assert.Equal(PopulationRushBrakeChange.Resumed, Window(100));
+        Assert.False(brake.Paused);
+
+        // A window is not counted twice: no new ticks, no new window.
+        Assert.False(brake.WindowDue(now + 5000, total, 5000)); // five seconds but no ticks: no evidence
+    }
+
+    [Fact]
+    public void Rush_HaltsOnAFailedPlacementDataBuild_ButHoldsWhileTheBuildRuns()
+    {
+        var rush = new PopulationRush();
+        rush.Begin(5, 10, 0);
+
+        // The build is running: a hold, however many passes it takes.
+        for (int i = 0; i < 10; i++) Assert.False(rush.Report(5, 0, PopulationProvisioner.WaitingReason, null, i));
+        Assert.Equal("running", rush.Snapshot(100).State);
+
+        // The build failed and waits for its retry: the rush ends instead of waiting for good.
+        Assert.True(rush.Report(5, 0, PopulationProvisioner.WaitingReason + PopulationProvisioner.BuildFailedSuffix, null, 200));
+        PopulationRushStatus status = rush.Snapshot(200);
+        Assert.Equal("halted", status.State);
+        Assert.Contains("the last build failed", status.Reason);
     }
 }

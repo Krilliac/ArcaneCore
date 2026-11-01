@@ -96,7 +96,8 @@ internal sealed record PlayerbotGroupGoal(
 /// A bot as the matcher sees it. <paramref name="Bonus"/> is the matching preference the cooperation rules add (a guildmate of the group's
 /// caller: 1; 0 otherwise): among bots that waited equally long it comes before level closeness. <paramref name="Qualifying"/> is whether the bot
 /// may anchor an instance group (<see cref="PlayerbotGroupGoal.Anchors"/>; for a recruit or a player, <see cref="PlayerbotGroupContent.QualifiesAtLevel"/>):
-/// true for everything that is not a quest dungeon goal.
+/// true for everything that is not a quest dungeon goal. <paramref name="Anchoring"/> is whether the bot is a waiting bot that anchors its instance goal
+/// (<see cref="PlayerbotGroupGoal.Anchors"/>): the predicate the coordinator's anchoring check (<c>PlanAnchored</c>) applies, which a recruit or a player never meets.
 /// </summary>
 internal sealed record PlayerbotGroupCandidate(
     Guid BotId,
@@ -111,7 +112,8 @@ internal sealed record PlayerbotGroupCandidate(
     float Gear,
     uint NeedSinceMs,
     int Bonus = 0,
-    bool Qualifying = true);
+    bool Qualifying = true,
+    bool Anchoring = false);
 
 /// <summary>A formed group, before the invitations go out (<see cref="PlayerbotGroupContent.Match"/>).</summary>
 internal sealed record PlayerbotGroupPlan(
@@ -304,10 +306,10 @@ internal static class PlayerbotGroupContent
     /// <see cref="PlayerbotGroupOptions.LevelRange"/> of every other. The leader is the best tank (highest level, then gear), else
     /// the bot that has waited longest (the quest's owner). A raid is spread over subgroups of five, the tanks and healers first.
     /// </summary>
-    internal static PlayerbotGroupPlan? Match(IReadOnlyList<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupOptions options, bool needQualifying = false)
+    internal static PlayerbotGroupPlan? Match(IReadOnlyList<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupOptions options, bool needQualifying = false, bool needAnchoring = false)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return Match(candidates, size, options, RoleNeeds(size, options), needQualifying);
+        return Match(candidates, size, options, RoleNeeds(size, options), needQualifying, needAnchoring);
     }
 
     /// <summary>Whether a bot of <paramref name="level"/> is in the band of the instance goal (<see cref="PlayerbotGroupGoal.FitBand"/>); true for a goal outside an instance or without a band.</summary>
@@ -334,6 +336,12 @@ internal static class PlayerbotGroupContent
         return oldest;
     }
 
+    /// <summary>The wrap-safe "waited longest first" order of two waiting-since ticks (see <see cref="NeedSinceComparer"/>), for the coordinator's own orderings.</summary>
+    internal static IComparer<uint> SinceOrder => NeedSinceComparer.Instance;
+
+    /// <summary>The member test of a plan's anchor rule: <see cref="PlayerbotGroupCandidate.Anchoring"/> when <paramref name="anchoring"/>, else <see cref="PlayerbotGroupCandidate.Qualifying"/>.</summary>
+    private static bool Holds(PlayerbotGroupCandidate c, bool anchoring) => anchoring ? c.Anchoring : c.Qualifying;
+
     private sealed class NeedSinceComparer : IComparer<uint>
     {
         public static readonly NeedSinceComparer Instance = new();
@@ -343,10 +351,11 @@ internal static class PlayerbotGroupContent
             => x == y ? 0 : x == uint.MaxValue ? 1 : y == uint.MaxValue ? -1 : unchecked((int)(x - y));
     }
 
-    /// <summary><see cref="Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions, bool)"/> with the tanks and healers given (a dungeon or raid run's quotas).</summary>
+    /// <summary><see cref="Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions, bool, bool)"/> with the tanks and healers given (a dungeon or raid run's quotas).</summary>
     internal static PlayerbotGroupPlan? Match(IReadOnlyList<PlayerbotGroupCandidate> candidates, int size, PlayerbotGroupOptions options,
-        (int Tanks, int Healers) needs, bool needQualifying = false)
+        (int Tanks, int Healers) needs, bool needQualifying = false, bool needAnchoring = false)
     {
+        needQualifying |= needAnchoring;
         ArgumentNullException.ThrowIfNull(candidates);
         ArgumentNullException.ThrowIfNull(options);
         if (size < 2 || candidates.Count < size) return null;
@@ -357,18 +366,18 @@ internal static class PlayerbotGroupContent
         {
             PlayerbotGroupCandidate[] window = [.. candidates.Where(c => c.Level >= floor && c.Level <= floor + options.LevelRange)];
             if (window.Length < size) continue;
-            if (Fill(window, size, tanks, healers, needQualifying) is not { } plan) continue;
+            if (Fill(window, size, tanks, healers, needQualifying, needAnchoring) is not { } plan) continue;
             // An instance plan needs at least one member that is in band or has a direct reason: try the next floor otherwise.
-            if (needQualifying && !plan.Members.Any(m => m.Bot.Qualifying)) continue;
+            if (needQualifying && !plan.Members.Any(m => Holds(m.Bot, needAnchoring))) continue;
             return plan;
         }
 
         return null;
     }
 
-    private static PlayerbotGroupPlan? Fill(PlayerbotGroupCandidate[] window, int size, int tanks, int healers, bool needQualifying = false)
+    private static PlayerbotGroupPlan? Fill(PlayerbotGroupCandidate[] window, int size, int tanks, int healers, bool needQualifying = false, bool needAnchoring = false)
     {
-        if (needQualifying && !window.Any(c => c.Qualifying)) return null;
+        if (needQualifying && !window.Any(c => Holds(c, needAnchoring))) return null;
         var chosen = new List<(PlayerbotGroupCandidate Bot, PlayerbotGroupRole Role)>();
         var left = new List<PlayerbotGroupCandidate>(window);
         foreach (PlayerbotGroupCandidate tank in left.Where(c => CanTank(c.Class))
@@ -404,13 +413,13 @@ internal static class PlayerbotGroupContent
 
         if (chosen.Count < size) return null;
 
-        if (needQualifying && !chosen.Any(c => c.Bot.Qualifying))
+        if (needQualifying && !chosen.Any(c => Holds(c.Bot, needAnchoring)))
         {
             // No qualifying member is otherwise chosen: reserve one slot for the best qualifying candidate in the window that fits a needed role or a damage slot.
             int damageIndex = chosen.FindLastIndex(c => c.Role == PlayerbotGroupRole.Damage);
             if (damageIndex >= 0)
             {
-                PlayerbotGroupCandidate? bestQual = window.Where(c => c.Qualifying)
+                PlayerbotGroupCandidate? bestQual = window.Where(c => Holds(c, needAnchoring))
                     .OrderBy(c => c.NeedSinceMs, NeedSinceComparer.Instance)
                     .ThenByDescending(c => c.Bonus)
                     .ThenBy(c => Math.Abs(c.Level - anchor))
@@ -423,7 +432,7 @@ internal static class PlayerbotGroupContent
             {
                 int healerIndex = chosen.FindLastIndex(c => c.Role == PlayerbotGroupRole.Healer);
                 PlayerbotGroupCandidate? bestQualHealer = healerIndex >= 0
-                    ? window.Where(c => c.Qualifying && CanHeal(c.Class))
+                    ? window.Where(c => Holds(c, needAnchoring) && CanHeal(c.Class))
                         .OrderByDescending(c => Preferred(c.Class, c.TalentRole) == PlayerbotGroupRole.Healer)
                         .ThenByDescending(c => c.Level)
                         .ThenBy(c => c.NeedSinceMs, NeedSinceComparer.Instance)
@@ -437,7 +446,7 @@ internal static class PlayerbotGroupContent
                 {
                     int tankIndex = chosen.FindLastIndex(c => c.Role == PlayerbotGroupRole.Tank);
                     PlayerbotGroupCandidate? bestQualTank = tankIndex >= 0
-                        ? window.Where(c => c.Qualifying && CanTank(c.Class))
+                        ? window.Where(c => Holds(c, needAnchoring) && CanTank(c.Class))
                             .OrderByDescending(c => Preferred(c.Class, c.TalentRole) == PlayerbotGroupRole.Tank)
                             .ThenByDescending(c => c.Level)
                             .ThenByDescending(c => c.Gear)

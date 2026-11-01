@@ -58,6 +58,7 @@ public static class ClientDbcConsumers
         new("World:Chat:ChatChannelsDbcPath", "ChatChannels.dbc", "built-in chat channels", "the six transcribed 1.12.1 channels (English names only)"),
         new("World:Chat:EmotesDbcPath", "Emotes.dbc", "text emote animations", "text emotes are only announced", "Emotes"),
         new("World:Chat:EmotesTextDbcPath", "EmotesText.dbc", "text emote animations", "text emotes are only announced", "Emotes"),
+        new("World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath", "WorldMapArea.dbc", "bot defense call coordinates", "calls name the place without map coordinates"),
     ];
 
     /// <summary>The keys that take a directory of DBCs instead of one file; <c>ClientData:DbcDirectory</c> fills an unset one with itself.</summary>

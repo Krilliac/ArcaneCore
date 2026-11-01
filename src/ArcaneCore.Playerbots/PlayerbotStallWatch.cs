@@ -62,6 +62,10 @@ internal sealed partial class PlayerbotStallWatch
     private uint _anchorMap;
     private Fingerprint _fingerprint;
     private uint _progressMs;
+    private uint _killStreakMs;
+
+    /// <summary>How many stall bounds in a row kills alone (no other fingerprint field changing, the bot staying put) keep resetting the stall clock.</summary>
+    internal const uint KillProgressBounds = 3;
     private uint _gaveUpMs;
 
     /// <summary>The current stall (null while the bot makes progress): a death loop first, else a living bot standing still.</summary>
@@ -165,7 +169,7 @@ internal sealed partial class PlayerbotStallWatch
         if (_deathLoopReport is not null && unchecked(nowMs - _aliveSinceMs) >= stallMs) _deathLoopReport = null;
         Fingerprint current = fingerprint(player);
         PlayerbotThinkProbe.Phase("stall decision");
-        if (!_started || player.MapId != _anchorMap || !current.Equals(_fingerprint)
+        if (!_started || player.MapId != _anchorMap || !(current with { Kills = _fingerprint.Kills }).Equals(_fingerprint)
             || Vector3.Distance(position, _anchor) >= ProgressYards)
         {
             // The first look after an external report only re-anchors: the report stands until the bot makes progress from here.
@@ -176,8 +180,22 @@ internal sealed partial class PlayerbotStallWatch
             _anchorMap = player.MapId;
             _fingerprint = current;
             _progressMs = nowMs;
+            _killStreakMs = nowMs;
             if (!keepExternal) _stallReport = null;
             return false;
+        }
+
+        if (current.Kills != _fingerprint.Kills)
+        {
+            // Kills alone: progress for KillProgressBounds stall bounds since anything else last changed, then they stop counting (a bot
+            // farming one spawn for ever, with nothing else changing, is still stalled).
+            _fingerprint = current;
+            if (unchecked(nowMs - _killStreakMs) < KillProgressBounds * stallMs)
+            {
+                _progressMs = nowMs;
+                _stallReport = null;
+                return false;
+            }
         }
 
         uint idle = unchecked(nowMs - _progressMs);
@@ -306,9 +324,12 @@ internal sealed partial class PlayerbotStallWatch
     /// victim's health to a new low (<see cref="PlayerbotKillObserver.ProgressHitsBy"/>), so fighting in place (hits and the killing
     /// blow) is progress for a bot that gains no experience (level 60) and loots nothing, while a target held up by death
     /// prevention or healed back is not.
+    /// <paramref name="Kills"/>: kills the bot had loot rights to, so a bot capped at its level (no experience) or with full bags (no coin or items)
+    /// that kills respawns is progressing, but only for <see cref="KillProgressBounds"/> stall bounds since another field changed or the bot
+    /// moved (<see cref="Observe"/>): the death-loop watch counts only the bot's own deaths, so this bound is what ends a kill loop.
     /// </summary>
     internal readonly record struct Fingerprint(uint Level, uint Experience, uint Money, uint Items, int Quests, int Rewarded,
-        uint Objectives, int Spells, ulong RestMark = 0, ulong ProgressHits = 0);
+        uint Objectives, int Spells, ulong RestMark = 0, ulong ProgressHits = 0, uint Kills = 0);
 }
 
 /// <summary>

@@ -304,6 +304,115 @@ public sealed class ConfigReloadTests : IDisposable
         }.Validate());
 
     [Fact]
+    public void PvpDefense_DefaultsAreOffWithTheSpecifiedLimits_BindAndAreLiveKeysExceptTheDbcPath()
+    {
+        var defaults = new PlayerbotPvpDefenseOptions();
+        Assert.False(defaults.Enabled);
+        Assert.True(defaults.Announce);
+        Assert.False(defaults.BothSides);
+        Assert.Equal((300, 4, 5, 5), (defaults.RespondRadiusYards, defaults.MaxRespondersPerSide, defaults.MaxLevelBelow, defaults.MaxLevelAbove));
+        Assert.Equal((60, 30, 2, 16, 30), (defaults.CallerCooldownSeconds, defaults.ZoneAnnounceSeconds, defaults.MaxActiveCallsPerZone, defaults.MaxOpenCallsPerMap, defaults.ProvokeThrottleSeconds));
+        Assert.Equal("", defaults.WorldMapAreaDbcPath);
+        new PlayerbotPvpOptions().Validate();
+
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["World:Playerbots:Pvp:Defense:Enabled"] = "true",
+            ["World:Playerbots:Pvp:Defense:Announce"] = "false",
+            ["World:Playerbots:Pvp:Defense:BothSides"] = "true",
+            ["World:Playerbots:Pvp:Defense:RespondRadiusYards"] = "500",
+            ["World:Playerbots:Pvp:Defense:MaxRespondersPerSide"] = "7",
+            ["World:Playerbots:Pvp:Defense:MaxLevelBelow"] = "2",
+            ["World:Playerbots:Pvp:Defense:MaxLevelAbove"] = "9",
+            ["World:Playerbots:Pvp:Defense:CallerCooldownSeconds"] = "90",
+            ["World:Playerbots:Pvp:Defense:ZoneAnnounceSeconds"] = "45",
+            ["World:Playerbots:Pvp:Defense:MaxActiveCallsPerZone"] = "3",
+            ["World:Playerbots:Pvp:Defense:MaxOpenCallsPerMap"] = "40",
+            ["World:Playerbots:Pvp:Defense:ProvokeThrottleSeconds"] = "20",
+            ["World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath"] = "maps.dbc",
+        }).Build();
+        var pvp = new PlayerbotPvpOptions();
+        configuration.GetSection(PlayerbotOptions.SectionName + ":Pvp").Bind(pvp);
+        Assert.True(pvp.Defense.Enabled);
+        Assert.False(pvp.Defense.Announce);
+        Assert.True(pvp.Defense.BothSides);
+        Assert.Equal((500, 7, 2, 9), (pvp.Defense.RespondRadiusYards, pvp.Defense.MaxRespondersPerSide, pvp.Defense.MaxLevelBelow, pvp.Defense.MaxLevelAbove));
+        Assert.Equal((90, 45, 3, 40, 20), (pvp.Defense.CallerCooldownSeconds, pvp.Defense.ZoneAnnounceSeconds, pvp.Defense.MaxActiveCallsPerZone, pvp.Defense.MaxOpenCallsPerMap, pvp.Defense.ProvokeThrottleSeconds));
+        Assert.Equal("maps.dbc", pvp.Defense.WorldMapAreaDbcPath);
+        pvp.Validate();
+
+        foreach (string key in new[]
+        {
+            "Enabled", "Announce", "BothSides", "RespondRadiusYards", "MaxRespondersPerSide", "MaxLevelBelow", "MaxLevelAbove",
+            "CallerCooldownSeconds", "ZoneAnnounceSeconds", "MaxActiveCallsPerZone", "MaxOpenCallsPerMap", "ProvokeThrottleSeconds",
+        })
+        {
+            Assert.Contains(WorldConfigKeys.All, k => k.Path == "World:Playerbots:Pvp:Defense:" + key && k.Live);
+            Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:Playerbots:Pvp:Defense:" + key, ConfigDaemon.World).Status);
+        }
+
+        // The DBC path is restart-only: known to the catalog, never a reload key.
+        Assert.DoesNotContain(WorldConfigKeys.All, k => k.Path == "World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath" && k.Live);
+        Assert.Equal(ConfKeyStatus.Known, ConfCatalog.Embedded.Classify("World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath", ConfigDaemon.World).Status);
+    }
+
+    [Theory]
+    [InlineData(49, 4, 5, 5, 60, 30, 2, 16, 30)]
+    [InlineData(1001, 4, 5, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, -1, 5, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, 21, 5, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, -1, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, 61, 5, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, -1, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, 61, 60, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 9, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 3601, 30, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 4, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 601, 2, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 0, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 21, 16, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 2, 0, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 2, 257, 30)]
+    [InlineData(300, 4, 5, 5, 60, 30, 2, 16, 0)]
+    [InlineData(300, 4, 5, 5, 60, 30, 2, 16, 3601)]
+    public void PvpDefense_OutOfRangeValues_AreRejected(int radius, int responders, int below, int above, int cooldown, int announce, int perZone, int perMap, int throttle)
+        => Assert.Throws<InvalidOperationException>(() => new PlayerbotPvpOptions
+        {
+            Defense = new PlayerbotPvpDefenseOptions
+            {
+                RespondRadiusYards = radius,
+                MaxRespondersPerSide = responders,
+                MaxLevelBelow = below,
+                MaxLevelAbove = above,
+                CallerCooldownSeconds = cooldown,
+                ZoneAnnounceSeconds = announce,
+                MaxActiveCallsPerZone = perZone,
+                MaxOpenCallsPerMap = perMap,
+                ProvokeThrottleSeconds = throttle,
+            },
+        }.Validate());
+
+    [Theory]
+    [InlineData(50, 0, 0, 10, 5, 1, 1, 1)]
+    [InlineData(1000, 20, 60, 3600, 600, 20, 256, 3600)]
+    public void PvpDefense_RangeEdges_AreAccepted(int radius, int responders, int levels, int cooldown, int announce, int perZone, int perMap, int throttle)
+        => new PlayerbotPvpOptions
+        {
+            Defense = new PlayerbotPvpDefenseOptions
+            {
+                RespondRadiusYards = radius,
+                MaxRespondersPerSide = responders,
+                MaxLevelBelow = levels,
+                MaxLevelAbove = levels,
+                CallerCooldownSeconds = cooldown,
+                ZoneAnnounceSeconds = announce,
+                MaxActiveCallsPerZone = perZone,
+                MaxOpenCallsPerMap = perMap,
+                ProvokeThrottleSeconds = throttle,
+            },
+        }.Validate();
+
+    [Fact]
     public void TheBotsReadTheOneSwitch_ThroughTheSharedWarModeOptions()
     {
         var shared = new WarModeOptions();
@@ -959,6 +1068,13 @@ public sealed class ConfigReloadTests : IDisposable
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Pvp)}:{nameof(PlayerbotPvpOptions.Initiate)}:{property.Name}");
         }
 
+        // Defense calls are live key by key except the WorldMapArea.dbc path, which is read once when the bot feature attaches.
+        foreach (PropertyInfo property in typeof(PlayerbotPvpDefenseOptions).GetProperties()
+            .Where(p => p.SetMethod is { IsPublic: true } && p.Name != nameof(PlayerbotPvpDefenseOptions.WorldMapAreaDbcPath)))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Pvp)}:{nameof(PlayerbotPvpOptions.Defense)}:{property.Name}");
+        }
+
         foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatOptions).GetProperties()
             .Where(p => p.SetMethod is { IsPublic: true } && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotChatSafetyOptions)
                 && p.PropertyType != typeof(global::ArcaneCore.World.Playerbots.Chat.PlayerbotSpeechOptions)
@@ -1041,6 +1157,12 @@ public sealed class ConfigReloadTests : IDisposable
         foreach (PropertyInfo property in typeof(PlayerbotOpportunityOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
         {
             expected.Add($"{PlayerbotOptions.SectionName}:{nameof(PlayerbotOptions.Opportunities)}:{property.Name}");
+        }
+
+        // The world PvP objectives (Silithyst) are live key by key (docs/areas/playbots-social.md, World PvP: Silithyst).
+        foreach (PropertyInfo property in typeof(global::ArcaneCore.World.Playerbots.PlayerbotSilithystOptions).GetProperties().Where(p => p.SetMethod is { IsPublic: true }))
+        {
+            expected.Add($"{PlayerbotOptions.SectionName}:WorldPvp:Silithyst:{property.Name}");
         }
 
         // How bots share the mobs of one place is live key by key (docs/areas/playbots.md, Contention).

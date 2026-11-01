@@ -25,7 +25,7 @@ public sealed class PlayerbotSteepGroundTests
             Player player = world.Player;
             var origin = new Vector3(player.X, player.Y, player.Z);
             var slope = new SteepStrip(origin, climb: -6f);
-            WorldCollision.Of(world.Host.World).Install(pathfinder: slope);
+            WorldCollision.Of(world.Host.World).Install(pathfinder: slope, lineOfSight: slope);
             var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
             var goal = origin + new Vector3(80, 0, 0);
 
@@ -53,6 +53,75 @@ public sealed class PlayerbotSteepGroundTests
         });
     }
 
+    /// <summary>
+    /// Live (#1501, bot-motion/start-blocked NoGroundSupport, 78 483 times over 256 bots): the steep-allowed path from a ledge at
+    /// -8165.9, -1449.7, 195.6 ran to -8154.9, -1446.9, 135.9, 11 yards flat and 60 down. That is a fall, not a slide; the motion
+    /// check refused the walk through the air and the next think planned it again. The strip here drops 30 yards over its first
+    /// five flat yards and 60 over 12 (<c>climb: -30</c>), against the gentle slide of
+    /// <see cref="OnSteepGround_TheRouteLeadsDownToTheFirstWalkableCorner"/> (6 and 12 yards).
+    /// </summary>
+    [Fact]
+    public async Task OnSteepGround_ACliffDrop_IsNotPlannedAsAWalkingRoute()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            var origin = new Vector3(player.X, player.Y, player.Z);
+            var cliff = new SteepStrip(origin, climb: -30f);
+            WorldCollision.Of(world.Host.World).Install(pathfinder: cliff, lineOfSight: cliff);
+            var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
+            var goal = origin + new Vector3(80, 0, 0);
+
+            Assert.False(PlayerbotNavigation.TryPlan(player, goal, options, out _), "a cliff face was planned as a walking route");
+            Assert.False(PlayerbotNavigation.TryPlanToward(player, goal, options, out _), "exploration walked a cliff face");
+            Assert.True(cliff.SteepQueries > 0, "the steep-allowed path was never asked for, so nothing was refused");
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task OnSteepGround_SwitchbackDescent_IsPlannedAsWalkingRoute()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            var origin = new Vector3(player.X, player.Y, player.Z);
+            var switchback = new SwitchbackSlope(origin);
+            WorldCollision.Of(world.Host.World).Install(pathfinder: switchback, lineOfSight: switchback);
+            var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
+            var goal = origin + new Vector3(80, 0, 0);
+
+            Assert.True(PlayerbotNavigation.TryPlan(player, goal, options, out PlayerbotRoute? route),
+                "a gentle switchback descent curving back toward start was refused");
+            Assert.True(route!.Navigated);
+            Assert.Equal(switchback.FirstWalkable, route.Points[^1]);
+            return true;
+        });
+    }
+
+    [Fact]
+    public async Task OnSteepGround_LongGentleRampDroppingMoreThan11Yards_IsPlannedAsWalkingRoute()
+    {
+        await using RiskTestWorld world = await RiskTestWorld.StartAsync();
+        await world.OnWorldAsync(() =>
+        {
+            Player player = world.Player;
+            var origin = new Vector3(player.X, player.Y, player.Z);
+            var ramp = new GentleRampSlope(origin);
+            WorldCollision.Of(world.Host.World).Install(pathfinder: ramp, lineOfSight: ramp);
+            var options = new PlayerbotOptions { MaxPathPoints = 128, MaxRouteYards = 2000 };
+            var goal = origin + new Vector3(80, 0, 0);
+
+            Assert.True(PlayerbotNavigation.TryPlan(player, goal, options, out PlayerbotRoute? route),
+                "a long gentle ramp dropping > 11 yards was falsely refused");
+            Assert.True(route!.Navigated);
+            Assert.Equal(ramp.FirstWalkable, route.Points[^1]);
+            return true;
+        });
+    }
+
     [Fact]
     public async Task OnWalkableGround_ADestinationOffTheMesh_StillHasNoRoute()
     {
@@ -63,7 +132,7 @@ public sealed class PlayerbotSteepGroundTests
             var origin = new Vector3(player.X, player.Y, player.Z);
             // The steep strip lies 200 yards east; the bot stands on walkable ground and aims into it.
             var slope = new SteepStrip(origin + new Vector3(200, 0, 0), climb: -6f);
-            WorldCollision.Of(world.Host.World).Install(pathfinder: slope);
+            WorldCollision.Of(world.Host.World).Install(pathfinder: slope, lineOfSight: slope);
             Assert.False(PlayerbotNavigation.TryPlan(player, origin + new Vector3(200, 0, 0), new PlayerbotOptions(), out _));
             Assert.Equal(0, slope.SteepQueries);
             return true;
@@ -132,7 +201,7 @@ public sealed class PlayerbotSteepGroundTests
     /// excludes steep slopes from or to the strip answers no path (Detour finds no polygon there); with steep slopes allowed the path
     /// runs east over the strip, each corner <c>climb</c> yards above the last, to walkable ground and on.
     /// </summary>
-    private sealed class SteepStrip(Vector3 centre, float climb) : IPathfinder
+    private sealed class SteepStrip(Vector3 centre, float climb, bool cliff = false) : IPathfinder, ILineOfSight
     {
         private const float HalfWidth = 10f;
 
@@ -141,6 +210,30 @@ public sealed class PlayerbotSteepGroundTests
         public Vector3 FirstWalkable => centre + new Vector3(HalfWidth + 2f, 0, climb * 2);
 
         public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+        {
+            if (x <= centre.X) return centre.Z;
+            if (x >= centre.X + HalfWidth + 2f) return centre.Z + (climb * 2);
+            if (cliff || climb <= -20f) return centre.Z + (climb * 2);
+
+            float t = (x - centre.X) / (HalfWidth + 2f);
+            return centre.Z + ((climb * 2) * t);
+        }
 
         private bool OnStrip(Vector3 point) => MathF.Abs(point.X - centre.X) <= HalfWidth && MathF.Abs(point.Y - centre.Y) <= 50f;
 
@@ -152,6 +245,106 @@ public sealed class PlayerbotSteepGroundTests
                     : new PathResult(PathType.Normal, [start, end]);
             SteepQueries++;
             return new PathResult(PathType.Normal, [start, centre + new Vector3(HalfWidth / 2, 0, climb), FirstWalkable, end]);
+        }
+    }
+
+    /// <summary>
+    /// A switchback trail descending a mountainside where the path doubles back toward the start coordinates
+    /// while remaining gentle and walkable along the path.
+    /// </summary>
+    private sealed class SwitchbackSlope(Vector3 centre) : IPathfinder, ILineOfSight
+    {
+        public Vector3 Corner1 => centre + new Vector3(10f, 0, -4f);
+        public Vector3 Corner2 => centre + new Vector3(1f, 2f, -8f);
+        public Vector3 FirstWalkable => centre + new Vector3(1f, 12f, -12f);
+
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+        {
+            float relX = x - centre.X;
+            float relY = y - centre.Y;
+            if (relY <= 1f)
+            {
+                float t = Math.Clamp(relX / 10f, 0f, 1f);
+                return centre.Z - (4f * t);
+            }
+            if (relY <= 3f)
+            {
+                float t = Math.Clamp((10f - relX) / 9f, 0f, 1f);
+                return centre.Z - 4f - (4f * t);
+            }
+            float t3 = Math.Clamp((relY - 2f) / 10f, 0f, 1f);
+            return centre.Z - 8f - (4f * t3);
+        }
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            bool excludeSteep = ((options?.ExcludeFlags ?? NavTerrain.Empty) & NavTerrain.SteepSlopes) != 0;
+            if (excludeSteep)
+            {
+                if (Vector3.Distance(start, FirstWalkable) <= 1f)
+                    return new PathResult(PathType.Normal, [start, end]);
+                return PathResult.StraightLine(start, end, PathType.NoPath);
+            }
+            return new PathResult(PathType.Normal, [start, Corner1, Corner2, FirstWalkable, end]);
+        }
+    }
+
+    /// <summary>
+    /// A long, gentle ramp whose single straight leg drops more than 11 yards (e.g. 14 yd drop over 50 yd flat)
+    /// but remains entirely walkable and supported by ground along each step.
+    /// </summary>
+    private sealed class GentleRampSlope(Vector3 centre) : IPathfinder, ILineOfSight
+    {
+        public Vector3 FirstWalkable => centre + new Vector3(50f, 0, -14f);
+
+        public bool Enabled => true;
+
+        public bool IsInLineOfSight(uint mapId, Vector3 from, Vector3 to, bool ignoreM2 = true) => true;
+
+        public bool TryGetObjectHit(uint mapId, Vector3 from, Vector3 to, float modifyDistance, out Vector3 hit)
+        {
+            hit = to;
+            return false;
+        }
+
+        public bool TryGetAreaInfo(uint mapId, float x, float y, float z, out ModelAreaInfo info)
+        {
+            info = default;
+            return false;
+        }
+
+        public float? GetModelHeight(uint mapId, float x, float y, float z, float maxSearchDistance)
+        {
+            float t = Math.Clamp((x - centre.X) / 50f, 0f, 1f);
+            return centre.Z - (14f * t);
+        }
+
+        public PathResult FindPath(uint mapId, Vector3 start, Vector3 end, PathOptions? options = null)
+        {
+            bool excludeSteep = ((options?.ExcludeFlags ?? NavTerrain.Empty) & NavTerrain.SteepSlopes) != 0;
+            if (excludeSteep)
+            {
+                if (Vector3.Distance(start, FirstWalkable) <= 1f)
+                    return new PathResult(PathType.Normal, [start, end]);
+                return PathResult.StraightLine(start, end, PathType.NoPath);
+            }
+            return new PathResult(PathType.Normal, [start, FirstWalkable, end]);
         }
     }
 }

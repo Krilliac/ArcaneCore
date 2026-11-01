@@ -39,8 +39,11 @@ public sealed class UpdateAurasFaultAttributionTests
         groups.Armed = true;
         kit.Advance(100);
 
-        Assert.True(fault.Data.Contains("SpellId"), "the outer UpdateAuras catch should have recorded the fault");
-        Assert.Equal(0u, Assert.IsType<uint>(fault.Data["SpellId"]));
-        Assert.Equal("<unknown>", fault.Data["SpellName"]);
+        // The per-source catch in UpdateAreaAuras records the fault against the area source's spell,
+        // and must not blame the unrelated passive aura that happens to be the first live holder.
+        Assert.True(fault.Data.Contains("SpellId"), "the per-source UpdateAreaAuras catch should have recorded the fault");
+        Assert.Equal(area, Assert.IsType<uint>(fault.Data["SpellId"]));
+        Assert.NotEqual(passive, Assert.IsType<uint>(fault.Data["SpellId"]));
+        Assert.Equal($"Spell {area}", fault.Data["SpellName"]);
     }
 }
