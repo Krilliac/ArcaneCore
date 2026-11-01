@@ -32,7 +32,7 @@ public sealed partial class PlayerInventory
             return result;
         }
 
-        item = StoreNewItem(dest, Templates.Find(entry)!, count, randomPropertyId != 0 ? randomPropertyId : null);
+        item = StoreNewItem(dest, Templates.Find(entry)!, count, randomPropertyId);
         if (Player is { IsInWorld: true } player)
         {
             player.Session.Send(WorldOpcode.SmsgItemPushResult, ItemPackets.ItemPushResult(player.Guid, item, count, received: false, created: false, showInChat: true));

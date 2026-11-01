@@ -195,7 +195,7 @@ public sealed class LootRandomPropertyTests
     }
 
     [Fact]
-    public void DurableChestRecord_RoundTripsTheProperty_AndTheTakeGrantCarriesIt()
+    public void DurableChestRecord_RoundTripsTheProperty()
     {
         var bag = new LootBag(Corpse, LootSourceKind.GameObject, LootType.Corpse);
         bag.Add(new LootItem(0, Sword, 1, false, false, 7) { RandomPropertyId = (int)PropertyX });

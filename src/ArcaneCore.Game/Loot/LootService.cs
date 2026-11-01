@@ -932,7 +932,7 @@ public sealed partial class LootService : IViewerFieldFilter
             return RefuseTake(player, item);
         }
 
-        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count, item.RandomPropertyId)],
+        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count, RandomPropertyId: item.RandomPropertyId)],
             out InventoryRewardStage? stage, out _);
         if (staged != InventoryResult.Ok || stage is null)
         {

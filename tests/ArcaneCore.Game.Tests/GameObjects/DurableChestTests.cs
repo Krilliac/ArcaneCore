@@ -291,8 +291,8 @@ public sealed class DurableChestTests
     [Fact]
     public void DurableChest_WindowPropertyMatchesTheBagItemTaken()
     {
-        // The durable open generates with no property and TakeDurableItem stages the grant with property 0, so an inventory that would roll
-        // one must not give the bag item a property the window never showed.
+        // The durable open rolls the property like any bag, persists it, and TakeDurableItem stages the grant with that stored value, so
+        // the bag item carries exactly the property the window showed (the catalog gives 1001 a 100% chance).
         var catalog = new ItemRandomPropertyCatalog(
             [new ItemRandomPropertyRecord(1001, "of the Bear", [74, 75, 0])], [new ItemEnchantmentChance(5, 1001, 100f)]);
         Rig rig = CreateRig([(LootTableKind.GameObject, Row(ChestLoot, RandomPropertySword, 100))]);
@@ -302,10 +302,12 @@ public sealed class DurableChestTests
         Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
         LootBag window = Assert.IsType<LootBag>(rig.Chest.Loot);
         LootItem shown = Assert.Single(window.Items);
+        Assert.Equal(1001, shown.RandomPropertyId);
+        Assert.Equal(1001, Assert.Single(rig.Durable.Find(Key)!.Items).RandomPropertyId);
         Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(alice, shown.Slot));
 
         Item taken = Assert.Single(alice.Inventory.AllItems, i => i.Entry == RandomPropertySword);
-        Assert.Equal(shown.RandomPropertyId, taken.RandomPropertyId);
+        Assert.Equal(1001, taken.RandomPropertyId);
     }
 
     [Fact]

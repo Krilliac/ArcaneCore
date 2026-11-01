@@ -11,7 +11,7 @@ public readonly record struct LootStateKey(uint InstanceId, uint SpawnGuid);
 /// <summary>
 /// One stack of a stored chest (a LootItem without its client display id, which is recomputed
 /// from the item template). The looter lists are character ids, compared as sets. <see cref="RandomPropertyId"/> is the property
-/// or suffix rolled at generation (0 none; positive = item_random_properties id, negative = -item_random_suffix id), so the window and the taken item agree.
+/// rolled at generation (0 none; otherwise an item_random_properties id), so the window and the taken item agree.
 /// </summary>
 public sealed record LootStateItem(
     byte Slot,
