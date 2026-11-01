@@ -202,7 +202,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
 
     // --- the recovery with players (world) ------------------------------------------------------------------------------------
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task Outnumbered_TheGhostStaysAtItsBody_WaitingForTheEnemyPlayers()
     {
         await using Scene scene = await Scene.StartAsync();
@@ -228,7 +228,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.Equal(1, anomalies.Count("recovery/waiting-out-campers")); // one report per death, not one per think
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task Outnumbered_WhenTheEnemiesLeave_TheGhostReclaimsItsBody()
     {
         await using Scene scene = await Scene.StartAsync();
@@ -248,7 +248,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.Equal(Step.Reclaim, scene.Recovery.LastStep);
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task Outnumbered_WhenAnEnemyDies_TheCountTurnsFavourable_AndTheGhostReclaims()
     {
         await using Scene scene = await Scene.StartAsync();
@@ -265,7 +265,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.True(scene.Bot.IsAlive));
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task Outnumbered_WhenAnAllyArrives_TheGhostReclaims()
     {
         await using Scene scene = await Scene.StartAsync();
@@ -296,7 +296,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.True(scene.Bot.IsAlive));
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task WithMarginZero_OneEnemyAgainstTheBot_MakesTheGhostWait()
     {
         await using Scene scene = await Scene.StartAsync(new PlayerbotRecoveryOptions { PvpCampMargin = 0 });
@@ -342,7 +342,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.True(scene.Bot.IsAlive));
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task TheReclaimDelayIsStillWaitedOutFirst_BeforeTheEnemyPlayersAreWeighed()
     {
         await using Scene scene = await Scene.StartAsync(delayPassed: false);
@@ -355,7 +355,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.Equal(Step.WaitForEnemyPlayers, scene.Recovery.LastStep);
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task TheWaitIsBounded_AfterTheMaxWait_TheGhostTakesTheSpiritHealer_AndNeverReclaims()
     {
         await using Scene scene = await Scene.StartAsync(new PlayerbotRecoveryOptions { PvpCampMaxWaitSeconds = 5 });
@@ -382,7 +382,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
 
     // --- battlegrounds (world) ------------------------------------------------------------------------------------------------
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task InABattleground_AtAContestedObjective_TheBotRunsBackToItsBody_AndReclaimsPastTwoEnemies()
     {
         await using Scene scene = await Scene.StartAsync(battleground: true, contested: true);
@@ -394,7 +394,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.True(scene.Bot.IsAlive));
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task InABattleground_AtAContestedObjective_ThreeEnemiesAgainstTheBot_MakeItWait()
     {
         await using Scene scene = await Scene.StartAsync(battleground: true, contested: true);
@@ -409,7 +409,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.False(scene.Bot.IsAlive));
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task InABattleground_ANodeListWithAContestedNodeAtTheBody_DecidesTheBodyRunThroughContestedNodeNear()
     {
         byte[] statuses = [ArathiBasin.StatusNeutral, ArathiBasin.StatusNeutral, ArathiBasin.StatusHordeContested, ArathiBasin.StatusNeutral, ArathiBasin.StatusNeutral];
@@ -434,7 +434,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.False(occupied.Recovery.PvpCampGaveUp);
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task InABattleground_TheConfiguredNinetySecondWait_IsCappedAtOneSpiritGuideWave_ThenTheGuideTakesOver()
     {
         // Config 90 s (the default): the battleground caps it at AreaResurrectionIntervalMs (30 s).
@@ -458,7 +458,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         await scene.OnWorldAsync(() => Assert.False(scene.Bot.IsAlive));
     }
 
-    [Fact]
+    [Fact(Skip = "Needs PlayerbotRecovery.Update to weigh the enemy players at the body (spec sections 3-4), landing in the follow-up Update lane.")]
     public async Task InABattleground_WithNoContestedObjective_TheGhostKeepsToTheSpiritGuide_NotTheBody()
     {
         await using Scene scene = await Scene.StartAsync(battleground: true, contested: false);

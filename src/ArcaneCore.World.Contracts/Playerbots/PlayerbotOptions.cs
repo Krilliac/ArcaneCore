@@ -290,7 +290,7 @@ public sealed class PlayerbotOptions
     /// <summary>How a homed bot returns to its home area: walk, teleport, or teleport when the walk is long or unsafe (<c>World:Playerbots:Home</c>; live).</summary>
     public PlayerbotHomeOptions Home { get; set; } = new();
 
-    /// <summary>How a dead bot weighs enemy players at its body before reclaiming (<c>World:Playerbots:Recovery</c>; live).</summary>
+    /// <summary>How a dead bot weighs enemy players at its body before reclaiming (<c>World:Playerbots:Recovery</c>; read when the bot dies).</summary>
     public PlayerbotRecoveryOptions Recovery { get; set; } = new();
 
     /// <summary>How bots share the mobs of one place: soft claims, helping a tagger, leaving someone else's mob alone (<c>World:Playerbots:Contention</c>; live).</summary>

@@ -93,7 +93,7 @@ internal static class PlayerbotArathiBasinTactics
     {
         foreach (PlayerbotAbNode node in nodes)
         {
-            if (node.Status is ArathiBasin.StatusAllianceContested or ArathiBasin.StatusHordeContested && Vector3.Distance(node.At, at) <= yards) return true;
+            if ((node.Status is ArathiBasin.StatusAllianceContested or ArathiBasin.StatusHordeContested) && Vector3.Distance(node.At, at) <= yards) return true;
         }
 
         return false;

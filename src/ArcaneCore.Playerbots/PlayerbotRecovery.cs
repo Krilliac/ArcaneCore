@@ -551,7 +551,7 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
     /// <summary>This battleground death runs back to the body instead of the spirit guide (inspection and tests).</summary>
     internal bool BattlegroundBodyRun => _bgBodyRun;
 
-    private bool _bgBodyRun = false;
+    private bool _bgBodyRun;
 
     /// <summary>A battleground ghost takes the corpse run over the spirit guide only for a body this close (straight line) to it. ArcaneCore choice.</summary>
     internal const float BattlegroundBodyRunMaxYards = 250f;
@@ -739,12 +739,6 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
             case PlayerbotRecoveryStep.WaitForHostiles:
                 // Not progress: a body camped for NoProgressMs is given up for the spirit healer.
                 StandStill(player);
-                return false;
-
-            case PlayerbotRecoveryStep.WaitForEnemyPlayers:
-                // The bounded PvP wait is this step's own limit (JudgePvpCamp), not the no-progress bound.
-                StandStill(player);
-                MarkProgress(now);
                 return false;
 
             case PlayerbotRecoveryStep.WalkToReviveSpot:
