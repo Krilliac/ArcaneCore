@@ -35,7 +35,10 @@ public sealed partial class CreatureMapSystem
         uint unsupported = step.DataLong2 & ~RelayTeleportKeepCombat;
         if (unsupported != 0)
         {
-            ReportRelay(step, $"TELEPORT_TO option bits 0x{unsupported:X}");
+            if (_reportedAi.Add($"relay:{step.Id}:TELEPORT_TO option bits 0x{unsupported:X}"))
+            {
+                _logger.LogWarning("relay script {Relay} sets TELEPORT_TO option bits 0x{Bits:X} that are ignored; the teleport still runs", step.Id, unsupported);
+            }
         }
 
         bool keepCombat = (step.DataLong2 & RelayTeleportKeepCombat) != 0;
