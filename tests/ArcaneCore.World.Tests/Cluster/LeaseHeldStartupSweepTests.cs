@@ -28,7 +28,7 @@ public sealed class LeaseHeldStartupSweepTests
 {
     private const string Node = "worker-a";
 
-    private enum Holding
+    public enum Holding
     {
         Holder,
         NonHolder,
