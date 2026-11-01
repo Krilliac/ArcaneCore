@@ -84,6 +84,30 @@ public sealed class ServerPlimitTests
     }
 
     [Fact]
+    public async Task ManagedSessions_DoNotCountAgainstTheLimit_SoBotsNeverLockOutARealPlayer()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(configureServices: c => c.AddSingleton(new WorldLoginAdmission(1, 0)));
+        await using WorldTestClient first = await host.EnterWorldAsync("PLIMBA", "Plimba");
+        WorldLoginAdmission admission = host.WorldServices.GetRequiredService<WorldLoginAdmission>();
+        using IServiceScope scope = host.WorldServices.CreateScope();
+
+        // Many managed (bot-like) sessions on top of the one real session: only the real one counts.
+        var sessions = new List<WorldSession>(host.Registry.Sessions);
+        for (int i = 0; i < 5; i++)
+        {
+            sessions.Add(WorldSession.CreateConsole(scope.ServiceProvider, host.Opcodes, host.World, host.Registry, new WorldSessionOptions(), Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance));
+        }
+
+        Assert.Equal(1, WorldLoginAdmission.CountOtherSessions(sessions, accountId: int.MaxValue));
+        Assert.Equal(AuthResponseCode.Unavailable, admission.Check(AccountSecurity.Player, WorldLoginAdmission.CountOtherSessions(sessions, int.MaxValue)));
+
+        // With only managed sessions online a real player gets in.
+        sessions.RemoveAll(s => !s.IsManaged);
+        Assert.Equal(0, WorldLoginAdmission.CountOtherSessions(sessions, int.MaxValue));
+        Assert.Null(admission.Check(AccountSecurity.Player, WorldLoginAdmission.CountOtherSessions(sessions, int.MaxValue)));
+    }
+
+    [Fact]
     public async Task GamemasterLock_WritesTheRealmRow_RefusesPlayers_AndResetClearsBoth()
     {
         var row = new RealmEntry { Id = 1, Name = "Realm", Address = "127.0.0.1:8085", State = RealmRuntimeState.Online };

@@ -83,6 +83,13 @@ public sealed class WorldLoginAdmission
     }
 
     /// <summary>
+    /// The sessions that count against the player-count limit: those of other accounts, leaving out managed sessions (playerbots, console).
+    /// A bot is not a client waiting for a slot and ArcaneCore has no login queue, so counting bots would lock real players out for good.
+    /// </summary>
+    internal static int CountOtherSessions(IEnumerable<WorldSession> sessions, int accountId)
+        => sessions.Count(other => !other.IsManaged && other.AccountId != accountId);
+
+    /// <summary>
     /// The admission test: null admits, otherwise the refusal to send. <paramref name="otherActiveSessions"/> counts the authenticated
     /// sessions of other accounts (a reconnect of the same account replaces its old session and is not counted twice, World.cpp:311-314).
     /// </summary>
@@ -107,9 +114,9 @@ public sealed class WorldLoginAdmission
     /// realm id, or when the row is not this world's to write.
     /// </summary>
     public Task PublishLockAsync()
-        => _services is null || _realmId <= 0 ? Task.CompletedTask : Task.Run(WriteLockAsync);
+        => _services is not { } services || _realmId <= 0 ? Task.CompletedTask : Task.Run(() => WriteLockAsync(services));
 
-    private async Task WriteLockAsync()
+    private async Task WriteLockAsync(IServiceProvider services)
     {
         try
         {
@@ -117,7 +124,7 @@ public sealed class WorldLoginAdmission
             try
             {
                 byte level = (byte)SecurityLimit;
-                await using AsyncServiceScope scope = _services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
+                await using AsyncServiceScope scope = services.GetRequiredService<IServiceScopeFactory>().CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<IRealmStatusStore>() is not { } store)
                 {
                     return;
