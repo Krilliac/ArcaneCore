@@ -455,7 +455,8 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
     {
         byte[] nodeIdBytes = Encoding.UTF8.GetBytes(manifest.NodeId);
         byte[] contentBytes = Encoding.UTF8.GetBytes(manifest.ContentRevision);
-        int total = 1 + 4 + 4 + nodeIdBytes.Length + 16 + 4 + 4 + 4 + 4 + 4 + contentBytes.Length;
+        byte[] ownedBytes = Encoding.UTF8.GetBytes(manifest.OwnedMaps ?? string.Empty);
+        int total = 1 + 4 + 4 + nodeIdBytes.Length + 16 + 4 + 4 + 4 + 4 + 4 + contentBytes.Length + 4 + ownedBytes.Length + 1;
         byte[] buf = new byte[total];
         Span<byte> span = buf;
         span[0] = (byte)GatewayWorkerFrameType.HelloRegister;
@@ -479,6 +480,14 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         BinaryPrimitives.WriteInt32LittleEndian(span.Slice(offset, 4), contentBytes.Length);
         offset += 4;
         contentBytes.CopyTo(span.Slice(offset, contentBytes.Length));
+        offset += contentBytes.Length;
+
+        // Appended after the original layout (a reader of the original layout stops at the content revision): the owned map list and the instance allowance.
+        BinaryPrimitives.WriteInt32LittleEndian(span.Slice(offset, 4), ownedBytes.Length);
+        offset += 4;
+        ownedBytes.CopyTo(span.Slice(offset, ownedBytes.Length));
+        offset += ownedBytes.Length;
+        span[offset] = manifest.AllowInstanceMaps ? (byte)1 : (byte)0;
         return buf;
     }
 
@@ -504,6 +513,20 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
         int contentLen = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
         offset += 4;
         string contentRev = Encoding.UTF8.GetString(span.Slice(offset, contentLen));
+        offset += contentLen;
+
+        // Fields appended by the map ownership change; a frame from an older peer ends here and reads as "owns everything".
+        string ownedMaps = string.Empty;
+        bool allowInstanceMaps = true;
+        if (offset < span.Length)
+        {
+            int ownedLen = BinaryPrimitives.ReadInt32LittleEndian(span.Slice(offset, 4));
+            offset += 4;
+            ownedMaps = Encoding.UTF8.GetString(span.Slice(offset, ownedLen));
+            offset += ownedLen;
+            allowInstanceMaps = span.Slice(offset, 1)[0] != 0;
+        }
+
         return new ClusterNodeManifest(
             realmId,
             nodeId,
@@ -512,7 +535,9 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             contractVer,
             charSchema,
             worldSchema,
-            contentRev);
+            contentRev,
+            ownedMaps,
+            allowInstanceMaps);
     }
 
     internal static byte[] BuildHelloAckFrame(bool accepted, string reason)

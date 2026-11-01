@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Persistence;
 
 namespace ArcaneCore.World.Cluster.Supervision;
@@ -154,6 +155,13 @@ public sealed class SupervisedProcessConfig
     /// Static map IDs assigned to this worker (empty for non-worker roles or dynamically assigned workers).
     /// </summary>
     public IReadOnlyList<uint> MapAssignments { get; set; } = [];
+
+    /// <summary>
+    /// The maps this worker owns as ids and inclusive ranges (<c>0,1,30-40</c>), the same syntax as the child's <c>Cluster:Worker:OwnedMaps</c>
+    /// (pass it there in <see cref="Arguments"/>; the supervisor only checks it). Empty means no assignment here. Worker children's lists, and
+    /// their <see cref="MapAssignments"/>, must not overlap: a map has one owner. Only worker-role entries are compared.
+    /// </summary>
+    public string Maps { get; set; } = string.Empty;
 
     /// <summary>
     /// Position in the start sequence (default 0): processes start in ascending order, ties broken by the configuration key
@@ -394,6 +402,7 @@ public sealed class ClusterSupervisorOptions
             problems.Add($"{section}:StackCaptureTool must name the dotnet-stack executable when a process has HangCapture Stacks.");
 
         var mapOwners = new Dictionary<uint, string>();
+        var rangeOwners = new List<(MapOwnership.Range Range, string Key, bool FromMaps)>();
         var realmOwners = new Dictionary<int, string>();
         var nameOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach ((string key, SupervisedProcessConfig config) in Processes)
@@ -445,8 +454,29 @@ public sealed class ClusterSupervisorOptions
             if (!string.IsNullOrWhiteSpace(config.Role) && !SupervisedRoles.IsKnown(config.Role))
                 problems.Add($"{section}:Processes:{key}:Role '{config.Role}' is not one of combined, realm, gateway, worker, social, coordinator, supervisor.");
 
+            bool mapsParsed = MapOwnership.TryParseRanges(config.Maps, out IReadOnlyList<MapOwnership.Range> mapRanges, out string? mapsError);
+            if (!mapsParsed)
+                problems.Add($"{section}:Processes:{key}:Maps is not a map list: {mapsError}.");
+
             if (string.Equals(config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
             {
+                var mine = new List<(MapOwnership.Range Range, bool FromMaps)>();
+                mine.AddRange(mapRanges.Select(r => (r, true)));
+                mine.AddRange(config.MapAssignments.Select(m => (new MapOwnership.Range(m, m), false)));
+                foreach ((MapOwnership.Range range, bool fromMaps) in mine)
+                {
+                    foreach ((MapOwnership.Range other, string otherKey, bool otherFromMaps) in rangeOwners)
+                    {
+                        // Two MapAssignments lists are reported by the per-map check below; every overlap that involves a Maps range is reported here.
+                        if ((fromMaps || otherFromMaps) && !string.Equals(otherKey, key, StringComparison.Ordinal) && range.Overlaps(other))
+                        {
+                            problems.Add($"{section}:Processes:{key}:{(fromMaps ? "Maps" : "MapAssignments")} lists {range}, which overlaps {other} of '{otherKey}'; a map must have one owner.");
+                        }
+                    }
+                }
+
+                rangeOwners.AddRange(mine.Select(m => (m.Range, key, m.FromMaps)));
+
                 foreach (uint mapId in config.MapAssignments)
                 {
                     if (mapOwners.TryGetValue(mapId, out string? owner))
