@@ -190,7 +190,7 @@ public sealed class TerrainManager
         }
 
         string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
-        _prefetch.Request(mapId, tileX, tileY, () => File.Exists(path) ? TerrainTile.Parse(File.ReadAllBytes(path)) : null, arrival);
+        _prefetch.Request(mapId, tileX, tileY, () => PooledFileReader.TryParse<TerrainTile>(path, ParseTile, out TerrainTile? read) ? read : null, arrival);
     }
 
     /// <summary>
@@ -211,12 +211,10 @@ public sealed class TerrainManager
         string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tile.X, tile.Y));
         try
         {
-            if (!File.Exists(path))
-            {
-                return (0, 0);
-            }
-
-            return areas.GetZoneAndAreaId(TerrainTile.Parse(File.ReadAllBytes(path)).GetAreaFlag(x, y), mapId);
+            // Pooled read (a float-height tile is over 85 KB, so a fresh array per call was a large object heap allocation, issue #1491).
+            return PooledFileReader.TryParse<TerrainTile>(path, ParseTile, out TerrainTile? read)
+                ? areas.GetZoneAndAreaId(read.GetAreaFlag(x, y), mapId)
+                : (0, 0);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -478,7 +476,8 @@ public sealed class TerrainManager
         string path = Path.Combine(_mapsDirectory, TerrainTile.FileName(mapId, tileX, tileY));
         try
         {
-            return File.Exists(path) ? TerrainTile.Parse(File.ReadAllBytes(path)) : TerrainTile.Empty;
+            // Pooled read: the parse copies what the tile keeps, so the buffer goes back to the pool (issue #1491, see ParseTile).
+            return PooledFileReader.TryParse<TerrainTile>(path, ParseTile, out TerrainTile? read) ? read : TerrainTile.Empty;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
@@ -491,6 +490,12 @@ public sealed class TerrainManager
             return TerrainTile.Empty;
         }
     }
+
+    /// <summary>
+    /// The parser the pooled terrain reads hand to <see cref="PooledFileReader.TryParse{T}"/>: <see cref="TerrainTile.Parse"/> copies every
+    /// section it keeps into its own arrays (its section reader returns new arrays), so it never holds the pooled span.
+    /// </summary>
+    private static readonly PooledFileReader.Parser<TerrainTile> ParseTile = static data => TerrainTile.Parse(data);
 
     internal TerrainTile LoadTile(uint mapId, int tileX, int tileY)
     {
