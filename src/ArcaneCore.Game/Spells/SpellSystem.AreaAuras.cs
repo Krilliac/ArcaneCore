@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Kernel.Diagnostics;
 
 namespace ArcaneCore.Game.Spells;
 
@@ -123,7 +124,17 @@ public sealed partial class SpellSystem
                     continue;
                 }
 
-                UpdateAreaAuraSource(state, source, map);
+                // One throwing source must not stop the next source's tick (the caller's catch would abort the whole pass).
+                // The phase stays "UpdateAuras", the fault names this source's spell.
+                try
+                {
+                    UpdateAreaAuraSource(state, source, map);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("spell.script", ex);
+                    RecordSpellScriptFault("UpdateAuras", ex, source.Spell, state.Unit, state.Unit);
+                }
             }
         }
         finally
