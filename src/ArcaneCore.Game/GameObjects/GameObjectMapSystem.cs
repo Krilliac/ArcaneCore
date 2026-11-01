@@ -1175,16 +1175,10 @@ public sealed partial class GameObjectMapSystem : IMapUpdater, IViewerFieldFilte
             return GameObjectUseResult.NeedsQuest;
         }
 
-        // A restocking chest (GO_NOT_READY) was unlocked by the first open: vmangos clears GO_FLAG_LOCKED then (GameObject.cpp:629-636), so the
-        // empty reopen during the countdown neither needs nor uses up a key.
-        Item? key = null;
-        if (go.LootState != GameObjectLootState.NotReady)
+        GameObjectUseResult locked = CheckDirectLock(player, go, out Item? key);
+        if (locked != GameObjectUseResult.Ok)
         {
-            GameObjectUseResult locked = CheckDirectLock(player, go, out key);
-            if (locked != GameObjectUseResult.Ok)
-            {
-                return locked;
-            }
+            return locked;
         }
 
         GameObjectUseResult opened = OpenChestStartingEvent(player, go);
