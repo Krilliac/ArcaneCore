@@ -5,13 +5,11 @@ using Xunit;
 namespace ArcaneCore.Cluster.E2E.Tests;
 
 /// <summary>
-/// Scenarios that need two concurrent fenced workers. They cannot run yet: the characters writer lock is one advisory lock per realm and
-/// ownership allows only scope 'world', so a second worker is refused at start (tools/ops/live/start-cluster.ps1 -Topology Split refuses a real start
-/// for the same reason). They are written now against the fixture's multi-worker options and stay skipped until s1-per-worker-writer-lock lands.
+/// Scenarios that need two concurrent fenced workers. The fixture starts each worker with Cluster:Fencing:Scope=Worker (its own shard lock and ownership scope, so
+/// both write one PostgreSQL characters database), the layout tools/ops/live/start-cluster.ps1 -Topology Split runs.
 /// </summary>
 public sealed class TwoWorkerScenarioTests
 {
-    private const string SkipReason = "needs s1-per-worker-writer-lock";
     private static readonly TimeSpan Deadline = TimeSpan.FromMinutes(5);
 
     // Kalimdor (1) on the second worker, the Eastern Kingdoms (0, where a human starts) on the first.
@@ -22,7 +20,7 @@ public sealed class TwoWorkerScenarioTests
         LoginWorkerIndex = 0,
     };
 
-    [Fact(Skip = SkipReason)]
+    [PostgresClusterFact]
     public async Task TwoWorkers_OwnDistinctMaps_AndALoginIsServedByTheOwnerOfItsMap()
     {
         using var cts = new CancellationTokenSource(Deadline);
@@ -45,7 +43,7 @@ public sealed class TwoWorkerScenarioTests
         await session.LogoutAsync(ct);
     }
 
-    [Fact(Skip = SkipReason)]
+    [PostgresClusterFact]
     public async Task KillingTheLoginWorker_ThenReloggingIn_IsServedByTheSurvivor()
     {
         using var cts = new CancellationTokenSource(Deadline);

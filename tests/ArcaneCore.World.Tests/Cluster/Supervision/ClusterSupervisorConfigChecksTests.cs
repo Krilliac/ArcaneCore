@@ -83,6 +83,30 @@ public sealed class ClusterSupervisorConfigChecksTests
     }
 
     [Fact]
+    public void TwoWorkerScopeChildren_WhoseShardIdsDifferOnlyInCase_AreRefused_ButDistinctShardsAreAccepted()
+    {
+        const string scope = " --Cluster:Fencing:Scope=Worker";
+        Dictionary<string, string?> values = Base();
+        AddWorld(values, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=Node-A" + scope);
+        AddWorld(values, "b", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-a" + scope);
+
+        ConfigIssue error = Assert.Single(Errors(values));
+        Assert.Contains("shard", error.Problem, StringComparison.Ordinal);
+        Assert.Equal("Cluster:Supervisor:Processes:b:Arguments", error.Key);
+
+        // An explicit Shard that differs makes them distinct; without Worker scope the same NodeIds are not a shard clash.
+        Dictionary<string, string?> distinct = Base();
+        AddWorld(distinct, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=Node-A --Cluster:Fencing:Shard=s1" + scope);
+        AddWorld(distinct, "b", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-a --Cluster:Fencing:Shard=s2" + scope);
+        Assert.Empty(Errors(distinct));
+
+        Dictionary<string, string?> realmScope = Base();
+        AddWorld(realmScope, "a", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-a --Cluster:Worker:NodeId=Node-A");
+        AddWorld(realmScope, "b", "worker", "--Cluster:Fencing:Enabled=true --Cluster:Fencing:OwnerNode=world-b --Cluster:Worker:NodeId=node-a");
+        Assert.Empty(Errors(realmScope));
+    }
+
+    [Fact]
     public void TwoWorldChildren_OnSqlite_AreRefused()
     {
         Dictionary<string, string?> values = Base("Sqlite");

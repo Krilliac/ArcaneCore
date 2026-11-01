@@ -325,6 +325,24 @@ public static partial class DbUpgradeCli
                     refusals.Add($"{spec.Name}: {sessions} other session(s) are connected to the source database; stop every ArcaneCore daemon first (or pass --allow-active-sessions)");
                 }
 
+                if (spec.Component == DatabaseComponent.Characters)
+                {
+                    // Worker fencing scope (design _wf/writer-lock-DESIGN.md, step C8): several workers write this database, each under its own shard lock, and the realm lock above does not
+                    // cover them. An active ownership row or a held shard lock means a world is (or may still be) writing: the copy would race it.
+                    await foreach (object?[] row in SchemaCatalog.RowsAsync(sdb, $"SELECT scope, active FROM {CharacterOwnershipDataModule.Table}", ct).ConfigureAwait(false))
+                    {
+                        string scope = Convert.ToString(row[0], CultureInfo.InvariantCulture) ?? string.Empty;
+                        if (Convert.ToBoolean(row[1], CultureInfo.InvariantCulture))
+                        {
+                            refusals.Add($"{spec.Name}: the ownership scope '{scope}' of the source is active: a world process owns the characters database; stop it first (a crashed world leaves its row active until the next start of that scope releases it)");
+                        }
+                        else if (CharacterOwnershipScopes.IsWorker(scope) && !CharacterDatabaseWriterLock.ProbeShardFree(source.Resolved, scope[CharacterOwnershipScopes.WorkerPrefix.Length..]))
+                        {
+                            refusals.Add($"{spec.Name}: the shard lock of '{scope}' is held: a worker process is running on the source characters database; stop it first");
+                        }
+                    }
+                }
+
                 return 0;
             }).ConfigureAwait(false);
 

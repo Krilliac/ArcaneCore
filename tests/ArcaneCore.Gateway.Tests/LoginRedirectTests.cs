@@ -13,7 +13,6 @@ using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -235,22 +234,19 @@ public sealed class LoginRedirectTests
 
         public static async Task<Cluster> StartAsync(CancellationToken token)
         {
-            SyntheticArcaneServer eastern = await SyntheticArcaneServer.StartAsync(token);
+            // Both worlds run as Cluster:Fencing:Scope=Worker workers (design _wf/writer-lock-DESIGN.md, C8): each takes its own shard lock and ownership scope, so they write
+            // the one characters database concurrently, as two world processes of a split realm do. SQLite is allowed for this in-process fixture only (AllowSqliteWorkerScope).
+            SyntheticArcaneServer eastern = await SyntheticArcaneServer.StartAsync(
+                new SyntheticServerOptions { Configuration = WorkerScopeConfiguration("w-east", "0") }, configureServices: null, token);
             SyntheticArcaneServer? kalimdor = null;
             GatewayWorkerEndpoint? easternWorker = null;
             GatewayWorkerEndpoint? kalimdorWorker = null;
             GatewayServer? gateway = null;
             try
             {
-                // The characters database has one writer-lock file: the Eastern world holds it, so the second world's guard defers it (never promoted
-                // here), as a standby's does. Both worlds then use the one set of databases without a second lock object on the file.
                 kalimdor = await SyntheticArcaneServer.StartAsync(
-                    new SyntheticServerOptions { SharedDatabaseDirectory = eastern.DataDirectory },
-                    services =>
-                    {
-                        services.RemoveAll<WorldWriterGuard>();
-                        services.AddSingleton(new WorldWriterGuard(deferUntilPromotion: true));
-                    },
+                    new SyntheticServerOptions { SharedDatabaseDirectory = eastern.DataDirectory, Configuration = WorkerScopeConfiguration("w-kalimdor", "1") },
+                    configureServices: null,
                     token);
                 eastern.World.Ownership = Owns("0");
                 kalimdor.World.Ownership = Owns("1");
@@ -344,6 +340,19 @@ public sealed class LoginRedirectTests
             await Kalimdor.DisposeAsync();
             await Eastern.DisposeAsync();
         }
+
+        private static Dictionary<string, string?> WorkerScopeConfiguration(string nodeId, string ownedMaps) => new()
+        {
+            ["Cluster:Fencing:Enabled"] = "true",
+            ["Cluster:Fencing:Scope"] = "Worker",
+            ["Cluster:Fencing:OwnerNode"] = nodeId,
+            ["Cluster:Fencing:AllowSqliteWorkerScope"] = "true",
+            ["Cluster:Worker:Enabled"] = "true",
+            ["Cluster:Worker:NodeId"] = nodeId,
+            ["Cluster:Worker:OwnedMaps"] = ownedMaps,
+            ["Cluster:Worker:LinkSecret"] = Secret,
+            ["Cluster:Node:Role"] = "MapWorker",
+        };
 
         private static MapOwnership Owns(string maps)
         {

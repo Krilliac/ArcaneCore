@@ -264,6 +264,43 @@ public sealed class DbCopyTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Copy_OfCharacters_WhileAnOwnershipScopeIsActive_OrAWorkerShardLockIsHeld_IsRefused()
+    {
+        DatabaseConnectionOptions source = await SeededSourceAsync("characters");
+        DatabaseConnectionOptions target = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+
+        // A worker row left active (a running worker, or one that crashed): the copy would race its writes.
+        await SetOwnershipAsync(source, "UPDATE \"character_ownership\" SET \"active\" = 1 WHERE \"scope\" IN (SELECT \"scope\" FROM \"character_ownership\" LIMIT 1)");
+        (int active, _, string activeError) = await RunCopyAsync(source, "characters", target);
+        Assert.True(active == DbUpgradeExitCodes.Refused, $"exit {active}
+{activeError}");
+        Assert.Contains("ownership scope", activeError, StringComparison.Ordinal);
+        Assert.False(File.Exists(UpgradeTestSupport.SqlitePath(target)));
+
+        // Every row inactive, but a worker row names a shard whose lock a process still holds.
+        await SetOwnershipAsync(source, "UPDATE \"character_ownership\" SET \"active\" = 0");
+        await SetOwnershipAsync(source, "UPDATE \"character_ownership\" SET \"scope\" = 'worker:s1' WHERE \"scope\" IN (SELECT \"scope\" FROM \"character_ownership\" LIMIT 1)");
+        using CharacterDatabaseWriterLock shard = CharacterDatabaseWriterLock.TryAcquireShard(source, "s1")!;
+        (int held, _, string heldError) = await RunCopyAsync(source, "characters", target);
+        Assert.True(held == DbUpgradeExitCodes.Refused, $"exit {held}
+{heldError}");
+        Assert.Contains("shard lock", heldError, StringComparison.Ordinal);
+        Assert.False(File.Exists(UpgradeTestSupport.SqlitePath(target)));
+
+        shard.Dispose();
+        Assert.Equal(DbUpgradeExitCodes.Ok, (await RunCopyAsync(source, "characters", target)).Code);
+    }
+
+    private static async Task SetOwnershipAsync(DatabaseConnectionOptions sqlite, string sql)
+    {
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(sqlite.ConnectionString + ";Pooling=False");
+        await connection.OpenAsync();
+        await using Microsoft.Data.Sqlite.SqliteCommand command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
     public async Task Copy_ToItsOwnSource_IsAUsageError()
     {
         DatabaseConnectionOptions source = await SeededSourceAsync("auth");

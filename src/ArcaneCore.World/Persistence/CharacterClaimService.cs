@@ -183,16 +183,23 @@ public sealed class CharacterClaimService(
 
     /// <summary>
     /// A login that claimed but was refused entry because the character is online under an older login (which keeps the claim): its ticket stops counting,
-    /// so the older login's release is valid again.
+    /// so the older login's release is valid again. When <paramref name="token"/> is given (a worker-shard token) and no live ticket of the character is left (the older login already logged out and its
+    /// release was skipped because this ticket was newer), a release is scheduled for the claim this abandoned login took: otherwise this worker would hold it until it dies and logins of the character
+    /// on other workers would be refused as <see cref="CharacterClaimOutcome.RefusedLiveOwner"/>. <paramref name="isOnline"/> (thread-safe) keeps the claim of a character that is online.
     /// </summary>
-    public void AbandonTicket(int characterId, long ticket)
+    public void AbandonTicket(int characterId, long ticket, CharacterOwnershipToken? token = null, Func<bool>? isOnline = null)
     {
         if (ticket == 0)
             return;
+        bool lastLive;
         lock (_pendingGate)
         {
             RemoveTicketLocked(characterId, ticket);
+            lastLive = !_liveTickets.ContainsKey(characterId);
         }
+
+        if (token is not null && lastLive)
+            ScheduleRelease(characterId, token, isOnline);
     }
 
     /// <summary>Caller holds <c>_pendingGate</c>.</summary>
