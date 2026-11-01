@@ -47,7 +47,6 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     /// </summary>
     private readonly Dictionary<(LootTableKind Kind, uint Entry), LootPlan> _plans = [];
     private int _processCalls;
-    private LootRowFilter? _rowFilter;
 
     /// <summary>
     /// Hardening beyond vmangos: the most <c>Process</c> calls (template visits) one <see cref="Roll"/> may make. An imported reference
@@ -79,16 +78,7 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     {
         var result = new List<RolledLoot>();
         _processCalls = 0;
-        _rowFilter = rowFilter;
-        try
-        {
-            Process(kind, entry, result, depth: 0);
-        }
-        finally
-        {
-            _rowFilter = null;
-        }
-
+        Process(kind, entry, result, depth: 0, rowFilter);
         return result;
     }
 
@@ -96,7 +86,7 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     // groupid > 0 AND mincountOrRef > 0; reference rows (mincountOrRef < 0) are stored with the ungrouped
     // entries and roll independently, whatever their groupid. A reference row's groupid instead selects
     // the single group of the REFERENCED template that is processed (0 = the whole template).
-    private void Process(LootTableKind kind, uint entry, List<RolledLoot> result, int depth, byte groupFilter = 0,
+    private void Process(LootTableKind kind, uint entry, List<RolledLoot> result, int depth, LootRowFilter? rowFilter, byte groupFilter = 0,
         IReadOnlyList<uint>? inheritedConditions = null)
     {
         if (depth > MaxReferenceDepth || (MaxProcessCallsPerRoll > 0 && ++_processCalls > MaxProcessCallsPerRoll))
@@ -109,9 +99,9 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
         {
             // Group reference: only that group of this template (vmangos: Groups[groupId - 1].Process).
             // Built by group id, never by row order or adjacency.
-            if (plan.Find(groupFilter) is { } members && PickFromGroup(members, inheritedConditions) is { } picked)
+            if (plan.Find(groupFilter) is { } members && PickFromGroup(members, inheritedConditions, rowFilter) is { } picked)
             {
-                Emit(picked, result, depth, inheritedConditions);
+                Emit(picked, result, depth, rowFilter, inheritedConditions);
             }
 
             return;
@@ -124,14 +114,14 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
                 continue;
             }
 
-            Emit(row, result, depth, inheritedConditions);
+            Emit(row, result, depth, rowFilter, inheritedConditions);
         }
 
         foreach (LootGroup group in plan.Groups)
         {
-            if (PickFromGroup(group, inheritedConditions) is { } picked)
+            if (PickFromGroup(group, inheritedConditions, rowFilter) is { } picked)
             {
-                Emit(picked, result, depth, inheritedConditions);
+                Emit(picked, result, depth, rowFilter, inheritedConditions);
             }
         }
     }
@@ -158,7 +148,7 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
         return plan;
     }
 
-    private void Emit(LootStoreRow row, List<RolledLoot> result, int depth, IReadOnlyList<uint>? inheritedConditions)
+    private void Emit(LootStoreRow row, List<RolledLoot> result, int depth, LootRowFilter? rowFilter, IReadOnlyList<uint>? inheritedConditions)
     {
         if (row.MinCountOrRef < 0)
         {
@@ -172,7 +162,7 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
                     break;
                 }
 
-                Process(LootTableKind.Reference, (uint)-row.MinCountOrRef, result, depth + 1, row.GroupId, conditions);
+                Process(LootTableKind.Reference, (uint)-row.MinCountOrRef, result, depth + 1, rowFilter, row.GroupId, conditions);
             }
 
             return;
@@ -190,9 +180,8 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
     /// vmangos LootGroup::Roll: explicit chances, in table order, against one shrinking roll, then the equal-chance (zero) pool. The roll is
     /// drawn even for a group with no explicit chance, and the pool pick only when no explicit row hit, as before the plans.
     /// </summary>
-    private LootStoreRow? PickFromGroup(LootGroup group, IReadOnlyList<uint>? inheritedConditions)
+    private LootStoreRow? PickFromGroup(LootGroup group, IReadOnlyList<uint>? inheritedConditions, LootRowFilter? filter)
     {
-        LootRowFilter? filter = _rowFilter;
         IReadOnlyList<uint> inherited = inheritedConditions ?? [];
         double roll = _random.NextDouble() * 100.0;
         foreach (LootStoreRow row in group.Explicit)
@@ -220,30 +209,30 @@ public sealed class LootGenerator(LootContent content, Random? random = null)
             return group.Equal.Length > 0 ? group.Equal[_random.Next(group.Equal.Length)] : null;
         }
 
-        int allowed = 0;
-        foreach (LootStoreRow row in group.Equal)
-        {
-            if (filter(row, inherited))
-            {
-                allowed++;
-            }
-        }
-
-        if (allowed == 0)
+        if (group.Equal.Length == 0)
         {
             return null;
         }
 
-        int pick = _random.Next(allowed);
-        foreach (LootStoreRow row in group.Equal)
+        // One filter call per row: the allowed rows go to a pooled buffer, then one uniform pick among them.
+        LootStoreRow[] buffer = System.Buffers.ArrayPool<LootStoreRow>.Shared.Rent(group.Equal.Length);
+        try
         {
-            if (filter(row, inherited) && pick-- == 0)
+            int allowed = 0;
+            foreach (LootStoreRow row in group.Equal)
             {
-                return row;
+                if (filter(row, inherited))
+                {
+                    buffer[allowed++] = row;
+                }
             }
-        }
 
-        return null;
+            return allowed == 0 ? null : buffer[_random.Next(allowed)];
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<LootStoreRow>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
     private bool RollChance(float chance) => chance >= 100.0f || (chance > 0 && _random.NextDouble() * 100.0 < chance);
