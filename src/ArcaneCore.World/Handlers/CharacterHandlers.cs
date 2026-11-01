@@ -469,7 +469,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        LoginSequence.SendLoginPackets(session, world, player, account.DataMd5);
+        LoginSequence.SendLoginPackets(session, world, map, player, account.DataMd5);
         LoginSequence.SendInitialPacketsBeforeAddToMap(session, player, account.TutorialFlags);
 
         try
