@@ -63,7 +63,9 @@ public sealed class ManagedPlayerbotHomeTests
         Assert.Equal("bot-not-found", (await feature.StartAsync(bot.BotId.ToString())).Code);
     }
 
+    // Timing: the restarted bot walks home under a wall-clock wait on the real managed-session think; a loaded host times out (flake ledger 2026-10-29).
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task SetHome_PersistsAndAppliesToTheRunningBrain_AndSurvivesARestart()
     {
         var accounts = new InMemoryAccountStore();

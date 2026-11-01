@@ -169,7 +169,9 @@ public sealed class QuestGoalJourneyTests
         await using JourneyHost host = await JourneyHost.StartAsync(travel, TeldrassilSpawn);
         await host.CompleteQuestAsync();
         await host.PlaceAsync(1, Darkshore);
-        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()));
+        // The water-journey step judges the 20 ms candidate-loop budget against the wall clock; a loaded host must not trip it, so the loop clock reads 0.
+        // (PlayerbotThinkProbe.Active is null outside a think scope, so the step probe is not involved.)
+        var destinations = await host.OnWorldAsync(() => new PlayerbotWorldDestinations(host.Session, Options()) { LoopMsSince = _ => 0 });
 
         Assert.True(await host.OnWorldAsync(() => destinations.Update(host.Player, 0, 100, QuestInteractionFixture.QuestId)), "no journey to the ender");
         Assert.Equal([(1u, At(TeldrassilSpawn))], travel.Begun);

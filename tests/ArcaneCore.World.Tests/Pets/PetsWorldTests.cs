@@ -58,17 +58,21 @@ public sealed class PetsWorldTests
 
         Assert.Same(pets, host.WorldServices.GetRequiredService<ISpellSummonSink>());
         Assert.Same(pets, spells.Summons);
-        foreach (SpellEffectName effect in new[]
+        // SpellSystem's effect table is a plain Dictionary written on the world thread (features post their installs there at start). Reading it
+        // from the test thread while such a write resizes it can report an installed key as missing (ledger: SummonTotemSlot1 false right after
+        // SummonTotem passed). Read it on the world thread, behind the already queued installs.
+        (SpellEffectName Effect, bool Has)[] seen = await host.OnWorldAsync(() => new[]
         {
             SpellEffectName.SummonTotem, SpellEffectName.SummonTotemSlot1, SpellEffectName.SummonTotemSlot2, SpellEffectName.SummonTotemSlot3,
             SpellEffectName.SummonTotemSlot4, SpellEffectName.SummonWild, SpellEffectName.SummonGuardian, SpellEffectName.SummonCritter,
-        })
+        }.Select(effect => (effect, spells.HasEffectHandler(effect))).ToArray());
+        foreach ((SpellEffectName effect, bool has) in seen)
         {
-            Assert.True(spells.HasEffectHandler(effect), effect.ToString());
+            Assert.True(has, effect.ToString());
         }
 
         // SPELL_EFFECT_SUMMON keeps its built-in handler (the quest reward preflight models it).
-        Assert.True(spells.HasBuiltInEffectHandler(SpellEffectName.Summon));
+        Assert.True(await host.OnWorldAsync(() => spells.HasBuiltInEffectHandler(SpellEffectName.Summon)));
     }
 
     [Fact]
