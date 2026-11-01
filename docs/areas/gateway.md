@@ -134,9 +134,16 @@ capturing every online player's save), the saves and every per-character queue f
 then the **epoch takeover** (one transaction: the ownership row moves from A at epoch N to B at N + 1). Any failure
 before the takeover resumes A and then journals the abort (a failed journal write leaves A running and the handoff open
 for `RecoverAsync`); after it the handoff only rolls forward (`RecoverAsync` finishes a crashed
-one from the journal): promote B, reroute, retire A. The gateway reroute (`GatewayWorldHandoffRouter`,
-`GatewayServer.RetargetWorkerAsync`) moves the gateway's single worker link to B: **clients on A are disconnected and log
-in again** (no `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD` carry-over, no input buffering during the freeze). A retired A
+one from the journal): promote B, reroute, retire A. The gateway side (`GatewayWorldHandoffRouter`) is seamless:
+when A freezes, the gateway holds every client's input (`GatewayServer.HoldSessionsForHandoff`, at most 256 packets per
+client, one past that is disconnected; an abort replays it to A). After B is promoted, `GatewayServer.RetargetWorkerSeamlessAsync`
+connects the gateway's worker link to B while the link to A is still open and re-points every session: B adopts the character
+with the client's buffered `CMSG_PLAYER_LOGIN` (it loads the save A captured at the freeze), B's `SMSG_LOGIN_VERIFY_WORLD`
+reaches the client as `SMSG_TRANSFER_PENDING` + `SMSG_NEW_WORLD` (same map and position as the save: the same-map world port
+the real client accepts, design section 5.5), the held input is delivered to B in order, and the link to A closes. A client at
+character select just gets a plain session on B. A client whose move fails (B refuses, 30 s timeout) is disconnected and logs
+in again. A **gateway restart still drops every client**: the sessions and their ciphers live in the gateway process. The loss
+contract of section 5.3 applies (loading screen; cast, combat, trade, loot and similar transients are cancelled). A retired A
 stays frozen; when its process stops, every write it still attempts is refused by the fence. The participants are not
 registered in DI and there is no cross-process control channel: one coordinator can drive them only when A, B and the
 gateway share a process (the tests). Known limits, including B crashing after the takeover, are listed in design

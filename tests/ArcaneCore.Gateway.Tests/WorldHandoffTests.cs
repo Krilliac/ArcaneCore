@@ -82,14 +82,22 @@ public sealed class WorldHandoffTests
             // A player in the world on A, through the gateway.
             await a.AddAccountAsync("HANDOFF", "PASSWORD", cts.Token);
             LogonResult logon = await LogonClient.AuthenticateAsync(a.RealmEndpoint, "HANDOFF", "PASSWORD", cts.Token);
-            WorldClient first = await WorldClient.ConnectAsync(linked.Gateway.ListenEndPoint, cts.Token);
+            await using WorldClient first = await WorldClient.ConnectAsync(linked.Gateway.ListenEndPoint, cts.Token);
             Assert.Equal((byte)AuthResponseCode.Ok, await first.AuthenticateAsync("HANDOFF", logon.SessionKey, cts.Token));
             ulong guid = await CreateAndEnterAsync(first, a, "Handoff", cts.Token);
             CharacterOwnershipToken before = a.World.CharacterOwnership!;
 
             var stages = new List<WorldHandoffStage>();
             WorldHandoffRecord done = await Coordinator(a, b, source, new GatewayWorldHandoffRouter(linked.Gateway, bEndpoint.Host!.BoundEndPoint))
-                .RunAsync(Guid.NewGuid(), (stage, _) => { stages.Add(stage); return Task.CompletedTask; }, cts.Token);
+                .RunAsync(Guid.NewGuid(), async (stage, ct) =>
+                {
+                    stages.Add(stage);
+                    if (stage == WorldHandoffStage.Frozen)
+                    {
+                        // Input sent while A is frozen: the gateway holds it and delivers it to B.
+                        await first.SendAsync((ushort)WorldOpcode.CmsgQueryTime, ReadOnlyMemory<byte>.Empty, ct);
+                    }
+                }, cts.Token);
 
             Assert.Equal(
                 [WorldHandoffStage.Begun, WorldHandoffStage.Warm, WorldHandoffStage.AdmissionsStopped, WorldHandoffStage.Frozen,
@@ -104,21 +112,36 @@ public sealed class WorldHandoffTests
             Assert.Equal(LocalWorldHandoffSource.RetiredReason, a.Services.GetRequiredService<WorkerAdmission>().ClosedReason);
             Assert.Equal(bEndpoint.Host.BoundEndPoint, linked.Gateway.WorkerEndPoint);
 
-            // The client on A was disconnected by the reroute; it logs in again through the same gateway and lands on B, which sees the character.
-            await first.DisposeAsync();
-            await using WorldClient again = await WorldClient.ConnectAsync(linked.Gateway.ListenEndPoint, cts.Token);
-            Assert.Equal((byte)AuthResponseCode.Ok, await again.AuthenticateAsync("HANDOFF", logon.SessionKey, cts.Token));
-            await WaitUntilAsync(() => Task.FromResult(bEndpoint.Acceptor!.Sessions.Count == 1), cts.Token); // tracked at Start, after the accept reply
+            // The client on A was not disconnected: it got one TRANSFER_PENDING + NEW_WORLD (the same map and position as its save), then B answered the input
+            // it sent during the freeze.
+            var seen = new List<WorldFrame>();
+            while (true)
+            {
+                WorldFrame frame = await first.ReadAsync(cts.Token);
+                seen.Add(frame);
+                if (frame.Opcode == (ushort)WorldOpcode.SmsgQueryTimeResponse)
+                {
+                    break;
+                }
+            }
+
+            int newWorld = seen.FindIndex(f => f.Opcode == (ushort)WorldOpcode.SmsgNewWorld);
+            Assert.True(newWorld > 0, "no SMSG_NEW_WORLD reached the client");
+            Assert.Single(seen, f => f.Opcode == (ushort)WorldOpcode.SmsgNewWorld);
+            Assert.Single(seen, f => f.Opcode == (ushort)WorldOpcode.SmsgTransferPending);
+            Assert.Equal((ushort)WorldOpcode.SmsgTransferPending, seen[newWorld - 1].Opcode);
+            Assert.Equal(20, seen[newWorld].Payload.Length);
+            Assert.Equal(seen[newWorld - 1].Payload, seen[newWorld].Payload[..4]);
+            Assert.Equal((ushort)WorldOpcode.SmsgQueryTimeResponse, seen[^1].Opcode);
+            Assert.True(newWorld < seen.Count - 1, "the held input was answered before the world port reached the client");
+            Assert.Equal(1, linked.Gateway.ConnectionCount);
+            await WaitUntilAsync(() => Task.FromResult(bEndpoint.Acceptor!.Sessions.Count == 1), cts.Token);
             Assert.Single(bEndpoint.Acceptor!.Sessions);
-            await again.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, cts.Token);
-            WorldFrame list = await again.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, cts.Token);
-            Assert.Equal(1, list.Payload[0]);
-            Assert.Equal(guid, BinaryPrimitives.ReadUInt64LittleEndian(list.Payload.AsSpan(1, 8)));
-            byte[] login = new byte[8];
-            BinaryPrimitives.WriteUInt64LittleEndian(login, guid);
-            await again.SendAsync((ushort)WorldOpcode.CmsgPlayerLogin, login, cts.Token);
-            await again.ReadUntilAsync((ushort)WorldOpcode.SmsgLoginVerifyWorld, cts.Token);
             await WaitUntilAsync(async () => await b.World.InvokeAsync(() => b.World.OnlinePlayerCount) == 1, cts.Token);
+
+            // The session is B's now: input sent after the handoff is answered too.
+            await first.SendAsync((ushort)WorldOpcode.CmsgQueryTime, ReadOnlyMemory<byte>.Empty, cts.Token);
+            await first.ReadUntilAsync((ushort)WorldOpcode.SmsgQueryTimeResponse, cts.Token);
 
             // The durable fence row names B now.
             CharacterOwnershipRow row = await OwnershipAsync(b);
@@ -128,6 +151,52 @@ public sealed class WorldHandoffTests
         finally
         {
             source.Dispose(); // release A's parked simulation thread before its host stops
+            await bEndpoint.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Fact]
+    public async Task AnAbortedHandoff_ReturnsTheInputHeldDuringTheFreeze_ToA_AndKeepsTheClientConnected()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer a = await StartActiveAsync(cts.Token);
+        await using SyntheticArcaneServer b = await StartStandbyAsync(a, cts.Token);
+        await using Linked linked = await LinkAsync(a, cts.Token);
+        GatewayWorkerEndpoint bEndpoint = b.Services.GetRequiredService<GatewayWorkerEndpoint>();
+        await bEndpoint.StartAsync(cts.Token);
+        using LocalWorldHandoffSource source = Source(a);
+        try
+        {
+            await a.AddAccountAsync("HANDOFF", "PASSWORD", cts.Token);
+            LogonResult logon = await LogonClient.AuthenticateAsync(a.RealmEndpoint, "HANDOFF", "PASSWORD", cts.Token);
+            await using WorldClient client = await WorldClient.ConnectAsync(linked.Gateway.ListenEndPoint, cts.Token);
+            Assert.Equal((byte)AuthResponseCode.Ok, await client.AuthenticateAsync("HANDOFF", logon.SessionKey, cts.Token));
+            await CreateAndEnterAsync(client, a, "Handoff", cts.Token);
+
+            await Assert.ThrowsAsync<WorldHandoffAbortedException>(() =>
+                Coordinator(a, b, source, new GatewayWorldHandoffRouter(linked.Gateway, bEndpoint.Host!.BoundEndPoint)).RunAsync(Guid.NewGuid(), async (stage, ct) =>
+                {
+                    if (stage == WorldHandoffStage.Frozen)
+                    {
+                        await client.SendAsync((ushort)WorldOpcode.CmsgQueryTime, ReadOnlyMemory<byte>.Empty, ct);
+                    }
+
+                    if (stage == WorldHandoffStage.Flushed)
+                    {
+                        // Let the gateway read the held input before the abort releases it.
+                        await Task.Delay(200, ct);
+                        throw new InvalidOperationException("injected failure at " + stage);
+                    }
+                }, cts.Token));
+
+            // A resumed and the gateway returned the held input to it: the query is answered and the client is still connected on A.
+            await client.ReadUntilAsync((ushort)WorldOpcode.SmsgQueryTimeResponse, cts.Token);
+            Assert.Equal(1, linked.Gateway.ConnectionCount);
+            Assert.True(Host(b).IsStandby);
+        }
+        finally
+        {
+            source.Dispose();
             await bEndpoint.StopAsync(CancellationToken.None);
         }
     }

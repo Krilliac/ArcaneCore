@@ -160,7 +160,7 @@ public sealed class GatewayServer : BackgroundService
 
     /// <summary>
     /// Move the first worker's link to <paramref name="worker"/> (the reroute of a whole-World handoff, Tier 3b): the link to the old worker is closed,
-    /// which disconnects its clients (they log in again through the new link; a seamless per-session reroute is not built), and the link supervisor
+    /// which disconnects its clients (they log in again through the new link; <see cref="RetargetWorkerSeamlessAsync"/> carries them across instead), and the link supervisor
     /// connects to the new worker with the same secret and manifest. Other workers' links are not touched. Completes when the new link is registered.
     /// In-process only: nothing remote can call it. Idempotent.
     /// </summary>
@@ -184,6 +184,97 @@ public sealed class GatewayServer : BackgroundService
             }
 
             await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The seamless reroute of a whole-World handoff: like <see cref="RetargetWorkerAsync"/>, but the clients on the old worker are not disconnected. The first
+    /// worker's supervisor connects to <paramref name="worker"/> while the old link is still open, every connection forwarding on the old link is re-pointed to
+    /// the new one (<see cref="GatewayClientConnection.HandOffAsync"/>: the character is adopted by the new world, the client gets a synthesized
+    /// SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD, the packets held since <see cref="HoldSessionsForHandoff"/> follow), and only then is the old link closed. A client whose
+    /// move fails is disconnected, the others are unaffected. Completes when every move ended. Without a registered link (or when the link already points at
+    /// <paramref name="worker"/>) it is the plain retarget. A gateway restart still drops every client. In-process only. Idempotent.
+    /// </summary>
+    public async Task RetargetWorkerSeamlessAsync(IPEndPoint worker, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(worker);
+        GatewayWorkerLink[] workers = _workers;
+        if (workers.Length == 0 || workers[0].Link is null || Equals(workers[0].ConnectedEndPoint, worker))
+        {
+            await RetargetWorkerAsync(worker, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var moved = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _worker = worker;
+        _logger.LogInformation("Worker link seamlessly retargeted to {Worker}", worker);
+        workers[0].Retarget(worker, async (previous, next, token) =>
+        {
+            try
+            {
+                moved.TrySetResult(await MoveSessionsAsync(previous, next, token).ConfigureAwait(false));
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                moved.TrySetException(ex);
+            }
+        });
+        await moved.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<int> MoveSessionsAsync(GatewaySessionLinkClient? previous, GatewaySessionLinkClient next, CancellationToken cancellationToken)
+    {
+        if (previous is null)
+        {
+            return 0;
+        }
+
+        var moves = new List<Task<bool>>();
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            if (connection.IsForwardingOn(previous))
+            {
+                moves.Add(connection.HandOffAsync(previous, next, cancellationToken));
+            }
+        }
+
+        bool[] results = await Task.WhenAll(moves).ConfigureAwait(false);
+        int moved = results.Count(result => result);
+        _logger.LogInformation("World handoff moved {Moved} of {Total} sessions to the promoted world", moved, results.Length);
+        return moved;
+    }
+
+    /// <summary>
+    /// The source world froze: hold the client packets of every connection forwarding on the first worker's link (instead of sending them to the frozen world),
+    /// so <see cref="RetargetWorkerSeamlessAsync"/> delivers them to the promoted world, or <see cref="ReleaseHandoffHold"/> returns them to the source when the
+    /// handoff aborts. Each connection holds at most 256 packets; one past that is disconnected. Returns how many connections now hold.
+    /// </summary>
+    public int HoldSessionsForHandoff()
+    {
+        GatewayWorkerLink[] workers = _workers;
+        if (workers.Length == 0 || workers[0].Link is not { } link)
+        {
+            return 0;
+        }
+
+        int held = 0;
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            if (connection.BeginHandoffHold(link))
+            {
+                held++;
+            }
+        }
+
+        return held;
+    }
+
+    /// <summary>The handoff aborted: every connection that holds replays its held packets to the world it is still on and forwards again. Idempotent.</summary>
+    public void ReleaseHandoffHold()
+    {
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            connection.EndHandoffHold();
         }
     }
 
@@ -476,6 +567,8 @@ public sealed class GatewayWorkerLink
     private long _reconnects;
     private TaskCompletionSource _linkUp = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource? _retarget;
+    private Func<GatewaySessionLinkClient?, GatewaySessionLinkClient, CancellationToken, Task>? _migrate;
+    private GatewaySessionLinkClient? _draining;
 
     internal GatewayWorkerLink(
         GatewayWorkerEntry entry,
@@ -538,6 +631,17 @@ public sealed class GatewayWorkerLink
         }
     }
 
+    /// <summary>
+    /// Like <see cref="Retarget(IPEndPoint)"/>, but the registered link stays open until the new one is registered: <paramref name="migrate"/> then runs once with the old
+    /// link (null when it was already lost) and the new one, and the old link is closed after it returns.
+    /// </summary>
+    internal void Retarget(IPEndPoint worker, Func<GatewaySessionLinkClient?, GatewaySessionLinkClient, CancellationToken, Task> migrate)
+    {
+        ArgumentNullException.ThrowIfNull(migrate);
+        Volatile.Write(ref _migrate, migrate);
+        Retarget(worker);
+    }
+
     internal async ValueTask DisposeLinkAsync()
     {
         if (_link is { } link)
@@ -547,6 +651,21 @@ public sealed class GatewayWorkerLink
     }
 
     internal async Task RunAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            await RunLoopAsync(stoppingToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (Interlocked.Exchange(ref _draining, null) is { } draining)
+            {
+                await draining.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task RunLoopAsync(CancellationToken stoppingToken)
     {
         TimeSpan delay = _config.LinkRetryDelay > TimeSpan.Zero ? _config.LinkRetryDelay : TimeSpan.FromSeconds(1);
         TimeSpan nextDelay = delay;
@@ -621,6 +740,27 @@ public sealed class GatewayWorkerLink
                 retarget.TrySetResult(); // retargeted while this attempt was connecting
             }
 
+            if (Interlocked.Exchange(ref _migrate, null) is { } migrate)
+            {
+                // A seamless retarget: the old link (kept open below) hands its sessions to this one, then closes.
+                GatewaySessionLinkClient? previous = Interlocked.Exchange(ref _draining, null);
+                try
+                {
+                    await migrate(previous, link, stoppingToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    _logger.LogWarning("Worker link {Node}: the session migration to {Worker} failed ({Message})", NodeId, worker, ex.Message);
+                }
+                finally
+                {
+                    if (previous is not null)
+                    {
+                        await previous.DisposeAsync().ConfigureAwait(false);
+                    }
+                }
+            }
+
             try
             {
                 await Task.WhenAny(link.Ended, retarget.Task).WaitAsync(stoppingToken).ConfigureAwait(false);
@@ -644,6 +784,12 @@ public sealed class GatewayWorkerLink
                 _lastError = "link lost";
                 Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Backoff);
                 _logger.LogWarning("Worker link {Node} to {Worker} lost; its clients were disconnected", NodeId, worker);
+            }
+
+            if (retarget.Task.IsCompleted && Volatile.Read(ref _migrate) is not null)
+            {
+                Volatile.Write(ref _draining, link); // kept open: the next registration moves its sessions, then closes it
+                continue;
             }
 
             await link.DisposeAsync().ConfigureAwait(false);

@@ -4,9 +4,11 @@ using ArcaneCore.World.Cluster.Handoff;
 namespace ArcaneCore.Gateway;
 
 /// <summary>
-/// The reroute step of a whole-World handoff (Tier 3b) for a coordinator that runs in the gateway process: move the gateway's worker link
-/// to the promoted world B (<see cref="GatewayServer.RetargetWorkerAsync"/>). Clients connected through the link to A are disconnected and log
-/// in again through B; carrying a live session across (SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD) is not built.
+/// The routing steps of a whole-World handoff (Tier 3b) for a coordinator that runs in the gateway process. When A freezes the gateway holds every client's
+/// input (<see cref="GatewayServer.HoldSessionsForHandoff"/>; an abort returns it to A through <see cref="GatewayServer.ReleaseHandoffHold"/>). After B is promoted
+/// the gateway's worker link moves to B and every session moves with it (<see cref="GatewayServer.RetargetWorkerSeamlessAsync"/>): B adopts each character,
+/// the client sees a synthesized SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD at the position of the save, and the held input is delivered to B. A client whose move fails
+/// is disconnected and logs in again. A gateway restart still drops every client: sessions live in the gateway process.
 /// </summary>
 public sealed class GatewayWorldHandoffRouter : IWorldHandoffRouter
 {
@@ -21,5 +23,17 @@ public sealed class GatewayWorldHandoffRouter : IWorldHandoffRouter
         _target = target;
     }
 
-    public Task RerouteAsync(CancellationToken cancellationToken) => _gateway.RetargetWorkerAsync(_target, cancellationToken);
+    public Task HoldAsync(CancellationToken cancellationToken)
+    {
+        _gateway.HoldSessionsForHandoff();
+        return Task.CompletedTask;
+    }
+
+    public Task ReleaseAsync(CancellationToken cancellationToken)
+    {
+        _gateway.ReleaseHandoffHold();
+        return Task.CompletedTask;
+    }
+
+    public Task RerouteAsync(CancellationToken cancellationToken) => _gateway.RetargetWorkerSeamlessAsync(_target, cancellationToken);
 }
