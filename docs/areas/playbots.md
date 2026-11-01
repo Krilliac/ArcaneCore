@@ -93,7 +93,7 @@ reagents (moving to a nearby forge or anvil when `RequiresSpellFocus` demands on
 Content one bot cannot do (elite, dungeon and raid quests, objectives inside instances, quest targets too strong alone) becomes a
 "needs a group of N" goal: `PlayerbotGroupCoordinator` matches bots by goal, team, level and role, the leader invites the others
 through the ordinary group packets, and `PlayerbotGroupAI` drives the members until the content is done (`World:Playerbots:Groups`,
-live; `.playerbot groups`): `docs/areas/playbots-groups.md`.
+live; `.playerbot groups`): `docs/areas/playbots-groups.md` (its approach-point choice and the 30 s refused-walk bailout are described there).
 
 A target number of bots kept online, spread over level bands and zones and held back by the world's tick time, is the population
 manager (`World:Playerbots:Population`, off by default, live; `.playerbot population`): `docs/areas/playbots-population.md`.
