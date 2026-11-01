@@ -571,6 +571,17 @@ public sealed partial class Creature : Unit, ICombatCreature
     internal bool IgnoreTemplateResistances { get; set; }
 
     /// <summary>
+    /// Makes this creature a hunter's permanent pet by kind (vmangos GetPetType() == HUNTER_PET): it stops carrying the beast's template
+    /// resistances, whoever owns or controls it. The key is the pet's own kind, set by the spawn of a persistent hunter pet, and not the owner's
+    /// class at the call site; warlock demons and other summons never call it and keep their template resistances.
+    /// </summary>
+    internal void MarkHunterPetKind()
+    {
+        IgnoreTemplateResistances = true;
+        ApplyCreateResistances();
+    }
+
+    /// <summary>
     /// The create resistance of every magic school (vmangos Creature::UpdateEntry, Creature.cpp:606-611); holy stays 0 in the field
     /// (CreatureTemplate.ResistanceOf), and a negative template value is a vulnerability. Applied as the change from the value last written,
     /// not as an overwrite: this also runs on a live creature (UpdateEntry, a game event override) whose resistance auras have already moved the
