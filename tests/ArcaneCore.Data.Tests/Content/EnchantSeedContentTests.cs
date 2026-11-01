@@ -154,10 +154,10 @@ public sealed class EnchantSeedContentTests : IAsyncLifetime
             Assert.Equal(ppm, rate!.Value);
         }
 
-        // Crusader (20007) carries no row: it keeps the default chance, it is not given a PPM by accident.
+        // Crusader (20007) carries no row (mangos-classic sql/base/mangos.sql ships only 8034, 13897, 20004, 20005): it keeps the default
+        // chance. "Crusader-style" in this file means "an enchant proc spell with a PPM row", not that Crusader itself has a PPM.
+        // The combat path (PPM versus delay / 600) is covered by ItemCombatProcTests (Game.Tests) and ItemEnchantmentCombatProcWorldTests
+        // (World.Tests); Data.Tests does not reference ArcaneCore.Game, so the file-to-store-to-catalog chain is what this test proves.
         Assert.Null(catalog.PpmRate(20007));
-        // A 2.6 s weapon: Icy Chill 1.6 PPM is 2600 * 1.6 / 600 = 6.93 percent per swing, Frostbrand 9 PPM is 39 percent.
-        Assert.Equal(6.9333d, 2600f * catalog.PpmRate(20005)!.Value / 600f, 3);
-        Assert.Equal(39d, 2600f * catalog.PpmRate(8034)!.Value / 600f, 3);
     }
 }
