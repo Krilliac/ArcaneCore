@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Data.Sqlite;
 
 namespace ArcaneCore.Data.Characters.Ownership;
@@ -44,7 +46,42 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
     /// The lock file path for a resolved characters component, or null when the database is not a plain file-backed read-write SQLite database
     /// (or its directory does not exist, in which case SQLite cannot open it either).
     /// </summary>
-    public static string? LockPathFor(DatabaseConnectionOptions options)
+    public static string? LockPathFor(DatabaseConnectionOptions options) => SidecarBasePath(options) is { } full ? full + Suffix : null;
+
+    /// <summary>Longest shard id: <c>character_ownership.scope</c> is varchar(64) and a worker's scope is <c>"worker:" + shard</c>.</summary>
+    public const int MaxShardIdLength = 57;
+
+    /// <summary>Whether <paramref name="shard"/> is usable as a worker shard id: 1 to <see cref="MaxShardIdLength"/> characters of <c>[A-Za-z0-9:._-]</c>.</summary>
+    public static bool IsValidShardId(string? shard)
+    {
+        if (string.IsNullOrEmpty(shard) || shard.Length > MaxShardIdLength) return false;
+        foreach (char c in shard)
+            if (!(c is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or ':' or '.' or '_' or '-')) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// The shard lock file path of a worker shard on a file-backed SQLite database: <c>&lt;database&gt;.world.&lt;hex16(SHA-256(shard))&gt;.lock</c> (the first 8 bytes of the hash, lower-case hex),
+    /// or null when the database has no sidecar (see <see cref="LockPathFor"/>). The realm sidecar <c>&lt;database&gt;.world.lock</c> is a different file.
+    /// </summary>
+    public static string? ShardLockPathFor(DatabaseConnectionOptions options, string shard)
+    {
+        ValidateShard(shard);
+        return SidecarBasePath(options) is { } full ? full + ShardSuffixFor(shard) : null;
+    }
+
+    /// <summary>The sidecar suffix of a shard: <c>.world.&lt;hex16&gt;.lock</c>.</summary>
+    internal static string ShardSuffixFor(string shard)
+        => ".world." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(shard)).AsSpan(0, 8)).ToLowerInvariant() + ".lock";
+
+    private static void ValidateShard(string shard)
+    {
+        if (!IsValidShardId(shard))
+            throw new ArgumentException($"a shard id must be 1 to {MaxShardIdLength} characters of [A-Za-z0-9:._-]", nameof(shard));
+    }
+
+    /// <summary>The database file's full path (file symlinks resolved) when it is a plain file-backed read-write SQLite database whose directory exists; else null.</summary>
+    private static string? SidecarBasePath(DatabaseConnectionOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (options.Provider != DatabaseProvider.Sqlite || string.IsNullOrWhiteSpace(options.ConnectionString)) return null;
@@ -65,7 +102,7 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
         string? directory = System.IO.Path.GetDirectoryName(full);
-        return directory is not null && Directory.Exists(directory) ? full + Suffix : null;
+        return directory is not null && Directory.Exists(directory) ? full : null;
     }
 
     /// <summary>
@@ -75,16 +112,60 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
     /// </summary>
     public static CharacterDatabaseWriterLock? TryAcquire(DatabaseConnectionOptions options, Action<string>? onLost = null, TimeSpan? healthInterval = null,
         Action<string>? onRecovered = null, Action<string>? onConflict = null, Action<string>? onRetakeBlocked = null)
+        => Acquire(options, null, onLost, healthInterval, onRecovered, onConflict, onRetakeBlocked);
+
+    /// <summary>
+    /// Takes the lock of one worker shard (design step C2 of the per-worker writer lock). Shards of one database coexist; the same shard twice is refused with
+    /// <see cref="CharacterDatabaseAlreadyOwnedException"/>. A worker never holds the realm lock, which <see cref="TryAcquire"/> takes: see <see cref="ProbeRealmFree"/>.
+    /// Keys: PostgreSQL <c>LE64(SHA256("arcanecore.world.writer:" + db + "#shard:" + shard))</c>; MariaDB/MySQL <c>NamePrefix + lower(db) + "#shard:" + lower(shard)</c> (SHA-256 fallback over 64 characters);
+    /// SQLite the sidecar of <see cref="ShardLockPathFor"/>. Returns null when the database has no lock (as <see cref="TryAcquire"/>); throws <see cref="ArgumentException"/> for an invalid shard id.
+    /// </summary>
+    public static CharacterDatabaseWriterLock? TryAcquireShard(DatabaseConnectionOptions options, string shard, Action<string>? onLost = null, TimeSpan? healthInterval = null,
+        Action<string>? onRecovered = null, Action<string>? onConflict = null, Action<string>? onRetakeBlocked = null)
+    {
+        ValidateShard(shard);
+        return Acquire(options, shard, onLost, healthInterval, onRecovered, onConflict, onRetakeBlocked);
+    }
+
+    /// <summary>
+    /// Whether the realm lock is free right now, without keeping it (a worker takes its shard lock and commits its claim, then probes: a holder means a Combined world is running and the worker must back out).
+    /// True also when the database has no lock at all. SQLite: a try-open of the realm sidecar; MariaDB/MySQL: <c>IS_USED_LOCK(name) IS NULL</c>; PostgreSQL: try-take then release.
+    /// An unreachable server propagates the driver's <see cref="System.Data.Common.DbException"/>.
+    /// </summary>
+    public static bool ProbeRealmFree(DatabaseConnectionOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.Provider != DatabaseProvider.Sqlite)
+            return ServerAdvisoryWriterLock.DatabaseNameOf(options) is not { } name || ServerAdvisoryWriterLock.ProbeFree(options, name);
+
+        if (LockPathFor(options) is not { } path) return true;
+        try
+        {
+            using var probe = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
+            return true;
+        }
+        catch (IOException ex) when (IsSharingViolation(ex))
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"could not probe the characters database writer lock '{path}': {ex.Message}", ex);
+        }
+    }
+
+    private static CharacterDatabaseWriterLock? Acquire(DatabaseConnectionOptions options, string? shard, Action<string>? onLost, TimeSpan? healthInterval,
+        Action<string>? onRecovered, Action<string>? onConflict, Action<string>? onRetakeBlocked)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (options.Provider != DatabaseProvider.Sqlite)
         {
             if (ServerAdvisoryWriterLock.DatabaseNameOf(options) is not { } name) return null;
-            ServerAdvisoryWriterLock advisory = ServerAdvisoryWriterLock.TryAcquire(options, name, onLost, healthInterval, onRecovered, onConflict, onRetakeBlocked: onRetakeBlocked);
+            ServerAdvisoryWriterLock advisory = ServerAdvisoryWriterLock.TryAcquire(options, name, onLost, healthInterval, onRecovered, onConflict, onRetakeBlocked: onRetakeBlocked, shard: shard);
             return new CharacterDatabaseWriterLock(advisory.Description, advisory);
         }
 
-        if (LockPathFor(options) is not { } path) return null;
+        if ((shard is null ? LockPathFor(options) : ShardLockPathFor(options, shard)) is not { } path) return null;
         try
         {
             return new CharacterDatabaseWriterLock(path, new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None));

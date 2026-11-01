@@ -4,6 +4,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.Pets;
 using ArcaneCore.Protocol;
@@ -34,6 +35,7 @@ public sealed partial class SummonService : ISpellSummonSink
     private readonly HashSet<string> _warned = [];
     private SpellSystem? _spells;
     private uint _petNumbers;
+    private volatile DurableIdBlockAllocator? _idBlockAllocator;
     private bool _summonPetRegistered;
     private bool _demonsInstalled;
 
@@ -46,6 +48,28 @@ public sealed partial class SummonService : ISpellSummonSink
         _logger = logger ?? NullLogger.Instance;
         _random = random ?? new Random();
     }
+
+    /// <summary>
+    /// Durable block allocator for the <c>"pet"</c> scope. Set by the host before the world starts when several workers share one
+    /// characters database; pet numbers are then realm-unique and survive restarts. Null keeps the process counter (Realm mode).
+    /// </summary>
+    public DurableIdBlockAllocator? IdBlockAllocator
+    {
+        get => _idBlockAllocator;
+        set
+        {
+            if (value is not null && !string.Equals(value.Scope, IdRangeScopes.Pet, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"Block allocator scope must be '{IdRangeScopes.Pet}', but was '{value.Scope}'.", nameof(value));
+            }
+
+            _idBlockAllocator = value;
+        }
+    }
+
+    /// <summary>When true (Worker mode) a pet number is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public volatile bool RequireDurableIds;
 
     /// <summary>The pet tables (<c>pet_levelstats</c>, <c>petcreateinfo_spell</c>); empty until the world loads them.</summary>
     public PetContent Content { get; set; } = PetContent.Empty;
@@ -281,13 +305,37 @@ public sealed partial class SummonService : ISpellSummonSink
     internal void AttachPetAi(Creature pet) => pet.AI = new PetAI(pet, () => _spells, _random);
 
     /// <summary>vmangos ObjectMgr::GeneratePetNumber: the pet number a summoned pet is named by (the GUID carries it).</summary>
-    internal uint NextPetNumber() => Interlocked.Increment(ref _petNumbers);
+    internal uint NextPetNumber()
+    {
+        if (_idBlockAllocator is { } allocator)
+        {
+            uint allocated = allocator.Next();
+            ReservePetNumber(allocated);
+            return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Pet,
+                $"Pet number allocator for scope '{IdRangeScopes.Pet}' is not primed with a durable block (fail-closed in Worker mode).");
+        }
+
+        return Interlocked.Increment(ref _petNumbers);
+    }
 
     /// <summary>A fresh pet number above <paramref name="atLeast"/> (a stored maximum), for a loaded character dump (vmangos PlayerDumpReader).</summary>
     public uint ReservePetNumberAbove(uint atLeast)
     {
         ReservePetNumber(atLeast);
-        return NextPetNumber();
+        uint number = NextPetNumber();
+        // A durable block starts above every stored number, so this loop only runs when a dump carries a number above them.
+        while (number <= atLeast && _idBlockAllocator is not null)
+        {
+            number = NextPetNumber();
+        }
+
+        return number;
     }
 
     /// <summary>Keep subsequently generated pet GUID counters above a loaded durable pet.</summary>

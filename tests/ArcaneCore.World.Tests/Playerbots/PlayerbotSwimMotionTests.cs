@@ -622,6 +622,38 @@ public sealed class PlayerbotSwimMotionTests
         ],
     };
 
+    /// <summary>
+    /// World-thread audit lane 7 (finding 16.2): a real bot step sends its movement packet through one per-bot writer and the session's reused
+    /// exact-length buffer. The old PlayerbotMotion.Send made a new PacketWriter and a ToArray() every step, so MotionState.Writer stayed null and
+    /// the session never kept a scratch buffer: both asserts below fail on that path.
+    /// </summary>
+    [Fact]
+    public async Task BotSteps_SendThroughOneReusedWriterAndOneReusedSessionBuffer()
+        => await RunAsync(async (host, session) =>
+        {
+            await host.OnWorldAsync(() =>
+            {
+                Player player = session.Player!;
+                Place(host, player, 20f);
+                Assert.True(Follow(host, session, player, new Vector3(20f, Y, Ground), new Vector3(120f, Y, Ground)), "the route did not start");
+                Assert.True(Step(host, session, player) > 1f, "the bot did not move on land");
+
+                PlayerbotMotion.MotionState state = PlayerbotMotion.Of(player);
+                PacketWriter? writer = state.Writer;
+                byte[]? scratch = session.ManagedScratch;
+                Assert.NotNull(writer);
+                Assert.NotNull(scratch);
+                for (int i = 0; i < 3; i++)
+                {
+                    Assert.True(Step(host, session, player) > 1f, "the bot did not move on land");
+                    Assert.Same(writer, state.Writer);
+                    Assert.Same(scratch, session.ManagedScratch);
+                }
+
+                return true;
+            });
+        });
+
     private static void Place(WorldTestHost host, Player player, float x) => player.Relocate(x, Y, Ground, 0f, host.World.NowMs);
 
     private static bool Follow(WorldTestHost host, WorldSession session, Player player, params Vector3[] points)

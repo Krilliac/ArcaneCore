@@ -362,6 +362,80 @@ public sealed class CharacterDatabaseWriterLockHardeningTests
         }
     }
 
+    // ---- Shard locks keep the same loss and conflict reporting as the realm lock (they are the same ServerAdvisoryWriterLock under another identity)
+
+    [ServerProviderTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task AShardLock_ReportsItsLoss_AndARivalOnTheSameShardIsAConflict(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        string name = ServerAdvisoryWriterLock.DatabaseNameOf(options)!;
+        var reports = new Reports();
+        using ServerAdvisoryWriterLock held = ServerAdvisoryWriterLock.TryAcquire(options, name,
+            _ => Interlocked.Increment(ref reports.Lost),
+            TimeSpan.FromHours(1),
+            onRecovered: _ => Interlocked.Increment(ref reports.Recovered),
+            onConflict: text => { reports.ConflictText = text; Interlocked.Increment(ref reports.Conflicts); },
+            onRetakeBlocked: _ => Interlocked.Increment(ref reports.Blocked),
+            shard: "w1");
+        Assert.Contains("w1", held.Description);
+        Assert.True(held.IsHeld());
+
+        // A realm lock is a different identity: the kill below must hit the shard session only.
+        using ServerAdvisoryWriterLock realm = ServerAdvisoryWriterLock.TryAcquire(options, name);
+        await CharacterDatabaseWriterLockTests.KillLockSessionAsync(options, name, "w1");
+        held.CheckHealth(); // notices the loss
+        Assert.Equal(1, reports.Lost);
+        Assert.True(realm.IsHeld());
+
+        ServerAdvisoryWriterLock? rival = null;
+        for (int attempt = 0; attempt < 200 && rival is null; attempt++)
+        {
+            try { rival = ServerAdvisoryWriterLock.TryAcquire(options, name, shard: "w1"); }
+            catch (CharacterDatabaseAlreadyOwnedException) { await Task.Delay(25); }
+        }
+
+        Assert.NotNull(rival);
+        using (rival)
+        {
+            held.CheckHealth(); // the first retake: refused by another session
+            Assert.Equal(1, reports.Conflicts);
+            Assert.Contains(held.Description, reports.ConflictText);
+            Assert.Equal((1, 0, 1), (reports.Lost, reports.Recovered, reports.Conflicts));
+            Assert.True(held.IsLost);
+        }
+    }
+
+    [ServerProviderTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task ALostShardLock_IsRetaken_WhenNobodyElseHoldsIt(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        string name = ServerAdvisoryWriterLock.DatabaseNameOf(options)!;
+        var reports = new Reports();
+        using ServerAdvisoryWriterLock held = ServerAdvisoryWriterLock.TryAcquire(options, name,
+            _ => Interlocked.Increment(ref reports.Lost),
+            TimeSpan.FromHours(1),
+            onRecovered: _ => Interlocked.Increment(ref reports.Recovered),
+            shard: "w1");
+
+        await CharacterDatabaseWriterLockTests.KillLockSessionAsync(options, name, "w1");
+        held.CheckHealth();
+        Assert.Equal(1, reports.Lost);
+        for (int attempt = 0; attempt < 100 && held.IsLost; attempt++)
+        {
+            held.CheckHealth(); // the retake takes the same shard identity again
+            if (held.IsLost) await Task.Delay(50);
+        }
+
+        Assert.False(held.IsLost);
+        Assert.True(held.IsHeld());
+        Assert.Equal(1, reports.Recovered);
+        Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => ServerAdvisoryWriterLock.TryAcquire(options, name, shard: "w1"));
+    }
+
     // ---- The pg_locks decomposition of a negative key whose halves are both >= 2^31
 
     private const string NegativeKeyDatabase = "wl_neg_5"; // key -8484032823849904770: classid 2319624472, objid 3618379134

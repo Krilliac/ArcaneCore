@@ -349,7 +349,8 @@ public sealed class WorldHost(
         IServiceScopeFactory scopes,
         uint blockSize = 1024,
         uint lowWatermark = 256,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool requireDurableIds = false)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(scopes);
@@ -363,8 +364,27 @@ public sealed class WorldHost(
 
         if (services.GetService<Items.ItemsFeature>() is { } items)
         {
+            items.GuidAllocator.RequireDurableIds = requireDurableIds;
             DurableIdBlockAllocator itemAlloc = items.GuidAllocator.ConfigureBlockReservation(reserveAsync, blockSize, lowWatermark);
             await itemAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // Pet numbers, GM tickets and petitions: realm-unique across workers (docs: writer-lock design, section 3). Their rows are inserted
+        // by the reservation store on first use, so no released schema module changes.
+        if ((services.GetService<Pets.PetsFeature>()?.Service ?? services.GetService<Game.Pets.SummonService>()) is { } pets)
+        {
+            var petAlloc = new DurableIdBlockAllocator(IdRangeScopes.Pet, blockSize, lowWatermark, reserveAsync);
+            await petAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            pets.IdBlockAllocator = petAlloc;
+            pets.RequireDurableIds = requireDurableIds;
+        }
+
+        if (services.GetService<Gm.Audit.GmAuditFeature>() is { } audit)
+        {
+            var ticketAlloc = new DurableIdBlockAllocator(IdRangeScopes.GmTicket, blockSize, lowWatermark, reserveAsync);
+            await ticketAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            audit.TicketIdAllocator = ticketAlloc;
+            audit.RequireDurableIds = requireDurableIds;
         }
 
         if (services.GetService<Social.SocialFeature>() is { } social)
@@ -376,6 +396,11 @@ public sealed class WorldHost(
             var guildAlloc = new DurableIdBlockAllocator(IdRangeScopes.Guild, blockSize, lowWatermark, reserveAsync);
             await guildAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
             social.Context.Guilds.IdBlockAllocator = guildAlloc;
+
+            var petitionAlloc = new DurableIdBlockAllocator(IdRangeScopes.Petition, blockSize, lowWatermark, reserveAsync);
+            await petitionAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
+            social.Context.Petitions.IdBlockAllocator = petitionAlloc;
+            social.Context.Petitions.RequireDurableIds = requireDurableIds;
         }
 
         if (services.GetService<Instances.InstanceFeature>() is { } instances)

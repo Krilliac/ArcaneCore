@@ -205,3 +205,85 @@ public interface IEconomyStore
 
     Task<EconomyIdSeed> GetIdSeedAsync(CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// What a worker asks of the Economy lease holder (M15 S3d, <c>docs/CLUSTERING_DESIGN.md</c> section 8 mail and auctions). The holder owns the only auction cache,
+/// the expiry scheduler and the fenced store writes; a worker that does not hold the lease reads through <see cref="MailList"/> and <see cref="AuctionList"/> and
+/// sends every mailbox or auction write (send, return, take, COD payment, bid, buyout, cancel) as an <see cref="EconomyCommitRequest"/> through
+/// <see cref="MailWrite"/> or <see cref="AuctionWrite"/>.
+/// </summary>
+public enum EconomyForwardKind : byte
+{
+    /// <summary>The letters of <see cref="EconomyForwardRequest.CharacterId"/> (all states; the worker filters by delivery and expiry time).</summary>
+    MailList = 1,
+
+    /// <summary>The live auctions of <see cref="EconomyForwardRequest.HouseId"/>, or only <see cref="EconomyForwardRequest.AuctionId"/> when it is not 0.</summary>
+    AuctionList = 2,
+
+    /// <summary>A commit whose changes touch letters (and escrow items) only.</summary>
+    MailWrite = 3,
+
+    /// <summary>A commit with at least one auction change (a listing, bid, buyout, cancel or settlement), possibly with letters for the parties.</summary>
+    AuctionWrite = 4,
+}
+
+/// <summary>A letter with the escrowed item it carries.</summary>
+public sealed record ForwardedMail(MailRecord Mail, ItemInstanceData? Item);
+
+/// <summary>A listed auction with its escrowed item.</summary>
+public sealed record ForwardedAuction(AuctionRecord Auction, ItemInstanceData Item);
+
+/// <summary>
+/// One request from a worker to the holder. <see cref="RequestId"/> correlates the answer; <see cref="WorkerId"/> names the asking worker (diagnostics).
+/// For the write kinds <see cref="Commit"/> is required and its <see cref="EconomyCommitRequest.OperationId"/> is the idempotency key: the worker saves its
+/// participants first (as a local economy operation does), then a retry of the same request after a lost answer is never a second write.
+/// </summary>
+public sealed record EconomyForwardRequest(
+    Guid RequestId,
+    string WorkerId,
+    EconomyForwardKind Kind,
+    int CharacterId = 0,
+    uint HouseId = 0,
+    uint AuctionId = 0,
+    EconomyCommitRequest? Commit = null);
+
+/// <summary>How the holder answered an <see cref="EconomyForwardRequest"/>.</summary>
+public enum EconomyForwardStatus : byte
+{
+    /// <summary>Served; for a write, durably committed (or already committed under the same operation id).</summary>
+    Ok = 0,
+
+    /// <summary>This node does not hold the Economy lease: ask the node that does.</summary>
+    NotHolder = 1,
+
+    /// <summary>The economy store is off or the node is stopping.</summary>
+    Disabled = 2,
+
+    /// <summary>The request is malformed (wrong kind for the changes, missing commit, an insert without its escrow item).</summary>
+    Invalid = 3,
+
+    /// <summary>The holder's cache or the stored rows no longer match what the write expected; nothing was written. The worker re-reads and may retry.</summary>
+    Conflict = 4,
+
+    /// <summary>Another operation holds one of the auctions or letters; nothing was written.</summary>
+    Busy = 5,
+
+    /// <summary>Nothing was written (the store failed and the operation is known not to have committed).</summary>
+    Failed = 6,
+
+    /// <summary>The outcome could not be read back; retry the same request (same operation id) to learn it.</summary>
+    Unknown = 7,
+}
+
+/// <summary>The holder's answer. <see cref="Mails"/> and <see cref="Auctions"/> are filled only for the matching read kind.</summary>
+public sealed record EconomyForwardResult(
+    Guid RequestId,
+    EconomyForwardStatus Status,
+    IReadOnlyList<ForwardedMail> Mails,
+    IReadOnlyList<ForwardedAuction> Auctions)
+{
+    public bool IsOk => Status == EconomyForwardStatus.Ok;
+
+    /// <summary>An answer with no rows.</summary>
+    public static EconomyForwardResult Of(Guid requestId, EconomyForwardStatus status) => new(requestId, status, [], []);
+}

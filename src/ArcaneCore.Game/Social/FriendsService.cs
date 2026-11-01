@@ -38,6 +38,26 @@ public enum FriendStatus : byte
     Dnd = 0x04,
 }
 
+/// <summary>What a worker knows of a friend who is online on another worker (from realm presence): the fields of SMSG_FRIEND_STATUS plus the faction for the visibility check.</summary>
+public readonly record struct RemoteFriendInfo(FriendStatus Status, uint Area, uint Level, uint Class, Team Team);
+
+/// <summary>
+/// A real online/offline transition of a watched friend who lives on another worker. <see cref="Info"/> is the current presence when
+/// <see cref="Online"/>, and the last cached presence (used for the visibility rule) when not. <see cref="Announce"/> is false for a friend found online the first
+/// time she is watched (the lister's friend list was already sent from an empty cache): the listers get the corrected friend list, without the "has come online" line.
+/// </summary>
+public readonly record struct RemotePresenceChange(ulong Guid, bool Online, RemoteFriendInfo Info, bool Announce = true);
+
+/// <summary>
+/// Non-blocking read of the characters online on other workers (a cache of realm presence). Implementations must never block the world thread:
+/// <see cref="TryGet"/> answers from memory.
+/// </summary>
+public interface IRemoteFriendPresence
+{
+    /// <summary>True with the friend's last known presence when the realm directory lists the character online.</summary>
+    bool TryGet(ObjectGuid friend, out RemoteFriendInfo info);
+}
+
 /// <summary>One online character's friend and ignore list (vmangos PlayerSocial).</summary>
 public sealed class PlayerSocial
 {
@@ -98,6 +118,12 @@ public sealed class PlayerSocial
 public sealed class FriendsService(SocialContext context)
 {
     private readonly Dictionary<ObjectGuid, PlayerSocial> _socials = [];
+
+    /// <summary>
+    /// Presence of friends who are online on another worker, from the realm presence directory; null on a single-worker server. A friend found
+    /// online in this process always wins over it. World thread.
+    /// </summary>
+    public IRemoteFriendPresence? Remote { get; set; }
 
     /// <summary>The loaded list of an online player (empty until its rows arrive).</summary>
     public PlayerSocial Get(Player player)
@@ -239,7 +265,8 @@ public sealed class FriendsService(SocialContext context)
         else
         {
             Player? online = context.World.FindOnlinePlayer(target.Guid);
-            result = online is not null && context.CanSeeOnline(player, online) ? FriendsResult.AddedOnline : FriendsResult.AddedOffline;
+            bool visible = online is not null ? context.CanSeeOnline(player, online) : RemoteVisible(player, target.Guid) is not null;
+            result = visible ? FriendsResult.AddedOnline : FriendsResult.AddedOffline;
             Persist(player, target.Id, social.Set(target.Id, SocialFlags.Friend, true));
         }
 
@@ -344,10 +371,118 @@ public sealed class FriendsService(SocialContext context)
     private (FriendStatus Status, uint Area, uint Level, uint Class) GetFriendInfo(Player player, uint other)
     {
         Player? friend = context.World.FindOnlinePlayer(ObjectGuid.Player(other));
-        return friend is not null && context.CanSeeOnline(player, friend)
-            ? (PresenceOf(friend), friend.ZoneId, friend.Level, (uint)friend.Class)
+        if (friend is not null)
+        {
+            return context.CanSeeOnline(player, friend)
+                ? (PresenceOf(friend), friend.ZoneId, friend.Level, (uint)friend.Class)
+                : (FriendStatus.Offline, 0, 0, 0);
+        }
+
+        return RemoteVisible(player, ObjectGuid.Player(other)) is { } remote
+            ? (remote.Status, remote.Area, remote.Level, remote.Class)
             : (FriendStatus.Offline, 0, 0, 0);
     }
+
+    /// <summary>
+    /// The presence of a friend who is online on another worker, when <paramref name="viewer"/> may see it (the faction rule of
+    /// <see cref="SocialContext.CanSeeOnline"/>; realm presence carries no GM level, so a remote staff member counts as a plain player).
+    /// </summary>
+    private RemoteFriendInfo? RemoteVisible(Player viewer, ObjectGuid friend)
+        => Remote is { } remote && remote.TryGet(friend, out RemoteFriendInfo info) && CanSeeRemote(viewer, info) ? info : null;
+
+    private bool CanSeeRemote(Player viewer, RemoteFriendInfo info)
+        => viewer.Security > AccountSecurity.Player || info.Team == viewer.Team || context.World.Options.AllowTwoSideWhoList;
+
+    /// <summary>
+    /// Guids of the listed friends of every loaded list who are not online in this process: the characters to look up in realm presence.
+    /// World thread.
+    /// </summary>
+    public ulong[] RemoteFriendCandidates()
+    {
+        var wanted = new HashSet<ulong>();
+        foreach (PlayerSocial social in _socials.Values)
+        {
+            foreach ((uint other, SocialFlags flags) in social.Entries)
+            {
+                if ((flags & SocialFlags.Friend) != 0 && context.World.FindOnlinePlayer(ObjectGuid.Player(other)) is null)
+                {
+                    wanted.Add(other);
+                }
+            }
+        }
+
+        return [.. wanted];
+    }
+
+    /// <summary>
+    /// Applies one batch of <see cref="RemotePresenceChange"/>. An announced change (a watched friend on another worker really came online or went offline) sends
+    /// FRIEND_ONLINE / FRIEND_OFFLINE like <see cref="BroadcastPresence"/> to every online lister here who lists her and may see it (the faction rule of
+    /// <see cref="SocialContext.CanSeeOnline"/>, applied to the last known presence for an offline). A silent change (a friend found online when first watched,
+    /// after the lister's list or add answer was built from an empty cache) resends SMSG_FRIEND_LIST once to each such lister, so the client shows her online
+    /// without a "has come online" line. A friend online in this process is skipped, its own <see cref="BroadcastPresence"/> covers it. World thread.
+    /// </summary>
+    public void NotifyRemotePresence(IReadOnlyList<RemotePresenceChange> changes)
+    {
+        ArgumentNullException.ThrowIfNull(changes);
+        HashSet<ObjectGuid>? resend = null;
+        foreach (RemotePresenceChange change in changes)
+        {
+            if (change.Guid is 0 or > uint.MaxValue)
+            {
+                continue;
+            }
+
+            ObjectGuid friend = ObjectGuid.Player((uint)change.Guid);
+            if (context.World.FindOnlinePlayer(friend) is not null)
+            {
+                continue;
+            }
+
+            RemoteFriendInfo info = change.Info;
+            byte[]? packet = null;
+            if (change.Announce)
+            {
+                packet = change.Online
+                    ? SocialPackets.BuildFriendStatus(FriendsResult.Online, friend, info.Status, info.Area, info.Level, info.Class)
+                    : SocialPackets.BuildFriendStatus(FriendsResult.Offline, friend, FriendStatus.Offline, 0, 0, 0);
+            }
+
+            foreach ((ObjectGuid listerGuid, PlayerSocial social) in _socials)
+            {
+                if (!social.Has(friend.Low, SocialFlags.Friend)
+                    || context.World.FindOnlinePlayer(listerGuid) is not { } lister
+                    || !CanSeeRemote(lister, info))
+                {
+                    continue;
+                }
+
+                if (packet is not null)
+                {
+                    lister.Session.Send(WorldOpcode.SmsgFriendStatus, packet);
+                }
+                else
+                {
+                    (resend ??= new HashSet<ObjectGuid>()).Add(listerGuid);
+                }
+            }
+        }
+
+        if (resend is null)
+        {
+            return;
+        }
+
+        foreach (ObjectGuid listerGuid in resend)
+        {
+            if (context.World.FindOnlinePlayer(listerGuid) is { } lister)
+            {
+                SendFriendList(lister);
+            }
+        }
+    }
+
+    /// <summary>One change; see <see cref="NotifyRemotePresence(IReadOnlyList{RemotePresenceChange})"/>.</summary>
+    public void NotifyRemotePresence(RemotePresenceChange change) => NotifyRemotePresence([change]);
 
     private void SendStatus(Player player, FriendsResult result, ObjectGuid friend)
     {
