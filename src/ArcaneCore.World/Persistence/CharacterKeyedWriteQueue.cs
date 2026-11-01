@@ -47,6 +47,9 @@ public abstract class CharacterKeyedWriteQueue<TValue>
 
     private protected ILogger Logger { get; }
 
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
+
     /// <summary>Pause between attempts of one write (tests shorten it).</summary>
     public TimeSpan RetryDelay { get; init; } = TimeSpan.FromMilliseconds(100);
 
@@ -189,6 +192,11 @@ public abstract class CharacterKeyedWriteQueue<TValue>
     /// <summary>Record the character's current value and queue a write unless one is waiting.</summary>
     private protected void SaveCore(int characterId, TValue value)
     {
+        if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+        {
+            return; // the character belongs to another world now: nothing is enqueued, kept or reported
+        }
+
         bool droppedStopped = false;
         bool droppedClosed = false;
         lock (_gate)
@@ -305,6 +313,7 @@ public abstract class CharacterKeyedWriteQueue<TValue>
             await _consumer.ConfigureAwait(false);
         }
 
+        Retirement?.LogStopSummary(Logger, QueueName);
         int[] failed;
         Exception? first;
         Exception? terminal;
@@ -546,6 +555,12 @@ public abstract class CharacterKeyedWriteQueue<TValue>
                 unsaved.Queued = false;
             }
 
+            if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            {
+                _characters.Remove(characterId); // retired since it was queued (or retained): dropped, so it counts as drained
+                return null;
+            }
+
             if (_terminalFailure is { } terminal)
             {
                 if (!IsEmpty(unsaved.Value))
@@ -600,6 +615,11 @@ public abstract class CharacterKeyedWriteQueue<TValue>
                 {
                     failure = ex; // another world holds the character now (or nobody does): not a storage fault and never retried
                     FaultLedger.Shared.Record($"{SitePrefix}-claim", ex);
+                    break;
+                }
+                catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+                {
+                    failure = null; // refused because the character moved to another world: counted, neither logged nor terminal
                     break;
                 }
                 catch (CharacterOwnershipRejectedException ex)

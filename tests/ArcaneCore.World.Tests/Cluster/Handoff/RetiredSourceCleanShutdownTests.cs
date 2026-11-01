@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.World.Progression;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -8,7 +10,7 @@ using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Handoff;
 
-/// <summary>A retired handoff source drops the pending saves of the characters that moved to the new owner and stops cleanly; a character it still owns keeps its write.</summary>
+/// <summary>A retired handoff source drops the pending writes of the characters that moved to the new owner (the save queue, and every keyed write queue through <see cref="CharacterRetirementRegistry"/>) and stops cleanly; a character it still owns keeps its write.</summary>
 public sealed class RetiredSourceCleanShutdownTests
 {
     private static CharacterState State(int id, uint money) => new(id, 0, 12, 0, 0, 83.5f, 0, 1, 0, Money: money);
@@ -71,6 +73,150 @@ public sealed class RetiredSourceCleanShutdownTests
         Assert.Equal(1, queue.RetireCharacters([1]));
         Assert.Equal(0, queue.RetireCharacters([1]));
         Assert.Single(logger.Entries, e => e.Level == LogLevel.Information);
+    }
+
+    private static CharacterRestState Rest(float bonus) => new(bonus, 1000, false);
+
+    private static (RestWriteQueue Queue, CharacterRetirementRegistry Registry, FencedRestStore Store, CaptureLogger Logger, ServiceProvider Services) RestRig(int moved, bool withRegistry = true)
+    {
+        var store = new FencedRestStore(moved);
+        ServiceProvider services = new ServiceCollection().AddSingleton<ICharacterRestStore>(store).BuildServiceProvider();
+        var registry = new CharacterRetirementRegistry();
+        store.Registry = registry;
+        var logger = new CaptureLogger();
+        var queue = new RestWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), logger)
+        {
+            RetainedRetryInterval = Timeout.InfiniteTimeSpan,
+            Retirement = withRegistry ? registry : null,
+        };
+        return (queue, registry, store, logger, services);
+    }
+
+    [Fact]
+    public async Task KeyedQueue_DropsTheWritesOfARetiredCharacter_StopsCleanly_AndStillWritesAnOwnedCharacter()
+    {
+        (RestWriteQueue queue, CharacterRetirementRegistry registry, FencedRestStore store, CaptureLogger logger, ServiceProvider services) = RestRig(moved: 1);
+        await using ServiceProvider owned = services;
+        Exception? fatal = null;
+        queue.FatalFailure += ex => fatal = ex;
+
+        // Both characters have a write waiting before the queue runs; then character 1 moves to the new owner; a later write of it is dropped on arrival.
+        queue.Save(1, Rest(1f));
+        queue.Save(2, Rest(2f));
+        registry.Retire([1]);
+        queue.Save(1, Rest(3f));
+
+        queue.Start();
+        await queue.StopAsync(); // must not throw: nothing is refused by the fence and nothing is left undrained, so no announcement either
+
+        Assert.Null(fatal);
+        Assert.Null(queue.TerminalFailure);
+        Assert.Equal(0, queue.Pending);
+        Assert.Empty(queue.RetainedCharacters);
+        Assert.DoesNotContain(store.Attempts, a => a.Id == 1);
+        (int id, CharacterRestState kept) = Assert.Single(store.Saved);
+        Assert.Equal(2, id);
+        Assert.Equal(2f, kept.RestBonus);
+        Assert.Equal(2, registry.DroppedCount("RestWriteQueue"));
+        Assert.Single(logger.Entries, e => e.Level == LogLevel.Information && e.Message.Contains("RestWriteQueue dropped 2 write(s)", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, e => e.Level >= LogLevel.Warning);
+    }
+
+    [Fact]
+    public async Task KeyedQueue_CountsAFenceRefusalOfACharacterRetiredMidWrite_WithoutAnErrorOrTerminalFailure()
+    {
+        (RestWriteQueue queue, CharacterRetirementRegistry registry, FencedRestStore store, CaptureLogger logger, ServiceProvider services) = RestRig(moved: 1);
+        await using ServiceProvider owned = services;
+        store.RetireWhenWriting = true; // the character moves while its write is in the store call: the fence refuses it
+
+        queue.Save(1, Rest(1f));
+        queue.Start();
+        await queue.StopAsync();
+
+        Assert.Null(queue.TerminalFailure);
+        Assert.Empty(queue.RetainedCharacters);
+        Assert.Contains(store.Attempts, a => a.Id == 1);
+        Assert.Equal(1, registry.DroppedCount("RestWriteQueue"));
+        Assert.DoesNotContain(logger.Entries, e => e.Level >= LogLevel.Warning);
+    }
+
+    [Fact]
+    public async Task KeyedQueue_AFenceRefusalOfACharacterThatIsStillOwned_IsStillTerminal()
+    {
+        // The registry exists but names nobody: a refusal of character 1 is a real loss of ownership, handled exactly as before.
+        (RestWriteQueue queue, CharacterRetirementRegistry registry, FencedRestStore store, _, ServiceProvider services) = RestRig(moved: 1);
+        await using ServiceProvider owned = services;
+
+        queue.Save(1, Rest(1f));
+        queue.Start();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync());
+
+        Assert.NotNull(queue.TerminalFailure);
+        Assert.Contains(store.Attempts, a => a.Id == 1);
+        Assert.Equal(0, registry.DroppedCount("RestWriteQueue"));
+    }
+
+    [Fact]
+    public async Task KeyedQueue_WithoutARegistry_BehavesAsBefore()
+    {
+        (RestWriteQueue queue, CharacterRetirementRegistry registry, FencedRestStore store, _, ServiceProvider services) = RestRig(moved: 1, withRegistry: false);
+        await using ServiceProvider owned = services;
+        registry.Retire([1]); // not wired into the queue
+
+        queue.Save(1, Rest(1f));
+        queue.Save(2, Rest(2f));
+        queue.Start();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => queue.StopAsync());
+
+        Assert.Contains(store.Attempts, a => a.Id == 1);
+        Assert.Equal(0, registry.DroppedCount("RestWriteQueue"));
+    }
+
+    [Fact]
+    public void Registry_CountsPerQueue_AndOnlyForRetiredCharacters()
+    {
+        var registry = new CharacterRetirementRegistry();
+        Assert.False(registry.TryDrop("A", 1));
+        Assert.Equal(2, registry.Retire([1, 2, 2]));
+        Assert.Equal(0, registry.Retire([1]));
+        Assert.True(registry.IsRetired(1));
+        Assert.False(registry.IsRetired(3));
+        Assert.True(registry.TryDrop("A", 1));
+        Assert.True(registry.TryDrop("A", 2));
+        Assert.True(registry.TryDrop("B", 1));
+        Assert.False(registry.TryDrop("A", 3));
+        Assert.Equal(2, registry.DroppedCount("A"));
+        Assert.Equal(1, registry.DroppedCount("B"));
+        Assert.Equal(0, registry.DroppedCount("C"));
+        Assert.False(CharacterRetirementRegistry.Drops(null, "A", 1));
+        Assert.False(CharacterRetirementRegistry.Retired(null, 1));
+    }
+
+    /// <summary>Refuses every write of the moved character the way the characters fence refuses a stale owner.</summary>
+    private sealed class FencedRestStore(int moved) : ICharacterRestStore
+    {
+        public ConcurrentQueue<(int Id, CharacterRestState State)> Attempts { get; } = new();
+        public ConcurrentQueue<(int Id, CharacterRestState State)> Saved { get; } = new();
+        public CharacterRetirementRegistry? Registry { get; set; }
+        public bool RetireWhenWriting { get; set; }
+
+        public Task<CharacterRestState?> LoadAsync(int characterId, CancellationToken cancellationToken = default) => Task.FromResult<CharacterRestState?>(null);
+
+        public Task SaveAsync(int characterId, CharacterRestState state, CancellationToken cancellationToken = default)
+        {
+            Attempts.Enqueue((characterId, state));
+            if (characterId == moved)
+            {
+                if (RetireWhenWriting)
+                    Registry?.Retire([characterId]);
+                return Task.FromException(new CharacterOwnershipRejectedException("world", 7));
+            }
+
+            Saved.Enqueue((characterId, state));
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(int characterId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     /// <summary>Refuses every write of the moved character the way the characters fence refuses a stale owner.</summary>

@@ -1,6 +1,7 @@
 using System.Threading.Channels;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Quests;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -13,6 +14,8 @@ namespace ArcaneCore.World.Npc;
 /// </summary>
 public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger logger) : IAsyncDisposable
 {
+    private const string QueueName = "QuestNpcPersistence";
+
     private readonly Lock _gate = new();
     private readonly Dictionary<int, CharacterState> _characters = [];
     private readonly HashSet<int> _quarantined = [];
@@ -25,6 +28,9 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
     private Task? _worker;
     private bool _stopped;
     private Exception? _terminalFailure;
+
+    /// <summary>The characters this process no longer owns (null: none are ever retired). Their writes are dropped silently and counted, see <see cref="CharacterRetirementRegistry"/>.</summary>
+    public CharacterRetirementRegistry? Retirement { get; init; }
 
     /// <summary>Raised once when a durable ownership fence rejects a quest or taxi write.</summary>
     public event Action<Exception>? FatalFailure;
@@ -48,7 +54,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         {
             lock (_gate)
             {
-                return [.. _characters.Where(c => c.Value.Failure is not null && !_quarantined.Contains(c.Key)).Select(c => c.Key).Order()];
+                return [.. _characters.Where(c => c.Value.Failure is not null && !_quarantined.Contains(c.Key) && !CharacterRetirementRegistry.Retired(Retirement, c.Key)).Select(c => c.Key).Order()];
             }
         }
     }
@@ -152,6 +158,11 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 return;
             }
 
+            if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            {
+                return; // the character belongs to another world now: nothing is enqueued
+            }
+
             CharacterState state = WritableCharacter(characterId);
             EnsureOwnership(characterId, state, ownership);
             state.Revision = checked(state.Revision + 1);
@@ -175,6 +186,11 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
             if (_quarantined.Contains(characterId))
             {
                 return;
+            }
+
+            if (CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
+            {
+                return; // the character belongs to another world now: nothing is enqueued
             }
 
             CharacterState state = WritableCharacter(characterId);
@@ -289,7 +305,7 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 // Shutdown snapshots follow every queued delta, including writes not yet attempted.
                 foreach ((int characterId, CharacterState state) in _characters)
                 {
-                    if (_terminalFailure is null && !_quarantined.Contains(characterId))
+                    if (_terminalFailure is null && !_quarantined.Contains(characterId) && !CharacterRetirementRegistry.Drops(Retirement, QueueName, characterId))
                     {
                         Enqueue(new PendingWrite(characterId, null, null, state.Snapshot(), state.Ownership, null));
                     }
@@ -303,13 +319,14 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
         }
 
         await worker.ConfigureAwait(false);
+        Retirement?.LogStopSummary(logger, QueueName);
         lock (_gate)
         {
             if (_terminalFailure is { } terminal)
             {
                 throw new InvalidOperationException("quest save queue has a terminal ownership failure", terminal);
             }
-            int[] failed = _characters.Where(c => c.Value.Failure is not null && !_quarantined.Contains(c.Key))
+            int[] failed = _characters.Where(c => c.Value.Failure is not null && !_quarantined.Contains(c.Key) && !CharacterRetirementRegistry.Retired(Retirement, c.Key))
                 .Select(c => c.Key).ToArray();
             if (failed.Length > 0)
             {
@@ -375,6 +392,18 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                         pending.Done?.TrySetResult();
                         continue;
                     }
+
+                    if (CharacterRetirementRegistry.Drops(Retirement, QueueName, pending.CharacterId))
+                    {
+                        // Retired since it was queued: dropped, so it counts as drained (a later failure of it is forgotten too).
+                        if (_characters.TryGetValue(pending.CharacterId, out CharacterState? retiredState))
+                        {
+                            retiredState.Failure = null;
+                        }
+
+                        pending.Done?.TrySetResult();
+                        continue;
+                    }
                 }
 
                 if (pending.Rows is not null || pending.TaxiMask is not null)
@@ -393,6 +422,19 @@ public sealed class QuestNpcPersistence(IServiceScopeFactory scopes, ILogger log
                 else
                 {
                     await RecoverAsync(pending.CharacterId, pending.Snapshot, pending.Ownership).ConfigureAwait(false);
+                }
+
+                pending.Done?.TrySetResult();
+            }
+            catch (CharacterOwnershipRejectedException) when (CharacterRetirementRegistry.Drops(Retirement, QueueName, pending.CharacterId))
+            {
+                // Refused because the character moved to another world: counted, neither logged nor terminal.
+                lock (_gate)
+                {
+                    if (_characters.TryGetValue(pending.CharacterId, out CharacterState? retiredState))
+                    {
+                        retiredState.Failure = null;
+                    }
                 }
 
                 pending.Done?.TrySetResult();

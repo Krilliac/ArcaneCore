@@ -226,7 +226,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
             }
         }
 
-        _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>(), services.GetService<ShutdownDrain>()?.Features);
+        _writes = new InstanceWriteQueue(scopes, loggers.CreateLogger<InstanceWriteQueue>(), services.GetService<ShutdownDrain>()?.Features) { Retirement = services.GetService<CharacterRetirementRegistry>() };
         _writes.FatalFailure += error =>
         {
             FaultLedger.Shared.Record("instance.write-queue-fatal", error, terminating: true);

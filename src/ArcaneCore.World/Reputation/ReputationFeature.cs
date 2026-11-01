@@ -282,7 +282,7 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
                 _logger.LogWarning("Reputation content: {Warning}", warning);
             }
 
-            _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>(), services.GetService<IHostApplicationLifetime>(), services.GetService<ShutdownDrain>()?.Features);
+            _writes = new ReputationWriteQueue(scopes, loggers.CreateLogger<ReputationWriteQueue>(), services.GetService<IHostApplicationLifetime>(), services.GetService<ShutdownDrain>()?.Features) { Retirement = services.GetService<CharacterRetirementRegistry>() };
             var rates = new ReputationRates { Gain = Options.RateGain, LowLevelKill = Options.RateLowLevelKill };
             return _service = new ReputationService(factions, onKill, rates, new Sink(_writes))
             {

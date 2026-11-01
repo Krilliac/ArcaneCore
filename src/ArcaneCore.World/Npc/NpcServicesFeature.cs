@@ -61,7 +61,7 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
     {
         ArgumentNullException.ThrowIfNull(world);
         _world = world;
-        _routeWrites = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), logger, services.GetService<ShutdownDrain>()?.Features);
+        _routeWrites = new TaxiFlightWriteQueue(services.GetRequiredService<IServiceScopeFactory>(), logger, services.GetService<ShutdownDrain>()?.Features) { Retirement = services.GetService<CharacterRetirementRegistry>() };
         _routeWrites.FatalFailure += ex =>
         {
             FaultLedger.Shared.Record("npc-services.route-writes-fatal", ex);
