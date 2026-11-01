@@ -22,7 +22,9 @@ public interface IMapBotThinker
 /// nothing, so the update is today's.
 /// <para>
 /// Classification: no <see cref="MapAccessAttribute"/>, so it is unclassified and runs inside the serial gate while maps update in
-/// parallel (a think reaches world features); <c>World:Parallel:Ungated=MapBotThinkStage</c> is the experiment switch.
+/// parallel (a think reaches world features and the feature's own shared tables). <see cref="MapStageGates"/> keeps it gated whatever
+/// <c>World:Parallel:Ungated</c> says: design section 3.4 ("Bots") requires a per-session queue of deferred bot actions, with issue
+/// order kept and a re-issued pending action not queued twice, before a think may run outside the gate, and that queue does not exist.
 /// </para>
 /// Thread affinity: <see cref="Update"/> runs on the owner thread of the map. The instance holds no per-map state, so one instance may
 /// be attached to every map. Immutable after construction.

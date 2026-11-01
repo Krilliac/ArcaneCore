@@ -61,8 +61,12 @@ public sealed class ParallelMapOptions
     /// <summary>
     /// Run the bots' thinks per map, on the map's update thread, as a stage after the map's other updaters and before Output
     /// (<see cref="MapBotThinkStage"/>; docs/research/map-local-stages-design-20261024.md, section 5.7), instead of in the playerbot
-    /// feature's own pass (default false: today's order, exactly). The stage is classified like any unmarked updater, so it runs inside
-    /// the serial gate unless <see cref="Ungated"/> names MapBotThinkStage.
+    /// feature's own pass (default false: today's order, exactly). With it on, the playerbot feature does its movement pump, intake and
+    /// coordinators before the maps, each map thinks for the bots standing on it inside its update, and the feature closes the tick after
+    /// the maps (the bots on no map, or on a map whose stage did not run, are thought for then, on the world thread). The tick's think time
+    /// and actions are split between the maps by head count; each map's share is measured on its own thread, so with parallel maps the
+    /// shares overlap and the phase takes about the longest share, not their sum. The stage always runs inside the serial gate:
+    /// <see cref="Ungated"/> naming MapBotThinkStage is ignored until bot actions have the per-session queue of design 3.4. Needs a restart.
     /// </summary>
     public bool BotThinkPerMap { get; set; }
 

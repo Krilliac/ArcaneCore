@@ -244,6 +244,7 @@ internal sealed class MapUpdateDiagnostics
         "MapCombat" => "combat (MapCombat)",
         "PetMapSystem" or "MapUnitControl" => "pets (" + updater.GetType().Name + ")",
         "GameObjectMapSystem" => "gameobjects (GameObjectMapSystem)",
+        "MapBotThinkStage" => "bots (MapBotThinkStage)",
         "SpellObjectSystem" or "TrapSystem" or "TotemMapUpdater" => "spell objects (" + updater.GetType().Name + ")",
         "ReactiveUpdater" or "LiquidAuraInterruptUpdater" or "StealthDetectionUpdater" or "EnchantUpdater" => "spells and auras (" + updater.GetType().Name + ")",
         var name => name,
