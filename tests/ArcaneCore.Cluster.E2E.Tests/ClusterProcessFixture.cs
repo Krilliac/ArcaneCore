@@ -40,6 +40,18 @@ public sealed class PostgresClusterFactAttribute : FactAttribute
     }
 }
 
+/// <summary>A theory that is reported as Skipped, with the variable to set, unless <c>ARCANECORE_TEST_POSTGRES</c> names a PostgreSQL server (see <see cref="PostgresClusterFactAttribute"/>).</summary>
+public sealed class PostgresClusterTheoryAttribute : TheoryAttribute
+{
+    public PostgresClusterTheoryAttribute()
+    {
+        if (ClusterProcessFixture.SkipReason is { } reason)
+        {
+            Skip = reason;
+        }
+    }
+}
+
 /// <summary>Shape of the cluster a <see cref="ClusterProcessFixture"/> starts.</summary>
 public sealed class ClusterOptions
 {

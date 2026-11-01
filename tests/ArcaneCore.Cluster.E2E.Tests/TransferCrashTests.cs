@@ -9,18 +9,6 @@ using Xunit;
 
 namespace ArcaneCore.Cluster.E2E.Tests;
 
-/// <summary>A theory that is reported as Skipped, with the variable to set, unless <c>ARCANECORE_TEST_POSTGRES</c> names a PostgreSQL server (see <see cref="PostgresClusterFactAttribute"/>).</summary>
-public sealed class PostgresClusterTheoryAttribute : TheoryAttribute
-{
-    public PostgresClusterTheoryAttribute()
-    {
-        if (ClusterProcessFixture.SkipReason is { } reason)
-        {
-            Skip = reason;
-        }
-    }
-}
-
 /// <summary>The process a <see cref="TransferCrashTests"/> case kills.</summary>
 public enum CrashVictim
 {
@@ -77,15 +65,18 @@ public sealed class TransferCrashTests
     ];
 
     /// <summary>Every stage against every victim: 6 x 3 = 18 cases.</summary>
-    public static IEnumerable<object[]> Cases()
+    public static TheoryData<PlayerTransferStage, CrashVictim> Cases()
     {
+        var data = new TheoryData<PlayerTransferStage, CrashVictim>();
         foreach (PlayerTransferStage stage in Stages)
         {
             foreach (CrashVictim victim in Enum.GetValues<CrashVictim>())
             {
-                yield return [stage, victim];
+                data.Add(stage, victim);
             }
         }
+
+        return data;
     }
 
     [PostgresClusterTheory]
@@ -162,6 +153,11 @@ public sealed class TransferCrashTests
             {
                 // Past the commit decision the coordinator's contract is roll-forward only (PlayerTransferCoordinator: a committed transfer is never aborted).
                 Assert.True(completed, $"A transfer killed at {stage} ({victim}) must roll forward to Completed, but the journal state is {decision.State}.");
+            }
+            else if (victim == CrashVictim.Gateway && stage is not PlayerTransferStage.ActivateAndRetire)
+            {
+                // The restarted gateway has no surviving coordinator; recovery aborts a record that never reached the commit decision (RecoverTransferAsync).
+                Assert.False(completed, $"A transfer whose gateway was killed at {stage} has no coordinator left to commit it and must abort.");
             }
 
             if (await ReadOwnerAsync(cluster, guid, ct) is { } owner)
@@ -258,18 +254,30 @@ public sealed class TransferCrashTests
     /// <summary>The original session either answers a ping or has been closed by the server; a session that does neither within the budget fails.</summary>
     private static async Task AssertAnswersOrClosedAsync(ScenarioConnection session, CancellationToken ct)
     {
+        // A patient read loop, as WaitForCloseAsync does: after a completed far teleport the session streams NEW_WORLD and update traffic, so a fixed-size
+        // ReadUntilAsync would overflow its packet limit. A protocol error (MockProtocolException, which derives from IOException) or running out of frames fails the test.
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(TimeSpan.FromSeconds(45));
         try
         {
             await session.SendAsync(WorldOpcode.CmsgPing, ScenarioWire.Ping(0xC4A5, 0), budget.Token);
-            await session.ReadUntilAsync(WorldOpcode.SmsgPong, budget.Token);
+            for (int frames = 0; frames < 1024; frames++)
+            {
+                await session.WaitForTrafficAsync(budget.Token);
+                WorldFrame frame = await session.ReadAsync(budget.Token);
+                if (frame.Opcode == (ushort)WorldOpcode.SmsgPong)
+                {
+                    return; // still answering
+                }
+            }
+
+            Assert.Fail("The original connection streamed 1024 packets without answering the ping or closing.");
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             Assert.Fail("The original connection neither answered nor closed within 45 seconds of the sweep.");
         }
-        catch (Exception ex) when (ex is EndOfStreamException or SocketException or IOException or MockProtocolException)
+        catch (Exception ex) when (ex is not MockProtocolException and (EndOfStreamException or SocketException or IOException { InnerException: SocketException }))
         {
             // A clean disconnect.
         }
