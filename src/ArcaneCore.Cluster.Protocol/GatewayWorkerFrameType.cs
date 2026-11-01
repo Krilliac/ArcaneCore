@@ -39,4 +39,8 @@ internal enum GatewayWorkerFrameType : byte
     // Login redirect (gateway to worker): opens a session on the map owner with the generation, the authenticated account and the
     // buffered CMSG_PLAYER_LOGIN. Answered with SessionOpenReply, like SessionOpen.
     SessionAdopt = 22,
+
+    // Realm liveness (worker to gateway): the worker's tick counter, session count and lifecycle state, sent on admission and then every few seconds,
+    // so the gateway can write the realm-list row of a clustered realm (docs/ops/realm-liveness.md section 7).
+    WorkerStatus = 23,
 }

@@ -98,6 +98,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     private readonly ConcurrentDictionary<int, Link> _links = new();
     private readonly GatewayWardenManifestVerifier? _wardenVerifier;
     private readonly Action<long, ClusterWardenVerdict>? _wardenVerdictAccepted;
+    private readonly Func<WorkerStatusReport>? _workerStatus;
     private readonly Lock _sourceGate = new();
     private readonly Dictionary<ClusterWardenVerdictSource, int> _openLinksBySource = [];
     // Newest incarnation admitted per node id. A gateway process keeps one incarnation for life and reconnects with it, so
@@ -122,7 +123,8 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         IPEndPoint bindEndPoint,
         ILogger? logger = null,
         GatewayWardenManifestVerifier? wardenVerifier = null,
-        Action<long, ClusterWardenVerdict>? wardenVerdictAccepted = null)
+        Action<long, ClusterWardenVerdict>? wardenVerdictAccepted = null,
+        Func<WorkerStatusReport>? workerStatus = null)
     {
         ArgumentNullException.ThrowIfNull(workerManifest);
         ArgumentNullException.ThrowIfNull(acceptor);
@@ -139,6 +141,44 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         _listener = new TcpListener(bindEndPoint);
         _wardenVerifier = wardenVerifier;
         _wardenVerdictAccepted = wardenVerdictAccepted;
+        _workerStatus = workerStatus;
+    }
+
+    /// <summary>
+    /// Send the worker's current liveness report (the <c>workerStatus</c> constructor argument) to every admitted gateway link; the gateway's realm
+    /// liveness writer reads it. Returns the number of links it was queued on (0 without a provider). Never throws for a failed provider or link
+    /// (logged; the next call tries again). Thread-safe: the frame is queued, not written on the caller's thread.
+    /// </summary>
+    public int BroadcastWorkerStatus()
+    {
+        int sent = 0;
+        foreach (Link link in _links.Values)
+        {
+            if (link.Admitted && TrySendWorkerStatus(link))
+            {
+                sent++;
+            }
+        }
+
+        return sent;
+    }
+
+    private bool TrySendWorkerStatus(Link link)
+    {
+        if (_workerStatus is not { } provider)
+        {
+            return false;
+        }
+
+        try
+        {
+            return link.Channel.TryEnqueue(GatewaySessionWire.EncodeWorkerStatus(provider()));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogWarning("Gateway link from {Remote}: the worker status could not be sent ({Message})", link.Remote, ex.Message);
+            return false;
+        }
     }
 
     public IPEndPoint BoundEndPoint => (IPEndPoint)_listener.LocalEndpoint;
@@ -332,6 +372,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                             link.Admitted = true;
                             _logger.LogInformation("Gateway link from {Remote} admitted (node {Node}, incarnation {Incarnation})",
                                 link.Remote, peer.NodeId, peer.NodeIncarnation);
+                            TrySendWorkerStatus(link); // the gateway knows this worker's state at once, not after the next periodic report
                             continue;
                         default:
                             _logger.LogWarning("Gateway link from {Remote}: frame {Type} before admission; closing", link.Remote, type);

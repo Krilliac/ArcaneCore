@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Auxiliary;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Ops.Lifecycle;
 using ArcaneCore.World.Warden;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,9 +41,19 @@ public sealed class GatewayWorkerEndpoint(
     ILoggerFactory loggers,
     WorkerAdmission? admission = null,
     IOptions<WardenOptions>? wardenOptions = null,
-    GatewayWardenManifestVerifier? wardenVerifier = null) : IHostedService, IAsyncDisposable
+    GatewayWardenManifestVerifier? wardenVerifier = null,
+    ServerLifecycleFeature? lifecycle = null,
+    WorldLoginAdmission? loginAdmission = null) : IHostedService, IAsyncDisposable
 {
     private static readonly TimeSpan PendingBanStopWait = TimeSpan.FromSeconds(5);
+
+    /// <summary>How often the worker reports its liveness to every admitted gateway link (also sent once on admission). The gateway's offline threshold is 60 s.</summary>
+    internal static readonly TimeSpan StatusInterval = TimeSpan.FromSeconds(5);
+
+    private readonly CancellationTokenSource _statusStop = new();
+    private Task _statusLoop = Task.CompletedTask;
+    private Action<ShutdownMask, bool>? _countdownHandler;
+    private int _countdown;                                // written by the world thread, read by the status loop: 0 none, 1 restart, 2 shutdown
 
     // Ban writes still running; StopAsync waits (bounded) so a ban accepted just before shutdown is not abandoned with the process.
     private readonly ConcurrentDictionary<Task, int> _pendingBans = new();
@@ -86,16 +97,77 @@ public sealed class GatewayWorkerEndpoint(
             new IPEndPoint(IPAddress.Parse(config.BindAddress), config.Port),
             logger,
             wardenVerifier,
-            wardenVerifier is null ? null : ApplyWardenVerdict);
+            wardenVerifier is null ? null : ApplyWardenVerdict,
+            BuildStatus);
         _host.Start();
+        if (lifecycle is not null && _countdownHandler is null)
+        {
+            _countdownHandler = OnCountdownChanged;
+            lifecycle.CountdownChanged += _countdownHandler;
+        }
+
+        GatewaySessionLinkHost running = _host;
+        _statusLoop = Task.Run(() => RunStatusLoopAsync(running, _statusStop.Token), CancellationToken.None);
         logger.LogInformation("Worker mode: gateway link listening on {Endpoint}", _host.BoundEndPoint);
         logger.LogInformation(
             "Worker mode: advertising characters schema {CharactersSchema}, world schema {WorldSchema}, content revision {ContentRevision} (from {Source}); the gateway's Gateway:* labels must equal them",
             versions.CharactersSchemaVersion, versions.WorldSchemaVersion, versions.ContentRevision, config.VersionsFromDatabase ? "the databases" : "the Cluster:Worker labels");
     }
 
+    /// <summary>
+    /// This worker's liveness as the gateway's realm writer reads it: the world loop's tick counter (a volatile read), the registered sessions, the
+    /// player limit in force and the standby and countdown state. Allocation-free and lock-free; callable from any thread.
+    /// </summary>
+    internal WorkerStatusReport BuildStatus()
+    {
+        WorkerStatusFlags flags = WorkerStatusFlags.None;
+        if (admission is { ClosedReason: WorkerAdmission.StandbyReason })
+        {
+            flags |= WorkerStatusFlags.Standby;
+        }
+
+        switch (Volatile.Read(ref _countdown))
+        {
+            case 1:
+                flags |= WorkerStatusFlags.Restarting;
+                break;
+            case 2:
+                flags |= WorkerStatusFlags.ShuttingDown;
+                break;
+        }
+
+        return new WorkerStatusReport(world.TicksStarted, registry.Count, loginAdmission?.AmountLimit ?? 0, flags);
+    }
+
+    private void OnCountdownChanged(ShutdownMask mask, bool pending)
+        => Volatile.Write(ref _countdown, !pending ? 0 : mask.HasFlag(ShutdownMask.Restart) ? 1 : 2);
+
+    private async Task RunStatusLoopAsync(GatewaySessionLinkHost host, CancellationToken stoppingToken)
+    {
+        using var timer = new PeriodicTimer(StatusInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(stoppingToken).ConfigureAwait(false))
+            {
+                host.BroadcastWorkerStatus();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // stopping
+        }
+    }
+
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (lifecycle is not null && _countdownHandler is not null)
+        {
+            lifecycle.CountdownChanged -= _countdownHandler;
+            _countdownHandler = null;
+        }
+
+        await _statusStop.CancelAsync().ConfigureAwait(false);
+        await _statusLoop.ConfigureAwait(false);
         // Clear the field before disposing so the second call (DisposeAsync after the host's StopAsync) is a no-op
         // for the link host even when the first disposal threw.
         GatewaySessionLinkHost? host = _host;

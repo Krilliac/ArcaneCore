@@ -77,9 +77,9 @@ start-up, Master.cpp:215, and a client has no "starting" state, so a starting re
 * A failed write is logged (fault site `realm.liveness-write`, throttled) and the next pass tries again.
 * A clean stop (`BeforeWorldStop`) stops the timer, then writes Offline and `Stopped`.
 
-Not written: with `World:Realm:Id` 0, with no auth database, and in gateway worker mode (`Cluster:Worker:Enabled`),
-where an active and a standby world share the realm and the gateway owns the client-facing address; the operator owns
-the row there ([gateway](../areas/gateway.md)).
+Not written by the world: with `World:Realm:Id` 0, with no auth database, and in gateway worker mode (`Cluster:Worker:Enabled`),
+where an active and a standby world share the realm and the gateway owns the client-facing address. There the gateway writes
+the row (section 7).
 
 ## 5. How the logon daemon reads it
 
@@ -109,3 +109,52 @@ so a count that drifted (a failed write, characters that existed before the tabl
 account lists its characters. The write runs on the session task after the client has its answer, never on the world
 thread, and a failure is logged without failing the create, the delete or the list. The count on the wire is a byte;
 above 255 it is sent as 255. With `World:Realm:Id` 0 or no auth database nothing is written.
+
+## 7. A clustered realm: the gateway writes the row
+
+With a gateway in front of one or more workers (`Cluster:Worker:Enabled`), no world writes the realm row: an active and a
+standby world share the realm, and a world going offline after a handoff would hide a realm its promoted standby serves. The
+gateway (`GatewayRealmLiveness`) writes it instead, from reports the workers send on the gateway link, so a clustered realm
+has the same hang-offline, restart-red and population as a combined-mode world. The row it writes is `Gateway:RealmId`
+(it must name the realm's `realmlist` row, as `World:Realm:Id` does for a combined world).
+
+**What a worker sends.** A `WorkerStatus` frame (frame type 23, worker to gateway, link contract version 4): the world loop's
+tick counter (`WorldRuntime.TicksStarted`), the registered sessions (bots included), the player limit in force (`.server plimit`
+changes it; 0 is none) and a flag byte (Standby = 1, restart countdown = 2, shutdown countdown = 4). It is sent once when the
+gateway is admitted and then every 5 s. The bytes are pinned by `GatewaySessionWireTests.WorkerStatus_GoldenAndRoundTrip`. A gateway
+of contract version 3 is refused at admission (it would close the link on the unknown frame).
+
+**What the gateway writes.**
+
+| Row | When |
+|---|---|
+| `Online` | an **active** worker (not standby) has ticked, and its counter changed within the last 60 s |
+| `Restarting` / `ShuttingDown` | an alive active worker announces a restart or shutdown countdown (restart wins) |
+| `Starting` (Offline set) | no worker is alive, but an active worker is linked and has not ticked yet, or the gateway started less than 60 s ago |
+| `Stopped` (Offline set) | no active worker has ticked for 60 s and the gateway is past its start-up grace; also a clean gateway stop |
+
+The heartbeat follows a combined world's rule: written every 10 s while some active worker's counter advanced since the last
+beat, so a hung loop stops beating and the logon daemon's own stale check (section 3) agrees with the gateway's. Population is
+`2 x (sessions summed over the alive active workers) / player limit`, written when it changes; a worker that stopped ticking no
+longer contributes, and neither does a standby.
+
+**A standby's ticks do not count.** A standby (`Cluster:Worker:Standby`) reports the Standby flag until it is promoted, and the
+gateway ignores its ticks and sessions: a standby running alone leaves the realm Offline, not Online.
+
+**Failover.**
+
+* The active world dies or hangs: its counter stops. The realm stays Online for up to 60 s (the same slack as a combined world),
+  then goes Offline. If a standby is promoted in that time, the promoted world's counter takes over and the row never goes
+  Offline.
+* Planned handoff: the old active world announces nothing special; once the standby is promoted and reports as active, the
+  row stays Online throughout. A restart countdown on either world shows Restarting for as long as it runs.
+* The gateway itself stops: it writes Offline and `Stopped`. If it is killed, its beats stop and the logon daemon marks the
+  realm offline after the stale threshold, as for any crashed writer.
+* Two gateways on one realm would both write the row; run one gateway per realm id.
+
+**Character counts.** `RealmCharacterCounts` does not depend on the liveness writer: whichever worker serves a create, delete or
+character list recounts the account from the shared characters database and writes the same `realmcharacters` row, so workers
+cannot disagree about a count, and a standby (which admits no session) writes none.
+
+Verified by `GatewayRealmLivenessTests` (ticks stop for 60 s goes Offline, a restart countdown shows Restarting, standby ticks alone
+leave the row Offline, population is the sum over the workers).

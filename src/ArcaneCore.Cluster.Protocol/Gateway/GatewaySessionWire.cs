@@ -45,6 +45,36 @@ public sealed record GatewaySessionRedirect(long SessionGeneration, int AccountI
 /// </summary>
 public sealed record GatewaySessionAdoptRequest(GatewaySessionOpenRequest Open, uint LoginOpcode, ReadOnlyMemory<byte> LoginPayload, uint LoginReceivedMs);
 
+/// <summary>What a worker reports about itself on <see cref="GatewayWorkerFrameType.WorkerStatus"/> frames.</summary>
+[Flags]
+public enum WorkerStatusFlags : byte
+{
+    None = 0,
+
+    /// <summary>The worker is a standby that was not promoted: its ticks and sessions do not count for the realm.</summary>
+    Standby = 1,
+
+    /// <summary>A restart countdown is running on the worker.</summary>
+    Restarting = 2,
+
+    /// <summary>A shutdown countdown is running on the worker.</summary>
+    ShuttingDown = 4,
+}
+
+/// <summary>
+/// The worker's liveness report to the gateway (docs/ops/realm-liveness.md section 7). <see cref="TicksStarted"/> is the world loop's tick counter
+/// (it advances while the loop runs), <see cref="Sessions"/> the sessions registered on this worker (bots included), <see cref="PlayerLimit"/> the
+/// player limit in force (0: none; the realm population is 2 x total sessions / limit) and <see cref="Flags"/> the standby and countdown state.
+/// </summary>
+public readonly record struct WorkerStatusReport(long TicksStarted, int Sessions, int PlayerLimit, WorkerStatusFlags Flags)
+{
+    public bool Standby => (Flags & WorkerStatusFlags.Standby) != 0;
+
+    public bool Restarting => (Flags & WorkerStatusFlags.Restarting) != 0;
+
+    public bool ShuttingDown => (Flags & WorkerStatusFlags.ShuttingDown) != 0;
+}
+
 /// <summary>
 /// Encoding of the Tier 3a session-link frames (<c>docs/design/hot-reload-tiers.md</c> §5.3). They ride the length-prefixed
 /// framing and the manifest handshake of <c>LoopbackGatewayWorkerHost</c>, and every packet frame carries the same
@@ -435,6 +465,40 @@ public static class GatewaySessionWire
         string digest = reader.Text();
         string options = reader.Text();
         return new GatewayWardenPosture(enabled, digest, options, revision);
+    }
+
+    /// <summary>Bytes of a WorkerStatus frame body (without the type byte): ticks (int64), sessions (int32), player limit (int32), flags (byte).</summary>
+    public const int WorkerStatusBodyBytes = 8 + 4 + 4 + 1;
+
+    /// <summary>A WorkerStatus frame (worker to gateway): type, ticks started, sessions, player limit, flags. Negative counts are sent as 0.</summary>
+    internal static byte[] EncodeWorkerStatus(WorkerStatusReport report)
+    {
+        byte[] buffer = new byte[1 + WorkerStatusBodyBytes];
+        var writer = new FrameWriter(buffer);
+        writer.Byte((byte)GatewayWorkerFrameType.WorkerStatus);
+        writer.Int64(Math.Max(report.TicksStarted, 0));
+        writer.Int32(Math.Max(report.Sessions, 0));
+        writer.Int32(Math.Max(report.PlayerLimit, 0));
+        writer.Byte((byte)report.Flags);
+        return buffer;
+    }
+
+    /// <summary>The report of a WorkerStatus frame body; the frame must be exactly <see cref="WorkerStatusBodyBytes"/> long, with only known flag bits and no negative count.</summary>
+    internal static WorkerStatusReport DecodeWorkerStatus(ReadOnlySpan<byte> body)
+    {
+        var reader = new FrameReader(body, "WorkerStatus");
+        long ticks = reader.Int64();
+        int sessions = reader.Int32();
+        int limit = reader.Int32();
+        byte flags = reader.Byte();
+        reader.End();
+        const byte known = (byte)(WorkerStatusFlags.Standby | WorkerStatusFlags.Restarting | WorkerStatusFlags.ShuttingDown);
+        if (ticks < 0 || sessions < 0 || limit < 0 || (flags & ~known) != 0)
+        {
+            throw new InvalidDataException("WorkerStatus frame with a negative count or an unknown flag");
+        }
+
+        return new WorkerStatusReport(ticks, sessions, limit, (WorkerStatusFlags)flags);
     }
 
     /// <summary>The text cut to at most <see cref="MaxTextBytes"/> UTF-8 bytes (whole characters only).</summary>
