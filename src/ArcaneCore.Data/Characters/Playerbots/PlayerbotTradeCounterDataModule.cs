@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Kernel.Characters;
 using Microsoft.EntityFrameworkCore;
@@ -41,7 +43,7 @@ public sealed class PlayerbotTradeCounterDataModule : IDataModule
         => services.AddScoped<IPlayerbotTradeCounterStore, EfPlayerbotTradeCounterStore>();
 }
 
-public sealed class EfPlayerbotTradeCounterStore(CharacterDbContext db) : IPlayerbotTradeCounterStore
+public sealed class EfPlayerbotTradeCounterStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IPlayerbotTradeCounterStore
 {
     public async Task<IReadOnlyList<PlayerbotTradeCounter>> LoadAllAsync(CancellationToken cancellationToken = default)
         => (await db.Set<PlayerbotTradeCounterRow>().AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false))
@@ -50,6 +52,7 @@ public sealed class EfPlayerbotTradeCounterStore(CharacterDbContext db) : IPlaye
     public async Task ReplaceAllAsync(IReadOnlyList<PlayerbotTradeCounter> rows, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rows);
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Maintenance); // a realm bot ledger: the maintenance lease holder writes it (writer-lock design section 2b; decision Q2)
         if (rows.Count > PlayerbotTradeCounter.MaxRows
             || rows.Any(row => row is null || !Enum.IsDefined(row.Kind) || row.Stamp < 0 || row.Amount <= 0))
             throw new ArgumentException("Invalid or unbounded playerbot trade counter snapshot.", nameof(rows));

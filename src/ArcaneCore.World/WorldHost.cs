@@ -164,6 +164,16 @@ public sealed class WorldHost(
                     .GetRequiredService<ICharacterStore>().GetAllIdentitiesAsync(cancellationToken).ConfigureAwait(false);
                 directory.Load(identities);
 
+                // A node with a cluster role (Cluster:Node:Role other than Combined) first takes the realm singleton leases it can get (before the item load below, whose orphaned-loot sweep runs only for the maintenance holder), then attaches
+                // only the features its role runs (the auction bot and AutoBroadcast only for a lease it holds). Combined attaches everything, as always.
+                Func<IWorldFeature, bool>? admit = null;
+                Cluster.Social.ClusterNodeRole role = nodeOptions?.Value.Role ?? Cluster.Social.ClusterNodeRole.Combined;
+                if (role != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
+                {
+                    await leaseKeeper.AcquireAtStartAsync(_incarnation, cancellationToken).ConfigureAwait(false);
+                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
+                }
+
                 // Item content before any feature attaches: creatures built while the features attach (script and world-state spawns, the first
                 // grid spawns) resolve their creature_equip_template items through it, and an unloaded store would warn and leave the slots empty.
                 // A failed load is not fatal here: it is not cached, the next request (a login) retries and fails closed itself.
@@ -177,16 +187,6 @@ public sealed class WorldHost(
                     {
                         logger.LogWarning(ex, "Item templates could not be loaded at startup; they load on first use and creature equipment resolves after that");
                     }
-                }
-
-                // A node with a cluster role (Cluster:Node:Role other than Combined) first takes the realm singleton leases it can get, then attaches
-                // only the features its role runs (the auction bot and AutoBroadcast only for a lease it holds). Combined attaches everything, as always.
-                Func<IWorldFeature, bool>? admit = null;
-                Cluster.Social.ClusterNodeRole role = nodeOptions?.Value.Role ?? Cluster.Social.ClusterNodeRole.Combined;
-                if (role != Cluster.Social.ClusterNodeRole.Combined && roleFilter is not null && leaseKeeper is not null)
-                {
-                    await leaseKeeper.AcquireAtStartAsync(_incarnation, cancellationToken).ConfigureAwait(false);
-                    admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
                 }
 
                 // The durable id allocators are primed BEFORE the features attach (writer-lock design section 3, point 5): an id taken while a feature attaches

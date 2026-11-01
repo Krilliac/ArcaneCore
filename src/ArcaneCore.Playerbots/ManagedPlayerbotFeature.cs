@@ -895,11 +895,20 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     }
 
 
+    /// <summary>
+    /// Whether this node runs the realm sweeps of the bot registry (the provisioning reconcile and the orphan registry deletes at startup): always with no lease keeper (Combined, tests),
+    /// on a clustered node only while it holds the <see cref="ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Maintenance"/> lease (writer-lock design section 4, row 7). A non-holder
+    /// reads the registry and leaves the repair to the holder.
+    /// </summary>
+    internal bool HoldsMaintenanceLease => ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper.HeldOrUnclustered(
+        services.GetService<ArcaneCore.World.Cluster.Social.RealmAuthorityLeaseKeeper>(), ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Maintenance);
+
     public async Task StartupAsync(CancellationToken cancellationToken)
     {
         if (!_options.Enabled) return;
         await using AsyncServiceScope scope = scopes.CreateAsyncScope();
-        await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+        bool maintenanceHolder = HoldsMaintenanceLease;
+        if (maintenanceHolder) await ReconcileProvisioningAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
             .LoadAllAsync(cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<IManagedPlayerbotSetAsideStore>() is { } setAsides && _world is { } world)
@@ -965,10 +974,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             if (character is null)
             {
                 // A registry row whose character is gone owns nothing; leaving it would hold a MaxRegisteredBots slot for good.
-                await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
-                    .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
-                _homes.TryRemove(bot.BotId, out _);
-                await ForgetRelationsAsync(scope.ServiceProvider, bot.BotId, bot.CharacterId).ConfigureAwait(false);
+                // Only the maintenance holder deletes it (the row may belong to a character another worker has not made visible yet); this node just does not restore it.
+                if (maintenanceHolder)
+                {
+                    await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
+                        .DeleteAsync(bot.BotId, bot.AccountId, bot.CharacterId, cancellationToken).ConfigureAwait(false);
+                    _homes.TryRemove(bot.BotId, out _);
+                    await ForgetRelationsAsync(scope.ServiceProvider, bot.BotId, bot.CharacterId).ConfigureAwait(false);
+                }
+
                 orphans.Add(bot.BotId);
                 continue;
             }
@@ -3859,6 +3873,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
 
                 if (_warWipePending.IsEmpty) continue;
+                // The relation ledger is the maintenance holder's to write; a non-holder keeps the wipe in memory and does not retry the refused write.
+                if (!HoldsMaintenanceLease) { _warWipePending.Clear(); continue; }
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is not { } store)
                 {
@@ -3977,6 +3993,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             foreach ((_, IReadOnlyList<int> characterIds) in removed)
                 foreach (int characterId in characterIds)
                     if (characterId > 0) survivors.UnionWith(memory.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
+            if (!HoldsMaintenanceLease) return; // the stored ledgers are the maintenance holder's to write; the memory above is already forgotten
             if (provider.GetService<IPlayerbotRelationStore>() is not { } store) return;
             foreach ((Guid botId, _) in removed)
             {
@@ -4002,6 +4019,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     private async Task SaveBotRelationsAsync(ActiveBot active)
     {
+        // The bot ledgers (relations, trade records, trade counters) are the maintenance lease holder's to write (decision Q2): a node that does not hold it keeps them in memory
+        // and does not try, instead of logging a refusal at every checkpoint. The stores refuse the write regardless.
+        if (!HoldsMaintenanceLease) return;
         Guid botId = active.Record.BotId;
         await SaveBotTradeLedgerAsync(active).ConfigureAwait(false); // the trade ledger rides every relation save (stop, pause, checkpoint)
         await SaveTradeCountersAsync().ConfigureAwait(false); // so do the desk's hourly and daily counters and the gift counts (one write for all bots, skipped when unchanged)

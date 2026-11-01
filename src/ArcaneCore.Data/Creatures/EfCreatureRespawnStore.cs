@@ -1,6 +1,8 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Stores;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,7 +14,7 @@ namespace ArcaneCore.Data.Creatures;
 /// transaction; nothing here relies on advisory locks or the case of an identifier. On SQLite the upsert is one
 /// <c>INSERT ... ON CONFLICT DO UPDATE</c> per row (<see cref="SqliteRowCommand"/>); other providers read, then update or insert.
 /// </summary>
-public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRespawnStore
+public sealed class EfCreatureRespawnStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : ICreatureRespawnStore
 {
     public async Task<IReadOnlyList<CreatureRespawnRecord>> LoadAsync(long nowUnixSeconds, CancellationToken cancellationToken = default)
     {
@@ -22,10 +24,19 @@ public sealed class EfCreatureRespawnStore(CharacterDbContext db) : ICreatureRes
         await db.Set<CreatureRespawnRow>().Where(r => r.RespawnTime <= nowUnixSeconds).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
 
         // A dungeon instance that no longer exists must not hand its timers to a later instance that reuses the id (the same guard
-        // EfLootStateStore applies to chest loot).
-        await db.Set<CreatureRespawnRow>()
-            .Where(r => r.InstanceId != 0 && !db.Set<InstanceRow>().Any(i => i.Id == r.InstanceId))
-            .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        // EfLootStateStore applies to chest loot). In a cluster only the Instances lease holder deletes orphans (writer-lock design section 4, row 3): another
+        // worker may have committed an instance row this node has not seen. A non-holder loads read-only; the holder's delete is verified against the lease row.
+        if (LeaseFencedWrite.IsHolder(leaseFences, RealmAuthorityScopes.Instances))
+        {
+            if (leaseFences?.FenceFor(RealmAuthorityScopes.Instances) is { } fence)
+            {
+                await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            }
+
+            await db.Set<CreatureRespawnRow>()
+                .Where(r => r.InstanceId != 0 && !db.Set<InstanceRow>().Any(i => i.Id == r.InstanceId))
+                .ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        }
 
         List<CreatureRespawnRow> rows = await db.Set<CreatureRespawnRow>().AsNoTracking()
             .OrderBy(r => r.InstanceId).ThenBy(r => r.SpawnGuid)

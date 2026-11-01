@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Stores;
@@ -117,7 +119,7 @@ public sealed class GmAuditDataModule : IDataModule, ICharacterDataCleanup
 }
 
 /// <summary>EF Core implementation of <see cref="IGmAuditStore"/>.</summary>
-public sealed class EfGmAuditStore(CharacterDbContext db) : IGmAuditStore
+public sealed class EfGmAuditStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IGmAuditStore
 {
     public async Task<IReadOnlyList<AccountMuteRecord>> LoadActiveMutesAsync(long nowUnix, CancellationToken cancellationToken = default)
         => [.. (await db.Set<AccountMuteRow>().AsNoTracking().Where(r => r.MutedUntil > nowUnix)
@@ -162,6 +164,7 @@ public sealed class EfGmAuditStore(CharacterDbContext db) : IGmAuditStore
     public async Task SaveTicketAsync(GmTicketRecord ticket, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(ticket);
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social); // the ticket queue lives with the Social holder (decision Q10): the same id on two workers would overwrite each other
         if (!await db.Characters.AnyAsync(c => c.Id == ticket.CharacterId, cancellationToken).ConfigureAwait(false))
         {
             return;
@@ -176,12 +179,15 @@ public sealed class EfGmAuditStore(CharacterDbContext db) : IGmAuditStore
         }
 
         row.CopyFrom(ticket);
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
 
     public async Task DeleteTicketAsync(int ticketId, CancellationToken cancellationToken = default)
-        => await CharacterWrites.InTransactionAsync(
-            db, () => db.Set<GmTicketRow>().Where(r => r.Id == ticketId).ExecuteDeleteAsync(cancellationToken),
+    {
+        LeaseFencedWrite.RequireHeld(leaseFences, RealmAuthorityScopes.Social);
+        await CharacterWrites.InTransactionAsync(
+            db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Social, () => db.Set<GmTicketRow>().Where(r => r.Id == ticketId).ExecuteDeleteAsync(cancellationToken), cancellationToken),
             cancellationToken).ConfigureAwait(false);
+    }
 }
