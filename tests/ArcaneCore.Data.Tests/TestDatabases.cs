@@ -155,7 +155,9 @@ internal sealed class TestDatabases : IAsyncDisposable
                 var builder = new MySqlConnectionStringBuilder(options.ConnectionString);
                 string name = builder.Database;
                 builder.Database = string.Empty;
-                builder.Pooling = false;
+
+                // Pooled on purpose: every drop shares one admin pool, so a parallel suite does not open an extra
+                // server session per drop (an unpooled connection per drop hit "Too many connections" on a full run).
                 await using var connection = new MySqlConnection(builder.ConnectionString);
                 await connection.OpenAsync();
                 await using MySqlCommand command = connection.CreateCommand();
