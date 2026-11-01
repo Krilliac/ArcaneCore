@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Groups;
+using ArcaneCore.Game.Guilds;
 using ArcaneCore.Kernel.Cluster.Social;
 
 namespace ArcaneCore.World.Cluster.Social;
@@ -45,7 +46,7 @@ public interface IPresenceAuthority
 /// <para>Thread-safety: one lock guards the generation, version and kick state; the directory and router have their own locks and are always taken after it (never the reverse).
 /// Memory: one long per account ever registered, one version floor, at most <see cref="MaxQueuedKicksPerWorker"/> kicks per worker (oldest dropped).</para>
 /// </summary>
-public sealed class PresenceHolderService(IRealmPresenceDirectory directory, IClusterSocialRouter router) : IPresenceAuthority, IGroupAuthorityTransport
+public sealed class PresenceHolderService(IRealmPresenceDirectory directory, IClusterSocialRouter router) : IPresenceAuthority, IGroupAuthorityTransport, IGuildHolderTransport
 {
     /// <summary>Most undelivered kicks kept per worker; a worker that never drains loses its oldest.</summary>
     public const int MaxQueuedKicksPerWorker = 1024;
@@ -64,6 +65,13 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
     public void ExecuteGroupCommand(string workerId, GroupCommand command) => Groups.Execute(workerId, command);
 
     public IReadOnlyList<GroupEvent> DrainGroupEvents(string workerId) => Groups.Drain(workerId);
+
+    /// <summary>The authoritative guild and charter side (S3b2): outboxes of what the holder worker's managers publish, and the entry for forwarded requests.</summary>
+    public GuildHolderService Guilds { get; } = new(directory ?? throw new ArgumentNullException(nameof(directory)));
+
+    public void ForwardGuildRequest(string workerId, long requestId, GuildRequest request) => Guilds.Submit(workerId, requestId, request);
+
+    public IReadOnlyList<GuildLinkEvent> DrainGuildEvents(string workerId) => Guilds.Drain(workerId);
 
     /// <summary>The authoritative router this service answers for.</summary>
     public IClusterSocialRouter Router { get; } = router ?? throw new ArgumentNullException(nameof(router));

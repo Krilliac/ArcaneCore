@@ -57,6 +57,10 @@ public sealed class SocialPetitionFeature(IServiceProvider services, IServiceSco
         if (services.GetService<IGuildHolderLink>() is { } link)
         {
             Social.Context.Guilds.Link = link;
+            if (link is ArcaneCore.World.Cluster.Social.PeerGuildHolderLink peer)
+            {
+                peer.Bind(world, Social.Context.Guilds, Social.Context.Petitions);
+            }
         }
 
         world.PlayerLoggedIn += OnLoggedIn;
