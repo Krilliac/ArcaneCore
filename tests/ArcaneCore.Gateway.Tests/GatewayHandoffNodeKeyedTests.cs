@@ -121,7 +121,7 @@ public sealed class GatewayHandoffNodeKeyedTests
         const System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
 
         var connections = (System.Collections.Concurrent.ConcurrentDictionary<GatewayClientConnection, Task>)typeof(GatewayServer).GetField("_connections", Private)!.GetValue(gateway)!;
-        GatewayClientConnection connection = Assert.Single(connections.Keys.Where(c => c.IsForwardingOn(gateway.Workers[1].Link!)));
+        GatewayClientConnection connection = Assert.Single(connections.Keys, c => c.IsForwardingOn(gateway.Workers[1].Link!));
         System.Reflection.FieldInfo linkField = typeof(GatewayClientConnection).GetField("_link", Private)!;
         System.Reflection.FieldInfo holding = typeof(GatewayClientConnection).GetField("_handoffHolding", Private)!;
 
