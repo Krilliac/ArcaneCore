@@ -29,7 +29,7 @@ internal sealed class MapUpdateScheduler : IDisposable
         _workers = new Thread[threads - 1];
         for (int i = 0; i < _workers.Length; i++)
         {
-            _workers[i] = new Thread(WorkerLoop) { IsBackground = true, Name = $"{name}-{i + 1}" };
+            _workers[i] = new Thread(WorkerLoop, WorldRuntime.WorldThreadStackBytes) { IsBackground = true, Name = $"{name}-{i + 1}" };
             _workers[i].Start();
         }
     }
