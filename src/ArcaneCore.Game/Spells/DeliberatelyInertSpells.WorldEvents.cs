@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Spells;
 /// vmangos and mangos-classic (cmangos) source trees, mangoszero and classic-db (ACID and Updates): every id below is either only cast or applied as a
 /// marker or visual, or (the NeverCast entries) nothing in those trees or the vmangos migrations and classic-db Full_DB reaches it. The spells of the lane that DO have a handler are scripts:
 /// Lunar Teleport Caps 26406, 26408-26410, 26412 and 26414 (<c>LunarTeleportCapScript</c>) and Muglash's Brazier Trap 20863
-/// (<c>MuglashBrazierTrapScript</c>). Celebras' spells 21914 and 21917 are not listed: classic-db Full_DB dbscripts_on_spell has rows for both, which run through
+/// (<c>MuglashBrazierTrapScript</c>); the Undercity Guardian Valentine 26924 is handled by <c>ValentineAnswerScript</c>. Celebras' spells 21914 and 21917 are not listed: classic-db Full_DB dbscripts_on_spell has rows for both, which run through
 /// <c>SpellSystem.StartDbSpellScript</c> (no code script claims them). 24746 is not listed either: vmangos conditions 887 and 888 test for its aura, so something applies it.
 /// </summary>
 public static partial class DeliberatelyInertSpells
@@ -15,8 +15,8 @@ public static partial class DeliberatelyInertSpells
     private const string WhyWorldCarrier = "cast or applied by a creature AI or script for its visual or marker; the spell's own effect has no handler in any reference core";
     private const string WhyNoHandler = "no reference core handles or casts it, so its DUMMY effect has nothing to run";
     private const string WhyHitTrigger = "only read as the SPELLHIT trigger of an EventAI row; the spell's own effect has no handler in any reference core";
-    private const string WhyItemCast = "cast by an item for its look or marker; the spell's own effect has no handler in any reference core";
-    private const string CitNeverCastScan = "no spell reference in vmangos sql/migrations (every statement outside locale, spawn and loot tables) or classic-db Full_DB (creature_ai_scripts, creature_template_addon, dbscripts_on_*, item_template spellid_1-5, quest_template), nor in the vmangos, mangos-classic and mangoszero source (2026-10-31); the bare number only appears as an item, creature or game object id";
+    private const string WhyItemCast = "applied by an item on equip for its look or marker (a party-area DUMMY aura that only the vmangos conditions rows read); the spell's own effect has no handler in any reference core";
+    private const string CitNeverCastScan = "no spell reference in vmangos sql/migrations (every statement outside locale, spawn and loot tables) or classic-db Full_DB (creature_ai_scripts, creature_template_addon, dbscripts_on_*, item_template spellid_1-5, quest_template), nor in the vmangos, mangos-classic and mangoszero source (2026-10-31); the bare number only appears as an item, creature or game object id, or (21830) as the trigger of the uncast 21828";
 
     private static InertSpell[] BuildWorldEvents() =>
     [
@@ -49,11 +49,13 @@ public static partial class DeliberatelyInertSpells
         new(21867, R.Marker, WhyHitTrigger, "vmangos sql/migrations/20220801022620_world.sql:39 (creature_ai_events 1099001, event type 8 SPELLHIT on 21867: 'Alterac Ram - Follow Player on Hit By Collar Effect Spell')"),
         new(24748, R.Marker, WhyItemCast, "vmangos sql/migrations/20220422044303_world.sql:204 (item_template 20421 spellid_1 24748, spelltrigger 1) and classic-db Full_DB item_template 20422 spellid_1"),
         new(24782, R.Marker, WhyItemCast, "classic-db Full_DB item_template 20451 'Twilight Cultist Ring of Lordship' spellid_1 24782"),
-        new(26924, R.ScriptCarrier, WhyWorldCarrier, "classic-db Full_DB dbscripts_on_gossip 284901, 1286101 and 1286201 (command 15 CAST_SPELL 26924 on the player, 'Cast valentine Undercity Guardian on player'); vmangos 20230308021711_world.sql:3397 carries the same row commented out ('UNKNOWN - Cast Valentine on Player'); no core handles the spell's SCRIPT_EFFECT"),
+        new(24803, R.Marker, "Abyssal Punishment: the Wind Stone trap damage spell, its second effect is a DUMMY aura nothing reads", "classic-db Full_DB gameobject_template 180502 'Wind Stone' (type 6 TRAP, data3 24803; spawned at gameobject guids 49298, 49299 and 49300 on map 1) and spell_template 24803 (Effect1 SCHOOL_DAMAGE, Effect2 APPLY_AURA with aura DUMMY); no core reads the aura"),
+        new(10848, R.SpawnAura, WhySpawnAura, "vmangos sql/migrations/20210717172913_world.sql:221 (creature_template auras '10848' for entry 16110) and 20220613183352_world.sql:1733 (auras '10848 9036' for entries 13056 and 18153); mangos-classic spell_scripts.cpp:46 only names it as a constant (npcs that are only interactable while dead)"),
+        new(27978, R.SpawnAura, WhySpawnAura, "vmangos sql/migrations/20230723234305_world.sql:14 (creature_template auras '27978 27614') and classic-db ACID creature_ai_scripts 1601601 (Anthion Harmon casts it on spawn); mangos-classic spell_scripts.cpp:429 only sets the client-side alive-invisible aura flag, which ArcaneCore does not model"),
+        new(20783, R.Marker, WhyHitTrigger, "vmangos src/scripts/kalimdor/ashenvale/ashenvale.cpp:447 and :663 (SPELL_DESTROY_KARANG_S_BANNER_2, read only by the SpellHit of the Foulweald mound creature script to end the mound event)"),
         new(21830, R.NeverCast, WhyNoHandler, CitNeverCastScan),
         new(22518, R.NeverCast, WhyNoHandler, CitNeverCastScan),
         new(22581, R.NeverCast, WhyNoHandler, CitNeverCastScan),
         new(22805, R.NeverCast, WhyNoHandler, CitNeverCastScan),
-        new(24803, R.NeverCast, WhyNoHandler, CitNeverCastScan),
     ];
 }
