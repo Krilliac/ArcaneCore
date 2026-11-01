@@ -87,11 +87,18 @@ public sealed class WorldHandoffHostingTests
             }));
         }
 
+        // The post-commit steps honour the token, so a roll-forward that is handed a cancelled token fails here.
         public Task<WorldHandoffRecord> MarkReroutedAsync(Guid handoffId, CancellationToken cancellationToken = default)
-            => Task.FromResult(Put(Current(handoffId) with { Stage = WorldHandoffStage.Rerouted }));
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(Put(Current(handoffId) with { Stage = WorldHandoffStage.Rerouted }));
+        }
 
         public Task<WorldHandoffRecord> MarkRetiredAsync(Guid handoffId, CancellationToken cancellationToken = default)
-            => Task.FromResult(Put(Current(handoffId) with { Stage = WorldHandoffStage.Retired, DecisionState = PlayerTransferDecisionState.Completed }));
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(Put(Current(handoffId) with { Stage = WorldHandoffStage.Retired, DecisionState = PlayerTransferDecisionState.Completed }));
+        }
 
         public Task<WorldHandoffRecord> AbortAsync(Guid handoffId, string reason, CancellationToken cancellationToken = default)
             => Task.FromResult(Put(Current(handoffId) with { Stage = WorldHandoffStage.Aborted, DecisionState = PlayerTransferDecisionState.Aborted, AbortReason = reason }));
@@ -184,6 +191,7 @@ public sealed class WorldHandoffHostingTests
     {
         public Task RerouteAsync(CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             events.Add("router:reroute");
             return Task.CompletedTask;
         }
