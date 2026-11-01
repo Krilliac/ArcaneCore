@@ -639,7 +639,8 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     {
         foreach (ChildProcess child in _children)
         {
-            if (child.HasExited)
+            // A process the test killed on purpose (KillWorkerAsync, KillGatewayAsync) and has not restarted is expected to be gone.
+            if (child.HasExited && !child.KilledByTest)
             {
                 throw new InvalidOperationException($"Cluster process '{child.Name}' exited with code {child.ExitCode} before the test finished.{Environment.NewLine}{child.Tail()}");
             }
@@ -680,6 +681,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(index), "No worker with that index.");
         }
 
+        child.KilledByTest = true;
         await child.KillAsync().ConfigureAwait(false);
     }
 
@@ -708,7 +710,12 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     }
 
     /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
-    public Task KillGatewayAsync() => (_gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.")).KillAsync();
+    public Task KillGatewayAsync()
+    {
+        ChildProcess gateway = _gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.");
+        gateway.KilledByTest = true;
+        return gateway.KillAsync();
+    }
 
     /// <summary>Starts the killed gateway again on its original port (without <see cref="ClusterOptions.FirstGatewayEnvironment"/>) and waits for its listener.</summary>
     public async Task RestartGatewayAsync(CancellationToken cancellationToken)
@@ -892,6 +899,9 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         }
 
         internal string Name { get; }
+
+        /// <summary>Set by the fixture before a deliberate crash kill, so its exit is not reported as an unexpected one.</summary>
+        internal bool KilledByTest { get; set; }
 
         private int _id;
         private bool _disposed;
