@@ -316,7 +316,9 @@ public sealed class PlayerbotInitiativeTests
 
     // --- comments -----------------------------------------------------------------------------------------------------------------
 
+    // Timing: real-clock world host: the remark depends on a think landing within the wall wait (flake ledger 2026-10-29).
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ARareCreatureInSight_IsRemarkedOn_OncePerBotGap_AndNotWhenSwitchedOff()
     {
         await using SocialWorld world = await StartAsync();

@@ -179,7 +179,9 @@ public sealed class PlayerbotBrainStallTests
     /// Its health never falls and the bot makes no step, so after
     /// <see cref="PlayerbotBrain.FightNoProgressMs"/> the bot sets it aside, and for about a respawn (<see cref="PlayerbotBrain.StalledTargetMs"/>).
     /// </summary>
+    // Timing: the think budget is wall-clock (PlayerbotThinkProbe.MsSince), so a loaded host spends it before the bot fights (flake ledger #32).
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task ATargetTheBotCannotHurt_IsSetAside_AndNotTakenBackSoon()
     {
         await using RiskTestWorld world = await RiskTestWorld.StartAsync(options => options.Risk.Enabled = false);

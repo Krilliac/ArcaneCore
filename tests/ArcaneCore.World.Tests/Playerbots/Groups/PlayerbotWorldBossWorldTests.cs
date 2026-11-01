@@ -354,7 +354,9 @@ public sealed class PlayerbotWorldBossWorldTests
         Assert.Equal(0, counts.Of(PlayerbotWorldBossOutcomes.Killed));
     }
 
+    // Timing: the wipe-and-regroup sequence runs on the real world loop and a 15 s wall wait; a loaded host can leave the first regroup unobserved (flake ledger 2026-10-29).
     [Fact]
+    [Trait("Category", "Timing")]
     public async Task WithMaxWipesTwo_TheFirstWipeRegroups_AndTheSecondEndsTheAttempt()
     {
         // The generic Wiped arm gives up at the const MaxFailures (2) for every other group; this raid counts its own wipes against MaxWipes.
