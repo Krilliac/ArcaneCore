@@ -244,8 +244,9 @@ recovery).
   state but still disconnects the clients (they log in again); a seamless reroute (one link per worker on the gateway,
   per-session routing, synthesized `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`, input buffered during the freeze) and an
   authenticated operator trigger are not built.
-- The link protocol lives in `ArcaneCore.World`, so the gateway references the whole World assembly; a shared protocol
-  assembly is still to be split out.
+- The link protocol (channel, session wire, frame types, contracts, manifest) now lives in `ArcaneCore.Cluster.Protocol`, but the
+  gateway still references `ArcaneCore.World` for `WorldSession` constants, `AddonInfo`, the build protocols (over Game), the session
+  link client and the handoff router seam; those need their own split before the reference can go.
 - **Cluster roles beyond combined and worker are not hosted.** The World daemon runs either combined or as a gateway worker
   (Cluster:Worker). `ClusterNodeOptions.Validate` refuses the Social, Economy and Gateway roles on a World process, so the
   only cluster role a World process takes is MapWorker. The role pieces that exist are registered and used, but only in that

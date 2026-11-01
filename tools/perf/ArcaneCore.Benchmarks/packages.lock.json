@@ -275,6 +275,13 @@
           "System.CodeDom": "9.0.5"
         }
       },
+      "arcanecore.cluster.protocol": {
+        "type": "Project",
+        "dependencies": {
+          "ArcaneCore.Kernel": "[1.0.0, )",
+          "ArcaneCore.Protocol": "[1.0.0, )"
+        }
+      },
       "arcanecore.cryptography": {
         "type": "Project",
         "dependencies": {
@@ -334,6 +341,7 @@
       "arcanecore.world": {
         "type": "Project",
         "dependencies": {
+          "ArcaneCore.Cluster.Protocol": "[1.0.0, )",
           "ArcaneCore.Cryptography": "[1.0.0, )",
           "ArcaneCore.Data": "[1.0.0, )",
           "ArcaneCore.Game": "[1.0.0, )",

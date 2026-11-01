@@ -25,7 +25,7 @@ public readonly record struct GatewaySessionOpenReply(bool Accepted, AuthRespons
 
 /// <summary>
 /// Encoding of the Tier 3a session-link frames (<c>docs/design/hot-reload-tiers.md</c> §5.3). They ride the length-prefixed
-/// framing and the manifest handshake of <see cref="LoopbackGatewayWorkerHost"/>, and every packet frame carries the same
+/// framing and the manifest handshake of <c>LoopbackGatewayWorkerHost</c>, and every packet frame carries the same
 /// <see cref="ClusterSessionPacket"/> envelope (generation, owner epoch, sequence). All integers little-endian. Every decoder
 /// checks lengths and throws <see cref="InvalidDataException"/> on a frame that does not fit, which closes the link.
 /// </summary>
@@ -103,9 +103,9 @@ public static class GatewaySessionWire
     /// <summary>A client packet (gateway to worker) or a server packet (worker to gateway) in the session envelope.</summary>
     internal static byte[] EncodePacket(GatewayWorkerFrameType type, ClusterSessionPacket packet)
     {
-        byte[] buffer = new byte[1 + LoopbackGatewayWorkerHost.SessionPacketHeaderBytes + packet.Payload.Length];
+        byte[] buffer = new byte[1 + GatewayLinkFraming.SessionPacketHeaderBytes + packet.Payload.Length];
         buffer[0] = (byte)type;
-        LoopbackGatewayWorkerHost.WriteSessionPacketBody(buffer.AsSpan(1), packet);
+        GatewayLinkFraming.WriteSessionPacketBody(buffer.AsSpan(1), packet);
         return buffer;
     }
 
@@ -114,7 +114,7 @@ public static class GatewaySessionWire
         GatewayWorkerFrameType type, long sessionGeneration, int accountId, ulong characterGuid, long ownerEpoch, long sequence,
         uint opcode, ReadOnlySpan<byte> payload)
     {
-        byte[] buffer = new byte[1 + LoopbackGatewayWorkerHost.SessionPacketHeaderBytes + payload.Length];
+        byte[] buffer = new byte[1 + GatewayLinkFraming.SessionPacketHeaderBytes + payload.Length];
         Span<byte> span = buffer;
         span[0] = (byte)type;
         BinaryPrimitives.WriteInt64LittleEndian(span.Slice(1, 8), sessionGeneration);
@@ -129,7 +129,7 @@ public static class GatewaySessionWire
     }
 
     /// <summary>The envelope of a packet frame body; the payload is a slice of <paramref name="body"/> (no copy).</summary>
-    internal static ClusterSessionPacket DecodePacket(ReadOnlyMemory<byte> body) => LoopbackGatewayWorkerHost.DeserializeSessionPacket(body);
+    internal static ClusterSessionPacket DecodePacket(ReadOnlyMemory<byte> body) => GatewayLinkFraming.DeserializeSessionPacket(body);
 
     internal static byte[] EncodeClose(long sessionGeneration, int accountId, ClusterSessionDetachReason reason)
     {

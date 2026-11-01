@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <RootNamespace>ArcaneCore.World.Cluster</RootNamespace>
+    <AssemblyName>ArcaneCore.Cluster.Protocol</AssemblyName>
+  </PropertyGroup>
+
+  <!-- The gateway-worker link protocol (docs/areas/gateway.md): frame types, session envelope, open/close/handshake encodings, the
+       length-prefixed link channel and the link manifest. Namespaces stay ArcaneCore.World.Cluster[.Gateway] so callers need no
+       change. Referenced by ArcaneCore.World (the worker end) and ArcaneCore.Gateway (the client end); depends on Kernel and
+       Protocol only. Its internals are visible to those two and to their test projects (never the other direction). -->
+  <ItemGroup>
+    <ProjectReference Include="..\ArcaneCore.Kernel\ArcaneCore.Kernel.csproj" />
+    <ProjectReference Include="..\ArcaneCore.Protocol\ArcaneCore.Protocol.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.World" />
+    <InternalsVisibleTo Include="ArcaneCore.Gateway" />
+    <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
+    <InternalsVisibleTo Include="ArcaneCore.Gateway.Tests" />
+  </ItemGroup>
+
+</Project>
