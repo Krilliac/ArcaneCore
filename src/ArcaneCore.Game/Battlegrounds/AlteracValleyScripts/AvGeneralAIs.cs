@@ -796,17 +796,15 @@ public sealed class AvWarMasterAI : AvGeneralAI
     public AvWarMasterAI(Creature creature, AlteracValleyScripts scripts)
         : base(creature, scripts) => ResetTimers();
 
-    /// <summary>The marshals' and warmasters' entries (the vmangos comment: 14762 to 14769 for the Alliance, the Horde's six after them).</summary>
+    /// <summary>
+    /// The marshals' and warmasters' entries: 14762 to 14777 without a gap, the Dun Baldar North and South warmasters (14770,
+    /// 14771) included (vmangos world DB sets ScriptName npc_WarMaster on every entry of the range).
+    /// </summary>
     public static IEnumerable<uint> Entries
     {
         get
         {
-            for (uint entry = 14762; entry <= 14769; entry++)
-            {
-                yield return entry;
-            }
-
-            for (uint entry = 14772; entry <= 14777; entry++)
+            for (uint entry = 14762; entry <= 14777; entry++)
             {
                 yield return entry;
             }

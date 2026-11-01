@@ -196,7 +196,7 @@ inert default.
     vmangos script spells instead of the classic-db sets (for example the war riders no longer Throw Liquid Fire, 23969, and Renferal no
     longer casts Thorns or Moonfire 22206).
   - **The generals** (`AvGeneralAIs.cs`, battleground_alterac.cpp:71-1148): `AvVanndarAI` (11948), `AvDrekTharAI` (11946), `AvBalindaAI` (11949),
-    `AvGalvangarAI` (11947) and `AvWarMasterAI` (marshals and warmasters 14762-14769 and 14772-14777), registered by entry because classic-db has
+    `AvGalvangarAI` (11947) and `AvWarMasterAI` (marshals and warmasters 14762-14777, including the Dun Baldar North and South warmasters 14770 and 14771), registered by entry because classic-db has
     no script names. Inside a match these entry scripts replace classic-db EventAI for the same creatures. Each general holds its room by a
     leash from the room's centre (Vanndar 35 yd, Drek'Thar 33, the captains 45) that heals it fully and evades; Vanndar and Drek'Thar say the
     reset line after a leash and the raid-wipe line after a lost fight, the captains say their reset line at every evade. Vanndar's (13333 and the
