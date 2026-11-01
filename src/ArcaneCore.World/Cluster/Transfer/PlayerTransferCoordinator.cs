@@ -241,6 +241,7 @@ public sealed class PlayerTransferCoordinator
             cancellationToken,
             targetWorker.OwnershipScope);
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.CommitDecision, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.CommitDecision, record, cancellationToken);
@@ -367,6 +368,7 @@ public sealed class PlayerTransferCoordinator
             record = await _decisionStore.RebindTargetInstanceAsync(request.TransferId, targetInstanceId, cancellationToken);
         }
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.Reserve, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.Reserve, record, cancellationToken);
@@ -415,6 +417,7 @@ public sealed class PlayerTransferCoordinator
             bundle,
             cancellationToken);
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.SuspendAndCapture, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.SuspendAndCapture, record, cancellationToken);
@@ -431,6 +434,7 @@ public sealed class PlayerTransferCoordinator
             bundle,
             cancellationToken);
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.InstallPassive, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.InstallPassive, record, cancellationToken);
@@ -457,6 +461,7 @@ public sealed class PlayerTransferCoordinator
             bundle,
             cancellationToken);
 
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.StageWorldPort, cancellationToken);
         if (afterStageHook is not null)
         {
             await afterStageHook(PlayerTransferStage.StageWorldPort, record, cancellationToken);
@@ -548,6 +553,9 @@ public sealed class PlayerTransferCoordinator
             record.CharacterGuid,
             record.SourceOwnershipToken,
             cancellationToken);
+
+        // Stage 6 is only half done here: the source is retired, the target is not yet active.
+        await TransferStageProbe.ReachedAsync(PlayerTransferStage.ActivateAndRetire, cancellationToken);
 
         // 2. Ensure target passive state exists (in case target worker restarted after CommitDecision) and activate it.
         await targetWorker.InstallPassiveShadowAsync(
@@ -653,5 +661,58 @@ public sealed class PlayerTransferCoordinator
             throw new InvalidOperationException($"Target worker '{workerId}' is not registered with PlayerTransferCoordinator.");
 
         return worker;
+    }
+}
+
+/// <summary>
+/// Test-only stage hold for the crash-mid-transfer scenarios (S6c). A no-op in production: it acts only when the process environment carries
+/// <see cref="HoldStageVariable"/> (a <see cref="PlayerTransferStage"/> name) and <see cref="DirectoryVariable"/> (an existing directory), which only the
+/// cluster E2E fixture sets, and only on the gateway it launches. When the coordinator first reaches the named stage it writes the marker file
+/// <c>reached-&lt;Stage&gt;</c> in that directory and waits until the file <c>release</c> appears there (or the token is cancelled, or <see cref="MaximumHold"/> passes),
+/// so the test can kill a process at exactly that stage. The hold fires once per process; later passes (recovery) are not held.
+/// Thread safety: the once-only latch is an interlocked flag; the settings are read once at type initialisation and immutable. Production cost: one null check.
+/// </summary>
+internal static class TransferStageProbe
+{
+    internal const string HoldStageVariable = "ARCANECORE_TEST_TRANSFER_HOLD_STAGE";
+    internal const string DirectoryVariable = "ARCANECORE_TEST_TRANSFER_HOLD_DIR";
+    internal const string ReleaseFileName = "release";
+
+    private static readonly TimeSpan MaximumHold = TimeSpan.FromMinutes(4);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly PlayerTransferStage? HoldStage = ReadStage();
+    private static readonly string? HoldDirectory = HoldStage is null ? null : Environment.GetEnvironmentVariable(DirectoryVariable);
+    private static int _fired;
+
+    internal static string MarkerFileName(PlayerTransferStage stage) => "reached-" + stage;
+
+    internal static Task ReachedAsync(PlayerTransferStage stage, CancellationToken cancellationToken)
+    {
+        if (HoldStage is null || HoldStage.Value != stage || string.IsNullOrEmpty(HoldDirectory))
+            return Task.CompletedTask;
+
+        return HoldAsync(stage, HoldDirectory, cancellationToken);
+    }
+
+    private static async Task HoldAsync(PlayerTransferStage stage, string directory, CancellationToken cancellationToken)
+    {
+        if (Interlocked.Exchange(ref _fired, 1) != 0)
+            return;
+
+        string marker = Path.Combine(directory, MarkerFileName(stage));
+        string temporary = marker + ".tmp";
+        await File.WriteAllTextAsync(temporary, stage.ToString(), cancellationToken).ConfigureAwait(false);
+        File.Move(temporary, marker, overwrite: true);
+
+        string release = Path.Combine(directory, ReleaseFileName);
+        DateTime deadline = DateTime.UtcNow + MaximumHold;
+        while (!File.Exists(release) && DateTime.UtcNow < deadline)
+            await Task.Delay(PollInterval, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static PlayerTransferStage? ReadStage()
+    {
+        string? name = Environment.GetEnvironmentVariable(HoldStageVariable);
+        return !string.IsNullOrWhiteSpace(name) && Enum.TryParse(name, ignoreCase: false, out PlayerTransferStage stage) ? stage : null;
     }
 }

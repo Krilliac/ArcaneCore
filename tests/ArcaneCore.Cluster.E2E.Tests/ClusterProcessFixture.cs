@@ -76,6 +76,9 @@ public sealed class ClusterOptions
     /// There is no supervisor in this fixture, so a retired source is not relaunched.
     /// </summary>
     public int? StandbyWorkerIndex { get; init; }
+
+    /// <summary>Extra environment variables for the first launch of the gateway only (not for <see cref="ClusterProcessFixture.RestartGatewayAsync"/>); the crash-mid-transfer scenarios use it to hold the coordinator at a stage.</summary>
+    public IReadOnlyDictionary<string, string>? FirstGatewayEnvironment { get; init; }
 }
 
 /// <summary>One launched world worker.</summary>
@@ -114,6 +117,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private readonly List<string> _databases = [];
     private readonly List<ClusterWorkerInfo> _workers = [];
     private readonly Dictionary<int, ChildProcess> _workerProcesses = [];
+    private readonly List<ChildProcess> _retired = [];
     private readonly string _postgresBase;
     private readonly string _linkSecret = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _root = Path.Combine(Path.GetTempPath(), "arcane-cluster-e2e-" + Guid.NewGuid().ToString("N"));
@@ -128,6 +132,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private int _gatewayPort;
     private ClusterStandbyInfo? _standby;
     private ChildProcess? _standbyProcess;
+    private ChildProcess? _gatewayProcess;
 
     private ClusterProcessFixture(ClusterOptions options)
     {
@@ -319,7 +324,8 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             _children.Add(_standbyProcess);
         }
 
-        _children.Add(ChildProcess.Start("gateway", "gateway", "ArcaneCore.Gateway", Path.Combine(_root, "gateway"), GatewayEnvironment(), secrets));
+        _gatewayProcess = ChildProcess.Start("gateway", "gateway", "ArcaneCore.Gateway", Path.Combine(_root, "gateway"), GatewayEnvironment(firstLaunch: true), secrets);
+        _children.Add(_gatewayProcess);
 
         var listeners = new List<(string Name, int Port)> { ("realm", _realmPort), ("gateway", _gatewayPort) };
         listeners.AddRange(_workers.Select(worker => (worker.NodeId + " client listener", worker.ClientPort)));
@@ -489,9 +495,17 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         return env;
     }
 
-    private Dictionary<string, string> GatewayEnvironment()
+    private Dictionary<string, string> GatewayEnvironment(bool firstLaunch)
     {
         Dictionary<string, string> env = CommonEnvironment();
+        if (firstLaunch && _options.FirstGatewayEnvironment is { } extra)
+        {
+            foreach ((string key, string value) in extra)
+            {
+                env[key] = value;
+            }
+        }
+
         env["Gateway__BindAddress"] = IPAddress.Loopback.ToString();
         env["Gateway__Port"] = _gatewayPort.ToString(CultureInfo.InvariantCulture);
         env["Gateway__LinkSecret"] = _linkSecret;
@@ -630,6 +644,50 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         await child.KillAsync().ConfigureAwait(false);
     }
 
+    /// <summary>Starts the killed world worker with this index again on its original ports, node id and databases, and waits for its client listener.</summary>
+    public async Task RestartWorkerAsync(int index, CancellationToken cancellationToken)
+    {
+        if (!_workerProcesses.TryGetValue(index, out ChildProcess? old))
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), "No worker with that index.");
+        }
+
+        if (!old.HasExited)
+        {
+            throw new InvalidOperationException($"Worker {index} is still running; kill it before restarting.");
+        }
+
+        ClusterWorkerInfo worker = _workers[index];
+        _children.Remove(old);
+        _retired.Add(old);
+        string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
+        ChildProcess child = ChildProcess.Start(
+            worker.NodeId, "world", "ArcaneCore.World", Path.Combine(_root, worker.NodeId), WorldEnvironment(worker), secrets);
+        _children.Add(child);
+        _workerProcesses[index] = child;
+        await WaitForListenerAsync(worker.NodeId + " client listener", worker.ClientPort, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
+    public Task KillGatewayAsync() => (_gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.")).KillAsync();
+
+    /// <summary>Starts the killed gateway again on its original port (without <see cref="ClusterOptions.FirstGatewayEnvironment"/>) and waits for its listener.</summary>
+    public async Task RestartGatewayAsync(CancellationToken cancellationToken)
+    {
+        ChildProcess old = _gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.");
+        if (!old.HasExited)
+        {
+            throw new InvalidOperationException("The gateway is still running; kill it before restarting.");
+        }
+
+        _children.Remove(old);
+        _retired.Add(old);
+        string[] secrets = [_linkSecret, AccountPassword, _postgresBase, _authConnection, _charactersConnection, _worldConnection];
+        _gatewayProcess = ChildProcess.Start("gateway", "gateway", "ArcaneCore.Gateway", Path.Combine(_root, "gateway"), GatewayEnvironment(firstLaunch: false), secrets);
+        _children.Add(_gatewayProcess);
+        await WaitForListenerAsync("gateway", _gatewayPort, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Logon at the realm daemon, then connect and authenticate at the gateway, as a client does. The processes are still starting
     /// when this is first called, so a refused connection and the gateway's "unavailable" answer (no worker link yet) are retried until
@@ -722,7 +780,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             failures.Add(ex); // a handle still open on the directory means a process is still alive
         }
 
-        foreach (ChildProcess child in _children)
+        foreach (ChildProcess child in _children.Concat(_retired))
         {
             child.Dispose();
         }
