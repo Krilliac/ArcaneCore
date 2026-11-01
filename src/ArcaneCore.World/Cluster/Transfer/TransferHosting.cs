@@ -48,6 +48,13 @@ public static class WorkerTransferHosting
             return services;
         }
 
+        if (handoffOn)
+        {
+            // The operator's .cluster restart goes to the gateway through this relay (design section 3.4); GatewayWorkerEndpoint attaches it to its link host.
+            services.TryAddSingleton<ClusterRestartRelay>(sp => new ClusterRestartRelay(null, sp.GetService<ILoggerFactory>()?.CreateLogger<ClusterRestartRelay>()));
+            services.TryAddSingleton<IClusterRestartRelay>(sp => sp.GetRequiredService<ClusterRestartRelay>());
+        }
+
         services.TryAddSingleton(sp => Build(sp, handoffOn, transfersOn));
         return services;
     }

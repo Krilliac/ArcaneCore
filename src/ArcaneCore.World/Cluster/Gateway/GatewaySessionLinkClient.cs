@@ -398,6 +398,9 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
                     case GatewayWorkerFrameType.ControlReply:
                         OnControlReply(ClusterControlWire.DecodeReply(body.Span));
                         break;
+                    case GatewayWorkerFrameType.ControlSubmit:
+                        OnControlSubmit(ClusterControlWire.DecodeSubmit(body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
                         if (_sessions.TryGetValue(generation, out ClientSession? closing) && closing.AccountId == accountId
@@ -467,6 +470,33 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     /// <summary>Sends one control request to the worker (contract 5). False when the link is down. The reply arrives on <see cref="ControlReplyReceived"/>.</summary>
     public bool SendControlRequest(ControlRequest request) =>
         _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeRequest(request));
+
+    /// <summary>
+    /// Raised on the link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmit"/> frame (a worker asks the gateway to start an operation). An event so
+    /// that the operator-restart handler and the transfer handler can both listen: each answers with <see cref="SendControlSubmitReply"/> only for the body kind it owns.
+    /// Handlers must not block and must not throw; one that throws is logged and the link goes on.
+    /// </summary>
+    public event Action<ControlSubmit>? ControlSubmitReceived;
+
+    /// <summary>Answers a <see cref="ControlSubmit"/> to the worker. False when the link is down.</summary>
+    public bool SendControlSubmitReply(ControlSubmitReply reply) =>
+        _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeSubmitReply(reply));
+
+    /// <summary>Tells the worker about an outcome for one of its sessions (contract 5). False when the link is down.</summary>
+    public bool SendControlNotice(ControlNotice notice) =>
+        _channel is { } channel && channel.TryEnqueue(ClusterControlWire.EncodeNotice(notice));
+
+    private void OnControlSubmit(ControlSubmit submit)
+    {
+        try
+        {
+            ControlSubmitReceived?.Invoke(submit);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the control submit handler failed", _worker);
+        }
+    }
 
     private void OnControlReply(ControlReply reply)
     {

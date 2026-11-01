@@ -117,6 +117,7 @@ public sealed class GatewayWorkerEndpoint(
         // Opt-in control channel (Cluster:Worker:Handoff / Transfers:Enabled): registered only when a key is on, so a worker without one answers every control request Disabled.
         // Resolved here, not in the constructor: building it looks up the world host among the hosted services, which would loop through this endpoint.
         _host.ControlHandler = rootServices?.GetService<Control.WorkerControlService>();
+        rootServices?.GetService<Control.ClusterRestartRelay>()?.Attach(_host, Acceptor ?? throw new InvalidOperationException("the session acceptor was not created"));
         _host.Start();
         if (lifecycle is not null && _countdownHandler is null)
         {

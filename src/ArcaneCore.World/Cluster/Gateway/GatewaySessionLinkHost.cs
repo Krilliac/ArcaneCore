@@ -447,6 +447,12 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                     case GatewayWorkerFrameType.ControlRequest:
                         OnControlRequest(link, ClusterControlWire.DecodeRequest(body.Span));
                         break;
+                    case GatewayWorkerFrameType.ControlSubmitReply:
+                        OnControlSubmitReply(ClusterControlWire.DecodeSubmitReply(body.Span));
+                        break;
+                    case GatewayWorkerFrameType.ControlNotice:
+                        OnControlNotice(ClusterControlWire.DecodeNotice(body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
                         if (link.Sessions.TryGetValue(generation, out LinkSession? closing) && closing.AccountId == accountId)
@@ -522,6 +528,60 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             if (link.Admitted && link.Sessions.ContainsKey(sessionGeneration))
             {
                 return link.Channel.TryEnqueue(GatewayTransferWire.Encode(control));
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Raised on a link's receive loop for every <see cref="GatewayWorkerFrameType.ControlSubmitReply"/> frame (the gateway's answer to a <see cref="TrySendControlSubmit"/>).
+    /// Handlers must not block and must not throw; one that throws is logged and the link goes on.
+    /// </summary>
+    public event Action<ControlSubmitReply>? ControlSubmitReplyReceived;
+
+    /// <summary>
+    /// Raised on a link's receive loop for every <see cref="GatewayWorkerFrameType.ControlNotice"/> frame (the gateway tells this worker about an outcome for one of its sessions).
+    /// Handlers must not block and must not throw; one that throws is logged and the link goes on.
+    /// </summary>
+    public event Action<ControlNotice>? ControlNoticeReceived;
+
+    private void OnControlSubmitReply(ControlSubmitReply reply)
+    {
+        try
+        {
+            ControlSubmitReplyReceived?.Invoke(reply);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.control", ex, "The control submit reply handler failed");
+        }
+    }
+
+    private void OnControlNotice(ControlNotice notice)
+    {
+        try
+        {
+            ControlNoticeReceived?.Invoke(notice);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.control", ex, "The control notice handler failed");
+        }
+    }
+
+    /// <summary>
+    /// Sends a <see cref="ControlSubmit"/> on the admitted link that carries the session <paramref name="sessionGeneration"/> (the operator's or the player's own session: the
+    /// gateway judges the request by the link it arrives on). False when no admitted link has that session or the link is down; the answer arrives on <see cref="ControlSubmitReplyReceived"/>.
+    /// </summary>
+    public bool TrySendControlSubmit(long sessionGeneration, ControlSubmit submit)
+    {
+        ArgumentNullException.ThrowIfNull(submit);
+        foreach (Link link in _links.Values)
+        {
+            if (link.Admitted && link.Sessions.ContainsKey(sessionGeneration))
+            {
+                return link.Channel.TryEnqueue(ClusterControlWire.EncodeSubmit(submit));
             }
         }
 
