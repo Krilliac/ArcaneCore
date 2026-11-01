@@ -1,7 +1,12 @@
 using System.Collections.Concurrent;
+using System.Net;
+using ArcaneCore.Gateway.Handoff;
 using ArcaneCore.Gateway.Transfers;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Cluster.Control;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Handoff;
 using ArcaneCore.World.Cluster.Transfer;
@@ -226,6 +231,88 @@ public sealed class GatewayTransferServiceTests
         Assert.Equal(PlayerTransferDecisionState.Aborted, outcome.DecisionState);
         Assert.Equal(GatewaySlotState.Idle, rig.Service.Machine.StateOf("ek"));
         Assert.Empty(await rig.Store.ListUnresolvedAsync());
+    }
+
+    // ------------------------------------------------------------------ production coupling with the handoff service
+
+    [Fact]
+    public async Task TheProductionConstructor_CouplesTheHandoffService_SoAHandoffIsRefusedWhileATransferRunsOrIsJournalled()
+    {
+        var handoffJournal = new FakeHandoffJournal();
+        var store = new InMemoryTransferDecisionStore();
+        store.SeedCharacterOwnership(Character, SourceToken);
+        var options = new GatewayOptions
+        {
+            LinkSecret = StandbyWorkerTests.Secret,
+            Workers =
+            [
+                new GatewayWorkerEntry { NodeId = "ek", Maps = [0], StandbyNodeId = "ek-standby", StandbyAddress = "127.0.0.1", StandbyPort = 1 },
+                new GatewayWorkerEntry { NodeId = "kal", Maps = [1] },
+            ],
+        };
+        IServiceScopeFactory scopes = new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+        using var server = new GatewayServer(scopes, Options.Create(options), NullLoggerFactory.Instance, transfers: Options.Create(new GatewayTransferOptions { Enabled = true }));
+        await using var handoffs = new GatewayHandoffService(server, handoffJournal, NullLoggerFactory.Instance);
+        await using var transfers = new GatewayTransferService(
+            server, store, store, new GatewayTransferOptions { Enabled = true }, handoffJournal, handoffs, NullLoggerFactory.Instance);
+
+        Assert.Same(transfers, handoffs.Guard); // the production constructor installs itself as the handoff service's guard
+
+        // A transfer of the slot is running (it holds the slot's lease): HandoffAsync is refused before its pre-flight.
+        Assert.True(transfers.Machine.TryBeginTransfer("ek", "kal", out IDisposable? running, out _));
+        WorldHandoffUnavailableException whileRunning = await Assert.ThrowsAsync<WorldHandoffUnavailableException>(() => handoffs.HandoffAsync("ek"));
+        Assert.Contains("transfer", whileRunning.Message);
+        running!.Dispose();
+
+        // A transfer of the slot is unresolved in the journal: refused too, naming it, and the refused handoff left the slot idle.
+        Guid stuck = Guid.NewGuid();
+        await store.CreateReservationAsync(stuck, Character, 77, 5, new WorkerNodeId("ek"), new WorkerNodeId("kal"), 0, 0, 1, 0, SourceToken);
+        WorldHandoffUnavailableException whileJournalled = await Assert.ThrowsAsync<WorldHandoffUnavailableException>(() => handoffs.HandoffAsync("ek"));
+        Assert.Contains(stuck.ToString(), whileJournalled.Message);
+        Assert.Equal(GatewaySlotState.Idle, transfers.Machine.StateOf("ek"));
+
+        // The other direction, through the same guard: a handoff in progress keeps transfers of the slot out.
+        await store.AbortPreCommitAsync(stuck, "test");
+        using IDisposable handing = await handoffs.Guard!.EnterHandoffAsync("ek", CancellationToken.None);
+        Assert.Equal(GatewaySlotState.HandingOff, transfers.Machine.StateOf("ek"));
+        Assert.False(transfers.Machine.TryBeginTransfer("ek", "kal", out _, out _));
+    }
+
+    // ------------------------------------------------------------------ production wiring on real transports (design section 8)
+
+    [Fact]
+    public async Task OnRealLinks_ATargetThatRestartedBetweenTheReserveAndStage4_AbortsWithTargetIncarnationChanged_AndNeverCommits()
+    {
+        await using LinkRig rig = await LinkRig.StartAsync();
+        rig.Kal.AfterInstall = () => rig.Kal.Incarnation = Guid.NewGuid(); // the target process "restarts" after it reserved and installed
+
+        PlayerTransferRequest request = rig.Request();
+        GatewayTransferSubmission submission = await rig.Service.SubmitAsync(request);
+        Assert.True(submission.Accepted, submission.Reason);
+        PlayerTransferOutcome outcome = await submission.Completion!.WaitAsync(Budget);
+
+        Assert.False(outcome.Succeeded);
+        Assert.Equal(PlayerTransferDecisionState.Aborted, outcome.DecisionState);
+        Assert.Equal(GatewayTransferService.TargetIncarnationChanged, outcome.FailureCode);
+        Assert.Equal(new[] { "reserve", "install", "discard" }, rig.Kal.Calls.ToArray());
+        Assert.Equal(new[] { "suspend", "resume" }, rig.Ek.Calls.ToArray());
+        Assert.Equal(new[] { "stage", "cancel" }, rig.Gateway.Calls.ToArray()); // never "commit"
+        Assert.Null((await rig.Store.GetDecisionAsync(request.TransferId))!.TargetOwnershipToken);
+        Assert.Equal(GatewaySlotState.Idle, rig.Service.Machine.StateOf("ek"));
+    }
+
+    [Fact]
+    public async Task OnRealLinks_ATargetWhoseIncarnationIsUnchanged_CommitsTheTransfer()
+    {
+        await using LinkRig rig = await LinkRig.StartAsync();
+
+        PlayerTransferOutcome outcome = await (await rig.Service.SubmitAsync(rig.Request())).Completion!.WaitAsync(Budget);
+
+        Assert.True(outcome.Succeeded, outcome.FailureMessage);
+        Assert.Equal(new[] { "reserve", "install", "install", "activate" }, rig.Kal.Calls.ToArray());
+        Assert.Equal(new[] { "suspend", "retire" }, rig.Ek.Calls.ToArray());
+        Assert.Equal(new[] { "stage", "commit" }, rig.Gateway.Calls.ToArray());
+        Assert.False(rig.ProductionWiring.SessionExists(123456)); // ForServer's own session check reads the server's real connections: this gateway has none
     }
 
     // ------------------------------------------------------------------ pre-commit check (design 4.3)
@@ -580,12 +667,144 @@ public sealed class GatewayTransferServiceTests
         }
     }
 
+    /// <summary>
+    /// The production wiring (<see cref="GatewayTransferWiring.ForServer"/>) on real transports: a real <see cref="GatewayServer"/> linked over loopback to two real <see cref="GatewaySessionLinkHost"/>s whose control
+    /// dispatcher is a real <see cref="WorkerControlService"/> in front of the fake participants. Only the gateway's session router and its session check are replaced (no client session exists in this rig).
+    /// </summary>
+    private sealed class LinkRig : IAsyncDisposable
+    {
+        private readonly GatewaySessionLinkHost _ekHost;
+        private readonly GatewaySessionLinkHost _kalHost;
+        private readonly GatewayServer _server;
+
+        private LinkRig(
+            GatewaySessionLinkHost ekHost, GatewaySessionLinkHost kalHost, GatewayServer server, InMemoryTransferDecisionStore store, FakeNode ek, FakeNode kal, FakeGateway gateway)
+        {
+            _ekHost = ekHost;
+            _kalHost = kalHost;
+            _server = server;
+            Store = store;
+            Ek = ek;
+            Kal = kal;
+            Gateway = gateway;
+            ProductionWiring = GatewayTransferWiring.ForServer(server, null, NullLoggerFactory.Instance);
+            Service = new GatewayTransferService(
+                new GatewayTransferOptions(), store, store, null, ProductionWiring with { GatewayRouter = gateway, SessionExists = _ => true });
+        }
+
+        public InMemoryTransferDecisionStore Store { get; }
+
+        public FakeNode Ek { get; }
+
+        public FakeNode Kal { get; }
+
+        public FakeGateway Gateway { get; }
+
+        /// <summary>What <see cref="GatewayTransferWiring.ForServer"/> built for the rig's server, before the router and the session check were replaced.</summary>
+        public GatewayTransferWiring ProductionWiring { get; }
+
+        public GatewayTransferService Service { get; }
+
+        public PlayerTransferRequest Request() =>
+            new(Guid.NewGuid(), Character, 77, 5, new WorkerNodeId("ek"), 0, 0, 1, 0, Landing, SourceToken);
+
+        public static async Task<LinkRig> StartAsync()
+        {
+            using var cts = new CancellationTokenSource(Budget);
+            var store = new InMemoryTransferDecisionStore();
+            store.SeedCharacterOwnership(Character, SourceToken);
+            var ek = new FakeNode("ek");
+            var kal = new FakeNode("kal");
+            GatewaySessionLinkHost ekHost = StartHost("ek", new WorkerControlService(
+                handoffEnabled: false, handoff: null, transfersEnabled: true,
+                transfers: new WorkerControlTransfer(store, ek, null, () => true, () => 8),
+                identity: () => new WorkerControlIdentity(ek.WorkerId, false, ek.Incarnation, "node-ek", "world", [0u])));
+            GatewaySessionLinkHost kalHost = StartHost("kal", new WorkerControlService(
+                handoffEnabled: false, handoff: null, transfersEnabled: true,
+                transfers: new WorkerControlTransfer(store, null, kal, () => true, () => 8),
+                identity: () => new WorkerControlIdentity(kal.WorkerId, false, kal.Incarnation, "node-kal", "world", [1u])));
+            GatewayServer? server = null;
+            try
+            {
+                var options = new GatewayOptions
+                {
+                    BindAddress = IPAddress.Loopback.ToString(),
+                    Port = 0,
+                    LinkSecret = StandbyWorkerTests.Secret,
+                    LinkRetryDelay = TimeSpan.FromMilliseconds(100),
+                    RealmId = 1,
+                    ContentRevision = "dev",
+                    CharactersSchemaVersion = 1,
+                    WorldSchemaVersion = 1,
+                    Workers =
+                    [
+                        new GatewayWorkerEntry { NodeId = "ek", Address = IPAddress.Loopback.ToString(), Port = ekHost.BoundEndPoint.Port, Maps = [0] },
+                        new GatewayWorkerEntry { NodeId = "kal", Address = IPAddress.Loopback.ToString(), Port = kalHost.BoundEndPoint.Port, Maps = [1] },
+                    ],
+                };
+                IServiceScopeFactory scopes = new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
+                server = new GatewayServer(scopes, Options.Create(options), NullLoggerFactory.Instance, transfers: Options.Create(new GatewayTransferOptions { Enabled = true }));
+                await server.StartAsync(cts.Token);
+                await server.WaitForAllLinksAsync(cts.Token);
+                return new LinkRig(ekHost, kalHost, server, store, ek, kal, new FakeGateway());
+            }
+            catch
+            {
+                if (server is not null)
+                {
+                    await server.StopAsync(CancellationToken.None);
+                    server.Dispose();
+                }
+
+                await ekHost.DisposeAsync();
+                await kalHost.DisposeAsync();
+                throw;
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Service.DisposeAsync();
+            await _server.StopAsync(CancellationToken.None);
+            _server.Dispose();
+            await _ekHost.DisposeAsync();
+            await _kalHost.DisposeAsync();
+        }
+
+        private static GatewaySessionLinkHost StartHost(string node, IGatewayControlHandler handler)
+        {
+            var host = new GatewaySessionLinkHost(
+                GatewayLinkManifest.Create(ClusterRole.Worker, node, Guid.NewGuid(), 1, "dev", 1, 1),
+                new NoSessionsAcceptor(), () => 1, StandbyWorkerTests.Secret, new IPEndPoint(IPAddress.Loopback, 0))
+            {
+                ControlHandler = handler,
+            };
+            host.Start();
+            return host;
+        }
+    }
+
+    private sealed class NoSessionsAcceptor : IGatewaySessionAcceptor
+    {
+        public ValueTask<GatewaySessionAcceptResult> OpenAsync(GatewaySessionOpenRequest request, IGatewaySessionOutput output, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(GatewaySessionAcceptResult.Refused(AuthResponseCode.Failed, "no sessions in this test"));
+    }
+
     /// <summary>One worker process behind both participant contracts, recording what it was asked.</summary>
     private sealed class FakeNode(string id) : ITransferSourceWorker, ITransferTargetWorker
     {
         public WorkerNodeId WorkerId { get; } = new(id);
 
-        public Guid Incarnation { get; } = Guid.NewGuid();
+        private Guid _incarnation = Guid.NewGuid();
+
+        public Guid Incarnation
+        {
+            get { lock (Calls) { return _incarnation; } }
+            set { lock (Calls) { _incarnation = value; } }
+        }
+
+        /// <summary>Runs after an install: a test changes <see cref="Incarnation"/> there, between the reserve and the commit.</summary>
+        public Action? AfterInstall { get; set; }
 
         public ConcurrentQueue<string> Calls { get; } = new();
 
@@ -647,6 +866,7 @@ public sealed class GatewayTransferServiceTests
         public Task InstallPassiveShadowAsync(Guid transferId, PlayerTransferBundle bundle, CancellationToken cancellationToken = default)
         {
             Calls.Enqueue("install");
+            AfterInstall?.Invoke();
             return Task.CompletedTask;
         }
 
