@@ -10,7 +10,7 @@ namespace ArcaneCore.Game.Death;
 /// </summary>
 public sealed class DeathHooks
 {
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldRuntime, DeathHooks> s_registered = new();
+    private static readonly InstanceAttachments<WorldRuntime, DeathHooks> s_registered = new();
 
     public DeathHooks(DeathOptions options, DeathClock clock)
     {
@@ -21,7 +21,7 @@ public sealed class DeathHooks
     /// <summary>Retail defaults and the system clock; used when nothing is registered.</summary>
     public static DeathHooks Default { get; } = new(new DeathOptions(), DeathClock.System);
 
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<WorldRuntime, DeathHooks> s_manualDefaults = new();
+    private static readonly InstanceAttachments<WorldRuntime, DeathHooks> s_manualDefaults = new();
 
     public DeathOptions Options { get; }
 
@@ -32,7 +32,7 @@ public sealed class DeathHooks
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(hooks);
-        s_registered.AddOrUpdate(world, hooks);
+        s_registered.Attach(world, hooks);
     }
 
     /// <summary>Register only when nothing is registered yet; the first registration wins. <see cref="Default"/> is never registered.</summary>
@@ -40,7 +40,7 @@ public sealed class DeathHooks
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(hooks);
-        return !ReferenceEquals(hooks, Default) && s_registered.TryAdd(world, hooks);
+        return !ReferenceEquals(hooks, Default) && s_registered.TryAttach(world, hooks);
     }
 
     /// <summary>
@@ -50,13 +50,13 @@ public sealed class DeathHooks
     public static DeathHooks For(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        if (s_registered.TryGetValue(world, out DeathHooks? hooks))
+        if (s_registered.Find(world) is { } hooks)
         {
             return hooks;
         }
 
         return world.IsManualClock
-            ? s_manualDefaults.GetValue(world, static w => new DeathHooks(new DeathOptions(), new WorldDeathClock(w)))
+            ? s_manualDefaults.GetOrCreate(world, static w => new DeathHooks(new DeathOptions(), new WorldDeathClock(w)))
             : Default;
     }
 }

@@ -36,7 +36,7 @@ public sealed class ImporterWriteBoundaryCharacterisationTests : IAsyncLifetime
         {
             case "conditions":
                 var conditions = new ConditionsDumpImporter();
-                conditions.Read(new StringReader("INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`) VALUES (1,14,0,2,0,0,0);"));
+                conditions.Read(new StringReader("INSERT INTO `conditions` (`condition_entry`,`type`,`value1`,`value2`,`value3`,`value4`,`flags`,`comments`) VALUES (1,14,0,2,0,0,0,'');"));
                 return (db, replace, ct) => conditions.WriteAsync(db, replace, ct);
             case "npc":
                 var npc = new NpcDumpImporter();

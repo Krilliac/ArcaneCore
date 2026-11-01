@@ -425,7 +425,7 @@ public static class ConfWriter
 
         if (otherDaemon.Count > 0)
         {
-            string other = daemon == ConfigDaemon.Realm ? "world.conf" : "realm.conf";
+            string other = ConfCatalog.OtherFiles(daemon);
             sb.Append("# ").Append(otherDaemon.Count).Append(" key(s) found in the profile's files belong to ").Append(other).Append(" and are not written to ").Append(file).Append(".\n");
         }
     }

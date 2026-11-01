@@ -42,7 +42,7 @@ public sealed partial class InstanceManager : IMapResolver
 
     private readonly WorldRuntime _world;
     private readonly InstanceOptions _options;
-    private readonly IInstancePersistence _persistence;
+    private IInstancePersistence _persistence; // swapped for the null sink only while a non-holder runs UpdateSchedule (world thread)
     private readonly Func<long> _unixNow;
     private readonly ILogger _logger;
     private readonly Dictionary<uint, InstanceSave> _saves = [];

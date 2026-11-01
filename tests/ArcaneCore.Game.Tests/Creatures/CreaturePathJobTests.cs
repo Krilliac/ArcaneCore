@@ -133,6 +133,10 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
     }
 
+    // Each tick waits out the job it dispatched, so the tick budget no longer races the pool's threads.
+    private static void SettlePool(CreatureMapSystem system) =>
+        Assert.True(SpinWait.SpinUntil(() => system.PathJobsFinished == system.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not finish");
+
     [Fact]
     public void AWanderingCreature_SearchesOnAWorker_AndWalksTheWorkersPath()
     {
@@ -142,7 +146,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         for (int i = 0; i < 300 && !s.Wolf.IsMoving; i++)
         {
             s.World.RunTick(100);
-            Thread.Sleep(1);
+            SettlePool(s.System);
         }
 
         Assert.True(s.Wolf.IsMoving, "the wolf never started a wander leg");
@@ -250,7 +254,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         for (int i = 0; i < 200 && s.System.PathJobsApplied == 0; i++)
         {
             s.World.RunTick(50);
-            Thread.Sleep(1);
+            SettlePool(s.System);
         }
 
         Assert.True(s.System.PathJobsApplied >= 1, "no follow answer from the pool was applied");
@@ -820,7 +824,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         for (int i = 0; i < 200 && s.System.PathJobsApplied == 0; i++)
         {
             s.World.RunTick(50);
-            Thread.Sleep(1);
+            SettlePool(s.System);
         }
 
         Assert.True(s.System.PathJobsApplied >= 1, "no chase answer from the pool was applied");
@@ -865,7 +869,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
             for (int i = 0; i < 200 && (!follower.IsMoving || system.PathJobsApplied < 2); i++)
             {
                 world.RunTick(50);
-                Thread.Sleep(1);
+                SettlePool(system);
             }
 
             Assert.True(follower.IsMoving, "the formation follower did not set off on the pool's path");
@@ -933,7 +937,8 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
     [Trait("Category", "Timing")] // asserts a Stopwatch budget while a background thread holds the gate
     public void AnUngatedDrape_IsTimedInsideTheGate_SoTheWaitForAnotherMapIsNotChargedToThePathBudget()
     {
-        const int HoldMs = 50;
+        // Long against scheduling jitter: the charge threshold is HoldMs / 2, so a preempted shared attempt stays under it while a charged gate wait does not.
+        const int HoldMs = 200;
         using var world = new WorldRuntime(
             new WorldRuntimeOptions
             {
@@ -950,6 +955,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         WorldCollision.Of(world).Install(pathfinder: paths);
         using var pool = new NavJobSystem(threads: 2);
         system.PathJobs = pool;
+        system.PathBudget = CreaturePathBudget.Unlimited; // a slow shared attempt must not exhaust the 12 ms drape budget and defer the apply (the charge is measured either way)
         (Player player, _) = AddPlayer(world, 1, 0, 0);
         world.GetMap(1, 0); // a second map: the maps phase runs on the map threads (and the serial gate is real) only with two or more
         using Scene s = new(world, system, player, Assert.Single(system.Creatures), paths, pool);

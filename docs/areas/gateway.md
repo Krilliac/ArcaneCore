@@ -124,8 +124,8 @@ registered in DI and there is no cross-process control channel: one coordinator 
 gateway share a process (the tests). Known limits, including B crashing after the takeover, are listed in design
 section 5.6.
 
-Gateway side: `gateway.json` next to the executable, then environment variables and the command line (generic host
-order). The gateway also reads the `Database:Auth` section (the realm's auth database), `Net:Protection` and `Logging`.
+Gateway side, lowest precedence first: `appsettings.json`, `gateway.conf` (or `--config <file>`, the same format as `world.conf`),
+`gateway.json` next to the executable, environment variables, the command line. The gateway also reads the `Database:Auth` section (the realm's auth database), `Net:Protection` and `Logging`.
 The build copies the World's `appsettings.json` into the gateway's output directory as a side effect of the project
 reference; when the gateway is started from that directory it supplies the same `Database:Auth` defaults the World uses.
 The `Gateway` section:
@@ -144,9 +144,32 @@ The `Gateway` section:
 | `NodeId` | `gateway` | Node id in the link manifest |
 | `RealmId`, `ContentRevision`, `CharactersSchemaVersion`, `WorldSchemaVersion` | `1`, `dev`, `1`, `1` | Must equal the worker's values or the link is refused |
 
-These keys are **not** in the generated configuration catalog: the catalog covers the World and Realm daemons
-(`ConfigDaemon` has no Gateway value), and there is no `gateway.conf.dist` or `--check-config` for the gateway yet. The
-source-binding coverage test skips `src/ArcaneCore.Gateway/` by a named row in `ConfigExceptionTable.UncataloguedSourceRoots`.
+These keys are in the generated configuration catalog (`ConfigDaemon.Gateway`, the `Gateway` section of the
+[configuration reference](../reference/configuration.md)), together with the shared sections the gateway also reads (`Database`,
+`Net:Protection`, `Logging`, `Diagnostics`). `src/ArcaneCore.Gateway/gateway.conf.dist` is generated from the catalog like
+the world and realm files (`ARCANECORE_UPDATE_DOCS=1 dotnet test tests/ArcaneCore.World.Tests --filter Docs`).
+
+### Command line
+
+| Command | What it does |
+|---|---|
+| `ArcaneCore.Gateway --check-config` (or `check-config`) | Loads the whole configuration, validates `Gateway:*` (`GatewayOptions.Validate`) and the link secret rule, prints every problem and exits: 0 valid, 78 invalid. Nothing is started and no database is touched. The `.conf` key check warns about misspelled keys |
+| `ArcaneCore.Gateway write-config (--defaults\|--current) <file\|->` | Writes the documented defaults or the effective configuration |
+| `ArcaneCore.Gateway --help` | Usage (exit 64); a mistyped or world-only option is a usage error (64), not silently dropped |
+
+The same validation runs at every start (exit 78 when invalid).
+
+### Metrics
+
+The gateway records `System.Diagnostics.Metrics` instruments on the meter `ArcaneCore.Gateway` (collected by a `MetricsStore` when a host
+registers one; with no listener each is a single enabled check). Every series carries `node` (`Gateway:NodeId`):
+`arcanecore.gateway.link_state` (1 up, 0 down), `arcanecore.gateway.sessions` (sessions open on the link),
+`arcanecore.gateway.connections` (client connections), `arcanecore.gateway.link_reconnects`, `arcanecore.gateway.link_failures`,
+`arcanecore.gateway.forwarded_packets` and `arcanecore.gateway.forwarded_bytes` (tag `direction`: `to_worker`, `to_client`),
+`arcanecore.gateway.session_opens` (tag `result`: `accepted`, `refused`, `no_link`) and `arcanecore.gateway.link_latency`
+(histogram, milliseconds: the session-open round trip over the link, tag `worker`). Client packets and bytes stay on
+`arcanecore.net.packets_in`, `arcanecore.net.packets_out`, `arcanecore.net.bytes_in` and `arcanecore.net.bytes_out`.
+The gateway does not start a metrics exporter yet (see below).
 
 ## Running under the host supervisor
 
@@ -238,7 +261,7 @@ recovery).
 - Warden runs on the worker, not the gateway.
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
 - The manifest's schema and content versions are operator labels, not read from the databases.
-- The gateway has no conf catalog entry, `.conf.dist`, `--check-config` or metrics; its link counters are only in-process.
+- The gateway records its metrics but starts no Prometheus or OTLP exporter: it needs a scrape port of its own, which is not chosen yet.
 - Phase 3b's handoff needs a same-map `SMSG_NEW_WORLD` the client accepts; the spike (`.worldport`, [code hot reload](code-hot-reload.md#worldport-tier-3-spike-administrator-only-when-enabled)) showed on a real 1.12.1 client that it does (design section 5.5); the reroute itself is not built.
 - A gateway or World restart still drops every client. The 3b handoff above moves the ownership and the players' saved
   state but still disconnects the clients (they log in again); a seamless reroute (one link per worker on the gateway,
@@ -254,7 +277,7 @@ recovery).
   - `ClusterNodeHosting.AddClusterNodeRole` registers `ClusterRoleFeatureFilter`, `RealmAuthorityLeaseKeeper` and the
     database-backed `EfRealmAuthorityLeaseStore` (as `IRealmAuthorityLeaseStore`) whenever `Cluster:Node:Role` is not
     Combined. `WorldHost` takes the leases it can get at start and attaches a feature only when the filter admits it, so
-    the auction bot and AutoBroadcast run only under a lease the node holds. The Instances lease scope is never taken.
+    the auction bot and AutoBroadcast run only under a lease the node holds. A MapWorker also takes the Instances lease scope; it gates only the realm-wide durable writes of the instance reset schedule (see [instances.md](instances.md)).
   - What is still missing is what those pieces serve: cross-process realm services on the link at the lease holder
     (S2/S3) and map routing (S4). Decision D3 means there will be no dedicated social or economy process. The staged plan is in the
     [design](../CLUSTERING_DESIGN.md#decisions-and-staged-plan-2026-10-30) (S0-S7).

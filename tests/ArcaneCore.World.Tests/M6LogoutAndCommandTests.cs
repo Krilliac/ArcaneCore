@@ -355,9 +355,22 @@ public sealed class M6LogoutAndCommandTests
 
         await CommandAsync(gm, ".kick victim");
         Assert.True(await victim.IsClosedByServerAsync());
+        // KickCore records the reason (WorldSession.cs, Volatile.Write) before it closes the socket, so the reason is already visible
+        // once the close is seen. The wait only lets the session finish leaving the world before the anomaly assertion.
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Victim") is null, "the victim to leave");
 
         Assert.False(capture.Any("session/kick-no-reason"));
         Assert.Equal("kicked by a GM command", session.KickReason);
+    }
+
+    [Fact]
+    public async Task IsClosedByServer_ThrowsTimeoutException_WhenTheServerKeepsTheConnectionOpen()
+    {
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient player = await host.EnterWorldAsync("PLAYER", "Player");
+        player.CloseTimeout = TimeSpan.FromMilliseconds(300);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => player.IsClosedByServerAsync());
     }
 
     [Fact]

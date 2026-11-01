@@ -53,7 +53,12 @@ internal static class PetInitializer
             pet.SetUInt32(UpdateFields.UnitFieldBaseMana, row.Mana);
             if (row.Mana > 0)
             {
-                pet.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
+                // A hunter pet keeps its Focus power type across a level-up (Creature::SetInitCreaturePowerType returns early for a HUNTER_PET, Creature.cpp:1757-1758).
+                if (!PetPower.IsHunterPet(pet, owner))
+                {
+                    pet.SetByte(UpdateFields.UnitFieldBytes0, 3, (byte)PowerType.Mana);
+                }
+
                 pet.SetUInt32(UpdateFields.UnitFieldMaxpower1, row.Mana);
             }
 
@@ -67,7 +72,7 @@ internal static class PetInitializer
         CopyOwnerControlFlags(pet, owner);
 
         pet.Health = pet.MaxHealth;
-        if (pet.PowerType == PowerType.Mana)
+        if (pet.PowerType == PowerType.Mana || PetPower.IsHunterPet(pet, owner))
         {
             pet.SetUInt32(UpdateFields.UnitFieldPower1, pet.GetUInt32(UpdateFields.UnitFieldMaxpower1));
         }

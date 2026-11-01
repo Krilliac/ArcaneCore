@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 
@@ -154,7 +153,7 @@ public sealed class LocomotionOptions
 /// </summary>
 public sealed class LocomotionEnvironment
 {
-    private static readonly ConditionalWeakTable<WorldRuntime, LocomotionEnvironment> s_registered = new();
+    private static readonly InstanceAttachments<WorldRuntime, LocomotionEnvironment> s_registered = new();
 
     public LocomotionEnvironment(LocomotionOptions options, Func<Player, bool>? isBeingTeleported = null)
     {
@@ -175,10 +174,10 @@ public sealed class LocomotionEnvironment
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(environment);
-        s_registered.AddOrUpdate(world, environment);
+        s_registered.Attach(world, environment);
     }
 
-    private static readonly ConditionalWeakTable<WorldRuntime, IEnvironmentalDamageMitigation> s_mitigations = new();
+    private static readonly InstanceAttachments<WorldRuntime, IEnvironmentalDamageMitigation> s_mitigations = new();
 
     /// <summary>
     /// Use <paramref name="mitigation"/> for the environmental damage of <paramref name="world"/> (the spell combat rules
@@ -188,59 +187,59 @@ public sealed class LocomotionEnvironment
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(mitigation);
-        s_mitigations.AddOrUpdate(world, mitigation);
+        s_mitigations.Attach(world, mitigation);
     }
 
-    private static readonly ConditionalWeakTable<WorldRuntime, IEnvironmentSpellBridge> s_spellBridges = new();
+    private static readonly InstanceAttachments<WorldRuntime, IEnvironmentSpellBridge> s_spellBridges = new();
 
     /// <summary>Use <paramref name="bridge"/> for the aura and channel removal of the liquid rules in <paramref name="world"/> (the world daemon's spell system).</summary>
     public static void RegisterSpellBridge(WorldRuntime world, IEnvironmentSpellBridge bridge)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(bridge);
-        s_spellBridges.AddOrUpdate(world, bridge);
+        s_spellBridges.Attach(world, bridge);
     }
 
     /// <summary>The spell bridge of the world <paramref name="map"/> belongs to, or null when none is registered.</summary>
     public static IEnvironmentSpellBridge? SpellBridgeFor(Map? map)
-        => map?.FindUpdater<MapLocomotion>()?.World is { } world && s_spellBridges.TryGetValue(world, out IEnvironmentSpellBridge? bridge) ? bridge : null;
+        => map?.FindUpdater<MapLocomotion>()?.World is { } world ? s_spellBridges.Find(world) : null;
 
-    private static readonly ConditionalWeakTable<WorldRuntime, IMountDisplaySource> s_mountDisplays = new();
+    private static readonly InstanceAttachments<WorldRuntime, IMountDisplaySource> s_mountDisplays = new();
 
     /// <summary>Use <paramref name="source"/> to resolve mount spells' creature entries to display ids in <paramref name="world"/> (the world daemon's creature data).</summary>
     public static void RegisterMountDisplays(WorldRuntime world, IMountDisplaySource source)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(source);
-        s_mountDisplays.AddOrUpdate(world, source);
+        s_mountDisplays.Attach(world, source);
     }
 
     /// <summary>The mount display source of the world <paramref name="map"/> belongs to, or null when none is registered.</summary>
     public static IMountDisplaySource? MountDisplaysFor(Map? map)
-        => map?.FindUpdater<MapLocomotion>()?.World is { } world && s_mountDisplays.TryGetValue(world, out IMountDisplaySource? source) ? source : null;
+        => map?.FindUpdater<MapLocomotion>()?.World is { } world ? s_mountDisplays.Find(world) : null;
 
-    private static readonly ConditionalWeakTable<WorldRuntime, IFallDamageModifiers> s_fallModifiers = new();
+    private static readonly InstanceAttachments<WorldRuntime, IFallDamageModifiers> s_fallModifiers = new();
 
     /// <summary>Use <paramref name="modifiers"/> for the fall damage of <paramref name="world"/> (the spell combat rules feature registers it).</summary>
     public static void RegisterFallModifiers(WorldRuntime world, IFallDamageModifiers modifiers)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(modifiers);
-        s_fallModifiers.AddOrUpdate(world, modifiers);
+        s_fallModifiers.Attach(world, modifiers);
     }
 
     /// <summary>The registered fall modifiers, or the pass-through ones.</summary>
     public static IFallDamageModifiers FallModifiersFor(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        return s_fallModifiers.TryGetValue(world, out IFallDamageModifiers? modifiers) ? modifiers : NoFallDamageModifiers.Instance;
+        return s_fallModifiers.Find(world) ?? NoFallDamageModifiers.Instance;
     }
 
     /// <summary>The registered mitigation, or the pass-through one.</summary>
     public static IEnvironmentalDamageMitigation MitigationFor(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        return s_mitigations.TryGetValue(world, out IEnvironmentalDamageMitigation? mitigation) ? mitigation : NoEnvironmentalMitigation.Instance;
+        return s_mitigations.Find(world) ?? NoEnvironmentalMitigation.Instance;
     }
 
     /// <summary>
@@ -256,13 +255,13 @@ public sealed class LocomotionEnvironment
     public static LocomotionOptions? RegisteredOptions(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        return s_registered.TryGetValue(world, out LocomotionEnvironment? environment) ? environment.Options : null;
+        return s_registered.Find(world)?.Options;
     }
 
     /// <summary>The environment registered for <paramref name="world"/>, or <see cref="Default"/>.</summary>
     public static LocomotionEnvironment For(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        return s_registered.TryGetValue(world, out LocomotionEnvironment? environment) ? environment : Default;
+        return s_registered.Find(world) ?? Default;
     }
 }

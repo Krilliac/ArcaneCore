@@ -67,6 +67,11 @@ internal static partial class PlayerbotQaSignalParser
         RegexOptions.CultureInvariant | RegexOptions.Singleline)]
     private static partial Regex RelayUnsupportedPattern();
 
+    // CreatureMapSystem.ReportFormationStep: a command 51 formation subcommand the server cannot run ("... {What}; that step does nothing").
+    [GeneratedRegex(@"^relay script (?<r>\d{1,10}) command 51 subcommand (?<sub>\d{1,10}): (?<what>.{1,200}?); that step does nothing",
+        RegexOptions.CultureInvariant | RegexOptions.Singleline)]
+    private static partial Regex RelayFormationPattern();
+
     [GeneratedRegex(@"^relay script (?<r>\d{1,10}) does not exist", RegexOptions.CultureInvariant)]
     private static partial Regex RelayMissingPattern();
 
@@ -261,6 +266,18 @@ internal static partial class PlayerbotQaSignalParser
         {
             if (!U(m, "r", out uint relay)) return false;
             signal = new QaSignal { Kind = QaSignalKind.RelayDataMissing, AtUtc = atUtc, Relay = relay, Detail = Cap(m.Groups["what"].Value), Message = Cap(message) };
+            return true;
+        }
+
+        m = RelayFormationPattern().Match(message);
+        if (m.Success)
+        {
+            if (!U(m, "r", out uint relay)) return false;
+            signal = new QaSignal
+            {
+                Kind = QaSignalKind.RelayDataMissing, AtUtc = atUtc, Relay = relay,
+                Detail = Cap("command 51 subcommand " + m.Groups["sub"].Value + ": " + m.Groups["what"].Value), Message = Cap(message),
+            };
             return true;
         }
 

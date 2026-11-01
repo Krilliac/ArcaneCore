@@ -332,9 +332,11 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     /// A line from the partner of a Quoted deal (not expired). A yes agrees the deal at the quoted price. A price is one counter-offer: accepted
     /// (<see cref="PlayerbotDealRules.AcceptCounter"/> with <c>Deals:CounterTolerancePercent</c>) it becomes the price and the deal is agreed; refused it uses up the
     /// deal's counter and the bot holds its price. Agreeing re-checks the limits (concurrent windows, a bot busy with someone else, the deal cap, the hourly counts
-    /// and the daily outflow caps with the discount counted). Anything else is <see cref="PlayerbotDealHeardKind.None"/>: the caller does its normal thing.
+    /// and the daily outflow caps with the discount counted). A buyer whose bags cannot hold the goods (<paramref name="bot"/>, the live bot; null skips the check) is
+    /// <see cref="PlayerbotDealRefusal.NoSpace"/> and the deal stays Quoted, with no cooldown on the partner (the same check <see cref="Claims"/> makes).
+    /// Anything else is <see cref="PlayerbotDealHeardKind.None"/>: the caller does its normal thing.
     /// </summary>
-    internal PlayerbotDealHeard Hear(Guid botId, ObjectGuid partner, string text)
+    internal PlayerbotDealHeard Hear(Guid botId, ObjectGuid partner, string text, Player? bot = null)
     {
         lock (_gate)
         {
@@ -359,7 +361,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
 
                 deal.CounterUsed = true;
                 deal.Price = deal.Role == PlayerbotDealRole.Seller ? PlayerbotDealRules.RoundUpToQuote(agreedPrice) : PlayerbotDealRules.RoundDownToQuote(agreedPrice);
-                PlayerbotDealRefusal counterRefusal = Agree(deal, now);
+                PlayerbotDealRefusal counterRefusal = Agree(deal, now, bot);
                 if (counterRefusal != PlayerbotDealRefusal.None)
                 {
                     deal.Price = deal.QuotedPrice;
@@ -370,7 +372,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             }
 
             deal.Price = deal.QuotedPrice;
-            PlayerbotDealRefusal refusal = Agree(deal, now);
+            PlayerbotDealRefusal refusal = Agree(deal, now, bot);
             return refusal == PlayerbotDealRefusal.None
                 ? Heard(PlayerbotDealHeardKind.Agreed, PlayerbotDealRefusal.None, deal, deal.Price)
                 : Heard(PlayerbotDealHeardKind.Refused, refusal, deal, deal.QuotedPrice);

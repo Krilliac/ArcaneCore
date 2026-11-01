@@ -1,6 +1,7 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,6 +18,7 @@ internal sealed class SweepScene : IDisposable
     private readonly List<Player> _players = [];
     private readonly List<Creature> _creatures = [];
     private readonly HashSet<Creature> _before;
+    private readonly HashSet<GameObject> _objectsBefore;
     private Creature? _striker;
     private Player? _enemyPlayer;
     private WorldSession? _session;
@@ -27,7 +29,9 @@ internal sealed class SweepScene : IDisposable
         Spell = spell;
         Kind = kind;
         _before = [.. rig.Creatures.Creatures];
+        _objectsBefore = [.. rig.Objects.GameObjects];
         Caster = AddPlayer(cls, level, 0, 0);
+        rig.StageSpellFocus(spell, Caster); // a retail player cast of a focus spell stands next to its forge, anvil or launcher
         switch (kind)
         {
             case SweepTargetKind.Hostile:
@@ -112,6 +116,11 @@ internal sealed class SweepScene : IDisposable
         foreach (Creature creature in _creatures.Concat(Rig.Creatures.Creatures.Where(c => !_before.Contains(c)).ToArray()).Distinct())
         {
             Rig.RemoveCreature(creature);
+        }
+
+        foreach (GameObject go in Rig.Objects.GameObjects.Where(g => !_objectsBefore.Contains(g)).ToArray())
+        {
+            Rig.Objects.Remove(go);
         }
 
         Rig.World.RunTick(0);

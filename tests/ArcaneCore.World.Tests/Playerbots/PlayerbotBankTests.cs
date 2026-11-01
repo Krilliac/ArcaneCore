@@ -102,6 +102,8 @@ public sealed class PlayerbotBankTests
             return bot;
         }
 
+        public WorldTestHost Host => _host;
+
         public Task<T> On<T>(Func<Player, T> action) => _host.OnWorldAsync(() => action(Session.Player!));
 
         public Task Advance(uint ms) => _host.World.AdvanceClockAsync(ms);
@@ -204,6 +206,52 @@ public sealed class PlayerbotBankTests
         await bot.Advance(PlayerbotBank.CheckIntervalMs + 1_000);
         Assert.False(await bot.On(p => { bot.Session.ManagedBudget = new ManagedActionBudget(8); return bot.Bank.Update(p, capital, _ => false, 500); }));
         Assert.Equal(3u, await bot.On(p => Carried(p, 9401)));
+    }
+
+    /// <summary>
+    /// A bot that comes into the banker's reach with another bot on its place steps to a ring spot of its own (2 to 4 yards from the banker) before the bank is opened.
+    /// Broken (no crowd step in <see cref="PlayerbotBank.Step"/>): the bot opens the bank and deposits from the crowded place, 1 yard from the banker.
+    /// </summary>
+    [Fact]
+    public async Task Visit_ACrowdedBot_StepsToItsOwnSpotBeforeTheBankIsOpened()
+    {
+        await using Bot bot = await Bot.StartAsync(new BankFixture());
+        await bot.SeeBanker();
+        await bot.Fill();
+        WorldSession other = await Combat.CombatTestSessions.EnterAsync(bot.Host, "BANKCROWD", "Bankcrowd");
+        try
+        {
+            for (int i = 0; i < 100 && !await bot.On(p => p.VisibleObjects.Contains(other.Player!.Guid)); i++) await bot.Advance(100);
+            Assert.True(await bot.On(p => p.VisibleObjects.Contains(other.Player!.Guid)), "the second bot never came into sight");
+            var banker = new Vector2(-8948.95f, -132.49f);
+            PlayerbotHomeArea capital = Capital();
+            float startDistance = await bot.On(p =>
+            {
+                other.Player!.Relocate(p.X, p.Y, p.Z, p.Orientation, bot.Session.World.NowMs);
+                return Vector2.Distance(new(p.X, p.Y), banker);
+            });
+            Assert.True(startDistance < 1.5f, "the test bot does not start crowded at the banker");
+            float distanceAtOpen = -1f;
+            for (int i = 0; i < 60 && distanceAtOpen < 0f; i++)
+            {
+                await bot.Advance(500);
+                distanceAtOpen = await bot.On(p =>
+                {
+                    PlayerbotMotion.ElapseForTests(p, 500);
+                    bot.Session.ManagedBudget = new ManagedActionBudget(8);
+                    bot.Bank.Update(p, capital, _ => false, 500);
+                    return bot.Bank.Deposited > 0 ? Vector2.Distance(new(p.X, p.Y), banker) : -1f;
+                });
+            }
+
+            Assert.True(distanceAtOpen >= 0f, "the bot never deposited");
+            Assert.True(distanceAtOpen >= 1.75f && distanceAtOpen <= 4.25f, $"the bank was used {distanceAtOpen:F2} yd from the banker, not from a spot of its own");
+        }
+        finally
+        {
+            other.Kick();
+            await other.ManagedClosed;
+        }
     }
 
     [Fact]

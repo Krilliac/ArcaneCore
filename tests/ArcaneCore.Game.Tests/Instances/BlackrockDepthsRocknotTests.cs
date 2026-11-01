@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Instances;
@@ -227,5 +228,33 @@ public sealed class BlackrockDepthsRocknotTests
         Assert.True(phalanx.IsInWorld);
         Assert.Contains(h.Creatures.Creatures, c => c.Template.Entry == BlackrockDepthsInstance.NpcPhalanx);
         Assert.True(phalanxAi.HasEscortState(EscortAI.EscortState.Paused));
+    }
+
+    private static DungeonScriptHarness BarHarness(FakeCaster caster)
+        => new(m => new BlackrockDepthsInstance(m),
+            [BlackrockDepthsInstance.NpcRocknot, BlackrockDepthsInstance.NpcNagmara, BlackrockDepthsInstance.NpcPlugger],
+            [BlackrockDepthsInstance.NpcRocknot, BlackrockDepthsInstance.NpcNagmara, BlackrockDepthsInstance.NpcPlugger],
+            null, new CreatureAiServices { Spells = caster });
+
+    /// <summary>vmangos instance_blackrock_depths.cpp:575: the bar turning hostile (Plugger dies) despawns Rocknot and Nagmara unless they are kissing.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void BarTurningHostile_DespawnsRocknotAndNagmara_UnlessRocknotHasTheKissAura(bool kissing, bool expectedAlive)
+    {
+        var caster = new FakeCaster();
+        using DungeonScriptHarness h = BarHarness(caster);
+        Creature rocknot = h.Creature(BlackrockDepthsInstance.NpcRocknot);
+        Creature nagmara = h.Creature(BlackrockDepthsInstance.NpcNagmara);
+        if (kissing)
+        {
+            caster.Auras.Add((rocknot, NagmaraAI.SpellNagmaraRocknot));
+        }
+
+        h.Kill(BlackrockDepthsInstance.NpcPlugger);
+        h.Tick(100);
+
+        Assert.Equal(expectedAlive, rocknot.IsAlive);
+        Assert.Equal(expectedAlive, nagmara.IsAlive);
     }
 }

@@ -17,7 +17,7 @@ namespace ArcaneCore.World.Tests.Spells.ContractSweep;
 [Collection(SpellContractSweepCollection.Name)]
 public sealed class SpellContractSweepTests(ITestOutputHelper output)
 {
-    private static SpellStore SweepStore(IEnumerable<SpellInfo> spells) => new([.. spells, SweepHelperSpells.SelfDummySpell()], [], []);
+    private static SpellStore SweepStore(IEnumerable<SpellInfo> spells) => new([.. spells, SweepHelperSpells.SelfDummySpell()], [], [], SweepFireworkRows.Rows);
 
     [RealClientDbcFact]
     public void Sweep_NoExceptionsOrInvariantBreaks_AndContractsMatchTheBaseline()

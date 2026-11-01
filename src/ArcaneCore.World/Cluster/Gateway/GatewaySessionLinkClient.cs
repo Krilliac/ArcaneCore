@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Protocol;
@@ -51,8 +52,11 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     private long _nextRequestId;
     private long _droppedServerPackets;
     private volatile bool _registered;
+    private readonly GatewayWardenPosture? _wardenPosture;
 
-    public GatewaySessionLinkClient(ClusterNodeManifest gatewayManifest, IPEndPoint workerEndPoint, string linkSecret, ILogger? logger = null)
+    /// <param name="wardenPosture">The gateway's Warden posture, sent to the worker right after admission and before any session opens. A worker that
+    /// enforces a Warden posture refuses sessions on a link that sent none or a different one.</param>
+    public GatewaySessionLinkClient(ClusterNodeManifest gatewayManifest, IPEndPoint workerEndPoint, string linkSecret, ILogger? logger = null, GatewayWardenPosture? wardenPosture = null)
     {
         ArgumentNullException.ThrowIfNull(gatewayManifest);
         ArgumentNullException.ThrowIfNull(workerEndPoint);
@@ -67,6 +71,7 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         _worker = workerEndPoint;
         _linkSecret = linkSecret;
         _logger = logger ?? NullLogger.Instance;
+        _wardenPosture = wardenPosture;
     }
 
     /// <summary>True from a successful <see cref="ConnectAsync"/> until the link ends.</summary>
@@ -108,6 +113,11 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         if (!accepted)
         {
             throw new InvalidOperationException($"worker refused the gateway link: {reason}");
+        }
+
+        if (_wardenPosture is { } posture && !_channel.TryEnqueue(GatewaySessionWire.EncodeWardenPosture(posture)))
+        {
+            throw new InvalidOperationException("the worker link closed before the Warden posture could be sent");
         }
 
         _registered = true;
@@ -196,6 +206,32 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             byte[] frame = GatewaySessionWire.EncodePacket(GatewayWorkerFrameType.SessionClientPacket, session.Generation, session.AccountId, 0,
                 session.Epoch, ++session.OutboundSequence, (uint)opcode, payload);
             return channel.TryEnqueue(frame);
+        }
+    }
+
+    /// <summary>
+    /// Tell the worker of a Warden verdict about an open session (the gateway runs Warden; the worker applies the penalty). The frame
+    /// carries the session's own generation, account and owner epoch, and the account id as the verdict key (the gateway has no
+    /// character). False when the session is not open or the link is down; the frame follows every packet already queued.
+    /// </summary>
+    public bool SendWardenVerdict(long sessionGeneration, ushort checkId, ClusterWardenAction action, string reason, GatewayWardenPosture posture)
+    {
+        ArgumentNullException.ThrowIfNull(reason);
+        ArgumentNullException.ThrowIfNull(posture);
+        if (_channel is not { } channel || !_sessions.TryGetValue(sessionGeneration, out ClientSession? session))
+        {
+            return false;
+        }
+
+        lock (session.Gate)
+        {
+            if (!session.IsOpen)
+            {
+                return false;
+            }
+
+            var verdict = new ClusterWardenVerdict(session.Generation, session.Epoch, session.AccountId, (ulong)session.AccountId, reason, action, checkId);
+            return channel.TryEnqueue(GatewaySessionWire.EncodeWardenVerdict(verdict, posture));
         }
     }
 

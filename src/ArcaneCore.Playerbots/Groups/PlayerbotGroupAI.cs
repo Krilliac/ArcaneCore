@@ -7,6 +7,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Teleport;
@@ -127,7 +128,7 @@ internal sealed class PlayerbotGroupAI
     private long _resurrectAtMs;
     private PlayerbotRoute? _runRoute;
     private long _runRouteAtMs;
-    private long _stuckSinceMs, _stuckLastMs;
+    private long _stuckSinceMs, _stuckLastMs, _stuckRefusedMs;
 
     /// <summary>The targets this bot could plan no way to, each for <see cref="UnreachableMemoryMs"/>: it does not choose them again meanwhile.</summary>
     private readonly PlayerbotUnreachableTargets _unreachable = new();
@@ -289,7 +290,7 @@ internal sealed class PlayerbotGroupAI
         _route = null;
         _runRoute = null;
         _rangedIdleMs = 0;
-        _stuckSinceMs = _stuckLastMs = 0;
+        _stuckSinceMs = _stuckLastMs = _stuckRefusedMs = 0;
         ForgetFight();
     }
 
@@ -311,6 +312,7 @@ internal sealed class PlayerbotGroupAI
         _spells.GroupRole = PlayerbotGroupContent.CombatRole(me.Role, me.TalentRole);
         bool dead = !player.IsAlive;
         if (dead) _fightWatch.Reset();
+        if ((dead || player.Combat.IsInCombat) && group.State == PlayerbotGroupState.Travelling) _stuckSinceMs = _stuckLastMs = _stuckRefusedMs = 0; // the leader stopped trying to walk to the approach point: a new stretch of refusals starts afterwards (a run's boss and an objective keep theirs through a fight)
         if (dead && !_deathRetired)
         {
             _risk.OnDeath(player);
@@ -462,7 +464,7 @@ internal sealed class PlayerbotGroupAI
             PlayerbotSiegeRaid? rallying = isLeader && group.Siege is { Order: PlayerbotSiegeOrder.Rally, RetreatNoPath: false } rally ? rally : null;
             if (rallying is not null) Fight(player, target, interval, rallying.MoveTo, PlayerbotSiegeCommander.RallyYards, leader);
             else Fight(player, target, interval, waiting?.MoveTo, waiting is { AnswerSpent: true } ? PlayerbotSiegeCommander.WaypointYards : PlayerbotSiegeCommander.SiegeAnswerLeashYards, leader);
-            if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader);
+            if (_noPathToTarget) GiveUpUnreachable(group, target, isLeader, interval);
             else if (group.Siege is null && target is Creature fought) WatchFight(player, group, fought);
             return;
         }
@@ -499,7 +501,7 @@ internal sealed class PlayerbotGroupAI
     {
         Goal = PlayerbotGoalKind.Group;
         Step = "lead:" + group.State.ToString().ToLowerInvariant();
-        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = 0;
+        if (group.State is not (PlayerbotGroupState.Travelling or PlayerbotGroupState.Entering or PlayerbotGroupState.Engaging)) _stuckSinceMs = _stuckLastMs = _stuckRefusedMs = 0;
         switch (group.State)
         {
             case PlayerbotGroupState.Gathering when PlayerbotGroupCoordinator.RetryExitOf(_session.World, group, player) is { } retryExit:
@@ -519,14 +521,29 @@ internal sealed class PlayerbotGroupAI
                 return;
             case PlayerbotGroupState.Travelling:
                 if (player.MapId != group.Goal.MeetingMap) { Step = "lead:hold-map"; HoldRun(player); return; }
-                if (MembersBehind(player, group)) { Step = "lead:hold-members"; HoldRun(player); return; }
-                if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; HoldRun(player); return; }
+                if (MembersBehind(player, group)) { Step = "lead:hold-members"; Hold(player); return; }
+                if (group.AnyResting(_session.World)) { Step = "lead:hold-resting"; Hold(player); return; }
+                // The holds above are not attempts and do not end a stretch of refused walks (live #1470: a leader that alternated its holds for members, rests and buffs with refused walks reset the stretch every time, and its group stood on the hill for good).
                 // The leader keeps out of known hazards. Not on the way back after a world-boss wipe: the hazard at the spot the raid died on lies between the leader and the rally, and the raid is going back to that fight on purpose (a refusal there ended the raid as no-path-to-approach).
                 PlayerbotNavigation.Guard(player, _options.Risk.Enabled && group.WorldBoss is not { Wipes: > 0 } ? _risk : null);
                 Vector3 approach = TravelPoint(group);
+                long tileMark = PlayerbotNavigation.PendingMark;
                 bool approaching = WalkTo(player, approach, interval, toward: true);
                 Step = approaching ? "lead:walk-approach" : "lead:no-path-approach";
-                NoteRunProgress(group, approaching);
+                NoteRunProgress(group, approaching, interval);
+                // A refusal that waited for a navigation tile is no verdict, and does not use up the one retry.
+                if (!approaching && !group.ApproachRetried && !PlayerbotNavigation.PendingSince(tileMark) && PlayerbotGroupCoordinator.WithinApproachRingFlat(player, group))
+                {
+                    // Inside the ring flat but refused at its own position (the hill above the entrance): it cannot get nearer on foot. The approach point is chosen
+                    // again once from here, a point it can reach or the meeting point itself. A probe that waited for a tile gives no verdict and keeps the retry.
+                    IPathfinder? pathfinder = WorldCollision.Of(_session.World).Pathfinder;
+                    group.Approach = PlayerbotGroupCoordinator.ReachableApproach(pathfinder, group.Goal, new Vector3(player.X, player.Y, player.Z),
+                        group.WorldBoss is { } rallying ? rallying.RallyYards : group.Goal.InInstance ? PlayerbotGroupCoordinator.ApproachYards : PlayerbotGroupCoordinator.QuestApproachYards,
+                        _options.MaxPathPoints, out bool decided);
+                    group.ApproachRetried = decided;
+                    approach = group.Approach;
+                }
+
                 NoteApproachProgress(player, group, approach);
                 if (!approaching) NoteUnpathableApproachNear(player, group, approach);
                 return;
@@ -537,7 +554,7 @@ internal sealed class PlayerbotGroupAI
                 // on from near an approach point it could not reach (NoteUnpathableApproachNear) often has no way to the entrance either.
                 bool entering = WalkTo(player, group.Goal.Meeting, interval, toward: true);
                 Step = entering ? "lead:walk-entrance" : "lead:no-path-entrance";
-                NoteRunProgress(group, entering);
+                NoteRunProgress(group, entering, interval);
                 return;
             case PlayerbotGroupState.Engaging:
                 if (group.Siege is { } siegeRaid) { LeadSiege(player, siegeRaid, interval); return; }
@@ -555,7 +572,7 @@ internal sealed class PlayerbotGroupAI
                 if (group.Run is null && group.Handoff?.Sweep is { } sweep) { LeadClear(player, group, sweep, interval); return; }
                 bool walked = WalkTo(player, ObjectivePoint(player, group), interval, toward: true);
                 Step = walked ? "lead:walk-objective" : "lead:no-path-objective";
-                NoteRunProgress(group, walked);
+                NoteRunProgress(group, walked, interval);
                 return;
             case PlayerbotGroupState.Leaving:
                 // Out of the instance already: wait outside for the others (on the continent the entrance would take it back in).
@@ -641,13 +658,13 @@ internal sealed class PlayerbotGroupAI
         Step = string.Create(CultureInfo.InvariantCulture, $"lead:{(walked ? "walk" : "no-path")}-clear:{next.Entry}");
         if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, walked, Now)) return;
         sweep.GiveUp(next.Guid.Value);
-        _stuckSinceMs = _stuckLastMs = 0;
+        _stuckSinceMs = _stuckLastMs = _stuckRefusedMs = 0;
     }
 
     /// <summary>The leader holds still while the run waits (members behind, a rest, a wait for loot): no attempt to walk was made, so no stretch of failed planning goes on.</summary>
     private void HoldRun(Player player)
     {
-        _stuckSinceMs = _stuckLastMs = 0;
+        _stuckSinceMs = _stuckLastMs = _stuckRefusedMs = 0;
         Hold(player);
     }
 
@@ -676,10 +693,13 @@ internal sealed class PlayerbotGroupAI
     /// (a dungeon quest group walking to the entrance) <c>no-path-to-entrance</c>
     /// (<see cref="PlayerbotGroupCoordinator.BotGroup.RunFault"/>, read by the coordinator). A handed-over player's group (no run) has rules of its own.
     /// </summary>
-    private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned)
+    private void NoteRunProgress(PlayerbotGroupCoordinator.BotGroup group, bool planned, uint interval)
     {
         if (group.Run is null && (group.Handoff is not null || group.Members.Any(m => m.Real))) return;
-        if (!NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now)) return;
+        bool stuck = group.State == PlayerbotGroupState.Travelling
+            ? NoteStuckRefused(ref _stuckRefusedMs, planned, interval)
+            : NoteStuck(ref _stuckSinceMs, ref _stuckLastMs, planned, Now);
+        if (!stuck) return;
         bool engaging = group.State == PlayerbotGroupState.Engaging;
         group.RunFault ??= group.Run is null
             ? (engaging ? "no-path-to-objective" : group.State == PlayerbotGroupState.Entering ? "no-path-to-entrance" : "no-path-to-approach")
@@ -688,19 +708,25 @@ internal sealed class PlayerbotGroupAI
 
     /// <summary>
     /// The leader's walk to the approach point: the point counts as reached (<see cref="PlayerbotGroupCoordinator.BotGroup.ApproachReached"/>) when
-    /// the leader plans a way and walks it but gets no nearer than <see cref="ApproachProgressYards"/> beyond its nearest for
+    /// the leader walks (or is refused) and gets no nearer than <see cref="ApproachProgressYards"/> beyond its nearest for
     /// <see cref="ApproachNoProgressMs"/> (a root, a wall the mesh does not show, a route that circles): the group goes on to the content instead of
     /// waiting at a point nobody reaches. A way that cannot be planned is <see cref="NoteRunProgress"/>'s. A pause of more than
-    /// <see cref="RunStuckGapMs"/> between two attempts (a hold, a rest, a fight) starts a new stretch.
+    /// <see cref="RunStuckGapMs"/> between two attempts (a hold, a rest, a fight) is not counted towards the bound.
     /// </summary>
     private void NoteApproachProgress(Player player, PlayerbotGroupCoordinator.BotGroup group, Vector3 approach)
     {
         uint now = _session.World.NowMs;
         float yards = Vector3.Distance(new Vector3(player.X, player.Y, player.Z), approach);
-        if (_approachTriedMs == 0 || unchecked(now - _approachTriedMs) > RunStuckGapMs)
+        if (_approachTriedMs == 0)
         {
             _approachNearestYards = yards;
             _approachProgressMs = now;
+        }
+        else if (unchecked(now - _approachTriedMs) is var paused && paused > RunStuckGapMs && paused <= int.MaxValue)
+        {
+            // A pause (a hold for members, a rest, a buff) is no time spent not getting nearer: the stretch goes on without it. Before, it
+            // started a new stretch, and a leader that held every few seconds never reached the bound (live #1470).
+            _approachProgressMs = unchecked(_approachProgressMs + paused);
         }
 
         _approachTriedMs = Math.Max(1u, now);
@@ -761,6 +787,25 @@ internal sealed class PlayerbotGroupAI
         if (since == 0 || now - last > RunStuckGapMs) since = now;
         last = now;
         return now - since > RunStuckMs;
+    }
+
+    /// <summary>
+    /// <see cref="NoteStuck"/> for the walk to the approach point (live #1470). The leader holds for members, rests and buffs between its attempts, and
+    /// each pause longer than <see cref="RunStuckGapMs"/> used to start a new stretch, so the bound never came. Here the stretch is the sum of the think
+    /// intervals (game time) of the thinks whose walk was refused, <paramref name="refusedMs"/>: pauses neither count nor end it, and no clock is read.
+    /// Returns true once it exceeds <see cref="RunStuckMs"/>. A planned way ends the stretch; so do the resets of the AI (a state change,
+    /// <see cref="Retarget"/>, a fight or a death while travelling, the hold for another map).
+    /// </summary>
+    internal static bool NoteStuckRefused(ref long refusedMs, bool planned, uint intervalMs)
+    {
+        if (planned)
+        {
+            refusedMs = 0;
+            return false;
+        }
+
+        refusedMs += intervalMs;
+        return refusedMs > RunStuckMs;
     }
 
     private Creature? FindObjectiveCreature(Player player, PlayerbotGroupCoordinator.BotGroup group)
@@ -1351,7 +1396,7 @@ internal sealed class PlayerbotGroupAI
     /// does not choose it again at every think; a leader shuns it for the group for <see cref="NoPathShunMs"/> (never the siege objective, and
     /// never a run's boss, which counts toward <see cref="RunStuckMs"/> instead).
     /// </summary>
-    private void GiveUpUnreachable(PlayerbotGroupCoordinator.BotGroup group, Unit target, bool isLeader)
+    private void GiveUpUnreachable(PlayerbotGroupCoordinator.BotGroup group, Unit target, bool isLeader, uint interval)
     {
         _fightWatch.Reset();
         if (!isLeader)
@@ -1364,7 +1409,7 @@ internal sealed class PlayerbotGroupAI
             return;
         if (group.Run is { } run && target is Creature boss && (run.CurrentBoss?.Entry == boss.Entry || run.Plan.IsBoss(boss.Entry)))
         {
-            NoteRunProgress(group, planned: false);
+            NoteRunProgress(group, planned: false, interval);
             return;
         }
 

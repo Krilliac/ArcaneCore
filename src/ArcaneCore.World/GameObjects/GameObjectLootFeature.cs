@@ -190,6 +190,11 @@ public sealed class GameObjectLootFeature(IServiceProvider services, ILogger<Gam
 
         foreach (uint mapId in Content.MapsWithSpawns)
         {
+            if (!world.Owns(mapId))
+            {
+                continue; // a map another worker owns (Cluster:Worker:OwnedMaps) spawns there
+            }
+
             GetOrCreateSystem(mapId);
         }
     }

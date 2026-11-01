@@ -187,6 +187,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
             (typeof(ArcaneCore.Data.Characters.Playerbots.PlayerbotTradeRecordDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Playerbots.PlayerbotTradeRecordDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.Cluster.RealmAuthorityLeaseDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.Cluster.RealmAuthorityLeaseDataModule.Version),
             (typeof(ArcaneCore.Data.Characters.CharacterAppearanceFlagsDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Characters.CharacterAppearanceFlagsDataModule.Version),
+            (typeof(ArcaneCore.Data.Loot.LootStateRandomPropertyDataModule), DatabaseComponent.Characters, ArcaneCore.Data.Loot.LootStateRandomPropertyDataModule.Version),
         ];
 
         Assert.Equal(expected.OrderBy(m => m.Component).ThenBy(m => m.Version),

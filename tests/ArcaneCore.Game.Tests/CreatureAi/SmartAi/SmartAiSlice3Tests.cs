@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
 using Xunit;
@@ -42,6 +43,28 @@ public sealed class SmartAiSlice3Tests
         Pull(rig);
         Assert.True(rig.Wolf.IsEvading);
         Assert.Empty(rig.Catalog.Rejected);
+    }
+
+    [Fact]
+    public void Evade_AScriptedEvadeWithNoPlayerOnTheOtherSide_IsNoEvadeLoop()
+    {
+        // SMART_ACTION_EVADE passes CreatureAnomalies.ScriptedEvadeReason like EventAI's evade, so a script that ends a fight on purpose
+        // (here four times inside the 60 s window) raises no creature/evade-loop; the wolf has no victim and no last victim.
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == "creature/evade-loop"
+            && n.Subject.StartsWith($"creature entry {WolfEntry} ", StringComparison.Ordinal));
+        using var rig = SmartRig.Start([CreatureRow(WolfEntry, 0, SmartEvent.Aggro, SmartAction.Evade)]);
+
+        for (int i = 0; i < 4; i++)
+        {
+            rig.Wolf.Relocate(25, 0, 83.5f, 0, 0);
+            rig.Map.Combat.AttackStop(rig.Wolf);
+            rig.Wolf.Combat.LastVictimGuid = default;
+            rig.Script.ProcessEventsFor(SmartEvent.Aggro);
+            Assert.True(rig.Wolf.IsEvading);
+            rig.World.RunTick(6_000);
+        }
+
+        Assert.Empty(capture.Notices);
     }
 
     [Fact]

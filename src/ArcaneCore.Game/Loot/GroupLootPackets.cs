@@ -7,19 +7,20 @@ namespace ArcaneCore.Game.Loot;
 /// Layouts follow vmangos Server/Packets/Loot.cpp (20-175, 190-215) and Packets/Group.cpp (264-275),
 /// cross-checked with wow_messages world/loot (smsg_loot_start_roll, smsg_loot_roll, smsg_loot_roll_won,
 /// smsg_loot_all_passed, smsg_loot_master_list, cmsg_loot_roll, cmsg_loot_master_give). The item random
-/// suffix and property are always 0 in 1.12 (wow_messages: "not used").
+/// suffix is always 0 in 1.12 (wow_messages: "not used"); the random property id is the one rolled for the loot item (vmangos Group::StartLootRool
+/// copies roll.itemRandomPropId into each of these packets).
 /// </summary>
 public static class GroupLootPackets
 {
-    /// <summary>SMSG_LOOT_START_ROLL: u64 corpse, u32 slot, u32 item, u32 suffix 0, u32 property 0, u32 countdown ms (28 bytes).</summary>
-    public static byte[] StartRoll(ObjectGuid corpse, uint slot, uint itemId, uint countdownMs)
+    /// <summary>SMSG_LOOT_START_ROLL: u64 corpse, u32 slot, u32 item, u32 suffix 0, u32 property (the item's random property id), u32 countdown ms (28 bytes).</summary>
+    public static byte[] StartRoll(ObjectGuid corpse, uint slot, uint itemId, uint countdownMs, int randomPropertyId = 0)
     {
         var writer = new PacketWriter(28);
         writer.WriteUInt64(corpse.Value);
         writer.WriteUInt32(slot);
         writer.WriteUInt32(itemId);
         writer.WriteUInt32(0);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(unchecked((uint)randomPropertyId));
         writer.WriteUInt32(countdownMs);
         return writer.ToArray();
     }
@@ -28,7 +29,7 @@ public static class GroupLootPackets
     /// SMSG_LOOT_ROLL: u64 corpse, u32 slot, u64 roller, u32 item, u32 0, u32 0, u8 roll number, u8 type (34 bytes).
     /// Raw form: <see cref="VoteAnnouncement"/> and <see cref="ResolvedRoll"/> are the two uses.
     /// </summary>
-    public static byte[] Roll(ObjectGuid corpse, uint slot, ObjectGuid roller, uint itemId, byte rollNumber, byte rollType)
+    public static byte[] Roll(ObjectGuid corpse, uint slot, ObjectGuid roller, uint itemId, byte rollNumber, byte rollType, int randomPropertyId = 0)
     {
         var writer = new PacketWriter(34);
         writer.WriteUInt64(corpse.Value);
@@ -36,7 +37,7 @@ public static class GroupLootPackets
         writer.WriteUInt64(roller.Value);
         writer.WriteUInt32(itemId);
         writer.WriteUInt32(0);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(unchecked((uint)randomPropertyId));
         writer.WriteByte(rollNumber);
         writer.WriteByte(rollType);
         return writer.ToArray();
@@ -46,27 +47,27 @@ public static class GroupLootPackets
     /// The SMSG_LOOT_ROLL sent when a player votes (vmangos Group::CountRollVote, Group.cpp:957-972):
     /// pass is (128, 128), need (0, 0), greed (128, 2).
     /// </summary>
-    public static byte[] VoteAnnouncement(ObjectGuid corpse, uint slot, ObjectGuid roller, uint itemId, RollVote vote)
+    public static byte[] VoteAnnouncement(ObjectGuid corpse, uint slot, ObjectGuid roller, uint itemId, RollVote vote, int randomPropertyId = 0)
         => vote switch
         {
-            RollVote.Need => Roll(corpse, slot, roller, itemId, 0, 0),
-            RollVote.Greed => Roll(corpse, slot, roller, itemId, 128, (byte)RollVote.Greed),
-            _ => Roll(corpse, slot, roller, itemId, 128, 128),
+            RollVote.Need => Roll(corpse, slot, roller, itemId, 0, 0, randomPropertyId),
+            RollVote.Greed => Roll(corpse, slot, roller, itemId, 128, (byte)RollVote.Greed, randomPropertyId),
+            _ => Roll(corpse, slot, roller, itemId, 128, 128, randomPropertyId),
         };
 
     /// <summary>The SMSG_LOOT_ROLL of a resolved roll (Group.cpp:1149 and 1202): the 1..100 number and the vote (need = 1, greed = 2).</summary>
-    public static byte[] ResolvedRoll(ObjectGuid corpse, uint slot, ObjectGuid roller, uint itemId, byte number, RollVote vote)
-        => Roll(corpse, slot, roller, itemId, number, (byte)vote);
+    public static byte[] ResolvedRoll(ObjectGuid corpse, uint slot, ObjectGuid roller, uint itemId, byte number, RollVote vote, int randomPropertyId = 0)
+        => Roll(corpse, slot, roller, itemId, number, (byte)vote, randomPropertyId);
 
     /// <summary>SMSG_LOOT_ROLL_WON: u64 corpse, u32 slot, u32 item, u32 0, u32 0, u64 winner, u8 roll, u8 vote (34 bytes).</summary>
-    public static byte[] RollWon(ObjectGuid corpse, uint slot, uint itemId, ObjectGuid winner, byte roll, RollVote vote)
+    public static byte[] RollWon(ObjectGuid corpse, uint slot, uint itemId, ObjectGuid winner, byte roll, RollVote vote, int randomPropertyId = 0)
     {
         var writer = new PacketWriter(34);
         writer.WriteUInt64(corpse.Value);
         writer.WriteUInt32(slot);
         writer.WriteUInt32(itemId);
         writer.WriteUInt32(0);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(unchecked((uint)randomPropertyId));
         writer.WriteUInt64(winner.Value);
         writer.WriteByte(roll);
         writer.WriteByte((byte)vote);
@@ -74,13 +75,13 @@ public static class GroupLootPackets
     }
 
     /// <summary>SMSG_LOOT_ALL_PASSED: u64 corpse, u32 slot, u32 item, u32 random property 0, u32 random suffix 0 (24 bytes; the field order differs from START_ROLL).</summary>
-    public static byte[] AllPassed(ObjectGuid corpse, uint slot, uint itemId)
+    public static byte[] AllPassed(ObjectGuid corpse, uint slot, uint itemId, int randomPropertyId = 0)
     {
         var writer = new PacketWriter(24);
         writer.WriteUInt64(corpse.Value);
         writer.WriteUInt32(slot);
         writer.WriteUInt32(itemId);
-        writer.WriteUInt32(0);
+        writer.WriteUInt32(unchecked((uint)randomPropertyId));
         writer.WriteUInt32(0);
         return writer.ToArray();
     }

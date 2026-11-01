@@ -1,0 +1,454 @@
+using System.Numerics;
+using ArcaneCore.Game;
+using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Economy;
+using ArcaneCore.Game.Items;
+using ArcaneCore.Data.Content.Spells;
+using ArcaneCore.World.Features;
+using ArcaneCore.World.Npc;
+using ArcaneCore.Game.Npc;
+using ArcaneCore.Kernel.Items;
+using ArcaneCore.Kernel.Npc;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Playerbots;
+using ArcaneCore.World.Playerbots.BotSocial;
+using ArcaneCore.World.Playerbots.Chat;
+using ArcaneCore.World.Tests.Items;
+using ArcaneCore.World.Tests.Playerbots.Party;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace ArcaneCore.World.Tests.Playerbots.Social;
+
+/// <summary>
+/// Follow-ups of the trade desk (#1700) and the town vendor spread (#1813), one test per point. The desk and fee tests run the real world with a real player on a socket
+/// client; the town-goals tests pin the pure rules the controller's crowd handling and trip handling go through.
+/// </summary>
+public sealed class PlayerbotTradeDeskFollowupTests
+{
+    private const uint BuyEntry = 995_001, FillerEntry = 995_002, QuiverEntry = 995_003, ArrowEntry = 995_004, SoulBagEntry = 995_005, ShardEntry = 995_006, Price = 1000;
+    private const string BotName = "Followbot", CustomerName = "Followcustomer";
+
+    private static ItemTemplate Plain(uint entry, string name, uint stackable = 20)
+        => new() { Entry = entry, Class = 15, SubClass = 0, Name = name, DisplayId = 1, Quality = 1, SellPrice = Price, Stackable = stackable };
+
+    private static ItemTemplate[] Templates() =>
+    [
+        Plain(BuyEntry, "Followitem Alpha"),
+        Plain(FillerEntry, "Followitem Filler", stackable: 1),
+        new() { Entry = QuiverEntry, Class = 11, SubClass = 2, Name = "Followitem Quiver", DisplayId = 1, Quality = 1, InventoryType = 18, ContainerSlots = 4, BagFamily = 1 },
+        new() { Entry = ArrowEntry, Class = 6, SubClass = 2, Name = "Followitem Arrow", DisplayId = 1, Quality = 1, InventoryType = 24, SellPrice = Price, Stackable = 20, BagFamily = 1 },
+        new() { Entry = SoulBagEntry, Class = 1, SubClass = 1, Name = "Followitem Soul Bag", DisplayId = 1, Quality = 1, InventoryType = 18, ContainerSlots = 4, BagFamily = 3 },
+        new() { Entry = ShardEntry, Class = 15, SubClass = 0, Name = "Followitem Shard", DisplayId = 1, Quality = 1, SellPrice = Price, Stackable = 20, BagFamily = 3 },
+    ];
+
+    private sealed class Scene : IAsyncDisposable
+    {
+        private Scene(SocialWorld world, Guid bot)
+        {
+            World = world;
+            Bot = bot;
+        }
+
+        public SocialWorld World { get; }
+
+        public Guid Bot { get; }
+
+        public static async Task<Scene> StartAsync()
+        {
+            var items = new ItemTestContent();
+            items.Templates.Templates.AddRange(Templates());
+            SocialWorld world;
+            using (items.Use())
+            {
+                world = await SocialWorld.StartAsync(
+                    options =>
+                    {
+                        options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone;
+                        options.Chat.Enabled = false;
+                        options.Chat.Voice.Trade = false;
+                        options.Chat.Voice.LookingForGroup = false;
+                        options.Chat.Voice.QuestHelp = false;
+                        options.Chat.Voice.RunCalls = false;
+                        options.Chat.Voice.BattlegroundCalls = false;
+                    },
+                    frozen: true,
+                    services: services => services.AddScoped<ArcaneCore.Kernel.Economy.IEconomyStore>(_ => new PlayerbotPartyTests.StubEconomyStore()));
+            }
+
+            Guid bot = await world.AddBotAsync(BotName, money: 50_000);
+            await world.AddPlayerAsync(CustomerName);
+            await world.Host.OnWorldAsync(() =>
+            {
+                HelpTestKit.Online(world, BotName).Inventory.Load([]);
+                HelpTestKit.Online(world, CustomerName).Inventory.Load([]);
+                HelpTestKit.Online(world, CustomerName).Money = 5000;
+                return true;
+            });
+            return new Scene(world, bot);
+        }
+
+        public PlayerbotTradeDesk Desk => PartyTestHost.Feature(World.Host).TradeDesk;
+
+        public Task<PlayerbotDealQuote> QuoteBuyerAsync(uint entry) => World.Host.OnWorldAsync(() =>
+            Desk.Quote(Bot, HelpTestKit.Online(World, BotName), HelpTestKit.Online(World, CustomerName), PlayerbotDealRole.Buyer, entry, 1));
+
+        /// <summary>The partner's line, heard with the live bot (what the voice passes).</summary>
+        public Task<PlayerbotDealHeard> HearAsync(string text) => World.Host.OnWorldAsync(() =>
+            Desk.Hear(Bot, HelpTestKit.Online(World, CustomerName).Guid, text, HelpTestKit.Online(World, BotName)));
+
+        public Task<PlayerbotDealState?> StateAsync() => World.Host.OnWorldAsync(() => Desk.StateOf(Bot, HelpTestKit.Online(World, CustomerName).Guid));
+
+        public Task<int> FillBackpackAsync() => World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(World, BotName);
+            int n = 0;
+            while (n < 200 && bot.Inventory.AddItem(FillerEntry, 1, out _) == InventoryResult.Ok) n++;
+            return n;
+        });
+
+        public ValueTask DisposeAsync() => World.DisposeAsync();
+    }
+
+    /// <summary>
+    /// A buyer quoted with room whose bags fill before the partner's "deal" is heard must refuse at the hearing (NoSpace), not agree and then drop the deal at its next tick;
+    /// the deal stays quoted and the partner carries no blame, so the same line agrees once there is room. Broken: Hear agreed without the bag check (Agree got no bot).
+    /// </summary>
+    [Fact]
+    public async Task Hear_BuyerWhoseBagsFilledAfterTheQuote_RefusesWithNoSpace_AndBlamesNobody()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        Assert.True((await scene.QuoteBuyerAsync(BuyEntry)).Ok);
+        Assert.True(await scene.FillBackpackAsync() > 0);
+
+        PlayerbotDealHeard heard = await scene.HearAsync("deal");
+        Assert.Equal(PlayerbotDealHeardKind.Refused, heard.Kind);
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, heard.Refusal);
+        Assert.Equal(PlayerbotDealState.Quoted, await scene.StateAsync());
+
+        // No blame: no cooldown on the pair, so once the bags have room the very same line agrees.
+        await scene.World.Host.OnWorldAsync(() => HelpTestKit.Online(scene.World, BotName).Inventory.DestroyItemCount(FillerEntry, 200));
+        PlayerbotDealHeard again = await scene.HearAsync("deal");
+        Assert.Equal(PlayerbotDealHeardKind.Agreed, again.Kind);
+        Assert.Equal(PlayerbotDealState.Agreed, await scene.StateAsync());
+    }
+
+    /// <summary>The counter-offer path has the same hole: an acceptable counter by a buyer with no room is not agreed and the deal stays quoted.</summary>
+    [Fact]
+    public async Task Hear_BuyerWithFullBags_DoesNotAgreeAnAcceptableCounter()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        PlayerbotDealQuote quote = await scene.QuoteBuyerAsync(BuyEntry);
+        Assert.True(quote.Ok);
+        Assert.True(await scene.FillBackpackAsync() > 0);
+
+        PlayerbotDealHeard heard = await scene.HearAsync(PlayerbotVoiceFacts.Price(quote.Price));
+        Assert.Equal(PlayerbotDealHeardKind.Refused, heard.Kind);
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, heard.Refusal);
+        Assert.Equal(PlayerbotDealState.Quoted, await scene.StateAsync());
+    }
+
+    /// <summary>
+    /// A completed fee window is the proof of payment, not a balance read: money that reached the bot between the settlement and the next Pay think (here more than the fee)
+    /// must not make the leg call the fee unpaid and pay the mage again. Broken: the leg compared the balance before the trade with the new one, found it higher, started over and traded again.
+    /// </summary>
+    [Fact]
+    public async Task MageFee_CompletedWindow_IsPaid_EvenWhenMoneyArrivedBeforeTheNextThink()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        (bool paid, uint paidCopper, TravelLegStep step, MageLegStage stage) = await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Player mage = HelpTestKit.Online(scene.World, CustomerName);
+            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, Vector3.Zero), 0) { Stage = MageLegStage.Paying };
+            var request = new PortalRequest(bot.Guid.Value, BotName, bot.Team, 0, Vector3.Zero, 0, 0, Price, 0);
+            var window = new TradeSession(bot, mage) { Completed = true };
+            window.SideOf(bot).Gold = Price;
+            leg.FeeSeen = true;
+            leg.FeeTrade = window;
+            bot.Money = bot.Money - Price + (5 * Price); // the fee left, and more arrived before this think
+            WorldSession session = PartyTestHost.Feature(scene.World.Host).FindSession(scene.Bot)!;
+            TravelLegStep result = PlayerbotMageService.Pay(session, bot, leg, request, mage, 100, out _);
+            return (request.Paid, leg.PaidCopper, result, leg.Stage);
+        });
+        Assert.True(paid, "the completed fee window was not recognised as paid");
+        Assert.Equal(Price, paidCopper);
+        Assert.Equal(TravelLegStep.Traveling, step);
+        Assert.Equal(MageLegStage.WaitPortal, stage);
+    }
+
+    /// <summary>A fee window that completed with another gold amount than the fee on the bot's side is not the fee: the leg starts over, not paid.</summary>
+    [Fact]
+    public async Task MageFee_CompletedWindowWithADifferentGold_IsNotPaid()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        (bool paid, bool seen) = await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Player mage = HelpTestKit.Online(scene.World, CustomerName);
+            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, Vector3.Zero), 0) { Stage = MageLegStage.Paying };
+            var request = new PortalRequest(bot.Guid.Value, BotName, bot.Team, 0, Vector3.Zero, 0, 0, Price, 0);
+            var window = new TradeSession(bot, mage) { Completed = true };
+            window.SideOf(bot).Gold = Price - 1;
+            leg.FeeSeen = true;
+            leg.FeeTrade = window;
+            WorldSession session = PartyTestHost.Feature(scene.World.Host).FindSession(scene.Bot)!;
+            PlayerbotMageService.Pay(session, bot, leg, request, mage, 100, out _);
+            return (request.Paid, leg.FeeSeen);
+        });
+        Assert.False(paid);
+        Assert.False(seen);
+    }
+
+    /// <summary>
+    /// The quiver and soul bag probe: a buyer whose only free room is a quiver slot takes arrows (the bag check is family-aware, the same CanStoreNewItem the server's staging
+    /// uses) and refuses an item the quiver cannot hold. Expected to hold on main too: it pins that the desk's check agrees with the server's family rules.
+    /// </summary>
+    [Fact]
+    public async Task Quote_BuyerWithOnlyAQuiverSlotFree_TakesArrowsAndRefusesOtherGoods()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(QuiverEntry, 1, out Item? quiver));
+            Assert.True(bot.Inventory.AutoEquipItem(quiver!.BagSlot, quiver.Slot));
+            return true;
+        });
+        Assert.True(await scene.FillBackpackAsync() > 0);
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.NotEqual(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(FillerEntry, 1, [], out _));
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(ArrowEntry, 1, [], out _));
+            return true;
+        });
+
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, (await scene.QuoteBuyerAsync(BuyEntry)).Refusal);
+        Assert.True((await scene.QuoteBuyerAsync(ArrowEntry)).Ok);
+    }
+
+    /// <summary>
+    /// The split-stack case of the probe: a quiver with three full arrow stacks and one free slot holds one more stack (20) and not two (40, which the seller's
+    /// two stacks would need: the server stages each traded stack on its own). The quote's whole-count check must refuse the 40, not quote it and time out blaming the partner.
+    /// Verified on current code to agree with the server's staging, so this pins the behaviour rather than fixing a defect.
+    /// </summary>
+    [Fact]
+    public async Task Quote_BuyerWithOneQuiverSlotFree_RefusesTwoStacksOfArrowsAndTakesOne()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(QuiverEntry, 1, out Item? quiver));
+            Assert.True(bot.Inventory.AutoEquipItem(quiver!.BagSlot, quiver.Slot));
+            return true;
+        });
+        Assert.True(await scene.FillBackpackAsync() > 0);
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(ArrowEntry, 60, out _)); // three full stacks of the quiver's four slots
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(ArrowEntry, 20, [], out _));
+            Assert.NotEqual(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(ArrowEntry, 40, [], out _));
+            return true;
+        });
+
+        PlayerbotDealQuote two = await scene.World.Host.OnWorldAsync(() =>
+            scene.Desk.Quote(scene.Bot, HelpTestKit.Online(scene.World, BotName), HelpTestKit.Online(scene.World, CustomerName), PlayerbotDealRole.Buyer, ArrowEntry, 40));
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, two.Refusal);
+        PlayerbotDealQuote one = await scene.World.Host.OnWorldAsync(() =>
+            scene.Desk.Quote(scene.Bot, HelpTestKit.Online(scene.World, BotName), HelpTestKit.Online(scene.World, CustomerName), PlayerbotDealRole.Buyer, ArrowEntry, 20));
+        Assert.NotEqual(PlayerbotDealRefusal.NoSpace, one.Refusal);
+    }
+
+    /// <summary>The soul bag half of the probe: a buyer whose only free room is a soul bag slot takes shards and refuses other goods.</summary>
+    [Fact]
+    public async Task Quote_BuyerWithOnlyASoulBagSlotFree_TakesShardsAndRefusesOtherGoods()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(SoulBagEntry, 1, out Item? soulBag));
+            Assert.True(bot.Inventory.AutoEquipItem(soulBag!.BagSlot, soulBag.Slot));
+            return true;
+        });
+        Assert.True(await scene.FillBackpackAsync() > 0);
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.NotEqual(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(FillerEntry, 1, [], out _));
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(ShardEntry, 1, [], out _));
+            return true;
+        });
+
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, (await scene.QuoteBuyerAsync(BuyEntry)).Refusal);
+        Assert.True((await scene.QuoteBuyerAsync(ShardEntry)).Ok);
+    }
+
+    // --- TradeSession.Completed ---------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The settlement flag is readable by drivers but writable only inside the game assemblies (the World assembly's settlement has internal access): a public setter let any
+    /// caller mark a cancelled window as paid. Broken: the setter was public.
+    /// </summary>
+    [Fact]
+    public void TradeSession_Completed_IsPubliclyReadableButNotPubliclyWritable()
+    {
+        System.Reflection.PropertyInfo completed = typeof(TradeSession).GetProperty(nameof(TradeSession.Completed))!;
+        Assert.True(completed.GetMethod!.IsPublic);
+        Assert.False(completed.SetMethod!.IsPublic, "the Completed setter is public");
+        Assert.True(completed.SetMethod.IsAssembly, "the Completed setter is not internal");
+    }
+
+    // --- town goals ---------------------------------------------------------------------------------------------------------------
+
+    /// <summary>The sell-trip exemption: the NPC of the service a trip was set out for is never left out for doing nothing; any other NPC (or no trip) is.</summary>
+    [Fact]
+    public void TownGoals_TheNpcOfTheWantedTrip_IsNeverLeftOut()
+    {
+        Assert.False(PlayerbotTownGoals.LeavesNpcOut(NpcFlags.Vendor, NpcFlags.Vendor | NpcFlags.Repair));
+        Assert.False(PlayerbotTownGoals.LeavesNpcOut(NpcFlags.Repair, NpcFlags.Repair));
+        Assert.True(PlayerbotTownGoals.LeavesNpcOut(NpcFlags.Vendor, NpcFlags.Trainer));
+        Assert.True(PlayerbotTownGoals.LeavesNpcOut(NpcFlags.None, NpcFlags.Vendor));
+    }
+
+    /// <summary>
+    /// A useful class trainer is recorded under the named offer reason (the nothing-to-do debug line read "none" for every trainer). The bot has food, so the vendor half of the
+    /// check finds nothing: the reason can only come from the trainer branch of HasUsefulService (without its Useful call the reason stays null).
+    /// </summary>
+    [Fact]
+    public async Task TownGoals_AUsefulClassTrainer_IsRecordedUnderItsReason()
+    {
+        var npc = new TownVendorFixture();
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = 117, Name = "Starter food", Class = (uint)ItemClass.Consumable, Stackable = 20, BuyPrice = 10, FoodType = 1 });
+        using IDisposable itemScope = items.Use();
+        TownVendorServices.Current.Value = npc;
+        try
+        {
+            await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton<ISpellContentStore>(npc));
+            WorldSession session = await PlayerbotMovementControlTests.EnterAsync(host);
+            try
+            {
+                await host.WaitForWorldAsync(() => session.Player!.VisibleObjects.Contains(TownVendorFixture.Guid), "the trainer in sight");
+                var goals = new PlayerbotTownGoals(session, new PlayerbotOptions { Enabled = true });
+                await host.OnWorldAsync(() =>
+                {
+                    Player player = session.Player!;
+                    player.Money = 100;
+                    Assert.Equal(InventoryResult.Ok, player.Inventory.AddItem(117, 1, out _));
+                    QuestNpcServices services = host.WorldServices.GetRequiredService<QuestNpcFeature>().Services;
+                    NpcInfo trainer = services.Deps.Creatures!.Find(player, TownVendorFixture.Guid)!;
+                    Assert.Equal(PlayerbotTownGoals.TrainerOfferReason, goals.TrainerUsefulReasonForTests(player, services, trainer));
+                    return true;
+                });
+            }
+            finally { session.Kick(); await session.ManagedClosed; }
+        }
+        finally { TownVendorServices.Current.Value = null; }
+    }
+
+    /// <summary>The two trainer reasons are distinct names, neither the "none" a missing reason logs as.</summary>
+    [Fact]
+    public void TownGoals_TrainerReasons_AreDistinctNames()
+    {
+        Assert.NotEqual("none", PlayerbotTownGoals.TrainerOfferReason);
+        Assert.NotEqual("none", PlayerbotTownGoals.RidingTrainerReason);
+        Assert.NotEqual(PlayerbotTownGoals.TrainerOfferReason, PlayerbotTownGoals.RidingTrainerReason);
+    }
+
+    /// <summary>The crowd gate is per NPC: firing at one NPC does not make the rule due again at it when the bot returns from another one inside the minute.</summary>
+    [Fact]
+    public void TownGoals_CrowdGate_RemembersEachNpc()
+    {
+        var memo = new PlayerbotTownGoals.CrowdSpotMemo();
+        ObjectGuid a = ObjectGuid.Item(1), b = ObjectGuid.Item(2);
+        uint now = 1000;
+        Assert.True(memo.Due(a, now));
+        memo.Mark(a, now);
+        Assert.False(memo.Due(a, now + 10));
+        Assert.True(memo.Due(b, now + 20));
+        memo.Mark(b, now + 20);
+        Assert.False(memo.Due(a, now + 30), "marking the second NPC forgot the first");
+        Assert.False(memo.Due(b, now + 30));
+        Assert.True(memo.Due(a, now + PlayerbotTownGoals.CrowdSpotMs + 1));
+    }
+
+    /// <summary>The memo is bounded: past its capacity of live entries it is cleared instead of growing.</summary>
+    [Fact]
+    public void TownGoals_CrowdGate_IsBounded()
+    {
+        var memo = new PlayerbotTownGoals.CrowdSpotMemo();
+        uint overflow = (uint)PlayerbotTownGoals.CrowdSpotCapacity + 2;
+        for (uint i = 0; i <= overflow; i++) memo.Mark(ObjectGuid.Item(100 + i), 5000);
+        Assert.True(memo.Due(ObjectGuid.Item(100), 5001), "the oldest entry survived a full memo");
+        Assert.False(memo.Due(ObjectGuid.Item(100 + overflow), 5001));
+    }
+
+    /// <summary>Only a bot crowds the arriving bot, and only on its own floor: a real player on the spot, or a bot a floor above, does not.</summary>
+    [Fact]
+    public void TownGoals_Crowding_CountsBotsOnTheSameFloorOnly()
+    {
+        Assert.True(PlayerbotTownGoals.IsCrowding(0.5f, 0.5f, 0.2f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
+        Assert.False(PlayerbotTownGoals.IsCrowding(0.5f, 0.5f, 0.2f, otherIsBot: false, PlayerbotTownGoals.CrowdedYards));
+        Assert.False(PlayerbotTownGoals.IsCrowding(0.5f, 0.5f, 6f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
+        Assert.False(PlayerbotTownGoals.IsCrowding(0.5f, 0.5f, -6f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
+        Assert.False(PlayerbotTownGoals.IsCrowding(2f, 0f, 0f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
+    }
+
+    // --- crowd rule at the bank, flight master, quest giver and auctioneer (point 11) -------------------------------------------------
+
+    /// <summary>
+    /// The crowd rule's gate is the shared one for the bank, taxi, quest and auction controllers: it fires once per NPC and minute, only when another bot crowds the place,
+    /// and asks the crowd question only while the gate is open. Broken: those controllers had no rule at all (bots stacked on one point of the NPC's reach).
+    /// </summary>
+    [Fact]
+    public void CrowdSpread_Gate_FiresOncePerNpcAndMinute_AndOnlyWhenCrowded()
+    {
+        var memo = new PlayerbotTownGoals.CrowdSpotMemo();
+        ObjectGuid npc = ObjectGuid.Item(777);
+        Assert.False(PlayerbotCrowdSpread.ShouldSpread(memo, npc, 1000, () => false));
+        Assert.True(PlayerbotCrowdSpread.ShouldSpread(memo, npc, 1000, () => true));
+        int asked = 0;
+        Assert.False(PlayerbotCrowdSpread.ShouldSpread(memo, npc, 1001, () => { asked++; return true; }));
+        Assert.Equal(0, asked);
+        Assert.True(PlayerbotCrowdSpread.ShouldSpread(memo, npc, 1000 + PlayerbotTownGoals.CrowdSpotMs + 1, () => true));
+    }
+
+    /// <summary>Two bots at one NPC get spots of their own inside the server's reach (2 to 4 yards on the ground plane), and an unusable first spot falls through to the next attempt.</summary>
+    [Fact]
+    public void CrowdSpread_PickSpot_SpreadsBotsInsideReach_AndSkipsUnusableSpots()
+    {
+        var npc = new Vector3(100f, 200f, 30f);
+        Vector3 a = PlayerbotCrowdSpread.PickSpot(11, 5000, npc, spot => spot)!.Value;
+        Vector3 b = PlayerbotCrowdSpread.PickSpot(12, 5000, npc, spot => spot)!.Value;
+        Assert.NotEqual(a, b);
+        foreach (Vector3 spot in new[] { a, b })
+        {
+            float flat = Vector2.Distance(new(spot.X, spot.Y), new(npc.X, npc.Y));
+            Assert.InRange(flat, PlayerbotStandSpots.ServiceMinYards - 0.01f, PlayerbotStandSpots.ServiceMaxYards + 0.01f);
+        }
+
+        int calls = 0;
+        Vector3? second = PlayerbotCrowdSpread.PickSpot(11, 5000, npc, spot => ++calls == 1 ? null : spot);
+        Assert.Equal(2, calls);
+        Assert.Equal(PlayerbotStandSpots.ServiceSpot(11, 5000, npc, 1), second);
+        Assert.Null(PlayerbotCrowdSpread.PickSpot(11, 5000, npc, _ => null));
+    }
+
+    /// <summary>The bank, the flight master visit, the quest-giver goal and the auction visit each own a crowd rule (the vendor/trainer visit has its own in the town goals).</summary>
+    [Theory]
+    [InlineData(typeof(PlayerbotBank))]
+    [InlineData(typeof(PlayerbotQuestGoals))]
+    [InlineData(typeof(PlayerbotEconomyDestinations))]
+    [InlineData(typeof(TaxiTrip))]
+    public void CrowdSpread_EveryServiceController_OwnsOne(Type controller)
+    {
+        const System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+        bool owns = controller.GetFields(all).Any(f => f.FieldType == typeof(PlayerbotCrowdSpread))
+            || controller.GetProperties(all).Any(p => p.PropertyType == typeof(PlayerbotCrowdSpread));
+        Assert.True(owns, controller.Name + " has no crowd spread");
+    }
+}

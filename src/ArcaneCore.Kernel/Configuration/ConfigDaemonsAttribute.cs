@@ -8,6 +8,9 @@ public enum ConfigDaemon
     World = 1,
     Realm = 2,
     Both = World | Realm,
+
+    /// <summary>The Tier 3a gateway daemon (<c>ArcaneCore.Gateway</c>, gateway.conf). <see cref="Both"/> does not include it: a section the gateway also reads is marked <c>Both | Gateway</c>.</summary>
+    Gateway = 4,
 }
 
 /// <summary>

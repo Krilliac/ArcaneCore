@@ -210,12 +210,13 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             && Vector3.Distance(new(player.X, player.Y, player.Z), _visitSpot) > VisitSpotArrivedYards;
         // A bot that comes into reach with another bot standing on its place also takes its own spot (once per NPC and minute): bots that
         // arrive the same way stop at the same point of the reach's edge, and the first thing to do then is to step apart.
-        if (inReach && !toSpot && (_crowdSpotNpc != npc.Guid || unchecked((int)(_crowdSpotUntil - session.World.NowMs)) <= 0)
+        if (inReach && !toSpot && _crowdSpots.Due(npc.Guid, session.World.NowMs)
             && AnotherBotWithin(player, CrowdedYards))
         {
-            _crowdSpotNpc = npc.Guid;
-            _crowdSpotUntil = unchecked(session.World.NowMs + CrowdSpotMs);
             PlanOutcome crowded = PlanVisit(player, npc, out _route);
+            // A plan still waiting for navigation tiles decided nothing: the gate stays open so the next think plans again, instead of the bot standing on the crowded place for a minute.
+            if (!ArmsCrowdGate(crowded)) return true;
+            _crowdSpots.Mark(npc.Guid, session.World.NowMs);
             if (crowded == PlanOutcome.Route && _visitOnSpot && _route is not null)
             {
                 _routeTarget = npc.Guid;
@@ -298,7 +299,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         // Useful, yet nothing was asked for: the same answer would come at every think, and the bot lingered at the vendor for minutes.
         // The NPC is left out of the search a while; a request that could not be sent (budget) only backs off briefly.
         // The service a trip was set out for is never left out: that would end the visit and send the bot on to a farther NPC.
-        if (wantedTrip == NpcFlags.None || (npc.NpcFlags & wantedTrip) == 0)
+        if (LeavesNpcOut(wantedTrip, npc.NpcFlags))
         {
             Refuse(_nothingToDo, npc.Guid, _requestNotSent ? RequestBackoffMs : NothingToDoMs);
             if (Logger.IsEnabled(LogLevel.Debug))
@@ -325,18 +326,57 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     /// <summary>How long a bot that stepped to its own spot at an NPC (or found none) is not moved to another one by the crowd rule.</summary>
     internal const uint CrowdSpotMs = 60_000;
 
-    private ObjectGuid _crowdSpotNpc;
-    private uint _crowdSpotUntil;
+    /// <summary>The most NPCs whose crowd rule is remembered at once (a visit touches one or two; the memo is cleared when it fills with live entries).</summary>
+    internal const int CrowdSpotCapacity = 8;
 
-    /// <summary>Whether another player stands within <paramref name="yards"/> of the bot on the ground plane (a player in sight).</summary>
-    private static bool AnotherBotWithin(Player player, float yards)
+    /// <summary>Another bot this far above or below the arriving one (yards) is on another floor and does not crowd it (the same bound a ring spot uses, <see cref="PlanVisit"/>).</summary>
+    internal const float CrowdedHeightYards = 2.5f;
+
+    private readonly CrowdSpotMemo _crowdSpots = new();
+
+    /// <summary>
+    /// The NPCs at which the crowd rule fired in the last <see cref="CrowdSpotMs"/>, one entry each: a bot that walks from one NPC to another and back is not moved
+    /// again at the first. Owned by one controller, world thread only; bounded by <see cref="CrowdSpotCapacity"/>.
+    /// </summary>
+    internal sealed class CrowdSpotMemo
+    {
+        private readonly Dictionary<ObjectGuid, uint> _until = [];
+
+        /// <summary>Whether the crowd rule may fire at <paramref name="npc"/> now (no live entry for it).</summary>
+        internal bool Due(ObjectGuid npc, uint now) => !_until.TryGetValue(npc, out uint until) || unchecked((int)(until - now)) <= 0;
+
+        /// <summary>Records that the rule fired at <paramref name="npc"/>: it is not due again for <see cref="CrowdSpotMs"/>.</summary>
+        internal void Mark(ObjectGuid npc, uint now)
+        {
+            if (!_until.ContainsKey(npc) && _until.Count >= CrowdSpotCapacity)
+            {
+                foreach ((ObjectGuid guid, uint until) in _until.ToArray())
+                    if (unchecked((int)(until - now)) <= 0) _until.Remove(guid);
+                if (_until.Count >= CrowdSpotCapacity) _until.Clear();
+            }
+
+            _until[npc] = unchecked(now + CrowdSpotMs);
+        }
+    }
+
+    /// <summary>Whether a plan of the crowd rule decided something (anything but <see cref="PlanOutcome.Pending"/>): only then does the rule's gate close for <see cref="CrowdSpotMs"/>.</summary>
+    internal static bool ArmsCrowdGate(PlanOutcome outcome) => outcome != PlanOutcome.Pending;
+
+    /// <summary>Whether an NPC that a visit did nothing at is left out of the search: not the NPC of the service a trip was set out for (that would end the visit and send the bot to a farther one).</summary>
+    internal static bool LeavesNpcOut(NpcFlags wantedTrip, NpcFlags npcFlags) => wantedTrip == NpcFlags.None || (npcFlags & wantedTrip) == 0;
+
+    /// <summary>Whether another player at the offset (<paramref name="dx"/>, <paramref name="dy"/>, <paramref name="dz"/>) from the bot crowds it: a bot (a real player does not take a bot's place), within <paramref name="yards"/> on the ground plane and on the same floor.</summary>
+    internal static bool IsCrowding(float dx, float dy, float dz, bool otherIsBot, float yards)
+        => otherIsBot && (dx * dx) + (dy * dy) <= yards * yards && MathF.Abs(dz) <= CrowdedHeightYards;
+
+    /// <summary>Whether another bot stands within <paramref name="yards"/> of the player on the ground plane and on its floor (a bot in sight; real players do not count).</summary>
+    internal static bool AnotherBotWithin(Player player, float yards)
     {
         if (player.Map is not { } map) return false;
         foreach (ObjectGuid guid in player.VisibleObjects)
         {
             if (!guid.IsPlayer || guid == player.Guid || map.FindObject(guid) is not Player other) continue;
-            float dx = other.X - player.X, dy = other.Y - player.Y;
-            if ((dx * dx) + (dy * dy) <= yards * yards) return true;
+            if (IsCrowding(other.X - player.X, other.Y - player.Y, other.Z - player.Z, other.Session is WorldSession { IsManaged: true }, yards)) return true;
         }
 
         return false;
@@ -1425,10 +1465,26 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     private bool HasUsefulService(Player player, QuestNpcServices services, NpcInfo npc, ref ServiceNeeds needs)
         // Advisory discovery only; the correlated GREEN list and ordinary buy handler
         // remain the authority for price, prerequisites and teaching/persistence.
-        => HasUsefulVendorService(player, services, npc, ref needs)
-            || (!Refused(_refusedTrainers, npc.Guid) && (npc.TrainerType == TrainerType.Mounts
-                ? RidingQuote(player, services, npc, 0) is not null
-                : TrainerHasOffer(player, services, npc)));
+        => HasUsefulVendorService(player, services, npc, ref needs) || HasUsefulTrainerService(player, services, npc);
+
+    /// <summary>The trainer half of <see cref="HasUsefulService"/>: records the reason (<see cref="RidingTrainerReason"/> or <see cref="TrainerOfferReason"/>) the trainer is useful under.</summary>
+    private bool HasUsefulTrainerService(Player player, QuestNpcServices services, NpcInfo npc)
+        => !Refused(_refusedTrainers, npc.Guid) && (npc.TrainerType == TrainerType.Mounts
+            ? RidingQuote(player, services, npc, 0) is not null && Useful(RidingTrainerReason)
+            : TrainerHasOffer(player, services, npc) && Useful(TrainerOfferReason));
+
+    /// <summary>Test seam: the reason the trainer half of the usefulness check records for <paramref name="npc"/> (null when the trainer is not useful).</summary>
+    internal string? TrainerUsefulReasonForTests(Player player, QuestNpcServices services, NpcInfo npc)
+    {
+        _usefulReason = null;
+        return HasUsefulTrainerService(player, services, npc) ? _usefulReason : null;
+    }
+
+    /// <summary>The useful-reason a Mounts trainer's riding training is logged under (the "nothing to do" debug line read "none" for every trainer).</summary>
+    internal const string RidingTrainerReason = "riding training";
+
+    /// <summary>The useful-reason a class trainer's offer is logged under.</summary>
+    internal const string TrainerOfferReason = "trainer offer";
 
     /// <summary>
     /// The riding training this Mounts trainer would teach the bot, when its budget says the money for the training and the mount is

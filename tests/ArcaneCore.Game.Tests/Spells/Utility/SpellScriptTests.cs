@@ -2,7 +2,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Spells.Scripts;
 using ArcaneCore.Protocol;
-using Microsoft.Extensions.Logging;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Spells.Utility;
@@ -101,18 +101,6 @@ public sealed class SpellScriptTests
         }
     }
 
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Lines { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Lines.Add($"{logLevel}: {formatter(state, exception)}");
-    }
-
     private static void Reset()
     {
         Log.Clear();
@@ -187,20 +175,20 @@ public sealed class SpellScriptTests
     {
         Reset();
         using SpellTestKit plainKit = Kit();
-        var before = new CapturingLogger();
+        var before = new LevelPrefixedCapturingLogger();
         var plain = new SpellSystem(plainKit.Store, () => plainKit.Now, spellbook: plainKit.Spellbook, random: new Random(1), logger: before);
         (Player player, _) = plainKit.AddPlayer(1);
         plain.CastSpell(player, TeleportShape, SpellCastTargets.ForSelf(), triggered: true);
         // The druid lane's ScriptEffectModule is built in, so a plain spell system already owns SCRIPT_EFFECT (it used to be reported as not implemented).
-        Assert.DoesNotContain(before.Lines, l => l.Contains("is not implemented yet", StringComparison.Ordinal));
+        Assert.DoesNotContain(before.Entries, l => l.Contains("is not implemented yet", StringComparison.Ordinal));
         Assert.True(plain.HasEffectHandler(SpellEffectName.ScriptEffect));
 
-        var after = new CapturingLogger();
+        var after = new LevelPrefixedCapturingLogger();
         var scripted = new SpellSystem(plainKit.Store, () => plainKit.Now, spellbook: plainKit.Spellbook, random: new Random(1), logger: after);
         SpellScriptDispatcher.Install(scripted, new SpellScriptRegistry([]));
         scripted.CastSpell(player, TeleportShape, SpellCastTargets.ForSelf(), triggered: true);
 
-        Assert.DoesNotContain(after.Lines, l => l.Contains("is not implemented yet", StringComparison.Ordinal));
+        Assert.DoesNotContain(after.Entries, l => l.Contains("is not implemented yet", StringComparison.Ordinal));
         Assert.True(scripted.HasEffectHandler(SpellEffectName.ScriptEffect));
     }
 
@@ -246,11 +234,11 @@ public sealed class SpellScriptTests
     public void AScriptForAnUnknownSpell_IsIgnoredWithOneWarning()
     {
         using SpellTestKit kit = Kit();
-        var logger = new CapturingLogger();
+        var logger = new LevelPrefixedCapturingLogger();
 
         SpellScriptDispatcher.Install(kit.System, new SpellScriptRegistry([new GhostScript()]), logger);
 
-        string warning = Assert.Single(logger.Lines);
+        string warning = Assert.Single(logger.Entries);
         Assert.Contains("Warning", warning, StringComparison.Ordinal);
         Assert.Contains("960999", warning, StringComparison.Ordinal);
     }

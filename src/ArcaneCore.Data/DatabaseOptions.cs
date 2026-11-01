@@ -71,7 +71,7 @@ public sealed class DatabaseConnectionOptions
 /// component without one falls back to the section's own Provider/ConnectionString, which is
 /// the single-database layout M1–M4 configurations use.
 /// </summary>
-[Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.Both)]
+[Kernel.Configuration.ConfigDaemons(Kernel.Configuration.ConfigDaemon.Both | Kernel.Configuration.ConfigDaemon.Gateway)]
 public sealed class DatabaseOptions
 {
     public const string SectionName = "Database";

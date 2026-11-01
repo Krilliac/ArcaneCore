@@ -1,5 +1,6 @@
 using System.Net;
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Cluster.Gateway;
 
 namespace ArcaneCore.Gateway;
@@ -9,6 +10,7 @@ namespace ArcaneCore.Gateway;
 /// (the realm's auth database: session keys, account status, bans), <c>Net:Protection:*</c> (the same transport protections
 /// as the world listener) and <c>Logging</c>.
 /// </summary>
+[ConfigDaemons(ConfigDaemon.Gateway)]
 public sealed class GatewayOptions
 {
     public const string SectionName = "Gateway";
