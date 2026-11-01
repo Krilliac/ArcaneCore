@@ -779,7 +779,7 @@ public sealed partial class EconomyFeature : IWorldFeature, ICharacterSettlement
     private static bool ForwardedChangesMatch(EconomyForwardKind kind, IReadOnlyList<EconomyChange> changes)
     {
         bool auction = changes.Any(c => c is InsertAuction or UpdateAuction or DeleteAuction);
-        bool mail = changes.Any(c => c is InsertMail or UpdateMail or DeleteMail);
+        bool mail = changes.Any(c => c is InsertMail or UpdateMail or ArcaneCore.Kernel.Economy.DeleteMail);
         bool kindFits = kind switch
         {
             EconomyForwardKind.AuctionWrite => auction,
