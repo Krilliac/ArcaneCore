@@ -1,6 +1,5 @@
 using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
-using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.Npc;
@@ -17,11 +16,13 @@ namespace ArcaneCore.Game.Tests.Combat;
 public sealed class CharmedFriendlinessTests
 {
     private const uint AllianceTemplate = 1;
+    private const uint HordeTemplate = 2;
     private const uint CreatureTemplate = 14;
 
     private static readonly FactionTemplateCatalog Catalog = new(
     [
         new FactionTemplateRecord(AllianceTemplate, AllianceTemplate, 0, OwnMask: 2, FriendlyMask: 2, HostileMask: 8),
+        new FactionTemplateRecord(HordeTemplate, HordeTemplate, 0, OwnMask: 4, FriendlyMask: 4, HostileMask: 2),
         new FactionTemplateRecord(CreatureTemplate, CreatureTemplate, 0, OwnMask: 8, FriendlyMask: 8, HostileMask: 2),
     ]);
 
@@ -57,6 +58,9 @@ public sealed class CharmedFriendlinessTests
             (AllyMate, _) = Kit.AddPlayer(5, 18, 10);
             Hooks = kind == "faction" ? new FactionCombatHooks(Catalog) : CombatHooks.Default;
             Ally.Map!.Combat.Hooks = Hooks;
+            // TestWorld gives every player template 1; the orcs get a Horde template the catalog holds as hostile to it.
+            Charmer.FactionTemplate = HordeTemplate;
+            Mate.FactionTemplate = HordeTemplate;
             SpellTestKit.FlagForPvp(Charmer);
             SpellTestKit.FlagForPvp(Mate);
             SpellTestKit.FlagForPvp(Thrall);
@@ -66,6 +70,8 @@ public sealed class CharmedFriendlinessTests
         {
             Thrall.SetUInt64(UpdateFields.UnitFieldCharmedby, Charmer.Guid.Value);
             Charmer.SetUInt64(UpdateFields.UnitFieldCharm, Thrall.Guid.Value);
+            // a real charm copies the charmer's template onto the thrall (CharmService.Charm.cs)
+            Thrall.FactionTemplate = Charmer.FactionTemplate;
         }
 
         public void Dispose() => Kit.Dispose();
