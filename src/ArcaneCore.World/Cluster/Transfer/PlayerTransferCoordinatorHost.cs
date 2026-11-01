@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
-using ArcaneCore.Kernel.Logging;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.World.Cluster.Gateway;
 using Microsoft.Extensions.Logging;
 

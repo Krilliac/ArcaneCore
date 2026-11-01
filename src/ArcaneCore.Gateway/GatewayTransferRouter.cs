@@ -115,6 +115,7 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
         public List<Held> Buffer { get; } = [];
         public int BufferedBytes { get; set; }
         public bool Overflowed { get; set; }
+        public bool TargetLost { get; set; }
     }
 
     private sealed record Routed(long Epoch, CharacterOwnershipToken Token);
@@ -272,14 +273,29 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
         }
 
         bool overflowed;
+        bool lost;
         lock (_gate)
         {
+            if (!_staged.TryGetValue(sessionGeneration, out Staged? current) || !ReferenceEquals(current, staged))
+            {
+                // A cancel ended this stage while the target open was pending: close the session that just opened and report the stage as gone.
+                target.Link.CloseSession(target.Generation, ClusterSessionDetachReason.Transferred);
+                throw new InvalidOperationException($"transfer {transferId} was cancelled while the target session was opening");
+            }
+
+            lost = staged.TargetLost;
             overflowed = staged.Overflowed;
-            staged.Target = target;
+            staged.Target = lost ? null : target;
             if (overflowed)
             {
                 target.Link.CloseSession(target.Generation, ClusterSessionDetachReason.Transferred);
             }
+        }
+
+        if (lost)
+        {
+            Resume(sessionGeneration, staged);
+            throw new InvalidOperationException("the target worker closed the session while the transfer was staging");
         }
 
         if (overflowed)
@@ -325,6 +341,7 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
     {
         ArgumentNullException.ThrowIfNull(targetOwnershipToken);
         IGatewayTransferSession? toKick = null;
+        bool lostTarget = false;
         lock (_gate)
         {
             if (_finished.Contains(transferId))
@@ -345,36 +362,53 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
             RemoveStaged(sessionGeneration);
             Finish(transferId);
             GatewayTransferTarget? target = staged.Target;
-            if (staged.Overflowed || target is null)
+            if (staged.Overflowed)
             {
                 return Task.CompletedTask; // the client was kicked and the target session closed already
             }
 
-            if (!staged.Session.IsOpen)
+            if (staged.TargetLost || target is null)
             {
-                target.Link.CloseSession(target.Generation, ClusterSessionDetachReason.ClientDisconnect);
-                return Task.CompletedTask;
+                // The target session is gone and the commit cannot be honoured.
+                toKick = staged.Session;
+                lostTarget = true;
+                staged.Buffer.Clear();
+                staged.BufferedBytes = 0;
             }
-
-            bool delivered = true;
-            foreach (Held held in staged.Buffer)
+            else
             {
-                if (!target.Link.SendClientPacket(target.Generation, held.Opcode, held.Payload, held.ReceivedMs))
+                if (!staged.Session.IsOpen)
                 {
-                    delivered = false;
-                    break;
+                    target.Link.CloseSession(target.Generation, ClusterSessionDetachReason.ClientDisconnect);
+                    return Task.CompletedTask;
+                }
+
+                bool delivered = true;
+                foreach (Held held in staged.Buffer)
+                {
+                    if (!target.Link.SendClientPacket(target.Generation, held.Opcode, held.Payload, held.ReceivedMs))
+                    {
+                        delivered = false;
+                        break;
+                    }
+                }
+
+                staged.Buffer.Clear();
+                staged.BufferedBytes = 0;
+                staged.Session.Repoint(target);
+                Retire(sessionGeneration);
+                _routed[target.Generation] = new Routed(target.OwnerEpoch, targetOwnershipToken);
+                if (!delivered)
+                {
+                    toKick = staged.Session;
                 }
             }
+        }
 
-            staged.Buffer.Clear();
-            staged.BufferedBytes = 0;
-            staged.Session.Repoint(target);
-            Retire(sessionGeneration);
-            _routed[target.Generation] = new Routed(target.OwnerEpoch, targetOwnershipToken);
-            if (!delivered)
-            {
-                toKick = staged.Session;
-            }
+        if (lostTarget)
+        {
+            toKick!.Kick("the target worker closed the session before the commit");
+            return Task.CompletedTask;
         }
 
         toKick?.Kick("the worker link is gone");
@@ -418,6 +452,36 @@ public sealed class GatewayTransferRouter : ITransferGatewayRouter
         }
 
         sendAck(ack);
+    }
+
+    /// <summary>
+    /// The target worker closed (or lost) the session <paramref name="targetGeneration"/> it opened for <paramref name="session"/>. Before the commit the source
+    /// still owns the character: the staged target is marked gone and the coordinator's cancel resumes the source, so the client stays connected. After the
+    /// commit, when that generation is the connection's current one, the client is kicked. Any other close (the router's own, a retired generation) is ignored.
+    /// </summary>
+    public void OnTargetSessionClosed(IGatewayTransferSession session, long targetGeneration, ClusterSessionDetachReason reason)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        bool kick = false;
+        lock (_gate)
+        {
+            foreach (Staged staged in _staged.Values)
+            {
+                if (ReferenceEquals(staged.Session, session) && (staged.Target is null || staged.Target.Generation == targetGeneration))
+                {
+                    staged.TargetLost = true;
+                    staged.Target = null;
+                    return;
+                }
+            }
+
+            kick = _routed.ContainsKey(targetGeneration) && session.SessionGeneration == targetGeneration;
+        }
+
+        if (kick)
+        {
+            session.Kick("the target worker closed the session (" + reason + ")");
+        }
     }
 
     /// <summary>Ends a staged transfer without a commit: closes the target session, replays the buffer to the source in order and resumes plain forwarding.</summary>
@@ -556,6 +620,6 @@ internal sealed class GatewayServerTransferEnvironment(GatewayServer server, Fun
             }
         }
 
-        public void OnClosed(ClusterSessionDetachReason reason) => session.Kick("the target worker closed the session (" + reason + ")");
+        public void OnClosed(ClusterSessionDetachReason reason) => router.OnTargetSessionClosed(session, Generation, reason);
     }
 }

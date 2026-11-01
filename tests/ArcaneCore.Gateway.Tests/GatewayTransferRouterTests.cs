@@ -307,6 +307,43 @@ public sealed class GatewayTransferRouterTests
     }
 
     [Fact]
+    public async Task TargetSessionClosedWhileStaged_DoesNotKick_AndTheCancelResumesTheSource()
+    {
+        (GatewayTransferRouter router, FakeEnvironment env, FakeSession session) = Setup();
+        await Stage(router);
+        router.Intercept(7, WorldOpcode.CmsgPing, Bytes(1), 10);
+
+        router.OnTargetSessionClosed(session, 70, ClusterSessionDetachReason.LinkLost);
+
+        Assert.Null(session.Kicked);
+        Assert.Equal(1, router.StagedCount);
+        Assert.Equal(GatewayTransferVerdict.Held, router.Intercept(7, WorldOpcode.CmsgPing, Bytes(2), 11));
+
+        await router.CancelStagedWorldPortAsync(TransferId, 5, 7, "ek", "target-lost");
+
+        Assert.Null(session.Kicked);
+        Assert.Equal(new[] { (byte)1, (byte)2 }, session.ToSource.Select(sent => sent.Payload[0]).ToArray());
+        Assert.Empty(env.TargetLink.Sent);
+        Assert.Empty(env.TargetLink.Closed); // the lost target session is not closed a second time
+        Assert.Equal(7, session.SessionGeneration);
+        Assert.Equal(0, router.StagedCount);
+    }
+
+    [Fact]
+    public async Task TargetSessionClosedAfterCommit_KicksTheClient_ButAStaleGenerationDoesNot()
+    {
+        (GatewayTransferRouter router, _, FakeSession session) = Setup();
+        await Stage(router);
+        await router.CommitRouteSwitchAsync(TransferId, 5, 7, "kal", Token);
+
+        router.OnTargetSessionClosed(session, 7, ClusterSessionDetachReason.LinkLost);
+        Assert.Null(session.Kicked);
+
+        router.OnTargetSessionClosed(session, 70, ClusterSessionDetachReason.LinkLost);
+        Assert.NotNull(session.Kicked);
+    }
+
+    [Fact]
     public async Task Commit_ForAClientThatLeft_ClosesTheTargetSessionAndRoutesNothing()
     {
         (GatewayTransferRouter router, FakeEnvironment env, FakeSession session) = Setup();
