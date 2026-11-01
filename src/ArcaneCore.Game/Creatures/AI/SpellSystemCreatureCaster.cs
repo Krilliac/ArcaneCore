@@ -100,10 +100,18 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
         SpellCastTargets targets = target is null || ReferenceEquals(target, caster)
             ? SpellCastTargets.ForSelf()
             : SpellCastTargets.ForUnit(target.Guid);
-        return spells.CastSpell(caster, spellId, targets, triggered) == SpellCastResult.CastOk
-            ? CreatureCastResult.Ok
-            : CreatureCastResult.Failed;
+        return Map(spells.CastSpell(caster, spellId, targets, triggered));
     }
+
+    /// <summary>The creature-facing outcome of a spell result; power, too-close and silence or pacify are told apart for the EventAI main spell.</summary>
+    private static CreatureCastResult Map(SpellCastResult result) => result switch
+    {
+        SpellCastResult.CastOk => CreatureCastResult.Ok,
+        SpellCastResult.NoPower => CreatureCastResult.NoPower,
+        SpellCastResult.TooClose => CreatureCastResult.TooClose,
+        SpellCastResult.Silenced or SpellCastResult.Pacified => CreatureCastResult.Prevented,
+        _ => CreatureCastResult.Failed,
+    };
 
     public CreatureCastResult CastByUnit(Unit caster, uint spellId, Unit? target, bool triggered)
     {
@@ -131,6 +139,34 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
         var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.DestLocation, Dest = (x, y, z) };
         return spells.CastSpell(caster, spellId, targets, triggered) == SpellCastResult.CastOk
             ? CreatureCastResult.Ok : CreatureCastResult.Failed;
+    }
+
+    /// <inheritdoc/>
+    public bool CanCastMainSpell(Creature caster, uint spellId)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        SpellSystem spells = Spells;
+        if (spells.Store.Get(spellId) is not { } spell)
+        {
+            return true;
+        }
+
+        // cmangos IsMainSpellPrevented (UnitAI.cpp:1115-1124): not ready, or silenced/pacified for the spell's prevention type.
+        if (!spells.IsSpellReadyIgnoringGlobalCooldown(caster, spell))
+        {
+            return false;
+        }
+
+        UnitFlags flags = caster.UnitFlags;
+        if ((spell.PreventionType == SpellConstants.PreventionTypeSilence && (flags & UnitFlags.Silenced) != 0)
+            || (spell.PreventionType == SpellConstants.PreventionTypePacify && (flags & UnitFlags.Pacified) != 0))
+        {
+            return false;
+        }
+
+        // cmangos IsEligibleForDistancing (UnitAI.cpp:1126-1132): a mana user needs more than twice the main spell's cost.
+        return caster.PowerType != PowerType.Mana
+            || (ulong)SpellSystem.CalculatePowerCost(caster, spell) * 2 < SpellSystem.GetPower(caster, PowerType.Mana);
     }
 
     public bool IsCasting(Creature caster)

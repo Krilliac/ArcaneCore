@@ -106,6 +106,15 @@ public enum CreatureCastResult
     AlreadyCasting,
     AuraPresent,
     Failed,
+
+    /// <summary>The cast failed for lack of mana, rage or energy (cmangos CAST_FAIL_POWER).</summary>
+    NoPower,
+
+    /// <summary>The target is inside the spell's minimum range (cmangos CAST_FAIL_TOO_CLOSE).</summary>
+    TooClose,
+
+    /// <summary>The caster is silenced or pacified for this spell (cmangos CAST_FAIL_CAST_PREVENTED).</summary>
+    Prevented,
 }
 
 /// <summary>
@@ -129,6 +138,12 @@ public interface ICreatureSpellCaster
     /// then resolve to that unit, not to the scripted creature. <see cref="CreatureCastResult.NoSpellSystem"/> by default.
     /// </summary>
     CreatureCastResult CastByUnit(Unit caster, uint spellId, Unit? target, bool triggered) => CreatureCastResult.NoSpellSystem;
+
+    /// <summary>
+    /// cmangos UnitAI::IsEligibleForDistancing and !IsMainSpellPrevented for <paramref name="spellId"/> (UnitAI.cpp:1126-1147): the spell is ready, the
+    /// caster is not silenced or pacified for it and a mana user has more than twice its cost. True by default.
+    /// </summary>
+    bool CanCastMainSpell(Creature caster, uint spellId) => true;
 
     bool IsCasting(Creature caster);
 
