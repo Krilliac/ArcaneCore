@@ -110,4 +110,28 @@ public sealed class HandlerFuzzInvariantTests
         Assert.True(missing.Length == 0, "CheckPlayer never fired: " + string.Join(", ", missing));
         Assert.Empty(fired.Except(HandlerFuzzKit.AllBreakNames)); // a new break name must be listed (and shown to fire) here
     }
+
+    /// <summary>
+    /// The fuzz fixture's content reaches the service handlers: stock, trainer spells, quests the creature starts and ends, taxi nodes and
+    /// a path between them, and loot for the chest and the creature. Loaded through the store interfaces the host reads at startup.
+    /// </summary>
+    [Fact]
+    public async Task FuzzFixtureContent_HasVendorTrainerQuestTaxiAndLoot()
+    {
+        var content = new HandlerFuzzFixtureContent();
+        NpcContent npc = await ((INpcContentStore)content).LoadAsync();
+        QuestContent quests = await ((IQuestContentStore)content).LoadAsync();
+
+        Assert.Contains(npc.VendorItems, v => v.Entry == HandlerFuzzKit.FixtureCreatureEntry && v.MaxCount == 0);
+        Assert.Contains(npc.VendorItems, v => v.Entry == HandlerFuzzKit.FixtureCreatureEntry && v.MaxCount > 0); // limited stock reaches the restock paths
+        Assert.Contains(npc.TrainerSpells, t => t.Entry == HandlerFuzzKit.FixtureCreatureEntry);
+        Assert.True(npc.TaxiNodes.Count >= 2 && npc.TaxiPaths.Any(p => p.FromNode != p.ToNode), "two taxi nodes and a path between them");
+        Assert.NotEmpty(quests.Templates);
+        Assert.All(quests.Templates, t =>
+        {
+            Assert.Contains(quests.Starters, r => r.Id == HandlerFuzzKit.FixtureCreatureEntry && r.Quest == t.Entry);
+            Assert.Contains(quests.Enders, r => r.Id == HandlerFuzzKit.FixtureCreatureEntry && r.Quest == t.Entry);
+        });
+        Assert.True(content.Loot.RowCount >= 2, "loot rows for the chest and the creature");
+    }
 }

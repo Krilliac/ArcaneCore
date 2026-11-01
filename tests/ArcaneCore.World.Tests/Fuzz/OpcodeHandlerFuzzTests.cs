@@ -13,7 +13,6 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Kernel.WorldData.GameObjects;
-using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -79,9 +78,9 @@ internal sealed class HandlerFuzzOptions
 /// <summary>One fuzz run: the host, the three sessions, the case loop, the findings and the report.</summary>
 internal sealed class HandlerFuzzRun
 {
-    private const uint PotionEntry = 910001;
-    private const uint SwordEntry = 910002;
-    private const uint BagEntry = 910003;
+    private const uint PotionEntry = HandlerFuzzFixtureContent.PotionEntry;
+    private const uint SwordEntry = HandlerFuzzFixtureContent.SwordEntry;
+    private const uint BagEntry = HandlerFuzzFixtureContent.BagEntry;
     private const int WorldBatchCases = 128;
     private const int MaxRecoveriesPerOpcode = 3;
     private static readonly TimeSpan WorldBatchBudget = TimeSpan.FromMilliseconds(250);
@@ -186,12 +185,20 @@ internal sealed class HandlerFuzzRun
         }
     }
 
+    private static uint[] ChestData()
+    {
+        uint[] data = new uint[GameObjectTemplate.DataCount];
+        data[1] = HandlerFuzzFixtureContent.ChestLootId; // the chest's loot id (gameobject_loot_template)
+        return data;
+    }
+
     // --- run -------------------------------------------------------------------------------
 
     public async Task<List<HandlerFuzzFinding>> ExecuteAsync()
     {
         var total = Stopwatch.StartNew();
         var setupWatch = Stopwatch.StartNew();
+        var fixtureContent = new HandlerFuzzFixtureContent();
         var itemContent = new ItemTestContent();
         itemContent.Templates.Templates.Add(new ItemTemplate { Entry = PotionEntry, Class = 0, Name = "Fuzz Potion", DisplayId = 1, Quality = 1, Stackable = 20, BuyPrice = 100, SellPrice = 25 });
         itemContent.Templates.Templates.Add(new ItemTemplate { Entry = SwordEntry, Class = 2, SubClass = 7, Name = "Fuzz Sword", DisplayId = 2, Quality = 1, InventoryType = 13, BuyPrice = 1000, SellPrice = 250, MaxDurability = 40 });
@@ -202,7 +209,7 @@ internal sealed class HandlerFuzzRun
         var npc = new CreatureTemplate
         {
             Entry = HandlerFuzzKit.FixtureCreatureEntry, Name = "Fuzz Servant", MinLevel = 5, MaxLevel = 5, DisplayIds = [49], Faction = 35,
-            MinLevelHealth = 100, MaxLevelHealth = 100,
+            MinLevelHealth = 100, MaxLevelHealth = 100, TrainerType = 0, TrainerClass = 1,
             NpcFlags = (uint)(NpcFlags.Gossip | NpcFlags.QuestGiver | NpcFlags.Vendor | NpcFlags.FlightMaster | NpcFlags.Trainer | NpcFlags.Innkeeper
                 | NpcFlags.Banker | NpcFlags.Petitioner | NpcFlags.TabardDesigner | NpcFlags.Auctioneer | NpcFlags.StableMaster | NpcFlags.Repair),
         };
@@ -210,12 +217,13 @@ internal sealed class HandlerFuzzRun
         var creatureContext = new CreatureTestContext(new CreatureContent([npc], [npcSpawn], [], [], []));
         var chest = new GameObjectTemplate
         {
-            Entry = HandlerFuzzKit.FixtureGameObjectEntry, Type = (uint)GameObjectType.Chest, DisplayId = 10, Name = "Fuzz Chest", Data = new uint[GameObjectTemplate.DataCount],
+            Entry = HandlerFuzzKit.FixtureGameObjectEntry, Type = (uint)GameObjectType.Chest, DisplayId = 10, Name = "Fuzz Chest", Data = ChestData(),
         };
         var chestSpawn = new GameObjectSpawn { Guid = HandlerFuzzKit.FixtureSpawn, Entry = HandlerFuzzKit.FixtureGameObjectEntry, MapId = 0, X = -8948f, Y = -132.5f, Z = 83.5f };
-        var gameObjectContext = new GameObjectTestContext(new GameObjectContent([chest], [chestSpawn], [], [], []), LootContent.Empty);
+        var gameObjectContext = new GameObjectTestContext(new GameObjectContent([chest], [chestSpawn], [], [], []), fixtureContent.Loot);
         CreatureTestStore.Current.Value = creatureContext;
         GameObjectTestStore.Current.Value = gameObjectContext;
+        HandlerFuzzContentServices.Current.Value = fixtureContent;
         try
         {
             using (itemContent.Use())
@@ -227,6 +235,7 @@ internal sealed class HandlerFuzzRun
         {
             CreatureTestStore.Current.Value = null;
             GameObjectTestStore.Current.Value = null;
+            HandlerFuzzContentServices.Current.Value = null;
         }
 
         _host.World.WorldTick += _ => Interlocked.Increment(ref _ticks);
@@ -489,6 +498,26 @@ internal sealed class HandlerFuzzRun
         await old.DisposeAsync();
     }
 
+    /// <summary>
+    /// The same invariants for the character on the other map (world thread): a handler working on the primary session must not corrupt a player it
+    /// does not own. Inventory and money may change (a handler may legitimately reach another player), so only the position, map, health and
+    /// caps are checked; a player that is out of the world or a session that was consumed is skipped (EnsureFleet replaces it before the next opcode).
+    /// </summary>
+    private void CheckOtherMapPlayer(List<HandlerFuzzBreak> into)
+    {
+        if (_other is not { Player: { } player } slot || !WorldSlotHealthy(slot))
+        {
+            return;
+        }
+
+        var found = new List<HandlerFuzzBreak>();
+        HandlerFuzzKit.CheckPlayer(player, HandlerFuzzInventory.Take(player), mayChange: true, mapChecks: true, found);
+        foreach (HandlerFuzzBreak b in found)
+        {
+            into.Add(new HandlerFuzzBreak("other-map-" + b.Name, "player on the other map: " + b.Detail));
+        }
+    }
+
     private static bool WorldSlotHealthy(Slot s)
         => s.Player is { } player && s.Session.State == SessionState.InWorld && !HandlerFuzzKit.IsKicked(s.Session)
             && ReferenceEquals(s.Session.Player, player) && player.Map is not null && player.Combat.DeathState == DeathState.Alive && player.Health > 0;
@@ -626,6 +655,7 @@ internal sealed class HandlerFuzzRun
 
             breaks.Clear();
             HandlerFuzzKit.CheckPlayer(player, before, mayChange, mapChecks: stop == Stop.None, breaks);
+            CheckOtherMapPlayer(breaks);
             foreach (HandlerFuzzBreak broken in breaks)
             {
                 AddFinding(handler.Opcode, broken.Name, "-", broken.Detail, fuzzCase.Description, index, fuzzCase.Payload);
@@ -750,6 +780,11 @@ internal sealed class HandlerFuzzRun
             bool hung = false;
             if (thrown is null)
             {
+                if (!task.IsCompleted)
+                {
+                    stats.Suspended++; // the rest of this handler runs after an await, off the thread-static read trace
+                }
+
                 try
                 {
                     await task.WaitAsync(SessionHandlerDeadline);
@@ -788,6 +823,7 @@ internal sealed class HandlerFuzzRun
                     bool k = HandlerFuzzKit.IsKicked(slot.Session);
                     bool g = !WorldSlotHealthy(slot);
                     HandlerFuzzInventory a = HandlerFuzzKit.CheckPlayer(slot.Player!, before, mayChange, mapChecks: !k && slot.Player!.Map is not null, breaks);
+                    CheckOtherMapPlayer(breaks);
                     return (g, k, a);
                 });
                 if (!ok)
@@ -945,12 +981,14 @@ internal sealed class HandlerFuzzRun
         int byteLevel = invoked - traced;
         _output.WriteLine($"coverage: {tableCount} handlers in table, {_stats.Count} selected, {invoked} invoked ({_stats.Count(s => s.Kind == "world" && s.Cases > 0)} world, {_stats.Count(s => s.Kind == "session" && s.Cases > 0)} session), {stripped} stripped (counted, not invoked), {traced} traced, {byteLevel} byte-level");
         _output.WriteLine($"cases executed: {_stats.Sum(s => s.Cases)}; kicks: {_stats.Sum(s => s.Kicks)}; recoveries: {_stats.Sum(s => s.Recoveries)} (+{_carryOverRecoveries} carry-over); transfers completed/stuck: {_stats.Sum(s => s.TransfersCompleted)}/{_stats.Sum(s => s.TransfersStuck)}; ticks seen: {Interlocked.Read(ref _ticks)}");
+        _output.WriteLine($"handlers suspended at an await (their reads past the first await are not traced): {_stats.Count(s => s.Suspended > 0)} handlers, {_stats.Sum(s => s.Suspended)} cases");
         _output.WriteLine($"findings: {_order.Count} distinct ({_rawOccurrences} occurrences); wall {total.TotalSeconds:F1} s (setup {setup.TotalSeconds:F1} s, world handlers {world.TotalSeconds:F1} s, session handlers {session.TotalSeconds:F1} s)");
         foreach (HandlerFuzzStats s in _stats)
         {
             string flags = (s.Kicks > 0 ? $" kicks={s.Kicks}" : string.Empty) + (s.Recoveries > 0 ? $" recoveries={s.Recoveries}" : string.Empty)
                 + (s.RecoveryCapped ? " RECOVERY-CAPPED" : string.Empty) + (s.TransfersCompleted > 0 ? $" transfers={s.TransfersCompleted}" : string.Empty)
-                + (s.TransfersStuck > 0 ? $" transfers-stuck={s.TransfersStuck}" : string.Empty);
+                + (s.TransfersStuck > 0 ? $" transfers-stuck={s.TransfersStuck}" : string.Empty)
+                + (s.Suspended > 0 ? $" suspended={s.Suspended}" : string.Empty);
             _output.WriteLine(string.Create(CultureInfo.InvariantCulture,
                 $"  {WorldOpcodeNames.GetName(s.Opcode),-40} {(ushort)s.Opcode,4} {s.Kind,-8} {(s.Kind == "stripped" ? "-" : s.Traced ? $"traced/{s.Fields}f" : "byte-level"),-12} cases={s.Cases,5} {s.Millis,7:F0} ms{flags}"));
         }

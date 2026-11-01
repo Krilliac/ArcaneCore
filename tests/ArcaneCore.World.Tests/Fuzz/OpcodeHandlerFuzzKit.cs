@@ -564,6 +564,9 @@ internal sealed class HandlerFuzzStats(WorldOpcode opcode, string kind)
 
     public int TransfersStuck { get; set; }
 
+    /// <summary>Session cases whose handler returned a task that was not yet complete (it continued after an await).</summary>
+    public int Suspended { get; set; }
+
     public double Millis { get; set; }
 
     public string? FirstKick { get; set; }
