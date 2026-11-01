@@ -1,13 +1,16 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
+using System.Text.RegularExpressions;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Cluster.Supervision;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Features;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -39,8 +42,9 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
     : IWorldFeature, IDisposable
 {
     /// <summary>
-    /// The nodes a full split cluster started by <c>start-cluster.ps1</c> runs: the three map workers, the gateway and the supervisor. A launcher
-    /// that starts fewer (or other) nodes passes its own list through <c>Cluster:NodeBridge:Endpoints</c> or <c>ARCANECORE_CLUSTER_ENDPOINTS</c>.
+    /// The fallback node list when neither an endpoint override nor supervisor children are configured: the three map workers, the gateway and the
+    /// supervisor. Under a supervisor the bridge lists the children it was configured with instead (<see cref="BuildSpecFromSupervisor"/>); an
+    /// operator can still override with <c>Cluster:NodeBridge:Endpoints</c> or <c>ARCANECORE_CLUSTER_ENDPOINTS</c>.
     /// </summary>
     public const string DefaultEndpointsSpec =
         "worker:EK|Worker|127.0.0.1:19081|0;" +
@@ -154,9 +158,24 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         }
 
         IsEnabled = true;
-        string spec = !string.IsNullOrWhiteSpace(explicitSpec) ? explicitSpec
-            : string.IsNullOrWhiteSpace(options.Endpoints) ? DefaultEndpointsSpec
-            : options.Endpoints;
+        // Precedence: the environment variable, then an Endpoints value an operator changed, then the nodes the cluster supervisor was configured
+        // to start (start-cluster.ps1 hands the world child that configuration), then the default.
+        bool endpointsChanged = !string.IsNullOrWhiteSpace(options.Endpoints)
+            && !string.Equals(options.Endpoints, DefaultEndpointsSpec, StringComparison.Ordinal);
+        string spec;
+        if (!string.IsNullOrWhiteSpace(explicitSpec))
+        {
+            spec = explicitSpec;
+        }
+        else if (endpointsChanged)
+        {
+            spec = options.Endpoints;
+        }
+        else
+        {
+            spec = BuildSpecFromSupervisor(services.GetService<IConfiguration>()) ?? DefaultEndpointsSpec;
+        }
+
         ParseSpec(spec);
         if (_nodes.Count == 0)
         {
@@ -221,6 +240,130 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         }
 
         _cts.Dispose();
+    }
+
+    /// <summary>
+    /// The endpoint spec for the nodes the cluster supervisor is configured to start (<c>Cluster:Supervisor:Processes</c>, which the supervisor
+    /// console's <c>Cluster__Supervisor__...</c> environment variables carry and the world child inherits): one entry per worker child (port from
+    /// its <c>--Cluster:Worker:Port</c> argument, maps from <c>Maps</c> or <c>--Cluster:Worker:OwnedMaps</c>) and per gateway child (port from
+    /// <c>--Gateway:Port</c>). Children of other roles, and children with no port in their arguments, are not monitored. Null when no supervisor
+    /// children are configured (the caller then uses the default); an empty string when some are configured but none is a monitorable node
+    /// (a combined world), so the bridge does not monitor nodes nobody started.
+    /// </summary>
+    internal static string? BuildSpecFromSupervisor(IConfiguration? configuration)
+    {
+        if (configuration is null)
+        {
+            return null;
+        }
+
+        var supervisor = new ClusterSupervisorOptions();
+        try
+        {
+            configuration.GetSection(ClusterSupervisorOptions.SectionName).Bind(supervisor);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException or ArgumentException)
+        {
+            return null;
+        }
+
+        if (supervisor.Processes.Count == 0)
+        {
+            return null;
+        }
+
+        var entries = new List<string>();
+        foreach (SupervisedProcessConfig process in supervisor.Processes.Values.OrderBy(p => p.Name, StringComparer.Ordinal))
+        {
+            bool isWorker = string.Equals(process.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase);
+            bool isGateway = string.Equals(process.Role, SupervisedRoles.Gateway, StringComparison.OrdinalIgnoreCase);
+            if (!isWorker && !isGateway)
+            {
+                continue;
+            }
+
+            string? portText = ArgumentValue(process.Arguments, isWorker ? "Cluster:Worker:Port" : "Gateway:Port");
+            if (!int.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out int port) || port is < 1 or > 65535)
+            {
+                continue;
+            }
+
+            string nodeId = (isWorker ? ArgumentValue(process.Arguments, "Cluster:Worker:NodeId") : null) ?? process.Name;
+            if (string.IsNullOrWhiteSpace(nodeId) || nodeId.AsSpan().IndexOfAny('|', ';') >= 0)
+            {
+                continue;
+            }
+
+            string host = "127.0.0.1";
+            if (isWorker
+                && IPAddress.TryParse(ArgumentValue(process.Arguments, "Cluster:Worker:BindAddress"), out IPAddress? bind)
+                && !bind.Equals(IPAddress.Any) && !bind.Equals(IPAddress.IPv6Any))
+            {
+                host = bind.ToString();
+            }
+
+            string maps = "-";
+            if (isWorker)
+            {
+                maps = ExpandMapList(!string.IsNullOrWhiteSpace(process.Maps) ? process.Maps : ArgumentValue(process.Arguments, "Cluster:Worker:OwnedMaps"));
+            }
+
+            string endpoint = host.Contains(':', StringComparison.Ordinal) ? $"[{host}]" : host;
+            entries.Add(string.Create(CultureInfo.InvariantCulture, $"{nodeId.Trim()}|{(isWorker ? "Worker" : "Gateway")}|{endpoint}:{port}|{maps}"));
+        }
+
+        return string.Join(';', entries);
+    }
+
+    /// <summary>The value of <c>--&lt;key&gt;=value</c> in a child's command-line string (surrounding quotes dropped), or null.</summary>
+    private static string? ArgumentValue(string arguments, string key)
+    {
+        if (string.IsNullOrWhiteSpace(arguments))
+        {
+            return null;
+        }
+
+        Match m = Regex.Match(arguments, "--" + Regex.Escape(key) + "=(?:\"([^\"]*)\"|(\\S+))", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!m.Success)
+        {
+            return null;
+        }
+
+        string value = m.Groups[1].Success ? m.Groups[1].Value : m.Groups[2].Value;
+        return value.Length == 0 ? null : value;
+    }
+
+    /// <summary>Turns a map list with inclusive ranges (<c>0,1,30-32</c>) into the comma list of ids the endpoint spec takes; <c>-</c> when empty or unparseable.</summary>
+    private static string ExpandMapList(string? maps)
+    {
+        if (string.IsNullOrWhiteSpace(maps))
+        {
+            return "-";
+        }
+
+        var ids = new List<uint>();
+        foreach (string part in maps.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            int dash = part.IndexOf('-', StringComparison.Ordinal);
+            if (dash > 0)
+            {
+                if (uint.TryParse(part.AsSpan(0, dash), NumberStyles.None, CultureInfo.InvariantCulture, out uint lo)
+                    && uint.TryParse(part.AsSpan(dash + 1), NumberStyles.None, CultureInfo.InvariantCulture, out uint hi)
+                    && lo <= hi && hi - lo < 1024)
+                {
+                    for (uint id = lo; id <= hi; id++)
+                    {
+                        ids.Add(id);
+                    }
+                }
+            }
+            else if (uint.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out uint single))
+            {
+                ids.Add(single);
+            }
+        }
+
+        return ids.Count == 0 ? "-" : string.Join(',', ids);
     }
 
     private void ParseSpec(string spec)
