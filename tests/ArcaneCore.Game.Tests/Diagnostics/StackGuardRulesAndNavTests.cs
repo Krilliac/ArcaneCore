@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
+using ArcaneCore.Game.Maps.Collision;
 using ArcaneCore.Game.Maps.Collision.MMaps;
 using ArcaneCore.Game.Rules;
+using ArcaneCore.Game.Tests.Rules;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Rules;
 using ArcaneCore.TestSupport;
