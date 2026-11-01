@@ -327,7 +327,6 @@ public sealed class StandbyWorkerTests
         ["Cluster:Worker:Standby"] = standby ? "true" : "false",
         ["Cluster:Worker:Port"] = "0",
         ["Cluster:Worker:LinkSecret"] = Secret,
-        ["Cluster:Worker:VersionsFromDatabase"] = "false", // the explicit label override: these workers run on fixtures with no recorded schema versions
     };
 
     internal static async Task<CharacterOwnershipRow> OwnershipAsync(SyntheticArcaneServer server)
@@ -345,7 +344,7 @@ public sealed class StandbyWorkerTests
             ? services.GetRequiredService<GatewayWorkerEndpoint>()
             : new GatewayWorkerEndpoint(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = 0, LinkSecret = Secret, VersionsFromDatabase = false }),
+                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = 0, LinkSecret = Secret }),
                 services.GetRequiredService<IOptions<WorldSessionOptions>>(),
                 services.GetRequiredService<ArcaneCore.World.Handlers.OpcodeTable>(),
                 server.World,

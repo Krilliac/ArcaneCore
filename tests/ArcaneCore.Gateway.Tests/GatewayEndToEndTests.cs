@@ -508,7 +508,7 @@ public sealed class GatewayEndToEndTests
             IServiceProvider services = server.Services;
             var endpoint = new GatewayWorkerEndpoint(
                 services.GetRequiredService<IServiceScopeFactory>(),
-                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = 0, LinkSecret = Secret, VersionsFromDatabase = false }),
+                Options.Create(new GatewayWorkerOptions { Enabled = true, Port = 0, LinkSecret = Secret }),
                 services.GetRequiredService<IOptions<WorldSessionOptions>>(),
                 services.GetRequiredService<OpcodeTable>(),
                 server.World,

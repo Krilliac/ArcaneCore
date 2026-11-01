@@ -1,3 +1,5 @@
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster;
 
@@ -38,13 +40,13 @@ public sealed class GatewayWorkerOptions
     public bool VersionsFromDatabase { get; set; } = true;
 
     /// <summary>Content revision label both ends of the link must agree on; an override, used only while <see cref="VersionsFromDatabase"/> is false.</summary>
-    public string ContentRevision { get; set; } = "dev";
+    public string ContentRevision { get; set; } = GatewayManifestVersions.ContentRevisionFor(WorldDbContext.Schema.CurrentVersion);
 
     /// <summary>Characters schema version both ends must agree on (an override label, used only while <see cref="VersionsFromDatabase"/> is false).</summary>
-    public int CharactersSchemaVersion { get; set; } = 1;
+    public int CharactersSchemaVersion { get; set; } = CharacterDbContext.Schema.CurrentVersion;
 
     /// <summary>World schema version both ends must agree on (an override label, used only while <see cref="VersionsFromDatabase"/> is false).</summary>
-    public int WorldSchemaVersion { get; set; } = 1;
+    public int WorldSchemaVersion { get; set; } = WorldDbContext.Schema.CurrentVersion;
 
     /// <summary>The maps this worker owns, as a list of ids and inclusive ranges (<c>0,1,30-40</c>; separators comma, semicolon or space). Empty, the default, owns every map, which keeps the combined behaviour. With a list, the world never creates or enters a map outside it (login, teleport, spawn, bot travel refuse cleanly until redirects and far transfers to the owning worker exist), and the list is announced in the link manifest. Lists of different workers must not overlap (the supervisor's Processes:*:Maps check).</summary>
     public string OwnedMaps { get; set; } = string.Empty;
