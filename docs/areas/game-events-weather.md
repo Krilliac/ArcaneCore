@@ -166,7 +166,7 @@ Pure maths in `Game/WorldState/Events`, every function taking the time and the z
   needs it to come back after a restart ([playbots-scenarios-events.md](playbots-scenarios-events.md)).
 - `GameEventFeature.AddListener` returns an `IDisposable` that removes the listener again (disposed with the owner's subscription bag on a
   detach); the bot scenarios ([playbots-scenarios-events.md](playbots-scenarios-events.md)) are such a listener.
-- Event mails (`SendEventMails`) are not delivered (see limits).
+- Event mails (`SendEventMails`): on a start (not a resume after a restart) `GameEventService` hands each `game_event_mail` row of the event to its `IGameEventMailSender`; the negative event number's rows go out when it stops (GameEventMgr.cpp:780, :802-804, :1038-1061). `GameEventFeature` installs `GameEventMailDelivery`: it mails the template to the online characters whose race bit is in the row's `race_mask` (with a `quest`, only those who finished it) through the registered `IScriptMailSink`. Tests: `tests/ArcaneCore.World.Tests/WorldState/GameEventMailTests.cs`.
 
 ### Event spawns (`game-event-spawn-gate`)
 
@@ -334,15 +334,13 @@ unchecked: any field may be set, the HUD shows only the ones a WorldStateUI row 
 
 ## Not delivered (limits)
 
-- **Event mails** (`game_event_mail`, vmangos `SendEventMails`, GameEventMgr.cpp:1038-1063; classic-db has one row, on the script-started
-  Scourge Invasion event 17): read and indexed (`GameEventRows.Mails`), not delivered. There is no system-mail sender or MailTemplate content in this tree
-  (it needs the economy lane); nothing is stubbed.
+- **Event mail reach** (see above): only characters online when the event starts are mailed (vmangos' mass mail also reaches offline ones from the database), and the letter is only as real as the registered `IScriptMailSink`: with none registered the rows are reported once and skipped, and no sink in this tree yet resolves MailTemplate.dbc text or `mail_loot_template` items.
 - **Darkmoon Faire schedules** (`schedule_type` 2-10, computed): rejected loudly (event disabled, issue line), not implemented: classic-db has no row that uses them.
 - **Hardcoded vmangos events** (`HardcodedEvents.cpp`: elemental invasion, nightmare dragons, Darkmoon, goblets, Scourge invasion, AQ war effort):
   only the seam exists for vmangos-specific handlers (`IWorldEventHandler`, with `hardcoded` / `disabled` handling in the service). The mangos-classic AQ phases and Colossus flags have a separate durable owner ([war-effort-20261009.md](../integration/war-effort-20261009.md)); the six Scourge zone counts and event gates do too ([scourge-invasion-20261009.md](../integration/scourge-invasion-20261009.md)). Their remaining choreography still needs handlers.
 - **Weekly recompute**: mangos-classic recomputes computed schedules at the weekly reset (World.cpp:2337); ArcaneCore has no weekly reset, so they are
   recomputed when the local calendar day changes. There is no `ScheduleRecompute` option because `WeeklyReset` could not work.
-- **Event creature spells and equipment**, **event mails**, **`.npc info` / `.gobject info` event lines**: see above.
+- **Event creature spells and equipment**, **`.npc info` / `.gobject info` event lines**: see above.
 - **A second quest-template reload** and **a manual `.event start/stop` surviving `.reload game_event`**: see above.
 - **Provider coverage**: the new world and characters stores were only exercised on SQLite on this machine (no MariaDB or PostgreSQL server). The provider
   theories (`TestDatabases.AvailableProviders`) are written against real provider semantics (non-transactional MariaDB DDL: re-runnable steps;
