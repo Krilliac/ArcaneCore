@@ -25,6 +25,9 @@ public static class ClusterPresenceHosting
     /// <summary>The gateway id stamped on presence entries of sessions served in this process.</summary>
     public const string LocalGatewayId = "gateway";
 
+    /// <summary>How often the cross-worker chat pump drains the deliveries queued for this worker.</summary>
+    public static readonly TimeSpan ChatPumpInterval = TimeSpan.FromMilliseconds(50);
+
     public static IServiceCollection AddClusterPresence(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -59,7 +62,37 @@ public static class ClusterPresenceHosting
                 sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterPresencePublisher>());
         });
         services.AddHostedService(sp => new PresencePublisherStarter(sp.GetRequiredService<ClusterPresencePublisher>()));
+        if (services.Any(d => d.ServiceType == typeof(RealmAuthorityLeaseKeeper)))
+        {
+            // Cross-worker chat (S2c): only where there can be another worker (cluster roles). Combined mode registers nothing, so every chat path stays local.
+            services.TryAddSingleton(sp =>
+            {
+                string workerId = sp.GetRequiredService<RealmAuthorityLeaseKeeper>().NodeId;
+                ClusterPresencePublisher publisher = sp.GetRequiredService<ClusterPresencePublisher>();
+                return new ClusterChatRouting(
+                    sp.GetRequiredService<IClusterSocialRouter>(),
+                    sp.GetRequiredService<IRealmPresenceDirectory>(),
+                    workerId,
+                    LocalGatewayId,
+                    guid => publisher.TryGetRegistration(guid, out long generation) ? generation : 0,
+                    sp.GetRequiredService<ILoggerFactory>().CreateLogger<ClusterChatRouting>());
+            });
+            services.AddHostedService(sp => new ChatRoutingStarter(sp.GetRequiredService<ClusterChatRouting>()));
+        }
+
         return services;
+    }
+
+    /// <summary>Starts the chat pump with the host and disposes the routing at stop (the container also disposes it; disposal is idempotent).</summary>
+    private sealed class ChatRoutingStarter(ClusterChatRouting routing) : IHostedService
+    {
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            routing.Start(ChatPumpInterval);
+            return Task.CompletedTask;
+        }
+
+        public async Task StopAsync(CancellationToken cancellationToken) => await routing.DisposeAsync().ConfigureAwait(false);
     }
 
     /// <summary>Starts the publisher's flush loop with the host; the publisher itself is disposed by the container.</summary>

@@ -281,12 +281,15 @@ public sealed partial class SpellSystem
             {
                 SpellEffectInfo effect = spell.Effects[i];
                 if ((saved.EffectMask & (1 << i)) == 0
-                    || effect.Effect is not (SpellEffectName.ApplyAura or SpellEffectName.ApplyAreaAuraParty))
+                    || effect.Effect is not (SpellEffectName.ApplyAura or SpellEffectName.ApplyAreaAuraParty or SpellEffectName.ApplyAreaAuraFriend or SpellEffectName.ApplyAreaAuraEnemy))
                 {
                     continue;
                 }
 
-                var aura = new SpellAura(i, effect.AuraType, saved.Amounts.ElementAtOrDefault(i), effect.Amplitude, effect.MiscValue, unit.PowerType);
+                // The enemy area source on the caster carries no aura type and no period (vmangos SpellAuras.cpp:443-444; EffectApplyAreaAuraEnemy), so the
+                // restored source is built the same way and UpdateAreaAuras spreads the real aura again once the unit is back in the world.
+                bool enemySource = effect.Effect == SpellEffectName.ApplyAreaAuraEnemy;
+                var aura = new SpellAura(i, enemySource ? AuraType.None : effect.AuraType, saved.Amounts.ElementAtOrDefault(i), enemySource ? 0 : effect.Amplitude, effect.MiscValue, unit.PowerType);
                 int timer = saved.PeriodicTimers.ElementAtOrDefault(i);
                 if (aura.IsPeriodic)
                 {

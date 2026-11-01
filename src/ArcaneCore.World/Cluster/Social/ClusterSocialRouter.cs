@@ -70,6 +70,40 @@ public sealed record RoutedSocialDelivery(
 /// <summary>Result of routing a <see cref="ClusterSocialMessage"/> through <see cref="IClusterSocialRouter"/>.</summary>
 public sealed record SocialRouteResult(SocialRouteStatus Status, IReadOnlyList<RoutedSocialDelivery> Deliveries);
 
+/// <summary>What a channel moderation request changes at the holder (<see cref="IClusterSocialRouter.ModerateChannel"/>). Values are wire values: append only.</summary>
+public enum ChannelModerationAction : byte
+{
+    /// <summary>The actor becomes owner and moderator of a channel that has no owner (the first joiner); refused when it is owned.</summary>
+    ClaimOwner = 1,
+
+    /// <summary>Hands ownership to the target (who also becomes a moderator); the actor must be owner, moderator or staff.</summary>
+    SetOwner = 2,
+
+    AddModerator = 3,
+
+    RemoveModerator = 4,
+
+    /// <summary>Bans the target: it is unsubscribed, cannot join again and its lines are refused.</summary>
+    Ban = 5,
+
+    Unban = 6,
+
+    /// <summary>Mutes the target: its lines are refused while it stays subscribed.</summary>
+    Mute = 7,
+
+    Unmute = 8,
+
+    /// <summary>Removes the target from the channel without recording a ban; same rights as <see cref="Ban"/>.</summary>
+    Kick = 9,
+}
+
+/// <summary>The moderation state the holder keeps for one custom channel: its owner (0 when none) and the sorted guids of its moderators, banned and muted characters.</summary>
+public sealed record ChannelModerationState(ulong Owner, IReadOnlyList<ulong> Moderators, IReadOnlyList<ulong> Banned, IReadOnlyList<ulong> Muted)
+{
+    /// <summary>True when <paramref name="characterGuid"/> may not speak in the channel (banned or muted).</summary>
+    public bool IsBarred(ulong characterGuid) => Banned.Contains(characterGuid) || Muted.Contains(characterGuid);
+}
+
 /// <summary>
 /// Realm-wide cross-worker social router (M15.2, <c>docs/CLUSTERING_DESIGN.md</c> §180, §212, §218-219, §565).
 /// Routes whispers, group chat/control, guild chat/events, custom channel messages, and broadcasts across workers
@@ -94,6 +128,23 @@ public interface IClusterSocialRouter
     IReadOnlyList<RoutedSocialDelivery> DrainWorkerDeliveries(string workerId);
 
     /// <summary>
+    /// Drain the oldest pending deliveries queued for <paramref name="workerId"/>, at most one peer-link reply's worth (<see cref="InMemoryClusterSocialRouter.MaxDrainBatchDeliveries"/>
+    /// deliveries and <see cref="InMemoryClusterSocialRouter.MaxDrainBatchBytes"/> encoded bytes); the remainder stays queued. Call again until it returns an empty list.
+    /// </summary>
+    IReadOnlyList<RoutedSocialDelivery> DrainWorkerDeliveriesBatch(string workerId);
+
+    /// <summary>
+    /// A moderation change of a custom channel, held at the router so every worker sees one owner, moderator, ban and mute state. <paramref name="actorGuid"/> must be the channel's
+    /// owner or a moderator, or an online character of staff security (SetOwner and any action against the owner need the owner or staff; except for <see cref="ChannelModerationAction.ClaimOwner"/>, which needs an unowned channel and the actor to be
+    /// the target and a member). Refused (false) for an unknown channel, a missing right or a full list (<see cref="InMemoryClusterSocialRouter.MaxModerationEntries"/>).
+    /// A ban also unsubscribes the target.
+    /// </summary>
+    bool ModerateChannel(string channelName, ChannelModerationAction action, ulong actorGuid, ulong targetGuid);
+
+    /// <summary>The moderation state of a channel that has subscribers, or null.</summary>
+    ChannelModerationState? GetChannelModeration(string channelName);
+
+    /// <summary>
     /// Atomically flush all queued deliveries originating from or addressed to <paramref name="characterGuid"/>'s
     /// gateway before conditionally removing the character's presence entry and custom channel memberships.
     /// Ensures messages sent before logout are delivered in causal order before the player disappears from presence.
@@ -111,6 +162,32 @@ public interface IClusterSocialRouter
 /// </summary>
 public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
 {
+    /// <summary>Most deliveries <see cref="DrainWorkerDeliveriesBatch"/> returns at once.</summary>
+    public const int MaxDrainBatchDeliveries = 1024;
+
+    /// <summary>Most encoded bytes (<see cref="PresenceWireCodec.DeliveryWireSize"/>) <see cref="DrainWorkerDeliveriesBatch"/> returns at once: well under the peer link's 64 KB payload limit.</summary>
+    public const int MaxDrainBatchBytes = 48 * 1024;
+
+    /// <summary>Most deliveries kept per gateway queue; the oldest are dropped beyond it (a gateway that never drains, such as the shared one of a cluster realm, must not grow without bound).</summary>
+    public const int MaxGatewayQueueDeliveries = 256;
+
+    /// <summary>Most encoded bytes kept per gateway queue (the oldest are dropped beyond it), so a drain or an ordered logout flush of a gateway queue always fits one peer-link reply.</summary>
+    public const int MaxGatewayQueueBytes = 32 * 1024;
+
+    /// <summary>Most moderators, banned and muted characters kept per channel and list.</summary>
+    public const int MaxModerationEntries = 1024;
+
+    /// <summary>The account security (<c>AccountSecurity.GameMaster</c>) from which a character may moderate any channel.</summary>
+    private const byte StaffSecurity = 2;
+
+    private sealed class ChannelModeration
+    {
+        public ulong Owner;
+        public readonly HashSet<ulong> Moderators = [];
+        public readonly HashSet<ulong> Banned = [];
+        public readonly HashSet<ulong> Muted = [];
+    }
+
     private readonly IRealmPresenceDirectory _directory;
     private readonly int _dedupCapacity;
     private readonly Lock _gate = new();
@@ -119,6 +196,8 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
     private readonly Queue<(Guid MessageId, (ulong SenderGuid, long SessionGeneration, long Sequence) SenderKey)> _dedupOrder = new();
     private readonly Dictionary<string, Dictionary<ulong, long>> _channels = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<RoutedSocialDelivery>> _gatewayQueues = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _gatewayQueueBytes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ChannelModeration> _moderation = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<RoutedSocialDelivery>> _workerQueues = new(StringComparer.Ordinal);
     private long _nextDeliverySequence;
 
@@ -185,7 +264,7 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
                     seq,
                     message.PayloadText);
                 deliveries.Add(delivery);
-                Enqueue(_gatewayQueues, recipient.GatewayId, delivery);
+                EnqueueGateway(recipient.GatewayId, delivery);
                 Enqueue(_workerQueues, recipient.WorkerId, delivery);
             }
 
@@ -208,6 +287,11 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
             if (active is null || active.SessionGeneration != sessionGeneration)
             {
                 return false;
+            }
+
+            if (_moderation.TryGetValue(channelName, out ChannelModeration? moderation) && moderation.Banned.Contains(characterGuid))
+            {
+                return false; // banned at the holder: refused whichever worker the character joins from
             }
 
             if (!_channels.TryGetValue(channelName, out Dictionary<ulong, long>? members))
@@ -237,12 +321,7 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
                 return false;
             }
 
-            members.Remove(characterGuid);
-            if (members.Count == 0)
-            {
-                _channels.Remove(channelName);
-            }
-
+            DropMember(channelName, members, characterGuid);
             return true;
         }
     }
@@ -256,7 +335,7 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
 
         lock (_gate)
         {
-            return DrainQueue(_gatewayQueues, gatewayId);
+            return DrainGatewayQueue(gatewayId);
         }
     }
 
@@ -271,6 +350,184 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
         {
             return DrainQueue(_workerQueues, workerId);
         }
+    }
+
+    public IReadOnlyList<RoutedSocialDelivery> DrainWorkerDeliveriesBatch(string workerId)
+    {
+        if (string.IsNullOrWhiteSpace(workerId))
+        {
+            return [];
+        }
+
+        lock (_gate)
+        {
+            if (!_workerQueues.TryGetValue(workerId, out List<RoutedSocialDelivery>? queue) || queue.Count == 0)
+            {
+                return [];
+            }
+
+            int take = 0;
+            long bytes = 0;
+            while (take < queue.Count && take < MaxDrainBatchDeliveries)
+            {
+                int size = PresenceWireCodec.DeliveryWireSize(queue[take]);
+                if (size > MaxDrainBatchBytes)
+                {
+                    // One delivery that can never fit a reply would block the queue for good: it is dropped (its text exceeds anything chat produces).
+                    queue.RemoveAt(take);
+                    continue;
+                }
+
+                if (bytes + size > MaxDrainBatchBytes)
+                {
+                    break;
+                }
+
+                bytes += size;
+                take++;
+            }
+
+            if (take == 0)
+            {
+                return [];
+            }
+
+            RoutedSocialDelivery[] batch = [.. queue.GetRange(0, take)];
+            queue.RemoveRange(0, take);
+            return batch;
+        }
+    }
+
+    public bool ModerateChannel(string channelName, ChannelModerationAction action, ulong actorGuid, ulong targetGuid)
+    {
+        if (string.IsNullOrWhiteSpace(channelName) || actorGuid == 0 || targetGuid == 0 || !Enum.IsDefined(action))
+        {
+            return false;
+        }
+
+        lock (_gate)
+        {
+            if (!_channels.TryGetValue(channelName, out Dictionary<ulong, long>? members))
+            {
+                return false;
+            }
+
+            if (!_moderation.TryGetValue(channelName, out ChannelModeration? state))
+            {
+                state = new ChannelModeration();
+                _moderation[channelName] = state;
+            }
+
+            if (action == ChannelModerationAction.ClaimOwner)
+            {
+                if (state.Owner != 0 || actorGuid != targetGuid || !members.ContainsKey(actorGuid))
+                {
+                    return false;
+                }
+
+                state.Owner = actorGuid;
+                state.Moderators.Add(actorGuid);
+                return true;
+            }
+
+            // The holder's owner and moderator sets are authoritative: a worker's local channel object grants nothing here (mangos-classic Channel.cpp KickOrBan, SetMode, SetOwner).
+            bool actorIsOwner = actorGuid == state.Owner;
+            bool actorIsStaff = _directory.FindByGuid(actorGuid) is { } actor && actor.Security >= StaffSecurity;
+            if (!actorIsOwner && !actorIsStaff && !state.Moderators.Contains(actorGuid))
+            {
+                return false;
+            }
+
+            // Only the owner or staff may hand ownership on, and only they may act against the owner.
+            bool ownerOrStaff = actorIsOwner || actorIsStaff;
+            bool againstOwner = state.Owner != 0 && targetGuid == state.Owner && action != ChannelModerationAction.Unban;
+            if (!ownerOrStaff && (action == ChannelModerationAction.SetOwner || againstOwner))
+            {
+                return false;
+            }
+
+            switch (action)
+            {
+                case ChannelModerationAction.SetOwner:
+                    if (!members.ContainsKey(targetGuid) || (!state.Moderators.Contains(targetGuid) && (state.Moderators.Count >= MaxModerationEntries || !state.Moderators.Add(targetGuid))))
+                    {
+                        return false;
+                    }
+
+                    state.Owner = targetGuid;
+                    return true;
+
+                case ChannelModerationAction.AddModerator:
+                    return state.Moderators.Contains(targetGuid) || (state.Moderators.Count < MaxModerationEntries && state.Moderators.Add(targetGuid));
+
+                case ChannelModerationAction.RemoveModerator:
+                    return state.Moderators.Remove(targetGuid);
+
+                case ChannelModerationAction.Ban:
+                    if (!state.Banned.Contains(targetGuid) && (state.Banned.Count >= MaxModerationEntries || !state.Banned.Add(targetGuid)))
+                    {
+                        return false;
+                    }
+
+                    if (members.ContainsKey(targetGuid))
+                    {
+                        DropMember(channelName, members, targetGuid);
+                    }
+
+                    return true;
+
+                case ChannelModerationAction.Kick:
+                    if (!members.ContainsKey(targetGuid))
+                    {
+                        return false;
+                    }
+
+                    DropMember(channelName, members, targetGuid);
+                    return true;
+
+                case ChannelModerationAction.Unban:
+                    return state.Banned.Remove(targetGuid);
+
+                case ChannelModerationAction.Mute:
+                    return state.Muted.Contains(targetGuid) || (state.Muted.Count < MaxModerationEntries && state.Muted.Add(targetGuid));
+
+                case ChannelModerationAction.Unmute:
+                    return state.Muted.Remove(targetGuid);
+
+                default:
+                    return false;
+            }
+        }
+    }
+
+    public ChannelModerationState? GetChannelModeration(string channelName)
+    {
+        if (string.IsNullOrWhiteSpace(channelName))
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            if (!_channels.ContainsKey(channelName))
+            {
+                return null;
+            }
+
+            if (!_moderation.TryGetValue(channelName, out ChannelModeration? state))
+            {
+                return new ChannelModerationState(0, [], [], []);
+            }
+
+            return new ChannelModerationState(state.Owner, Sorted(state.Moderators), Sorted(state.Banned), Sorted(state.Muted));
+        }
+    }
+
+    private static ulong[] Sorted(HashSet<ulong> set)
+    {
+        ulong[] values = [.. set];
+        Array.Sort(values);
+        return values;
     }
 
     public PresenceMutationResult LogoutWithOrderedFlush(
@@ -299,7 +556,7 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
 
             RemoveChannelSubscriptionsForSession(characterGuid, expectedSessionGeneration);
             flushedGatewayDeliveries = gatewayId is not null
-                ? DrainQueue(_gatewayQueues, gatewayId)
+                ? DrainGatewayQueue(gatewayId)
                 : [];
             return PresenceMutationResult.Applied;
         }
@@ -347,6 +604,13 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
                 || !_channels.TryGetValue(message.TargetChannelName, out Dictionary<ulong, long>? members)
                 || !members.TryGetValue(senderPresence.CharacterGuid, out long subscribedGeneration)
                 || subscribedGeneration != senderPresence.SessionGeneration)
+            {
+                return false;
+            }
+
+            // Moderation is held here, so a muted or banned speaker is refused whichever worker it speaks from.
+            if (_moderation.TryGetValue(message.TargetChannelName, out ChannelModeration? moderation)
+                && (moderation.Banned.Contains(senderPresence.CharacterGuid) || moderation.Muted.Contains(senderPresence.CharacterGuid)))
             {
                 return false;
             }
@@ -466,6 +730,7 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
                 && subscribedGeneration <= sessionGeneration)
             {
                 members.Remove(characterGuid);
+                ForgetMemberModeration(channelName, characterGuid);
                 if (members.Count == 0)
                 {
                     (emptyChannels ??= []).Add(channelName);
@@ -478,7 +743,36 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
             foreach (string channelName in emptyChannels)
             {
                 _channels.Remove(channelName);
+                _moderation.Remove(channelName);
             }
+        }
+    }
+
+    /// <summary>Under the gate: removes a subscription (leave, ban) and ends the channel when it was the last one, as an empty channel is deleted at the workers.</summary>
+    private void DropMember(string channelName, Dictionary<ulong, long> members, ulong characterGuid)
+    {
+        members.Remove(characterGuid);
+        ForgetMemberModeration(channelName, characterGuid);
+        if (members.Count == 0)
+        {
+            _channels.Remove(channelName);
+            _moderation.Remove(channelName);
+        }
+    }
+
+    /// <summary>Under the gate: member flags (owner, moderator, mute) end with the membership; a ban does not.</summary>
+    private void ForgetMemberModeration(string channelName, ulong characterGuid)
+    {
+        if (!_moderation.TryGetValue(channelName, out ChannelModeration? state))
+        {
+            return;
+        }
+
+        state.Moderators.Remove(characterGuid);
+        state.Muted.Remove(characterGuid);
+        if (state.Owner == characterGuid)
+        {
+            state.Owner = 0;
         }
     }
 
@@ -491,6 +785,34 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
         }
 
         queue.Add(delivery);
+    }
+
+    /// <summary>Under the gate: queues a delivery for a gateway, dropping the oldest while the queue is over <see cref="MaxGatewayQueueDeliveries"/> or <see cref="MaxGatewayQueueBytes"/>.</summary>
+    private void EnqueueGateway(string gatewayId, RoutedSocialDelivery delivery)
+    {
+        Enqueue(_gatewayQueues, gatewayId, delivery);
+        List<RoutedSocialDelivery> queue = _gatewayQueues[gatewayId];
+        long bytes = _gatewayQueueBytes.GetValueOrDefault(gatewayId) + PresenceWireCodec.DeliveryWireSize(delivery);
+        int drop = 0;
+        while (drop < queue.Count && (queue.Count - drop > MaxGatewayQueueDeliveries || bytes > MaxGatewayQueueBytes))
+        {
+            bytes -= PresenceWireCodec.DeliveryWireSize(queue[drop]);
+            drop++;
+        }
+
+        if (drop > 0)
+        {
+            queue.RemoveRange(0, drop);
+        }
+
+        _gatewayQueueBytes[gatewayId] = bytes;
+    }
+
+    /// <summary>Under the gate.</summary>
+    private IReadOnlyList<RoutedSocialDelivery> DrainGatewayQueue(string gatewayId)
+    {
+        _gatewayQueueBytes.Remove(gatewayId);
+        return DrainQueue(_gatewayQueues, gatewayId);
     }
 
     private static IReadOnlyList<RoutedSocialDelivery> DrainQueue(Dictionary<string, List<RoutedSocialDelivery>> queues, string key)

@@ -90,7 +90,7 @@ internal static class TalentProcSupport
     /// vmangos Unit::CanAttackWithoutEnablingPvP (Unit.cpp:9985-9993): a player-controlled target is only fair game when the attacking player is
     /// PvP-flagged, both are free-for-all flagged, or they duel.
     /// </summary>
-    private static bool CanAttackWithoutEnablingPvP(Unit attacker, Unit target)
+    internal static bool CanAttackWithoutEnablingPvP(Unit attacker, Unit target)
     {
         if (target.GetCharmerOrOwnerPlayerOrSelf() is not { } attacked || attacker.GetCharmerOrOwnerPlayerOrSelf() is not { } player)
         {

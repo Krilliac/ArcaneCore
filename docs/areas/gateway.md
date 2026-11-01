@@ -274,6 +274,18 @@ an abort injected after each of the five pre-commit stages; a source that lost i
 write that still resumes A; a crash after the takeover rolled forward by recovery; a crash before it aborted by
 recovery).
 
+## Cross-worker player transfer, gateway side (S5c)
+
+`GatewayTransferRouter` is the gateway half of `ITransferGatewayRouter`. The source worker's coordinator host
+(`PlayerTransferCoordinatorHost` with `LinkTransferGatewayRouter`) sends `TransferStage`, `TransferCancel` and `TransferCommit` control
+frames on the worker's own gateway link (`GatewayTransferWire`; each is answered with a `TransferAck`). Stage buffers the session's client
+packets (at most 256 packets and 256 KiB), opens a session on the target worker and sends a synthesized `SMSG_TRANSFER_PENDING`. Cancel
+replays the buffer to the source and closes the target session. Commit replays the buffer to the target in order, re-points the connection
+(link and generation) and retires the old generation, so packets still stamped with it are dropped. A buffer overflow frees the buffer, closes
+the target session and disconnects the client; the later commit is then a no-op. Node ids in the frames are the `Gateway:Workers:N:NodeId` values.
+Not built: the worker-side peer-link participant for the target, and the session of the target being resolvable by the shadow loader before
+stage 4 (the target session opens at stage 4, after the passive shadow install).
+
 ## Not done yet (rest of 3a and beyond)
 
 - **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only.

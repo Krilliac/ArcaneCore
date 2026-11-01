@@ -390,6 +390,11 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
                     case GatewayWorkerFrameType.WorkerStatus:
                         OnWorkerStatus(GatewaySessionWire.DecodeWorkerStatus(body.Span));
                         break;
+                    case GatewayWorkerFrameType.TransferStage:
+                    case GatewayWorkerFrameType.TransferCancel:
+                    case GatewayWorkerFrameType.TransferCommit:
+                        OnTransferControl(GatewayTransferWire.DecodeControl(type, body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
                         if (_sessions.TryGetValue(generation, out ClientSession? closing) && closing.AccountId == accountId
@@ -443,6 +448,28 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
     /// must not throw; one that throws is logged and the link goes on. Set before <see cref="ConnectAsync"/> so the first report is not missed.
     /// </summary>
     public Action<WorkerStatusReport>? WorkerStatusReceived { get; set; }
+
+    /// <summary>
+    /// Raised on the link's receive loop for every cross-worker transfer control frame (<see cref="GatewayTransferWire"/>). The handler must not block and
+    /// must not throw; it answers with <see cref="SendTransferAck"/>. Without a handler the frame is ignored (the worker's coordinator then times out).
+    /// </summary>
+    public Action<GatewayTransferControl>? TransferControlReceived { get; set; }
+
+    /// <summary>Answers a transfer control frame to the worker. False when the link is down.</summary>
+    public bool SendTransferAck(GatewayTransferAck ack) =>
+        _channel is { } channel && channel.TryEnqueue(GatewayTransferWire.EncodeAck(ack));
+
+    private void OnTransferControl(GatewayTransferControl control)
+    {
+        try
+        {
+            TransferControlReceived?.Invoke(control);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the transfer control handler failed", _worker);
+        }
+    }
 
     private void OnWorkerStatus(WorkerStatusReport report)
     {

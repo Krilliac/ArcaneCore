@@ -22,7 +22,9 @@ public readonly record struct PresenceSnapshot(
     string? GuildName,
     int GroupId,
     bool IsAfk,
-    bool IsDnd);
+    bool IsDnd,
+    byte Security = 0,
+    bool GmInvisible = false);
 
 /// <summary>
 /// Feeds this worker's online characters into realm presence (M15.2) without ever blocking the world thread: <see cref="PublishLogin"/>, <see cref="PublishUpdate"/> and
@@ -115,6 +117,25 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
                 return _pending.Count;
             }
         }
+    }
+
+    /// <summary>
+    /// The session generation the authority assigned to <paramref name="characterGuid"/>'s registration by this publisher (the one realm-wide deliveries are stamped with), or false
+    /// while the character is not registered (login not sent yet, logged out, or superseded by another worker). Thread-safe, never blocks.
+    /// </summary>
+    public bool TryGetRegistration(ulong characterGuid, out long sessionGeneration)
+    {
+        lock (_gate)
+        {
+            if (_known.TryGetValue(characterGuid, out Known? known))
+            {
+                sessionGeneration = known.Generation;
+                return true;
+            }
+        }
+
+        sessionGeneration = 0;
+        return false;
     }
 
     /// <summary>A character entered the world (a snapshot with a non-positive generation, such as a test double or a synthetic session, is ignored).</summary>
@@ -221,7 +242,7 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
 
     private RealmPresenceEntry Build(in PresenceSnapshot s, long generation, long version) => new(
         s.CharacterGuid, s.CharacterName, s.AccountId, _workerId, _gatewayId, s.MapId, s.ZoneId, s.AreaId, s.Level, s.Class, s.Race, s.Gender,
-        s.GuildId, s.GroupId, version, generation, _time.GetUtcNow(), s.GuildName, s.IsAfk, s.IsDnd);
+        s.GuildId, s.GroupId, version, generation, _time.GetUtcNow(), s.GuildName, s.IsAfk, s.IsDnd, null, s.Security, s.GmInvisible);
 
     /// <summary>
     /// One pass: send the pending operations, then apply the kicks queued for this worker. Returns false when the authority could not be reached (the unsent operations

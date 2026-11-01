@@ -43,4 +43,11 @@ internal enum GatewayWorkerFrameType : byte
     // Realm liveness (worker to gateway): the worker's tick counter, session count and lifecycle state, sent on admission and then every few seconds,
     // so the gateway can write the realm-list row of a clustered realm (docs/ops/realm-liveness.md section 7).
     WorkerStatus = 23,
+
+    // Cross-worker player transfer (S5c), control frames on the existing link (GatewayTransferWire). The source worker's coordinator sends
+    // TransferStage / TransferCancel / TransferCommit to the gateway over its own link; the gateway answers each with a TransferAck.
+    TransferStage = 24,
+    TransferCancel = 25,
+    TransferCommit = 26,
+    TransferAck = 27,
 }
