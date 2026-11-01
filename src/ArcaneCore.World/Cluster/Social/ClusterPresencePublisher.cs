@@ -92,6 +92,9 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
         _lastVersion = _time.GetUtcNow().UtcTicks;
     }
 
+    /// <summary>This worker's id, as stamped on the entries it publishes (<see cref="RealmPresenceEntry.WorkerId"/>).</summary>
+    public string WorkerId => _workerId;
+
     /// <summary>Characters this publisher has registered and not yet removed.</summary>
     public int RegisteredCount
     {

@@ -167,6 +167,16 @@ public sealed partial class WorldRuntime : IDisposable
         }
     }
 
+    /// <summary>
+    /// The stack the world thread is created with: 16 MiB, against the platform default of 1 to 8 MiB. Every recursive relay of the tick (spell chains, procs, auras,
+    /// scripts, rule lists, pathing) is guarded by <c>StackGuard</c> or a depth cap, but a guard only drops the nested action when the stack runs low; a larger stack
+    /// lets legitimate nesting finish before that happens. Address space is reserved, pages are committed only when touched.
+    /// </summary>
+    public const int WorldThreadStackBytes = 16 * 1024 * 1024;
+
+    /// <summary>The stack size the world thread is (or will be) created with, in bytes (<see cref="WorldThreadStackBytes"/>); readable on any thread.</summary>
+    public int ConfiguredStackBytes => WorldThreadStackBytes;
+
     /// <summary>Start the world thread.</summary>
     public void Start()
     {
@@ -182,7 +192,7 @@ public sealed partial class WorldRuntime : IDisposable
 
         _stopped = false;
         Scripts.Freeze();
-        _thread = new Thread(Run) { IsBackground = true, Name = "world" };
+        _thread = new Thread(Run, WorldThreadStackBytes) { IsBackground = true, Name = "world" };
         _thread.Start();
     }
 
@@ -486,6 +496,28 @@ public sealed partial class WorldRuntime : IDisposable
         player.InitializeNativeDisplayModel(PlayerDisplayModelResolver);
         MapResolver?.OnLoginMapAdd(player, map);
         map.AddPlayer(player);
+    }
+
+    /// <summary>
+    /// Put a transferred player into the online registry without a map (world thread), as a player is while a far teleport loads: the
+    /// cluster transfer target registers the shadow here, sends the loading screen (<c>TeleportService.BeginClusterArrival</c>) and the map
+    /// add follows the client's MSG_MOVE_WORLDPORT_ACK. A disconnect in between takes the normal logout path (<see cref="RemovePlayer"/>
+    /// saves the player at its arrival position). Throws when the guid is already online.
+    /// </summary>
+    public void RegisterPlayerForTransferArrival(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.CharacterOwnership is null && CharacterOwnership is { } ownership)
+            player.CharacterOwnership = ownership;
+        if (!_online.TryAdd(player.Guid, player))
+        {
+            throw new InvalidOperationException($"{player.Name} ({player.Guid}) is already online");
+        }
+
+        _onlineByName[player.Name] = player;
+        _autosaveRescan = true;
+        player.StartPlayedTime(NowMs);
+        player.InitializeNativeDisplayModel(PlayerDisplayModelResolver);
     }
 
     /// <summary>Take a player out of the world and queue its state for saving (world thread).</summary>

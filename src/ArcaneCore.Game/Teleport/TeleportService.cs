@@ -36,6 +36,22 @@ public enum TeleportStage
 }
 
 /// <summary>
+/// What the cluster transfer target hears while a transferred player loads its map (<see cref="TeleportService.BeginClusterArrival"/>). All
+/// calls run on the world thread.
+/// </summary>
+public interface ITransferArrivalObserver
+{
+    /// <summary>The player was added to the map, before the login packets that follow the add (so saves held since the transfer resume before the client sees itself in the world).</summary>
+    void MapAdded(Player player);
+
+    /// <summary>The arrival finished: map add and the login packets after it are done.</summary>
+    void Entered(Player player);
+
+    /// <summary>The arrival ended without the player entering the map (disconnect, or the map could not be entered and the session is kicked).</summary>
+    void Abandoned(Player player);
+}
+
+/// <summary>
 /// Teleports (vmangos <c>Player::TeleportTo</c>, <c>ExecuteTeleportFar</c>,
 /// <c>ExecuteTeleportNear</c>, <c>WorldSession::HandleMoveWorldportAckOpcode</c>).
 /// <para>
@@ -483,6 +499,42 @@ public sealed partial class TeleportService
         return true;
     }
 
+    /// <summary>
+    /// A transferred player's arrival on this worker, with the retail far-teleport sequence (vmangos Player::ExecuteTeleportFar sends
+    /// SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD, Player.cpp:2068-2118; the map add and both login packet groups run in
+    /// HandleMoveWorldportAckOpcode only, MovementHandler.cpp:112-146): the client gets the loading screen now, and the player enters
+    /// <paramref name="map"/> when its MSG_MOVE_WORLDPORT_ACK arrives. The player must already be in the online registry without a map
+    /// (<see cref="WorldRuntime.RegisterPlayerForTransferArrival"/>). A map that cannot be entered kicks the session (the source no longer
+    /// owns the character, so there is no origin to return to). Returns false, sending nothing, when the player is not registered, is in a
+    /// map or has a teleport pending. World thread.
+    /// </summary>
+    public bool BeginClusterArrival(Player player, Map map, TeleportDestination destination, ITransferArrivalObserver observer)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(observer);
+        if (!ReferenceEquals(_world.FindOnlinePlayer(player.Guid), player) || player.Map is not null || _pending.ContainsKey(player.Guid))
+        {
+            return false;
+        }
+
+        var arrival = new Pending(this, player, destination, TeleportStage.Far, map, destination)
+        {
+            ArrivalMap = map,
+            Observer = observer,
+            StartedMs = _world.NowMs,
+            StageSinceMs = _world.NowMs,
+        };
+        _pending[player.Guid] = arrival;
+        map.BeginTransit(player); // the map keeps handling this player's packets (the worldport ack) until it enters
+        player.MapId = destination.MapId;
+        player.Relocate(destination.X, destination.Y, destination.Z, destination.Orientation, _world.NowMs);
+        player.Session.Send(WorldOpcode.SmsgTransferPending, TeleportPackets.BuildTransferPending(destination.MapId));
+        player.Session.Send(WorldOpcode.SmsgNewWorld, TeleportPackets.BuildNewWorld(destination.MapId, destination.X, destination.Y, destination.Z, destination.Orientation));
+        FarStageReached?.Invoke(player, TeleportStage.Far);
+        return true;
+    }
+
     /// <summary>Teleport the player to its hearthstone bind point (vmangos <c>Player::TeleportToHomebind</c>).</summary>
     public bool TeleportToHomebind(Player player)
     {
@@ -619,6 +671,7 @@ public sealed partial class TeleportService
             }
 
             pending.SourceMap.EndTransit(player);
+            pending.Observer?.Abandoned(player);
         }
     }
 
@@ -697,11 +750,18 @@ public sealed partial class TeleportService
         pending.SourceMap.EndTransit(player);
         if (!ReferenceEquals(_world.FindOnlinePlayer(player.Guid), player) || player.Map is not null)
         {
+            pending.Observer?.Abandoned(player);
             return;
         }
 
         TeleportDestination dest = pending.Destination;
         WorldMaps maps = WorldMaps.Of(_world);
+        if (pending.ArrivalMap is { } arrivalMap)
+        {
+            CompleteClusterArrival(player, pending, arrivalMap, maps);
+            return;
+        }
+
         if (!maps.Registry.Contains(dest.MapId) || !GridDefines.IsValidMapCoord(dest.X, dest.Y, dest.Z, dest.Orientation))
         {
             // vmangos: an invalid destination sends the player to its bind point.
@@ -775,6 +835,34 @@ public sealed partial class TeleportService
         }
     }
 
+    // The worldport ack of a transferred player: the map was chosen by the transfer (this worker's copy of the target map), so there is no
+    // resolver pick, no bind-point fallback and no origin to return to; a destination that cannot be entered kicks the session.
+    private void CompleteClusterArrival(Player player, Pending pending, Map map, WorldMaps maps)
+    {
+        TeleportDestination dest = pending.Destination;
+        if (!maps.Registry.Contains(dest.MapId)
+            || !GridDefines.IsValidMapCoord(dest.X, dest.Y, dest.Z, dest.Orientation)
+            || !TryEnterMap(player, dest, map, pending.Observer))
+        {
+            _logger.LogError("{Player} could not enter transferred map {MapId}; disconnecting", player.Name, dest.MapId);
+            ServerAnomalies.Report(
+                player,
+                ServerAnomalies.Teleport,
+                "map-entry-failed",
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"could not enter map {dest.MapId} after a cluster transfer (map not in the registry, invalid destination or the player is already in it); the session is kicked"),
+                AnomalySeverity.Error);
+            pending.Observer?.Abandoned(player);
+            player.Session.Kick();
+            return;
+        }
+
+        // The same arrival steps as CompleteTeleportFar (cheat flags cleared, landing verified, Honorless Target on a PvP-enforced arrival).
+        player.Cheats &= ~(PlayerCheats.Fly | PlayerCheats.FixedZ);
+        VerifyLanding(player, dest, dest.MapId);
+        HonorlessTargetDue?.Invoke(player, true);
+        pending.Observer?.Entered(player);
+    }
+
     /// <summary>
     /// A new far teleport for a player that is in no map (the failed-teleport fallback to the bind point, vmangos <c>TeleportToHomebind</c>): the
     /// client gets SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD for the map it must load and the entry waits for its MSG_MOVE_WORLDPORT_ACK, as
@@ -803,15 +891,19 @@ public sealed partial class TeleportService
         return true;
     }
 
-    private bool TryEnterMap(Player player, TeleportDestination dest)
+    private bool TryEnterMap(Player player, TeleportDestination dest, Map? chosenMap = null, ITransferArrivalObserver? arrival = null)
     {
         // The map resolver picks (or creates) the instance and binds the player or its group
-        // (vmangos MapManager::CreateMap → DungeonMap::Add); null refuses the entry.
+        // (vmangos MapManager::CreateMap → DungeonMap::Add); null refuses the entry. A cluster arrival brings the map the transfer chose.
         IMapResolver? resolver = _world.MapResolver;
         Map? map;
         try
         {
-            if (resolver is null)
+            if (chosenMap is not null)
+            {
+                map = chosenMap;
+            }
+            else if (resolver is null)
             {
                 // The typed answer is the seam the redirect / far transfer to the owning worker hooks into.
                 if (_world.TryGetMap(dest.MapId, 0, out map) == MapAccessResult.NotOwned)
@@ -862,7 +954,13 @@ public sealed partial class TeleportService
 
         UpdateZone(map, player);
         _beforeAddToMap(player);
+        if (chosenMap is not null)
+        {
+            resolver?.OnLoginMapAdd(player, map); // the instance bind of a login add (WorldRuntime.AddPlayer), which the transfer arrival replaces
+        }
+
         map.AddPlayer(player);
+        arrival?.MapAdded(player);
         _afterAddToMap(player);
         resolver?.OnEntered(player, map);
         TeleportCompleted?.Invoke(player);
@@ -1048,6 +1146,12 @@ public sealed partial class TeleportService
 
         /// <summary>Whether this teleport is the bind-point fallback of a failed far teleport (it is not retried when it fails too).</summary>
         public bool IsHomebindFallback { get; init; }
+
+        /// <summary>The map a cluster transfer brings the player to (null for an ordinary teleport).</summary>
+        public Map? ArrivalMap { get; init; }
+
+        /// <summary>The cluster transfer target that hears of the arrival (null for an ordinary teleport).</summary>
+        public ITransferArrivalObserver? Observer { get; init; }
 
         /// <summary>vmangos DELAYED_CAST_HONORLESS_TARGET scheduled by a same-map teleport.</summary>
         public bool HonorlessTarget { get; init; }
