@@ -73,6 +73,18 @@ public abstract class CharacterKeyedWriteQueue<TValue>
     /// <summary>Writes queued or in progress.</summary>
     public int Pending => Volatile.Read(ref _pending);
 
+    /// <summary>Ids of characters whose last write failed and is still retained, ascending.</summary>
+    public IReadOnlyList<int> RetainedCharacters
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _characters.Where(c => c.Value.Failure is not null).Select(c => c.Key).Order()];
+            }
+        }
+    }
+
     /// <summary>Terminal failure that halted the queue (such as <see cref="CharacterOwnershipRejectedException"/>), if any.</summary>
     public Exception? TerminalFailure
     {
@@ -125,6 +137,28 @@ public abstract class CharacterKeyedWriteQueue<TValue>
     private protected abstract void LogSweepSummary(ILogger logger, int failed, int total, string locked, string reason);
 
     private protected abstract string SweepInvariantMessage { get; }
+
+    /// <summary>The pause after failed attempt number <paramref name="attempt"/> (1-based) before the next one; the default is the constant <see cref="RetryDelay"/>.</summary>
+    private protected virtual TimeSpan BackoffAfter(int attempt) => RetryDelay;
+
+    /// <summary>The fault site recorded when a retry sweep's attempt for a character fails; null (the default) records nothing beyond the per-attempt site.</summary>
+    private protected virtual string? SweepFaultSite => null;
+
+    /// <summary>
+    /// Called when every attempt of a write (not a retry sweep's) failed and no newer write replaced it: return true with the value
+    /// that supersedes it to give the write up instead of retaining it (the default never does). The superseding value is
+    /// written next, with a fresh set of attempts. Runs outside the queue's lock on the consumer.
+    /// </summary>
+    private protected virtual bool TryAbandon(TValue? value, Exception failure, out TValue? replacement)
+    {
+        replacement = default;
+        return false;
+    }
+
+    /// <summary>Called once after <see cref="TryAbandon"/> chose to give <paramref name="abandoned"/> up and the replacement is recorded (reports, logs and runs the owner's fallback).</summary>
+    private protected virtual void OnAbandoned(int characterId, TValue? abandoned, Exception failure, int attempts)
+    {
+    }
 
     /// <summary>Tests: queue one retained-write sweep now, exactly as a timer tick would; false when one is already pending or the queue is not started.</summary>
     internal bool PostRetainedSweepForTest() => _retry?.TryPost() ?? false;
@@ -533,92 +567,121 @@ public abstract class CharacterKeyedWriteQueue<TValue>
             version = unsaved.Version;
         }
 
-        int attempts = sweep || _stopped ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
-        int attemptsMade = 0;
-        bool refused = false;
-        Exception? failure = null;
-        for (int attempt = 1; attempt <= attempts; attempt++)
+        while (true)
         {
-            if (attempt == 1 && (_stopped || _drain.IsSuppressed) && _drain.Refuse() is { } exhausted)
+            int attempts = sweep || _stopped ? 1 : MaxAttempts; // at stop: one attempt per write, busy or not, no inline retry
+            int attemptsMade = 0;
+            bool refused = false;
+            Exception? failure = null;
+            for (int attempt = 1; attempt <= attempts; attempt++)
             {
-                failure = exhausted; // stop drain exhausted or lane suppressed: nothing is attempted, the write stays retained
-                refused = true;
-                break;
-            }
-
-            attemptsMade = attempt;
-            using IServiceScope scope = _scopes.CreateScope();
-            try
-            {
-                using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
-                await SaveToStoreAsync(scope.ServiceProvider, characterId, value).ConfigureAwait(false);
-                progress.Succeeded();
-                failure = null;
-                break;
-            }
-            catch (CharacterOwnershipRejectedException ex)
-            {
-                failure = ex;
-                FaultLedger.Shared.Record($"{SitePrefix}-ownership", ex);
-                FailTerminal(ex, scope.ServiceProvider);
-                break;
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                failure = ex;
-                if (!(SkipsBusyAttemptFault && attempt < attempts && DatabaseTransience.IsBusy(ex)))
+                if (attempt == 1 && (_stopped || _drain.IsSuppressed) && _drain.Refuse() is { } exhausted)
                 {
-                    FaultLedger.Shared.Record($"{SitePrefix}-attempt", ex);
+                    failure = exhausted; // stop drain exhausted or lane suppressed: nothing is attempted, the write stays retained
+                    refused = true;
+                    break;
                 }
 
-                if (!sweep)
+                attemptsMade = attempt;
+                using IServiceScope scope = _scopes.CreateScope();
+                try
                 {
-                    LogAttemptFailed(Logger, ex, characterId, attempt, attempts);
+                    using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
+                    await SaveToStoreAsync(scope.ServiceProvider, characterId, value).ConfigureAwait(false);
+                    progress.Succeeded();
+                    failure = null;
+                    break;
                 }
-
-                if (attempt < attempts)
+                catch (CharacterOwnershipRejectedException ex)
                 {
-                    if (_stopped && _drain.Exhausted)
+                    failure = ex;
+                    FaultLedger.Shared.Record($"{SitePrefix}-ownership", ex);
+                    FailTerminal(ex, scope.ServiceProvider);
+                    break;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    failure = ex;
+                    if (!(SkipsBusyAttemptFault && attempt < attempts && DatabaseTransience.IsBusy(ex)))
                     {
-                        break; // the lane has stalled: no retry, the write stays retained with its real failure
+                        FaultLedger.Shared.Record($"{SitePrefix}-attempt", ex);
                     }
 
-                    await Task.Delay(RetryDelay).ConfigureAwait(false);
+                    if (!sweep)
+                    {
+                        LogAttemptFailed(Logger, ex, characterId, attempt, attempts);
+                    }
+
+                    if (attempt < attempts)
+                    {
+                        if (_stopped && _drain.Exhausted)
+                        {
+                            break; // the lane has stalled: no retry, the write stays retained with its real failure
+                        }
+
+                        await Task.Delay(BackoffAfter(attempt)).ConfigureAwait(false);
+                    }
                 }
             }
-        }
 
-        bool newEpisode;
-        lock (_gate)
-        {
-            if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
+            if (failure is not null && !sweep && !refused && TryAbandon(value, failure, out TValue? replacement))
             {
-                return null;
+                bool replaced = false;
+                lock (_gate)
+                {
+                    // Only the write that failed is given up; a newer one replaced it and is queued itself.
+                    if (_characters.TryGetValue(characterId, out Unsaved? current) && current.Version == version)
+                    {
+                        current.Value = replacement;
+                        version = ++current.Version;
+                        replaced = true;
+                    }
+                }
+
+                if (replaced)
+                {
+                    OnAbandoned(characterId, value, failure, attemptsMade);
+                    value = replacement;
+                    continue;
+                }
             }
 
-            newEpisode = failure is not null && unsaved.Failure is null; // a retained write failing again is the same episode
-            unsaved.Failure = failure;
-            if (failure is null && unsaved.Version == version && !unsaved.Queued)
+            bool newEpisode;
+            lock (_gate)
             {
-                _characters.Remove(characterId); // durable and unchanged since: nothing to retain
-            }
-        }
+                if (!_characters.TryGetValue(characterId, out Unsaved? unsaved))
+                {
+                    return null;
+                }
 
-        if (failure is not null && !sweep && !refused)
-        {
-            if (newEpisode && failure is not CharacterOwnershipRejectedException)
-            {
-                AnomalyLedger.Shared.Report(
-                    "persist",
-                    "write-retry-exhausted",
-                    $"character {characterId}",
-                    $"queue={QueueName} character={characterId} attempts={attemptsMade} error={failure.GetType().Name}",
-                    AnomalySeverity.Error);
+                newEpisode = failure is not null && unsaved.Failure is null; // a retained write failing again is the same episode
+                unsaved.Failure = failure;
+                if (failure is null && unsaved.Version == version && !unsaved.Queued)
+                {
+                    _characters.Remove(characterId); // durable and unchanged since: nothing to retain
+                }
             }
 
-            LogRetryExhausted(Logger, failure, characterId, attemptsMade);
-        }
+            if (failure is not null && !sweep && !refused)
+            {
+                if (newEpisode && failure is not CharacterOwnershipRejectedException)
+                {
+                    AnomalyLedger.Shared.Report(
+                        "persist",
+                        "write-retry-exhausted",
+                        $"character {characterId}",
+                        $"queue={QueueName} character={characterId} attempts={attemptsMade} error={failure.GetType().Name}",
+                        AnomalySeverity.Error);
+                }
 
-        return failure;
+                LogRetryExhausted(Logger, failure, characterId, attemptsMade);
+            }
+            else if (failure is not null && sweep && SweepFaultSite is { } sweepSite)
+            {
+                FaultLedger.Shared.Record(sweepSite, failure);
+            }
+
+            return failure;
+        }
     }
 }
