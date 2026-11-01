@@ -76,9 +76,10 @@ public sealed class OperatorRestartRelayTests
         Assert.Empty(await rig.Store.GetUnresolvedAsync(cts.Token));
 
         // '.cluster handoff status' reads the same outcome from the journal.
-        string status = await ClusterCommands.FormatHandoffStatusAsync(rig.Store, open.HandoffId, cts.Token);
+        string status = await ClusterCommands.FormatHandoffStatusAsync(rig.Store, started.OperationId, cts.Token);
         Assert.Contains("stage=Retired", status);
-        Assert.Contains(open.HandoffId.ToString("D"), status);
+        Assert.Contains(started.OperationId.ToString("D"), status);
+        Assert.Equal(open.HandoffId, started.OperationId);
     }
 
     [Fact]

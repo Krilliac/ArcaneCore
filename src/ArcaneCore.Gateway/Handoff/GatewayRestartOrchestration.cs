@@ -39,11 +39,25 @@ internal sealed class GatewaySlotHandoffDriver(GatewayHandoffService service) : 
         return null;
     }
 
+    private readonly AsyncLocal<Guid?> _nextId = new();
+
+    /// <summary>Makes the handoff started by this async flow (until the returned scope is disposed) use <paramref name="handoffId"/> as its journal key.</summary>
+    public IDisposable UseHandoffId(Guid handoffId)
+    {
+        _nextId.Value = handoffId;
+        return new IdScope(_nextId);
+    }
+
+    private sealed class IdScope(AsyncLocal<Guid?> slot) : IDisposable
+    {
+        public void Dispose() => slot.Value = null;
+    }
+
     public Task<WorldHandoffRecord> HandoffAsync(WorkerNodeId worker, CancellationToken cancellationToken)
     {
         string slot = SlotOf(worker.Value)
             ?? throw new WorldHandoffUnavailableException($"gateway worker '{worker}' has no standby configured (Gateway:Workers:N:StandbyNodeId)");
-        return service.HandoffAsync(slot, AfterStage, cancellationToken);
+        return service.HandoffAsync(slot, AfterStage, cancellationToken, _nextId.Value);
     }
 }
 
@@ -190,13 +204,14 @@ public sealed class GatewayRestartOrchestration : IHostedService
                 return;
             }
 
-            operation = Guid.NewGuid();
+            operation = Guid.NewGuid(); // also the journal HandoffId: the driver is told to use it, so '.cluster handoff status <id>' finds the row
             if (!link.SendControlSubmitReply(new ControlSubmitReply(requestId, true, operation, string.Empty)))
             {
                 _logger.LogWarning("Operator restart of account {Account} not run: the worker link is gone", request.AccountId);
                 return;
             }
 
+            using IDisposable idScope = _driver.UseHandoffId(operation);
             ClusterRestartResult result = await _orchestration.RunAsync(security, connection!.AccountName, request.Arguments.Trim(), _stopping.Token).ConfigureAwait(false);
             Notify(connection, request.AccountId, operation, ToOutcome(result.Outcome), result.Message);
         }
