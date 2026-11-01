@@ -261,6 +261,13 @@ public sealed class RuleEvaluator(Random random)
             return false;
         }
 
+        // The depth cap bounds one firing's nesting; the guard covers a host that calls in with little stack left (a bot pass deep in another relay).
+        if (!StackGuard.TryEnter("rules.start-list"))
+        {
+            Interlocked.Increment(ref Counters.DepthLimited);
+            return false;
+        }
+
         // A list that is already pending for this subject restarts.
         Span<PendingRun> pending = context.State.Pending;
         for (int i = 0; i < pending.Length; i++)

@@ -4,6 +4,7 @@
 //   --spawn-child              start a copy of itself first, for the tree-kill case (the copy gets the same --lifetime-ms)
 //   --pid-file <path>          append "self <pid>" and, after --spawn-child, "child <pid>" (race-free alternative to parsing stdout)
 //   --lifetime-ms <n>          maximum life in milliseconds (default 60000)
+//   --stack-depth <bytes>      run a guarded 2 KB-a-frame recursion on a thread created with that stack size, print "depth <n>" and exit 0 (stack-guard tests)
 //   --cr-heartbeat             after "ready", write one line "noise<CR>heartbeat <utc> pid=<pid> alive" (a bare CR, not CRLF), then the line "done"
 // Otherwise: print "ready" on stdout and sleep for the bounded lifetime, then exit 0. The bound is what cleans up after a failing test:
 // nothing ever kills a fixture by pid, so a fixture that is left behind ends by itself.
@@ -13,6 +14,19 @@ using System.Globalization;
 int exitAt = Array.IndexOf(args, "--exit");
 if (exitAt >= 0)
     return int.Parse(args[exitAt + 1], CultureInfo.InvariantCulture);
+
+int stackAt = Array.IndexOf(args, "--stack-depth");
+if (stackAt >= 0)
+{
+    int stackBytes = int.Parse(args[stackAt + 1], CultureInfo.InvariantCulture);
+    int depth = -1;
+    var probe = new Thread(() => depth = StackProbe.Recurse(0), stackBytes);
+    probe.Start();
+    probe.Join();
+    Console.Out.WriteLine($"depth {depth}");
+    Console.Out.Flush();
+    return 0;
+}
 
 int lifetimeAt = Array.IndexOf(args, "--lifetime-ms");
 int lifetimeMs = lifetimeAt >= 0 ? int.Parse(args[lifetimeAt + 1], CultureInfo.InvariantCulture) : 60_000;
@@ -44,3 +58,21 @@ if (args.Contains("--cr-heartbeat"))
 
 Thread.Sleep(lifetimeMs);
 return 0;
+
+/// <summary>Recursion that stops where the runtime says the stack is nearly gone (the pattern StackGuard wraps); without that check it would end the process.</summary>
+internal static class StackProbe
+{
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    public static int Recurse(int depth)
+    {
+        if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+        {
+            return depth;
+        }
+
+        Span<byte> pad = stackalloc byte[2048];
+        pad[0] = 1;
+        int result = Recurse(depth + 1);
+        return result + pad[0] - 1; // keeps the frame alive: not a tail call
+    }
+}
