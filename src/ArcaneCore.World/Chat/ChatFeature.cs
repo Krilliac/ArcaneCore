@@ -1,4 +1,11 @@
 using System.Runtime.CompilerServices;
+using ArcaneCore.Game.Guilds;
+using ArcaneCore.Game.Social;
+using ArcaneCore.Protocol;
+using ArcaneCore.World.Cluster.Social;
+using ArcaneCore.World.Net;
+using ArcaneCore.World.Packets;
+using ArcaneCore.World.Social;
 using ArcaneCore.Data.Social;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Chat;
@@ -129,6 +136,11 @@ public sealed class ChatFeature : IWorldFeature
         }
 
         world.Updated += ExpireSessionMutes;
+        Cluster = _services?.GetService<ClusterChatRouting>();
+        if (Cluster is { } cluster)
+        {
+            cluster.Deliver = delivery => world.Post(() => ApplyClusterDelivery(world, delivery));
+        }
     }
 
     /// <summary>The unix time until which <paramref name="player"/> cannot speak (vmangos WorldSession::m_muteTime): the latest of the flood mute and every source.</summary>
@@ -225,12 +237,15 @@ public sealed class ChatFeature : IWorldFeature
     }
 
     /// <summary>vmangos MasterPlayer::Whisper (end): a sender that does not accept whispers lets the receiver whisper back.</summary>
-    public void NoteWhisperSent(Player sender, Player receiver)
+    public void NoteWhisperSent(Player sender, Player receiver) => NoteWhisperSent(sender, receiver.Guid);
+
+    /// <summary>The same for a receiver on another worker, known only by its guid.</summary>
+    public void NoteWhisperSent(Player sender, ObjectGuid receiver)
     {
         ChatState state = State(sender);
         if (!state.AcceptsWhispers)
         {
-            (state.AllowedWhisperers ??= []).Add(receiver.Guid);
+            (state.AllowedWhisperers ??= []).Add(receiver);
         }
     }
 
@@ -280,6 +295,148 @@ public sealed class ChatFeature : IWorldFeature
         {
             _sessionMutes.Remove(accountId);
         }
+    }
+
+    /// <summary>
+    /// Cross-worker chat (M15.2 S2c): the routing the cluster hosting registers, or null in a single-worker realm (and in a host without the cluster services), where every chat path
+    /// behaves as before.
+    /// </summary>
+    public ClusterChatRouting? Cluster { get; private set; }
+
+    /// <summary>
+    /// Applies one chat frame that another worker routed to a character of this one (world thread; posted by the routing's pump). The delivery is checked against the registered
+    /// session generation again here, because the session can be replaced between the pump and the tick; a stale one is dropped. Rules are the local ones: a whisper's faction,
+    /// staff and mute gates and away/busy auto-reply (answered to the whisperer through <see cref="ClusterChatRouting.SendReply"/>), the sub-group of party chat, the listen
+    /// right and ignore list of guild and officer chat, the channel membership, faction and ignore list of a channel line.
+    /// </summary>
+    internal void ApplyClusterDelivery(WorldRuntime world, ClusterChatDelivery delivery)
+    {
+        ClusterChatRouting? cluster = Cluster;
+        if (cluster is null || !cluster.IsCurrent(delivery.RecipientGuid, delivery.RecipientSessionGeneration)
+            || world.FindOnlinePlayer(new ObjectGuid(delivery.RecipientGuid)) is not { } recipient)
+        {
+            return;
+        }
+
+        ClusterChatFrame frame = delivery.Frame;
+        var speaker = new ObjectGuid(frame.SenderGuid);
+        SocialContext? social = _services?.GetService<SocialFeature>()?.Context;
+        switch (frame.Kind)
+        {
+            case ClusterChatFrameKind.Whisper:
+                ApplyClusterWhisper(world, cluster, recipient, frame);
+                return;
+
+            case ClusterChatFrameKind.WhisperReply:
+                foreach (ClusterChatPacket packet in frame.Packets)
+                {
+                    recipient.Session.Send(packet.Opcode, packet.Payload);
+                }
+
+                if (frame.NoteWhisperGuid != 0)
+                {
+                    NoteWhisperSent(recipient, new ObjectGuid(frame.NoteWhisperGuid));
+                }
+
+                return;
+
+            case ClusterChatFrameKind.Group:
+                if (frame.SubGroup != ClusterChatFrame.NoSubGroup
+                    && social?.Groups.GetGroup(recipient.Guid)?.Find(recipient.Guid) is { } slot && slot.SubGroup != frame.SubGroup)
+                {
+                    return; // party chat reaches the speaker's sub-group only (vmangos Group::BroadcastPacket with a sub-group)
+                }
+
+                break;
+
+            case ClusterChatFrameKind.Guild:
+            case ClusterChatFrameKind.Officer:
+            {
+                // vmangos Guild::BroadcastToGuild / BroadcastChatMsgToOfficers: the listen right, and not for a member who ignores the speaker.
+                bool officer = frame.Kind == ClusterChatFrameKind.Officer;
+                if (social is null || social.Guilds.GetGuildOf(recipient) is not { } guild || guild.Find(recipient.Guid.Low) is not { } member
+                    || !guild.HasRight(member.Rank, officer ? GuildRights.OfficerChatListen : GuildRights.GuildChatListen)
+                    || social.IsIgnoring(recipient, speaker))
+                {
+                    return;
+                }
+
+                break;
+            }
+
+            case ClusterChatFrameKind.Channel:
+                if (social is null || frame.Channel is not { } channelName
+                    || social.Channels.Find(recipient.Team, channelName) is not { } channel || !channel.IsOn(recipient.Guid)
+                    || (!social.Options.AllowTwoSideChannel && (Team)frame.SenderTeam != recipient.Team)
+                    || (!frame.IgnoreExempt && social.IsIgnoring(recipient, speaker)))
+                {
+                    return;
+                }
+
+                break;
+
+            default:
+                return;
+        }
+
+        foreach (ClusterChatPacket packet in frame.Packets)
+        {
+            recipient.Session.Send(packet.Opcode, packet.Payload);
+        }
+    }
+
+    /// <summary>The receiving half of <c>ChatHandlers.Whisper</c> (vmangos MasterPlayer::Whisper) for a whisperer on another worker; every outcome is answered to the whisperer.</summary>
+    private static void ApplyClusterWhisper(WorldRuntime world, ClusterChatRouting cluster, Player receiver, ClusterChatFrame request)
+    {
+        var whisperer = new ObjectGuid(request.SenderGuid);
+        var answering = new ClusterChatSender(receiver.Guid.Value, receiver.Name, receiver.AccountId);
+        var senderSecurity = (AccountSecurity)request.SenderSecurity;
+        ChatFeature? chat = receiver.Session.Services.GetService<ChatFeature>();
+
+        void Answer(ulong noted, params ClusterChatPacket[] packets) => cluster.SendReply(
+            answering,
+            request.SenderGuid,
+            new ClusterChatFrame { Kind = ClusterChatFrameKind.WhisperReply, SenderGuid = receiver.Guid.Value, NoteWhisperGuid = noted, Packets = packets });
+
+        // A plain player cannot see a staff member who does not accept its whispers: the same notice as for an offline target.
+        if (senderSecurity == AccountSecurity.Player && receiver.Security > AccountSecurity.Player
+            && chat is not null && !chat.AcceptsWhispersFrom(receiver, whisperer))
+        {
+            Answer(0, new ClusterChatPacket(WorldOpcode.SmsgChatPlayerNotFound, ChatPackets.BuildPlayerNotFound(receiver.Name)));
+            return;
+        }
+
+        if (receiver.Security == AccountSecurity.Player && request.MuteNotice is { } notice)
+        {
+            Answer(0, new ClusterChatPacket(WorldOpcode.SmsgNotification, ChatPackets.BuildNotification(notice)));
+            return;
+        }
+
+        if (senderSecurity == AccountSecurity.Player && receiver.Security == AccountSecurity.Player
+            && !world.Options.AllowTwoSideChat && (Team)request.SenderTeam != receiver.Team)
+        {
+            Answer(0, new ClusterChatPacket(WorldOpcode.SmsgChatWrongFaction, []));
+            return;
+        }
+
+        receiver.Session.Send(WorldOpcode.SmsgMessagechat,
+            ChatPackets.BuildMessage(ChatType.Whisper, Language.Universal, whisperer, request.Text, (ChatTag)request.ChatTag));
+        var replies = new List<ClusterChatPacket>
+        {
+            new(WorldOpcode.SmsgMessagechat, ChatPackets.BuildMessage(ChatType.WhisperInform, Language.Universal, receiver.Guid, request.Text, receiver.ChatTag)),
+        };
+        if (receiver.IsDnd)
+        {
+            replies.Add(new ClusterChatPacket(WorldOpcode.SmsgMessagechat,
+                ChatPackets.BuildMessage(ChatType.Dnd, Language.Universal, receiver.Guid, receiver.DndMessage, ChatTag.None)));
+        }
+        else if (receiver.IsAfk)
+        {
+            replies.Add(new ClusterChatPacket(WorldOpcode.SmsgMessagechat,
+                ChatPackets.BuildMessage(ChatType.Afk, Language.Universal, receiver.Guid, receiver.AfkMessage, ChatTag.None)));
+        }
+
+        Answer(receiver.Guid.Value, [.. replies]);
     }
 
     private ChatState State(Player player) => _states.GetValue(player, p => new ChatState(p.Security == AccountSecurity.Player || Options.GmWhisperingTo == 1));

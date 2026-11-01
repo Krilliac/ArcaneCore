@@ -2,8 +2,11 @@ using ArcaneCore.Game.Channels;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Chat;
+using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Social;
 
@@ -13,7 +16,7 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
     public void Register(OpcodeTable table)
     {
         table.OnWorld(WorldOpcode.CmsgJoinChannel, HandleJoin);
-        table.OnWorld(WorldOpcode.CmsgLeaveChannel, (s, p, d) => Channels(s).Leave(p, Text(d)));
+        table.OnWorld(WorldOpcode.CmsgLeaveChannel, HandleLeave);
         table.OnWorld(WorldOpcode.CmsgChannelList, (s, p, d) => Channels(s).List(p, Text(d)));
         table.OnWorld(WorldOpcode.CmsgChannelPassword, HandlePassword);
         table.OnWorld(WorldOpcode.CmsgChannelSetOwner, (s, p, d) => WithTarget(d, (c, t) => Channels(s).SetOwner(p, c, t)));
@@ -50,6 +53,28 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
         string name = reader.ReadCString();
         string password = reader.ReadCString();
         Channels(session).Join(player, name, password);
+        if (session.Services.GetService<ChatFeature>()?.Cluster is { } cluster
+            && Channels(session).Find(player.Team, name) is { } channel && channel.IsOn(player.Guid))
+        {
+            cluster.JoinChannel(new ClusterChatSender(player.Guid.Value, player.Name, player.AccountId), channel.Name);
+        }
+    }
+
+    /// <summary>
+    /// CMSG_LEAVE_CHANNEL: CString name. With cross-worker chat the member is also unsubscribed at the router once the local channel no longer lists it
+    /// (a channel that does not exist or never listed the player changes nothing).
+    /// </summary>
+    private static void HandleLeave(WorldSession session, Player player, byte[] payload)
+    {
+        string name = Text(payload);
+        Channel? channel = name.Length == 0 ? null : Channels(session).Find(player.Team, name);
+        bool wasMember = channel is not null && channel.IsOn(player.Guid);
+        Channels(session).Leave(player, name);
+        if (wasMember && !channel!.IsOn(player.Guid)
+            && session.Services.GetService<ChatFeature>()?.Cluster is { } cluster)
+        {
+            cluster.LeaveChannel(new ClusterChatSender(player.Guid.Value, player.Name, player.AccountId), channel.Name);
+        }
     }
 
     /// <summary>CMSG_CHANNEL_PASSWORD: CString name, CString password.</summary>

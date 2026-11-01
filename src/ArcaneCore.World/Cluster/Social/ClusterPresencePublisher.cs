@@ -114,6 +114,25 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// The session generation the authority assigned to <paramref name="characterGuid"/>'s registration by this publisher (the one realm-wide deliveries are stamped with), or false
+    /// while the character is not registered (login not sent yet, logged out, or superseded by another worker). Thread-safe, never blocks.
+    /// </summary>
+    public bool TryGetRegistration(ulong characterGuid, out long sessionGeneration)
+    {
+        lock (_gate)
+        {
+            if (_known.TryGetValue(characterGuid, out Known? known))
+            {
+                sessionGeneration = known.Generation;
+                return true;
+            }
+        }
+
+        sessionGeneration = 0;
+        return false;
+    }
+
     /// <summary>A character entered the world (a snapshot with a non-positive generation, such as a test double or a synthetic session, is ignored).</summary>
     public void PublishLogin(in PresenceSnapshot snapshot)
     {
