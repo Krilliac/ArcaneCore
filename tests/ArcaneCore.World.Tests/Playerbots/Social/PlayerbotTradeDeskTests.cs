@@ -170,11 +170,11 @@ public sealed class PlayerbotTradeDeskTests
         public Task<int> AffinityAsync() => World.Host.OnWorldAsync(() =>
             HelpTestKit.RecorderOf(World).Memory.TryGet(Bot, CustomerGuid.Value, out PlayerbotRelation relation) ? (int)relation.Affinity : 0);
 
-        /// <summary>A fee leg of the bot to <paramref name="fee"/> copper, in its Paying stage since <paramref name="stageMs"/>, remembering <paramref name="moneyBefore"/> copper.</summary>
+        /// <summary>A fee leg of the bot to <paramref name="fee"/> copper, in its Paying stage since <paramref name="stageMs"/>. <paramref name="moneyBefore"/> is the bot's balance the caller set up (the leg no longer remembers it).</summary>
         public Task<(MageLeg Leg, PortalRequest Request)> NewFeeLegAsync(uint fee, uint stageMs, uint moneyBefore) => World.Host.OnWorldAsync(() =>
         {
             Player bot = HelpTestKit.Online(World, BotName);
-            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, System.Numerics.Vector3.Zero), stageMs) { Stage = MageLegStage.Paying, MoneyBefore = moneyBefore };
+            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, System.Numerics.Vector3.Zero), stageMs) { Stage = MageLegStage.Paying };
             var request = new PortalRequest(bot.Guid.Value, BotName, bot.Team, 0, System.Numerics.Vector3.Zero, 0, 0, fee, stageMs);
             return (leg, request);
         });
@@ -926,7 +926,7 @@ public sealed class PlayerbotTradeDeskTests
         {
             Player bot = HelpTestKit.Online(scene.World, BotName);
             WorldSession session = PartyTestHost.Feature(scene.World.Host).FindSession(scene.Bot)!;
-            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, System.Numerics.Vector3.Zero), stageMs) { Stage = MageLegStage.Paying, MoneyBefore = bot.Money };
+            var leg = new MageLeg(TravelMeans.MagePortal, 0, new TravelPlace(0, System.Numerics.Vector3.Zero), stageMs) { Stage = MageLegStage.Paying };
             var request = new PortalRequest(bot.Guid.Value, BotName, bot.Team, 0, System.Numerics.Vector3.Zero, 0, 0, 100, stageMs);
             TravelLegStep step = PlayerbotMageService.Pay(session, bot, leg, request, HelpTestKit.Online(scene.World, SecondCustomerName), now, out string? failure);
             return (step, failure);
@@ -1242,7 +1242,6 @@ public sealed class PlayerbotTradeDeskTests
         uint now = 100;
         Assert.Equal(TravelLegStep.Traveling, (await scene.PayAsync(leg, request, CustomerName, now)).Step);
         Assert.False(request.Paid, "money spent elsewhere was taken for the fee");
-        Assert.Equal(48_000u, leg.MoneyBefore);
         Assert.Equal(MageLegStage.Paying, leg.Stage);
         await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgInitiateTrade) == 1, "the fee leg to ask the mage for the trade");
         PlayerbotTradeClaim claim = await scene.ClaimAsync();
@@ -1318,7 +1317,6 @@ public sealed class PlayerbotTradeDeskTests
 
         Assert.Equal(TravelLegStep.Traveling, (await scene.PayAsync(leg, request, SecondCustomerName, now += 100)).Step);
         Assert.False(request.Paid, "the desk sale was taken for the fee");
-        Assert.Equal(50_000u - Price, leg.MoneyBefore);
         Assert.Equal(MageLegStage.Paying, leg.Stage);
         await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgInitiateTrade) == 2, "the fee leg to ask the mage for its own trade");
         PlayerbotTradeClaim claim = await scene.ClaimAsync();

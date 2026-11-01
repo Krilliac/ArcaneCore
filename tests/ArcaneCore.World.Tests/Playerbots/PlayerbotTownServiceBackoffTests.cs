@@ -241,4 +241,38 @@ public sealed class PlayerbotTownServiceBackoffTests
             });
         });
     }
+
+    /// <summary>
+    /// A crowd plan still waiting for navigation tiles decides nothing: the 60 s crowd gate stays open, so the next think plans again and the bot steps to its own spot.
+    /// Broken: a pending plan armed the gate, and the next think traded from the crowded place (the bot bought at once).
+    /// </summary>
+    [Fact]
+    public async Task APendingCrowdPlan_DoesNotBurnTheGate_SoTheNextThinkStillStepsAside()
+    {
+        await RunAsync(manualClock: false, extraBots: 1, async (host, sessions, goals) =>
+        {
+            Player player = sessions[0].Player!;
+            await host.WaitForWorldAsync(() => player.VisibleObjects.Contains(sessions[1].Player!.Guid), "the second bot in sight");
+            await host.OnWorldAsync(() =>
+            {
+                sessions[1].Player!.Relocate(player.X, player.Y, player.Z, player.Orientation, host.World.NowMs);
+                var pathfinder = new PlayerbotTileHoldTests.PendingPathfinder { Pending = true };
+                WorldCollision.Of(host.World).Install(lineOfSight: new FlatFloor(), pathfinder: pathfinder);
+
+                // Think 1: the bot is crowded, its spot plan waits for a tile. The visit is kept, nothing is bought here (a refused plan would have traded from the spot).
+                sessions[0].ManagedBudget = new ManagedActionBudget(4);
+                goals.BeginThink();
+                Assert.True(goals.Update(player, 500));
+                Assert.Equal(0u, player.Inventory.GetItemCount(117));
+
+                // Think 2: the tiles are there. The gate was not armed by the pending plan, so the crowd rule plans again and the bot sets out for its spot instead of trading.
+                pathfinder.Pending = false;
+                sessions[0].ManagedBudget = new ManagedActionBudget(4);
+                goals.BeginThink();
+                Assert.True(goals.Update(player, 500));
+                Assert.Equal(0u, player.Inventory.GetItemCount(117));
+                return true;
+            });
+        });
+    }
 }

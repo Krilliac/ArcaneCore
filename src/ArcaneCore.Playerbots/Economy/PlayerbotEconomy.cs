@@ -431,6 +431,8 @@ internal sealed partial class PlayerbotEconomy(WorldSession session, PlayerbotOp
             return false;
         }
 
+        // Bots that reach the auctioneer the same way stop on one point: a crowded bot steps to its own spot first (the town vendor's crowd rule).
+        if (_destinations.SpreadAt(player, seen.Npc, elapsedMs)) return true;
         if (!PlayerbotMovementControl.Stop(session, player)) return true;
         _destinations.Clear();
         _auctioneer = seen.Npc.Guid;

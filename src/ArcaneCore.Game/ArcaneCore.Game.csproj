@@ -8,6 +8,7 @@
   <!-- Microsoft.Extensions.Logging.Abstractions is part of Microsoft.NETCore.App in .NET 11 (NU1510). -->
 
   <ItemGroup>
+    <InternalsVisibleTo Include="ArcaneCore.World" />
     <InternalsVisibleTo Include="ArcaneCore.Game.Tests" />
     <InternalsVisibleTo Include="ArcaneCore.World.Tests" />
     <InternalsVisibleTo Include="ArcaneCore.Benchmarks" />

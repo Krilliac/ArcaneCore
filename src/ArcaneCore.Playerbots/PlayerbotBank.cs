@@ -69,6 +69,7 @@ internal sealed class PlayerbotBank(WorldSession session, PlayerbotOptions optio
     private const int MaxRefusals = 2;
 
     private readonly PlayerbotEconomyWalker _walker = new(session, options);
+    private readonly PlayerbotCrowdSpread _spread = new(session, options);
     private readonly HashSet<uint> _blocked = [];
     private readonly HashSet<ObjectGuid> _refusedItems = [];
     private readonly List<(uint Entry, uint Spawn, Vector3 Position)> _bankers = [];
@@ -101,6 +102,7 @@ internal sealed class PlayerbotBank(WorldSession session, PlayerbotOptions optio
     internal void Reset()
     {
         _walker.Clear();
+        _spread.Clear();
         _blocked.Clear();
         _refusedItems.Clear();
         _opened = false;
@@ -157,6 +159,7 @@ internal sealed class PlayerbotBank(WorldSession session, PlayerbotOptions optio
         if (!_visiting) return;
         _visiting = false;
         _walker.Clear();
+        _spread.Clear();
         TargetEntry = 0;
         if (rest) (_checked, _nextCheckAt) = (true, unchecked(session.World.NowMs + RestMs));
     }
@@ -315,6 +318,8 @@ internal sealed class PlayerbotBank(WorldSession session, PlayerbotOptions optio
         }
 
         TargetEntry = banker.Entry;
+        // Bots that reach the banker the same way stop on one point: a crowded bot steps to its own spot first (the town vendor's crowd rule).
+        if (!_opened && _spread.Step(player, banker, elapsedMs)) return BankStep.Working;
         if (!PlayerbotMovementControl.Stop(session, player)) return BankStep.Working;
         if (!_opened)
         {

@@ -25,6 +25,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
     private readonly WorldSession _session = session ?? throw new ArgumentNullException(nameof(session));
     private readonly PlayerbotOptions _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly PlayerbotQuestTripFeasibility _trip = new();
+    private readonly PlayerbotCrowdSpread _spread = new(session, options);
 
     internal int TripEvaluations => _trip.Evaluations;
     private PlayerbotRoute? _route;
@@ -634,6 +635,13 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
 
         _route = null;
         _approachFailCount = 0;
+        // Bots that reach a giver the same way stop on one point: a crowded bot steps to its own spot first (the town vendor's crowd rule).
+        if (_spread.Step(player, target.Npc, elapsedMs))
+        {
+            Goal = PlayerbotGoalKind.Quest;
+            return true;
+        }
+
         if (!PlayerbotMovementControl.Stop(_session, player))
             return true;
 
