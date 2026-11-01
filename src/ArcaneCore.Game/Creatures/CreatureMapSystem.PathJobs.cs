@@ -62,8 +62,9 @@ public sealed partial class CreatureMapSystem
     internal const float PathJobLagMaxDriftYards = 12f;
 
     /// <summary>
-    /// How long (ms, from submission) a lagging job that has not finished is waited for before it is dropped and asked again. Without
-    /// the bound a lagging job that never answers (a saturated pool, a stuck worker below <see cref="PathJobPendingTimeoutMs"/>) holds its creature.
+    /// How long (ms, from when the map first saw a worker running it) a lagging job that has not finished is waited for before it is
+    /// dropped and asked again. A job still queued is never cycled. Without the bound a lagging job stuck in a worker below
+    /// <see cref="PathJobPendingTimeoutMs"/> holds its creature.
     /// </summary>
     internal const long PathJobLagMaxWaitMs = 2_000;
 
@@ -252,9 +253,11 @@ public sealed partial class CreatureMapSystem
 
             // The wait for a lagging job is bounded by how far its target has gone (distance) and how long the job has been out (time):
             // past either, the job is dropped and asked again from where the creature stands for where the target is now.
-            bool lagWaitSpent = lagging && !done
+            // Only a job a worker has started is cycled (time measured from when the map saw it start): a still-queued job resubmitted
+            // goes to the back of its FIFO lane, so cycling it would starve the follower on a busy pool.
+            bool lagWaitSpent = lagging && !done && job.StartedSeenAtMs >= 0
                 && (Vector3.DistanceSquared(job.Destination, destination) > PathJobLagMaxDriftYards * PathJobLagMaxDriftYards
-                    || _clockMs - job.SubmittedAtMs > PathJobLagMaxWaitMs);
+                    || _clockMs - job.StartedSeenAtMs > PathJobLagMaxWaitMs);
             if (!done && !overdue && ((sameRequest && destinationFits) || (lagging && !lagWaitSpent)))
             {
                 PathJobWaits++;

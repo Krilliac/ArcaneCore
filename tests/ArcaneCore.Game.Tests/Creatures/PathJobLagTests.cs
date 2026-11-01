@@ -29,8 +29,14 @@ public sealed class PathJobLagTests
 
         public bool CanSearchShared(uint mapId) => true;
 
+        /// <summary>How many worker searches have entered <see cref="FindPathShared"/> (they may still be waiting on <see cref="Gate"/>).</summary>
+        public int Entered => Volatile.Read(ref _entered);
+
+        private int _entered;
+
         public PathResult FindPathShared(uint mapId, Vector3 start, Vector3 end, PathOptions options)
         {
+            Interlocked.Increment(ref _entered);
             Gate.Wait(TimeSpan.FromSeconds(10));
             return Answer(start, end);
         }
@@ -63,6 +69,9 @@ public sealed class PathJobLagTests
 
     private static void WaitUntilPublished(Scene s)
         => Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
+
+    private static void WaitUntilWorkerHasIt(Scene s, int entered)
+        => Assert.True(SpinWait.SpinUntil(() => s.Paths.Entered >= entered, TimeSpan.FromSeconds(10)), "no worker took the path job");
 
     [Fact]
     public void ALaggingAnswer_ThatWouldRunPastAReversedOwner_IsDiscarded()
@@ -121,12 +130,47 @@ public sealed class PathJobLagTests
         s.Wolf.Motion.MoveFollow(s.Player, 2, 0);
         s.World.RunTick(100);
         Assert.Equal(1, s.System.PathJobsSubmitted);
+        WaitUntilWorkerHasIt(s, 1);
 
         s.Player.Relocate(0, -10 + CreatureMapSystem.PathJobLagMaxDriftYards + 3f, s.Player.Z, MathF.PI / 2f, 0);
         s.World.RunTick(100);
 
         Assert.Equal(1, s.System.PathJobsStale);
         Assert.Equal(2, s.System.PathJobsSubmitted);
+        s.Paths.Gate.Set();
+    }
+
+    [Fact]
+    public void ALaggingJobThatIsStillQueued_IsNeverDroppedForTimeOrDistance()
+    {
+        // A one-thread pool whose only worker is held on another search: the follower's job stays queued (IsStarted false). Dropping and
+        // resubmitting it would send it to the back of the lane, so it is waited for however long it takes and however far the owner goes.
+        using Scene s = Start();
+        using var pool = new NavJobSystem(threads: 1);
+        s.System.PathJobs = pool;
+        s.Paths.Gate.Reset();
+        var blocker = new NavJob(s.Paths, 0u,new Vector3(100, 100, 0), new Vector3(110, 100, 0), PathOptions.Default);
+        Assert.True(pool.TrySubmit(blocker));
+        WaitUntilWorkerHasIt(s, 1);
+
+        s.Player.Relocate(0, -10, s.Player.Z, MathF.PI / 2f, 0);
+        s.Wolf.Relocate(0, -30, s.Wolf.Z, s.Wolf.Orientation, 0);
+        s.Wolf.Motion.MoveFollow(s.Player, 2, 0);
+        s.World.RunTick(100);
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+
+        s.Player.Relocate(0, -7, s.Player.Z, MathF.PI / 2f, 0);
+        for (long waited = 0; waited <= 2 * CreatureMapSystem.PathJobLagMaxWaitMs; waited += 100)
+        {
+            s.World.RunTick(100);
+        }
+
+        s.Player.Relocate(0, -10 + CreatureMapSystem.PathJobLagMaxDriftYards + 3f, s.Player.Z, MathF.PI / 2f, 0);
+        s.World.RunTick(100);
+
+        Assert.Equal(0, s.System.PathJobsStale);
+        Assert.Equal(1, s.System.PathJobsSubmitted);
+        Assert.Equal(1, s.Paths.Entered); // only the blocker has been taken by a worker
         s.Paths.Gate.Set();
     }
 
@@ -140,6 +184,7 @@ public sealed class PathJobLagTests
         s.Wolf.Motion.MoveFollow(s.Player, 2, 0);
         s.World.RunTick(100);
         Assert.Equal(1, s.System.PathJobsSubmitted);
+        WaitUntilWorkerHasIt(s, 1); // the bound counts from when the map sees a worker running the job
 
         s.Player.Relocate(0, -7, s.Player.Z, MathF.PI / 2f, 0);
         s.World.RunTick(100);
