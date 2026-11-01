@@ -82,13 +82,12 @@ public sealed class GatewayHandoffNodeKeyedTests
         Assert.Equal(1, gateway.HoldSessionsForHandoff());
         Assert.Equal(0, gateway.HoldSessionsForHandoff(EastNode));
         Assert.Equal(1, gateway.HoldSessionsForHandoff(KalimdorNode));
+        // The unkeyed hold acts on the first worker only, but the unkeyed release frees every hold (both filters null), so the Kalimdor hold is gone too.
         gateway.ReleaseHandoffHold();
         Assert.Equal(1, gateway.HoldSessionsForHandoff(EastNode));
-        Assert.Equal(0, gateway.HoldSessionsForHandoff(KalimdorNode));
+        Assert.Equal(1, gateway.HoldSessionsForHandoff(KalimdorNode));
         gateway.ReleaseHandoffHold(KalimdorNode);
         gateway.ReleaseHandoffHold(EastNode);
-        GC.KeepAlive(kalimdorClient);
-        GC.KeepAlive(eastClient);
     }
 
     [Fact]
@@ -110,8 +109,6 @@ public sealed class GatewayHandoffNodeKeyedTests
         await router.ReleaseAsync(cts.Token);
         Assert.Equal(1, gateway.HoldSessionsForHandoff(KalimdorNode)); // released: it can be held again
         gateway.ReleaseHandoffHold(KalimdorNode);
-        GC.KeepAlive(kalimdorClient);
-        GC.KeepAlive(eastClient);
     }
 
     [Fact]
