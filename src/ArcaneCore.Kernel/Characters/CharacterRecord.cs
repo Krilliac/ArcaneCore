@@ -83,9 +83,3 @@ public sealed class CharacterRecord
 
     public float TransportOrientation { get; set; }
 }
-
-/// <summary>One action-bar slot: packed as action | type &lt;&lt; 24 on the wire (vmangos ACTION_BUTTON_*).</summary>
-public sealed record ActionButton(byte Button, uint Action, byte Type);
-
-/// <summary>The identity fields of a character, for name queries and /who of offline players.</summary>
-public sealed record CharacterIdentity(int Id, int AccountId, string Name, byte Race, byte Gender, byte Class, byte Level = 1, uint ZoneId = 0);
