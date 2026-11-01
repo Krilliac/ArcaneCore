@@ -1,3 +1,4 @@
+using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.Realm.Ops.Cli;
 using Microsoft.Extensions.Configuration;
@@ -23,6 +24,13 @@ public sealed class RealmStartupValidationTests
         ConfigReport report = Validate(("Auth:Port", value));
         Assert.True(report.IsInvalid);
         Assert.Contains(report.Issues, i => i.Key == "Auth:Port" && i.Severity == ConfigSeverity.Error);
+    }
+
+    [Fact]
+    public void EmptyAuthPort_ThrowsWhenBoundAtStart()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Auth:Port"] = "" }).Build();
+        Assert.Throws<InvalidOperationException>(() => configuration.GetSection(AuthOptions.SectionName).Get<AuthOptions>());
     }
 
     [Fact]

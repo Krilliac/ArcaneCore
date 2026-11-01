@@ -29,8 +29,9 @@ public sealed class AuthConfigChecks : IConfigCheck
         }
 
         string? port = configuration[PortKey];
-        // A present-but-empty port is an error too: the options binder skips an empty value for an int, so the daemon would silently listen on
-        // the default 3724 while the operator believes the key is set.
+        // A present-but-empty port is an error too: ConfigurationBinder sends the empty value to the Int32 converter, which throws, and the
+        // binder rethrows that as InvalidOperationException, so options binding at realm start would crash the daemon (pinned by
+        // RealmStartupValidationTests.EmptyAuthPort_ThrowsWhenBoundAtStart). check-config reports it with exit 78 instead.
         if (port is not null
             && !(int.TryParse(port, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out int value) && value is >= 0 and <= 65535))
         {
