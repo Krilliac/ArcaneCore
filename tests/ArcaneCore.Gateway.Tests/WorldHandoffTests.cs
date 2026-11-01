@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
@@ -84,8 +85,16 @@ public sealed class WorldHandoffTests
             LogonResult logon = await LogonClient.AuthenticateAsync(a.RealmEndpoint, "HANDOFF", "PASSWORD", cts.Token);
             await using WorldClient first = await WorldClient.ConnectAsync(linked.Gateway.ListenEndPoint, cts.Token);
             Assert.Equal((byte)AuthResponseCode.Ok, await first.AuthenticateAsync("HANDOFF", logon.SessionKey, cts.Token));
-            ulong guid = await CreateAndEnterAsync(first, a, "Handoff", cts.Token);
+            (_, byte[] loginVerify) = await CreateAndEnterAsync(first, a, "Handoff", cts.Token);
             CharacterOwnershipToken before = a.World.CharacterOwnership!;
+
+            // A second client of another account, still at character select (the OpenAsync branch of the move).
+            await a.AddAccountAsync("HANDOFFB", "PASSWORD", cts.Token);
+            LogonResult logonB = await LogonClient.AuthenticateAsync(a.RealmEndpoint, "HANDOFFB", "PASSWORD", cts.Token);
+            await using WorldClient selecting = await WorldClient.ConnectAsync(linked.Gateway.ListenEndPoint, cts.Token);
+            Assert.Equal((byte)AuthResponseCode.Ok, await selecting.AuthenticateAsync("HANDOFFB", logonB.SessionKey, cts.Token));
+            await selecting.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, cts.Token);
+            await selecting.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, cts.Token);
 
             var stages = new List<WorldHandoffStage>();
             WorldHandoffRecord done = await Coordinator(a, b, source, new GatewayWorldHandoffRouter(linked.Gateway, bEndpoint.Host!.BoundEndPoint))
@@ -130,18 +139,26 @@ public sealed class WorldHandoffTests
             Assert.Single(seen, f => f.Opcode == (ushort)WorldOpcode.SmsgNewWorld);
             Assert.Single(seen, f => f.Opcode == (ushort)WorldOpcode.SmsgTransferPending);
             Assert.Equal((ushort)WorldOpcode.SmsgTransferPending, seen[newWorld - 1].Opcode);
-            Assert.Equal(20, seen[newWorld].Payload.Length);
-            Assert.Equal(seen[newWorld - 1].Payload, seen[newWorld].Payload[..4]);
+
+            // Golden bytes: SMSG_NEW_WORLD is exactly the character's SMSG_LOGIN_VERIFY_WORLD from A (u32 map, x, y, z, o: the same map and position), and
+            // SMSG_TRANSFER_PENDING is exactly the u32 map, little endian.
+            Assert.Equal(20, loginVerify.Length);
+            byte[] expectedPending = new byte[4];
+            BinaryPrimitives.WriteUInt32LittleEndian(expectedPending, BinaryPrimitives.ReadUInt32LittleEndian(loginVerify));
+            Assert.Equal(loginVerify, seen[newWorld].Payload);
+            Assert.Equal(expectedPending, seen[newWorld - 1].Payload);
             Assert.Equal((ushort)WorldOpcode.SmsgQueryTimeResponse, seen[^1].Opcode);
             Assert.True(newWorld < seen.Count - 1, "the held input was answered before the world port reached the client");
-            Assert.Equal(1, linked.Gateway.ConnectionCount);
-            await WaitUntilAsync(() => Task.FromResult(bEndpoint.Acceptor!.Sessions.Count == 1), cts.Token);
-            Assert.Single(bEndpoint.Acceptor!.Sessions);
+            Assert.Equal(2, linked.Gateway.ConnectionCount);
+            await WaitUntilAsync(() => Task.FromResult(bEndpoint.Acceptor!.Sessions.Count == 2), cts.Token);
+            Assert.Equal(2, bEndpoint.Acceptor!.Sessions.Count);
             await WaitUntilAsync(async () => await b.World.InvokeAsync(() => b.World.OnlinePlayerCount) == 1, cts.Token);
 
-            // The session is B's now: input sent after the handoff is answered too.
+            // The session is B's now: input sent after the handoff is answered too, for the character in the world and the one at character select.
             await first.SendAsync((ushort)WorldOpcode.CmsgQueryTime, ReadOnlyMemory<byte>.Empty, cts.Token);
             await first.ReadUntilAsync((ushort)WorldOpcode.SmsgQueryTimeResponse, cts.Token);
+            await selecting.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, cts.Token);
+            await selecting.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, cts.Token);
 
             // The durable fence row names B now.
             CharacterOwnershipRow row = await OwnershipAsync(b);
@@ -173,24 +190,44 @@ public sealed class WorldHandoffTests
             Assert.Equal((byte)AuthResponseCode.Ok, await client.AuthenticateAsync("HANDOFF", logon.SessionKey, cts.Token));
             await CreateAndEnterAsync(client, a, "Handoff", cts.Token);
 
+            // CMSG_QUERY_TIME is a session-level handler, so a frozen A would answer it without any hold: an answer before the abort means the hold is broken.
+            var received = new ConcurrentQueue<WorldFrame>();
+            Task? reader = null;
+            bool answeredEarly = true;
             await Assert.ThrowsAsync<WorldHandoffAbortedException>(() =>
                 Coordinator(a, b, source, new GatewayWorldHandoffRouter(linked.Gateway, bEndpoint.Host!.BoundEndPoint)).RunAsync(Guid.NewGuid(), async (stage, ct) =>
                 {
                     if (stage == WorldHandoffStage.Frozen)
                     {
+                        reader = Task.Run(async () =>
+                        {
+                            while (true)
+                            {
+                                WorldFrame frame = await client.ReadAsync(cts.Token);
+                                received.Enqueue(frame);
+                                if (frame.Opcode == (ushort)WorldOpcode.SmsgQueryTimeResponse)
+                                {
+                                    return;
+                                }
+                            }
+                        }, CancellationToken.None);
                         await client.SendAsync((ushort)WorldOpcode.CmsgQueryTime, ReadOnlyMemory<byte>.Empty, ct);
                     }
 
                     if (stage == WorldHandoffStage.Flushed)
                     {
-                        // Let the gateway read the held input before the abort releases it.
-                        await Task.Delay(200, ct);
+                        // Give the gateway time to read the input and an unheld A time to answer it, then require silence.
+                        await Task.Delay(500, ct);
+                        answeredEarly = received.Any(f => f.Opcode == (ushort)WorldOpcode.SmsgQueryTimeResponse); // asserted after: the coordinator would swallow an assertion thrown here as the abort
                         throw new InvalidOperationException("injected failure at " + stage);
                     }
                 }, cts.Token));
 
-            // A resumed and the gateway returned the held input to it: the query is answered and the client is still connected on A.
-            await client.ReadUntilAsync((ushort)WorldOpcode.SmsgQueryTimeResponse, cts.Token);
+            // A resumed and the gateway returned the held input to it: the query is answered only now and the client is still connected on A.
+            Assert.False(answeredEarly, "the input sent during the freeze was answered before the abort: the gateway did not hold it");
+            Assert.NotNull(reader);
+            await reader!.WaitAsync(cts.Token);
+            Assert.Contains(received, f => f.Opcode == (ushort)WorldOpcode.SmsgQueryTimeResponse);
             Assert.Equal(1, linked.Gateway.ConnectionCount);
             Assert.True(Host(b).IsStandby);
         }
@@ -373,7 +410,8 @@ public sealed class WorldHandoffTests
     private static WorldHandoffCoordinator Coordinator(SyntheticArcaneServer a, SyntheticArcaneServer b, IWorldHandoffSource source, IWorldHandoffRouter router)
         => new(Store(a), source, new StandbyWorldHandoffTarget(new WorkerNodeId("b"), Host(b)), router);
 
-    private static async Task<ulong> CreateAndEnterAsync(WorldClient client, SyntheticArcaneServer server, string name, CancellationToken token)
+    /// <summary>Creates a character and enters the world; returns its guid and the payload of the SMSG_LOGIN_VERIFY_WORLD A sent (u32 map, x, y, z, o).</summary>
+    private static async Task<(ulong Guid, byte[] LoginVerifyWorld)> CreateAndEnterAsync(WorldClient client, SyntheticArcaneServer server, string name, CancellationToken token)
     {
         await client.SendAsync((ushort)WorldOpcode.CmsgCharCreate, CharacterCreate(name), token);
         Assert.Equal(new byte[] { 0x2E }, (await client.ReadUntilAsync((ushort)WorldOpcode.SmsgCharCreate, token)).Payload);
@@ -383,9 +421,9 @@ public sealed class WorldHandoffTests
         byte[] login = new byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(login, guid);
         await client.SendAsync((ushort)WorldOpcode.CmsgPlayerLogin, login, token);
-        await client.ReadUntilAsync((ushort)WorldOpcode.SmsgLoginVerifyWorld, token);
+        WorldFrame verify = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgLoginVerifyWorld, token);
         await WaitUntilAsync(async () => await server.World.InvokeAsync(() => server.World.OnlinePlayerCount) == 1, token);
-        return guid;
+        return (guid, verify.Payload);
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, CancellationToken token)

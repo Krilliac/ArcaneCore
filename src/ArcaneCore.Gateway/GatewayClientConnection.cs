@@ -67,6 +67,9 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     // the character is in the world now (SMSG_LOGIN_VERIFY_WORLD seen, no SMSG_LOGOUT_COMPLETE since): only then does the promoted world have a player to load.
     private bool _handoffHolding;
     private volatile bool _inWorld;
+
+    /// <summary>CMSG_PLAYER_LOGIN was forwarded and the worker has not answered it yet (neither SMSG_LOGIN_VERIFY_WORLD nor SMSG_CHARACTER_LOGIN_FAILED).</summary>
+    private volatile bool _loginPending;
     private PendingAuth? _pending;
     private string? _kickReason;
     private GatewayWardenSession? _warden;
@@ -273,6 +276,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         if (opcode == WorldOpcode.CmsgPlayerLogin && payload.Length <= GatewaySessionWire.MaxAdoptPacketBytes)
         {
             Volatile.Write(ref _loginPacket, new LoginPacket(payload, _packetReceivedMs));
+            _loginPending = true;
         }
 
         // A staged cross-worker transfer holds the packets of the freeze; a generation the session left is dropped (GatewayTransferRouter).
@@ -558,6 +562,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         if (opcode == WorldOpcode.SmsgLoginVerifyWorld)
         {
             _inWorld = true;
+            _loginPending = false;
+        }
+        else if (opcode == WorldOpcode.SmsgCharacterLoginFailed)
+        {
+            _loginPending = false;
         }
         else if (opcode == WorldOpcode.SmsgLogoutComplete)
         {
@@ -633,6 +642,10 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     {
         LoginPacket? login = Volatile.Read(ref _loginPacket);
         bool inWorld = _inWorld;
+
+        // A login that A never answered (CMSG_PLAYER_LOGIN sent, no SMSG_LOGIN_VERIFY_WORLD yet) is adopted too, so B answers it; that answer reaches the client
+        // as the plain SMSG_LOGIN_VERIFY_WORLD it is waiting for, not as a world port.
+        bool adopt = inWorld || _loginPending;
         long oldGeneration;
         lock (_redirectGate)
         {
@@ -649,16 +662,16 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         long newGeneration = 0;
         try
         {
-            if (inWorld && login is null)
+            if (adopt && login is null)
             {
                 throw new InvalidOperationException("the character is in the world but no login packet was seen");
             }
 
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(RedirectTimeout);
-            var sink = new HandoffSink(this, inWorld);
+            var sink = new HandoffSink(this, TrackWorldState, Send, inWorld);
             GatewaySessionOpenReply reply;
-            if (inWorld)
+            if (adopt)
             {
                 reply = await to.AdoptAsync(
                     _server.NextGeneration,
@@ -763,15 +776,19 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
         EndRedirect(from, oldGeneration, reason);
     }
 
-    private const int NewWorldPayloadLength = sizeof(uint) + (4 * sizeof(float));
+    /// <summary>Writes one frame to the client (the connection's encrypted send).</summary>
+    internal delegate void ClientFrameWriter(WorldOpcode opcode, ReadOnlySpan<byte> payload);
 
     /// <summary>
     /// The session on the promoted world, as the client sees it. For a character that was in the world, the first SMSG_LOGIN_VERIFY_WORLD becomes
     /// SMSG_TRANSFER_PENDING (u32 map) + SMSG_NEW_WORLD (the same u32 map and four floats), the pair vmangos sends for a far teleport (Player::ExecuteTeleportFar);
-    /// everything else passes unchanged.
+    /// everything else passes unchanged to <paramref name="inner"/> (the connection). <paramref name="trackWorldState"/> and <paramref name="write"/> are the
+    /// connection's own state tracker and client writer.
     /// </summary>
-    private sealed class HandoffSink(GatewayClientConnection connection, bool synthesizeWorldPort) : IGatewaySessionSink
+    internal sealed class HandoffSink(IGatewaySessionSink inner, Action<WorldOpcode> trackWorldState, ClientFrameWriter write, bool synthesizeWorldPort) : IGatewaySessionSink
     {
+        private const int NewWorldPayloadLength = sizeof(uint) + (4 * sizeof(float));
+
         private bool _synthesized;
 
         public void OnOpened(GatewaySessionOpenReply reply)
@@ -784,16 +801,20 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
             if (synthesizeWorldPort && !_synthesized && opcode == WorldOpcode.SmsgLoginVerifyWorld && payload.Length == NewWorldPayloadLength)
             {
                 _synthesized = true;
-                connection.TrackWorldState(opcode);
-                connection.Send(WorldOpcode.SmsgTransferPending, payload[..sizeof(uint)]);
-                connection.Send(WorldOpcode.SmsgNewWorld, payload);
+                trackWorldState(opcode);
+                write(WorldOpcode.SmsgTransferPending, payload[..sizeof(uint)]);
+                write(WorldOpcode.SmsgNewWorld, payload);
                 return;
             }
 
-            ((IGatewaySessionSink)connection).OnServerPacket(opcode, payload);
+            inner.OnServerPacket(opcode, payload);
         }
 
-        public void OnClosed(ClusterSessionDetachReason reason) => ((IGatewaySessionSink)connection).OnClosed(reason);
+        public void OnClosed(ClusterSessionDetachReason reason) => inner.OnClosed(reason);
+
+        // The sink stays the session's sink on the promoted world for its whole life: a later login redirect (character select on a map another worker owns)
+        // must be resolved by the connection as before the handoff, not refused by the interface default.
+        public bool OnRedirect(GatewaySessionRedirect redirect) => inner.OnRedirect(redirect);
     }
 
     /// <summary>

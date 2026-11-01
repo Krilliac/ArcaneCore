@@ -239,6 +239,14 @@ public sealed class GatewayServer : BackgroundService
         }
 
         bool[] results = await Task.WhenAll(moves).ConfigureAwait(false);
+
+        // A connection that holds but was not moved (it left Forwarding after the hold began, or a login redirect took it) would keep holding until it overflows:
+        // release it to the world it is on. A connection the move finished no longer holds, so this is a no-op for it.
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            connection.EndHandoffHold();
+        }
+
         int moved = results.Count(result => result);
         _logger.LogInformation("World handoff moved {Moved} of {Total} sessions to the promoted world", moved, results.Length);
         return moved;
@@ -777,7 +785,7 @@ public sealed class GatewayWorkerLink
             if (retarget.Task.IsCompleted)
             {
                 Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Connecting);
-                _logger.LogInformation("Worker link {Node} to {Worker} closed for the retarget to {Target}; its clients were disconnected", NodeId, worker, _target);
+                _logger.LogInformation("Worker link {Node} to {Worker} closed for the retarget to {Target}", NodeId, worker, _target);
             }
             else
             {
