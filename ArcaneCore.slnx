@@ -14,6 +14,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/ArcaneCore.Atlas.Tests/ArcaneCore.Atlas.Tests.csproj" />
+    <Project Path="tests/ArcaneCore.Cluster.E2E.Tests/ArcaneCore.Cluster.E2E.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Cryptography.Tests/ArcaneCore.Cryptography.Tests.csproj" />
     <Project Path="tests/ArcaneCore.Data.ProcessRunner/ArcaneCore.Data.ProcessRunner.csproj" />
     <Project Path="tests/ArcaneCore.Data.Tests/ArcaneCore.Data.Tests.csproj" />

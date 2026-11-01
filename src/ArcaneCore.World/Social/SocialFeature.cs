@@ -578,7 +578,19 @@ public sealed class SocialFeature(
     /// </summary>
     private void OnLoggingOut(Player player)
     {
-        PublishPresenceLogout(player);
+        // A transfer retire (the player left through a committed cluster transfer and is still online on the target): forget the in-memory
+        // tracking only. No guild member update or save (the target owns the row and the whole guild copy here may be stale), no SignedOff
+        // and no offline presence (to the guild, friends or realm presence), since a transfer is not a sign-off.
+        bool retiring = _world is { IsRetiringTransferredPlayer: true };
+        if (retiring)
+        {
+            _presenceSent.Remove(player.Guid.Low);
+        }
+        else
+        {
+            PublishPresenceLogout(player);
+        }
+
         _pendingCommands.Remove(player);
         _rejectedCommands.Remove(player);
         SocialContext context = Context;
@@ -593,7 +605,7 @@ public sealed class SocialFeature(
         bool ready = _ready.Remove(player.Guid);
         if (ready)
         {
-            context.Guilds.OnLoggingOut(player);
+            context.Guilds.OnLoggingOut(player, transferredAway: retiring);
         }
 
         context.Channels.LeaveAll(player);
@@ -601,12 +613,15 @@ public sealed class SocialFeature(
 
         // Friends can already see this player online while its own social rows are loading.
         // Presence uses the observers' lists, so their offline update must not wait for ours.
-        context.Friends.BroadcastPresence(player, online: false);
+        if (!retiring)
+        {
+            context.Friends.BroadcastPresence(player, online: false);
+        }
 
         context.Friends.Unload(player);
 
         int characterId = (int)player.Guid.Low;
-        if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+        if (!retiring && _writes is { } writes && writes.HasRetainedFailure(characterId))
         {
             writes.RequestRetry(characterId); // an early retry; the login barrier and shutdown still retry
         }

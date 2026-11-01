@@ -1,4 +1,5 @@
 using ArcaneCore.Game;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.WorldState.Zones;
 using ArcaneCore.Protocol;
@@ -196,6 +197,96 @@ public sealed class PlayerbotDefenseCallWorldTests
             .Where(m => m.Type == ChatType.Channel).ToList();
         Assert.Contains(heard, m => m.Text.Contains("is under attack!", StringComparison.Ordinal) && m.Text.Contains(RivalryKit.Ordinary.Name, StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// Two distinct calls (two callers, two attackers, 500 yd apart so they never merge) of one team in one zone, opened straight on the board. The first pass at 1 s
+    /// announces the older call and the zone's cooldown (<c>ZoneAnnounceSeconds</c> = 30) holds the other back. RED proof: with the cooldown test at the lane's
+    /// <c>_zoneAnnouncedAt</c> check removed, the pass at 2 s says the second line too (2), which the first two rows would then fail; with the window passed (31 s,
+    /// inclusive at 30 s) the second line is due, which is the row that proves the cooldown is what held it back.
+    /// </summary>
+    [Theory]
+    [InlineData(2_000L, 1)]
+    [InlineData(30_999L, 1)]
+    [InlineData(31_000L, 2)]
+    [InlineData(100_000L, 2)]
+    public async Task TwoCallsInOneZone_AreAnnouncedOneLinePerZoneCooldownWindow(long secondPassMs, int announced)
+    {
+        await using SocialWorld world = await StartAsync(chat: true);
+        (Guid bot, WorldTestClient listener, WorldTestClient foe) = await ChannelSceneAsync(world);
+        await using WorldTestClient keepListener = listener;
+        await using WorldTestClient keepFoe = foe;
+        await world.AddBotAsync("Dfcaller2");
+        await HelpTestKit.StandAsync(world, "Dfcaller2", ("Dflistener", 3f));
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player second = RivalryKit.Online(world, "Dfcaller2");
+            second.ZoneId = RivalryKit.OrdinaryZone;
+            SocialTestKit.Social(world.Host).Context.Channels.Join(second, "LocalDefense - " + RivalryKit.Ordinary.Name, string.Empty);
+            world.Options.Pvp.Defense.MaxActiveCallsPerZone = 5;
+            Player first = RivalryKit.Online(world, "Dfcaller");
+            PlayerbotDefenseBoard board = HelpTestKit.BrainOf(world, bot).DefenseCalls!;
+            DefenseReport one = board.Report(first.Guid.Value, 9001, first.Team, first.MapId, first.Map!.InstanceId, RivalryKit.OrdinaryZone, 0,
+                new System.Numerics.Vector3(first.X, first.Y, first.Z), first.Level);
+            DefenseReport two = board.Report(second.Guid.Value, 9002, second.Team, second.MapId, second.Map!.InstanceId, RivalryKit.OrdinaryZone, 0,
+                new System.Numerics.Vector3(first.X + 500f, first.Y, first.Z), second.Level);
+            Assert.Equal(DefenseReportOutcome.Opened, one.Outcome);
+            Assert.Equal(DefenseReportOutcome.Opened, two.Outcome);
+            Assert.NotEqual(one.CallId, two.CallId);
+            return true;
+        });
+        PlayerbotDefenseLane lane = SocialTestKit.Feature(world.Host).Defense;
+
+        await RunLaneAsync(world, 1_000);
+        Assert.Equal(1, lane.Announced); // one line for the zone and team, however many calls are open
+
+        await RunLaneAsync(world, secondPassMs);
+        Assert.Equal(announced, lane.Announced);
+    }
+
+    /// <summary>
+    /// The re-announce rule: a call is announced, its centre then moves farther than <c>MergeRadiusYards</c> (ground plane, strictly more than the radius) from where the
+    /// line was said, and one more line follows once the zone cooldown has passed; a further move adds no third line. With radius 0 (merging off) there is never a second line.
+    /// RED proof: with <c>ShouldReannounce</c> returning false the first row (40 yd, moved 100) stays at 1 line; with the <c>Repeated</c> latch removed it gets a third line.
+    /// </summary>
+    [Theory]
+    [InlineData(40, 100f, 2)]
+    [InlineData(40, 41f, 2)]
+    [InlineData(40, 40f, 1)]
+    [InlineData(0, 100f, 1)]
+    public async Task ACallWhoseCentreMovesBeyondTheMergeRadius_IsAnnouncedAgainAtMostOnce(int radius, float moveYards, int linesAfterFirstMove)
+    {
+        await using SocialWorld world = await StartAsync(chat: true);
+        (Guid bot, WorldTestClient listener, WorldTestClient foe) = await ChannelSceneAsync(world);
+        await using WorldTestClient keepListener = listener;
+        await using WorldTestClient keepFoe = foe;
+        world.Options.Pvp.Defense.MergeRadiusYards = radius;
+        Assert.Equal(DefenseReportRefusal.None, await ReportFromChannelSceneAsync(world, bot));
+        PlayerbotDefenseLane lane = SocialTestKit.Feature(world.Host).Defense;
+
+        await RunLaneAsync(world, 1_000);
+        Assert.Equal(1, lane.Announced);
+
+        await MoveCentreAsync(world, bot, moveYards);
+        await RunLaneAsync(world, 40_000); // past the zone's 30 s cooldown, so only the re-announce rule decides
+        Assert.Equal(linesAfterFirstMove, lane.Announced);
+
+        if (linesAfterFirstMove == 2)
+        {
+            await MoveCentreAsync(world, bot, moveYards);
+            await RunLaneAsync(world, 80_000);
+            Assert.Equal(2, lane.Announced); // the one re-announcement is spent
+        }
+    }
+
+    private static Task MoveCentreAsync(SocialWorld world, Guid bot, float yards)
+        => world.Host.OnWorldAsync(() =>
+        {
+            var open = new List<DefenseCall>();
+            HelpTestKit.BrainOf(world, bot).DefenseCalls!.OpenCalls(open);
+            DefenseCall call = Assert.Single(open);
+            call.Centre += new System.Numerics.Vector3(yards, 0f, 0f);
+            return true;
+        });
 
     [Fact]
     public async Task WithAnnounceOff_NoLineIsSaid_AndTheCallStaysOnTheBoard()

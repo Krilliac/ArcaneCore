@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
@@ -126,7 +127,7 @@ public sealed class PlayerbotTradeGiftsWorldTests(ITestOutputHelper output)
                 receiver.Inventory.Load([]);
                 giver.Inventory.Load([]);
                 receiver.Relocate(giver.X + 2f, giver.Y, giver.Z, 0f, host.World.NowMs);
-                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, giver.Inventory.AddItem(GiftEntry, 1, out ArcaneCore.Game.Entities.Item? gift));
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, giver.Inventory.AddItem(GiftEntry, 1, out ArcaneCore.Game.Items.Item? gift));
                 return gift!.Guid;
             });
             await host.WaitForWorldAsync(() => giver.VisibleObjects.Contains(receiver.Guid) && receiver.VisibleObjects.Contains(giver.Guid), "the bots in sight of each other");

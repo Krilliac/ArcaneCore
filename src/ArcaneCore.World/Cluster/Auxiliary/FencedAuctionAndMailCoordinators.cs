@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
+using ArcaneCore.World.Cluster.Social;
 
 namespace ArcaneCore.World.Cluster.Auxiliary;
 
@@ -511,4 +512,63 @@ public sealed class ClusterServerMailCoordinator
         var key = ServerMailIdempotencyKey.Derive(_realmId, characterId, templateId);
         return _operations.TryGetValue(key.OperationId, out DeliveryState state) && state == DeliveryState.Committed;
     }
+}
+
+/// <summary>
+/// What the Economy lease holder calls after it has durably committed a mail or an auction result (M15 S2d): builds the client packet and hands it to the
+/// <see cref="EconomyNotifyRouter"/>, which finds the recipient's current worker by presence lookup. Notifications are sent only after the commit, so a rolled-back
+/// operation never notifies. Request forwarding is not part of this type. Thread-safe: no state of its own beyond the router.
+/// </summary>
+public sealed class EconomyCommitNotifier(EconomyNotifyRouter router)
+{
+    /// <summary>
+    /// A letter for <paramref name="recipientCharacterId"/> was committed. Follows vmangos MasterPlayer::AddNewMailDeliverTime (MasterPlayer.cpp:197-209): a letter whose
+    /// <paramref name="deliverTime"/> (unix seconds) is not after <paramref name="nowUnixSeconds"/> sends SMSG_RECEIVED_MAIL to the worker hosting the recipient at once;
+    /// a delayed letter (item or COD mail) queues nothing and returns <see cref="EconomyNotifyStatus.Deferred"/>, and the holder calls <see cref="MailDelivered"/> when it is due.
+    /// </summary>
+    public EconomyNotifyStatus MailCommitted(int recipientCharacterId, long deliverTime, long nowUnixSeconds)
+        => deliverTime <= nowUnixSeconds ? MailDelivered(recipientCharacterId) : EconomyNotifyStatus.Deferred;
+
+    /// <summary>A committed letter became deliverable (vmangos MasterPlayer::Update, MasterPlayer.cpp:66-76): SMSG_RECEIVED_MAIL to the worker hosting the recipient.</summary>
+    public EconomyNotifyStatus MailDelivered(int recipientCharacterId)
+        => router.Notify(PresenceGuid(recipientCharacterId), ArcaneCore.Protocol.WorldOpcode.SmsgReceivedMail, ArcaneCore.Game.Economy.EconomyPackets.ReceivedMail());
+
+    /// <summary>
+    /// SMSG_AUCTION_OWNER_NOTIFICATION to the seller: an auction sold or expired unsold, or (vmangos AuctionHouseHandler.cpp:515-516) a bid arrived (<paramref name="sold"/> false).
+    /// </summary>
+    public EconomyNotifyStatus AuctionOwnerResult(ArcaneCore.Kernel.Economy.AuctionRecord auction, bool sold, int randomPropertyId = 0)
+    {
+        ArgumentNullException.ThrowIfNull(auction);
+        return router.Notify(
+            PresenceGuid(auction.SellerId),
+            ArcaneCore.Protocol.WorldOpcode.SmsgAuctionOwnerNotification,
+            ArcaneCore.Game.Economy.EconomyPackets.OwnerNotification(auction, sold, randomPropertyId));
+    }
+
+    /// <summary>The auction was won: SMSG_AUCTION_BIDDER_NOTIFICATION ("won") to the winning bidder recorded on <paramref name="auction"/>.</summary>
+    public EconomyNotifyStatus AuctionWon(ArcaneCore.Kernel.Economy.AuctionRecord auction, int randomPropertyId = 0)
+    {
+        ArgumentNullException.ThrowIfNull(auction);
+        return router.Notify(
+            PresenceGuid(auction.BidderId),
+            ArcaneCore.Protocol.WorldOpcode.SmsgAuctionBidderNotification,
+            ArcaneCore.Game.Economy.EconomyPackets.BidderNotification(auction, won: true, randomPropertyId));
+    }
+
+    /// <summary>
+    /// A higher bid replaced the bidder recorded on <paramref name="auctionBeforeBid"/>: SMSG_AUCTION_BIDDER_NOTIFICATION ("outbid") to that bidder. The packet is built from the
+    /// auction as it was before the bid, so it carries the outbid player's own guid and bid, as vmangos SendAuctionOutbiddedMail does before it overwrites
+    /// auction->bidder and auction->bid (AuctionHouseHandler.cpp:148-163, 509-513, 529-535); the single-process path does the same.
+    /// </summary>
+    public EconomyNotifyStatus Outbid(ArcaneCore.Kernel.Economy.AuctionRecord auctionBeforeBid, int randomPropertyId = 0)
+    {
+        ArgumentNullException.ThrowIfNull(auctionBeforeBid);
+        return router.Notify(
+            PresenceGuid(auctionBeforeBid.BidderId),
+            ArcaneCore.Protocol.WorldOpcode.SmsgAuctionBidderNotification,
+            ArcaneCore.Game.Economy.EconomyPackets.BidderNotification(auctionBeforeBid, won: false, randomPropertyId));
+    }
+
+    // The presence directory keys characters by the low part of the player GUID, which is the character id (SocialFeature.BuildPresence).
+    private static ulong PresenceGuid(int characterId) => (uint)characterId;
 }

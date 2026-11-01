@@ -387,6 +387,9 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
                     case GatewayWorkerFrameType.SessionRedirect:
                         OnRedirect(GatewaySessionWire.DecodeRedirect(body.Span));
                         break;
+                    case GatewayWorkerFrameType.WorkerStatus:
+                        OnWorkerStatus(GatewaySessionWire.DecodeWorkerStatus(body.Span));
+                        break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
                         if (_sessions.TryGetValue(generation, out ClientSession? closing) && closing.AccountId == accountId
@@ -432,6 +435,24 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             }
 
             _ended.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// Raised on the link's receive loop for every WorkerStatus frame (realm liveness, docs/ops/realm-liveness.md section 7). Handlers must not block and
+    /// must not throw; one that throws is logged and the link goes on. Set before <see cref="ConnectAsync"/> so the first report is not missed.
+    /// </summary>
+    public Action<WorkerStatusReport>? WorkerStatusReceived { get; set; }
+
+    private void OnWorkerStatus(WorkerStatusReport report)
+    {
+        try
+        {
+            WorkerStatusReceived?.Invoke(report);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.transport", ex, "Worker link {Worker}: the worker status handler failed", _worker);
         }
     }
 

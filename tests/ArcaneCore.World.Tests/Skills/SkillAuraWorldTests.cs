@@ -104,7 +104,7 @@ public sealed class SkillAuraWorldTests
         return client;
     }
 
-    private static void Configure(IServiceCollection services)
+    internal static void Configure(IServiceCollection services)
     {
         services.AddSingleton(new SkillCatalog(
             [new SkillLineRecord(SkillIds.Unarmed, SkillCategories.Weapon, "Unarmed", 0), new SkillLineRecord(SkillIds.Defense, SkillCategories.Class, "Defense", 0)],
