@@ -416,7 +416,7 @@ public sealed class PlayerbotWorldBossWorldTests
                 Player p = world.Player(id);
                 var now = new Vector3(p.X, p.Y, p.Z);
                 // Run speed is 7 yards a second: a tick of 50 ms moves 0.35 yards. A jump of 30 yards in one tick is a teleport.
-                if (group?.Find(id) is not null && lastAt.TryGetValue(id, out Vector3 before) && Vector3.Distance(before, now) > 30f) { jumps.Add((name, Vector3.Distance(before, now)));
+                if (group?.Find(id) is not null && lastAt.TryGetValue(id, out Vector3 before) && Vector3.Distance(before, now) > 30f) jumps.Add((name, Vector3.Distance(before, now)));
                 lastAt[id] = now;
             }
 
