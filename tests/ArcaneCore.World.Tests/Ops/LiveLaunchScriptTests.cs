@@ -654,6 +654,10 @@ public sealed class LiveLaunchScriptTests : IDisposable
             Assert.Contains($"      Cluster__Supervisor__Processes__{key}__Name={node}", output, StringComparison.Ordinal);
             Assert.Contains("--Cluster:Worker:Handoff:Enabled=true", arguments, StringComparison.Ordinal);
             Assert.DoesNotContain("--Cluster:Worker:Standby", arguments, StringComparison.Ordinal);
+            // The supervisor relaunches a retired world as a standby by appending only Cluster:Worker:Standby=true,
+            // and a standby without an explicit shard fails ValidateWorkerScope, so each world names its own node id.
+            Assert.Equal(node, ArgumentValue(arguments, "Cluster:Fencing:Shard"));
+            Assert.Equal(node, ArgumentValue(arguments, "Cluster:Worker:NodeId"));
         }
 
         // One standby per world: its own node id, owner node and ports, the shard of the world it stands behind, no hang watch, the gateway's start-order group.

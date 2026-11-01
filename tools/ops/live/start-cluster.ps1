@@ -353,7 +353,12 @@ if ($split) {
         if (-not $isLeaseHolder) { $splitArgs += '--Database:Upgrade:ValidateOnly=true' }
         # Every world is a MapWorker so ClusterRoleFeatureFilter lets the realm authority lease choose the one singleton runner.
         $splitArgs += '--Cluster:Node:Role=MapWorker'
-        if ($Standby) { $splitArgs += '--Cluster:Worker:Handoff:Enabled=true' }
+        if ($Standby) {
+            $splitArgs += '--Cluster:Worker:Handoff:Enabled=true'
+            # A retired world is relaunched by the supervisor as the slot's next standby (it only appends Cluster:Worker:Standby=true);
+            # CharacterFencingOptions.ValidateWorkerScope rejects a standby without an explicit shard, so every world names its own.
+            $splitArgs += "--Cluster:Fencing:Shard=$($world.NodeId)"
+        }
         if ($Transfers) { $splitArgs += '--Cluster:Worker:Transfers:Enabled=true' }
         # With -Standby the supervisor child is named by node id: the gateway asks the supervisor to relaunch a retired world by that name.
         Add-Child $world.Key 'worker' 'ArcaneCore.World.exe' $order $splitArgs $(if ($isLeaseHolder) { $RealmId } else { 0 }) $world.ClientPort ($world.Maps -join ',') $true $(if ($Standby) { $world.NodeId } else { '' })
