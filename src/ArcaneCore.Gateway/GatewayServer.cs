@@ -160,7 +160,7 @@ public sealed class GatewayServer : BackgroundService
 
     /// <summary>
     /// Move the first worker's link to <paramref name="worker"/> (the reroute of a whole-World handoff, Tier 3b): the link to the old worker is closed,
-    /// which disconnects its clients (they log in again through the new link; <see cref="RetargetWorkerSeamlessAsync"/> carries them across instead), and the link supervisor
+    /// which disconnects its clients (they log in again through the new link; <see cref="RetargetWorkerSeamlessAsync(IPEndPoint, CancellationToken)"/> carries them across instead), and the link supervisor
     /// connects to the new worker with the same secret and manifest. Other workers' links are not touched. Completes when the new link is registered.
     /// In-process only: nothing remote can call it. Idempotent.
     /// </summary>
@@ -191,7 +191,7 @@ public sealed class GatewayServer : BackgroundService
     /// The seamless reroute of a whole-World handoff: like <see cref="RetargetWorkerAsync"/>, but the clients on the old worker are not disconnected. The first
     /// worker's supervisor connects to <paramref name="worker"/> while the old link is still open, every connection forwarding on the old link is re-pointed to
     /// the new one (<see cref="GatewayClientConnection.HandOffAsync"/>: the character is adopted by the new world, the client gets a synthesized
-    /// SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD, the packets held since <see cref="HoldSessionsForHandoff"/> follow), and only then is the old link closed. A client whose
+    /// SMSG_TRANSFER_PENDING / SMSG_NEW_WORLD, the packets held since <see cref="HoldSessionsForHandoff()"/> follow), and only then is the old link closed. A client whose
     /// move fails is disconnected, the others are unaffected. Completes when every move ended. Without a registered link (or when the link already points at
     /// <paramref name="worker"/>) it is the plain retarget. A gateway restart still drops every client. In-process only. Idempotent.
     /// </summary>
@@ -205,10 +205,50 @@ public sealed class GatewayServer : BackgroundService
             return;
         }
 
-        var moved = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         _worker = worker;
         _logger.LogInformation("Worker link seamlessly retargeted to {Worker}", worker);
-        workers[0].Retarget(worker, async (previous, next, token) =>
+        await RetargetSlotSeamlessAsync(workers[0], worker, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The node-keyed form of <see cref="RetargetWorkerSeamlessAsync(IPEndPoint, CancellationToken)"/>: moves only the link of the worker whose node id is
+    /// <paramref name="nodeId"/> (the source of a whole-World handoff) and the sessions forwarding on it; every other worker's link and sessions are not touched.
+    /// Without a registered link on that node (or when it already points at <paramref name="worker"/>) it is the plain retarget of that node's link.
+    /// Throws <see cref="ArgumentException"/> for a node id that is not a configured worker. In-process only. Idempotent.
+    /// </summary>
+    public async Task RetargetWorkerSeamlessAsync(string nodeId, IPEndPoint worker, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(worker);
+        GatewayWorkerLink slot = RequireWorker(nodeId);
+        if (ReferenceEquals(slot, _workers[0]))
+        {
+            _worker = worker;
+        }
+
+        if (slot.Link is null || Equals(slot.ConnectedEndPoint, worker))
+        {
+            _logger.LogInformation("Worker link {Node} retargeted to {Worker}", slot.NodeId, worker);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                slot.Retarget(worker);
+                if (slot.Link is not null && Equals(slot.ConnectedEndPoint, worker))
+                {
+                    return;
+                }
+
+                await Task.Delay(20, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        _logger.LogInformation("Worker link {Node} seamlessly retargeted to {Worker}", slot.NodeId, worker);
+        await RetargetSlotSeamlessAsync(slot, worker, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RetargetSlotSeamlessAsync(GatewayWorkerLink slot, IPEndPoint worker, CancellationToken cancellationToken)
+    {
+        var moved = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        slot.Retarget(worker, async (previous, next, token) =>
         {
             try
             {
@@ -220,6 +260,20 @@ public sealed class GatewayServer : BackgroundService
             }
         });
         await moved.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private GatewayWorkerLink RequireWorker(string nodeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(nodeId);
+        foreach (GatewayWorkerLink worker in _workers)
+        {
+            if (string.Equals(worker.NodeId, nodeId, StringComparison.Ordinal))
+            {
+                return worker;
+            }
+        }
+
+        throw new ArgumentException($"'{nodeId}' is not a configured gateway worker", nameof(nodeId));
     }
 
     private async Task<int> MoveSessionsAsync(GatewaySessionLinkClient? previous, GatewaySessionLinkClient next, CancellationToken cancellationToken)
@@ -242,9 +296,13 @@ public sealed class GatewayServer : BackgroundService
 
         // A connection that holds but was not moved (it left Forwarding after the hold began, or a login redirect took it) would keep holding until it overflows:
         // release it to the world it is on. A connection the move finished no longer holds, so this is a no-op for it.
+        // Only connections of the worker being moved: another worker's connections may be holding for a handoff of their own.
         foreach (GatewayClientConnection connection in _connections.Keys)
         {
-            connection.EndHandoffHold();
+            if (connection.IsForwardingOn(previous))
+            {
+                connection.EndHandoffHold();
+            }
         }
 
         int moved = results.Count(result => result);
@@ -254,7 +312,7 @@ public sealed class GatewayServer : BackgroundService
 
     /// <summary>
     /// The source world froze: hold the client packets of every connection forwarding on the first worker's link (instead of sending them to the frozen world),
-    /// so <see cref="RetargetWorkerSeamlessAsync"/> delivers them to the promoted world, or <see cref="ReleaseHandoffHold"/> returns them to the source when the
+    /// so <see cref="RetargetWorkerSeamlessAsync(IPEndPoint, CancellationToken)"/> delivers them to the promoted world, or <see cref="ReleaseHandoffHold()"/> returns them to the source when the
     /// handoff aborts. Each connection holds at most 256 packets; one past that is disconnected. Returns how many connections now hold.
     /// </summary>
     public int HoldSessionsForHandoff()
@@ -275,6 +333,50 @@ public sealed class GatewayServer : BackgroundService
         }
 
         return held;
+    }
+
+    /// <summary>
+    /// The node-keyed form of <see cref="HoldSessionsForHandoff()"/>: holds only the connections forwarding on the link of the worker whose node id is
+    /// <paramref name="nodeId"/> (the source of the handoff); sessions on other workers keep flowing. Returns how many connections now hold (0 while that
+    /// worker has no registered link). Throws <see cref="ArgumentException"/> for a node id that is not a configured worker.
+    /// </summary>
+    public int HoldSessionsForHandoff(string nodeId)
+    {
+        if (RequireWorker(nodeId).Link is not { } link)
+        {
+            return 0;
+        }
+
+        int held = 0;
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            if (connection.BeginHandoffHold(link))
+            {
+                held++;
+            }
+        }
+
+        return held;
+    }
+
+    /// <summary>
+    /// The node-keyed form of <see cref="ReleaseHandoffHold()"/>: the handoff of that worker aborted, so only the connections forwarding on its link replay their held
+    /// packets and forward again. Another worker's holds stay in place. Idempotent. Throws <see cref="ArgumentException"/> for a node id that is not a configured worker.
+    /// </summary>
+    public void ReleaseHandoffHold(string nodeId)
+    {
+        if (RequireWorker(nodeId).Link is not { } link)
+        {
+            return;
+        }
+
+        foreach (GatewayClientConnection connection in _connections.Keys)
+        {
+            if (connection.IsForwardingOn(link))
+            {
+                connection.EndHandoffHold();
+            }
+        }
     }
 
     /// <summary>The handoff aborted: every connection that holds replays its held packets to the world it is still on and forwards again. Idempotent.</summary>
