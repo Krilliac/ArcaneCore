@@ -57,6 +57,9 @@ internal sealed class DefenseCall
     /// <summary>A caller counts as live for this long after its last report (design section 1.1).</summary>
     public const long LiveWindowMs = 10_000;
 
+    /// <summary>A call takes on fresh responders only while a caller reported this recently (design section 1.6); responders already assigned keep going through grace.</summary>
+    public const long FreshResponderWindowMs = 60_000;
+
     internal DefenseCall(int id, uint mapId, uint instanceId, uint zoneId, uint areaId, Team callerTeam, Vector3 origin, long openedMs, int level, long graceMs, long maxOpenMs)
     {
         Id = id;
@@ -107,11 +110,11 @@ internal sealed class DefenseCall
     /// <summary>The first caller's level.</summary>
     public int Level { get; }
 
-    /// <summary>Grace after the last live report in which the call stays open (0 in this phase).</summary>
-    public long GraceMs { get; }
+    /// <summary>Grace after the last live report in which the call stays open. The board re-stamps it from the live options at every use.</summary>
+    public long GraceMs { get; internal set; }
 
-    /// <summary>A call closes this long after it opened, however live it is.</summary>
-    public long MaxOpenMs { get; }
+    /// <summary>A call closes this long after it opened, however live it is. The board re-stamps it from the live options at every use.</summary>
+    public long MaxOpenMs { get; internal set; }
 
     /// <summary>Caller-side bots that reported, by guid, with their last position and report time.</summary>
     public Dictionary<ulong, (Vector3 Pos, long LastMs)> Callers { get; } = [];
@@ -134,6 +137,9 @@ internal sealed class DefenseCall
     /// </summary>
     public bool IsOpen(long now) => (IsLive(now) || now - LastLiveMs < GraceMs) && now - OpenedMs < MaxOpenMs;
 
+    /// <summary>True while the latest report is less than <see cref="FreshResponderWindowMs"/> old: the call may take on fresh responders.</summary>
+    public bool AcceptsResponders(long now) => now - LastLiveMs < FreshResponderWindowMs;
+
     /// <summary>Callers whose last report is within <see cref="LiveWindowMs"/> of <paramref name="now"/>.</summary>
     public int LiveCallerCount(long now)
     {
@@ -150,8 +156,9 @@ internal sealed class DefenseCall
 /// <summary>
 /// The call board of defense calls (design: war-mode-defense, sections 1.1, 1.2 and 1.6). A bot that is attacked reports here; the lane reads
 /// <see cref="OpenCalls"/> and assigns responders. World thread only, memory only, no locks (like the world event board). Holds guids and positions,
-/// no world objects, and reads time from the injected clock, so tests drive it with a manual clock. In this phase grace is 0 and calls are not merged by
-/// distance (<see cref="Absorb"/> is the fold the later merge pass uses).
+/// no world objects, and reads time from the injected clock, so tests drive it with a manual clock. Grace and the maximum age come from the live options unless the constructor pins them.
+/// Calls merge by distance when <see cref="PlayerbotPvpDefenseOptions.MergeRadiusYards"/> is above 0: a report joins an open call of its team within that radius, and
+/// <see cref="Sweep"/> folds converging calls together with <see cref="Absorb"/>.
 /// </summary>
 internal sealed class PlayerbotDefenseBoard
 {
@@ -169,8 +176,8 @@ internal sealed class PlayerbotDefenseBoard
 
     private readonly Func<long> _clock;
     private readonly Func<PlayerbotPvpDefenseOptions> _options;
-    private readonly long _graceMs;
-    private readonly long _maxOpenMs;
+    private readonly long? _graceMs;
+    private readonly long? _maxOpenMs;
     private readonly Dictionary<(uint Map, uint Instance), List<DefenseCall>> _byMap = [];
     private readonly Dictionary<int, int> _redirect = [];
     private readonly Dictionary<ulong, long> _callerNextNewCall = [];
@@ -179,14 +186,14 @@ internal sealed class PlayerbotDefenseBoard
 
     /// <param name="clock">Milliseconds on the one clock all board times use.</param>
     /// <param name="options">The live options, read at every use.</param>
-    /// <param name="graceMs">Grace after the last live report (0 until the grace phase).</param>
-    /// <param name="maxOpenMs">Maximum age of a call.</param>
-    public PlayerbotDefenseBoard(Func<long> clock, Func<PlayerbotPvpDefenseOptions> options, long graceMs = 0, long maxOpenMs = DefaultMaxOpenMs)
+    /// <param name="graceMs">Pins the grace after the last live report; null reads <see cref="PlayerbotPvpDefenseOptions.GraceSeconds"/> live.</param>
+    /// <param name="maxOpenMs">Pins the maximum age of a call; null reads <see cref="PlayerbotPvpDefenseOptions.MaxOpenSeconds"/> live.</param>
+    public PlayerbotDefenseBoard(Func<long> clock, Func<PlayerbotPvpDefenseOptions> options, long? graceMs = null, long? maxOpenMs = null)
     {
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentOutOfRangeException.ThrowIfNegative(graceMs);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxOpenMs);
+        if (graceMs is { } pinnedGrace) ArgumentOutOfRangeException.ThrowIfNegative(pinnedGrace);
+        if (maxOpenMs is { } pinnedMaxOpen) ArgumentOutOfRangeException.ThrowIfNegativeOrZero(pinnedMaxOpen);
         _clock = clock;
         _options = options;
         _graceMs = graceMs;
@@ -210,6 +217,7 @@ internal sealed class PlayerbotDefenseBoard
         {
             foreach (var call in calls)
             {
+                Stamp(call, options);
                 if (!call.IsOpen(now))
                     continue;
                 bool known = call.Callers.ContainsKey(caller);
@@ -218,6 +226,19 @@ internal sealed class PlayerbotDefenseBoard
                 {
                     Touch(call, caller, attacker, position, now);
                     return new DefenseReport(known ? DefenseReportOutcome.Refreshed : DefenseReportOutcome.Joined, call.Id);
+                }
+            }
+
+            // Merge on report: the first open call of the team within the merge radius (ground plane); the list is in id order, so the lowest id wins.
+            if (options.MergeRadiusYards > 0)
+            {
+                foreach (var call in calls)
+                {
+                    if (call.IsOpen(now) && call.CallerTeam == team && Within(call.Centre, position, options.MergeRadiusYards))
+                    {
+                        Touch(call, caller, attacker, position, now);
+                        return new DefenseReport(DefenseReportOutcome.Joined, call.Id);
+                    }
                 }
             }
         }
@@ -247,7 +268,7 @@ internal sealed class PlayerbotDefenseBoard
 
         if (calls is null)
             _byMap[key] = calls = [];
-        var opened = new DefenseCall(_nextId++, mapId, instanceId, zoneId, areaId, team, position, now, level, _graceMs, _maxOpenMs);
+        var opened = new DefenseCall(_nextId++, mapId, instanceId, zoneId, areaId, team, position, now, level, GraceOf(options), MaxOpenOf(options));
         calls.Add(opened);
         Touch(opened, caller, attacker, position, now);
         _callerNextNewCall[caller] = now + options.CallerCooldownSeconds * 1000L;
@@ -273,14 +294,17 @@ internal sealed class PlayerbotDefenseBoard
             foreach (var call in calls)
             {
                 if (call.Id == id)
+                {
+                    Stamp(call, _options());
                     return call;
+                }
             }
         }
         return null;
     }
 
     /// <summary>
-    /// Records <paramref name="guid"/> as a responder of the call. False when the call is gone or closed, the bot already answers it, or the side is full:
+    /// Records <paramref name="guid"/> as a responder of the call. False when the call is gone, closed or has had no live report for <see cref="DefenseCall.FreshResponderWindowMs"/>, the bot already answers it, or the side is full:
     /// <see cref="PlayerbotPvpDefenseOptions.MaxRespondersPerSide"/> for defenders, and for joiners also defenders + live callers + 1, so reinforcements
     /// do not gank the caller before defenders arrive.
     /// </summary>
@@ -290,7 +314,7 @@ internal sealed class PlayerbotDefenseBoard
         if (call is null)
             return false;
         long now = _clock();
-        if (!call.IsOpen(now))
+        if (!call.IsOpen(now) || !call.AcceptsResponders(now))
             return false;
         if (call.Defenders.Contains(guid) || call.Joiners.Contains(guid))
             return false;
@@ -362,11 +386,13 @@ internal sealed class PlayerbotDefenseBoard
     {
         ArgumentNullException.ThrowIfNull(into);
         long now = _clock();
+        var options = _options();
         int start = into.Count;
         foreach (var calls in _byMap.Values)
         {
             foreach (var call in calls)
             {
+                Stamp(call, options);
                 if (call.IsOpen(now))
                     into.Add(call);
             }
@@ -381,10 +407,14 @@ internal sealed class PlayerbotDefenseBoard
     public void Sweep()
     {
         long now = _clock();
+        var options = _options();
         List<(uint Map, uint Instance)>? emptied = null;
         foreach (var (key, calls) in _byMap)
         {
+            foreach (var call in calls)
+                Stamp(call, options);
             calls.RemoveAll(c => !c.IsOpen(now));
+            MergeConverging(calls, options.MergeRadiusYards);
             if (calls.Count == 0)
                 (emptied ??= []).Add(key);
         }
@@ -414,6 +444,47 @@ internal sealed class PlayerbotDefenseBoard
 
     /// <summary>Entries held in the redirect, cooldown and throttle dictionaries (for the sweep tests).</summary>
     internal (int Redirects, int CallerCooldowns, int AttackerThrottles) BookkeepingCounts => (_redirect.Count, _callerNextNewCall.Count, _attackerNextCall.Count);
+
+    /// <summary>
+    /// Folds every call into the lowest-id call of its team whose centre is within <paramref name="radius"/> yards (ground plane). After a fold the scan of that survivor
+    /// restarts, because the moved centre can bring a third call into range. <paramref name="calls"/> is in id order, so index <c>i</c> is always the lower id.
+    /// </summary>
+    private void MergeConverging(List<DefenseCall> calls, int radius)
+    {
+        if (radius <= 0)
+            return;
+        for (int i = 0; i < calls.Count; i++)
+        {
+            int j = i + 1;
+            while (j < calls.Count)
+            {
+                DefenseCall survivor = calls[i];
+                DefenseCall other = calls[j];
+                if (survivor.CallerTeam == other.CallerTeam && Within(survivor.Centre, other.Centre, radius) && Absorb(other.Id, survivor.Id))
+                    j = i + 1; // Absorb removed calls[j] from the list
+                else
+                    j++;
+            }
+        }
+    }
+
+    private long GraceOf(PlayerbotPvpDefenseOptions options) => _graceMs ?? options.GraceSeconds * 1000L;
+
+    private long MaxOpenOf(PlayerbotPvpDefenseOptions options) => _maxOpenMs ?? options.MaxOpenSeconds * 1000L;
+
+    /// <summary>Applies the live grace and maximum age to a call, so a reload takes effect on calls already open.</summary>
+    private void Stamp(DefenseCall call, PlayerbotPvpDefenseOptions options)
+    {
+        call.GraceMs = GraceOf(options);
+        call.MaxOpenMs = MaxOpenOf(options);
+    }
+
+    /// <summary>True when the two points are no more than <paramref name="yards"/> apart in the ground plane.</summary>
+    private static bool Within(Vector3 a, Vector3 b, int yards)
+    {
+        float dx = a.X - b.X, dy = a.Y - b.Y;
+        return (dx * dx) + (dy * dy) <= (float)yards * yards;
+    }
 
     private static void Touch(DefenseCall call, ulong caller, ulong attacker, Vector3 position, long now)
     {

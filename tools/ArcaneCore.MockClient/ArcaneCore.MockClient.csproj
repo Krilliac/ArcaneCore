@@ -13,5 +13,6 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="ArcaneCore.MockClient.Tests" />
+    <InternalsVisibleTo Include="ArcaneCore.Cluster.E2E.Tests" />
   </ItemGroup>
 </Project>

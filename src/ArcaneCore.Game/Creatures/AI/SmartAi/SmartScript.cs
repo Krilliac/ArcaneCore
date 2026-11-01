@@ -287,6 +287,11 @@ public sealed class SmartScript
 
     private void ProcessEvent(SmartHolder e, Unit? invoker, uint var0 = 0, SpellInfo? spell = null, uint var1 = 0)
     {
+        if (!StackGuard.TryEnter("smartai.action"))
+        {
+            return; // a script chain too deep for the stack: the nested event is dropped (the fault is recorded)
+        }
+
         try
         {
             if (!e.Active && e.Event != SmartEvent.Link) return;

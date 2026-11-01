@@ -31,6 +31,9 @@ public static class GatewayServiceCollectionExtensions
             sp.GetRequiredService<IOptions<GatewayOptions>>().Value.RealmId,
             sp.GetRequiredService<IOptions<ArcaneCore.World.Warden.WardenOptions>>().Value,
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>().CreateLogger<GatewayWarden>()));
+        // The realm-list row of the clustered realm (no world writes it in worker mode): registered before the server so it starts first (Starting) and stops last (Stopped).
+        services.AddSingleton<GatewayRealmLiveness>();
+        services.AddHostedService(sp => sp.GetRequiredService<GatewayRealmLiveness>());
         services.AddSingleton<GatewayServer>();
         services.AddHostedService(sp => sp.GetRequiredService<GatewayServer>());
         return services;

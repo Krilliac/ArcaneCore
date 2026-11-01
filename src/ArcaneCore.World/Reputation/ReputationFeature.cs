@@ -203,9 +203,9 @@ public sealed partial class ReputationFeature(IServiceProvider services, IServic
     {
         Service.Untrack(player);
         int characterId = (int)player.Guid.Low;
-        if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+        if (_world is not { IsRetiringTransferredPlayer: true } && _writes is { } writes && writes.HasRetainedFailure(characterId))
         {
-            writes.RequestRetry(characterId); // an early retry; the login barrier and shutdown still retry
+            writes.RequestRetry(characterId); // an early retry; the login barrier and shutdown still retry (never after a transfer retire)
         }
     }
 

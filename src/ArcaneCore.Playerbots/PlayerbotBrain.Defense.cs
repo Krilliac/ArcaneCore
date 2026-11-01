@@ -61,7 +61,6 @@ internal sealed partial class PlayerbotBrain
     private bool _defenseHeld;
     private uint _defenseHoldUntil;
     private PlayerbotHomeArea? _defenseArea;
-    private int _defenseAreaCall;
     private readonly PlayerbotHomeReturn _defenseWalk = new() { WalkOnly = true };
 
     /// <summary>True while the bot answers a defense call (the help lane's <c>IsFree</c> and <see cref="RequestDefense"/> read it).</summary>
@@ -253,10 +252,11 @@ internal sealed partial class PlayerbotBrain
         return true;
     }
 
-    /// <summary>The walk's target circle (cached per call id; rebuilt, with the walker reset, when the centre moved more than <see cref="DefenseRetargetYards"/>).</summary>
+    /// <summary>The walk's target circle (cached; rebuilt, with the walker reset, when the centre moved more than <see cref="DefenseRetargetYards"/>).</summary>
     private PlayerbotHomeArea DefenseAreaOf(DefenseCall call)
     {
-        if (_defenseArea is { } area && _defenseAreaCall == call.Id
+        // The cache is by position only: a call this one was merged into has another id, and a centre within the retarget distance needs no new walk.
+        if (_defenseArea is { } area
             && Vector2.Distance(new Vector2(area.Centre.X, area.Centre.Y), new Vector2(call.Centre.X, call.Centre.Y)) <= DefenseRetargetYards) return area;
         if (_defenseArea is not null)
         {
@@ -264,7 +264,6 @@ internal sealed partial class PlayerbotBrain
             AbandonRoute();
         }
 
-        _defenseAreaCall = call.Id;
         return _defenseArea = new PlayerbotHomeArea(call.MapId, call.Centre, DefenseArrivalYards, "defense");
     }
 

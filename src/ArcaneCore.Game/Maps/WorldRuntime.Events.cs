@@ -56,6 +56,20 @@ public sealed partial class WorldRuntime
     public event Action<Player>? PlayerLoggingOut;
 
     /// <summary>
+    /// Raised on the world thread by a cluster transfer's capture, while the player is still in its map and before the character snapshot
+    /// is taken (<see cref="RaisePlayerTransferPreparing"/>). A feature that persists per-character state at logout queues the same dirty
+    /// state here, so the transfer's flush makes it durable before the target loads it. A failing handler is logged and does not stop the others.
+    /// </summary>
+    public event Action<Player>? PlayerTransferPreparing;
+
+    /// <summary>
+    /// True only while <see cref="RetireDetachedPlayer"/> raises <see cref="PlayerLoggingOut"/> (world thread). The player left through a
+    /// committed transfer, so the target owns its durable state: a <see cref="PlayerLoggingOut"/> handler must forget the player's
+    /// in-memory tracking but must not enqueue or start any write of it.
+    /// </summary>
+    public bool IsRetiringTransferredPlayer { get; private set; }
+
+    /// <summary>
     /// Raised once per world tick on the world thread, after the posted commands and before the maps update,
     /// with the tick's elapsed milliseconds (vmangos <c>World::Update</c> drives <c>sGameEventMgr.Update</c> from
     /// its own timers, World.cpp:2106-2111; this is the equivalent seam for world-level services). A failing

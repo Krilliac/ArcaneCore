@@ -28,6 +28,7 @@ public sealed class GatewayServer : BackgroundService
     private readonly ILogger _logger;
     private readonly ConcurrentDictionary<GatewayClientConnection, Task> _connections = new();
     private readonly Guid _incarnation = Guid.NewGuid();
+    private readonly GatewayRealmLiveness? _realmLiveness;
     private TcpListener? _listener;
     private volatile GatewayWorkerLink[] _workers = [];
     private volatile GatewayRouteTable _routes = new([]);
@@ -40,7 +41,8 @@ public sealed class GatewayServer : BackgroundService
         IOptions<GatewayOptions> options,
         ILoggerFactory loggers,
         IOptions<NetProtectionOptions>? protection = null,
-        GatewayWarden? warden = null)
+        GatewayWarden? warden = null,
+        GatewayRealmLiveness? realmLiveness = null)
     {
         ArgumentNullException.ThrowIfNull(scopes);
         ArgumentNullException.ThrowIfNull(options);
@@ -51,6 +53,7 @@ public sealed class GatewayServer : BackgroundService
         _loggers = loggers;
         _protection = protection;
         Warden = warden;
+        _realmLiveness = realmLiveness;
         _logger = loggers.CreateLogger<GatewayServer>();
     }
 
@@ -291,7 +294,7 @@ public sealed class GatewayServer : BackgroundService
         {
             GatewayWorkerEntry entry = entries[index];
             IPEndPoint endpoint = index == 0 && _worker is { } retargeted ? retargeted : new IPEndPoint(IPAddress.Parse(entry.Address), entry.Port);
-            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes);
+            workers[index] = new GatewayWorkerLink(entry, endpoint, config, _incarnation, _loggers, Warden, _logger, routes, _realmLiveness);
         }
 
         var listener = new TcpListener(IPAddress.Parse(config.BindAddress), config.Port);
@@ -429,6 +432,7 @@ public sealed class GatewayWorkerLink
     private readonly GatewayWarden? _warden;
     private readonly ILogger _logger;
     private readonly GatewayRouteTable _routes;
+    private readonly GatewayRealmLiveness? _realmLiveness;
     private readonly int[] _maps;
     private volatile IPEndPoint _target;
     private volatile IPEndPoint? _connected;
@@ -448,10 +452,12 @@ public sealed class GatewayWorkerLink
         ILoggerFactory loggers,
         GatewayWarden? warden,
         ILogger logger,
-        GatewayRouteTable routes)
+        GatewayRouteTable routes,
+        GatewayRealmLiveness? realmLiveness = null)
     {
         ArgumentNullException.ThrowIfNull(routes);
         _routes = routes;
+        _realmLiveness = realmLiveness;
         _entry = entry;
         _config = config;
         _incarnation = incarnation;
@@ -515,6 +521,12 @@ public sealed class GatewayWorkerLink
             IPEndPoint worker = _target;
             Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Connecting);
             var link = new GatewaySessionLinkClient(_config.ToManifest(_incarnation), worker, _config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), _warden?.Posture);
+            if (_realmLiveness is { } liveness)
+            {
+                string node = NodeId;
+                link.WorkerStatusReceived = report => liveness.OnWorkerStatus(node, report); // the realm-list row of the realm is written from these reports
+            }
+
             try
             {
                 using var attempt = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);

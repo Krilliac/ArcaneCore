@@ -298,7 +298,10 @@ public sealed class NpcServicesFeature(IServiceProvider services, ILogger<NpcSer
             // did: the character is put back at the leg's departure node and the route is cleared (ReturnToDeparture); with no
             // departure node to return to, the save is retained and the login barrier refuses a relog while it is not durable.
             _persistedRoutes.TryRemove((uint)player.Guid.Low, out _);
-            _routeWrites?.Save((int)player.Guid.Low, route, ReturnToDeparture(player, route));
+            if (_world is not { IsRetiringTransferredPlayer: true }) // a retire after a committed transfer must not write the route
+            {
+                _routeWrites?.Save((int)player.Guid.Low, route, ReturnToDeparture(player, route));
+            }
         }
         else if (_routeWrites is { } writes && writes.HasRetainedFailure((int)player.Guid.Low))
         {

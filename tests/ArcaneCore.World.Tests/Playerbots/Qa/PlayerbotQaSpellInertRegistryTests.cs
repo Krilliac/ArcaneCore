@@ -43,6 +43,23 @@ public sealed class PlayerbotQaSpellInertRegistryTests
         }
     }
 
+    [Theory]
+    [InlineData(1826u)]
+    [InlineData(5373u)]
+    [InlineData(7121u)]
+    [InlineData(16468u)]
+    [InlineData(23359u)]
+    [InlineData(26256u)]
+    [InlineData(26553u)]
+    [InlineData(26591u)]
+    [InlineData(27678u)]
+    public void TheBaselineLeftovers_AreListedWithAReferenceCitation(uint spellId)
+    {
+        Assert.True(DeliberatelyInertSpells.TryGet(spellId, out InertSpell? entry));
+        Assert.Contains(entry.Reason, new[] { InertSpellReason.Marker, InertSpellReason.ScriptCarrier });
+        Assert.Matches("vmangos|cmangos", entry.Citation);
+    }
+
     [Fact]
     public void ASpell_IsEitherDeliberatelyInert_OrConsumed_NeverBoth()
     {
