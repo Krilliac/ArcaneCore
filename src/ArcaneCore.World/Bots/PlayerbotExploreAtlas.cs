@@ -217,6 +217,9 @@ public sealed class PlayerbotExploreAtlas
         public int CurrentRing => Ring;
     }
 
+    /// <summary>Cells <see cref="FindStep"/> probes between two reads of its budget while it walks cells that hold no spawn (a ring of 40 is 6,561 cells).</summary>
+    internal const int EmptyProbesPerBudgetCheck = 256;
+
     /// <summary>How <see cref="FindStep"/> ended.</summary>
     public enum FindStatus : byte
     {
@@ -246,9 +249,9 @@ public sealed class PlayerbotExploreAtlas
 
     /// <summary>
     /// <see cref="Find"/> in slices: it works until <paramref name="maxExamined"/> spawns have been checked in this call or
-    /// <paramref name="outOfBudget"/> (read after each occupied cell; null: never) says stop, then returns <see cref="FindStatus.Pending"/>
+    /// <paramref name="outOfBudget"/> (read after each occupied cell and every <see cref="EmptyProbesPerBudgetCheck"/> cells walked; null: never) says stop, then returns <see cref="FindStatus.Pending"/>
     /// with <paramref name="cursor"/> holding the walk, and the next call with the same cursor carries on from the next cell. At least one
-    /// occupied cell is searched per call, so repeated calls always finish. A slice ends only between cells, so it overruns
+    /// cell is walked per call, so repeated calls always finish. A slice ends only between cells, so it overruns
     /// <paramref name="maxExamined"/> by at most one cell (64 spawns per faction sample list, <see cref="MaxFactionsPerCell"/> factions).
     /// The answer is the one <see cref="Find"/> gives for the same state: the cell order, the ring rule and the nearest-of-ring rule are
     /// unchanged. <paramref name="examined"/> is this call's count. A fresh cursor begins a search at <paramref name="from"/>; on a resumed
@@ -281,6 +284,7 @@ public sealed class PlayerbotExploreAtlas
         level = cursor.Level;
         from = cursor.From;
         int cx = cursor.CentreX, cy = cursor.CentreY;
+        int probes = 0;
         while (cursor.Ring <= MaxRing)
         {
             int ring = cursor.Ring;
@@ -291,7 +295,14 @@ public sealed class PlayerbotExploreAtlas
                     int x = cursor.X, y = cursor.Y;
                     cursor.Y++;
                     if (ring != 0 && x != cx - ring && x != cx + ring && y != cy - ring && y != cy + ring) continue;
-                    if (blocked(x, y) || !_cells.TryGetValue((map, (byte)level, x, y), out Cell? cell)) continue;
+                    if (blocked(x, y) || !_cells.TryGetValue((map, (byte)level, x, y), out Cell? cell))
+                    {
+                        // A walk over cells with nothing to examine reads the budget too, every EmptyProbesPerBudgetCheck cells (this one is
+                        // done: the cursor is already past it).
+                        if (++probes % EmptyProbesPerBudgetCheck == 0 && outOfBudget?.Invoke() == true) return FindStatus.Pending;
+                        continue;
+                    }
+
                     foreach ((uint faction, List<CreatureSpawn> samples) in cell.ByFaction)
                     {
                         if (factionEligible is not null && !factionEligible(faction)) continue;

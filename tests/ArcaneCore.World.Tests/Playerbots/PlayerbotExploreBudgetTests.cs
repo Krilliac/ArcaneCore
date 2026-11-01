@@ -178,4 +178,132 @@ public sealed class PlayerbotExploreBudgetTests
             Assert.Equal(PlayerbotBrain.DeadEndPinAreaBlock(template, areas, zone, area) is null,
                 PlayerbotBrain.CanShareDeadEndPin(template, areas, zone, area));
     }
+
+    [Fact]
+    public void AWalkOverEmptyCells_ReadsTheBudget_AndTheNextSliceResumes()
+    {
+        // One spawn 18 rings out: the walk crosses well over a thousand cells that hold nothing before it gets there.
+        var spawn = new CreatureSpawn { Guid = 1, Entry = 1, MapId = 0, X = (PlayerbotExploreAtlas.CellYards * 18) + 80f, Y = 0, Z = 20 };
+        var atlas = new PlayerbotExploreAtlas(new CreatureContent([Template(1)], [spawn], [], [], []));
+        var cursor = new PlayerbotExploreAtlas.FindCursor();
+        int slices = 0;
+        PlayerbotExploreAtlas.FindStatus status;
+        PlayerbotExploreAtlas.Candidate? found;
+        do
+        {
+            slices++;
+            int probes = 0;
+            status = atlas.FindStep(cursor, 0, 8, Origin, _ => true, (_, _) => { probes++; return false; }, int.MaxValue, () => true, out found, out _);
+            Assert.True(probes <= PlayerbotExploreAtlas.EmptyProbesPerBudgetCheck,
+                $"slice {slices} probed {probes} cells with a spent clock (check every {PlayerbotExploreAtlas.EmptyProbesPerBudgetCheck})");
+            Assert.True(slices < 1_000, "the search never finished");
+        }
+        while (status == PlayerbotExploreAtlas.FindStatus.Pending);
+        Assert.Equal(PlayerbotExploreAtlas.FindStatus.Found, status);
+        Assert.Equal(1u, found!.Value.Spawn.Guid);
+        Assert.True(slices > 4, "a walk of thousands of empty cells must be split");
+        Assert.Equal(1u, atlas.Find(0, 8, Origin, _ => true, (_, _) => false, out _)!.Value.Spawn.Guid);
+    }
+
+    // --- the quests phase: the starter search's resumable scan (audit cid 43, 1,184 ms in one think) ------------------------------
+
+    private static readonly ArcaneCore.Game.ObjectGuid[] Givers = [.. Enumerable.Range(1, 6).Select(i => new ArcaneCore.Game.ObjectGuid((ulong)i))];
+    private const int QuestsPerGiver = 3;
+
+    /// <summary>
+    /// One think of the starter search as <c>PlayerbotQuestGoals.FindCandidate</c> drives its scan: every quest not yet judged is judged
+    /// (<paramref name="judged"/> counts them) until <paramref name="budget"/> judgements are spent, then the search is cut; the quest
+    /// at (<paramref name="takenGiver"/>, <paramref name="takenQuest"/>) is the one worth taking (0: none).
+    /// </summary>
+    private static bool Think(PlayerbotQuestGoals.StarterScan scan, uint now, int budget, int takenGiver, uint takenQuest, ref int judged, ref int thinkJudged)
+    {
+        scan.BeginThink(now);
+        thinkJudged = 0;
+        bool chosen = false;
+        foreach (ArcaneCore.Game.ObjectGuid giver in Givers)
+        {
+            for (uint quest = 1; quest <= QuestsPerGiver && !chosen; quest++)
+            {
+                if (scan.IsJudged(giver, quest)) continue;
+                if (!scan.MayJudge(budgetSpent: thinkJudged >= budget)) goto done;
+                judged++;
+                thinkJudged++;
+                if ((int)giver.Value == takenGiver && quest == takenQuest) chosen = true;
+                else scan.Judged(giver, quest, now, roomWanted: false);
+            }
+
+            if (chosen) break;
+        }
+
+    done:
+        scan.EndThink(chosen);
+        return chosen;
+    }
+
+    [Fact]
+    public void ASlowQuestSearch_YieldsEachThink_AndResumesWithTheQuestsNotYetJudged()
+    {
+        var scan = new PlayerbotQuestGoals.StarterScan();
+        int judged = 0, thinkJudged = 0, thinks = 0;
+        bool chosen;
+        do
+        {
+            thinks++;
+            chosen = Think(scan, 1_000, budget: 4, takenGiver: 6, takenQuest: QuestsPerGiver, ref judged, ref thinkJudged);
+            Assert.True(thinkJudged <= 4, $"think {thinks} judged {thinkJudged} quests (budget 4)");
+            Assert.True(thinks < 100, "the search never finished");
+        }
+        while (!chosen);
+        Assert.True(thinks > 1, "a budget of 4 judgements must split a search over 18 quests");
+        Assert.Equal(Givers.Length * QuestsPerGiver, judged); // every quest judged exactly once: resuming repeats no work
+        Assert.Equal(0, scan.JudgedCount); // a quest was chosen: the next pass starts from the beginning
+    }
+
+    [Fact]
+    public void ASpentQuestBudget_StillJudgesOneQuestPerThink_AndTheSearchFinishes()
+    {
+        var scan = new PlayerbotQuestGoals.StarterScan();
+        int judged = 0, thinkJudged = 0, thinks = 0;
+        bool chosen;
+        do
+        {
+            thinks++;
+            chosen = Think(scan, 1_000, budget: 0, takenGiver: 6, takenQuest: QuestsPerGiver, ref judged, ref thinkJudged);
+            Assert.Equal(1, thinkJudged);
+            Assert.True(thinks < 100, "the search never finished");
+        }
+        while (!chosen);
+        Assert.Equal(Givers.Length * QuestsPerGiver, thinks);
+    }
+
+    [Fact]
+    public void AQuestPass_ThatEndsWithoutRunningOutOfBudget_ForgetsWhatItJudged()
+    {
+        var scan = new PlayerbotQuestGoals.StarterScan();
+        int judged = 0, thinkJudged = 0;
+        Assert.False(Think(scan, 1_000, budget: 3, takenGiver: 0, takenQuest: 0, ref judged, ref thinkJudged));
+        Assert.True(scan.JudgedCount > 0, "a cut search keeps its judgements for the next think");
+        Assert.True(scan.Cut);
+        while (scan.Cut)
+            Think(scan, 1_000, budget: 3, takenGiver: 0, takenQuest: 0, ref judged, ref thinkJudged);
+        Assert.Equal(0, scan.JudgedCount); // the last think finished the pass: a later pass judges everything again
+        Assert.Equal(Givers.Length * QuestsPerGiver, judged);
+    }
+
+    [Fact]
+    public void JudgedQuests_AreForgottenAfterTheirAge_AndTheRoomWishIsCarried()
+    {
+        var scan = new PlayerbotQuestGoals.StarterScan();
+        scan.BeginThink(1_000);
+        scan.Judged(Givers[0], 1, 1_000, roomWanted: true);
+        Assert.True(scan.IsJudged(Givers[0], 1));
+        Assert.False(scan.IsJudged(Givers[0], 2));
+        Assert.False(scan.IsJudged(Givers[1], 1));
+        Assert.True(scan.RoomWanted);
+        scan.BeginThink(1_000 + PlayerbotQuestGoals.StarterScan.MaxAgeMs);
+        Assert.True(scan.IsJudged(Givers[0], 1), "not yet older than the limit");
+        scan.BeginThink(1_001 + PlayerbotQuestGoals.StarterScan.MaxAgeMs);
+        Assert.False(scan.IsJudged(Givers[0], 1));
+        Assert.False(scan.RoomWanted);
+    }
 }

@@ -1791,15 +1791,24 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
-            if (DeadEndPinShareBlock(player) is { } blocked)
+            if (DeadEndPinShareBlock(player, out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? pinGraph, out int pinRegion) is { } blocked)
             {
                 // Live 2026-10 (audit cid 44): 53 bots pinned one placement point and no world pin formed, and the two rules that keep a pin
                 // from being shared (the area flags, the cut-region exemption) could not be told apart from the logs. Say which one held it back.
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin-unshared", $"this bot's dead-end pin is not shared with the world: {blocked}", AnomalySeverity.Info);
             }
-            else if (ReportWorldPin(player, now) is { } newPin)
+            else if (ReportWorldPin(player, now, pinGraph, pinRegion) is { } newPin)
             {
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
+            }
+            else if (!_stall.IsWorldPin(player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now))
+            {
+                // Neither refused nor made a pin: the ledger holds this bot's report and waits for another bot (PlayerbotSharedPins.BotsToShare),
+                // or there is no ledger. Said once the cell is no pin, so a cell that stays unpinned for many stalls is told from a blocked one.
+                PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin-pending",
+                    _stall.SharedPins is null ? "no shared pin ledger on this bot, so its dead-end pin cannot become a world pin"
+                        : $"reported to the shared pin ledger; the cell becomes a world pin when {PlayerbotSharedPins.BotsToShare} different bots have pinned it",
+                    AnomalySeverity.Info);
             }
         }
         else if (worldPin)
@@ -1924,40 +1933,36 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     }
 
     /// <summary>
-    /// Whether this bot's dead-end pin may count towards a world pin: only on an open-world map (never a dungeon, raid or battleground, whose
-    /// stalls are the instance's) and outside a capital or city, where bots crowd round quest givers and vendors and stall for reasons that
-    /// say nothing about the ground. Fails closed when the area table is missing.
+    /// Why this bot's dead-end pin may not count towards a world pin, or null when it may. The area rule (<see cref="DeadEndPinAreaBlock"/>:
+    /// only an open-world map, never a dungeon, raid or battleground whose stalls are the instance's, and outside a capital or city, where
+    /// bots crowd round quest givers and vendors and stall for reasons that say nothing about the ground; it fails closed when the area table
+    /// is missing) comes first, then the cut-region exemption (<see cref="PlayerbotNavigation.IsCutRegion"/>). The reason names the zone,
+    /// area, region and its polygon count so the rules can be told apart from the anomaly log. <paramref name="graph"/> and
+    /// <paramref name="region"/> are the bot's region lookup once the area rule passed (else null and -1), for <see cref="ReportWorldPin"/>
+    /// to reuse instead of looking the region up again.
     /// </summary>
-    private bool CanShareDeadEndPin(Player player) => DeadEndPinShareBlock(player) is null;
-
-    /// <summary>
-    /// Why this bot's dead-end pin may not count towards a world pin, or null when it may: the area rule (<see cref="DeadEndPinAreaBlock"/>)
-    /// first, then the cut-region exemption (<see cref="PlayerbotNavigation.IsCutRegion"/>), described with the zone, area, region and its
-    /// polygon count so the two can be told apart from the anomaly log.
-    /// </summary>
-    private string? DeadEndPinShareBlock(Player player)
+    private string? DeadEndPinShareBlock(Player player, out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region)
     {
+        graph = null;
+        region = -1;
         if (player.Map is not { } map || map.Template is not { } template) return "no map template";
         ArcaneCore.Game.Maps.Terrain.AreaTable areas = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
         uint area = player.ZoneId == 0 ? 0 : map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
         if (DeadEndPinAreaBlock(template, areas, player.ZoneId, area) is { } areaBlock)
             return string.Create(CultureInfo.InvariantCulture, $"{areaBlock} (zone {player.ZoneId}, area {area})");
-        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region);
+        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out graph, out region);
         if (PlayerbotNavigation.IsCutRegion(graph, region, _options.CutRegionMaxPolygons))
             return string.Create(CultureInfo.InvariantCulture,
                 $"cut region {region} of {graph!.RegionPolygons(region)} polygons (zone {player.ZoneId}, area {area}, at most {_options.CutRegionMaxPolygons} polygons are exempt)");
         return null;
     }
 
-    /// <summary>Tell the world this bot dead-end-pinned its cell, unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin"/>). The region lookup runs only for a bot that may share.</summary>
-    private string? ReportWorldPin(Player player, uint now)
-    {
-        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region);
-        return _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region, _options.CutRegionMaxPolygons);
-    }
+    /// <summary>Tell the world this bot dead-end-pinned its cell, from <paramref name="region"/> of <paramref name="graph"/> (<see cref="DeadEndPinShareBlock"/>'s lookup), unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin(ulong, uint, uint, float, float, uint, ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph?, int, int)"/>).</summary>
+    private string? ReportWorldPin(Player player, uint now, ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, int region)
+        => _stall.ReportDeadEndPin(player.Guid.Value, player.MapId, player.Map?.InstanceId ?? 0, player.X, player.Y, now, graph, region, _options.CutRegionMaxPolygons);
 
     /// <summary>
-    /// The rule of <see cref="CanShareDeadEndPin(Player)"/> on its inputs: an open-world map (not instanceable), a known zone, and neither
+    /// The area rule of the bot-level share check (<c>DeadEndPinShareBlock</c>) on its inputs: an open-world map (not instanceable), a known zone, and neither
     /// the zone nor the sub-area (<paramref name="areaId"/>, 0 when unknown) flagged as a capital, city or town
     /// (<c>Capital</c>, <c>City</c>, <c>SlaveCapital</c>, <c>SlaveCapital2</c>), so Goldshire, Sentinel Hill or Booty Bay inside an open zone do not pin.
     /// </summary>
@@ -4262,6 +4267,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 out PlayerbotExploreAtlas.Candidate? foundCandidate, out _, _exploreFactionFilter);
             if (found == PlayerbotExploreAtlas.FindStatus.Pending) return false;
             _exploreFindCursor = null;
+            // The best candidate of a resumed search was judged in an earlier slice: a spawn marked visited or suspended since is not taken.
+            // The search begins again at the next think (no search-after delay: nothing was exhausted).
+            if (foundCandidate is { } judged && !_exploreEligibleFilter(judged)) return false;
             _exploreCandidate = foundCandidate;
             if (_exploreCandidate is null)
             {

@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Playerbots;
 /// within <see cref="WindowMs"/> is a world pin for <see cref="PinMs"/>: explore candidates keep out of it
 /// (<see cref="PlayerbotNavigation.IsWorldPin"/>), and a bot's first stall inside it already counts as a dead-end pin, so it escapes at once.
 /// World pins never refuse a plan (<see cref="PlayerbotNavigation.IsDeadEndPin"/> is per bot): an NPC or a flag in the cell stays reachable.
-/// The caller reports only from open-world maps outside cities (PlayerbotBrain.CanShareDeadEndPin); cells are kept per map instance anyway.
+/// The caller reports only from open-world maps outside cities (PlayerbotBrain.DeadEndPinShareBlock: the area rule, then the cut-region exemption); cells are kept per map instance anyway.
 /// Live 2026-10-25: 60 bots were pinned at two Deadwind Pass spawn points; the pin ledger is per bot, so each of them needed two stalls of
 /// two minutes or more to learn what the first had already found. A repeat after a pin ended lasts twice as long (at most
 /// <see cref="MaxPinMs"/>); bounded by <see cref="MaxKeys"/> (the one reported longest ago goes first). Kept in memory only: a restart relearns it.
