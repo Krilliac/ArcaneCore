@@ -173,7 +173,11 @@ public sealed class RaidBossScriptTests
         Assert.True((orb.Flags & GameObjectFlags.NoInteract) != 0);
         Assert.True(raid.Data.OnGameObjectUse(raid.Tank, orb));
         var casts = new List<(uint Spell, ObjectGuid Target)>();
-        raid.Data.CastPlayerTargetSpell = (_, spell, target) => casts.Add((spell, target));
+        raid.Data.CastPlayerTargetSpell = (_, spell, target) =>
+        {
+            casts.Add((spell, target));
+            return true;
+        };
         raid.Map.Combat.Kill(raid.Tank, controller);
         Assert.True((orb.Flags & GameObjectFlags.NoInteract) == 0);
         Assert.True(raid.Data.OnGameObjectUse(raid.Tank, orb));
