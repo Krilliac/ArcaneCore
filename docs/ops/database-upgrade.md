@@ -216,6 +216,20 @@ Limits, stated plainly:
   target column's range, text that is not a number in a numeric column) fails the copy and names the table, column and primary key of the row; the copy is
   one pass over a stopped realm, not a replication.
 
+### Cutover of the live realm to PostgreSQL 16
+
+`tools/ops/live/pg-cutover.ps1` wraps the `copy` procedure above for the live realm (auth, characters and world) and adds an independent check and a rollback. It never starts a daemon and the downtime window is the operator's call. Needs `arcane-db` from the merged `copy` command, a reachable PostgreSQL 16 server with empty UTF8 databases (`arcane_auth`, `arcane_characters`, `arcane_world`) and a role that may create tables.
+
+Secrets come only from a JSON file in the user profile (default `.arcanecore/pg-cutover.json` under the profile directory, or the path in `ARCANECORE_PG_SECRET_FILE`, or `-SecretFile`) with the keys `Host`, `Port`, `Username`, `Password` and optionally `AuthDatabase`, `CharactersDatabase`, `WorldDatabase`, `SslMode`. The script builds connection strings in memory, hands them to `arcane-db` through the child process environment only and scrubs the password from its output; no argument carries a secret.
+
+1. `pg-cutover.ps1 -Plan` prints every step and the resolved locations and touches nothing.
+2. Stop every daemon and tool. Backup: `-Step Backup -BackupDir <dir> -Confirm` writes a consistent `VACUUM INTO` copy of each SQLite file, runs `integrity_check`, compares each copy with its source table by table and records SHA-256 hashes in `manifest.json`.
+3. Copy: `-Step Copy -BackupDir <dir> -Confirm` refuses without the verified manifest, then runs `arcane-db copy --component all` (add `-Replace` to re-run). World content travels with the world component. If `creature_template` is empty in the source, `Verify` warns; fill it with `arcane-content-importer --provider postgresql --connection-string <target>` (the importers accept PostgreSQL, see [content import](../areas/content-import.md)).
+4. Verify: `-Step Verify` compares each SQLite component with its PostgreSQL database: per table the row count and an order-independent digest of every primary key. Exit 0 means all tables match; exit 1 lists each differing table (a dropped row changes the count and the digest). Limits: it compares keys, not every column (the `copy` command compares every value), and a table without a primary key is compared by count only.
+5. Check: `-Step Check` runs `arcane-db status` and `arcane-db check` against the target. Start the daemons with `Database:Upgrade:Policy` set to `Never` so the schema initializers only validate.
+6. Switch: `-Step Switch` prints the `Database:Auth`, `Database:Characters` and `Database:World` provider (`PostgreSql`) and connection string settings (password masked) to apply, as environment variables, to the realm, world, gateway and tools.
+7. Rollback: `-Step Rollback -BackupDir <dir>` checks the backup against its manifest and prints the revert (remove the overrides, SQLite settings apply again); with `-Confirm` it restores the SQLite files, keeping the replaced ones as `.pre-rollback-<stamp>`. Changes made on PostgreSQL after the switch are not in the SQLite files; copy them back first with `arcane-db copy` from PostgreSQL to SQLite and `--replace` if they matter.
+
 ### Databases created by the Codex line
 
 Until the 2026-10-07 merge the Codex line (`codex/server-continue-20261004`, last commit 0e07c29b) numbered its own
