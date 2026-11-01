@@ -54,7 +54,7 @@ public sealed class PlayerbotQaOptions
         IConfigurationSection section = configuration.GetSection(SectionName);
         // ConfigurationBinder appends array elements to a non-empty initialised array: explicit labels replace the default.
         string githubKey = nameof(GitHub);
-        if (section.GetSection(nameof(Faults)).GetSection(nameof(PlayerbotQaFaultOptions.FirstChanceDenylist)).GetChildren().Any())
+        if (configuration.GetSection(PlayerbotQaOptions.SectionName + ":Faults:FirstChanceDenylist").GetChildren().Any())
         {
             options.Faults.FirstChanceDenylist = [];
         }
