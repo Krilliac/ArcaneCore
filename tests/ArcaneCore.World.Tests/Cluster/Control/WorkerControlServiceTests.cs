@@ -55,19 +55,74 @@ public sealed class WorkerControlServiceTests
         var journal = new FakeHandoffJournal();
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var source = new FakeHandoffSource { FreezeGate = gate };
-        await using Rig rig = await Rig.StartAsync(HandoffService(journal, source, new FakeHandoffTarget()));
+        WorkerControlService service = HandoffService(journal, source, new FakeHandoffTarget());
+        await using Rig rig = await Rig.StartAsync(service);
         Guid id = journal.Add(WorldHandoffStage.AdmissionsStopped, PlayerTransferDecisionState.PreCommit);
 
         Task<ControlReply> first = rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Freeze);
         await source.FreezeStarted.Task.WaitAsync(Budget);
+        Assert.Equal(0, service.JoinedRepeats);
         Task<ControlReply> second = rig.SendAsync(ControlKind.WorldHandoff, id, ControlVerb.Freeze);
-        await Task.Delay(100);
+        // The repeat reaches the service while the first freeze still runs and joins it: the service counts the join (no sleep, no guess).
+        await WaitUntilAsync(() => service.JoinedRepeats == 1);
         Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
         gate.SetResult();
 
         Assert.Equal(ControlStatus.Ok, (await first).Status);
         Assert.Equal(ControlStatus.Ok, (await second).Status);
         Assert.Equal(1, source.Freezes);
+        Assert.Equal(1, service.JoinedRepeats);
+    }
+
+    [Fact]
+    public async Task Handoff_ARunningVerb_IsNeverEvicted_ByLaterOperations()
+    {
+        var journal = new FakeHandoffJournal();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var source = new FakeHandoffSource { FreezeGate = gate };
+        WorkerControlService service = HandoffService(journal, source, new FakeHandoffTarget());
+        await using Rig rig = await Rig.StartAsync(service);
+        Guid slow = journal.Add(WorldHandoffStage.AdmissionsStopped, PlayerTransferDecisionState.PreCommit);
+        Task<ControlReply> first = rig.SendAsync(ControlKind.WorldHandoff, slow, ControlVerb.Freeze);
+        await source.FreezeStarted.Task.WaitAsync(Budget);
+
+        // More finished operations than the service remembers: the oldest finished ones go, the running Freeze must stay.
+        for (int i = 0; i < 600; i++)
+        {
+            Guid other = journal.Add(WorldHandoffStage.Warm, PlayerTransferDecisionState.PreCommit);
+            Assert.Equal(ControlStatus.Ok, (await rig.SendAsync(ControlKind.WorldHandoff, other, ControlVerb.StopAdmissions)).Status);
+        }
+
+        Task<ControlReply> repeat = rig.SendAsync(ControlKind.WorldHandoff, slow, ControlVerb.Freeze);
+        await WaitUntilAsync(() => service.JoinedRepeats == 1);
+        gate.SetResult();
+
+        Assert.Equal(ControlStatus.Ok, (await first).Status);
+        Assert.Equal(ControlStatus.Ok, (await repeat).Status);
+        Assert.Equal(1, source.Freezes);
+    }
+
+    [Fact]
+    public async Task Handoff_ARefusedVerbAskedAgain_IsRememberedOnce_AndItsNeighboursSurviveEviction()
+    {
+        var journal = new FakeHandoffJournal();
+        var source = new FakeHandoffSource();
+        WorkerControlService service = HandoffService(journal, source, new FakeHandoffTarget());
+        await using Rig rig = await Rig.StartAsync(service);
+        Guid early = journal.Add(WorldHandoffStage.Begun, PlayerTransferDecisionState.PreCommit);
+        Guid kept = journal.Add(WorldHandoffStage.AdmissionsStopped, PlayerTransferDecisionState.PreCommit);
+        Assert.Equal(ControlStatus.Ok, (await rig.SendAsync(ControlKind.WorldHandoff, kept, ControlVerb.Freeze)).Status);
+
+        // The refused Freeze is forgotten each time; asking again 600 times must not leave 600 queued copies that evict the kept Freeze.
+        for (int i = 0; i < 600; i++)
+        {
+            Assert.Equal(ControlStatus.Refused, (await rig.SendAsync(ControlKind.WorldHandoff, early, ControlVerb.Freeze)).Status);
+        }
+
+        Assert.Equal(ControlStatus.Ok, (await rig.SendAsync(ControlKind.WorldHandoff, kept, ControlVerb.Freeze)).Status);
+        Assert.Equal(1, source.Freezes);
+        Assert.Equal(1, service.JoinedRepeats);
     }
 
     [Fact]
@@ -413,6 +468,15 @@ public sealed class WorkerControlServiceTests
     }
 
     // ------------------------------------------------------------------ helpers
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        using var cts = new CancellationTokenSource(Budget);
+        while (!condition())
+        {
+            await Task.Delay(5, cts.Token);
+        }
+    }
 
     private static WorkerControlIdentity Identity() => new(NodeA, false, IncarnationA, "node-a", "world", [0u, 1u]);
 

@@ -84,8 +84,9 @@ public sealed class WorkerControlService(
     private const int Remembered = 512;
 
     private readonly Lock _gate = new();
-    private readonly Dictionary<(Guid Operation, ControlVerb Verb), Task<ControlReply>> _results = [];
-    private readonly Queue<(Guid Operation, ControlVerb Verb)> _resultOrder = new();
+    private readonly Dictionary<(Guid Operation, ControlVerb Verb), ResultEntry> _results = [];
+    private readonly LinkedList<(Guid Operation, ControlVerb Verb)> _resultOrder = new();
+    private int _joinedRepeats;
     private readonly HashSet<(Guid Operation, ControlKind Kind)> _ended = [];
     private readonly Queue<(Guid Operation, ControlKind Kind)> _endedOrder = new();
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
@@ -95,6 +96,9 @@ public sealed class WorkerControlService(
 
     /// <summary>Whether the worker's transfer key is on.</summary>
     public bool TransfersEnabled => transfersEnabled;
+
+    /// <summary>How many repeats of a single-shot verb joined an identical request that was still running or already answered (instead of calling the participant again). A test seam and a diagnostic.</summary>
+    public int JoinedRepeats => Volatile.Read(ref _joinedRepeats);
 
     /// <inheritdoc />
     public async Task<ControlReply> HandleAsync(ControlRequest request, GatewayControlContext context, CancellationToken cancellationToken)
@@ -503,23 +507,22 @@ public sealed class WorkerControlService(
     {
         var key = (request.OperationId, request.Verb);
         var completion = new TaskCompletionSource<ControlReply>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task<ControlReply>? running;
+        ResultEntry? existing;
+        ResultEntry? own = null;
         lock (_gate)
         {
-            if (!_results.TryGetValue(key, out running))
+            if (!_results.TryGetValue(key, out existing))
             {
-                _results[key] = completion.Task;
-                _resultOrder.Enqueue(key);
-                while (_resultOrder.Count > Remembered)
-                {
-                    _results.Remove(_resultOrder.Dequeue());
-                }
+                own = new ResultEntry(completion.Task, _resultOrder.AddLast(key));
+                _results[key] = own;
+                EvictFinished();
             }
         }
 
-        if (running is not null)
+        if (existing is not null)
         {
-            ControlReply first = await running.ConfigureAwait(false);
+            Interlocked.Increment(ref _joinedRepeats);
+            ControlReply first = await existing.Result.ConfigureAwait(false);
             return first with { RequestId = request.RequestId };
         }
 
@@ -530,7 +533,7 @@ public sealed class WorkerControlService(
         }
         catch (OperationCanceledException)
         {
-            Forget(key);
+            Finish(key, own!, keep: false);
             completion.TrySetResult(Reply(request, ControlStatus.Failed, "the worker is stopping"));
             throw;
         }
@@ -540,21 +543,56 @@ public sealed class WorkerControlService(
             reply = Reply(request, ControlStatus.Failed, ex.Message);
         }
 
-        if (reply.Status != ControlStatus.Ok)
-        {
-            Forget(key);
-        }
-
+        // Only an Ok reply is kept; a refused or failed one is forgotten so the verb can be asked again.
+        Finish(key, own!, keep: reply.Status == ControlStatus.Ok);
         completion.TrySetResult(reply);
         return reply;
     }
 
-    private void Forget((Guid Operation, ControlVerb Verb) key)
+    /// <summary>
+    /// Marks the entry finished and, when it is not kept, removes it from the table and the order list together (so a verb asked again is queued once). Evicts the oldest
+    /// finished entries beyond <see cref="Remembered"/>; an entry whose verb still runs is never evicted, so a repeat arriving later can still join it.
+    /// </summary>
+    private void Finish((Guid Operation, ControlVerb Verb) key, ResultEntry entry, bool keep)
     {
         lock (_gate)
         {
-            _results.Remove(key);
+            entry.Done = true;
+            if (!keep && _results.TryGetValue(key, out ResultEntry? current) && ReferenceEquals(current, entry))
+            {
+                _results.Remove(key);
+                _resultOrder.Remove(entry.Node);
+            }
+
+            EvictFinished();
         }
+    }
+
+    /// <summary>Caller holds <see cref="_gate"/>. Drops the oldest finished entries while the table is over its bound; running entries are skipped.</summary>
+    private void EvictFinished()
+    {
+        LinkedListNode<(Guid Operation, ControlVerb Verb)>? node = _resultOrder.First;
+        while (_results.Count > Remembered && node is not null)
+        {
+            LinkedListNode<(Guid Operation, ControlVerb Verb)>? next = node.Next;
+            if (_results[node.Value].Done)
+            {
+                _results.Remove(node.Value);
+                _resultOrder.Remove(node);
+            }
+
+            node = next;
+        }
+    }
+
+    /// <summary>One remembered (operation, verb): the shared reply task, its place in the age order, and whether the verb has finished. <see cref="Done"/> is read and written under the service's gate.</summary>
+    private sealed class ResultEntry(Task<ControlReply> task, LinkedListNode<(Guid Operation, ControlVerb Verb)> node)
+    {
+        public Task<ControlReply> Result { get; } = task;
+
+        public LinkedListNode<(Guid Operation, ControlVerb Verb)> Node { get; } = node;
+
+        public bool Done { get; set; }
     }
 
     private bool IsEnded(ControlRequest request)
