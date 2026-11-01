@@ -5,6 +5,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Commands;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
