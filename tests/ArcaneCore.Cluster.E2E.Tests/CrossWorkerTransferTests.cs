@@ -7,7 +7,6 @@ using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.MockClient.Protocol;
 using ArcaneCore.MockClient.Scenarios;
 using ArcaneCore.Protocol;
-using Npgsql;
 using Xunit;
 
 namespace ArcaneCore.Cluster.E2E.Tests;
@@ -40,7 +39,8 @@ public sealed class CrossWorkerTransferTests
         WorkerMaps = [[0], [1]],
         LoginWorkerIndex = 0,
         InstanceWorkerIndex = 1,
-        AccountSecurity = AccountSecurity.GameMaster,
+        Security = AccountSecurity.GameMaster,
+        Transfers = true,
     };
 
     [PostgresClusterFact]
@@ -49,7 +49,6 @@ public sealed class CrossWorkerTransferTests
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
         await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Crossing(), ct);
-        string database = cluster.CharactersConnectionString;
 
         await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);
         var session = new ScenarioConnection(client);
@@ -60,10 +59,10 @@ public sealed class CrossWorkerTransferTests
         Assert.Contains((int)login.Location.Map, cluster.Workers[0].OwnedMaps);
 
         EndPoint connection = client.LocalEndPoint ?? throw new InvalidOperationException("The client has no local endpoint.");
-        long? epochBefore = (await ReadOwnerAsync(database, guid, ct))?.Epoch;
-        IReadOnlyList<ShardRow> shardsBefore = await ReadShardsAsync(database, ct);
+        OwnerRow ownerBefore = Assert.IsType<OwnerRow>(await ReadOwnerAsync(cluster, guid, ct)); // the login claim created it
+        IReadOnlyList<ShardRow> shardsBefore = await ReadShardsAsync(cluster, ct);
 
-        Arrival arrival = await CrossAsync(session, database, guid, OrgrimmarGo, KalimdorMap, ct);
+        Arrival arrival = await CrossAsync(session, cluster, guid, OrgrimmarGo, KalimdorMap, ct);
         Assert.True(arrival.TransferPendingSeen, "SMSG_TRANSFER_PENDING must precede SMSG_NEW_WORLD.");
         Assert.InRange(arrival.DecisionStateAtNewWorld, (int)PlayerTransferDecisionState.Committed, (int)PlayerTransferDecisionState.Completed);
 
@@ -71,20 +70,18 @@ public sealed class CrossWorkerTransferTests
         Assert.Equal(connection, client.LocalEndPoint);
         await PingAsync(session, 0xC0FFEE, ct);
 
-        // One journal row, committed once: the source's epoch plus one, which the per-character ownership row now carries; the shard rows did not move.
-        DecisionRow decision = await WaitForCompletedAsync(database, guid, ct);
+        // One journal row, committed once. With per-worker fencing the commit gives the character the target worker's own live scope token, so the owner row
+        // now carries that worker's active character_ownership epoch (not source epoch + 1), its scope and incarnation moved, and the shard rows did not.
+        DecisionRow decision = await WaitForCompletedAsync(cluster, guid, ct);
         Assert.Equal(0, decision.SourceMap);
         Assert.Equal((long)KalimdorMap, decision.TargetMap);
         Assert.NotEqual(decision.SourceWorker, decision.TargetWorker);
-        Assert.Equal(decision.SourceEpoch + 1, decision.TargetEpoch);
-        OwnerRow owner = Assert.IsType<OwnerRow>(await ReadOwnerAsync(database, guid, ct));
-        Assert.Equal(decision.TargetEpoch, owner.Epoch);
-        Assert.Null(owner.ActiveTransfer);
-        // Two paths, reported in the failure text: a row existed before (epoch compared against it), or none did (only the journal's source+1 above holds).
-        Assert.Equal(epochBefore is { } before ? before + 1 : decision.TargetEpoch, owner.Epoch,
-            epochBefore is null ? "no cluster_transfer_owner row existed before the transfer; only the journal epoch was checked" : "the owner epoch must advance exactly once from the pre-transfer row");
+        Assert.True(decision.SessionGeneration > 0, "the journal must name the gateway session generation.");
+        IReadOnlyList<ShardRow> shardsAfter = await ReadShardsAsync(cluster, ct);
+        OwnerRow owner = Assert.IsType<OwnerRow>(await ReadOwnerAsync(cluster, guid, ct));
+        AssertMovedToTarget(ownerBefore, owner, decision, shardsAfter);
 
-        Assert.Equal(shardsBefore, await ReadShardsAsync(database, ct));
+        Assert.Equal(shardsBefore, shardsAfter);
 
         // A second login of the same account while the first session is online replaces it: the first connection is closed, the
         // second is served by the owner of the character's map, and nothing advances the epoch again.
@@ -99,15 +96,15 @@ public sealed class CrossWorkerTransferTests
         await PingAsync(replacement, 0xBEEF, ct);
 
         await replacement.LogoutAsync(ct);
-        DecisionRow only = Assert.Single(await ReadDecisionsAsync(database, guid, ct));
+        DecisionRow only = Assert.Single(await ReadDecisionsAsync(cluster, guid, ct));
         Assert.Equal(decision.TransferId, only.TransferId);
         Assert.Equal(decision.SessionGeneration, only.SessionGeneration);
         Assert.Equal((int)PlayerTransferDecisionState.Completed, only.State);
-        OwnerRow ownerAfter = Assert.IsType<OwnerRow>(await ReadOwnerAsync(database, guid, ct));
-        Assert.Equal(decision.TargetEpoch, ownerAfter.Epoch);
+        OwnerRow ownerAfter = Assert.IsType<OwnerRow>(await ReadOwnerAsync(cluster, guid, ct));
+        Assert.Equal(owner, ownerAfter); // the replacing login claims with the token the owner row already holds: scope, epoch and incarnation stay
 
         // No stale write from the old owner: the character row holds the new map after both sessions are gone.
-        Assert.Equal((long)KalimdorMap, await ReadCharacterMapAsync(database, guid, ct));
+        Assert.Equal((long)KalimdorMap, await ReadCharacterMapAsync(cluster, guid, ct));
     }
 
     [PostgresClusterFact]
@@ -116,7 +113,6 @@ public sealed class CrossWorkerTransferTests
         using var cts = new CancellationTokenSource(Deadline);
         CancellationToken ct = cts.Token;
         await using ClusterProcessFixture cluster = await ClusterProcessFixture.StartAsync(Crossing(), ct);
-        string database = cluster.CharactersConnectionString;
         Assert.DoesNotContain((int)DeadminesMap, cluster.Workers[0].OwnedMaps.Concat(cluster.Workers[1].OwnedMaps));
 
         await using WorldClient client = await cluster.ConnectGatewayClientAsync(ct);
@@ -127,27 +123,38 @@ public sealed class CrossWorkerTransferTests
         await session.LoginAsync(character.Guid, ct);
 
         EndPoint connection = client.LocalEndPoint ?? throw new InvalidOperationException("The client has no local endpoint.");
-        long? epochBefore = (await ReadOwnerAsync(database, guid, ct))?.Epoch;
+        OwnerRow ownerBefore = Assert.IsType<OwnerRow>(await ReadOwnerAsync(cluster, guid, ct));
 
-        Arrival arrival = await CrossAsync(session, database, guid, DeadminesGo, DeadminesMap, ct);
+        Arrival arrival = await CrossAsync(session, cluster, guid, DeadminesGo, DeadminesMap, ct);
         Assert.True(arrival.TransferPendingSeen, "SMSG_TRANSFER_PENDING must precede SMSG_NEW_WORLD.");
         Assert.InRange(arrival.DecisionStateAtNewWorld, (int)PlayerTransferDecisionState.Committed, (int)PlayerTransferDecisionState.Completed);
         Assert.Equal(connection, client.LocalEndPoint);
         await PingAsync(session, 0xD3AD, ct);
 
-        DecisionRow decision = await WaitForCompletedAsync(database, guid, ct);
+        DecisionRow decision = await WaitForCompletedAsync(cluster, guid, ct);
         Assert.Equal((long)DeadminesMap, decision.TargetMap);
         Assert.NotEqual(decision.SourceWorker, decision.TargetWorker);
-        Assert.Equal(decision.SourceEpoch + 1, decision.TargetEpoch);
-        OwnerRow owner = Assert.IsType<OwnerRow>(await ReadOwnerAsync(database, guid, ct));
-        Assert.Equal(decision.TargetEpoch, owner.Epoch);
-        // Two paths, reported in the failure text: a row existed before (epoch compared against it), or none did (only the journal's source+1 above holds).
-        Assert.Equal(epochBefore is { } before ? before + 1 : decision.TargetEpoch, owner.Epoch,
-            epochBefore is null ? "no cluster_transfer_owner row existed before the transfer; only the journal epoch was checked" : "the owner epoch must advance exactly once from the pre-transfer row");
+        OwnerRow owner = Assert.IsType<OwnerRow>(await ReadOwnerAsync(cluster, guid, ct));
+        AssertMovedToTarget(ownerBefore, owner, decision, await ReadShardsAsync(cluster, ct));
 
         await session.LogoutAsync(ct);
-        Assert.Single(await ReadDecisionsAsync(database, guid, ct));
-        Assert.Equal((long)DeadminesMap, await ReadCharacterMapAsync(database, guid, ct));
+        Assert.Single(await ReadDecisionsAsync(cluster, guid, ct));
+        Assert.Equal((long)DeadminesMap, await ReadCharacterMapAsync(cluster, guid, ct));
+    }
+
+    /// <summary>The owner row moved to the target worker's scope, carries that scope's live (active) character_ownership epoch and a new incarnation, and holds no open transfer.</summary>
+    private static void AssertMovedToTarget(OwnerRow before, OwnerRow after, DecisionRow decision, IReadOnlyList<ShardRow> shards)
+    {
+        Assert.NotNull(decision.TargetScope);
+        Assert.Equal(decision.TargetScope, after.Scope);
+        Assert.NotEqual(before.Scope, after.Scope);
+        Assert.NotEqual(before.Incarnation, after.Incarnation);
+        ShardRow target = Assert.Single(shards, shard => shard.Scope == after.Scope);
+        Assert.True(target.Active, "the target worker's shard row must be active.");
+        Assert.Equal(target.Epoch, after.Epoch);
+        Assert.Equal(target.Epoch, decision.TargetEpoch);
+        Assert.Equal(target.Incarnation, after.Incarnation);
+        Assert.Null(after.ActiveTransfer);
     }
 
     // ---- client side ----
@@ -158,7 +165,7 @@ public sealed class CrossWorkerTransferTests
     /// Types <paramref name="command"/> as a say, then plays the client's half of a far teleport: reads to SMSG_NEW_WORLD (noting an earlier SMSG_TRANSFER_PENDING),
     /// reads the state of the journal at that moment, answers with MSG_MOVE_WORLDPORT_ACK and waits for the target's world states (the map add).
     /// </summary>
-    private static async Task<Arrival> CrossAsync(ScenarioConnection session, string database, long guid, string command, uint targetMap, CancellationToken ct)
+    private static async Task<Arrival> CrossAsync(ScenarioConnection session, ClusterProcessFixture cluster, long guid, string command, uint targetMap, CancellationToken ct)
     {
         await session.SendAsync(WorldOpcode.CmsgMessagechat, LiveSession.SayPacket(command), ct);
 
@@ -182,7 +189,7 @@ public sealed class CrossWorkerTransferTests
         Assert.Equal(targetMap, BinaryPrimitives.ReadUInt32LittleEndian(payload));
 
         // The loading-screen packet only exists once the transfer committed: the journal already says so.
-        DecisionRow decision = Assert.Single(await ReadDecisionsAsync(database, guid, ct));
+        DecisionRow decision = Assert.Single(await ReadDecisionsAsync(cluster, guid, ct));
 
         await session.SendAsync(WorldOpcode.MsgMoveWorldportAck, [], ct);
         await ReadPatientUntilAsync(session, WorldOpcode.SmsgInitWorldStates, ct);
@@ -221,8 +228,7 @@ public sealed class CrossWorkerTransferTests
                 await session.WaitForTrafficAsync(ct);
                 await session.ReadAsync(ct);
             }
-            catch (Exception ex) when (ex is EndOfStreamException or SocketException or ObjectDisposedException
-                or IOException { InnerException: SocketException or ObjectDisposedException } and not MockProtocolException)
+            catch (Exception ex) when (ex is not MockProtocolException and (EndOfStreamException or SocketException or IOException { InnerException: SocketException }))
             {
                 return true;
             }
@@ -234,53 +240,27 @@ public sealed class CrossWorkerTransferTests
     // ---- characters database (PostgreSQL; table and column names are the data modules' mappings) ----
 
     private sealed record DecisionRow(
-        string TransferId, long SessionGeneration, string SourceWorker, string TargetWorker, long SourceMap, long TargetMap, int State, long SourceEpoch, long TargetEpoch);
+        string TransferId, long SessionGeneration, string SourceWorker, string TargetWorker, long SourceMap, long TargetMap, int State, long SourceEpoch, long TargetEpoch, string? TargetScope);
 
-    private sealed record OwnerRow(long Epoch, string? ActiveTransfer);
+    private sealed record OwnerRow(string Scope, long Epoch, string Incarnation, string? ActiveTransfer);
 
-    private sealed record ShardRow(string Scope, long Epoch, bool Active);
+    private sealed record ShardRow(string Scope, long Epoch, bool Active, string Incarnation);
 
-    private static async Task<NpgsqlConnection> OpenAsync(string connectionString, CancellationToken ct)
-    {
-        var builder = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false };
-        var connection = new NpgsqlConnection(builder.ConnectionString);
-        try
-        {
-            await connection.OpenAsync(ct);
-            return connection;
-        }
-        catch
-        {
-            await connection.DisposeAsync();
-            throw;
-        }
-    }
-
-    private static async Task<IReadOnlyList<DecisionRow>> ReadDecisionsAsync(string database, long guid, CancellationToken ct)
-    {
-        await using NpgsqlConnection connection = await OpenAsync(database, ct);
-        await using var command = new NpgsqlCommand(
-            "SELECT transfer_id, session_generation, source_worker, target_worker, source_map, target_map, state, source_epoch, target_epoch " +
-            "FROM cluster_transfer_decision WHERE character_guid = @guid ORDER BY updated_at_ms, transfer_id", connection);
-        command.Parameters.AddWithValue("guid", guid);
-        var rows = new List<DecisionRow>();
-        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(new DecisionRow(
+    private static Task<IReadOnlyList<DecisionRow>> ReadDecisionsAsync(ClusterProcessFixture cluster, long guid, CancellationToken ct)
+        => cluster.CharactersRowsAsync(
+            "SELECT transfer_id, session_generation, source_worker, target_worker, source_map, target_map, state, source_epoch, target_epoch, target_scope " +
+            "FROM cluster_transfer_decision WHERE character_guid = " + guid.ToString(CultureInfo.InvariantCulture) + " ORDER BY updated_at_ms, transfer_id",
+            reader => new DecisionRow(
                 reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3), reader.GetInt64(4), reader.GetInt64(5),
-                reader.GetInt32(6), reader.GetInt64(7), reader.IsDBNull(8) ? -1 : reader.GetInt64(8)));
-        }
-
-        return rows;
-    }
+                reader.GetInt32(6), reader.GetInt64(7), reader.IsDBNull(8) ? -1 : reader.GetInt64(8), reader.IsDBNull(9) ? null : reader.GetString(9)),
+            ct);
 
     /// <summary>Waits until the character has exactly one journal row and it is Completed (stage 6 done), then returns it.</summary>
-    private static async Task<DecisionRow> WaitForCompletedAsync(string database, long guid, CancellationToken ct)
+    private static async Task<DecisionRow> WaitForCompletedAsync(ClusterProcessFixture cluster, long guid, CancellationToken ct)
     {
         while (true)
         {
-            IReadOnlyList<DecisionRow> rows = await ReadDecisionsAsync(database, guid, ct);
+            IReadOnlyList<DecisionRow> rows = await ReadDecisionsAsync(cluster, guid, ct);
             Assert.True(rows.Count <= 1, $"Expected one transfer journal row for the character, found {rows.Count}.");
             if (rows.Count == 1)
             {
@@ -295,40 +275,21 @@ public sealed class CrossWorkerTransferTests
         }
     }
 
-    private static async Task<OwnerRow?> ReadOwnerAsync(string database, long guid, CancellationToken ct)
+    private static async Task<OwnerRow?> ReadOwnerAsync(ClusterProcessFixture cluster, long guid, CancellationToken ct)
     {
-        await using NpgsqlConnection connection = await OpenAsync(database, ct);
-        await using var command = new NpgsqlCommand("SELECT epoch, active_transfer FROM cluster_transfer_owner WHERE character_guid = @guid", connection);
-        command.Parameters.AddWithValue("guid", guid);
-        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(ct);
-        return await reader.ReadAsync(ct) ? new OwnerRow(reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetString(1)) : null;
+        IReadOnlyList<OwnerRow> rows = await cluster.CharactersRowsAsync(
+            "SELECT scope, epoch, incarnation, active_transfer FROM cluster_transfer_owner WHERE character_guid = " + guid.ToString(CultureInfo.InvariantCulture),
+            reader => new OwnerRow(reader.GetString(0), reader.GetInt64(1), reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3)),
+            ct);
+        return rows.Count == 0 ? null : rows[0];
     }
 
-    private static async Task<IReadOnlyList<ShardRow>> ReadShardsAsync(string database, CancellationToken ct)
-    {
-        await using NpgsqlConnection connection = await OpenAsync(database, ct);
-        await using var command = new NpgsqlCommand("SELECT scope, epoch, active FROM character_ownership ORDER BY scope", connection);
-        var rows = new List<ShardRow>();
-        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(ct);
-        while (await reader.ReadAsync(ct))
-        {
-            rows.Add(new ShardRow(reader.GetString(0), reader.GetInt64(1), reader.GetBoolean(2)));
-        }
+    private static Task<IReadOnlyList<ShardRow>> ReadShardsAsync(ClusterProcessFixture cluster, CancellationToken ct)
+        => cluster.CharactersRowsAsync(
+            "SELECT scope, epoch, active, owner_incarnation FROM character_ownership ORDER BY scope",
+            reader => new ShardRow(reader.GetString(0), reader.GetInt64(1), reader.GetBoolean(2), reader.GetString(3)),
+            ct);
 
-        return rows;
-    }
-
-    private static async Task<long> ReadCharacterMapAsync(string database, long guid, CancellationToken ct)
-    {
-        await using NpgsqlConnection connection = await OpenAsync(database, ct);
-        await using var command = new NpgsqlCommand("SELECT \"MapId\" FROM characters WHERE \"Id\" = @id", connection);
-        command.Parameters.AddWithValue("id", (int)guid);
-        object? map = await command.ExecuteScalarAsync(ct);
-        if (map is null or DBNull)
-        {
-            throw new InvalidOperationException("The character row has no map.");
-        }
-
-        return Convert.ToInt64(map, CultureInfo.InvariantCulture);
-    }
+    private static Task<long> ReadCharacterMapAsync(ClusterProcessFixture cluster, long guid, CancellationToken ct)
+        => cluster.CharactersScalarAsync("SELECT \"MapId\" FROM characters WHERE \"Id\" = " + guid.ToString(CultureInfo.InvariantCulture), ct);
 }
