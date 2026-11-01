@@ -83,7 +83,7 @@ public static class WorkerTransferHosting
             var target = new WorkerTransferTarget(
                 nodeId, world, new CharacterHooksShadowLoader(bundle => AdoptedSession(services, bundle)), new WorldSessionTransferEntry(), admission,
                 MaxTargetReservations, host.Incarnation, loggers?.CreateLogger<WorkerTransferTarget>(),
-                allocateInstance: AllocateInstance(services));
+                instances: AllocateInstance(services));
             transfer = new WorkerControlTransfer(transferJournal, source, target, () => admission.IsOpen, () => MaxTargetReservations - target.ReservedCount);
         }
 
@@ -99,13 +99,13 @@ public static class WorkerTransferHosting
     }
 
     /// <summary>
-    /// Q8: the allocator an instance-0 request for a dungeon uses (an instance allocated and bound on this worker), over the instance feature; null without the feature, so the requested
-    /// id stands. Runs on the world thread (<see cref="WorkerTransferTarget"/> invokes it there).
+    /// Q8: the allocator an instance-0 request for a dungeon uses (an instance reserved on this worker, bound at activation, released on abort), over the instance feature; null without the feature,
+    /// so the requested id stands. <see cref="WorkerTransferTarget"/> runs it on the world thread.
     /// </summary>
-    private static Func<uint, ArcaneCore.Game.ObjectGuid, uint>? AllocateInstance(IServiceProvider services)
+    private static ITransferInstanceAllocator? AllocateInstance(IServiceProvider services)
     {
         ArcaneCore.World.Instances.InstanceFeature? feature = services.GetService<ArcaneCore.World.Instances.InstanceFeature>();
-        return feature is null ? null : (mapId, guid) => feature.Instances.ReserveEntryInstance(guid, mapId);
+        return feature is null ? null : new InstanceManagerTransferAllocator(feature.Instances);
     }
 
     /// <summary>

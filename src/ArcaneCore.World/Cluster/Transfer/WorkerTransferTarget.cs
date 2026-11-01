@@ -197,6 +197,53 @@ public sealed class WorldSessionTransferEntry : ITransferSessionEntry
 }
 
 /// <summary>
+/// The instance side of a transfer's reservation on the target worker (orchestrator decision Q8: the target allocates instance ids). <see cref="Reserve"/>, <see cref="Release"/> and <see cref="Bind"/>
+/// run on the world thread; <see cref="IsInstanced"/> reads immutable data and may run anywhere.
+/// </summary>
+public interface ITransferInstanceAllocator
+{
+    /// <summary>Whether an instance-0 request for <paramref name="mapId"/> needs an allocated instance (a dungeon). False for continents: the world thread is not visited for them.</summary>
+    bool IsInstanced(uint mapId);
+
+    /// <summary>The instance <paramref name="player"/> will enter on <paramref name="mapId"/>: its bound one, else a new one held for the transfer. 0 when the map is not instanced.</summary>
+    uint Reserve(ObjectGuid player, uint mapId);
+
+    /// <summary>Undoes <see cref="Reserve"/> of a reservation that was refused or aborted. Idempotent; leaves an instance somebody is bound to alone.</summary>
+    void Release(uint mapId, uint instanceId);
+
+    /// <summary>Binds <paramref name="player"/> to the reserved instance once the transfer committed (the bind write is refused by the worker write fence before). False when the instance is gone or the character is bound elsewhere.</summary>
+    bool Bind(ObjectGuid player, uint mapId, uint instanceId);
+}
+
+/// <summary>The production <see cref="ITransferInstanceAllocator"/>: the world's <see cref="InstanceManager"/> (<see cref="InstanceManager.ReserveEntryInstance"/>, <see cref="InstanceManager.ReleaseEntryInstance"/>, <see cref="InstanceManager.BindReservedEntry"/>).</summary>
+public sealed class InstanceManagerTransferAllocator(InstanceManager instances) : ITransferInstanceAllocator
+{
+    private readonly InstanceManager _instances = instances ?? throw new ArgumentNullException(nameof(instances));
+
+    public bool IsInstanced(uint mapId) => _instances.IsInstancedMap(mapId);
+
+    public uint Reserve(ObjectGuid player, uint mapId) => _instances.ReserveEntryInstance(player, mapId);
+
+    public void Release(uint mapId, uint instanceId) => _instances.ReleaseEntryInstance(mapId, instanceId);
+
+    public bool Bind(ObjectGuid player, uint mapId, uint instanceId) => _instances.BindReservedEntry(player, mapId, instanceId);
+}
+
+/// <summary>An allocator that is only a function: every map may be instanced, nothing to undo or bind (the function's owner keeps the instance).</summary>
+internal sealed class DelegateTransferInstanceAllocator(Func<uint, ObjectGuid, uint> allocate) : ITransferInstanceAllocator
+{
+    public bool IsInstanced(uint mapId) => true;
+
+    public uint Reserve(ObjectGuid player, uint mapId) => allocate(mapId, player);
+
+    public void Release(uint mapId, uint instanceId)
+    {
+    }
+
+    public bool Bind(ObjectGuid player, uint mapId, uint instanceId) => true;
+}
+
+/// <summary>
 /// The production <see cref="ITransferTargetWorker"/> (Tier 3, default D4). The target of a transfer reloads the character from the characters
 /// database (the source's settlement save is durable before the bundle exists) instead of deserialising live objects:
 /// <list type="bullet">
@@ -225,7 +272,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     private readonly WorkerAdmission? _admission;
     private readonly int _maxReservations;
     private readonly ILogger _logger;
-    private readonly Func<uint, ObjectGuid, uint>? _allocateInstance;
+    private readonly ITransferInstanceAllocator? _instances;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, Slot> _slots = [];
     private readonly Dictionary<ulong, Guid> _byCharacter = [];
@@ -241,7 +288,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         int maxReservations = 64,
         Guid? incarnation = null,
         ILogger<WorkerTransferTarget>? logger = null,
-        Func<uint, ObjectGuid, uint>? allocateInstance = null)
+        Func<uint, ObjectGuid, uint>? allocateInstance = null,
+        ITransferInstanceAllocator? instances = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(loader);
@@ -255,7 +303,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         _maxReservations = maxReservations;
         Incarnation = incarnation ?? Guid.NewGuid();
         _logger = logger ?? NullLogger<WorkerTransferTarget>.Instance;
-        _allocateInstance = allocateInstance;
+        _instances = instances ?? (allocateInstance is null ? null : new DelegateTransferInstanceAllocator(allocateInstance));
     }
 
     public WorkerNodeId WorkerId => _workerId;
@@ -296,7 +344,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
     /// <summary>
     /// Stage 1 with the instance binding of orchestrator decision Q8: when <paramref name="targetInstanceId"/> is 0 and the map is an instanced one (the instance allocator answers a
-    /// non-zero id), this worker allocates and binds an instance for the character and answers its id; every other request is answered with the requested id. The id is remembered with
+    /// non-zero id), this worker reserves an instance for the character (bound at activation, released when the reservation is refused, loses a race or is discarded) and answers its id; every other request is answered with the requested id. The id is remembered with
     /// the slot, so a repeat of the same transfer id answers the same instance.
     /// </summary>
     public async Task<TransferSlotReservation> ReserveSlotAsync(
@@ -313,7 +361,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             return refused;
         }
 
-        bool allocate = targetInstanceId == 0 && _allocateInstance is not null;
+        // A continent never needs an allocated instance: the registry pre-check keeps it off the world thread.
+        bool allocate = targetInstanceId == 0 && _instances is { } instanced && instanced.IsInstanced(targetMapId);
         // An instance-0 request for an instanced map names no copy yet: the worker must own instance copies of the map (any non-zero id probes that).
         if (!_world.Owns(targetMapId, allocate ? InstanceManager.FirstInstanceId : targetInstanceId))
         {
@@ -327,9 +376,9 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 return refused;
             }
 
-            if (_activated.Contains(transferId))
+            if (_activated.TryGetInstance(transferId, out uint activatedInstance))
             {
-                return new TransferSlotReservation(true, targetInstanceId); // a repeated stage 1 of a transfer that already completed
+                return new TransferSlotReservation(true, activatedInstance); // a repeated stage 1 of a transfer that already completed: the instance it entered, not the requested one
             }
 
             if (_slots.TryGetValue(transferId, out Slot? existing))
@@ -350,35 +399,70 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         }
 
         // The instance manager is world-thread state: allocate and bind there, outside the slot lock.
-        Func<uint, ObjectGuid, uint> allocator = _allocateInstance!;
+        ITransferInstanceAllocator allocator = _instances!;
         var guid = new ObjectGuid(characterGuid);
-        uint allocated = await _world.InvokeAsync(() => allocator(targetMapId, guid), CancellationToken.None).ConfigureAwait(false);
+        uint allocated = await _world.InvokeAsync(() => allocator.Reserve(guid, targetMapId), CancellationToken.None).ConfigureAwait(false);
         // The allocator answers 0 for a non-instanced map: the request then stands as instance 0 and must pass the plain ownership check (the probe above used a non-zero id,
         // which MapOwnership accepts for any map while instance maps are allowed).
         if (!_world.Owns(targetMapId, allocated))
         {
+            await ReleaseInstanceAsync(targetMapId, allocated).ConfigureAwait(false);
             return refused;
         }
 
+        TransferSlotReservation answer;
+        bool keep = false;
         lock (_gate)
         {
             if (_discarded.Contains(transferId))
             {
-                return refused;
+                answer = refused;
             }
-
-            if (_slots.TryGetValue(transferId, out Slot? raced))
+            else if (_slots.TryGetValue(transferId, out Slot? raced))
             {
-                return new TransferSlotReservation(raced.CharacterGuid == characterGuid, raced.InstanceId);
+                answer = new TransferSlotReservation(raced.CharacterGuid == characterGuid, raced.InstanceId);
+                keep = raced.InstanceId == allocated; // the winner may have reserved the very same (bound) instance
             }
-
-            if (_byCharacter.ContainsKey(characterGuid) || _slots.Count >= _maxReservations)
+            else if (_byCharacter.ContainsKey(characterGuid) || _slots.Count >= _maxReservations)
             {
-                return refused;
+                answer = refused;
             }
+            else
+            {
+                AddSlot(new Slot(transferId, characterGuid) { InstanceId = allocated, MapId = targetMapId, Allocated = allocated != 0 });
+                return new TransferSlotReservation(true, allocated);
+            }
+        }
 
-            AddSlot(new Slot(transferId, characterGuid) { InstanceId = allocated });
-            return new TransferSlotReservation(true, allocated);
+        // The slot race was lost (or the transfer was discarded meanwhile): this call's allocation is not held by any slot, so undo it.
+        if (!keep)
+        {
+            await ReleaseInstanceAsync(targetMapId, allocated).ConfigureAwait(false);
+        }
+
+        return answer;
+    }
+
+    /// <summary>Undoes an instance reservation on the world thread. A failure is recorded and swallowed: the caller's refusal or discard stands, and the held map expires with the process at worst.</summary>
+    private async Task ReleaseInstanceAsync(uint mapId, uint instanceId)
+    {
+        if (instanceId == 0 || _instances is not { } allocator)
+        {
+            return;
+        }
+
+        try
+        {
+            await _world.InvokeAsync(() =>
+            {
+                allocator.Release(mapId, instanceId);
+                return true;
+            }, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target-instance", ex);
+            _logger.LogError(ex, "Releasing the reserved instance {Instance} of map {Map} failed", instanceId, mapId);
         }
     }
 
@@ -396,7 +480,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         await AwaitLoadAsync(slot, load!, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task DiscardPassiveShadowAsync(Guid transferId, ulong characterGuid, string abortReason, CancellationToken cancellationToken = default)
+    public async Task DiscardPassiveShadowAsync(Guid transferId, ulong characterGuid, string abortReason, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Slot? removed;
@@ -405,17 +489,17 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             if (_activated.Contains(transferId))
             {
                 _logger.LogWarning("Transfer {TransferId} was activated here; its discard ({Reason}) is ignored", transferId, abortReason);
-                return Task.CompletedTask;
+                return;
             }
 
             if (_slots.TryGetValue(transferId, out Slot? activating) && activating.Activating)
             {
                 _logger.LogWarning("Transfer {TransferId} is activating here; its discard ({Reason}) is ignored", transferId, abortReason);
-                return Task.CompletedTask;
+                return;
             }
 
             removed = RemoveSlot(transferId);
-            _discarded.Add(transferId);
+            _discarded.Add(transferId, 0);
         }
 
         if (removed is not null)
@@ -430,7 +514,11 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             ReleaseWhenLoaded(loading);
         }
 
-        return Task.CompletedTask;
+        // The instance the reservation allocated goes with it (an instance somebody is bound to stays).
+        if (removed is { Allocated: true })
+        {
+            await ReleaseInstanceAsync(removed.MapId, removed.InstanceId).ConfigureAwait(false);
+        }
     }
 
     private void ReleaseWhenLoaded(Task<Player> load)
@@ -520,6 +608,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             {
                 // A very late duplicate of a transfer whose id is no longer remembered: its character is already here under this very token.
                 ReleaseShadow(shadow);
+                ReleaseUnboundInstance(slot);
                 Finish(slot);
                 return false;
             }
@@ -557,8 +646,15 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             _logger.LogInformation("Transfer {TransferId}: the client of character {Character} left before activation; nothing to add", slot.TransferId, bundle.CharacterGuid);
             claims?.AbandonTicket(characterId, claimTicket);
             ReleaseShadow(shadow);
+            ReleaseUnboundInstance(slot);
             Finish(slot);
             return false;
+        }
+
+        if (slot.Allocated)
+        {
+            // The claim moved here with the commit, so this bind write is accepted (at Reserve the source still held the claim and the worker write fence refused it).
+            BindReservedInstance(slot, shadow);
         }
 
         // Retail far-teleport order: vmangos Player::ExecuteTeleportFar sends SMSG_TRANSFER_PENDING then SMSG_NEW_WORLD (Player.cpp:2068-2118),
@@ -587,6 +683,42 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         Finish(slot);
         return true;
+    }
+
+    /// <summary>On the world thread: drops the instance this slot's reservation allocated when the activation ends without binding it (the held map would otherwise never unload). An instance somebody is bound to stays.</summary>
+    private void ReleaseUnboundInstance(Slot slot)
+    {
+        if (!slot.Allocated || slot.InstanceId == 0 || _instances is not { } allocator)
+        {
+            return;
+        }
+
+        try
+        {
+            allocator.Release(slot.MapId, slot.InstanceId);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target-instance", ex);
+            _logger.LogError(ex, "Releasing the reserved instance {Instance} of map {Map} failed", slot.InstanceId, slot.MapId);
+        }
+    }
+
+    private void BindReservedInstance(Slot slot, Player shadow)
+    {
+        try
+        {
+            if (!_instances!.Bind(shadow.Guid, slot.MapId, slot.InstanceId))
+            {
+                _logger.LogWarning("Transfer {TransferId}: character {Character} could not be bound to the reserved instance {Instance} of map {Map}", slot.TransferId, shadow.Guid.Value, slot.InstanceId, slot.MapId);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The committed transfer must complete: the character still enters the reserved instance, only its lockout bind is missing.
+            FaultLedger.Shared.Record("cluster.transfer-target-instance", ex);
+            _logger.LogError(ex, "Binding character {Character} to the reserved instance {Instance} failed", shadow.Guid.Value, slot.InstanceId);
+        }
     }
 
     /// <summary>The arrival callbacks of the teleport service: the held saves resume once the player is in its map (and when the arrival is abandoned), then the login notification.</summary>
@@ -628,7 +760,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                     throw new InvalidOperationException($"character {bundle.CharacterGuid} is reserved by transfer '{other}', not '{transferId}'");
                 }
 
-                slot = new Slot(transferId, bundle.CharacterGuid);
+                slot = new Slot(transferId, bundle.CharacterGuid) { InstanceId = bundle.TargetInstanceId };
                 AddSlot(slot);
             }
             else if (slot.CharacterGuid != bundle.CharacterGuid)
@@ -674,7 +806,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         lock (_gate)
         {
             RemoveSlot(slot.TransferId);
-            _activated.Add(slot.TransferId);
+            _activated.Add(slot.TransferId, slot.InstanceId);
         }
     }
 
@@ -720,6 +852,12 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         /// <summary>The instance id the reservation answered (the requested one, or the one this worker allocated for an instance-0 request).</summary>
         public uint InstanceId { get; init; }
 
+        /// <summary>The map the reservation allocated <see cref="InstanceId"/> on (meaningful when <see cref="Allocated"/>).</summary>
+        public uint MapId { get; init; }
+
+        /// <summary>Whether this worker's allocator reserved <see cref="InstanceId"/> for the slot: it is bound at activation and released on discard.</summary>
+        public bool Allocated { get; init; }
+
         /// <summary>The shadow load (null until the first install; guarded by the target's gate).</summary>
         public Task<Player>? Loading { get; set; }
 
@@ -733,17 +871,19 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         private volatile bool _activating;
     }
 
-    /// <summary>A bounded set of transfer ids, oldest forgotten first. Guarded by the target's gate.</summary>
+    /// <summary>A bounded map of finished transfer ids to the instance they ended on, oldest forgotten first. Guarded by the target's gate.</summary>
     private sealed class FinishedSet(int capacity)
     {
-        private readonly HashSet<Guid> _set = [];
+        private readonly Dictionary<Guid, uint> _set = [];
         private readonly Queue<Guid> _order = new();
 
-        public bool Contains(Guid id) => _set.Contains(id);
+        public bool Contains(Guid id) => _set.ContainsKey(id);
 
-        public void Add(Guid id)
+        public bool TryGetInstance(Guid id, out uint instanceId) => _set.TryGetValue(id, out instanceId);
+
+        public void Add(Guid id, uint instanceId)
         {
-            if (!_set.Add(id))
+            if (!_set.TryAdd(id, instanceId))
             {
                 return;
             }

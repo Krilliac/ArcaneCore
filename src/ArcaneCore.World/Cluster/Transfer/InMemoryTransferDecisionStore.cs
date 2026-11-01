@@ -136,6 +136,34 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
     }
 
     /// <inheritdoc />
+    public Task<TransferDecisionRecord> RebindTargetInstanceAsync(
+        Guid transferId,
+        uint targetInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_sync)
+        {
+            TransferDecisionRecord current = GetRequiredLocked(transferId);
+            if (current.TargetInstanceId == targetInstanceId)
+            {
+                return Task.FromResult(current);
+            }
+
+            if (current.DecisionState != PlayerTransferDecisionState.PreCommit || current.CurrentStage != PlayerTransferStage.Reserve)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot rebind the target instance of transfer '{transferId}' in state {current.DecisionState} at stage {current.CurrentStage}; only a pre-commit Reserve may.");
+            }
+
+            EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
+            TransferDecisionRecord updated = current with { TargetInstanceId = targetInstanceId, UpdatedAtUtcMs = _clockUtcMs() };
+            _decisions[transferId] = updated;
+            return Task.FromResult(updated);
+        }
+    }
+
+    /// <inheritdoc />
     public Task<TransferDecisionRecord> AdvancePreCommitStageAsync(
         Guid transferId,
         PlayerTransferStage nextStage,
