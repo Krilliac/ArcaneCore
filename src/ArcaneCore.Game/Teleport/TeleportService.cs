@@ -791,7 +791,17 @@ public sealed partial class TeleportService
         // The map resolver picks (or creates) the instance and binds the player or its group
         // (vmangos MapManager::CreateMap → DungeonMap::Add); null refuses the entry.
         IMapResolver? resolver = _world.MapResolver;
-        Map? map = resolver is null ? _world.GetMap(dest.MapId) : resolver.ResolveEntry(player, dest.MapId);
+        Map? map;
+        try
+        {
+            map = resolver is null ? _world.GetMap(dest.MapId) : resolver.ResolveEntry(player, dest.MapId);
+        }
+        catch (MapNotOwnedException)
+        {
+            // Another worker owns the destination (Cluster:Worker:OwnedMaps): refuse cleanly until a far transfer to the owner exists.
+            return false;
+        }
+
         if (map is null || map.FindObject(player.Guid) is not null)
         {
             return false;
