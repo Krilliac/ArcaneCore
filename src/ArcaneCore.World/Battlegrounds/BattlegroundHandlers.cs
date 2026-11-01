@@ -205,7 +205,7 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
         Group? group = join.JoinAsGroup ? session.Services.GetService<SocialFeature>()?.Context.Groups.GetGroup(player.Guid) : null;
         IReadOnlyList<BattlegroundMember> members = group is null ? [] : feature.MembersOf(group);
         bool asGroup = join.JoinAsGroup && group is not null;
-        feature.Manager.JoinQueue(new BattlegroundJoinRequest(feature.MemberOf(player), type, join.InstanceId, asGroup, atPortal, members));
+        feature.RequestJoin(player, new BattlegroundJoinRequest(feature.MemberOf(player), type, join.InstanceId, asGroup, atPortal, members));
     }
 
     /// <summary>vmangos HandleBattleFieldPortOpcode (BattleGroundHandler.cpp:361-507): enter the invited match, or leave the queue.</summary>
@@ -216,7 +216,7 @@ public sealed class BattlegroundHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        feature.Manager.HandlePort(new BattlegroundPortRequest(player.Guid, port.MapId, port.Action, player.Level, feature.IsDeserter(player)));
+        feature.RequestPort(new BattlegroundPortRequest(player.Guid, port.MapId, port.Action, player.Level, feature.IsDeserter(player)));
     }
 
     /// <summary>vmangos HandleLeaveBattlefieldOpcode (BattleGroundHandler.cpp:509-525): not while in combat in a running match.</summary>
@@ -328,5 +328,14 @@ public sealed partial class BattlegroundFeature
     }
 
     /// <summary>The answer to CMSG_BATTLEFIELD_STATUS (vmangos HandleBattlefieldStatusOpcode): one status per occupied queue slot.</summary>
-    public void SendStatusReports(Player player) => _manager?.SendStatusReports(player.Guid, player.Level);
+    public void SendStatusReports(Player player)
+    {
+        if (_worker is { } worker)
+        {
+            worker.Poll(player.Guid, player.Level);
+            return;
+        }
+
+        _manager?.SendStatusReports(player.Guid, player.Level);
+    }
 }

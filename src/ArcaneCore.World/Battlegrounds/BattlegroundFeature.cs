@@ -59,6 +59,9 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
     private readonly System.Threading.Channels.Channel<Func<IBattlegroundEntryPointStore, Task>> _writes =
         System.Threading.Channels.Channel.CreateUnbounded<Func<IBattlegroundEntryPointStore, Task>>(new() { SingleReader = true });
     private BattlegroundManager? _manager;
+    private BattlegroundWorldHost? _host;
+    private BattlegroundClusterQueue? _cluster;
+    private BattlegroundWorkerClient? _worker;
     private WorldRuntime? _world;
     private Task? _writer;
 
@@ -115,7 +118,11 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             .ToDictionary(g => g.Key, g => (BattlegroundType)g.First().BattlegroundTypeId);
 
         var host = new BattlegroundWorldHost(this);
-        _manager = new BattlegroundManager(Options, host, host.BasePorts());
+        // The manager's host is the cluster queue wrapper: with no workers configured it hands everything to the local host unchanged.
+        _host = host;
+        _cluster = new BattlegroundClusterQueue(host, StoreEntryPointAt);
+        _manager = new BattlegroundManager(Options, _cluster, host.BasePorts());
+        _cluster.Bind(_manager);
         _writer = Task.Run(WriteLoopAsync);
 
         // Everything that needs the other features (they attach in type-name order, after this one): the first world command.
@@ -298,6 +305,7 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
 
         try
         {
+            _cluster?.Pump();
             manager.Update(diffMs);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -940,10 +948,146 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             LeaveBattlegroundRaid(player.Guid);
         }
 
+        if (_worker is { } worker)
+        {
+            worker.Logout(player.Guid);
+            return;
+        }
+
         manager.PlayerLoggedOut(player.Guid);
     }
 
-    private void OnPlayerLoggedIn(Player player) => _manager?.PlayerLoggedIn(player.Guid, player.Level);
+    private void OnPlayerLoggedIn(Player player)
+    {
+        if (_worker is { } worker)
+        {
+            worker.Login(MemberOf(player));
+            return;
+        }
+
+        _manager?.PlayerLoggedIn(player.Guid, player.Level);
+    }
+
+    // ------------------------------------------------------------------ cluster: queues behind the holder
+
+    /// <summary>
+    /// Make this node the holder of the battleground queues (the designated battleground worker): commands submitted through
+    /// <see cref="SubmitClusterCommand"/> run against its manager and notices for other workers' players leave through <paramref name="workers"/>.
+    /// World thread, before the first player queues.
+    /// </summary>
+    internal void ConfigureHolder(string localWorkerId, IBattlegroundWorkerLink workers)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(localWorkerId);
+        ArgumentNullException.ThrowIfNull(workers);
+        BattlegroundClusterQueue cluster = _cluster ?? throw new InvalidOperationException("the battleground feature is not attached");
+        cluster.LocalWorkerId = localWorkerId;
+        cluster.Workers = workers;
+    }
+
+    /// <summary>
+    /// Make this node a plain worker: its players' queue actions go to the holder over <paramref name="holder"/> and the holder's notices are applied
+    /// through <see cref="ReceiveNotice"/>; the local manager keeps no queue state. World thread.
+    /// </summary>
+    internal void ConfigureWorker(string localWorkerId, IBattlegroundHolderLink holder)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(localWorkerId);
+        ArgumentNullException.ThrowIfNull(holder);
+        _worker = new BattlegroundWorkerClient(localWorkerId, holder);
+    }
+
+    /// <summary>A worker's command arrived at the holder (any thread); it runs on the next world tick.</summary>
+    internal void SubmitClusterCommand(string workerId, BattlegroundCommand command)
+        => (_cluster ?? throw new InvalidOperationException("the battleground feature is not attached")).Submit(workerId, command);
+
+    /// <summary>The holder's notice arrived at this worker (any thread); it is applied on the world thread.</summary>
+    internal void ReceiveNotice(BattlegroundNotice notice)
+    {
+        ArgumentNullException.ThrowIfNull(notice);
+        World.Post(() => ApplyNotice(notice));
+    }
+
+    private void ApplyNotice(BattlegroundNotice notice)
+    {
+        BattlegroundWorldHost host = _host ?? throw new InvalidOperationException("the battleground feature is not attached");
+        switch (notice)
+        {
+            case BattlegroundStatusNotice n:
+                host.SendStatus(n.Player, n.QueueSlot, n.Subject, n.Status, n.Time1, n.Time2);
+                break;
+            case BattlegroundGroupJoinedNotice n:
+                host.SendGroupJoined(n.Player, n.Result);
+                break;
+            case BattlegroundJoinErrorNotice n:
+                host.SendJoinError(n.Player, n.Error);
+                break;
+            case BattlegroundQueueLimitNotice n:
+                host.GroupQueueLimitNotice(n.Player, n.Limit);
+                break;
+            case BattlegroundPrepareToPortNotice n:
+                host.PrepareToPortIn(n.Player);
+                break;
+            case BattlegroundEnterNotice n:
+                EnterRemoteMatch(n);
+                break;
+        }
+    }
+
+    /// <summary>
+    /// The holder says the player accepted: AFK goes and the player is teleported to the match's start location (vmangos <c>SendToBattleGround</c>,
+    /// BattleGroundMgr.cpp:1452-1473). The map belongs to the holder, so the teleport service hands it to the cluster far transfer.
+    /// </summary>
+    private void EnterRemoteMatch(BattlegroundEnterNotice notice)
+    {
+        if (World.FindOnlinePlayer(notice.Player) is not { } player)
+        {
+            return;
+        }
+
+        if (player.IsAfk)
+        {
+            player.ToggleAfk();
+        }
+
+        if (services.GetService<TeleportFeature>() is { } teleport
+            && !teleport.Teleports.TeleportTo(player, notice.MapId, notice.X, notice.Y, notice.Z, notice.Orientation))
+        {
+            _logger.LogWarning("could not teleport {Player} into battleground map {Map} instance {Instance}", player.Name, notice.MapId, notice.InstanceId);
+        }
+    }
+
+    /// <summary>A join request of a player of this node: the local manager, or the holder when this node is a worker.</summary>
+    internal void RequestJoin(Player player, BattlegroundJoinRequest request)
+    {
+        if (_worker is { } worker)
+        {
+            worker.Join(request, new BattlegroundEntryPoint(player.MapId, player.X, player.Y, player.Z, player.Orientation, player.ZoneId));
+            return;
+        }
+
+        Manager.JoinQueue(request);
+    }
+
+    /// <summary>An invitation answer or queue leave of a player of this node: the local manager, or the holder when this node is a worker.</summary>
+    internal void RequestPort(BattlegroundPortRequest request)
+    {
+        if (_worker is { } worker)
+        {
+            worker.Port(request);
+            return;
+        }
+
+        Manager.HandlePort(request);
+    }
+
+    private void StoreEntryPointAt(ObjectGuid member, BattlegroundEntryPoint point)
+    {
+        if (Invariant.Check(
+            !member.IsEmpty && float.IsFinite(point.X) && float.IsFinite(point.Y) && float.IsFinite(point.Z) && float.IsFinite(point.Orientation),
+            $"cannot store battleground entry point for {member} from ({point.X}, {point.Y}, {point.Z}, {point.Orientation})"))
+        {
+            _entryPoints[member] = point;
+        }
+    }
 
     /// <summary>
     /// vmangos Player::LoadFromDB (Player.cpp:14775-14788): a character saved on a battleground map is not in a match any more after a login,
