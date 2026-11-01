@@ -10,6 +10,7 @@ using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Items;
+using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
@@ -101,6 +102,13 @@ public sealed class ClusterOptions
     /// client creates), so a new character owns a persisted <c>item_instance</c> row. Null, the default, seeds nothing.
     /// </summary>
     public uint? StartingItemEntry { get; init; }
+
+    /// <summary>
+    /// When set, the world database gets the <c>map_template</c> row of the Deadmines (map 36, a dungeon), so the workers know the map: with an empty <c>map_template</c> a world
+    /// knows only the two continents (<c>MapRegistry.DefaultContinents</c>) and refuses any teleport to another map before it reaches the cluster. A non-empty table replaces
+    /// that default, so the two continent rows are seeded with it. False, the default, seeds nothing.
+    /// </summary>
+    public bool SeedDeadminesTemplate { get; init; }
 }
 
 /// <summary>One launched world worker.</summary>
@@ -421,6 +429,21 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                 await world.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             }
 
+            if (_options.SeedDeadminesTemplate)
+            {
+                // The values of the Data.Tests map_template case (MapDataModuleTests): a 10-player instance whose ghosts enter in Westfall. A non-empty map_template
+                // replaces MapRegistry.DefaultContinents, so the continents (common maps, ghost entrance -1, as the default rows) are seeded with it.
+                await using WorldDbContext world = await scope.ServiceProvider.GetRequiredService<IDbContextFactory<WorldDbContext>>().CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+                world.Set<MapTemplateRow>().AddRange(
+                    new MapTemplateRow { Entry = 0, MapType = 0, GhostEntranceMap = -1, MapName = "Eastern Kingdoms" },
+                    new MapTemplateRow { Entry = 1, MapType = 0, GhostEntranceMap = -1, MapName = "Kalimdor" },
+                    new MapTemplateRow
+                    {
+                        Entry = 36, Parent = 0, MapType = 1, PlayerLimit = 10, GhostEntranceMap = 0, GhostEntranceX = -11208.4f, GhostEntranceY = 1672.3f, MapName = "Deadmines",
+                    });
+                await world.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             AuthDbContext auth = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
             // The initializer seeds a row as Stopped (offline in the list). This fixture's row is unmanaged: State Unknown, no Offline flag,
             // so the realm list shows it online whatever the worker has reported yet.
@@ -603,13 +626,40 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         env[$"Database__{component}__ConnectionString"] = connection;
     }
 
+    // Fixture ports come from below every ephemeral range in use (Linux default 32768-60999, Windows 49152-65535; a CI node may narrow
+    // its range to a few thousand ports). A port the kernel hands out for bind(0) is itself ephemeral: between this probe and the child's
+    // bind, any outbound connection (each process's pooled database connections, a gateway's link retries) may take it as its local port,
+    // and the child then dies with "Address already in use". Below the ephemeral range only listeners compete, the probe sees them, and the
+    // per-process counter (from a random start, so concurrent test processes diverge) never hands one port out twice.
+    private const int PortRangeStart = 20000;
+    private const int PortRangeSize = 12000;
+    private static int s_nextPort = RandomNumberGenerator.GetInt32(PortRangeSize);
+
     private static int FreePort()
     {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
+        for (int attempt = 0; attempt < PortRangeSize; attempt++)
+        {
+            int port = PortRangeStart + (int)((uint)Interlocked.Increment(ref s_nextPort) % PortRangeSize);
+            if (CanListen(IPAddress.Any, port) && CanListen(IPAddress.Loopback, port))
+            {
+                return port;
+            }
+        }
+
+        throw new InvalidOperationException($"No free port in {PortRangeStart}-{PortRangeStart + PortRangeSize - 1}.");
+    }
+
+    private static bool CanListen(IPAddress address, int port)
+    {
+        var listener = new TcpListener(address, port);
         try
         {
-            return ((IPEndPoint)listener.LocalEndpoint).Port;
+            listener.Start();
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
         }
         finally
         {
@@ -639,7 +689,8 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     {
         foreach (ChildProcess child in _children)
         {
-            if (child.HasExited)
+            // A process the test killed on purpose (KillWorkerAsync, KillGatewayAsync) and has not restarted is expected to be gone.
+            if (child.HasExited && !child.KilledByTest)
             {
                 throw new InvalidOperationException($"Cluster process '{child.Name}' exited with code {child.ExitCode} before the test finished.{Environment.NewLine}{child.Tail()}");
             }
@@ -680,6 +731,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(index), "No worker with that index.");
         }
 
+        child.KilledByTest = true;
         await child.KillAsync().ConfigureAwait(false);
     }
 
@@ -708,7 +760,12 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     }
 
     /// <summary>Kill the gateway (and its process tree) without a graceful stop, as a crash would.</summary>
-    public Task KillGatewayAsync() => (_gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.")).KillAsync();
+    public Task KillGatewayAsync()
+    {
+        ChildProcess gateway = _gatewayProcess ?? throw new InvalidOperationException("The gateway was not started.");
+        gateway.KilledByTest = true;
+        return gateway.KillAsync();
+    }
 
     /// <summary>Starts the killed gateway again on its original port (without <see cref="ClusterOptions.FirstGatewayEnvironment"/>) and waits for its listener.</summary>
     public async Task RestartGatewayAsync(CancellationToken cancellationToken)
@@ -892,6 +949,9 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         }
 
         internal string Name { get; }
+
+        /// <summary>Set by the fixture before a deliberate crash kill, so its exit is not reported as an unexpected one.</summary>
+        internal bool KilledByTest { get; set; }
 
         private int _id;
         private bool _disposed;

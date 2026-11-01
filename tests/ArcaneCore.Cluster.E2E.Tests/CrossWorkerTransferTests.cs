@@ -35,6 +35,7 @@ public sealed class CrossWorkerTransferTests
     // The far-teleport router always submits target instance 0 and the gateway resolves that through the listed maps (an instanceable map outside every
     // list is refused as unassigned), so the instance worker lists map 36: a dungeon entry from the first worker has to cross.
     // The account is a game master: .go xyz is how a client starts a far teleport.
+    // The Deadmines map_template row is seeded: without it the workers know only the continents and .go refuses map 36 before any transfer.
     private static ClusterOptions Crossing() => new()
     {
         WorkerCount = 2,
@@ -43,6 +44,7 @@ public sealed class CrossWorkerTransferTests
         InstanceWorkerIndex = 1,
         Security = AccountSecurity.GameMaster,
         Transfers = true,
+        SeedDeadminesTemplate = true,
     };
 
     [PostgresClusterFact]
@@ -108,7 +110,9 @@ public sealed class CrossWorkerTransferTests
 
         await replacement.LogoutAsync(ct);
 
-        // No stale write from the old owner: the character row holds the new map after both sessions are gone.
+        // No stale write from the old owner: the character row holds the new map after both sessions are gone. SMSG_LOGOUT_COMPLETE only queues the final
+        // save, so the row is read once the claim is released, which happens only after the character's last write is durable.
+        Assert.True(await WaitForClaimReleasedAsync(cluster, guid, ct), "The logout must release the character's claim once its final save is durable.");
         Assert.Equal((long)KalimdorMap, await ReadCharacterMapAsync(cluster, guid, ct));
     }
 
@@ -145,6 +149,7 @@ public sealed class CrossWorkerTransferTests
 
         await session.LogoutAsync(ct);
         Assert.Single(await ReadDecisionsAsync(cluster, guid, ct));
+        Assert.True(await WaitForClaimReleasedAsync(cluster, guid, ct), "The logout must release the character's claim once its final save is durable.");
         Assert.Equal((long)DeadminesMap, await ReadCharacterMapAsync(cluster, guid, ct));
     }
 
@@ -286,6 +291,29 @@ public sealed class CrossWorkerTransferTests
             }
 
             await Task.Delay(250, ct);
+        }
+    }
+
+    /// <summary>
+    /// True once the character's owner row is gone: a logout releases the claim only after every queue holding the character's writes is durable
+    /// (CharacterClaimService.ScheduleRelease), so the final save is in the row by then. False if it is still there after 45 seconds.
+    /// </summary>
+    private static async Task<bool> WaitForClaimReleasedAsync(ClusterProcessFixture cluster, long guid, CancellationToken ct)
+    {
+        using var releaseCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        releaseCts.CancelAfter(TimeSpan.FromSeconds(45));
+        try
+        {
+            while (await ReadOwnerAsync(cluster, guid, releaseCts.Token) is not null)
+            {
+                await Task.Delay(100, releaseCts.Token);
+            }
+
+            return true;
+        }
+        catch (OperationCanceledException) when (releaseCts.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            return false;
         }
     }
 

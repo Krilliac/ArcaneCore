@@ -221,6 +221,9 @@ public sealed partial class WorldSession : IPlayerSession
 
     public SessionState State => _state;
 
+    /// <inheritdoc />
+    public bool IsDisconnected => _state == SessionState.Closed;
+
     /// <summary>World-handler packets queued for the world thread and not yet handled or dropped.</summary>
     public int QueuedWorldPackets => Volatile.Read(ref _queuedPackets);
 

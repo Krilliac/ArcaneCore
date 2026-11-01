@@ -390,6 +390,17 @@ public sealed class WorkerTransferSource(
             }
 
             persistence.ReleaseHold(suspension.CharacterId);
+
+            // The client left while the player was frozen (its gateway died, or the session was closed): the session's close found no player in the world and logged
+            // nobody out, so the restored player would stay online with nobody behind it and every later login of the character would be refused as a duplicate.
+            // Log it out now, after the hold is lifted so the logout snapshot is written and the claim release follows (the close's own posted removal, if it is still
+            // queued behind this command, then finds the player offline and does nothing).
+            if (suspension.Player.Session.IsDisconnected)
+            {
+                _logger.LogInformation("Character {CharacterGuid} resumed after an aborted transfer, but its session is closed; logging it out", suspension.Player.Guid.Value);
+                world.RemovePlayer(suspension.Player);
+            }
+
             return true;
         }, cancellationToken).ConfigureAwait(false);
     }

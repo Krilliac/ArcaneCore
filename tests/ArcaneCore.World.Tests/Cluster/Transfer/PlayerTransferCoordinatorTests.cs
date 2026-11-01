@@ -80,6 +80,14 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
 
         public Guid Incarnation { get; }
 
+        /// <summary>The worker scope the fake claims under (null: the realm-wide scope, as before).</summary>
+        public string? OwnershipScope { get; set; }
+
+        /// <summary>The incarnation after a simulated process restart; null while the process lives.</summary>
+        public Guid? RestartedIncarnation { get; set; }
+
+        public Task<Guid> CurrentIncarnationAsync(CancellationToken cancellationToken = default) => Task.FromResult(RestartedIncarnation ?? Incarnation);
+
         public bool RejectReservation { get; set; }
 
         public Action? OnDualActiveCheck { get; set; }
@@ -599,6 +607,62 @@ public sealed class PlayerTransferCoordinatorTests : IAsyncLifetime
 
         // Post-completion abort is still rejected
         Assert.False(await coordinator.TryAbortTransferAsync(request.TransferId, "after-complete"));
+    }
+
+    /// <summary>
+    /// Follow-up C18 (design _wf/handoff-control-DESIGN.md): the target restarted after the commit into its worker scope. Recovery rebinds the committed token to the target's
+    /// live incarnation before it activates, so the restarted target receives a token of its own incarnation (it refuses any other) and the transfer completes.
+    /// </summary>
+    [Fact]
+    public async Task RollForward_AfterTheTargetRestarted_RebindsTheCommittedTokenToItsLiveIncarnation()
+    {
+        var (mapTable, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, _) = await CreateFixtureAsync(durable: false);
+        targetWorker.OwnershipScope = "worker:kalimdor";
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ExecuteTransferAsync(
+                request,
+                afterStageHook: (stage, _, _) =>
+                {
+                    if (stage == PlayerTransferStage.CommitDecision)
+                    {
+                        targetWorker.SimulateTargetProcessRestartClearingMemory();
+                        targetWorker.RestartedIncarnation = Guid.NewGuid();
+                        throw new InvalidOperationException("simulated-target-crash-after-commit");
+                    }
+
+                    return Task.CompletedTask;
+                }));
+
+        TransferDecisionRecord committed = (await decisionStore.GetDecisionAsync(request.TransferId))!;
+        Assert.Equal("worker:kalimdor", committed.TargetOwnershipToken!.Scope);
+        Assert.Equal(targetWorker.Incarnation, committed.TargetOwnershipToken.Incarnation);
+
+        coordinator = new PlayerTransferCoordinator(mapTable, decisionStore, gateway, [sourceWorker], [targetWorker]);
+        TransferDecisionRecord recovered = await coordinator.RecoverTransferAsync(request.TransferId);
+
+        Assert.Equal(PlayerTransferDecisionState.Completed, recovered.DecisionState);
+        CharacterOwnershipToken held = targetWorker.GetHeldToken(request.CharacterGuid)!;
+        Assert.Equal(targetWorker.RestartedIncarnation, held.Incarnation);
+        Assert.Equal("worker:kalimdor", held.Scope);
+        Assert.True(held.Epoch > committed.TargetOwnershipToken.Epoch);
+        Assert.Equal(held, recovered.TargetOwnershipToken);
+        Assert.Equal(held, decisionStore.GetActiveOwnership(request.CharacterGuid));
+        Assert.Equal(held, gateway.RoutedOwnershipTokens[request.CharacterGuid]);
+    }
+
+    [Fact]
+    public async Task RollForward_WithTheTargetAlive_KeepsTheCommittedToken()
+    {
+        var (mapTable, decisionStore, gateway, sourceWorker, targetWorker, coordinator, request, _) = await CreateFixtureAsync(durable: false);
+        targetWorker.OwnershipScope = "worker:kalimdor";
+
+        PlayerTransferOutcome outcome = await coordinator.ExecuteTransferAsync(request);
+
+        Assert.True(outcome.Succeeded);
+        TransferDecisionRecord done = (await decisionStore.GetDecisionAsync(request.TransferId))!;
+        Assert.Equal(targetWorker.Incarnation, done.TargetOwnershipToken!.Incarnation);
+        Assert.Equal(done.TargetOwnershipToken, targetWorker.GetHeldToken(request.CharacterGuid));
     }
 
     [Theory]

@@ -117,12 +117,13 @@ public sealed class DeferredShadowLoadTests
     };
 
     /// <summary>The target as <c>WorkerTransferHosting</c> builds it: the production loader and entry, the session probe, and the acceptor's session-opened wiring.</summary>
-    private static (WorkerTransferTarget Target, CountingLoader Loader) NewTarget(Rig rig, bool deferred = true, int failFirstLoads = 0)
+    private static (WorkerTransferTarget Target, CountingLoader Loader) NewTarget(Rig rig, bool deferred = true, int failFirstLoads = 0, bool offline = false)
     {
         Func<PlayerTransferBundle, WorldSession?> sessions = AdoptedSession(rig.Acceptor);
         var loader = new CountingLoader(new CharacterHooksShadowLoader(sessions), failFirstLoads);
         var target = new WorkerTransferTarget(
-            Target, rig.Host.World, loader, new WorldSessionTransferEntry(), sessionReady: deferred ? bundle => sessions(bundle) is not null : null);
+            Target, rig.Host.World, loader, new WorldSessionTransferEntry(), sessionReady: deferred ? bundle => sessions(bundle) is not null : null,
+            offlineArrival: offline ? new CharacterStoreOfflineArrival(rig.Host.WorldServices.GetRequiredService<IServiceScopeFactory>()) : null);
         rig.Acceptor.SessionOpened += opened => target.OnSessionOpened(opened.AccountId);
         return (target, loader);
     }
@@ -267,6 +268,60 @@ public sealed class DeferredShadowLoadTests
         Assert.Equal(0, loader.Calls);
         Assert.Equal(0, target.ReservedCount);
         await Assert.ThrowsAsync<InvalidOperationException>(() => target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget));
+    }
+
+    /// <summary>
+    /// Design section 6 ("ActivateTargetPlayerAsync with no client must return without throwing"): the client's session never opened here (or closed) and the transfer is
+    /// committed. Before the offline arrival the activation failed with "no adopted session" on every recovery pass, forever; now the character arrives offline at the target.
+    /// </summary>
+    [Fact]
+    public async Task ACommittedTransferWhoseClientIsGone_ArrivesOffline_AtTheTargetPosition()
+    {
+        await using Rig rig = NewRig();
+        (int accountId, _, CharacterRecord character) = await NewCharacterAsync(rig.Host, "DEFERRED6", "Defersix");
+        (WorkerTransferTarget target, CountingLoader loader) = NewTarget(rig, offline: true);
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character);
+        ObjectGuid guid = new(bundle.CharacterGuid);
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget);
+
+        // After the commit, without the session: install (a no-op) and activate both return.
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget);
+        await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(Budget);
+
+        Assert.True(target.WasActivated(id));
+        Assert.Equal(0, target.ReservedCount);
+        Assert.Equal(0, loader.Calls);
+        Assert.False(rig.Host.World.IsOnline(guid));
+        CharacterRecord stored = (await rig.Host.Characters.GetByIdAsync(character.Id))!;
+        Assert.Equal(bundle.TargetMapId, stored.MapId);
+        Assert.Equal(bundle.TargetPosition.X, stored.X);
+        Assert.Equal(bundle.TargetPosition.Y, stored.Y);
+        Assert.Equal(bundle.TargetPosition.Z, stored.Z);
+        Assert.Equal(character.Level, stored.Level);
+
+        // A repeat (recovery hears of the activation late) writes nothing more and does not throw.
+        int saves = rig.Host.Characters.SaveCount;
+        await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(Budget);
+        Assert.Equal(saves, rig.Host.Characters.SaveCount);
+    }
+
+    [Fact]
+    public async Task WithoutTheOfflineArrival_AnActivationWithoutTheClient_StillFails()
+    {
+        await using Rig rig = NewRig();
+        (int accountId, _, CharacterRecord character) = await NewCharacterAsync(rig.Host, "DEFERRED7", "Deferseven");
+        (WorkerTransferTarget target, _) = NewTarget(rig, offline: false);
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character);
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() => target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(Budget));
+
+        Assert.Contains("no adopted session", error.Message);
+        Assert.False(target.WasActivated(id));
+        Assert.Equal(1, target.ReservedCount);
     }
 
     private sealed class CountingLoader(ITransferShadowLoader inner, int failFirst) : ITransferShadowLoader

@@ -164,6 +164,27 @@ public sealed class WorkerTransferSourceTests : IDisposable
         await _source.ResumeAfterAbortAsync(id, _player.Guid.Value, Token, "again"); // idempotent
     }
 
+    /// <summary>
+    /// The client's connection closed while the player was frozen (the gateway crashed mid-transfer). The close logged nobody out (the player was in no map), so before the
+    /// fix the abort put a player back online with nobody behind it, and every later login of the character waited for it to go offline and failed as a duplicate.
+    /// </summary>
+    [Fact]
+    public async Task Abort_AfterTheSessionClosedDuringTheTransfer_LogsTheRestoredPlayerOut()
+    {
+        Guid id = Guid.NewGuid();
+        await CaptureAsync(id);
+        _session.IsDisconnected = true;
+
+        await _source.ResumeAfterAbortAsync(id, _player.Guid.Value, Token, "gateway-recovery");
+
+        Assert.False(_world.IsOnline(_player.Guid));
+        Assert.Null(_player.Map);
+        Assert.Equal(1, _loggingOut); // the full logout ran once: its features saw the player leave
+        Assert.False(_queue.IsHeld(7));
+        Assert.False(_source.HoldsClaim(_player.Guid.Value));
+        Assert.True(_world.IsOnline(_other.Guid));
+    }
+
     [Fact]
     public async Task Abort_UnderADifferentCoordinatorToken_StillRestoresThePlayer()
     {
@@ -303,6 +324,7 @@ public sealed class WorkerTransferSourceTests : IDisposable
         public long SessionGeneration { get; } = generation;
         public int GossipCompletes => Volatile.Read(ref _gossipCompletes);
         public AccountSecurity Security => AccountSecurity.Player;
+        public bool IsDisconnected { get; set; }
 
         public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
         {

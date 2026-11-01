@@ -83,6 +83,45 @@ public sealed class CharacterClaimProviderTests : IAsyncLifetime
         Assert.Equal(b.Scope, (await store.MarkCompletedAsync(transfer)).TargetOwnershipToken!.Scope);
     }
 
+    /// <summary>
+    /// Follow-up C18 (design _wf/handoff-control-DESIGN.md): the target restarted after the commit, so the committed token names a dead incarnation the restarted target can
+    /// never write under. Rebinding moves the commit and the claim to the scope's live incarnation, only that one, and leaves the transfer completable.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task ACommittedTransfer_RebindsToTheRestartedTargetsLiveIncarnation_AndToNoOther(DatabaseProvider provider)
+    {
+        (ServiceProvider services, EfTransferDecisionStore store) = await OpenAsync(await _databases.CreateAsync(provider));
+        CharacterOwnershipToken a = await AcquireAsync(services, "a", 1);
+        CharacterOwnershipToken b = await AcquireAsync(services, "b", 30);
+        await store.TryClaimCharacterAsync(44, a);
+        Guid transfer = Guid.NewGuid();
+        await store.CreateReservationAsync(transfer, 44, 1, 1, NodeA, NodeB, 1, 0, 30, 0, a);
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.SuspendAndCapture, Bundle(transfer, 44, a));
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.InstallPassive);
+        await store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.StageWorldPort);
+        await store.CommitDecisionAsync(transfer, b.Incarnation, CancellationToken.None, b.Scope);
+
+        CharacterOwnershipToken restarted;
+        await using (AsyncServiceScope scope = services.CreateAsyncScope())
+        {
+            restarted = (await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().TryReclaimAsync(b, "node-b", Guid.NewGuid(), [30u]))!;
+        }
+
+        Assert.NotNull(restarted);
+        await Assert.ThrowsAsync<CharacterOwnershipRejectedException>(() => store.RebindCommittedTargetAsync(transfer, Guid.NewGuid()));
+
+        TransferDecisionRecord rebound = await store.RebindCommittedTargetAsync(transfer, restarted.Incarnation);
+        Assert.Equal(restarted, rebound.TargetOwnershipToken);
+        Assert.Equal(PlayerTransferDecisionState.Committed, rebound.DecisionState);
+        Assert.Equal(restarted, (await store.RebindCommittedTargetAsync(transfer, restarted.Incarnation)).TargetOwnershipToken); // the same incarnation again: unchanged
+        await WriteAsync(services, 44, restarted);
+        await Assert.ThrowsAsync<CharacterClaimRejectedException>(() => WriteAsync(services, 44, a));
+
+        Assert.Equal(restarted, (await store.MarkCompletedAsync(transfer)).TargetOwnershipToken);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.RebindCommittedTargetAsync(transfer, Guid.NewGuid()));
+    }
+
     [Theory]
     [MemberData(nameof(Providers))]
     public async Task ADeadShard_IsReapedAtLogin_OnlyWithAStaleHeartbeatAndAFreeLock(DatabaseProvider provider)
