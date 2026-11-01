@@ -121,13 +121,13 @@ public sealed partial class SummonService
                 return false; // a pet in corpse state can't be unsummoned by a call pet
             }
 
-            Unsummon(old);
+            Unsummon(old, PetUnsummonReason.Replaced);
             return true;
         }
 
         if (caster is Player && newEntry != 0)
         {
-            Unsummon(old);
+            Unsummon(old, PetUnsummonReason.Replaced);
             return true;
         }
 

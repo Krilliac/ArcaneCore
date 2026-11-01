@@ -381,6 +381,7 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     /// <summary>The pet command a class sends beside its chosen action (<see cref="PlayerbotClassRotation.PetCompanion"/>).</summary>
     private void CommandCompanionPet(Player player, SpellFeature feature, PlayerbotClassRotation rotation, RotationState view, RotationAction? chosen)
     {
+        PlayerbotPetControl.EnableHarmfulAutocast(session, player, feature.System); // Growl, Claw, Firebolt: a pet's spells start with autocast off
         if (rotation.PetCompanion(view, chosen) is { } pet) Execute(player, feature, pet);
     }
 
