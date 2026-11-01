@@ -16,8 +16,9 @@ namespace ArcaneCore.Game.Spells;
 /// removed).</item>
 /// </list>
 /// The taunt aura (SPELL_AURA_MOD_TAUNT) is <see cref="ThreatAuras"/>. A creature's static taunt immunity
-/// (CREATURE_IMMUNITY_TAUNT, Creature.cpp:444-448) has no provider on this base: <c>ICreatureImmunityProvider</c> carries mechanic and
-/// school masks only, so only immunity auras on the unit stop the effect.
+/// (CREATURE_IMMUNITY_TAUNT, Creature.cpp:444-448) is not checked in this handler: the importer turns <c>creature_template.immunity_flags</c>
+/// TAUNT into creature immunity rows (an Effect 114 row and a State 11 row), which <c>CreatureDataImmunities</c> serves through
+/// <c>ICreatureImmunityProvider.IsImmuneToEffect</c> before the effect runs. The other immunity_flags bits are not mapped.
 /// </summary>
 public sealed class ThreatEffects : ISpellHandlerModule
 {
