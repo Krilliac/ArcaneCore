@@ -16,6 +16,7 @@ using ArcaneCore.World;
 using ArcaneCore.World.Cluster.Control;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Handoff;
+using ArcaneCore.World.Cluster.Supervision;
 using ArcaneCore.World.Cluster.Tooling;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Commands;
@@ -55,7 +56,7 @@ public sealed class GatewayControlHardeningTests
         [
             (ControlReasonCode.None, 0), (ControlReasonCode.Unspecified, 1), (ControlReasonCode.NotHosted, 2), (ControlReasonCode.StandbyLink, 3),
             (ControlReasonCode.UnsupportedKind, 4), (ControlReasonCode.GatewayStopping, 5), (ControlReasonCode.NotATransferSlot, 6), (ControlReasonCode.SessionNotOpen, 7),
-            (ControlReasonCode.NoEligibleWorker, 8), (ControlReasonCode.TargetNotReady, 9), (ControlReasonCode.TargetAtCapacity, 10), (ControlReasonCode.SameWorker, 11),
+            (ControlReasonCode.NoEligibleWorker, 8), (ControlReasonCode.TargetNotReady, 9), (ControlReasonCode.Capacity, 10), (ControlReasonCode.SameWorker, 11),
             (ControlReasonCode.MultipleGateways, 12), (ControlReasonCode.WorkerUnreachable, 13), (ControlReasonCode.SlotBusy, 14), (ControlReasonCode.Unresolved, 15),
             (ControlReasonCode.AlreadyRunning, 16), (ControlReasonCode.GatewayFailure, 17), (ControlReasonCode.TransferAborted, 18),
             (ControlReasonCode.NotPermitted, 19), (ControlReasonCode.UnknownWorker, 20), (ControlReasonCode.InvalidRequest, 21),
@@ -67,7 +68,7 @@ public sealed class GatewayControlHardeningTests
     [Fact]
     public void ControlSubmitReply_CarriesTheCodeAsItsLastByte_GoldenBytes()
     {
-        byte[] frame = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(13, false, Op, "no", ControlReasonCode.TargetAtCapacity));
+        byte[] frame = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(13, false, Op, "no", ControlReasonCode.Capacity));
         byte[] expected = [31, .. BitConverter.GetBytes(13UL), 0, .. Op.ToByteArray(), 2, 0, 0, 0, (byte)'n', (byte)'o', 10];
         Assert.Equal(expected, frame);
     }
@@ -122,8 +123,8 @@ public sealed class GatewayControlHardeningTests
     [InlineData("no-eligible-worker", ControlReasonCode.NoEligibleWorker)]
     [InlineData("map-unassigned", ControlReasonCode.NoEligibleWorker)]
     [InlineData("instance-unbound", ControlReasonCode.NoEligibleWorker)]
-    [InlineData("worker-at-player-capacity", ControlReasonCode.TargetAtCapacity)]
-    [InlineData("worker-at-instance-capacity", ControlReasonCode.TargetAtCapacity)]
+    [InlineData("worker-at-player-capacity", ControlReasonCode.Capacity)]
+    [InlineData("worker-at-instance-capacity", ControlReasonCode.Capacity)]
     [InlineData("worker-not-ready", ControlReasonCode.TargetNotReady)]
     [InlineData("worker-draining", ControlReasonCode.TargetNotReady)]
     [InlineData("worker-unknown", ControlReasonCode.TargetNotReady)]
@@ -132,7 +133,7 @@ public sealed class GatewayControlHardeningTests
         => Assert.Equal(expected, GatewayTransferService.CodeOfPlacementFailure(failure));
 
     [Theory]
-    [InlineData("worker-at-player-capacity", ControlReasonCode.TargetAtCapacity)]
+    [InlineData("worker-at-player-capacity", ControlReasonCode.Capacity)]
     [InlineData("worker-not-ready", ControlReasonCode.TargetNotReady)]
     [InlineData("target-incarnation-changed", ControlReasonCode.TransferAborted)]
     [InlineData(null, ControlReasonCode.TransferAborted)]
@@ -252,6 +253,7 @@ public sealed class GatewayControlHardeningTests
         Assert.True(await rig.A.World.InvokeAsync(() => ClusterCommands.Restart(context, NodeA)));
         WorldFrame reply = await op.ReadSystemTextAsync("Cluster restart was not started", cts.Token);
         Assert.Contains("hosts no operator restart", Encoding.UTF8.GetString(reply.Payload));
+        context.Complete(); // the executor that ran the handler does this when it returns; the test invoked the handler directly
         await context.WhenSettled.WaitAsync(cts.Token);
     }
 
@@ -399,8 +401,7 @@ public sealed class GatewayControlHardeningTests
         Assert.True(view.PreviousConnected);
         Assert.True(view.PreviousSessions > 0);
         Assert.True(view.StillForwarding);
-        Assert.Null(view.KickReason);
-        Assert.Null(connection.KickReason);
+        Assert.Null(view.KickReason); // at the migration the session was still attached; the callback here moves nothing, so the link's disposal right after it detaches the session (the real callback re-homes it first)
     }
 
     // ------------------------------------------------------------------ helpers

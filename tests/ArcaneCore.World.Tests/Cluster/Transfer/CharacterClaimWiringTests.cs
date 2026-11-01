@@ -117,7 +117,10 @@ public sealed class CharacterClaimWiringTests
         {
             CharacterOwnershipToken a2 = await rig.AcquireWorkerAsync("a2", 2);
             (WorldTestClient client, int id) = await ConnectWithCharacterAsync(off, "CLAIMWIRE5", "Left");
-            await rig.Store.TryClaimCharacterAsync((ulong)id, a2);
+            // Each world host numbers characters from its own in-memory store, so this character has the id the previous section's login took over, and that world's
+            // shutdown kept b's claim (a claim still held when a world stops is taken over once its incarnation is dead, never deleted at shutdown). Drop it here so a2 holds it.
+            await rig.Store.ReleaseCharacterClaimAsync((ulong)id, b);
+            Assert.True((await rig.Store.TryClaimCharacterAsync((ulong)id, a2)).IsClaimed);
             Assert.True(await rig.HeartbeatAsync(a2, stale));
             var login = new PacketWriter(8);
             login.WriteUInt64((ulong)id);

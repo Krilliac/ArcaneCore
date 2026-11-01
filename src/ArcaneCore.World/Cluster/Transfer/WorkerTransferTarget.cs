@@ -670,7 +670,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 return false;
             }
 
-            if (online.CharacterOwnership == token)
+            if (online.CharacterOwnership is { } onlineToken && (onlineToken == token || onlineToken == PlayerTokenFor(token)))
             {
                 // A very late duplicate of a transfer whose id is no longer remembered: its character is already here under this very token.
                 ReleaseShadow(shadow);
@@ -696,8 +696,19 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             throw new InvalidOperationException($"worker '{_workerId}' has no teleport service attached");
         }
 
+        // The arrived player's snapshot token must be this world's own ownership token: the write fence verifies a snapshot's token against the scope's
+        // character_ownership row, and the claim check proves the claim row names this scope and incarnation (writer-lock design section 1b). The committed
+        // token names this scope and incarnation; a store that bumped only the per-character epoch (the in-memory store) is mapped back to the world's token here.
+        // A commit to another scope or incarnation (this worker restarted since) is never adopted: the character could not be written here.
+        if (PlayerTokenFor(token) is not { } playerToken)
+        {
+            slot.Activating = false;
+            throw new InvalidOperationException(
+                $"transfer '{slot.TransferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{_workerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
+        }
+
         TransferPosition at = bundle.TargetPosition;
-        shadow.CharacterOwnership = token;
+        shadow.CharacterOwnership = playerToken;
         // The claim moved to this worker with the commit: the activated player gets its own claim ticket, so its logout release is invalidated by any newer login's claim
         // (a quick relogin that claims before the posted release runs) exactly as for a character that logged in here.
         CharacterClaimService? claims = (shadow.Session as WorldSession)?.Services.GetService<CharacterClaimService>();
@@ -763,6 +774,21 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         {
             shadow.LoginTransportSeat = null;
         }
+    }
+
+    /// <summary>
+    /// The snapshot token an arrived player writes under for the committed <paramref name="committed"/>: this world's own ownership token when it names the same scope
+    /// and incarnation (whatever per-character epoch the store recorded), the committed token when this world has none (fencing off), and null when the commit names
+    /// another scope or incarnation (this worker cannot write the character).
+    /// </summary>
+    private CharacterOwnershipToken? PlayerTokenFor(CharacterOwnershipToken committed)
+    {
+        if (_world.CharacterOwnership is not { } own || own == committed)
+        {
+            return committed;
+        }
+
+        return string.Equals(own.Scope, committed.Scope, StringComparison.Ordinal) && own.Incarnation == committed.Incarnation ? own : null;
     }
 
     /// <summary>On the world thread: drops the instance this slot's reservation allocated when the activation ends without binding it (the held map would otherwise never unload). An instance somebody is bound to stays.</summary>

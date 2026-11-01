@@ -648,7 +648,7 @@ public sealed class GatewayTransferService : IHostedService, IAsyncDisposable, I
     internal static ControlReasonCode CodeOfPlacementFailure(string? failure) => failure switch
     {
         null => ControlReasonCode.NoEligibleWorker,
-        ClusterMapPlacementTable.FailureWorkerAtPlayerCapacity or ClusterMapPlacementTable.FailureWorkerAtInstanceCapacity => ControlReasonCode.TargetAtCapacity,
+        ClusterMapPlacementTable.FailureWorkerAtPlayerCapacity or ClusterMapPlacementTable.FailureWorkerAtInstanceCapacity => ControlReasonCode.Capacity,
         ClusterMapPlacementTable.FailureWorkerNotReady or ClusterMapPlacementTable.FailureWorkerDraining or ClusterMapPlacementTable.FailureWorkerUnknown => ControlReasonCode.TargetNotReady,
         ClusterMapPlacementTable.FailureNoEligibleWorker or ClusterMapPlacementTable.FailureMapUnassigned or ClusterMapPlacementTable.FailureInstanceUnbound
             or ClusterMapPlacementTable.FailureInvalidInstanceId => ControlReasonCode.NoEligibleWorker,

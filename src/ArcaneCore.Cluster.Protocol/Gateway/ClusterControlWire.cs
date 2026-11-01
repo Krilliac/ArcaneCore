@@ -125,7 +125,7 @@ public enum ControlReasonCode : byte
     TargetNotReady = 9,
 
     /// <summary>The target worker is at its player or instance capacity (the retail "instance full" case).</summary>
-    TargetAtCapacity = 10,
+    Capacity = 10,
 
     /// <summary>The source and the target are the same worker.</summary>
     SameWorker = 11,
@@ -280,7 +280,7 @@ public sealed record ControlNotice(
     ControlNoticeKind Kind, long SessionGeneration, int AccountId, ulong CharacterGuid, Guid OperationId, ControlNoticeOutcome Outcome, string Text, ControlReasonCode Code = ControlReasonCode.None);
 
 /// <summary>
-/// Encoding of the unified control frames (<see cref="GatewayWorkerFrameType.ControlRequest"/> to <see cref="GatewayWorkerFrameType.ControlNotice"/>, contract 6):
+/// Encoding of the unified control frames (<see cref="GatewayWorkerFrameType.ControlRequest"/> to <see cref="GatewayWorkerFrameType.ControlNotice"/>, contract 5):
 /// the conventions of <see cref="GatewayTransferWire"/> (little-endian fixed fields, Guid as 16 bytes, text as an int32 length plus UTF-8 of at most
 /// <see cref="GatewaySessionWire.MaxTextBytes"/> bytes, the type byte first). The one addition is a length-prefixed byte block for the Suspend bundle
 /// (at most <see cref="MaxBundleBytes"/>). Booleans are exactly 0 or 1, enums must be defined, positions finite and epochs not negative. Every decoder

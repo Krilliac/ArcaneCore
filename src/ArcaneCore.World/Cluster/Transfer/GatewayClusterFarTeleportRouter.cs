@@ -23,8 +23,11 @@ namespace ArcaneCore.World.Cluster.Transfer;
 /// <item><description>Which worker owns the target map is the gateway's decision (its map router); the request names only the map, with instance 0 (the target worker allocates an instance id at <c>Reserve</c> for an instanced
 /// map, orchestrator decision Q8). The source worker id the gateway journals is the slot node id of the link the request arrives on, so no worker id travels in the frame.</description></item>
 /// <item><description>A refusal or an abort arrives later (<see cref="OnSubmitReply"/>, <see cref="OnNotice"/>, on the link's receive loop) and is shown to the player on the world thread. Question Q9: retail answers a
-/// full map with <c>SMSG_TRANSFER_ABORTED</c> reason <c>TRANSFER_ABORT_MAX_PLAYERS</c> (vmangos Map.cpp:2133-2138, <c>Map::CanEnter</c>); that packet is sent when the gateway's text names a capacity limit. No retail reason fits
-/// "no worker owns the map", "the transfer was aborted" or "a transfer is already running", so those are a system chat line only (a documented gap against retail, orchestrator decision Q9).</description></item>
+/// full map with <c>SMSG_TRANSFER_ABORTED</c> reason <c>TRANSFER_ABORT_MAX_PLAYERS</c> (vmangos Map.cpp:2123-2138, <c>DungeonMap::CanEnter</c>; cmangos-classic Player.cpp:20055-20062 <c>GetAreaTriggerLockStatus</c> returns
+/// <c>AREA_LOCKSTATUS_INSTANCE_IS_FULL</c>, which Player.cpp:18182-18183 sends as <c>TRANSFER_ABORT_MAX_PLAYERS</c>; cmangos-classic has no <c>DungeonMap::CanEnter</c>, the check lives in the player). That packet is sent when
+/// the gateway's structured <see cref="ControlReasonCode"/> is <see cref="ControlReasonCode.Capacity"/>; the free text is never parsed. No retail reason fits "no worker owns the map", "the transfer was aborted" or "a
+/// transfer is already running", so those are a generic system chat line only (a documented gap against retail, orchestrator decision Q9). The player never sees the gateway's text, which carries node ids, account ids, session
+/// generations and exception text: it goes to the log only.</description></item>
 /// <item><description>The in-flight table is bounded by <see cref="InFlightExpiry"/>: a gateway that died never sends its notice, and the character must be able to try again.</description></item>
 /// </list>
 /// Thread affinity: <see cref="TryBeginTransfer"/> runs on the world thread; the sink methods run on a link's receive loop and only touch the lock-guarded table and <see cref="WorldRuntime.Post"/>.
@@ -182,7 +185,7 @@ public sealed class GatewayClusterFarTeleportRouter : IClusterFarTeleportRouter,
             }
         }
 
-        Tell(character, reply.Reason);
+        Tell(character, reply.Code, reply.Reason);
     }
 
     /// <inheritdoc />
@@ -205,7 +208,7 @@ public sealed class GatewayClusterFarTeleportRouter : IClusterFarTeleportRouter,
 
         if (notice.Outcome != ControlNoticeOutcome.Completed)
         {
-            Tell(notice.CharacterGuid, notice.Text);
+            Tell(notice.CharacterGuid, notice.Code, notice.Text);
         }
     }
 
@@ -251,13 +254,13 @@ public sealed class GatewayClusterFarTeleportRouter : IClusterFarTeleportRouter,
         }
     }
 
-    /// <summary>Whether a gateway text names a capacity limit (the placement failures <c>worker-at-player-capacity</c> and <c>worker-at-instance-capacity</c>).</summary>
-    internal static bool NamesCapacity(string text) => text.Contains("capacity", StringComparison.OrdinalIgnoreCase);
+    /// <summary>The only line a player sees for a refused or aborted far teleport.</summary>
+    internal const string PlayerFailureText = "The teleport could not be completed.";
 
-    // The player may be gone by now (logged out, or retired by a completed transfer): nothing is sent then. Runs on the world thread.
-    private void Tell(ulong character, string reason)
+    // The gateway's text goes to the log only. The player may be gone by now (logged out, or retired by a completed transfer): nothing is sent then. Runs on the world thread.
+    private void Tell(ulong character, ControlReasonCode code, string detail)
     {
-        string text = string.IsNullOrWhiteSpace(reason) ? "the teleport could not be completed" : reason;
+        _logger.LogInformation("far teleport of character {Character} did not happen: code={Code} detail={Detail}", character, code, detail);
         _world.Post(() =>
         {
             if (_world.FindOnlinePlayer(new ObjectGuid(character)) is not { } player)
@@ -265,12 +268,12 @@ public sealed class GatewayClusterFarTeleportRouter : IClusterFarTeleportRouter,
                 return;
             }
 
-            if (NamesCapacity(text))
+            if (code == ControlReasonCode.Capacity)
             {
                 player.Session.Send(WorldOpcode.SmsgTransferAborted, TeleportPackets.BuildTransferAborted(TransferAbortReason.MaxPlayers));
             }
 
-            player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage("Teleport failed: " + text));
+            player.Session.Send(WorldOpcode.SmsgMessagechat, ChatPackets.BuildSystemMessage(PlayerFailureText));
         });
     }
 }

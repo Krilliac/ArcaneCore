@@ -101,17 +101,17 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
     }
 
     [Fact]
-    public void ContractVersion6_RefusesAVersion5Peer_AtAdmission()
+    public void ContractVersion5_RefusesAVersion4Peer_AtAdmission()
     {
         ClusterNodeManifest worker = GatewayLinkManifest.Create(ClusterRole.Worker, "worker", Guid.NewGuid(), 1, "dev", 1, 1);
         ClusterNodeManifest gateway = GatewayLinkManifest.Create(ClusterRole.Gateway, "gw", Guid.NewGuid(), 1, "dev", 1, 1);
-        Assert.Equal(6, GatewayLinkManifest.ContractVersion);
-        Assert.Equal(6, gateway.ContractVersion);
+        Assert.Equal(5, GatewayLinkManifest.ContractVersion);
+        Assert.Equal(5, gateway.ContractVersion);
         Assert.True(worker.TryAdmit(gateway, out _));
-        Assert.False(worker.TryAdmit(gateway with { ContractVersion = 5 }, out string? reason));
+        Assert.False(worker.TryAdmit(gateway with { ContractVersion = 4 }, out string? reason));
         Assert.Contains("contract version mismatch", reason);
-        Assert.Contains("v5", reason);
-        Assert.False(gateway.TryAdmit(worker with { ContractVersion = 5 }, out _));
+        Assert.Contains("v4", reason);
+        Assert.False(gateway.TryAdmit(worker with { ContractVersion = 4 }, out _));
     }
 
     // ------------------------------------------------------------------ golden bytes
@@ -296,6 +296,39 @@ public sealed class ClusterControlWireTests : IAsyncLifetime
         Assert.Equal(
             Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [2], [1, 0, 0, 0], "x"u8.ToArray(), [0]),
             frame);
+    }
+
+    [Fact]
+    public void ControlReasonCode_ValuesArePinned()
+    {
+        Assert.Equal(Enumerable.Range(0, 22).ToArray(), Values<ControlReasonCode>());
+    }
+
+    [Fact]
+    public void ControlSubmitReply_AndNotice_CarryTheReasonCode_GoldenBytes()
+    {
+        byte[] reply = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(13, false, Op, "no", ControlReasonCode.Capacity));
+        Assert.Equal(Concat([31], [13, 0, 0, 0, 0, 0, 0, 0], [0], Op.ToByteArray(), [2, 0, 0, 0], "no"u8.ToArray(), [10]), reply);
+        byte[] notice = ClusterControlWire.EncodeNotice(
+            new ControlNotice(ControlNoticeKind.TransferOutcome, 5, 7, 9, Op, ControlNoticeOutcome.Refused, "x", ControlReasonCode.NoEligibleWorker));
+        Assert.Equal(
+            Concat([32], [2], [5, 0, 0, 0, 0, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0, 0, 0, 0, 0], Op.ToByteArray(), [3], [1, 0, 0, 0], "x"u8.ToArray(), [8]),
+            notice);
+        Assert.Equal(ControlReasonCode.Capacity, ClusterControlWire.DecodeSubmitReply(reply.AsSpan(1)).Code);
+        Assert.Equal(ControlReasonCode.NoEligibleWorker, ClusterControlWire.DecodeNotice(notice.AsSpan(1)).Code);
+    }
+
+    [Fact]
+    public void ReasonCode_UnknownValue_IsRefusedOnEncodeAndDecode()
+    {
+        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(1, false, Op, "", (ControlReasonCode)99)));
+        Assert.Throws<ArgumentException>(() => ClusterControlWire.EncodeNotice(new ControlNotice(ControlNoticeKind.OperatorText, 1, 1, 1, Op, ControlNoticeOutcome.None, "", (ControlReasonCode)99)));
+        byte[] reply = ClusterControlWire.EncodeSubmitReply(new ControlSubmitReply(1, false, Op, ""))[1..];
+        reply[^1] = 99;
+        Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeSubmitReply(reply));
+        byte[] notice = ClusterControlWire.EncodeNotice(new ControlNotice(ControlNoticeKind.OperatorText, 1, 2, 3, Op, ControlNoticeOutcome.None, ""))[1..];
+        notice[^1] = 99;
+        Assert.Throws<InvalidDataException>(() => ClusterControlWire.DecodeNotice(notice));
     }
 
     // ------------------------------------------------------------------ round trips

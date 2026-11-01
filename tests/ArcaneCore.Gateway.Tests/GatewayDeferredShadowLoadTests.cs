@@ -15,6 +15,7 @@ using ArcaneCore.World.Cluster.Control;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -59,6 +60,31 @@ public sealed class GatewayDeferredShadowLoadTests
         await TransferCluster.WaitUntilAsync(async () => await cluster.Kalimdor.World.InvokeAsync(() => cluster.Kalimdor.World.FindOnlinePlayer(guid) is null), cts.Token);
         Assert.Contains(cluster.EastWorker.Acceptor!.Sessions.Values, remote => remote.Session.AccountId == request.AccountId);
         Assert.Equal(0, cluster.Gateway.Transfers.StagedCount);
+
+        // Exactly one writer after the commit: the target's save of the arrived player lands under the target world's own token, and a save the source still
+        // holds for the character is refused by the database (the claim moved) without halting the source's queue. The logout and shutdown saves of the
+        // arrived player run at disposal, where any refusal fails the test.
+        int id = checked((int)guid.Low);
+        CharacterState arrived = await cluster.Eastern.World.InvokeAsync(
+            () => cluster.Eastern.World.FindOnlinePlayer(guid)!.CreateSnapshot(cluster.Eastern.World.NowMs), cts.Token);
+        Assert.Equal(cluster.Eastern.World.CharacterOwnership, arrived.Ownership);
+        CharacterSaveQueue eastSaves = cluster.Eastern.Services.GetRequiredService<CharacterSaveQueue>();
+        eastSaves.Enqueue(arrived with { X = Landing.X + 3f });
+        await eastSaves.FlushCharacterAsync(id, cts.Token);
+        Assert.Null(eastSaves.TerminalFailure);
+        Assert.Empty(eastSaves.RetainedCharacters);
+        CharacterRecord afterTarget = (await cluster.StoredCharacterAsync(id, cts.Token))!;
+        Assert.Equal(0u, afterTarget.MapId);
+        Assert.Equal(Landing.X + 3f, afterTarget.X);
+
+        CharacterSaveQueue kalimdorSaves = cluster.Kalimdor.Services.GetRequiredService<CharacterSaveQueue>();
+        kalimdorSaves.Enqueue(new CharacterState(id, 1, 1, 100f, 100f, 50f, 0f, 1, 0, Ownership: cluster.Kalimdor.World.CharacterOwnership));
+        await kalimdorSaves.FlushCharacterAsync(id, cts.Token);
+        Assert.Null(kalimdorSaves.TerminalFailure);
+        Assert.Empty(kalimdorSaves.RetainedCharacters);
+        CharacterRecord afterSource = (await cluster.StoredCharacterAsync(id, cts.Token))!;
+        Assert.Equal(0u, afterSource.MapId);
+        Assert.Equal(Landing.X + 3f, afterSource.X);
     }
 
     [Fact]
@@ -247,25 +273,13 @@ public sealed class GatewayDeferredShadowLoadTests
             await KalimdorWorker.StopAsync(CancellationToken.None);
             await EastWorker.StopAsync(CancellationToken.None);
             await Kalimdor.DisposeAsync();
-            try
-            {
-                await Eastern.DisposeAsync();
-            }
-            catch (AggregateException ex) when (Leaves(ex).All(leaf => leaf is CharacterOwnershipRejectedException))
-            {
-                // KNOWN GAP (reported, not hidden here): the arrived player carries the transfer's per-character token (scope worker:w-east, epoch 2) and the save queue verifies a snapshot's token
-                // against the scope ownership row (epoch 1), so its final save at shutdown is refused. The transfer itself has completed and been asserted by then.
-            }
+            await Eastern.DisposeAsync(); // the arrived player's shutdown save runs here: a refusal fails the test
         }
 
-        private static IEnumerable<Exception> Leaves(Exception ex)
+        public async Task<CharacterRecord?> StoredCharacterAsync(int id, CancellationToken token)
         {
-            if (ex is AggregateException aggregate)
-            {
-                return aggregate.InnerExceptions.SelectMany(Leaves);
-            }
-
-            return ex.InnerException is { } inner ? Leaves(inner) : [ex];
+            await using AsyncServiceScope scope = Eastern.Services.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<ICharacterStore>().GetByIdAsync(id, token);
         }
 
         public static async Task WaitUntilAsync(Func<Task<bool>> condition, CancellationToken token)
