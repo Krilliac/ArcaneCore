@@ -122,7 +122,7 @@ public sealed class GameObjectLootEmptyAnomalyTests
     {
         // The row is 100% and its item is known, but nobody passes condition 71, so an empty bag is correct.
         Rig rig = CreateRig(7_101_004, 9004, Row(9004, ItemTestData.ToughJerky, 100, condition: 71));
-        rig.Loot.Conditions = (_, _) => false;
+        rig.Loot.Conditions = (_, _, _) => false;
         Player player = rig.Join(7104);
         using AnomalyCapture cap = CaptureFor(7_101_004);
 

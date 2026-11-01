@@ -85,12 +85,20 @@ public sealed class MapStageGates
         IEnumerable<string> stages = Enum.GetValues<MapStage>().Where(s => !_stageGated[(int)s]).Select(s => s.ToString());
         string overrides = (_ungated.Count > 0 ? " ungated by config: " + string.Join(",", _ungated) : string.Empty)
             + (_gated.Count > 0 ? " gated by config: " + string.Join(",", _gated) : string.Empty);
-        return "ungated stages: " + string.Join(",", stages) + "; updaters by [MapAccess(MapLocal)]" + overrides;
+        return "ungated stages: " + string.Join(",", stages) + "; updaters by [MapAccess(MapLocal)]" + overrides
+            + (_ungated.Contains(nameof(MapBotThinkStage)) ? "; " + nameof(MapBotThinkStage) + " stays gated (no bot action queue yet)" : string.Empty);
     }
+
+    /// <summary>
+    /// Updaters that no configuration may run outside the gate. <see cref="MapBotThinkStage"/>: a bot's think reaches every world feature and the
+    /// feature's own tables (the probe, the budgets, the cadence), and the per-session action queue that would make that safe on a map thread
+    /// (design 3.4, "Bots") does not exist yet; World:Parallel:Ungated naming it is ignored.
+    /// </summary>
+    private static readonly string[] NeverUngated = [nameof(MapBotThinkStage)];
 
     private bool Decide(string name, MapAccess codeDefault)
     {
-        if (_gateAll || _gated.Contains(name))
+        if (_gateAll || _gated.Contains(name) || Array.IndexOf(NeverUngated, name) >= 0)
         {
             return true;
         }

@@ -12,7 +12,7 @@ public static class SmartAreaTrigger
 {
     /// <summary>
     /// Run the rows of <paramref name="triggerId"/> for <paramref name="player"/>. True when a script ran (AzerothCore then ends the packet handler
-    /// before quest exploration, tavern and teleport; ArcaneCore's listener seam cannot, a documented deviation); false when there was none to run.
+    /// before quest exploration, tavern and teleport; <c>SmartAreaTriggerFeature</c> passes this on as an <c>IAreaTriggerPreemptor</c>); false when there was none to run.
     /// </summary>
     public static bool Run(SmartScriptCatalog catalog, Player player, uint triggerId)
     {

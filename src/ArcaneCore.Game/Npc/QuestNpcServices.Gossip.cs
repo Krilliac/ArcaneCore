@@ -163,16 +163,21 @@ public sealed partial class QuestNpcServices
 
     /// <summary>
     /// The creature AI's hello hook runs last, after the menu is sent, as AzerothCore does (HandleGossipHelloOpcode, NPCHandler.cpp: OnGossipHello,
-    /// PrepareGossipMenu, SendPreparedGossip, then unit->AI()->sGossipHello). A spirit guide never reaches it there (the battleground spirit guide
-    /// branch returns first), so a spirit guide skips it here too.
+    /// PrepareGossipMenu, SendPreparedGossip, then unit->AI()->sGossipHello). Only a battleground spirit guide skips it: that is the branch which
+    /// returns first there (it sends the area spirit-healer query and nothing else). A creature flagged as a spirit guide on any other map is an
+    /// ordinary gossip NPC and runs its AI hook.
     /// </summary>
     private void RaiseGossipHelloAi(Player player, NpcInfo npc)
     {
-        if ((npc.NpcFlags & NpcFlags.SpiritGuide) == 0)
+        if (!IsBattlegroundSpiritGuide(player, npc))
         {
             RaiseCreatureAiHook(player, npc, "npc.gossip-hello-ai", ai => ai.OnGossipHello(player));
         }
     }
+
+    /// <summary>A spirit-guide-flagged creature on a battleground map (the only place the battleground spirit guide handler applies).</summary>
+    private static bool IsBattlegroundSpiritGuide(Player player, NpcInfo npc)
+        => (npc.NpcFlags & NpcFlags.SpiritGuide) != 0 && player.Map?.Template is { IsBattleground: true };
 
     /// <summary>
     /// Runs a creature AI gossip hook (AzerothCore CreatureAI::sGossipHello / sGossipSelect). A fault is recorded once in the

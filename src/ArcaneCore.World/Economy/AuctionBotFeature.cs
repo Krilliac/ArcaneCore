@@ -599,7 +599,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
 
         Dictionary<uint, AuctionRecord> open = economy.OpenAuctions(houseId).ToDictionary(v => v.Auction.Id, v => v.Auction);
         int started = 0;
-        foreach (AuctionBotBuyIntent intent in planner.PlanBuy(open.Values, _items.Templates.Find))
+        foreach (AuctionBotPlannedBuy intent in planner.PlanBuy(open.Values, _items.Templates.Find))
         {
             if (!Invariant.Check(open.TryGetValue(intent.AuctionId, out AuctionRecord? auction) && intent.Price > 0,
                 $"AuctionBotFeature.Buy: invalid buy intent for auction {intent.AuctionId} price {intent.Price}") || auction is null)

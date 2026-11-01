@@ -266,7 +266,7 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
                         ClusterNodeManifest peer = DeserializeManifest(body.Span);
                         bool admitted = _workerManifest.TryAdmit(peer, out string? reason);
                         conn.Admitted = admitted;
-                        byte[] ack = BuildHelloAckFrame(admitted, reason ?? string.Empty);
+                        byte[] ack = BuildHelloAckFrame(admitted, reason ?? string.Empty, _workerManifest.OwnedMaps, _workerManifest.AllowInstanceMaps);
                         await conn.SendChannel.Writer.WriteAsync(ack, ct).ConfigureAwait(false);
                         if (!admitted)
                         {
@@ -540,15 +540,59 @@ public sealed class LoopbackGatewayWorkerHost : IAsyncDisposable
             allowInstanceMaps);
     }
 
-    internal static byte[] BuildHelloAckFrame(bool accepted, string reason)
+    /// <summary>
+    /// The worker's answer to a HelloRegister. After the reason it appends (like the HelloRegister manifest does) the worker's own owned map list and instance
+    /// allowance, so the gateway can build its map-to-worker table; a reader of the original layout stops after the reason, and an ack without the tail reads as
+    /// "owns every map".
+    /// </summary>
+    internal static byte[] BuildHelloAckFrame(bool accepted, string reason, string ownedMaps = "", bool allowInstanceMaps = true)
     {
         byte[] reasonBytes = Encoding.UTF8.GetBytes(reason);
-        byte[] buf = new byte[1 + 1 + 4 + reasonBytes.Length];
+        byte[] ownedBytes = Encoding.UTF8.GetBytes(ownedMaps ?? string.Empty);
+        byte[] buf = new byte[1 + 1 + 4 + reasonBytes.Length + 4 + ownedBytes.Length + 1];
         buf[0] = (byte)GatewayWorkerFrameType.HelloAck;
         buf[1] = accepted ? (byte)1 : (byte)0;
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(2, 4), reasonBytes.Length);
         reasonBytes.CopyTo(buf.AsSpan(6));
+        int offset = 6 + reasonBytes.Length;
+        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(offset, 4), ownedBytes.Length);
+        offset += 4;
+        ownedBytes.CopyTo(buf.AsSpan(offset));
+        offset += ownedBytes.Length;
+        buf[offset] = allowInstanceMaps ? (byte)1 : (byte)0;
         return buf;
+    }
+
+    /// <summary>
+    /// Reads the owned map tail of a HelloAck body (the bytes after the frame type). False when the ack carries none (an older worker) or the tail is
+    /// malformed; the caller then keeps whatever it was configured with.
+    /// </summary>
+    internal static bool TryReadHelloAckOwnedMaps(ReadOnlySpan<byte> body, out string ownedMaps, out bool allowInstanceMaps)
+    {
+        ownedMaps = string.Empty;
+        allowInstanceMaps = true;
+        if (body.Length < 5)
+        {
+            return false;
+        }
+
+        int reasonLength = BinaryPrimitives.ReadInt32LittleEndian(body.Slice(1, 4));
+        int offset = 5 + reasonLength;
+        if (reasonLength < 0 || offset < 5 || body.Length - offset < 5)
+        {
+            return false;
+        }
+
+        int ownedLength = BinaryPrimitives.ReadInt32LittleEndian(body.Slice(offset, 4));
+        offset += 4;
+        if (ownedLength < 0 || ownedLength > body.Length - offset - 1)
+        {
+            return false;
+        }
+
+        ownedMaps = Encoding.UTF8.GetString(body.Slice(offset, ownedLength));
+        allowInstanceMaps = body[offset + ownedLength] != 0;
+        return true;
     }
 
     internal static byte[] BuildAttachReplyFrame(long reqId, ClusterSessionAttachResult result)

@@ -48,6 +48,9 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     private volatile ConnectionState _state = ConnectionState.Connected;
     // True from sending SMSG_NEW_WORLD until the read loop parses the client's MSG_MOVE_WORLDPORT_ACK: bad-header diagnostics only.
     private volatile bool _worldportPending;
+
+    /// <summary>The gateway clock reading when the frame being dispatched was fully read. Written and read by the read loop only.</summary>
+    private uint _packetReceivedMs;
     private GatewaySessionLinkClient? _link;
     private long _generation;
     private int _accountId;
@@ -183,6 +186,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             }
 
             deadline.Disarm();
+            _packetReceivedMs = (uint)Clock.Milliseconds(); // stamped on the frame, forwarded to the worker for the movement anticheat
             ArcaneCore.Kernel.Ops.Metrics.ArcaneMeters.PacketIn(header.Length + payload.Length);
             WorldOpcode opcode = _protocol.Opcodes.FromWire(rawOpcode);
             trail.Record(opcode, header.Length + payload.Length, Clock.Milliseconds(), cipherEngaged);
@@ -244,7 +248,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
 
     private bool Forward(WorldOpcode opcode, byte[] payload)
     {
-        if (_link is { } link && link.SendClientPacket(SessionGeneration, opcode, payload))
+        if (_link is { } link && link.SendClientPacket(SessionGeneration, opcode, payload, _packetReceivedMs))
         {
             GatewayMeters.CountForwarded(_server.Options.NodeId, "to_worker", payload.Length);
             return true;

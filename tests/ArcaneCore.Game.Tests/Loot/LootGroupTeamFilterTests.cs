@@ -178,7 +178,7 @@ public sealed class LootServiceTeamPrefilterTests
         return new LootService(new LootContent(rows, []), random: new Random(seed))
         {
             Items = ItemStore,
-            Conditions = perViewer ?? ((player, id) => evaluator.IsSatisfied(id, player, null)),
+            Conditions = (player, _, id) => perViewer is null ? evaluator.IsSatisfied(id, player, null) : perViewer(player, id),
             ConditionRules = () => evaluator,
         };
     }

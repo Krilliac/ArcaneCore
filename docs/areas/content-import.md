@@ -443,7 +443,9 @@ feature reads:
   are). Inside one transaction it empties and refills, only when the inputs carry them: `world_safe_locs` and `game_graveyard_zone`
   (`WorldSafeLocs.dbc` in `--dbc-dir` adds the ids the dump lacks; a dump row keeps its facing, which the DBC does not have), the four
   battleground tables, `creature_equip_template` and `creature_template.EquipmentTemplateId` (world 56, `CreatureDumpImporter.RefreshEquipmentAsync`),
-  `exploration_basexp` and `game_weather`, `areatrigger_tavern` (`AreaTriggerTavernDumpImporter`), `transports`
+  `exploration_basexp` and `game_weather` (`WorldStateDumpImporter`, which reads only the one-line plain `INSERT INTO `table` VALUES (...)` form: a dump whose
+  INSERT for either table names a column list or uses `INSERT IGNORE` or `REPLACE` is refused with an `InvalidDataException` naming the line, in `import` and in `refresh`,
+  instead of being read as if the table were absent), `areatrigger_tavern` (`AreaTriggerTavernDumpImporter`), `transports`
   (`TransportDumpImporter`; a cmangos row has no build and gets 0), `spell_proc_event` (build 5875; `--cooldown-unit auto` reads the
   classic-db core revision from `db_version`: seconds before z2829, milliseconds from it, refused when the dump names none), the relay DB
   scripts, the quest, gossip and event DB scripts and `script_waypoint` (world 42, `DbScriptDumpImporter.ReplaceAsync`: it also sets

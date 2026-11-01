@@ -42,6 +42,12 @@ public sealed class GatewayOptions
     /// </summary>
     public List<GatewayWorkerEntry> Workers { get; set; } = [];
 
+    /// <summary>
+    /// Node id of the worker new sessions open on (it must name a <see cref="Workers"/> entry, or <see cref="LegacyWorkerNodeId"/> in single-worker mode). While it is
+    /// down, sessions open on the ready link with the fewest sessions. Empty, the default, designates none: sessions always spread over the ready links.
+    /// </summary>
+    public string LoginWorker { get; set; } = string.Empty;
+
     /// <summary>Node id given to the entry made from <see cref="WorkerAddress"/> and <see cref="WorkerPort"/>.</summary>
     public const string LegacyWorkerNodeId = "worker";
 
@@ -172,6 +178,11 @@ public sealed class GatewayOptions
             {
                 problems.Add($"{SectionName}:WorkerPort: must be 1..{IPEndPoint.MaxPort}.");
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(LoginWorker) && !EffectiveWorkers().Any(entry => string.Equals(entry?.NodeId, LoginWorker, StringComparison.Ordinal)))
+        {
+            problems.Add($"{SectionName}:LoginWorker: '{LoginWorker}' names no worker entry.");
         }
 
         if (LinkRetryDelay < TimeSpan.Zero)

@@ -256,6 +256,73 @@ public sealed class GatewayEndToEndTests
     }
 
     [Fact]
+    public async Task LoginWorker_TakesTheSessions_RoutesFollowItsAnnouncementAndLinkState_AndLoginFallsBackWhenItIsLost()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using SyntheticArcaneServer server = await SyntheticArcaneServer.StartAsync(cts.Token);
+        GatewayWorkerEndpoint workerA = await StartWorkerAsync(server, 0, cts.Token);
+        GatewayWorkerEndpoint workerB = await StartWorkerAsync(server, 0, cts.Token, ownedMaps: "1,30-40");
+        GatewayServer gateway = CreateGateway(server, new GatewayOptions
+        {
+            Workers =
+            [
+                new GatewayWorkerEntry { NodeId = "w-a", Address = IPAddress.Loopback.ToString(), Port = workerA.Host!.BoundEndPoint.Port, Maps = [0] },
+                new GatewayWorkerEntry { NodeId = "w-b", Address = IPAddress.Loopback.ToString(), Port = workerB.Host!.BoundEndPoint.Port, Maps = [1] },
+            ],
+            LoginWorker = "w-b",
+        });
+        await gateway.StartAsync(cts.Token);
+        bool bStopped = false;
+        try
+        {
+            await gateway.WaitForAllLinksAsync(cts.Token);
+
+            // Registration fed the table: both ready, and w-b's rows come from its announcement (maps 30-40 are in no static list).
+            Assert.All(gateway.Routes.Snapshot(), row => Assert.True(row.Ready));
+            Assert.False(Assert.Single(gateway.Routes.Snapshot(), row => row.NodeId == "w-a").FromAnnouncement);
+            Assert.True(Assert.Single(gateway.Routes.Snapshot(), row => row.NodeId == "w-b").FromAnnouncement);
+            Assert.True(gateway.Routes.TryResolve(35, 0, out string owner));
+            Assert.Equal("w-b", owner);
+            Assert.True(gateway.Routes.TryResolve(0, 0, out owner));
+            Assert.Equal("w-a", owner);
+            Assert.True(gateway.Routes.TryGetLoginWorker(out string loginNode));
+            Assert.Equal("w-b", loginNode);
+
+            // Two sessions both open on the login worker although the other link has fewer sessions.
+            await server.AddAccountAsync("LOGINONE", "PASSWORD", cts.Token);
+            await server.AddAccountAsync("LOGINTWO", "PASSWORD", cts.Token);
+            await server.AddAccountAsync("LOGINTHREE", "PASSWORD", cts.Token);
+            await using WorldClient first = await LoginAsync(server, gateway, "LOGINONE", cts.Token);
+            await using WorldClient second = await LoginAsync(server, gateway, "LOGINTWO", cts.Token);
+            await WaitUntilAsync(() => Task.FromResult(workerB.Acceptor!.Sessions.Count == 2), cts.Token);
+            Assert.Equal(0, workerA.Acceptor!.Sessions.Count);
+            Assert.Equal(2, gateway.Workers[1].Link!.SessionCount);
+            Assert.Equal(0, gateway.Workers[0].Link!.SessionCount);
+
+            // The login worker is lost: its row goes not-ready, so nothing resolves to it, and the next login lands on the other link.
+            await workerB.StopAsync(CancellationToken.None);
+            bStopped = true;
+            await WaitUntilAsync(() => Task.FromResult(!Assert.Single(gateway.Routes.Snapshot(), row => row.NodeId == "w-b").Ready), cts.Token);
+            Assert.True(Assert.Single(gateway.Routes.Snapshot(), row => row.NodeId == "w-a").Ready);
+            Assert.False(gateway.Routes.TryResolve(35, 0, out _));
+            Assert.False(gateway.Routes.TryGetLoginWorker(out _));
+
+            await using WorldClient third = await LoginAsync(server, gateway, "LOGINTHREE", cts.Token);
+            await WaitUntilAsync(() => Task.FromResult(workerA.Acceptor!.Sessions.Count == 1), cts.Token);
+        }
+        finally
+        {
+            await gateway.StopAsync(CancellationToken.None);
+            gateway.Dispose();
+            await workerA.StopAsync(CancellationToken.None);
+            if (!bStopped)
+            {
+                await workerB.StopAsync(CancellationToken.None);
+            }
+        }
+    }
+
+    [Fact]
     public async Task WorkerThatIsDown_DoesNotBlockLoginsOnTheOtherWorker()
     {
         using var cts = new CancellationTokenSource(Deadline);
@@ -367,12 +434,12 @@ public sealed class GatewayEndToEndTests
             server.Services.GetRequiredService<ILoggerFactory>());
     }
 
-    private static async Task<GatewayWorkerEndpoint> StartWorkerAsync(SyntheticArcaneServer server, int port, CancellationToken token)
+    private static async Task<GatewayWorkerEndpoint> StartWorkerAsync(SyntheticArcaneServer server, int port, CancellationToken token, string ownedMaps = "")
     {
         IServiceProvider services = server.Services;
         var endpoint = new GatewayWorkerEndpoint(
             services.GetRequiredService<IServiceScopeFactory>(),
-            Options.Create(new GatewayWorkerOptions { Enabled = true, Port = port, LinkSecret = Stack.Secret, VersionsFromDatabase = false }),
+            Options.Create(new GatewayWorkerOptions { Enabled = true, Port = port, LinkSecret = Stack.Secret, OwnedMaps = ownedMaps }),
             services.GetRequiredService<IOptions<WorldSessionOptions>>(),
             services.GetRequiredService<OpcodeTable>(),
             server.World,

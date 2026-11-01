@@ -35,7 +35,8 @@ public sealed partial class WorldSession
     private uint _remoteBuild;
     private byte[]? _remoteSessionKey;
 
-    private readonly record struct RemoteInbound(WorldOpcode Opcode, byte[] Payload);
+    /// <summary>One client opcode from the gateway; <paramref name="ReceivedMs"/> is the gateway receive time on this worker's clock, or null to stamp on arrival here.</summary>
+    private readonly record struct RemoteInbound(WorldOpcode Opcode, byte[] Payload, uint? ReceivedMs = null);
 
     /// <summary>True for a session fed by a gateway instead of a socket.</summary>
     internal bool IsRemote => _remoteOutput is not null;
@@ -165,9 +166,9 @@ public sealed partial class WorldSession
     /// Hand one client opcode to the session (the link's receive loop). Never blocks: a session whose backlog is over its bound
     /// is kicked, as a socket session over World:MaxQueuedWorldPackets is.
     /// </summary>
-    internal void DeliverRemote(WorldOpcode opcode, byte[] payload)
+    internal void DeliverRemote(WorldOpcode opcode, byte[] payload, uint? receivedMs = null)
     {
-        if (_remoteInbound is not { } inbound || inbound.Writer.TryWrite(new RemoteInbound(opcode, payload)))
+        if (_remoteInbound is not { } inbound || inbound.Writer.TryWrite(new RemoteInbound(opcode, payload, receivedMs)))
         {
             return;
         }
@@ -216,7 +217,7 @@ public sealed partial class WorldSession
                 }
 
                 CapturePacket(true, packet.Opcode, packet.Payload);
-                if (!await DispatchFromClientAsync(packet.Opcode, packet.Payload, linked.Token).ConfigureAwait(false))
+                if (!await DispatchFromClientAsync(packet.Opcode, packet.Payload, linked.Token, packet.ReceivedMs).ConfigureAwait(false))
                 {
                     break;
                 }

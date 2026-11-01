@@ -67,6 +67,8 @@ public sealed class RemoteWorldSession : IGatewayRemoteSession
 
     public void Deliver(WorldOpcode opcode, byte[] payload) => _session.DeliverRemote(opcode, payload);
 
+    public void Deliver(WorldOpcode opcode, byte[] payload, uint receivedMs) => _session.DeliverRemote(opcode, payload, receivedMs);
+
     public void CloseFromGateway(ClusterSessionDetachReason reason)
     {
         if (Interlocked.Exchange(ref _started, 1) == 0)

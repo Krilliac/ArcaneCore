@@ -40,11 +40,7 @@ public sealed class MoltenCoreTargetModule : ISpellHandlerModule
         float radius = effect.Radius > 0 ? effect.Radius : cast.Spell.Range.Max;
         // Spell::CheckScriptTargeting: an entry search with the 50000 yd "anywhere" range looks 200 yd around the caster.
         if (nearest && radius >= 50000f) radius = 200f;
-        float Distance(Unit target)
-        {
-            float dx = target.X - cast.Caster.X, dy = target.Y - cast.Caster.Y, dz = target.Z - cast.Caster.Z;
-            return dx * dx + dy * dy + dz * dz;
-        }
+        float Distance(Unit target) => WorldGeometry.DistanceSq3D(target, cast.Caster);
         IEnumerable<Unit> targets = creatures.Creatures.Cast<Unit>().Concat(raid.Instance.Players)
             .Where(u => u.IsAlive && (entries.Length == 0 || u is Creature c && entries.Contains(c.Entry))
                 && Distance(u) <= MathF.Pow(radius + u.BoundingRadius + cast.Caster.BoundingRadius, 2));

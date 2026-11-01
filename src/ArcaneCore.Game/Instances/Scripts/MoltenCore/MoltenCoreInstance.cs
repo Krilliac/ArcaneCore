@@ -37,8 +37,7 @@ public sealed class MoltenCoreInstance(Map map) : ScriptedInstance(map, 10)
             if (Instance.FindObject(holder.CasterGuid) is not Unit { IsAlive: true } caster) continue;
             Unit target = holder.Target;
             float radius = holder.Spell.Effects[0].Radius + caster.BoundingRadius + target.BoundingRadius;
-            float dx = caster.X - target.X, dy = caster.Y - target.Y, dz = caster.Z - target.Z;
-            if (target.IsAlive && dx * dx + dy * dy + dz * dz > radius * radius)
+            if (target.IsAlive && WorldGeometry.DistanceSq3D(caster, target) > radius * radius)
                 entry.System.CastSpell(target, holder.Spell.Id == 21094 ? 21095u : 23492u, SpellCastTargets.ForSelf(), triggered: true);
         }
     }
