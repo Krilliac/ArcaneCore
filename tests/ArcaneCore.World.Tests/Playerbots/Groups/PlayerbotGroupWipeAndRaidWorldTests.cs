@@ -66,7 +66,7 @@ public sealed class PlayerbotGroupWipeAndRaidWorldTests : PlayerbotGroupWorldTes
     [Fact]
     public async Task ARaidQuest_ForSix_TheLeaderConvertsToARaid_AndSpreadsTheRolesOverTheSubgroups()
     {
-        await using GroupTestWorld world = await GroupTestWorld.StartAsync([RaidQuest]);
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([RaidQuest], questLevel: 20);
         var tank = await world.AddBotAsync("Raidtank", Human, Warrior, 20, [Taunt]);
         var healer = await world.AddBotAsync("Raidprie", Human, Priest, 20, [LesserHeal, Smite]);
         await world.AddBotAsync("Raidmage", Human, Mage, 20, [Fireball]);

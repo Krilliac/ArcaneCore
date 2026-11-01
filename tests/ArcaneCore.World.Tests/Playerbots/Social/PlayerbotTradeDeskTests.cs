@@ -230,7 +230,7 @@ public sealed class PlayerbotTradeDeskTests
             {
                 Player bot = HelpTestKit.Online(World, BotName);
                 PlayerbotMovementControl.Stop(PartyTestHost.Feature(World.Host).FindSession(Bot)!, bot);
-                bot.Inventory.Load([]);
+                bot.Inventory.DestroyItemCount(DealEntry, uint.MaxValue); // Load([]) only places rows and leaves the bags as they are: the stacks, and the 3 the bot split off, would stay and merge with the next AddItem
                 Player other = HelpTestKit.Online(World, player);
                 other.Inventory.Load([]);
                 other.Money = money;
@@ -478,7 +478,7 @@ public sealed class PlayerbotTradeDeskTests
             var driven = new List<PlayerbotDealStep>();
             for (int i = 0; i < PlayerbotTradeDesk.MaxSplits; i++)
             {
-                bot.Inventory.Load([]);
+                bot.Inventory.DestroyItemCount(DealEntry, uint.MaxValue); // Load([]) only places rows and leaves the bags as they are: the stacks, and the 3 the bot split off, would stay and merge with the next AddItem
                 TradeSide botSide = scene.Economy.TradeOf(bot)!.SideOf(bot);
                 for (int slot = 0; slot < TradeRules.SlotCount; slot++) botSide[slot] = default; // trade-slot guids the bot's own drive may have set would dangle after the reload
                 botSide.Gold = 0;
