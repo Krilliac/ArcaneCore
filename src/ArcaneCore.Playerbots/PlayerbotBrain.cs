@@ -230,7 +230,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private Func<int, int, bool>? _exploreBlockedFilter;
     private uint _exploreSearchAfter;
     private long _exploreSearchStartedAt;
-    private int _exploreCandidateChecks;
+    private PlayerbotExploreAtlas.FindCursor? _exploreFindCursor;
+    private uint _exploreFindBegunAt;
+    private Func<bool>? _exploreFindOutOfBudget;
     private long _thinkStartedAt;
     private PlayerbotGoalKind _goal = PlayerbotGoalKind.Explore;
     private PlayerbotGoalKind? _planningGoal;
@@ -1789,8 +1791,16 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             PlayerbotAnomalies.Report(player, "brain", "dead-end-pin",
                 string.Create(CultureInfo.InvariantCulture,
                     $"stalled {pinStalls} times within {PlayerbotStallWatch.PinCellYards:F0} yd of here; giving up goal {_goal} target {TargetEntry} quest {QuestId} did not free it"));
-            if (CanShareDeadEndPin(player) && ReportWorldPin(player, now) is { } newPin)
+            if (DeadEndPinShareBlock(player) is { } blocked)
+            {
+                // Live 2026-10 (audit cid 44): 53 bots pinned one placement point and no world pin formed, and the two rules that keep a pin
+                // from being shared (the area flags, the cut-region exemption) could not be told apart from the logs. Say which one held it back.
+                PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin-unshared", $"this bot's dead-end pin is not shared with the world: {blocked}", AnomalySeverity.Info);
+            }
+            else if (ReportWorldPin(player, now) is { } newPin)
+            {
                 PlayerbotAnomalies.Report(player, "brain", "world-dead-end-pin", $"several bots dead-end-pinned the same cell; every bot avoids it: {newPin}");
+            }
         }
         else if (worldPin)
         {
@@ -1918,12 +1928,25 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// stalls are the instance's) and outside a capital or city, where bots crowd round quest givers and vendors and stall for reasons that
     /// say nothing about the ground. Fails closed when the area table is missing.
     /// </summary>
-    private bool CanShareDeadEndPin(Player player)
+    private bool CanShareDeadEndPin(Player player) => DeadEndPinShareBlock(player) is null;
+
+    /// <summary>
+    /// Why this bot's dead-end pin may not count towards a world pin, or null when it may: the area rule (<see cref="DeadEndPinAreaBlock"/>)
+    /// first, then the cut-region exemption (<see cref="PlayerbotNavigation.IsCutRegion"/>), described with the zone, area, region and its
+    /// polygon count so the two can be told apart from the anomaly log.
+    /// </summary>
+    private string? DeadEndPinShareBlock(Player player)
     {
-        if (player.Map is not { } map || map.Template is not { } template || template.Instanceable) return false;
+        if (player.Map is not { } map || map.Template is not { } template) return "no map template";
         ArcaneCore.Game.Maps.Terrain.AreaTable areas = ArcaneCore.Game.Maps.Templates.WorldMaps.Of(_session.World).Areas;
         uint area = player.ZoneId == 0 ? 0 : map.GetZoneAndAreaId(player.X, player.Y, player.Z).AreaId;
-        return CanShareDeadEndPin(template, areas, player.ZoneId, area);
+        if (DeadEndPinAreaBlock(template, areas, player.ZoneId, area) is { } areaBlock)
+            return string.Create(CultureInfo.InvariantCulture, $"{areaBlock} (zone {player.ZoneId}, area {area})");
+        PlayerbotNavigation.TryRegionAt(player, new System.Numerics.Vector3(player.X, player.Y, player.Z), out ArcaneCore.Game.Maps.Collision.MMaps.NavRegionGraph? graph, out int region);
+        if (PlayerbotNavigation.IsCutRegion(graph, region, _options.CutRegionMaxPolygons))
+            return string.Create(CultureInfo.InvariantCulture,
+                $"cut region {region} of {graph!.RegionPolygons(region)} polygons (zone {player.ZoneId}, area {area}, at most {_options.CutRegionMaxPolygons} polygons are exempt)");
+        return null;
     }
 
     /// <summary>Tell the world this bot dead-end-pinned its cell, unless the cell is a cut region (<see cref="PlayerbotStallWatch.ReportDeadEndPin"/>). The region lookup runs only for a bot that may share.</summary>
@@ -1939,12 +1962,23 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// (<c>Capital</c>, <c>City</c>, <c>SlaveCapital</c>, <c>SlaveCapital2</c>), so Goldshire, Sentinel Hill or Booty Bay inside an open zone do not pin.
     /// </summary>
     internal static bool CanShareDeadEndPin(ArcaneCore.Kernel.WorldData.MapTemplate? template, ArcaneCore.Game.Maps.Terrain.AreaTable areas, uint zoneId, uint areaId)
+        => DeadEndPinAreaBlock(template, areas, zoneId, areaId) is null;
+
+    /// <summary>
+    /// The area rule of <see cref="CanShareDeadEndPin(ArcaneCore.Kernel.WorldData.MapTemplate?, ArcaneCore.Game.Maps.Terrain.AreaTable, uint, uint)"/> with its
+    /// reason: null when the pin may be shared, otherwise which input refused it (no template, an instanced map, an unknown zone, a town zone, a town sub-area).
+    /// </summary>
+    internal static string? DeadEndPinAreaBlock(ArcaneCore.Kernel.WorldData.MapTemplate? template, ArcaneCore.Game.Maps.Terrain.AreaTable areas, uint zoneId, uint areaId)
     {
-        if (template is null || template.Instanceable || zoneId == 0 || areas.GetById(zoneId) is not { } zone) return false;
+        if (template is null) return "no map template";
+        if (template.Instanceable) return "instanced map";
+        if (zoneId == 0) return "no zone";
+        if (areas.GetById(zoneId) is not { } zone) return "zone missing from the area table";
         const uint townFlags = (uint)(ArcaneCore.Game.WorldState.Zones.AreaFlags.Capital | ArcaneCore.Game.WorldState.Zones.AreaFlags.City
             | ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital | ArcaneCore.Game.WorldState.Zones.AreaFlags.SlaveCapital2);
-        if ((zone.Flags & townFlags) != 0) return false;
-        return areaId == 0 || areas.GetById(areaId) is not { } area || (area.Flags & townFlags) == 0;
+        if ((zone.Flags & townFlags) != 0) return "zone flagged as a capital or city";
+        if (areaId != 0 && areas.GetById(areaId) is { } area && (area.Flags & townFlags) != 0) return "sub-area flagged as a capital, city or town";
+        return null;
     }
 
     /// <summary>
@@ -4207,11 +4241,28 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreFactionFilter ??= ExploreAttackableFaction;
             _exploreThreatFilter ??= ExploreHostileFaction;
             _exploreBlockedFilter ??= ExploreBlocked;
-            _exploreSearchStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-            _exploreCandidateChecks = 0;
+            _exploreSearchStartedAt = PlayerbotThinkProbe.Timestamp();
+            // The search is sliced (ExploreFindSliceChecks spawns, ExploreFindSliceMs, the think's optional budget): a slice that
+            // runs out leaves the walk in the cursor and this think wanders; the next think resumes from the next cell. A cursor left
+            // by a bot that changed map or level, moved on, or searched for too long is dropped and the search begins again.
+            var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
+            if (_exploreFindCursor is { } held
+                && (held.SearchMap != mapId || held.SearchLevel != player.Level
+                    || unchecked(now - _exploreFindBegunAt) > ExploreFindMaxAgeMs
+                    || System.Numerics.Vector3.DistanceSquared(held.SearchFrom, from) > PlayerbotExploreAtlas.CellYards * PlayerbotExploreAtlas.CellYards))
+                _exploreFindCursor = null;
+            if (_exploreFindCursor is null)
+            {
+                _exploreFindCursor = new PlayerbotExploreAtlas.FindCursor();
+                _exploreFindBegunAt = now;
+            }
             PlayerbotThinkProbe.Phase("explore atlas find");
-            _exploreCandidate = atlas.Find(mapId, player.Level, new(player.X, player.Y, player.Z), _exploreEligibleFilter,
-                _exploreBlockedFilter, out _, _exploreFactionFilter);
+            PlayerbotExploreAtlas.FindStatus found = atlas.FindStep(_exploreFindCursor, mapId, player.Level, from, _exploreEligibleFilter,
+                _exploreBlockedFilter, ExploreFindSliceChecks, _exploreFindOutOfBudget ??= ExploreFindOutOfBudget,
+                out PlayerbotExploreAtlas.Candidate? foundCandidate, out _, _exploreFactionFilter);
+            if (found == PlayerbotExploreAtlas.FindStatus.Pending) return false;
+            _exploreFindCursor = null;
+            _exploreCandidate = foundCandidate;
             if (_exploreCandidate is null)
             {
                 _exploreSearchAfter = unchecked(now + 5_000u);
@@ -4278,6 +4329,19 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>The wait for navigation tiles still being read (<see cref="PlanOutcome.Pending"/>), shared by the plans this brain makes.</summary>
     private TileWait _tileWait;
 
+    /// <summary>The spawns one slice of the explore atlas find checks at most (<see cref="PlayerbotExploreAtlas.FindStep"/>), to the end of the cell it is in.</summary>
+    internal const int ExploreFindSliceChecks = 96;
+
+    /// <summary>The milliseconds one slice of the explore atlas find runs at most (read after each occupied cell). The unbounded search took 635 ms in one think (audit evidence).</summary>
+    internal const double ExploreFindSliceMs = 4.0;
+
+    /// <summary>How long a resumable explore find may stay unfinished (world milliseconds) before it begins again: the eligibility inputs (hazards, suspensions, blocked cells) have moved on.</summary>
+    internal const uint ExploreFindMaxAgeMs = 20_000;
+
+    /// <summary>Whether the running slice of the explore find has used its time or the think its optional budget.</summary>
+    private bool ExploreFindOutOfBudget()
+        => !HasOptionalThinkBudget(15.0) || PlayerbotThinkProbe.MsSince(_exploreSearchStartedAt) >= ExploreFindSliceMs;
+
     private bool ExploreBlocked(int x, int y)
         => _exploreBlockedCells.ContainsKey((_exploreSearchMap, x, y));
 
@@ -4341,9 +4405,6 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             || _exploreSearchContent is not { } content
             || _exploreSearchAtlas is not { } atlas
             || _exploreThreatFilter is not { } threatFilter)
-            return false;
-        if (++_exploreCandidateChecks > 24
-            && (!HasOptionalThinkBudget(15.0) || System.Diagnostics.Stopwatch.GetElapsedTime(_exploreSearchStartedAt).TotalMilliseconds >= 12.0))
             return false;
         CreatureSpawn spawn = candidate.Spawn;
         uint now = _session.World.NowMs;

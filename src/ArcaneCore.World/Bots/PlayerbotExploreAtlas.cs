@@ -190,24 +190,106 @@ public sealed class PlayerbotExploreAtlas
     }
 
     /// <summary>
+    /// The state of one resumable <see cref="Find"/> search (<see cref="FindStep"/>): where the ring walk stands and the best candidate of
+    /// the ring under way. One cursor per search; owned by the caller and used on one thread (the world thread). The search measures
+    /// distances from the point it began at and is dropped by the caller when the bot, map or level it was begun for changes.
+    /// </summary>
+    public sealed class FindCursor
+    {
+        internal bool Started;
+        internal uint Map;
+        internal uint Level;
+        internal Vector3 From;
+        internal int CentreX, CentreY, Ring, X, Y;
+        internal Candidate? Best;
+        internal float BestDistance;
+
+        /// <summary>The point the search was begun at.</summary>
+        public Vector3 SearchFrom => From;
+
+        /// <summary>The map the search was begun on.</summary>
+        public uint SearchMap => Map;
+
+        /// <summary>The level the search was begun for.</summary>
+        public uint SearchLevel => Level;
+
+        /// <summary>The ring (0 = the bot's own cell) the walk has reached.</summary>
+        public int CurrentRing => Ring;
+    }
+
+    /// <summary>How <see cref="FindStep"/> ended.</summary>
+    public enum FindStatus : byte
+    {
+        /// <summary>A candidate was found (the nearest of the first ring that held an eligible one); the cursor is spent.</summary>
+        Found,
+
+        /// <summary>Every ring up to <see cref="MaxRing"/> was searched and none held an eligible candidate; the cursor is spent.</summary>
+        Exhausted,
+
+        /// <summary>The budget ran out first: call <see cref="FindStep"/> again with the same cursor to resume where it stopped.</summary>
+        Pending,
+    }
+
+    /// <summary>
     /// One bounded spatial search. At most (2*MaxRing+1)^2 dictionary probes and 64 spawn checks per occupied cell;
     /// adding thousands of spawns to one cell does not add think-time work. The eligibility callback checks current faction,
     /// spawn gate, home and hazard state. The caller tests one route, then sets a refused or exhausted cell aside.
+    /// This runs the whole search in one call; <see cref="FindStep"/> is the same search in budgeted slices.
     /// </summary>
     public Candidate? Find(uint map, uint level, Vector3 from, Func<Candidate, bool> eligible,
         Func<int, int, bool> blocked, out int examined, Func<uint, bool>? factionEligible = null)
     {
+        var cursor = new FindCursor();
+        FindStatus status = FindStep(cursor, map, level, from, eligible, blocked, int.MaxValue, null, out Candidate? found, out examined, factionEligible);
+        return status == FindStatus.Found ? found : null;
+    }
+
+    /// <summary>
+    /// <see cref="Find"/> in slices: it works until <paramref name="maxExamined"/> spawns have been checked in this call or
+    /// <paramref name="outOfBudget"/> (read after each occupied cell; null: never) says stop, then returns <see cref="FindStatus.Pending"/>
+    /// with <paramref name="cursor"/> holding the walk, and the next call with the same cursor carries on from the next cell. At least one
+    /// occupied cell is searched per call, so repeated calls always finish. A slice ends only between cells, so it overruns
+    /// <paramref name="maxExamined"/> by at most one cell (64 spawns per faction sample list, <see cref="MaxFactionsPerCell"/> factions).
+    /// The answer is the one <see cref="Find"/> gives for the same state: the cell order, the ring rule and the nearest-of-ring rule are
+    /// unchanged. <paramref name="examined"/> is this call's count. A fresh cursor begins a search at <paramref name="from"/>; on a resumed
+    /// cursor <paramref name="map"/>, <paramref name="level"/> and <paramref name="from"/> are ignored (the search keeps those it began with).
+    /// </summary>
+    public FindStatus FindStep(FindCursor cursor, uint map, uint level, Vector3 from, Func<Candidate, bool> eligible,
+        Func<int, int, bool> blocked, int maxExamined, Func<bool>? outOfBudget, out Candidate? found, out int examined,
+        Func<uint, bool>? factionEligible = null)
+    {
+        ArgumentNullException.ThrowIfNull(cursor);
+        found = null;
         examined = 0;
-        if (!HasIndexedMap(map) || level is < 1 or > 60 || !float.IsFinite(from.X) || !float.IsFinite(from.Y)) return null;
-        int cx = CellOf(from.X), cy = CellOf(from.Y);
-        for (int ring = 0; ring <= MaxRing; ring++)
+        if (!cursor.Started)
         {
-            Candidate? best = null;
-            float bestDistance = float.PositiveInfinity;
-            for (int x = cx - ring; x <= cx + ring; x++)
+            if (!HasIndexedMap(map) || level is < 1 or > 60 || !float.IsFinite(from.X) || !float.IsFinite(from.Y)) return FindStatus.Exhausted;
+            cursor.Started = true;
+            cursor.Map = map;
+            cursor.Level = level;
+            cursor.From = from;
+            cursor.CentreX = CellOf(from.X);
+            cursor.CentreY = CellOf(from.Y);
+            cursor.Ring = 0;
+            cursor.X = cursor.CentreX;
+            cursor.Y = cursor.CentreY;
+            cursor.Best = null;
+            cursor.BestDistance = float.PositiveInfinity;
+        }
+
+        map = cursor.Map;
+        level = cursor.Level;
+        from = cursor.From;
+        int cx = cursor.CentreX, cy = cursor.CentreY;
+        while (cursor.Ring <= MaxRing)
+        {
+            int ring = cursor.Ring;
+            while (cursor.X <= cx + ring)
             {
-                for (int y = cy - ring; y <= cy + ring; y++)
+                while (cursor.Y <= cy + ring)
                 {
+                    int x = cursor.X, y = cursor.Y;
+                    cursor.Y++;
                     if (ring != 0 && x != cx - ring && x != cx + ring && y != cy - ring && y != cy + ring) continue;
                     if (blocked(x, y) || !_cells.TryGetValue((map, (byte)level, x, y), out Cell? cell)) continue;
                     foreach ((uint faction, List<CreatureSpawn> samples) in cell.ByFaction)
@@ -220,15 +302,31 @@ public sealed class PlayerbotExploreAtlas
                             if (!eligible(candidate)) continue;
                             float dx = spawn.X - from.X, dy = spawn.Y - from.Y;
                             float distance = dx * dx + dy * dy;
-                            if (distance >= bestDistance) continue;
-                            bestDistance = distance;
-                            best = candidate;
+                            if (distance >= cursor.BestDistance) continue;
+                            cursor.BestDistance = distance;
+                            cursor.Best = candidate;
                         }
                     }
+
+                    if (examined >= maxExamined || outOfBudget?.Invoke() == true) return FindStatus.Pending;
                 }
+
+                cursor.X++;
+                cursor.Y = cy - ring;
             }
-            if (best is not null) return best;
+
+            if (cursor.Best is { } best)
+            {
+                found = best;
+                cursor.Best = null;
+                return FindStatus.Found;
+            }
+
+            cursor.Ring++;
+            cursor.X = cx - cursor.Ring;
+            cursor.Y = cy - cursor.Ring;
         }
-        return null;
+
+        return FindStatus.Exhausted;
     }
 }
