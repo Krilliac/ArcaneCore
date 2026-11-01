@@ -73,6 +73,8 @@ internal sealed class AvScriptRig : IDisposable
         AvEventAI.SayWarcryHorde, AvEventAI.SayRamRiderCommander, AvEventAI.SayWarcryAlliance,
         AvWorldBossAI.SayLokholarSpawn1, AvWorldBossAI.SayLokholarSpawn2, AvWorldBossAI.SayLokholarKilledPlayer, AvWorldBossAI.SayLokholarReachedBase,
         AvWorldBossAI.SayIvusSpawned, AvWorldBossAI.SayIvusPastField, AvWorldBossAI.SayIvusReachedBase,
+        AvVanndarAI.SayAggro, AvVanndarAI.SayReset, AvVanndarAI.SayRaidWipe, AvDrekTharAI.SayReset, AvDrekTharAI.SayRaidWipe,
+        AvBalindaAI.SayReset, AvGalvangarAI.SayReset,
         AvCollectorGossip.SayPatrol, AvCollectorGossip.SayReavers, AvCollectorGossip.SayRamRider, AvCollectorGossip.SayGuse,
     ];
 
