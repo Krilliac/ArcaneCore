@@ -590,6 +590,12 @@ public sealed partial class TeleportService
                     pending.Destination.MapId, pending.Destination.X, pending.Destination.Y, pending.Destination.Z, elapsedMs);
             }
 
+            // vmangos Player::SaveToDB (Player.cpp:16408-16424): while IsBeingTeleported the destination is saved instead of the
+            // current position, so the next login lands where the teleport was going. The final snapshot follows this handler
+            // (WorldRuntime.RemovePlayer); a location already chosen (a spirit's graveyard) wins.
+            player.LogoutLocation ??= (pending.Destination.MapId, pending.Destination.X, pending.Destination.Y,
+                pending.Destination.Z, pending.Destination.Orientation);
+
             pending.SourceMap.EndTransit(player);
         }
     }
