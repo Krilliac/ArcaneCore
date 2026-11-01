@@ -286,11 +286,11 @@ public sealed class InspectSectionRegistryTests
         const int Count = 64;
         var registrations = new IDisposable[Count];
 
-        Parallel.For(0, Count, i =>
+        System.Threading.Tasks.Parallel.For(0, Count, i =>
             registrations[i] = InspectSectionRegistry.Register(new InspectSection(InspectLeaf.Map, "rt-par-" + i, (_, _) => null)));
         Assert.Equal(Count, InspectSectionRegistry.SectionsOf(InspectLeaf.Map).Count(s => s.Name.StartsWith("rt-par-", StringComparison.Ordinal)));
 
-        Parallel.ForEach(registrations, r => r.Dispose());
+        System.Threading.Tasks.Parallel.ForEach(registrations, r => r.Dispose());
         Assert.Equal(0, InspectSectionRegistry.SectionsOf(InspectLeaf.Map).Count(s => s.Name.StartsWith("rt-par-", StringComparison.Ordinal)));
     }
 

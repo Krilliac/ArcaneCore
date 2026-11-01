@@ -286,7 +286,7 @@ public sealed class WiringAuditTests
 
         var parallel = new UnhandledOpcodeTracker();
         long firsts = 0;
-        Parallel.For(0, 8, _ =>
+        System.Threading.Tasks.Parallel.For(0, 8, _ =>
         {
             for (int i = 0; i < 1000; i++)
             {

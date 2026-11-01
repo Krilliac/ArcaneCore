@@ -136,7 +136,7 @@ public sealed class PlayerbotQaLogTapTests
     public void FullBus_ConcurrentWriters_LoseNothingUncounted()
     {
         var bus = new PlayerbotQaSignalBus(64);
-        Parallel.For(0, 8, _ =>
+        System.Threading.Tasks.Parallel.For(0, 8, _ =>
         {
             for (int i = 0; i < 500; i++) bus.TryWrite(QaData.Stall(QaData.Bot1, 0, 0));
         });

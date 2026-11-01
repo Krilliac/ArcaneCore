@@ -21,7 +21,7 @@ public sealed class ItemsFeatureBackgroundLoadTests
         var feature = new ItemsFeature(provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<ItemsFeature>.Instance);
         long faultsBefore = Faults();
 
-        Parallel.For(0, 16, _ => feature.StartLoadInBackground());
+        System.Threading.Tasks.Parallel.For(0, 16, _ => feature.StartLoadInBackground());
         await source.Started.WaitAsync(Budget);
         source.Fail.SetResult(); // every caller had the chance to start its own load while the first one was held
         await WaitUntilAsync(() => Faults() > faultsBefore);

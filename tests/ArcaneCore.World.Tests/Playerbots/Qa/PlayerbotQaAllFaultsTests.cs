@@ -542,7 +542,7 @@ public sealed class PlayerbotQaAllFaultsTests : IDisposable
         QaStoreFile loaded = new PlayerbotQaStore(_directory, new ListLogger()).Load()!;
 
         Assert.Equal(QaPublicationState.Pending, Assert.Single(loaded.Findings).Publication.State);
-        Assert.Equal([QaData.T0.AddMinutes(1)], loaded.Ledger.ServerCreatesUtc);
+        Assert.Equal([QaData.T0.AddMinutes(1)], loaded.Ledger.ServerCreatesUtc!);
         var options = new PlayerbotQaOptions { GitHub = { Enabled = true, Repository = QaData.Repo, MaxServerFaultIssuesPerHour = 1 } };
         PlayerbotQaPublisher publisher = NewPublisher(options, new FakeQaState(), new FakeGitHub(), new ManualTime(QaData.T0.AddMinutes(2)));
         publisher.Ledger.Restore(loaded.Ledger);

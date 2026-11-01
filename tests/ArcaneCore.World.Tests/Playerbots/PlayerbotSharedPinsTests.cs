@@ -134,7 +134,7 @@ public sealed class PlayerbotSharedPinsTests : IDisposable
     public void TheLedger_IsBounded_AndSurvivesParallelReports()
     {
         var pins = new PlayerbotSharedPins();
-        Parallel.For(0, 8, worker =>
+        System.Threading.Tasks.Parallel.For(0, 8, worker =>
         {
             for (int i = 0; i < 2_000; i++)
             {

@@ -141,7 +141,7 @@ internal sealed class ReadsDifferentlyScanner
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
                         && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))];
         var options = new CSharpParseOptions(LanguageVersion.Preview);
-        Parallel.ForEach(files, file =>
+        System.Threading.Tasks.Parallel.ForEach(files, file =>
         {
             string relative = Path.GetRelativePath(_root, file).Replace('\\', '/');
             string project = relative.Split('/')[1];
