@@ -30,6 +30,9 @@ public sealed class WorldStateHooks
 
     public ZoneOptions Zones { get; } = new();
 
+    /// <summary>The War Mode switch and its two costs (<c>World:WarMode</c>, live; off by default).</summary>
+    public WarModeOptions WarMode { get; } = new();
+
     public TimeOptions TimeSettings { get; } = new();
 
     public WeatherOptions WeatherSettings { get; } = new();

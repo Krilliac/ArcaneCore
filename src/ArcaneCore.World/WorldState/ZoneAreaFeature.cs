@@ -34,6 +34,8 @@ public sealed class ZoneAreaFeature(IServiceProvider services) : IWorldFeature, 
         WorldStateHooks hooks = WorldStateHooks.For(world);
         IConfiguration? configuration = services.GetService<IConfiguration>();
         configuration?.GetSection(ZoneOptions.SectionName).Bind(hooks.Zones);
+        configuration?.GetSection(WarModeOptions.SectionName).Bind(hooks.WarMode);
+        hooks.WarMode.Validate(); // fail closed at startup on an out-of-range multiplier or loss
         // The game-time options live here too (this feature is the world-state option binder).
         configuration?.GetSection(TimeOptions.SectionName).Bind(hooks.TimeSettings);
         if (hooks.TimeSettings.UseServerLocalTime && hooks.TimeSettings.TimeZoneId.Length > 0)
