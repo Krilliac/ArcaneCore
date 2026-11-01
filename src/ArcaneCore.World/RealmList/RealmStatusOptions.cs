@@ -17,9 +17,11 @@ public sealed class RealmStatusOptions
     public int Id { get; set; } = 1;
 
     /// <summary>
-    /// The population formula's player limit (vmangos PlayerLimit, default 100, SystemConfig.h:91): the realm list's population
-    /// hint is 2 x sessions / PlayerLimit, written when a session is added (World.cpp:340-353). 0 = the population is never written
-    /// (vmangos skips it when the limit is 0). ArcaneCore has no login queue, so only the hint reads this value.
+    /// The player limit (vmangos PlayerLimit, default 100, SystemConfig.h:91): a plain player is refused at login once this many
+    /// other accounts are online (staff accounts always get in; <c>.server plimit</c> changes it at run time and
+    /// <c>.server plimit reset</c> returns to this value; ArcaneCore has no login queue, so the refusal is AUTH_UNAVAILABLE). The realm
+    /// list's population hint is 2 x sessions / PlayerLimit, written when a session is added (World.cpp:340-353). 0 = no limit and the
+    /// population is never written (vmangos skips it when the limit is 0).
     /// </summary>
     public int PlayerLimit { get; set; } = 100;
 

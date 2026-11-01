@@ -42,7 +42,7 @@ write. The gap after a restart countdown ends and before the new process is read
 
 A realm locked above the account's security level (`realmlist.AllowedSecurityLevel` greater than the account's GM level)
 is also sent Offline, in every state (vmangos AuthSocket.cpp:1088-1090). The 1.x client has no locked display, so
-the lock is shown as offline. The lock compares `AllowedSecurityLevel` with the account-wide GM level, not a per-realm level as vmangos's `GetSecurityOn` does (AuthSocket.cpp:1088). There is no command to set the lock yet: set the column with SQL.
+the lock is shown as offline. The lock compares `AllowedSecurityLevel` with the account-wide GM level, not a per-realm level as vmangos's `GetSecurityOn` does (AuthSocket.cpp:1088). `.server plimit` sets the lock (Administrator, or the console): a security name (`gamemaster`) or a negative number locks the realm to accounts of at least that level and writes `allowedSecurityLevel` to the row off the world thread; `.server plimit <count>` limits the players online, `.server plimit reset` restores `World:Realm:PlayerLimit`, and the command alone prints both. A world refuses a login below the lock, or a plain player once `PlayerLimit` other accounts are online, with AUTH_UNAVAILABLE (vmangos queues the second case; ArcaneCore has no queue). Staff accounts skip the limit. A start writes the lock in force (none) to the row, so a lock never outlives the process that set it. A failed write is logged and the next change or start writes it again; the realm console `realms` listing prints the stored `lock`.
 
 ## 3. Configuration
 

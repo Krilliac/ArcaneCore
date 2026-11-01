@@ -66,6 +66,9 @@ public sealed class RealmStatusFeature : IWorldFeature
         }
 
         Enabled = true;
+        // vmangos World::SetPlayerLimit(..., true) at start (World.cpp:486): the row's lock level is made to match the lock in force, so a lock
+        // left by an earlier run (or a hand edit) cannot outlive the process that set it.
+        _ = _services.GetService<WorldLoginAdmission>()?.PublishLockAsync();
         _subscriptions.Add(hooks.Register(WorldLifecycleStage.BeforeWorldStop, "realm.offline", _ => MarkOfflineAsync()));
         if (_options.PlayerLimit > 0 && _services.GetService<SessionRegistry>() is { } sessions)
         {

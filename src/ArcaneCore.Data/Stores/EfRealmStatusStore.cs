@@ -72,6 +72,11 @@ public sealed class EfRealmStatusStore(AuthDbContext db) : IRealmStatusStore
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.Population, population), cancellationToken)
             .ConfigureAwait(false) > 0;
 
+    public async Task<bool> SetAllowedSecurityLevelAsync(int realmId, byte level, CancellationToken cancellationToken = default)
+        => await db.Realms.Where(r => r.Id == realmId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.AllowedSecurityLevel, level), cancellationToken)
+            .ConfigureAwait(false) > 0;
+
     /// <summary>
     /// Read the flags, compute <paramref name="change"/>, and apply it to the row only while it still holds the flags that were read;
     /// a concurrent flags edit makes the next attempt re-read. False when no row has the id.

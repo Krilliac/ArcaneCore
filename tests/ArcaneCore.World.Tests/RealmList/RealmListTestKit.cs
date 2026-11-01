@@ -155,6 +155,9 @@ internal sealed class RealmRowStore(RealmEntry row) : IRealmStatusStore
     public Task<bool> SetPopulationAsync(int realmId, float population, CancellationToken cancellationToken = default)
         => Change("population", realmId, r => r.Population = population);
 
+    public Task<bool> SetAllowedSecurityLevelAsync(int realmId, byte level, CancellationToken cancellationToken = default)
+        => Change("lock", realmId, r => r.AllowedSecurityLevel = level);
+
     private Task<bool> Change(string call, int realmId, Action<RealmEntry> change)
     {
         OnCall?.Invoke(call);
