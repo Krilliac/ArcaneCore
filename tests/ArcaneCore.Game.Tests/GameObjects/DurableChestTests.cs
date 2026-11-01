@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Crafting.Enchanting;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
 using ArcaneCore.Game.Groups;
@@ -284,6 +285,26 @@ public sealed class DurableChestTests
         Assert.Single(Packets(session, WorldOpcode.SmsgLootReleaseResponse));
         Assert.False(session.Kicked);
         Assert.Null(rig.Chest.Loot);
+    }
+
+    [Fact]
+    public void DurableChest_WindowPropertyMatchesTheBagItemTaken()
+    {
+        // The durable open generates with no property and TakeDurableItem stages the grant with property 0, so an inventory that would roll
+        // one must not give the bag item a property the window never showed.
+        var catalog = new ItemRandomPropertyCatalog(
+            [new ItemRandomPropertyRecord(1001, "of the Bear", [74, 75, 0])], [new ItemEnchantmentChance(5, 1001, 100f)]);
+        Rig rig = CreateRig([(LootTableKind.GameObject, Row(ChestLoot, RandomPropertySword, 100))]);
+        (Player alice, _) = rig.Join(1);
+        alice.Inventory.RandomProperties = new ItemRandomProperties(catalog, () => 10f);
+
+        Assert.Equal(GameObjectUseResult.Ok, rig.System.Use(alice, rig.Chest.Guid));
+        LootBag window = Assert.IsType<LootBag>(rig.Chest.Loot);
+        LootItem shown = Assert.Single(window.Items);
+        Assert.Equal(InventoryResult.Ok, rig.Loot.TakeItem(alice, shown.Slot));
+
+        Item taken = Assert.Single(alice.Inventory.AllItems, i => i.Entry == RandomPropertySword);
+        Assert.Equal(shown.RandomPropertyId, taken.RandomPropertyId);
     }
 
     [Fact]

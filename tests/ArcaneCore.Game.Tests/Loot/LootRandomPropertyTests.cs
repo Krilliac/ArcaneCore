@@ -185,17 +185,6 @@ public sealed class LootRandomPropertyTests
     }
 
     [Fact]
-    public void DurableChestGeneration_LeavesTheWindowAtNone_SoItMatchesTheStagedRewardItem()
-    {
-        // A durable chest generates with rollProperties: false because TakeDurableItem's reward grant has no property field (the bag item rolls on its own).
-        // The window must therefore show 0 rather than a value the item would not keep.
-        (LootService loot, Player player) = Rig(PropertyX);
-        LootBag bag = loot.Generate(Corpse, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.Creature, CorpseEntry, [player], rollProperties: false);
-        Assert.Equal(0, Assert.Single(bag.Items).RandomPropertyId);
-        Assert.Equal(0u, BitConverter.ToUInt32(LootPackets.LootResponse(bag, player), 31));
-    }
-
-    [Fact]
     public void ItemWhoseTemplateHasNoRandomProperty_ShowsNone()
     {
         (LootService _, Player player) = Rig();

@@ -159,8 +159,9 @@ public sealed partial class LootService : IViewerFieldFilter
     /// (vmangos Player.cpp:7692 FillLoot(0, LootTemplates_Fishing)), so the fishing area asks for it explicitly.
     /// </param>
     /// <param name="rollProperties">
-    /// False leaves every item's <see cref="LootItem.RandomPropertyId"/> at 0. A durable (instance) chest passes false: its takes stage a
-    /// reward grant that has no property field and rolls the bag item's property itself, so a rolled window value would disagree with the item.
+    /// False leaves every item's <see cref="LootItem.RandomPropertyId"/> at 0. A durable (instance) chest passes false: the record it
+    /// persists has no property column, so its takes stage the reward grant with property 0 (no property) and the window and the bag item agree at 0.
+    /// Carrying a rolled property through durable chests would need a LootStateItem column and per-provider SQL (open gap).
     /// </param>
     public LootBag Generate(ObjectGuid source, LootSourceKind kind, LootType type, LootTableKind table, uint entry, IReadOnlyList<Player> recipients,
         bool zeroEntryIsATable = false, bool rollProperties = true)
@@ -809,7 +810,7 @@ public sealed partial class LootService : IViewerFieldFilter
         // place for it yet (LootBag.ToRecord refuses a bag with gold), so a stored chest pays nothing (docs/areas/loot-conditions-chest-gold.md).
         List<Player> recipients = RecipientsFor(player, go, out Group? group);
         LootBag fresh = Generate(go.Guid, LootSourceKind.GameObject, LootType.Corpse, LootTableKind.GameObject, lootId, recipients,
-            rollProperties: false); // TakeDurableItem's reward grant carries no property, so window and item stay at 0 together
+            rollProperties: false); // TakeDurableItem stages the grant with property 0, so window and item stay at 0 together
         fresh.DurableKey = key;
         CheckGameObjectLootEmpty(player, go, lootId, fresh, recipients);
         Group? looterGroup = UsesGroupLootRules(go) ? group : null;
@@ -933,7 +934,7 @@ public sealed partial class LootService : IViewerFieldFilter
             return RefuseTake(player, item);
         }
 
-        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count)],
+        InventoryResult staged = player.Inventory.TryStageQuestRewards([new InventoryRewardGrant(item.ItemId, item.Count, RandomPropertyId: 0)],
             out InventoryRewardStage? stage, out _);
         if (staged != InventoryResult.Ok || stage is null)
         {
