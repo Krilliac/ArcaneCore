@@ -228,6 +228,40 @@ public sealed class PlayerbotTradeDeskFollowupTests
         Assert.True((await scene.QuoteBuyerAsync(ArrowEntry)).Ok);
     }
 
+    /// <summary>
+    /// The split-stack case of the probe: a quiver with three full arrow stacks and one free slot holds one more stack (20) and not two (40, which the seller's
+    /// two stacks would need: the server stages each traded stack on its own). The quote's whole-count check must refuse the 40, not quote it and time out blaming the partner.
+    /// Verified on current code to agree with the server's staging, so this pins the behaviour rather than fixing a defect.
+    /// </summary>
+    [Fact]
+    public async Task Quote_BuyerWithOneQuiverSlotFree_RefusesTwoStacksOfArrowsAndTakesOne()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(QuiverEntry, 1, out Item? quiver));
+            Assert.True(bot.Inventory.AutoEquipItem(quiver!.BagSlot, quiver.Slot));
+            return true;
+        });
+        Assert.True(await scene.FillBackpackAsync() > 0);
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(ArrowEntry, 60, out _)); // three full stacks of the quiver's four slots
+            Assert.Equal(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(ArrowEntry, 20, [], out _));
+            Assert.NotEqual(InventoryResult.Ok, bot.Inventory.CanStoreNewItem(ArrowEntry, 40, [], out _));
+            return true;
+        });
+
+        PlayerbotDealQuote two = await scene.World.Host.OnWorldAsync(() =>
+            scene.Desk.Quote(scene.Bot, HelpTestKit.Online(scene.World, BotName), HelpTestKit.Online(scene.World, CustomerName), PlayerbotDealRole.Buyer, ArrowEntry, 40));
+        Assert.Equal(PlayerbotDealRefusal.NoSpace, two.Refusal);
+        PlayerbotDealQuote one = await scene.World.Host.OnWorldAsync(() =>
+            scene.Desk.Quote(scene.Bot, HelpTestKit.Online(scene.World, BotName), HelpTestKit.Online(scene.World, CustomerName), PlayerbotDealRole.Buyer, ArrowEntry, 20));
+        Assert.NotEqual(PlayerbotDealRefusal.NoSpace, one.Refusal);
+    }
+
     /// <summary>The soul bag half of the probe: a buyer whose only free room is a soul bag slot takes shards and refuses other goods.</summary>
     [Fact]
     public async Task Quote_BuyerWithOnlyASoulBagSlotFree_TakesShardsAndRefusesOtherGoods()
@@ -362,5 +396,59 @@ public sealed class PlayerbotTradeDeskFollowupTests
         Assert.False(PlayerbotTownGoals.IsCrowding(0.5f, 0.5f, 6f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
         Assert.False(PlayerbotTownGoals.IsCrowding(0.5f, 0.5f, -6f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
         Assert.False(PlayerbotTownGoals.IsCrowding(2f, 0f, 0f, otherIsBot: true, PlayerbotTownGoals.CrowdedYards));
+    }
+
+    // --- crowd rule at the bank, flight master, quest giver and auctioneer (point 11) -------------------------------------------------
+
+    /// <summary>
+    /// The crowd rule's gate is the shared one for the bank, taxi, quest and auction controllers: it fires once per NPC and minute, only when another bot crowds the place,
+    /// and asks the crowd question only while the gate is open. Broken: those controllers had no rule at all (bots stacked on one point of the NPC's reach).
+    /// </summary>
+    [Fact]
+    public void CrowdSpread_Gate_FiresOncePerNpcAndMinute_AndOnlyWhenCrowded()
+    {
+        var memo = new PlayerbotTownGoals.CrowdSpotMemo();
+        ObjectGuid npc = ObjectGuid.Item(777);
+        Assert.False(PlayerbotCrowdSpread.ShouldSpread(memo, npc, 1000, () => false));
+        Assert.True(PlayerbotCrowdSpread.ShouldSpread(memo, npc, 1000, () => true));
+        int asked = 0;
+        Assert.False(PlayerbotCrowdSpread.ShouldSpread(memo, npc, 1001, () => { asked++; return true; }));
+        Assert.Equal(0, asked);
+        Assert.True(PlayerbotCrowdSpread.ShouldSpread(memo, npc, 1000 + PlayerbotTownGoals.CrowdSpotMs + 1, () => true));
+    }
+
+    /// <summary>Two bots at one NPC get spots of their own inside the server's reach (2 to 4 yards on the ground plane), and an unusable first spot falls through to the next attempt.</summary>
+    [Fact]
+    public void CrowdSpread_PickSpot_SpreadsBotsInsideReach_AndSkipsUnusableSpots()
+    {
+        var npc = new Vector3(100f, 200f, 30f);
+        Vector3 a = PlayerbotCrowdSpread.PickSpot(11, 5000, npc, spot => spot)!.Value;
+        Vector3 b = PlayerbotCrowdSpread.PickSpot(12, 5000, npc, spot => spot)!.Value;
+        Assert.NotEqual(a, b);
+        foreach (Vector3 spot in new[] { a, b })
+        {
+            float flat = Vector2.Distance(new(spot.X, spot.Y), new(npc.X, npc.Y));
+            Assert.InRange(flat, PlayerbotStandSpots.ServiceMinYards - 0.01f, PlayerbotStandSpots.ServiceMaxYards + 0.01f);
+        }
+
+        int calls = 0;
+        Vector3? second = PlayerbotCrowdSpread.PickSpot(11, 5000, npc, spot => ++calls == 1 ? null : spot);
+        Assert.Equal(2, calls);
+        Assert.Equal(PlayerbotStandSpots.ServiceSpot(11, 5000, npc, 1), second);
+        Assert.Null(PlayerbotCrowdSpread.PickSpot(11, 5000, npc, _ => null));
+    }
+
+    /// <summary>The bank, the flight master visit, the quest-giver goal and the auction visit each own a crowd rule (the vendor/trainer visit has its own in the town goals).</summary>
+    [Theory]
+    [InlineData(typeof(PlayerbotBank))]
+    [InlineData(typeof(PlayerbotQuestGoals))]
+    [InlineData(typeof(PlayerbotEconomyDestinations))]
+    [InlineData(typeof(TaxiTrip))]
+    public void CrowdSpread_EveryServiceController_OwnsOne(Type controller)
+    {
+        const System.Reflection.BindingFlags all = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic;
+        bool owns = controller.GetFields(all).Any(f => f.FieldType == typeof(PlayerbotCrowdSpread))
+            || controller.GetProperties(all).Any(p => p.PropertyType == typeof(PlayerbotCrowdSpread));
+        Assert.True(owns, controller.Name + " has no crowd spread");
     }
 }

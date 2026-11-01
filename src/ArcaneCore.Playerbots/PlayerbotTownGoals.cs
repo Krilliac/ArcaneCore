@@ -370,7 +370,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         => otherIsBot && (dx * dx) + (dy * dy) <= yards * yards && MathF.Abs(dz) <= CrowdedHeightYards;
 
     /// <summary>Whether another bot stands within <paramref name="yards"/> of the player on the ground plane and on its floor (a bot in sight; real players do not count).</summary>
-    private static bool AnotherBotWithin(Player player, float yards)
+    internal static bool AnotherBotWithin(Player player, float yards)
     {
         if (player.Map is not { } map) return false;
         foreach (ObjectGuid guid in player.VisibleObjects)
