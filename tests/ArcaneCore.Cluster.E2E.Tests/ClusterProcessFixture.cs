@@ -80,7 +80,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private static readonly string[] ScrubbedEnvironmentPrefixes =
     [
         "Cluster__", "Gateway__", "World__", "Auth__", "Database__", "Realm__", "Realms__", "Net__", "Ops__", "Logging__", "ClientData__",
-        "DOTNET_gc", "ARCANECORE_TEST_",
+        "DOTNET_gc", "DOTNET_ENVIRONMENT", "ASPNETCORE_ENVIRONMENT", "ARCANECORE_TEST_",
     ];
 
     private readonly ClusterOptions _options;
@@ -499,9 +499,10 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                     throw new InvalidOperationException($"The gateway refused the login with response code 0x{code:X2}.");
                 }
             }
-            catch (Exception ex) when (ex is IOException or SocketException && !cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (ex is (IOException and not MockProtocolException) or SocketException && !cancellationToken.IsCancellationRequested)
             {
-                // MockProtocolException is an IOException: a listener that is not up yet, or a link that dropped mid-handshake.
+                // A listener that is not up yet, or a link that dropped mid-handshake. A MockProtocolException (a deterministic protocol
+                // failure) and a MockAuthException (bad credentials) are not retried: they fail the test at once.
             }
             finally
             {
@@ -635,11 +636,17 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
 
         internal string Name { get; }
 
-        internal int Id => _process.Id;
+        private int _id;
+        private bool _disposed;
+        private bool _exitedAtDispose;
+        private int _exitCodeAtDispose;
 
-        internal bool HasExited => _process.HasExited;
+        internal int Id => _id;
 
-        internal int ExitCode => _process.ExitCode;
+        /// <summary>Safe after <see cref="Dispose"/>: Process.Close() resets the Process, so the state is cached before disposing.</summary>
+        internal bool HasExited => _disposed ? _exitedAtDispose : _process.HasExited;
+
+        internal int ExitCode => _disposed ? _exitCodeAtDispose : _process.ExitCode;
 
         /// <summary>Start a daemon from the copy under <c>daemons/&lt;folder&gt;</c> of the test output: its apphost on Windows, <c>dotnet &lt;stem&gt;.dll</c> elsewhere.</summary>
         internal static ChildProcess Start(
@@ -700,6 +707,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                 throw new InvalidOperationException($"The {name} daemon could not be started: {ex.Message}", ex);
             }
 
+            child._id = process.Id;
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             return child;
@@ -808,6 +816,25 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             }
         }
 
-        public void Dispose() => _process.Dispose();
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            try
+            {
+                _exitedAtDispose = _process.HasExited;
+                _exitCodeAtDispose = _exitedAtDispose ? _process.ExitCode : 0;
+            }
+            catch (InvalidOperationException)
+            {
+                _exitedAtDispose = true; // no longer associated with a process: nothing is running
+            }
+
+            _disposed = true;
+            _process.Dispose();
+        }
     }
 }
