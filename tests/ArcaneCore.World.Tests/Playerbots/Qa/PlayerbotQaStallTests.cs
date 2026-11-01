@@ -66,6 +66,40 @@ public sealed class PlayerbotQaStallTests : IDisposable
     }
 
     [Fact]
+    public async Task OneIsolatedOverrun_DoesNotSuppressStalls()
+    {
+        (PlayerbotQaFeature feature, PlayerbotQaSignalBus bus, ManualTime time, ServiceProvider services) = Start();
+        using (services)
+        {
+            Interlocked.Increment(ref _overruns); // one frame over budget: routine on a loaded host
+            Assert.True(bus.TryWrite(QaData.Stall(QaData.Bot1, -5608.8f, -439.4f)));
+            feature.Drain();
+            Assert.Equal(1, StallFindings(feature));
+
+            // One more every look, far below the threshold within the window: still not starved.
+            for (int i = 0; i < PlayerbotQaFeature.StarvationOverruns - 3; i++)
+            {
+                time.Advance(TimeSpan.FromSeconds(1));
+                Interlocked.Increment(ref _overruns);
+                Assert.True(bus.TryWrite(QaData.Relay((uint)(20 + i))));
+                feature.Drain();
+            }
+
+            Assert.True(bus.TryWrite(QaData.Stall(QaData.Bot2, -5608.8f, -439.4f)));
+            feature.Drain();
+            Assert.Equal(0, feature.DiscountedStalls);
+            Assert.Equal(1, StallFindings(feature));
+
+            // Enough of them within the window is starvation.
+            Interlocked.Add(ref _overruns, PlayerbotQaFeature.StarvationOverruns);
+            Assert.True(bus.TryWrite(QaData.Stall(QaData.Bot3, -5608.8f, -439.4f)));
+            feature.Drain();
+            Assert.Equal(1, feature.DiscountedStalls);
+            await feature.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task AHangCountsAsStarvationToo()
     {
         (PlayerbotQaFeature feature, PlayerbotQaSignalBus bus, _, ServiceProvider services) = Start();
@@ -103,7 +137,7 @@ public sealed class PlayerbotQaStallTests : IDisposable
         (PlayerbotQaFeature feature, PlayerbotQaSignalBus bus, ManualTime time, ServiceProvider services) = Start();
         using (services)
         {
-            Interlocked.Add(ref _overruns, 5);
+            Interlocked.Add(ref _overruns, 40);
             Assert.True(bus.TryWrite(QaData.Stall(QaData.Bot1, -5608.8f, -439.4f)));
             feature.Drain();
             Assert.Equal(0, StallFindings(feature));

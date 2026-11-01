@@ -24,6 +24,10 @@ internal static class PlayerbotQaMeters
     internal static Counter<long> Occurrences { get; } = Meter.CreateCounter<long>(
         "arcanecore.botqa.occurrences", "{occurrence}", "Occurrences folded into bot QA findings, by finding kind.");
 
+    /// <summary>Stall and set-aside signals dropped because the host was starved (<see cref="PlayerbotQaOptions.StallStarvationSeconds"/>): a check that discards signals must show it.</summary>
+    internal static Counter<long> DiscountedStalls { get; } = Meter.CreateCounter<long>(
+        "arcanecore.botqa.stalls_discounted", "{signal}", "Bot QA stall and set-aside signals dropped while the host was starved (tick overruns or hangs).");
+
     internal static void CountOccurrences(QaSignalKind kind, long occurrences)
     {
         if (Occurrences.Enabled && occurrences > 0) Occurrences.Add(occurrences, new KeyValuePair<string, object?>("kind", QaKinds.Of(kind).Slug));

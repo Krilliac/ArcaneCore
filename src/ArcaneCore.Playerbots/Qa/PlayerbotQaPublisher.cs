@@ -470,7 +470,7 @@ internal sealed class PlayerbotQaPublisher
             bool regressionComment = false;
             if (!found.Open)
             {
-                // An issue closed as not planned is a decision, not a fix: a newer build does not undo it (ReopenClosed, which reopens whatever its reason, still does).
+                // An issue closed as not planned is a decision, not a fix: a newer build does not undo it (ReopenClosed still does, for a finding seen since start-up).
                 bool regression = IsRegression(current) && !found.NotPlanned;
                 if (!MayReopen(current) && !regression)
                 {

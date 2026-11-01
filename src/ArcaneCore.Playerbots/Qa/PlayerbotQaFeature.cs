@@ -54,7 +54,15 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     private long _seenOverruns;
     private long _seenHangs;
     private DateTime _starvedUntilUtc = DateTime.MinValue;
+    private readonly Queue<(DateTime AtUtc, long Count)> _recentOverruns = new();
+    private DateTime _lastDiscountLogUtc = DateTime.MinValue;
     private long _discountedStalls;
+
+    /// <summary>Overruns within <see cref="PlayerbotQaOptions.StallStarvationSeconds"/> that make the host count as starved: a lone slow frame on a busy host does not.</summary>
+    internal const int StarvationOverruns = 10;
+
+    /// <summary>The least time between two log lines about discounted stalls.</summary>
+    private static readonly TimeSpan DiscountLogInterval = TimeSpan.FromMinutes(5);
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
     internal Func<string, string?>? EnvironmentReader { get; init; }
@@ -184,6 +192,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             _tickHealth = TickHealthSource ?? MonitorHealth(services.GetService<ArcaneCore.Kernel.Ops.Watchdog.TickMonitor>());
             _healthSeen = false;
             _starvedUntilUtc = DateTime.MinValue;
+            _recentOverruns.Clear();
         }
 
         if (StartedUtc == DateTime.MaxValue) StartedUtc = Now; // an attach after a detach keeps the process's first
@@ -336,6 +345,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             moved = _bus.Drain(batch, Math.Min(4096, max - total));
             DateTime now = Now;
             bool starved = batch.Count > 0 && HostStarved(now);
+            long discountedBefore = Interlocked.Read(ref _discountedStalls);
             foreach (QaSignal signal in batch)
             {
                 try
@@ -357,10 +367,30 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
                 }
             }
 
+            long discounted = Interlocked.Read(ref _discountedStalls) - discountedBefore;
+            if (discounted > 0) ReportDiscounted(discounted, now);
             total += moved;
         }
         while (moved > 0);
         return total;
+    }
+
+    /// <summary>Make the suppression visible: the meter counts every dropped signal, and a warning (at most one per <see cref="DiscountLogInterval"/>) says how many so far.</summary>
+    private void ReportDiscounted(long discounted, DateTime now)
+    {
+        if (PlayerbotQaMeters.DiscountedStalls.Enabled) PlayerbotQaMeters.DiscountedStalls.Add(discounted);
+        bool log;
+        lock (_healthGate)
+        {
+            log = now - _lastDiscountLogUtc >= DiscountLogInterval;
+            if (log) _lastDiscountLogUtc = now;
+        }
+
+        if (log)
+        {
+            _log.LogWarning("Bot QA dropped {Batch} stall/set-aside signal(s) because the host is starved (tick overruns or hangs within {Seconds} s); {Total} dropped since start. World:Playerbots:Qa:StallStarvationSeconds = 0 turns this off",
+                discounted, _options.StallStarvationSeconds, Interlocked.Read(ref _discountedStalls));
+        }
     }
 
     /// <summary>The counts of the world tick monitor, or null (no monitor, a disabled one, or one that has not started ticking).</summary>
@@ -375,8 +405,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     }
 
     /// <summary>
-    /// Whether the tick monitor counted an overrun or a completed hang since the previous look, or did within the last
-    /// <see cref="PlayerbotQaOptions.StallStarvationSeconds"/>. The first look only takes the baseline. Safe to call from any thread.
+    /// Whether the host is starved: the tick monitor counted a completed hang within the last <see cref="PlayerbotQaOptions.StallStarvationSeconds"/>, or at least
+    /// <see cref="StarvationOverruns"/> overruns within it (one slow frame on a loaded host is routine and is not starvation). The first look only takes the
+    /// baseline. Overruns are credited to the look that sees them. Safe to call from any thread.
     /// </summary>
     private bool HostStarved(DateTime now)
     {
@@ -386,13 +417,22 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             if (window <= 0 || _tickHealth is null) return false;
             if (_tickHealth() is { } reading)
             {
-                if (_healthSeen && (reading.Overruns > _seenOverruns || reading.Hangs > _seenHangs)) _starvedUntilUtc = now.AddSeconds(window);
+                if (_healthSeen)
+                {
+                    if (reading.Hangs > _seenHangs) _starvedUntilUtc = now.AddSeconds(window);
+                    if (reading.Overruns > _seenOverruns) _recentOverruns.Enqueue((now, reading.Overruns - _seenOverruns));
+                }
+
                 _seenOverruns = reading.Overruns;
                 _seenHangs = reading.Hangs;
                 _healthSeen = true;
             }
 
-            return now <= _starvedUntilUtc;
+            DateTime oldest = now.AddSeconds(-window);
+            while (_recentOverruns.Count > 0 && _recentOverruns.Peek().AtUtc < oldest) _recentOverruns.Dequeue();
+            long overruns = 0;
+            foreach ((DateTime _, long count) in _recentOverruns) overruns += count;
+            return overruns >= StarvationOverruns || now <= _starvedUntilUtc;
         }
     }
 

@@ -336,13 +336,13 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
     [Fact]
     public async Task AStaleFindingOfHigherSeverity_IsDeferredBehindTheFreshOne_AndStillLinkedFromTheListInTheSamePass()
     {
-        QaFindingView stale = Stale(1656);
-        QaFindingView fresh = Fresh(1700) with { Count = 5, DistinctBots = 2, BuildCounts = [new QaBuildCount(CurrentBuild, 5)], FirstBuild = CurrentBuild };
+        // Severity is a stored value (not recomputed by `with`), so the ranking is set explicitly.
+        QaFindingView stale = Stale(1656) with { Severity = 90 };
+        QaFindingView fresh = Fresh(1700) with { Count = 5, DistinctBots = 2, BuildCounts = [new QaBuildCount(CurrentBuild, 5)], FirstBuild = CurrentBuild, Severity = 10 };
         Assert.True(stale.Severity > fresh.Severity, "the test needs the stale finding to rank first");
         PlayerbotQaAggregator state = Restored(stale, fresh);
         var transport = new StaleCreateTransport();
-        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(stale.Id) + "
-Playerbot QA finding: opened last week");
+        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(stale.Id) + "\nPlayerbot QA finding: opened last week");
 
         await Run(NewPublisher(state, transport), state);
 
@@ -393,8 +393,7 @@ Playerbot QA finding: opened last week");
     {
         QaFindingView probe = Stale();
         var transport = new StaleCreateTransport();
-        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(probe.Id) + "
-Playerbot QA finding: closed last week", open: false);
+        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(probe.Id) + "\nPlayerbot QA finding: closed last week", open: false);
         QaFindingView closed = probe with { Publication = new QaPublication(QaPublicationState.KnownClosed, issue), OccurrencesReported = probe.Count };
         PlayerbotQaAggregator state = Restored(closed);
 
@@ -409,8 +408,7 @@ Playerbot QA finding: closed last week", open: false);
     {
         QaFindingView probe = Fresh();
         var transport = new StaleCreateTransport();
-        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(probe.Id) + "
-Playerbot QA finding: closed last week", open: false);
+        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(probe.Id) + "\nPlayerbot QA finding: closed last week", open: false);
         QaFindingView closed = probe with { Publication = new QaPublication(QaPublicationState.KnownClosed, issue), OccurrencesReported = 0 };
         PlayerbotQaAggregator state = Restored(closed);
 

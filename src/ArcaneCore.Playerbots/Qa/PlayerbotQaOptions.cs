@@ -32,7 +32,7 @@ public sealed class PlayerbotQaOptions
     /// <summary>Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5).</summary>
     public int TickHangWarmupMinutes { get; set; } = 5;
 
-    /// <summary>Seconds after the tick monitor last counted an overrun or a completed hang during which stall and set-aside signals are not filed (a starved host slows every bot's simulated ticks, so a bot that merely got few of them reads as stalled). 0 files them always (0..3600, default 120).</summary>
+    /// <summary>Window in seconds after the tick monitor counted a hang or a burst of overruns during which stall and set-aside signals are not filed (at least 10 overruns within the window, or one completed hang; a lone slow frame does not count. A starved host slows every bot's simulated ticks, so a bot that merely got few of them reads as stalled). 0 files them always (0..3600, default 120).</summary>
     public int StallStarvationSeconds { get; set; } = 120;
 
     /// <summary>The newest evidence samples kept per finding (1..20).</summary>
@@ -222,7 +222,7 @@ public sealed class PlayerbotQaGitHubOptions
     /// <summary>At most one comment per finding in this many hours (1..720).</summary>
     public int CommentIntervalHours { get; set; } = 24;
 
-    /// <summary>Reopen a finding's issue when it was closed and the finding keeps happening (off by default: a closed issue is recorded as known and left alone).</summary>
+    /// <summary>Reopen a finding's issue when it was closed and the finding keeps happening, if it was seen since this start-up (a stale finding from history is not reopened) (off by default: a closed issue is recorded as known and left alone).</summary>
     public bool ReopenClosed { get; set; }
 
     /// <summary>

@@ -202,6 +202,8 @@ It is local only (GitHub is never touched) and takes effect on disk at the next 
 - Skipped: a finding the publisher is working on, a finding with a duplicate issue still to close, and the start-up spell-coverage findings (by age).
 
 `World:Playerbots:Qa:TickHangWarmupMinutes` (default 5, 0..1440) is the start-up window, counted from the watchdog feature attaching, in which a tick hang is not reported to QA (cold grids, JIT, loading); 0 reports from the first tick. `World:Playerbots:Qa:AutoPruneHours` (default 0, off) runs the same age prune (without `closed`) on every pass, counted from the later of a
+
+`World:Playerbots:Qa:StallStarvationSeconds` (default 120, 0..3600, 0 = off) is the window in which stall and set-aside signals are dropped after the tick monitor counted a completed hang or at least 10 overruns within it (a starved host gives each bot few simulated ticks, so a bot that merely got little done reads as stalled; one slow frame does not count). The drops are visible: the `arcanecore_botqa_stalls_discounted_total` counter and a warning in the log (at most one per 5 minutes). `PlayerbotStallWatch` is not affected: bots still abandon goals while the host is starved.
 finding's last sighting and the server start, so a restart never prunes anything before the age has passed in this process. It logs the short ids it forgot.
 
 Every `ExportIntervalSeconds` (default 300) one pass saves `qa/findings.json`, writes `qa/report.md` and `qa/report.json` (ranked,
