@@ -490,6 +490,32 @@ public sealed class GuildManagerTests
     }
 
     [Fact]
+    public void LoggingOut_AfterATransfer_DoesNotSaveTheGuildNorBroadcastSignedOff_ButAnOrdinaryLogoutDoes()
+    {
+        using var f = new SocialFixture();
+        Player a = f.AddPlayer(1);
+        Player b = f.AddPlayer(2);
+        Guild guild = Found(f, a);
+        Join(f, a, b);
+        f.Context.Guilds.OnLoggedIn(b);
+        f.Persistence.Guilds.Clear();
+        f.ClearAll();
+
+        // The character left through a committed transfer and is still online on the target: nothing is written or announced.
+        f.Context.Guilds.OnLoggingOut(b, transferredAway: true);
+
+        Assert.Empty(f.Persistence.Guilds);
+        Assert.Empty(f.Sent(a, WorldOpcode.SmsgGuildEvent));
+        Assert.Equal(0, guild.Find(b.Guid.Low)!.LogoutTime);
+
+        f.Context.Guilds.OnLoggingOut(b);
+
+        Assert.Single(f.Persistence.Guilds);
+        Assert.Equal(GuildEvent.SignedOff, ReadEvent(f.Single(a, WorldOpcode.SmsgGuildEvent)).Event);
+        Assert.NotEqual(0, guild.Find(b.Guid.Low)!.LogoutTime);
+    }
+
+    [Fact]
     public void AdminCommands_InviteRankUninviteDelete()
     {
         using var f = new SocialFixture();

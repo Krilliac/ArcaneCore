@@ -202,6 +202,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
 
         world.PlayerLoggedIn += OnPlayerLoggedIn;
         world.PlayerLoggingOut += OnPlayerLoggingOut;
+        world.PlayerTransferPreparing += OnPlayerTransferPreparing;
         world.MapCreated += SubscribeCombat;
         world.MapUnloading += UnsubscribeCombat;
         world.Updated += OnWorldUpdated;
@@ -302,6 +303,7 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
         {
             _world.PlayerLoggedIn -= OnPlayerLoggedIn;
             _world.PlayerLoggingOut -= OnPlayerLoggingOut;
+            _world.PlayerTransferPreparing -= OnPlayerTransferPreparing;
             _world.MapCreated -= SubscribeCombat;
             _world.MapUnloading -= UnsubscribeCombat;
             _world.Updated -= OnWorldUpdated;
@@ -495,6 +497,20 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             _staged.Remove(player);
         }
 
+        // A retire after a committed transfer must not write: the target owns the cooldowns and auras now.
+        if (_world is not { IsRetiringTransferredPlayer: true })
+        {
+            SaveSpellState(player);
+        }
+
+        System.RemoveUnit(player);
+    }
+
+    /// <summary>A cluster transfer's capture: the cooldowns and auras a logout would write, queued before the capture's flush.</summary>
+    private void OnPlayerTransferPreparing(Player player) => SaveSpellState(player);
+
+    private void SaveSpellState(Player player)
+    {
         try
         {
             State.Save(SpellbookCache.CharacterId(player), System.CaptureState(player, UnixNowMs));
@@ -504,8 +520,6 @@ public sealed class SpellFeature : IWorldFeature, ICharacterHooks, IAsyncDisposa
             ArcaneCore.Kernel.Diagnostics.FaultLedger.Shared.Record("spell.logout-capture", ex);
             _logger.LogError(ex, "Capturing the spell state of {Player} failed", player.Guid);
         }
-
-        System.RemoveUnit(player);
     }
 
     /// <summary>

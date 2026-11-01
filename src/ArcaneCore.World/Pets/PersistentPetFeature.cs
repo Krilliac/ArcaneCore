@@ -25,6 +25,7 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
     private WorldRuntime? _world;
     private Action<Player>? _onLoggedIn;
     private Action<Player>? _onLoggingOut;
+    private Action<Player>? _onTransferPreparing;
 
     public void Attach(WorldRuntime world)
     {
@@ -61,9 +62,18 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
         };
         _world = world;
         _onLoggedIn = player => PublishLoaded(world, player, pets);
-        _onLoggingOut = player => _ = SaveAsync(player, pets);
+        // A retire after a committed transfer must not save: the target owns the pet row now.
+        _onLoggingOut = player =>
+        {
+            if (!world.IsRetiringTransferredPlayer)
+            {
+                _ = SaveAsync(player, pets);
+            }
+        };
+        _onTransferPreparing = player => _ = SaveAsync(player, pets); // queued before the capture's flush; CaptureCurrentPet runs synchronously here
         world.PlayerLoggedIn += _onLoggedIn;
         world.PlayerLoggingOut += _onLoggingOut;
+        world.PlayerTransferPreparing += _onTransferPreparing;
     }
 
     public async Task OnPlayerLoadingAsync(WorldSession session, CharacterRecord character, Player player)
@@ -157,9 +167,11 @@ public sealed class PersistentPetFeature(IServiceProvider services, IServiceScop
         {
             world.PlayerLoggedIn -= _onLoggedIn;
             world.PlayerLoggingOut -= _onLoggingOut;
+            world.PlayerTransferPreparing -= _onTransferPreparing;
             _world = null;
             _onLoggedIn = null;
             _onLoggingOut = null;
+            _onTransferPreparing = null;
         }
 
         return _pets?.Service.StopAsync() ?? Task.CompletedTask;
