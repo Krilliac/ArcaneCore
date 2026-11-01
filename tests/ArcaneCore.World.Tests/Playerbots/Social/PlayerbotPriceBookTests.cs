@@ -1,7 +1,9 @@
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Chat;
+using ArcaneCore.World.Tests.Items;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Social;
@@ -121,34 +123,72 @@ public sealed class PlayerbotPriceBookTests
         Assert.Equal(0u, source.ReferencePerUnit(worthless));
     }
 
+    private const string BotName = "Pricebot", PartnerName = "Pricepartner";
+    private const uint CheapEntry = 996_401, DearEntry = 996_402;
+
     /// <summary>
-    /// The post and the desk quote are equal. For one unit and a neutral partner the desk asks
-    /// <c>RoundUpToQuote(max(SellerAsk(price, 1, 0, ...), vendor value, 1))</c> of the source's price; the WTS post text is the same amount. Checked with the reference price
-    /// (below the seller minimum) and with the book's median, for a cheap item (the vendor floor binds) and an expensive one (a 10 silver rounding step binds). Broken (the
-    /// post still asking four times the vendor price): 400 copper against the desk's 141 or 6000.
+    /// The post and the desk quote are equal, driven through the real code: a real <see cref="PlayerbotTradeDesk.Quote"/> (Seller role, neutral partner, count 1) on a desk
+    /// that reads the shared <see cref="PlayerbotPriceBookDealPrices"/>, against the WTS post's price text (<see cref="PlayerbotNeedsVoice.PostPrice"/>, what the voice
+    /// posts) and the WTB whisper's price (<c>PlayerbotWorldChatter.Price</c>) for the same item and source. Run
+    /// with two sellers (below the minimum of 3: the reference price) and with three (the book's median), for a cheap item (the vendor floor binds) and a dear one (a rounding
+    /// step binds). Broken: a desk still on the reference prices, a post on the vendor multiple, or a changed desk formula each make one of these differ.
     /// </summary>
-    [Theory]
-    [InlineData(0, 100u)]
-    [InlineData(3, 100u)]
-    [InlineData(3, 40_000u)]
-    public void Post_AndDeskQuote_AreEqual(int sellers, uint sellPrice)
+    [Fact]
+    public async Task Post_AndDeskQuote_AreEqual()
     {
-        var clock = new Clock();
-        var book = new PlayerbotPriceBook(clock.Read);
-        var options = new PlayerbotOptions();
-        var source = new PlayerbotPriceBookDealPrices(book, options);
-        for (uint s = 1; s <= sellers; s++) book.Observe([Row(s * 3000 + 123_457, s)]);
-        ItemTemplate item = Item(sellPrice);
-        uint perUnit = source.ReferencePerUnit(item);
+        var items = new ItemTestContent();
+        items.Templates.Templates.AddRange(
+        [
+            new ItemTemplate { Entry = CheapEntry, Class = 15, SubClass = 0, Name = "Pricething Cheap", DisplayId = 1, Quality = 2, SellPrice = 100, Stackable = 20 },
+            new ItemTemplate { Entry = DearEntry, Class = 15, SubClass = 0, Name = "Pricething Dear", DisplayId = 1, Quality = 2, SellPrice = 40_000, Stackable = 20 },
+        ]);
+        SocialWorld world;
+        using (items.Use()) world = await SocialWorld.StartAsync(frozen: true);
+        await using SocialWorld ownedWorld = world;
+        Guid botId = await world.AddBotAsync(BotName);
+        await using WorldTestClient partnerClient = await world.AddPlayerAsync(PartnerName);
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(world, BotName), partner = HelpTestKit.Online(world, PartnerName);
+            Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, bot.Inventory.AddItem(CheapEntry, 1, out _));
+            Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, bot.Inventory.AddItem(DearEntry, 1, out _));
+            foreach (uint entry in new[] { CheapEntry, DearEntry })
+            {
+                ItemTemplate template = bot.Inventory.Templates.Find(entry)!;
+                string belowText = string.Empty;
+                foreach (uint sellers in new uint[] { 2, 3 })
+                {
+                    var clock = new Clock();
+                    var book = new PlayerbotPriceBook(clock.Read);
+                    var source = new PlayerbotPriceBookDealPrices(book, world.Options);
+                    for (uint s = 1; s <= sellers; s++) book.Observe([Row(s * 3000 + 123_457, s, entry: entry)]);
 
-        long deskQuote = PlayerbotDealRules.RoundUpToQuote(Math.Max(Math.Max(PlayerbotDealRules.SellerAsk(perUnit, 1, 0,
-            options.Social.Trading.Deals.FriendDiscountPercent, options.Social.Trading.Deals.DislikeMarkupPercent), sellPrice), 1));
-        long post = PlayerbotVoiceFacts.DealAsk(perUnit, item.SellPrice, item.Quality, options.Chat.Voice.PriceMultiplier);
+                    var desk = new PlayerbotTradeDesk(world.Options, HelpTestKit.RecorderOf(world), source, static () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), null);
+                    PlayerbotDealQuote quote = desk.Quote(botId, bot, partner, PlayerbotDealRole.Seller, entry, 1);
+                    Assert.True(quote.Ok, quote.Refusal.ToString());
 
-        Assert.Equal(deskQuote, post);
-        Assert.Equal(PlayerbotVoiceFacts.Price(deskQuote), PlayerbotVoiceFacts.Price(post));
-        if (sellers == 0) Assert.Equal(PlayerbotDealRules.RoundUpToQuote(Math.Max(PlayerbotAuctionPricing.ReferencePerUnit(item), sellPrice)), post);
-        else Assert.True(post > 4L * sellPrice || sellPrice > 10_000); // the median (about 129000 and up) drives the post, not the vendor multiple
+                    string post = PlayerbotNeedsVoice.PostPrice(template, source, world.Options.Chat.Voice.PriceMultiplier);
+                    Assert.Equal(quote.PriceText, post);
+                    var item = new BotChatItem(entry, template.Name, 1, template.Quality, template.SellPrice);
+                    Assert.Equal(PlayerbotChatEvents.Coins((uint)quote.Price), PlayerbotWorldChatter.Price(item, source, template));
+
+                    if (sellers == 2)
+                    {
+                        // Below the seller minimum the desk asks the reference price (never under the vendor value).
+                        Assert.Equal(PlayerbotVoiceFacts.Price(PlayerbotDealRules.RoundUpToQuote(Math.Max(PlayerbotAuctionPricing.ReferencePerUnit(template), template.SellPrice))), quote.PriceText);
+                        belowText = quote.PriceText;
+                    }
+                    else
+                    {
+                        // At the minimum the book's median (129457 copper, rounded up to a quote) drives both, not the reference price.
+                        Assert.Equal(PlayerbotVoiceFacts.Price(PlayerbotDealRules.RoundUpToQuote(Math.Max(129_457u, template.SellPrice))), quote.PriceText);
+                        Assert.NotEqual(belowText, quote.PriceText);
+                    }
+                }
+            }
+
+            return true;
+        });
     }
 
     /// <summary>With no price evidence (a reference of 0) the post keeps the vendor multiple, so an unpriced item still gets a sane post.</summary>
