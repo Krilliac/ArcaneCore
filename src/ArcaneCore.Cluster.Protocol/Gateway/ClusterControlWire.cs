@@ -146,8 +146,11 @@ public sealed record ControlDescribePayload(
     int AdmittedGateways,
     bool HandoffEnabled) : ControlPayload;
 
-/// <summary>TargetDescribe: the target's incarnation and ownership scope, whether it admits sessions and how many reservations it can still take.</summary>
-public sealed record ControlTargetDescribePayload(Guid Incarnation, string OwnershipScope, bool AdmissionOpen, int FreeReservations) : ControlPayload;
+/// <summary>
+/// TargetDescribe: the target's incarnation and ownership scope, whether it admits sessions, how many reservations it can still take and how many distinct gateways have an admitted link to it
+/// (one gateway per realm is the contract: the coordinator refuses a transfer when a worker involved reports more than one).
+/// </summary>
+public sealed record ControlTargetDescribePayload(Guid Incarnation, string OwnershipScope, bool AdmissionOpen, int FreeReservations, int AdmittedGateways) : ControlPayload;
 
 /// <summary>Reserve: whether the target reserved, and the instance id it reserved under (the target allocates one for an instanced map when the request named 0).</summary>
 public sealed record ControlReservePayload(bool Reserved, uint InstanceId) : ControlPayload;
@@ -380,10 +383,16 @@ public static class ClusterControlWire
                     throw new ArgumentException("negative free reservation count", nameof(reply));
                 }
 
+                if (p.AdmittedGateways < 0)
+                {
+                    throw new ArgumentException("negative admitted gateway count", nameof(reply));
+                }
+
                 w.Guid(p.Incarnation);
                 w.Text(p.OwnershipScope);
                 w.Bool(p.AdmissionOpen);
                 w.Int32(p.FreeReservations);
+                w.Int32(p.AdmittedGateways);
                 break;
             }
 
@@ -473,7 +482,13 @@ public static class ClusterControlWire
                         throw new InvalidDataException($"ControlReply negative free reservation count {free}");
                     }
 
-                    payload = new ControlTargetDescribePayload(incarnation, scope, open, free);
+                    int targetGateways = r.Int32();
+                    if (targetGateways < 0)
+                    {
+                        throw new InvalidDataException($"ControlReply negative admitted gateway count {targetGateways}");
+                    }
+
+                    payload = new ControlTargetDescribePayload(incarnation, scope, open, free, targetGateways);
                     break;
                 }
 

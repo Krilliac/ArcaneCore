@@ -117,6 +117,8 @@ public sealed class GatewayWorkerEndpoint(
         // Opt-in control channel (Cluster:Worker:Handoff / Transfers:Enabled): registered only when a key is on, so a worker without one answers every control request Disabled.
         // Resolved here, not in the constructor: building it looks up the world host among the hosted services, which would loop through this endpoint.
         _host.ControlHandler = rootServices?.GetService<Control.WorkerControlService>();
+        // The far-teleport router (Cluster:Worker:Transfers:Enabled, non-empty OwnedMaps) receives the gateway's answers to its transfer requests and the outcome notices; null otherwise.
+        _host.SubmitSink = rootServices?.GetService<Transfer.ClusterFarTeleportFeature>()?.Router;
         _host.Start();
         if (lifecycle is not null && _countdownHandler is null)
         {
