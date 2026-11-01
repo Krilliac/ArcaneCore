@@ -9,7 +9,7 @@ namespace ArcaneCore.Data.Content.Maps;
 public readonly record struct WorldMapAreaBounds(float Left, float Right, float Top, float Bottom);
 
 /// <summary>
-/// Reads build-5875 WorldMapArea.dbc (8 four-byte fields; vmangos <c>WorldMapAreaEntryfmt</c> "xinxffff", DBCStructure.h): id, MapID (field 1), AreaID
+/// Reads build-5875 WorldMapArea.dbc (8 four-byte fields; vmangos <c>WorldMapAreaEntryfmt</c> "xinxffff", Database/DBCfmt.h:87; struct in DBCStructure.h:737): id, MapID (field 1), AreaID
 /// (field 2), the area name (not kept) and LocLeft, LocRight, LocTop, LocBottom (fields 4 to 7). It keeps the rows of the two continents (maps 0 and 1)
 /// that name an area (AreaID not 0), keyed by that area id, so a zone id gives its map rectangle for a "x, y" place line. Rows with a bound that is not
 /// a finite number, or with an empty rectangle, are skipped; when two rows name the same area the first one wins.

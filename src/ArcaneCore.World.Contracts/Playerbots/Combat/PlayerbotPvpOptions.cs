@@ -81,7 +81,7 @@ public sealed class PlayerbotPvpInitiateOptions
 /// <summary>
 /// <c>World:Playerbots:Pvp:Defense</c>: a bot that is attacked by an enemy player or bot calls for help; free bots of its side nearby walk over and fight
 /// the attackers, and a "LocalDefense" channel line names the place (with map coordinates when <see cref="WorldMapAreaDbcPath"/> is set). The switch is
-/// independent of War Mode: War Mode on means the calls are active, and <see cref="Enabled"/> turns them on while War Mode is off. Not retail behaviour
+/// independent of War Mode and is a master switch: <see cref="Enabled"/> is the only switch for the calls, so while it is false there are no calls, no announcements and no responders, even with War Mode on. Not retail behaviour
 /// (retail sends no call, and its "is under attack" line is a client-formatted zone packet, not chat). Every key except <see cref="WorldMapAreaDbcPath"/>
 /// is live; the path is read once when the bot feature attaches.
 /// </summary>
@@ -120,13 +120,13 @@ public sealed class PlayerbotPvpDefenseOptions
     /// <summary>Highest <see cref="ProvokeThrottleSeconds"/>.</summary>
     public const int MaxProvokeThrottleSeconds = 3600;
 
-    /// <summary>Let attacked bots call for help while War Mode is off (off by default: not retail behaviour; War Mode on already activates the calls).</summary>
+    /// <summary>Master switch for defense: attacked bots call for help, announce it and get responders only while this is true (off by default: not retail behaviour). War Mode does not turn the calls on.</summary>
     public bool Enabled { get; set; }
 
     /// <summary>Post a line in the zone's "LocalDefense" channel when a call opens. Off silences the line and leaves the coordination as it is.</summary>
     public bool Announce { get; set; } = true;
 
-    /// <summary>With War Mode off, bots of the attackers' side also answer a call (with War Mode on they always do).</summary>
+    /// <summary>While <see cref="Enabled"/> is true and War Mode is off, bots of the attackers' side also answer a call (with War Mode on they always do). Has no effect while <see cref="Enabled"/> is false.</summary>
     public bool BothSides { get; set; }
 
     /// <summary>A bot answers a call only within this many yards of the call's centre (50 to 1000).</summary>

@@ -23,7 +23,7 @@ internal static class PlayerbotDefenseText
     }
 
     /// <summary>
-    /// The map position of a world point inside <paramref name="bounds"/>, in whole percents (fractions cut off, as the client's coordinate display does),
+    /// The map position of a world point inside <paramref name="bounds"/>, in whole percents (fractions cut off; a design choice),
     /// or null when the point lies outside the rectangle or a value is not finite. The client frame runs right to left along world Y and top to bottom
     /// along world X: x = (Left - worldY) / (Left - Right) * 100 and y = (Top - worldX) / (Top - Bottom) * 100.
     /// </summary>
