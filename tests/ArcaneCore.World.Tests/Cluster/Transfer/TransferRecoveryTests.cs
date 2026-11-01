@@ -143,8 +143,17 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
             return Task.CompletedTask;
         }
 
+        /// <summary>Makes the next activations throw, after the source was already retired (a crash inside stage 6).</summary>
+        public int FailActivateTimes { get; set; }
+
         public Task ActivateTargetPlayerAsync(Guid transferId, PlayerTransferBundle bundle, CharacterOwnershipToken targetOwnershipToken, CancellationToken cancellationToken = default)
         {
+            if (FailActivateTimes > 0)
+            {
+                FailActivateTimes--;
+                throw new InvalidOperationException("simulated-crash-in-activate");
+            }
+
             Shadows.Remove(transferId);
             Slots.Remove(transferId);
             Active[bundle.CharacterGuid] = bundle;
@@ -162,6 +171,9 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
         public int FailCancelTimes { get; set; }
 
         public int Cancels { get; private set; }
+
+        /// <summary>Makes the next route switches throw (a crash inside stage 6, after the target was activated).</summary>
+        public int FailRouteSwitchTimes { get; set; }
 
         public bool IsStaged(Guid transferId) => _staged.ContainsKey(transferId);
 
@@ -196,6 +208,12 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
             Guid transferId, ulong characterGuid, long sessionGeneration, WorkerNodeId targetWorkerId, CharacterOwnershipToken targetOwnershipToken,
             CancellationToken cancellationToken = default)
         {
+            if (FailRouteSwitchTimes > 0)
+            {
+                FailRouteSwitchTimes--;
+                throw new InvalidOperationException("simulated-crash-in-route-switch");
+            }
+
             _staged.Remove(transferId);
             Routes[characterGuid] = targetWorkerId;
             return Task.CompletedTask;
@@ -301,7 +319,6 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
             data.Add(PlayerTransferStage.InstallPassive, durable);
             data.Add(PlayerTransferStage.StageWorldPort, durable);
             data.Add(PlayerTransferStage.CommitDecision, durable);
-            data.Add(PlayerTransferStage.ActivateAndRetire, durable);
         }
 
         return data;
@@ -320,21 +337,9 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
         (TransferRecoveryService service, ITransferDecisionStore store) = await RestartAsync(f);
         TransferRecoverySummary summary = await service.RunStartupSweepAsync(localWorker: null, stagedRoutes: f.Gateway);
 
-        bool committed = crashAt is PlayerTransferStage.CommitDecision or PlayerTransferStage.ActivateAndRetire;
+        bool committed = crashAt == PlayerTransferStage.CommitDecision;
         Assert.Equal(0, summary.Failed);
-        switch (crashAt)
-        {
-            case PlayerTransferStage.CommitDecision:
-                Assert.Equal(new TransferRecoverySummary(1, 1, 0, 0, 0), summary);
-                break;
-            case PlayerTransferStage.ActivateAndRetire:
-                // The transfer had already completed; there was nothing to resolve.
-                Assert.Equal(TransferRecoverySummary.Empty, summary);
-                break;
-            default:
-                Assert.Equal(new TransferRecoverySummary(1, 0, 1, 0, 0), summary);
-                break;
-        }
+        Assert.Equal(committed ? new TransferRecoverySummary(1, 1, 0, 0, 0) : new TransferRecoverySummary(1, 0, 1, 0, 0), summary);
 
         if (committed)
             AssertExactlyOneOwner(f, store, f.Target, f.Source, f.Request.SourceOwnershipToken.Epoch + 1);
@@ -345,6 +350,42 @@ public sealed class TransferRecoveryTests : IAsyncLifetime
         Assert.Empty(await ((ITransferJournalScan)store).ListUnresolvedAsync());
 
         // A second sweep finds nothing to do and changes nothing.
+        TransferRecoverySummary again = await service.RunStartupSweepAsync(localWorker: null, stagedRoutes: f.Gateway);
+        Assert.Equal(TransferRecoverySummary.Empty, again);
+    }
+
+    /// <summary>
+    /// Stage 6 (ActivateAndRetire) crashed halfway, with the record still Committed: the source is already retired and either the target
+    /// was never activated (activate throws) or it was but the gateway route was not switched (route switch throws).
+    /// </summary>
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    public async Task StartupSweep_AfterCrashInsideStage6_RollsForwardToExactlyOneOwner_WithoutLosingItemsOrCopper(bool durable, bool crashInActivate)
+    {
+        Fixture f = await CreateFixtureAsync(durable);
+        if (crashInActivate)
+            f.Target.FailActivateTimes = 1;
+        else
+            f.Gateway.FailRouteSwitchTimes = 1;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Coordinator.ExecuteTransferAsync(f.Request));
+
+        // The crash left the record Committed, not Completed, with the source already retired.
+        Assert.Equal(1, await f.Store.CountUnresolvedAsync());
+        Assert.Empty(f.Source.Active);
+        Assert.Empty(f.Source.Suspended);
+
+        (TransferRecoveryService service, ITransferDecisionStore store) = await RestartAsync(f);
+        TransferRecoverySummary summary = await service.RunStartupSweepAsync(localWorker: null, stagedRoutes: f.Gateway);
+
+        Assert.Equal(new TransferRecoverySummary(1, 1, 0, 0, 0), summary);
+        AssertExactlyOneOwner(f, store, f.Target, f.Source, f.Request.SourceOwnershipToken.Epoch + 1);
+        Assert.Equal(0, await store.CountUnresolvedAsync());
+        Assert.Empty(await ((ITransferJournalScan)store).ListUnresolvedAsync());
+
         TransferRecoverySummary again = await service.RunStartupSweepAsync(localWorker: null, stagedRoutes: f.Gateway);
         Assert.Equal(TransferRecoverySummary.Empty, again);
     }
