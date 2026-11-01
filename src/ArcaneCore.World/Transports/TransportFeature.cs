@@ -125,6 +125,10 @@ public sealed class TransportFeature(IServiceProvider services, ILogger<Transpor
         {
             TeleportPassenger = (player, mapId, x, y, z, o) => services.GetService<TeleportFeature>() is { } teleport
                 && teleport.Teleports.TeleportTo(player, mapId, x, y, z, o, TeleportOptions.NotLeaveTransport),
+            // Only with a cluster far-teleport router: without one the ship is held with its passengers (the single-process default).
+            TeleportPassengerToUnownedMap = (player, mapId, x, y, z, o) => services.GetService<TeleportFeature>() is { } teleport
+                && teleport.Teleports.ClusterFarRouter is not null
+                && teleport.Teleports.TeleportTo(player, mapId, x, y, z, o, TeleportOptions.NotLeaveTransport),
             PreparePassengerForMapChange = PrepareForMapChange,
             TeleportToHomebind = player => services.GetService<TeleportFeature>() is { } teleport && teleport.Teleports.TeleportToHomebind(player),
         };

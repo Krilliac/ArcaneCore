@@ -26,6 +26,8 @@ internal enum PresenceOp : byte
     Logout = 18,
     ChannelModerate = 19,
     ChannelState = 20,
+    GroupCommand = 21,
+    GroupDrain = 22,
 }
 
 /// <summary>
@@ -618,6 +620,19 @@ internal static class PresenceWireCodec
             {
                 ChannelModerationState? state = router.GetChannelModeration(r.ReadString());
                 return EncodeReply(w => WriteChannelState(w, state));
+            }
+
+            case PresenceOp.GroupCommand:
+            {
+                string worker = r.ReadString();
+                service.Groups.Execute(worker, GroupWireCodec.ReadCommand(r));
+                return EncodeReply();
+            }
+
+            case PresenceOp.GroupDrain:
+            {
+                IReadOnlyList<ArcaneCore.Game.Groups.GroupEvent> events = service.Groups.Drain(r.ReadString());
+                return EncodeReply(w => GroupWireCodec.WriteEvents(w, events));
             }
 
             default:

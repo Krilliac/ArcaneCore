@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Schema.Upgrade;
 using ArcaneCore.Data.Schema.Upgrade.Cli;
+using ArcaneCore.World.Clustering;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -14,8 +15,8 @@ internal static class WorldStartup
 {
     /// <summary>
     /// First the single-writer lock (<see cref="WorldWriterGuard"/>: the SQLite sidecar file, or the MariaDB/MySQL/PostgreSQL session advisory lock), then the schema initializers
-    /// (<see cref="DatabaseStartup"/>): a second world on the same characters database is refused before anything opens, upgrades or checkpoints it. A lock that is held elsewhere, and one that cannot be created at all (permissions,
-    /// a full disk), are both one line on <paramref name="error"/> and the refusal exit code instead of an unhandled crash.
+    /// (<see cref="DatabaseStartup"/>): a second world on the same characters database is refused before anything opens, upgrades or checkpoints it. With Cluster:Fencing:Scope=Worker the lock is the worker's shard lock, so several workers start on one database and only the same shard twice is refused. A lock that is held elsewhere, and one that cannot be created at all (permissions,
+    /// a full disk) and a Worker-scope configuration that cannot run (a bad shard id, SQLite without the test switch), are all one line on <paramref name="error"/> and the refusal exit code instead of an unhandled crash.
     /// </summary>
     /// <returns>0 when ready, otherwise the exit code the process should return.</returns>
     public static async Task<int> PrepareDatabasesAsync(IServiceProvider services, Func<Task> initialize, TextWriter error)
@@ -33,7 +34,7 @@ internal static class WorldStartup
                 {
                     guard.Acquire();
                 }
-                catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException)
+                catch (Exception ex) when (ex is CharacterDatabaseAlreadyOwnedException or IOException or UnauthorizedAccessException or WorkerScopeConfigurationException)
                 {
                     refusal = ex;
                 }

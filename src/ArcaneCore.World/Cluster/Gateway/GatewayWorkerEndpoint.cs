@@ -337,7 +337,9 @@ public static class GatewayWorkerServiceCollectionExtensions
         services.AddSingleton(sp => new WorldWriterGuard(sp.GetService<Microsoft.Extensions.Options.IOptions<Data.DatabaseOptions>>(),
             sp.GetService<Microsoft.Extensions.Logging.ILogger<WorldWriterGuard>>(), deferUntilPromotion: true,
             lifetime: sp.GetService<IHostApplicationLifetime>(), drain: sp.GetService<ArcaneCore.World.Persistence.ShutdownDrain>(),
-            fence: sp.GetService<ArcaneCore.Data.Characters.Ownership.CharacterDatabaseWriterFence>())); // a promoted standby must be able to stop itself on a take-over
+            fence: sp.GetService<ArcaneCore.Data.Characters.Ownership.CharacterDatabaseWriterFence>(), // a promoted standby must be able to stop itself on a take-over
+            fencingOptions: sp.GetService<Microsoft.Extensions.Options.IOptions<Clustering.CharacterFencingOptions>>(), // Scope=Worker: promotion takes the shard lock, not the realm lock
+            workerOptions: sp.GetService<Microsoft.Extensions.Options.IOptions<GatewayWorkerOptions>>()));
         ServiceDescriptor? listener = services.LastOrDefault(d => d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(WorldServer));
         if (listener is not null)
         {

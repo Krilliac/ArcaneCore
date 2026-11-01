@@ -5,6 +5,7 @@ using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Character;
 using ArcaneCore.World.Gm.Core;
+using ArcaneCore.World.Spells;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.DebugTools;

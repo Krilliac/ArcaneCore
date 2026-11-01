@@ -54,12 +54,23 @@ public sealed class WorldHost(
     private bool _watchClaims;
     private CancellationTokenSource? _claimWatchStop;
     private Task _claimWatch = Task.CompletedTask;
+    private CancellationTokenSource? _heartbeatStop;
+    private Task _heartbeat = Task.CompletedTask;
     private readonly Lock _stopGate = new();
     private Task? _stop;
     private volatile bool _attached; // the features were attached (StartAsync): from then on a stop has a world, features and a save queue to stop
 
     /// <summary>How often a world running with fencing off looks for a claim (test seam); null uses <see cref="CharacterFencingOptions.ClaimWatchIntervalSeconds"/>.</summary>
     internal TimeSpan? ClaimWatchInterval { get; init; }
+
+    /// <summary>How often a Worker-scope world records its heartbeat (test seam); null uses <see cref="CharacterFencingOptions.HeartbeatSeconds"/>.</summary>
+    internal TimeSpan? HeartbeatInterval { get; init; }
+
+    /// <summary>Whether this world claims a <c>worker:&lt;shard&gt;</c> ownership row (<c>Cluster:Fencing:Scope=Worker</c>) instead of the realm-wide <c>world</c> row.</summary>
+    private bool IsWorkerScope => _fencing.Scope == CharacterFencingScope.Worker;
+
+    /// <summary>The durable scope this world claims: <c>world</c>, or <c>worker:&lt;shard&gt;</c> (shard defaults to <c>Cluster:Worker:NodeId</c>).</summary>
+    public string OwnershipScope => _fencing.ResolveScope(_worker?.NodeId ?? string.Empty);
 
     /// <summary>Runs where the playerbot restore runs, after the world and the save queue have started, with the start's token (test seam).</summary>
     internal Func<CancellationToken, Task>? StartupWorkForTesting { get; init; }
@@ -93,6 +104,8 @@ public sealed class WorldHost(
                 logger.LogInformation("Worker owns maps: {Maps}", ownedMaps);
         }
 
+        _fencing.ValidateWorkerScope(_worker, nodeOptions?.Value.Role ?? Cluster.Social.ClusterNodeRole.Combined);
+
         bool acquiredHere = false;
         try
         {
@@ -120,6 +133,8 @@ public sealed class WorldHost(
         }
 
         saveQueue.FatalFailure += OnFatalSaveFailure;
+        if (!_standby && IsWorkerScope && _ownership is { } claimed)
+            StartHeartbeat(claimed);
         if (_standby)
         {
             await using (AsyncServiceScope scope = scopes.CreateAsyncScope())
@@ -174,15 +189,25 @@ public sealed class WorldHost(
                     admit = feature => roleFilter.ShouldAttachFeature(feature.GetType(), role, leaseKeeper.NodeId, leaseKeeper.TokenFor, leaseKeeper.UtcNow, _incarnation);
                 }
 
+                // The durable id allocators are primed BEFORE the features attach (writer-lock design section 3, point 5): an id taken while a feature attaches
+                // must come from a reserved block, not from the seeded-from-max counter, which can collide with a block another worker reserved but has not written yet.
+                // Allocators of features that only exist once attached (social, instances) are primed now and handed over right after the attach. A failure here
+                // happens before _attached is set, so the start's catch gives the leases back.
+                Action? handOverIdAllocators = null;
+                if (_fencing.Enabled && scope.ServiceProvider.GetService<IIdRangeReservationStore>() is not null)
+                {
+                    handOverIdAllocators = await PrepareDurableIdAllocatorsAsync(scope.ServiceProvider, scopes, cancellationToken: cancellationToken, requireDurableIds: IsWorkerScope)
+                        .ConfigureAwait(false);
+                }
+                else if (IsWorkerScope)
+                {
+                    throw new InvalidOperationException("Cluster:Fencing:Scope=Worker needs the durable id range reservation store: two workers on one database would otherwise hand out the same ids");
+                }
+
                 // Features are singletons, so the scope hands out the same instances. Set first: a feature that attached before one that threw must still stop.
                 _attached = true;
                 scope.ServiceProvider.AttachWorldFeatures(world, admit);
-
-                if (_fencing.Enabled && scope.ServiceProvider.GetService<IIdRangeReservationStore>() is not null)
-                {
-                    await PrimeDurableIdAllocatorsAsync(scope.ServiceProvider, scopes, cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
-                }
+                handOverIdAllocators?.Invoke();
             }
 
             logger.LogInformation("Loaded {Count} character names", directory.Count);
@@ -273,7 +298,8 @@ public sealed class WorldHost(
     {
         if (!_standbyStarted)
             throw new InvalidOperationException("the standby world has not started; it cannot be promoted");
-        if (takenOver.Scope != "world" || takenOver.Incarnation != _incarnation)
+        string ownershipScope = OwnershipScope;
+        if (takenOver.Scope != ownershipScope || takenOver.Incarnation != _incarnation)
             throw new InvalidOperationException("the ownership to promote under was not handed to this world's incarnation");
 
         // The process-lifetime writer lock first (SQLite sidecar file, or the MariaDB/MySQL/PostgreSQL advisory lock), before the ownership row is read: while the old
@@ -292,12 +318,15 @@ public sealed class WorldHost(
 
         try
         {
+            // Worker scope: the realm lock is probed after the shard lock is held (a worker never holds the realm lock); a holder is a Combined world.
+            if (IsWorkerScope && writerGuard is not null && !writerGuard.ProbeRealmFree())
+                throw new InvalidOperationException("a Combined world holds the characters database realm writer lock; refusing to promote a worker shard beside it, the standby stays a standby");
             await using AsyncServiceScope scope = scopes.CreateAsyncScope();
             ICharacterOwnershipStore store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>()
                 ?? throw new InvalidOperationException("no characters ownership store is registered; a standby cannot be promoted");
             // Only reads the row: the token must be the database's current active one. Never TryAcquireAsync here, which would claim a released
             // (inactive) row at a new epoch outside the handoff journal and leave it claimed by a standby whose refusal then holds no token.
-            CharacterOwnershipToken? current = await store.GetCurrentAsync("world", cancellationToken).ConfigureAwait(false);
+            CharacterOwnershipToken? current = await store.GetCurrentAsync(ownershipScope, cancellationToken).ConfigureAwait(false);
             if (current != takenOver)
                 throw new InvalidOperationException("the characters database is not owned by this standby under the promoted token; refusing to promote");
         }
@@ -312,6 +341,8 @@ public sealed class WorldHost(
         if (ownershipContext is not null)
             ownershipContext.Current = takenOver;
         _standby = false;
+        if (IsWorkerScope)
+            StartHeartbeat(takenOver);
         logger.LogInformation("Standby world promoted at ownership epoch {Epoch}: attaching the features and starting the simulation", takenOver.Epoch);
 
         // As an active world's start does after its ownership claim: load the characters, attach, start, run the after-start work. A failure here
@@ -351,9 +382,24 @@ public sealed class WorldHost(
         uint lowWatermark = 256,
         CancellationToken cancellationToken = default,
         bool requireDurableIds = false)
+        => (await PrepareDurableIdAllocatorsAsync(services, scopes, blockSize, lowWatermark, cancellationToken, requireDurableIds).ConfigureAwait(false)).Invoke();
+
+    /// <summary>
+    /// <see cref="PrimeDurableIdAllocatorsAsync"/> split in two so the priming can run before the features attach: this primes every allocator and hands over, immediately,
+    /// the ones whose feature exists before it attaches (items, pets, GM tickets, economy; the economy's <c>Enabled</c> is set inside its attach, so it is not a condition).
+    /// The returned action hands over the allocators of state that exists only once attached (groups, guilds, petitions, instances); run it right after the attach.
+    /// </summary>
+    internal static async Task<Action> PrepareDurableIdAllocatorsAsync(
+        IServiceProvider services,
+        IServiceScopeFactory scopes,
+        uint blockSize = 1024,
+        uint lowWatermark = 256,
+        CancellationToken cancellationToken = default,
+        bool requireDurableIds = false)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(scopes);
+        Action handOver = static () => { };
 
         Func<string, uint, CancellationToken, Task<IdRangeBlock>> reserveAsync = async (scopeName, count, ct) =>
         {
@@ -391,26 +437,29 @@ public sealed class WorldHost(
         {
             var groupAlloc = new DurableIdBlockAllocator(IdRangeScopes.Group, blockSize, lowWatermark, reserveAsync);
             await groupAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
-            social.Context.Groups.IdBlockAllocator = groupAlloc;
 
             var guildAlloc = new DurableIdBlockAllocator(IdRangeScopes.Guild, blockSize, lowWatermark, reserveAsync);
             await guildAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
-            social.Context.Guilds.IdBlockAllocator = guildAlloc;
 
             var petitionAlloc = new DurableIdBlockAllocator(IdRangeScopes.Petition, blockSize, lowWatermark, reserveAsync);
             await petitionAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
-            social.Context.Petitions.IdBlockAllocator = petitionAlloc;
-            social.Context.Petitions.RequireDurableIds = requireDurableIds;
+            handOver += () =>
+            {
+                social.Context.Groups.IdBlockAllocator = groupAlloc;
+                social.Context.Guilds.IdBlockAllocator = guildAlloc;
+                social.Context.Petitions.IdBlockAllocator = petitionAlloc;
+                social.Context.Petitions.RequireDurableIds = requireDurableIds;
+            };
         }
 
         if (services.GetService<Instances.InstanceFeature>() is { } instances)
         {
             var instanceAlloc = new DurableIdBlockAllocator(IdRangeScopes.Instance, blockSize, lowWatermark, reserveAsync);
             await instanceAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
-            instances.Instances.IdBlockAllocator = instanceAlloc;
+            handOver += () => instances.Instances.IdBlockAllocator = instanceAlloc;
         }
 
-        if (services.GetService<Economy.EconomyFeature>() is { Enabled: true } economy)
+        if (services.GetService<Economy.EconomyFeature>() is { } economy)
         {
             var mailAlloc = new DurableIdBlockAllocator(IdRangeScopes.Mail, blockSize, lowWatermark, reserveAsync);
             await mailAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
@@ -424,6 +473,8 @@ public sealed class WorldHost(
             await textAlloc.EnsurePrimedAsync(cancellationToken).ConfigureAwait(false);
             economy.ItemTextIdAllocator = textAlloc;
         }
+
+        return handOver;
     }
 
     /// <summary>
@@ -450,6 +501,7 @@ public sealed class WorldHost(
 
     private async Task StopClaimWatchAsync()
     {
+        await StopHeartbeatAsync().ConfigureAwait(false);
         if (_claimWatchStop is not { } watchStop) return;
         await watchStop.CancelAsync().ConfigureAwait(false);
         await _claimWatch.ConfigureAwait(false);
@@ -588,20 +640,164 @@ public sealed class WorldHost(
         if (!_fencing.Enabled)
         {
             _watchClaims = true;
-            if (await store.IsOwnedAsync("world", cancellationToken).ConfigureAwait(false))
+            // Any active row (the world row or a worker shard), not just 'world': an unfenced world must not start beside a fenced worker either.
+            if (await store.IsAnyOwnedAsync(cancellationToken).ConfigureAwait(false))
                 throw new InvalidOperationException("the characters database is already owned; disabled fencing cannot start a duplicate world writer");
             return;
         }
 
-        _ownership = _fencing is { HasTakeover: true, TakeoverEpoch: { } takeoverEpoch, TakeoverIncarnation: { } takeoverIncarnation }
-            ? await store.TryTakeoverAsync(new CharacterOwnershipToken("world", takeoverEpoch,
-                takeoverIncarnation), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false)
-            : await store.TryAcquireAsync("world", _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
-        if (_ownership is null)
-            throw new InvalidOperationException("the characters database is already owned by another world authority");
+        if (IsWorkerScope)
+        {
+            _ownership = await ClaimWorkerScopeAsync(store, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            _ownership = _fencing is { HasTakeover: true, TakeoverEpoch: { } takeoverEpoch, TakeoverIncarnation: { } takeoverIncarnation }
+                ? await store.TryTakeoverAsync(new CharacterOwnershipToken("world", takeoverEpoch,
+                    takeoverIncarnation), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false)
+                : await store.TryAcquireAsync("world", _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
+            if (_ownership is null)
+                throw new InvalidOperationException("the characters database is already owned by another world authority");
+        }
+
         world.CharacterOwnership = _ownership;
         if (ownershipContext is not null)
             ownershipContext.Current = _ownership; // the ambient token the characters write fence verifies every unaware store's transaction against
+    }
+
+    /// <summary>
+    /// The Worker-scope claim (design _wf/writer-lock-DESIGN.md sections 1 and 5): this process already holds the shard's advisory lock (<see cref="WorldWriterGuard"/>).
+    /// Claim the <c>worker:&lt;shard&gt;</c> row with this worker's owned maps (an explicit takeover when configured); if the row is still active under another incarnation
+    /// and this process holds the shard lock, that incarnation is dead (the server released its lock), so the row is reclaimed at epoch+1 (the old token is then refused
+    /// by the fence). Only after the claim committed is the realm lock probed: a holder is a Combined world, and the claim is released again. Each side of the
+    /// Combined/Worker exclusion writes first and checks second, so one of them always sees the other.
+    /// </summary>
+    private async Task<CharacterOwnershipToken> ClaimWorkerScopeAsync(ICharacterOwnershipStore store, CancellationToken cancellationToken)
+    {
+        string scope = OwnershipScope;
+        if (!CharacterFencingOptions.TryGetOwnedMaps(_worker!, out IReadOnlyCollection<uint> maps, out string? mapsError))
+            throw new WorkerScopeConfigurationException($"Cluster:Fencing:Scope=Worker: {mapsError}");
+
+        CharacterOwnershipToken? token;
+        if (_fencing is { HasTakeover: true, TakeoverEpoch: { } takeoverEpoch, TakeoverIncarnation: { } takeoverIncarnation })
+        {
+            token = await store.TryTakeoverAsync(new CharacterOwnershipToken(scope, takeoverEpoch, takeoverIncarnation), _fencing.OwnerNode, _incarnation, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            token = await store.TryAcquireAsync(scope, _fencing.OwnerNode, _incarnation, maps, cancellationToken).ConfigureAwait(false);
+            if (token is null)
+                token = await TryReclaimDeadIncarnationAsync(store, scope, maps, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (token is null)
+            throw new InvalidOperationException($"the worker scope '{scope}' could not be claimed: a live world owns the same shard, its maps overlap another active worker, or a Combined world owns the characters database");
+
+        bool realmFree;
+        try
+        {
+            realmFree = writerGuard is null || writerGuard.ProbeRealmFree();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            // The probe itself failed (the server is unreachable): the claim just written must not stay active, so the same contract holds as for a held lock.
+            await ReleaseWorkerClaimAsync(store, token, scope).ConfigureAwait(false);
+            logger.LogError(ex, "The realm writer lock could not be probed for the worker scope '{Scope}'; the claim was released", scope);
+            throw;
+        }
+
+        if (!realmFree)
+        {
+            await ReleaseWorkerClaimAsync(store, token, scope).ConfigureAwait(false);
+            throw new InvalidOperationException($"a Combined world holds the characters database realm writer lock; the worker scope '{scope}' claim was released and this worker does not start");
+        }
+
+        return token;
+    }
+
+    private async Task ReleaseWorkerClaimAsync(ICharacterOwnershipStore store, CharacterOwnershipToken token, string scope)
+    {
+        try
+        {
+            await store.ReleaseAsync(token, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("world-host.release-ownership", ex);
+            logger.LogError(ex, "The worker scope '{Scope}' claim could not be released after the realm writer lock check", scope);
+        }
+    }
+
+    /// <summary>
+    /// A restart after a hard kill: the shard row is still active under the dead incarnation. Holding the shard lock is the proof that process is gone, so the row is
+    /// reclaimed (CAS on the observed epoch and incarnation). Null when there is nothing to reclaim, the lock is not held (no proof), or the CAS lost a race.
+    /// </summary>
+    private async Task<CharacterOwnershipToken?> TryReclaimDeadIncarnationAsync(ICharacterOwnershipStore store, string scope, IReadOnlyCollection<uint> maps, CancellationToken cancellationToken)
+    {
+        if (writerGuard is not { HoldsLock: true })
+            return null;
+        CharacterOwnershipToken? current = await store.GetCurrentAsync(scope, cancellationToken).ConfigureAwait(false);
+        if (current is null || current.Incarnation == _incarnation)
+            return null;
+        CharacterOwnershipToken? reclaimed = await store.TryReclaimAsync(current, _fencing.OwnerNode, _incarnation, maps, cancellationToken).ConfigureAwait(false);
+        if (reclaimed is not null)
+            logger.LogWarning("Reclaimed the worker scope '{Scope}' from the dead incarnation {OldIncarnation} (epoch {OldEpoch}) at epoch {Epoch}: its writer lock was free, so that process is gone", scope, current.Incarnation, current.Epoch, reclaimed.Epoch);
+        return reclaimed;
+    }
+
+    /// <summary>Starts recording this worker's heartbeat on its ownership row every <see cref="CharacterFencingOptions.HeartbeatSeconds"/> (Worker scope only). A heartbeat the row refuses means the shard was reclaimed or reaped: the save queue goes terminal and the host stops.</summary>
+    private void StartHeartbeat(CharacterOwnershipToken token)
+    {
+        // Not synchronised: start, promote and stop are sequenced by the host lifecycle (StopHeartbeatAsync does its exchange only after both have returned).
+        if (_heartbeatStop is not null) return;
+        _heartbeatStop = new CancellationTokenSource();
+        CancellationToken stop = _heartbeatStop.Token;
+        _heartbeat = Task.Run(() => HeartbeatLoopAsync(token, stop));
+    }
+
+    private async Task StopHeartbeatAsync()
+    {
+        if (Interlocked.Exchange(ref _heartbeatStop, null) is not { } stop) return;
+        await stop.CancelAsync().ConfigureAwait(false);
+        await _heartbeat.ConfigureAwait(false);
+        stop.Dispose();
+    }
+
+    private async Task HeartbeatLoopAsync(CharacterOwnershipToken token, CancellationToken stop)
+    {
+        TimeSpan interval = HeartbeatInterval ?? TimeSpan.FromSeconds(_fencing.HeartbeatSeconds);
+        try
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                // Wait first: the claim itself wrote the first heartbeat. A failed beat also waits a full interval before the retry.
+                await Task.Delay(interval, stop).ConfigureAwait(false);
+                try
+                {
+                    await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+                    ICharacterOwnershipStore store = scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>();
+                    if (!await store.HeartbeatAsync(token, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), stop).ConfigureAwait(false))
+                    {
+                        saveQueue.FailTerminal(new InvalidOperationException(
+                            $"the worker scope '{token.Scope}' at epoch {token.Epoch} no longer belongs to this world (it was reclaimed or reaped)"));
+                        return;
+                    }
+                }
+                catch (OperationCanceledException) when (stop.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    FaultLedger.Shared.Record("world.host", ex);
+                    logger.LogFault(LogLevel.Warning, "world-host.heartbeat", ex, "Could not record the worker ownership heartbeat; will retry next interval");
+                }
+            }
+        }
+        catch (OperationCanceledException) when (stop.IsCancellationRequested)
+        {
+            return;
+        }
     }
 
     private async Task ReleaseOwnershipAsync(CancellationToken cancellationToken, List<Exception> failures)
@@ -639,7 +835,7 @@ public sealed class WorldHost(
                 {
                     await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                     ICharacterOwnershipStore? store = scope.ServiceProvider.GetService<ICharacterOwnershipStore>();
-                    if (store is not null && await store.IsOwnedAsync("world", stop).ConfigureAwait(false))
+                    if (store is not null && await store.IsAnyOwnedAsync(stop).ConfigureAwait(false))
                     {
                         saveQueue.FailTerminal(new InvalidOperationException(
                             "the characters database was claimed by a fenced world while this world runs with fencing disabled"));

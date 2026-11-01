@@ -43,6 +43,7 @@ public sealed partial class TransportSystem
     private readonly List<ShipTransport> _ships = [];
     private readonly Dictionary<Map, List<ShipTransport>> _byMap = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<ObjectGuid> _justBoarded = [];
+    private readonly HashSet<ObjectGuid> _routedAway = [];
     private readonly HashSet<uint> _missingTransportReportedEntries = [];
     private bool _installed;
 
@@ -73,6 +74,13 @@ public sealed partial class TransportSystem
     /// a player whose ship changes maps is put off the ship where it stands.
     /// </summary>
     public Func<Player, uint, float, float, float, float, bool>? TeleportPassenger { get; set; }
+
+    /// <summary>
+    /// A player aboard a ship whose next map another worker owns: the player, the new map and the position on it. Returns true when the
+    /// cluster far teleport accepted the transfer. The world feature wires it to the teleport service only when a
+    /// <see cref="ArcaneCore.Game.Teleport.IClusterFarTeleportRouter"/> is set; unset, the ship is held with its passengers. Called once per accepted player.
+    /// </summary>
+    public Func<Player, uint, float, float, float, float, bool>? TeleportPassengerToUnownedMap { get; set; }
 
     /// <summary>
     /// Run on a player before its ship changes maps, after a dead passenger was revived (vmangos TeleportTransport:
@@ -418,6 +426,7 @@ public sealed partial class TransportSystem
         if (passenger is Player player)
         {
             _justBoarded.Remove(player.Guid);
+            _routedAway.Remove(player.Guid);
         }
 
         Raise(PassengerLeft, ship, passenger);
@@ -447,8 +456,10 @@ public sealed partial class TransportSystem
         Map? oldMap = ship.CurrentMap;
         if ((oldMap is null || oldMap.MapId != newMapId) && !_world.Owns(newMapId))
         {
-            // The next frame is on a map another worker owns: the caller holds the ship where it is (no far transfer between workers yet)
-            // instead of creating the map. It is asked again each tick; this is cheap and silent.
+            // The next frame is on a map another worker owns: the caller holds the ship where it is instead of creating the map. It is
+            // asked again each tick; this is cheap and silent. Each player aboard is handed once to the cluster far teleport (the
+            // loading screen to the owning worker); the ship itself and its creatures stay.
+            RoutePassengersToUnownedMap(ship, newMapId, x, y, z, o);
             return false;
         }
 
@@ -502,6 +513,45 @@ public sealed partial class TransportSystem
         }
 
         return true;
+    }
+
+    private void RoutePassengersToUnownedMap(ShipTransport ship, uint newMapId, float x, float y, float z, float o)
+    {
+        if (TeleportPassengerToUnownedMap is not { } route)
+        {
+            return;
+        }
+
+        foreach (Unit passenger in ship.Passengers.ToArray())
+        {
+            if (passenger is not Player player || _routedAway.Contains(player.Guid))
+            {
+                continue;
+            }
+
+            float destX = passenger.Movement.TransportX;
+            float destY = passenger.Movement.TransportY;
+            float destZ = passenger.Movement.TransportZ;
+            float destO = passenger.Movement.TransportOrientation;
+            ShipTransport.CalculatePassengerPosition(ref destX, ref destY, ref destZ, ref destO, x, y, z, o);
+            try
+            {
+                if (route(player, newMapId, destX, destY, destZ, destO))
+                {
+                    _routedAway.Add(player.Guid); // accepted: the transfer runs on its own, do not ask again each tick
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                _logger.LogFault(
+                    "transport.route-passenger",
+                    ex,
+                    "TransportSystem fault routing passenger {PassengerGuid} on transport {Entry} to map {NewMapId}",
+                    player.Guid,
+                    ship.Entry,
+                    newMapId);
+            }
+        }
     }
 
     // vmangos: "Units teleport on transport not implemented": a creature stays on the old map; one whose owner is not

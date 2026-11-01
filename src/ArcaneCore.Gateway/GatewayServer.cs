@@ -55,7 +55,7 @@ public sealed class GatewayServer : BackgroundService
         Warden = warden;
         _realmLiveness = realmLiveness;
         _logger = loggers.CreateLogger<GatewayServer>();
-        Transfers = new GatewayTransferRouter(new GatewayServerTransferEnvironment(this, () => Transfers));
+        Transfers = new GatewayTransferRouter(new GatewayServerTransferEnvironment(this));
     }
 
     /// <summary>The gateway side of cross-worker player transfers: buffers, replays and re-points sessions on the worker coordinator's control frames.</summary>
