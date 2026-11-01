@@ -3,6 +3,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Spells.Procs.Talents;
 using ArcaneCore.Game.Stealth;
 using ArcaneCore.Kernel.Diagnostics;
 
@@ -126,35 +127,13 @@ public sealed partial class SpellSystem
         }
     }
 
-    /// <summary>Allocation-free pre-check: whether <paramref name="unit"/> holds a live invisibility aura (the detect query itself allocates).</summary>
-    private bool HoldsInvisibilityAura(Unit unit)
-    {
-        List<SpellAuraHolder> held = GetAuras(unit);
-        for (int h = 0; h < held.Count; h++)
-        {
-            if (held[h].IsRemoved)
-            {
-                continue;
-            }
-
-            foreach (SpellAura? aura in held[h].AuraSpan)
-            {
-                if (aura is { Type: AuraType.ModInvisibility })
-                {
-                    return true;
-                }
-            }
-        }
-
-        return false;
-    }
-
     /// <summary>
     /// The extra target checks of vmangos AnyAoETargetUnitInObjectRangeCheck (GridNotifiers.h:952-968) on top of the hostility test: a totem is
     /// immune to AoE (Creature::IsImmuneToAoe; the creature_template AoE immunity flag is not mapped here), a unit the caster cannot see is skipped
-    /// (a GM-invisible player the caster's security does not reach, or an invisibility aura the caster cannot detect), and a caster that is not
-    /// PvP flagged does not hit another player's units (Unit::CanAttackWithoutEnablingPvP, Unit.cpp:9985-9993; free-for-all pairs and duel
-    /// opponents are exempt).
+    /// (a GM-invisible player the caster's security does not reach), and a caster that is not PvP flagged does not hit another player's units
+    /// (Unit::CanAttackWithoutEnablingPvP, Unit.cpp:9985-9993; free-for-all pairs and duel opponents are exempt). Units under an invisibility
+    /// aura are still hit, as in vmangos (the AoE check has no stealth or invisibility test). The GM-invisible skip follows the lane brief; vmangos's
+    /// <c>u->CanSeeInWorld(caster)</c> is a world-mask test from the target toward the caster, and there is no world mask here.
     /// </summary>
     private bool IsValidEnemyAreaTarget(Unit caster, Unit unit)
     {
@@ -168,14 +147,7 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        if (HoldsInvisibilityAura(unit) && !Invisibility.CanDetect(this, caster, unit))
-        {
-            return false;
-        }
-
-        return unit.GetCharmerOrOwnerPlayerOrSelf() is not { } attacked || caster.GetCharmerOrOwnerPlayerOrSelf() is not { } attacker
-            || (attacker.UnitFlags & UnitFlags.Pvp) != 0 || ((attacker.Flags & PlayerFlags.FfaPvp) != 0 && (attacked.Flags & PlayerFlags.FfaPvp) != 0)
-            || DuelRules.IsInDuelWith(attacker, attacked);
+        return TalentProcSupport.CanAttackWithoutEnablingPvP(caster, unit);
     }
 
     /// <summary>Test seam: one <see cref="UpdateAreaAuras"/> pass for <paramref name="unit"/>'s state without the rest of <see cref="Update"/> (allocation tests).</summary>

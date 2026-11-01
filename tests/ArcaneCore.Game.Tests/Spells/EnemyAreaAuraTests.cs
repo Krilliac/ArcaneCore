@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Ranged;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Scripts;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
 using static ArcaneCore.Game.Tests.Spells.SpellTestKit;
@@ -15,7 +16,7 @@ namespace ArcaneCore.Game.Tests.Spells;
 /// </summary>
 public sealed class EnemyAreaAuraTests
 {
-    private const uint Sam = 946101, InvisibilitySpell = 946102, PermanentFeignDeath = 29266;
+    private const uint Sam = 946101, PermanentFeignDeath = 29266;
     private const long SavedAt = 1_800_000_000_000;
 
     private static SpellInfo EnemyArea() => Spell(Sam,
@@ -67,9 +68,9 @@ public sealed class EnemyAreaAuraTests
     }
 
     [Fact]
-    public void GmInvisiblePlayer_IsSkipped_AndPlayerWithAnInvisibilityAuraTheCasterCannotDetect_IsSkipped()
+    public void GmInvisiblePlayer_IsSkipped_UntilVisibleAgain()
     {
-        using SpellTestKit kit = Kit(Permanent(InvisibilitySpell, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModInvisibility, misc: 1)));
+        using SpellTestKit kit = Kit();
         (Player caster, _) = kit.AddPlayer(1);
         FlagForPvp(caster);
         (Player hidden, _) = kit.AddHostilePlayer(2, 5, 0, ArcaneCore.Kernel.Accounts.AccountSecurity.GameMaster); // a higher security than the caster's, so the caster cannot see it
@@ -84,11 +85,6 @@ public sealed class EnemyAreaAuraTests
         hidden.GmInvisible = false;
         kit.Advance(1500);
         Assert.True(kit.System.HasAura(hidden, Sam)); // control: visible again, hit
-
-        kit.System.CastSpell(hidden, InvisibilitySpell, SpellCastTargets.ForSelf(), triggered: true);
-        kit.Advance(1500);
-        Assert.False(kit.System.HasAura(hidden, Sam)); // a held child goes when the unit stops being a valid target
-        Assert.True(kit.System.HasAura(shown, Sam));
     }
 
     [Fact]
