@@ -63,7 +63,7 @@ public sealed partial class CreatureMapSystem
             bool allowed = SpawnAllowed(guid);
             if (!allowed)
             {
-                _respawnAt.Remove(guid);
+                ForgetRespawnForGate(guid);
                 if (live is not null)
                 {
                     Despawn(live);
@@ -74,7 +74,7 @@ public sealed partial class CreatureMapSystem
 
             if (live is null && _grids.TryGetValue(GridDefines.ComputeGridCoord(spawn.X, spawn.Y), out LoadedGrid? grid))
             {
-                _respawnAt.Remove(guid); // a stale death of an earlier run of the event
+                ForgetRespawnForGate(guid); // a stale death of an earlier run of the event
                 LoadSpawns(grid, [spawn]);
             }
         }
