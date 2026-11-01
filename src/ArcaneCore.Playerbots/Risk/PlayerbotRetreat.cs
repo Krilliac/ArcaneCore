@@ -447,7 +447,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
         }
 
         _fanResume = 0;
-        return PlayerbotNavigation.TryPlanToward(player, goal, options, out PlayerbotRoute? toward) ? toward : null;
+        return PlayerbotNavigation.TryPlanToward(player, goal, options, out PlayerbotRoute? toward, nowMs: session.World.NowMs) ? toward : null;
     }
 
     private bool CrossesNewHazard(Player player, PlayerbotRoute route)
@@ -482,7 +482,7 @@ internal sealed class PlayerbotRetreat(WorldSession session, PlayerbotOptions op
     private PlayerbotRoute? Plan(Player player, Vector3 goal, IReadOnlyList<Vector3> crumbs)
     {
         if ((PlayerbotNavigation.TryPlan(player, goal, options, out PlayerbotRoute? route)
-                || PlayerbotNavigation.TryPlanToward(player, goal, options, out route))
+                || PlayerbotNavigation.TryPlanToward(player, goal, options, out route, nowMs: session.World.NowMs))
             && route is not null && !CrossesNewHazard(player, route))
             return route;
         int end = -1;
