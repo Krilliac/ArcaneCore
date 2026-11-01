@@ -163,6 +163,9 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
     /// <summary>The durable group id block allocator, when cluster ID range reservation is on (thread-safe); null uses a counter above every restored id.</summary>
     public Func<DurableIdBlockAllocator?>? IdBlockAllocatorSource { get; set; }
 
+    /// <summary>Whether (Worker mode) an unprimed allocator must throw instead of falling back to the counter; null means false.</summary>
+    public Func<bool>? RequireDurableIdsSource { get; set; }
+
     /// <summary>World time in Unix seconds (test seam).</summary>
     internal Func<long> UnixSecondsClock { get; set; } = static () => DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -1106,6 +1109,13 @@ public sealed class GroupAuthority(IRealmPresenceDirectory directory)
             }
 
             return allocated;
+        }
+
+        if (RequireDurableIdsSource?.Invoke() == true)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Group,
+                $"Group id allocator for scope '{IdRangeScopes.Group}' is not primed with a durable block (fail-closed in Worker mode).");
         }
 
         if (_nextId == 0)

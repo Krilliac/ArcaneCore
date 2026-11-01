@@ -70,7 +70,10 @@ public sealed partial class GuildManager(SocialContext context)
     /// </summary>
     public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
 
-    private int AllocateGuildId()
+    /// <summary>When true (Worker mode) a guild id is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    public bool RequireDurableIds { get; set; }
+
+    internal int AllocateGuildId()
     {
         if (IdBlockAllocator is { } allocator)
         {
@@ -78,6 +81,13 @@ public sealed partial class GuildManager(SocialContext context)
             if (allocated >= _nextId && allocated < int.MaxValue)
                 _nextId = allocated + 1;
             return allocated;
+        }
+
+        if (RequireDurableIds)
+        {
+            throw new IdRangeExhaustedException(
+                IdRangeScopes.Guild,
+                $"Guild id allocator for scope '{IdRangeScopes.Guild}' is not primed with a durable block (fail-closed in Worker mode).");
         }
 
         if (!IsAuthority)
