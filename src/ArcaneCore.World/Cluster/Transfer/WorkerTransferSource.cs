@@ -247,7 +247,7 @@ public sealed class WorkerTransferSource(
         await RestoreAsync(suspension, cancellationToken).ConfigureAwait(false);
     }
 
-    public Task RetireSourcePlayerAsync(
+    public async Task RetireSourcePlayerAsync(
         Guid transferId,
         ulong characterGuid,
         CharacterOwnershipToken supersededToken,
@@ -262,7 +262,7 @@ public sealed class WorkerTransferSource(
             {
                 if (_retired.Contains(transferId))
                 {
-                    return Task.CompletedTask; // a roll-forward repeats the step
+                    return; // a roll-forward repeats the step
                 }
 
                 throw new InvalidOperationException($"character {characterGuid} is not suspended on this worker; nothing to retire for transfer '{transferId}'");
@@ -289,7 +289,10 @@ public sealed class WorkerTransferSource(
 
         // The hold set at capture stays; quarantine makes the refusal explicit and survives a later ResumeCharacter of the hold.
         persistence.Refuse(suspension.CharacterId);
-        return Task.CompletedTask;
+
+        // The retired entity never ran the logout teardown (capture detached it without it): do it now so the PlayerLoggingOut subscribers
+        // forget the guid and the Player is released. The claim is already gone, so this runs at most once per transfer.
+        await world.InvokeAsync(() => world.RetireDetachedPlayer(suspension.Player), CancellationToken.None).ConfigureAwait(false);
     }
 
     private Capture CaptureOnWorldThread(
@@ -353,7 +356,7 @@ public sealed class WorkerTransferSource(
             persistence.ReleaseHold(state.Id);
             if (!world.IsOnline(player.Guid) && player.Map is null)
             {
-                world.AddPlayer(player, ResolveMap(player, map));
+                world.ReattachPlayerAfterTransferAbort(player, ResolveMap(player, map));
             }
 
             throw;
@@ -379,7 +382,7 @@ public sealed class WorkerTransferSource(
 
             if (!world.IsOnline(suspension.Player.Guid) && suspension.Player.Map is null)
             {
-                world.AddPlayer(suspension.Player, ResolveMap(suspension.Player, suspension.Map));
+                world.ReattachPlayerAfterTransferAbort(suspension.Player, ResolveMap(suspension.Player, suspension.Map));
             }
 
             persistence.ReleaseHold(suspension.CharacterId);

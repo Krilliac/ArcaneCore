@@ -532,6 +532,44 @@ public sealed partial class WorldRuntime : IDisposable
     }
 
     /// <summary>
+    /// Put a player taken out by <see cref="DetachPlayerForTransfer"/> back into its map and the online registry after an aborted transfer
+    /// (world thread). Unlike <see cref="AddPlayer"/> this is not a login: the played-time clock keeps running from the session start, and the
+    /// instance bind / enter-limiter record of a login are not repeated. <paramref name="map"/> is the map to re-enter.
+    /// </summary>
+    public void ReattachPlayerAfterTransferAbort(Player player, Map map)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(map);
+        if (!_online.TryAdd(player.Guid, player))
+        {
+            throw new InvalidOperationException($"{player.Name} ({player.Guid}) is already online");
+        }
+
+        _onlineByName[player.Name] = player;
+        _autosaveRescan = true; // its autosave timer restarts at the next autosave scan
+        map.AddPlayer(player);
+    }
+
+    /// <summary>
+    /// Run the logout-side teardown for a player detached by <see cref="DetachPlayerForTransfer"/> whose transfer committed (world thread):
+    /// raises <see cref="PlayerLoggingOut"/> so every feature forgets the guid, and the <c>OnLogout</c> script hook. No snapshot is queued
+    /// (the transfer's settlement save is the last write) and the entity is already out of the map and registry. Returns false, doing
+    /// nothing, when <paramref name="player"/> is online (it was never detached or has been re-added).
+    /// </summary>
+    public bool RetireDetachedPlayer(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (_online.TryGetValue(player.Guid, out Player? current) && ReferenceEquals(current, player))
+        {
+            return false;
+        }
+
+        Raise(PlayerLoggingOut, player, nameof(PlayerLoggingOut));
+        Scripts.Player.OnLogout(player);
+        return true;
+    }
+
+    /// <summary>
     /// Complete a logout (world thread): save and remove the player, then return its client to
     /// the character screen (vmangos WorldSession::LogoutPlayer → SMSG_LOGOUT_COMPLETE).
     /// </summary>

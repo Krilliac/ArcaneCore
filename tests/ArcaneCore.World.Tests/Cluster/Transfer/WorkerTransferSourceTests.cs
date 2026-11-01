@@ -66,6 +66,7 @@ public sealed class WorkerTransferSourceTests : IDisposable
         _other = NewPlayer(8, "Bystander", new GenerationSession(6, 1));
         _world.AddPlayer(_player, _world.GetMap(0));
         _world.AddPlayer(_other, _world.GetMap(0));
+        _world.UseManualClock(); // the played-time test advances game time deterministically
         _world.Start();
         ITransferPersistence persistence = new SwitchableFlushPersistence(new SaveQueueTransferPersistence(_queue), () => _failFlush);
         _source = new WorkerTransferSource(Source, _world, persistence, new FeatureTransferPlayerProbe(_probeServices, _queue));
@@ -206,6 +207,45 @@ public sealed class WorkerTransferSourceTests : IDisposable
         Assert.Equal(savedAtCapture, _saved.Count);
         await Assert.ThrowsAsync<InvalidOperationException>(() => _source.ResumeAfterAbortAsync(id, _player.Guid.Value, Token, "late"));
         await _source.RetireSourcePlayerAsync(id, _player.Guid.Value, Token); // a roll-forward repeats it
+        Assert.Equal(1, _loggingOut); // the repeat did not tear the player down twice
+    }
+
+    [Fact]
+    public async Task Retire_RunsTheLogoutTeardownExactlyOnce_AndCaptureAndAbortNever()
+    {
+        Guid id = Guid.NewGuid();
+        await CaptureAsync(id);
+        Assert.Equal(0, _loggingOut);
+
+        await _source.RetireSourcePlayerAsync(id, _player.Guid.Value, Token);
+
+        Assert.Equal(1, _loggingOut);
+        Assert.False(_world.IsOnline(_player.Guid));
+
+        Guid abortedId = Guid.NewGuid();
+        Player other = _other;
+        await _source.SuspendAndCaptureAsync(abortedId, other.Guid.Value, Target, 1, 0, new TransferPosition(1f, 2f, 3f, 0f));
+        await _source.ResumeAfterAbortAsync(abortedId, other.Guid.Value, Token, "abort");
+        Assert.Equal(1, _loggingOut); // capture and abort of another player raised nothing
+    }
+
+    [Fact]
+    public async Task Abort_KeepsThePlayedTimeBuiltUpThisSession_AndTheSameMap()
+    {
+        await _world.AdvanceClockAsync(120_000);
+        uint before = await _world.InvokeAsync(() => (_player.PlayedTimeAt(_world.NowMs) << 0) + 0u);
+        Assert.True(before >= 120);
+        Map? map = _player.Map;
+
+        Guid id = Guid.NewGuid();
+        await CaptureAsync(id);
+        await _source.ResumeAfterAbortAsync(id, _player.Guid.Value, Token, "abort");
+
+        uint after = await _world.InvokeAsync(() => _player.PlayedTimeAt(_world.NowMs));
+        uint levelAfter = await _world.InvokeAsync(() => _player.LevelPlayedTimeAt(_world.NowMs));
+        Assert.Equal(before, after);
+        Assert.True(levelAfter >= 120);
+        Assert.Same(map, _player.Map);
     }
 
     [Fact]
