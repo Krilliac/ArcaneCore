@@ -3,7 +3,7 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// <summary>
 /// <c>World:Playerbots:Social:Trading</c>: bots answering trade windows, fixed-price deals, group gifts and the outflow limits (P4a). On by default.
 /// The keys are live (a change applies without a restart). The trade desk (<c>PlayerbotTradeDesk</c>) reads <see cref="Enabled"/>, <see cref="LowTrustPermille"/>,
-/// <see cref="TradeTimeoutSeconds"/> and every key of <see cref="Deals"/> (except the price book keys, read by the price book of design lane T1, not yet built) and <see cref="Limits"/>;
+/// <see cref="TradeTimeoutSeconds"/> and every key of <see cref="Deals"/> (the price book keys through the price book the desk, the WTS posts and the whisper quotes share) and <see cref="Limits"/>;
 /// <see cref="ScamMemoryDays"/> and <see cref="NinjaMemoryDays"/> are read by the trade ledger. The gift keys (<see cref="AnswerTrades"/>, <see cref="AcceptGifts"/>, <see cref="GiftMinValueCopper"/>,
 /// <see cref="MaxGiftsReceivedPerHour"/>, <see cref="Gifts"/>) are read by later P4 steps and nothing yet. The desk runs only while <c>World:Playerbots:Enabled</c> is on; the deal talk
 /// also needs <c>World:Playerbots:Chat:Enabled</c> and the bot voice. The scam and ninja memory of a partner is kept in the bot's trade ledger (counts and times only).
@@ -88,10 +88,10 @@ public sealed class PlayerbotSocialTradingDealsOptions
     /// <summary>The ask markup in percent for a partner the bot dislikes, scaled by the negative affinity (0..200, default 25).</summary>
     public int DislikeMarkupPercent { get; set; } = 25;
 
-    /// <summary>Not yet implemented: the price book is not built, so nothing reads this key. The hours an auction house observation is kept in the price book (1..720, default 24). Read by the price book (design lane T1), not yet by the desk.</summary>
+    /// <summary>The hours an auction house observation is kept in the price book (1..720, default 24). Read live by the price book on every price: older sightings of a seller are dropped.</summary>
     public int PriceBookHours { get; set; } = 24;
 
-    /// <summary>Not yet implemented: the price book is not built, so nothing reads this key. The distinct seller accounts an item needs before an auction house reading prices a deal (1..20, default 3). Read by the price book (design lane T1), not yet by the desk.</summary>
+    /// <summary>The distinct sellers an item needs within the price book window before the auction house median prices a deal and a WTS post (1..20, default 3); below it the reference price is used.</summary>
     public int PriceBookMinSellers { get; set; } = 3;
 
     /// <summary>A counter-offer the bot accepts: at most this share under its ask when selling (never under the vendor value); one counter per deal, then it holds its price (0..50, default 10).</summary>

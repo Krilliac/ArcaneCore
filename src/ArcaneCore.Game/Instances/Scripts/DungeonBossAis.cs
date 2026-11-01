@@ -46,6 +46,10 @@ public static class DungeonBossAis
         [(329, 10812)] = B(c => new DathrohanBalnazzarAI(c)),
         [(329, 10808)] = B(c => new TimmyTheCruelAI(c)),
         [(329, 10418)] = B(c => new CrimsonGuardsmanAI(c)),
+        [(329, 10439)] = B(c => new RamsteinTheGorgerAI(c)),
+        [(329, 10435)] = B(c => new MagistrateBarthilasAI(c)),
+        [(329, 10437)] = B(c => new NerubenkanAI(c)),
+        [(329, 11143)] = B(c => new PostmasterMalownAI(c)),
     };
 
     public static CreatureAI? Create(Creature creature, uint mapId)

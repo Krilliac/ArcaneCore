@@ -7,7 +7,7 @@ namespace ArcaneCore.Game.Economy.AuctionBot;
 public sealed record AuctionBotSellIntent(uint Entry, uint Count, uint StartBid, uint Buyout, uint Hours);
 
 /// <summary>One player auction the buyer wants to buy out (<see cref="Bid"/> false) or bid on (true) at <see cref="Price"/>.</summary>
-public sealed record AuctionBotBuyIntent(uint AuctionId, uint Price, bool Bid = false);
+public sealed record AuctionBotPlannedBuy(uint AuctionId, uint Price, bool Bid = false);
 
 /// <summary>
 /// The seller and buyer decisions of cMaNGOS AuctionHouseBot::Update (AuctionHouseBot.cpp:159-288), without side effects: the World
@@ -184,11 +184,11 @@ public sealed class AuctionBotPlanner
     /// outbid step, at least the start bid) below it is bid. The bot's own auctions (cMaNGOS also bids on those once a player bid),
     /// auctions where the bot's bid already stands, blacklisted items and items it would not value are skipped.
     /// </summary>
-    public IReadOnlyList<AuctionBotBuyIntent> PlanBuy(IEnumerable<AuctionRecord> auctions, Func<uint, ItemTemplate?> templates)
+    public IReadOnlyList<AuctionBotPlannedBuy> PlanBuy(IEnumerable<AuctionRecord> auctions, Func<uint, ItemTemplate?> templates)
     {
         ArgumentNullException.ThrowIfNull(auctions);
         ArgumentNullException.ThrowIfNull(templates);
-        var intents = new List<AuctionBotBuyIntent>();
+        var intents = new List<AuctionBotPlannedBuy>();
         foreach (AuctionRecord auction in auctions)
         {
             if (auction.SellerId == 0 || (auction.BidderId == 0 && auction.Bid > 0) || _blacklist.Contains(auction.ItemEntry)
@@ -206,11 +206,11 @@ public sealed class AuctionBotPlanner
             uint next = AuctionHouseRules.MinimumBid(auction);
             if (auction.Buyout > 0 && check > auction.Buyout)
             {
-                intents.Add(new AuctionBotBuyIntent(auction.Id, auction.Buyout));
+                intents.Add(new AuctionBotPlannedBuy(auction.Id, auction.Buyout));
             }
             else if (_options.Bidding && check > next && (auction.Buyout == 0 || next < auction.Buyout))
             {
-                intents.Add(new AuctionBotBuyIntent(auction.Id, next, Bid: true));
+                intents.Add(new AuctionBotPlannedBuy(auction.Id, next, Bid: true));
             }
         }
 

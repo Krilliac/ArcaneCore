@@ -651,6 +651,13 @@ by waves 2-3).
 - Bot think per map (**World:Playerbots:ThinkInMapPhase** from the plan): each map's bots think inside the map's update, after
   the updaters and before Output, under a per-map share of the think budget. `TryManagedAction` and `TryManagedMovement`
   (`ManagedWorldSession.cs:136-178`) follow §3.4's bot rules (queue after the first Deferred action, dedupe).
+- **As built (2026-10-31, ahead of wave 5):** the option is named World:Parallel:BotThinkPerMap (default off, restart), under the other
+  parallel options, instead of World:Playerbots:ThinkInMapPhase. The feature runs its prelude (motion pump, intake, coordinators) and groups
+  the bots by map before the maps phase, each map's `MapBotThinkStage` thinks for its bots with a per-map rotation (two lanes, cursors
+  re-anchored by bot id) and a head-count share of the time and action budgets, and the feature closes the tick after the maps (bots on no
+  map are thought for then). The stage is **always gated**: World:Parallel:Ungated naming it is ignored, because the per-session bot
+  action queue of §3.4 and its tests (a [Deferred, MapLocal] sequence runs in issue order; a re-issued pending action is not queued twice)
+  are not built. The stage can be ungated only together with them. With parallel maps the maps' time shares overlap.
 - Lands after the path-job pool and the social pass slicing. It reuses both and redesigns neither.
 - **Tests:** a bot [Deferred, MapLocal] sequence runs in issue order; a re-issued pending action is not queued twice; outbox
   order against resumed packets for one session.

@@ -308,8 +308,7 @@ public abstract class CreatureAI
                 continue;
             }
 
-            float dx = other.X - Me.X, dy = other.Y - Me.Y, dz = other.Z - Me.Z;
-            if (dx * dx + dy * dy + dz * dz > rangeSquared
+            if (WorldGeometry.DistanceSq3D(other, Me) > rangeSquared
                 || (!ReferenceEquals(other, Me) && !hostility.CanAssist(other, Me) && !hostility.IsFriendly(Me, other)))
             {
                 continue;

@@ -349,6 +349,7 @@ public sealed class PlayerbotPopulationOptions
     /// in RushBrakeWindows consecutive windows of RushBrakeWindowSeconds seconds (50..10000). 0 (the default) means 1.5 times
     /// TickP95BudgetMs, so the brake follows the budget the population itself keeps.
     /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number: 0 (1.5 times TickP95BudgetMs) or 50 to 10000")]
     public int RushBrakeP95Ms { get; set; }
 
     /// <summary>The consecutive windows over the RushBrakeP95Ms ceiling that pause a rush, and under the resume line that lift the pause (1..20).</summary>

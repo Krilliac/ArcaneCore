@@ -251,3 +251,300 @@ public sealed class DathrohanBalnazzarAI(Creature creature) : ScriptDevBossAI(cr
         }
     }
 }
+
+/// <summary>The fixed-interval timer of the Stratholme boss scripts: the timer restarts whether or not the spell went off, unlike
+/// <see cref="ScriptDevBossAI.CastWhenReady"/> which retries a failed cast.</summary>
+internal static class StratholmeTimers
+{
+    /// <summary>Counts <paramref name="timer"/> down; true (and the timer set to <paramref name="resetMs"/>) when it ran out this tick.</summary>
+    public static bool Elapsed(ref uint timer, uint diffMs, uint resetMs)
+    {
+        if (timer > diffMs)
+        {
+            timer -= diffMs;
+            return false;
+        }
+
+        timer = resetMs;
+        return true;
+    }
+}
+
+/// <summary>boss_ramstein_the_gorgerAI (vmangos stratholme/boss_ramstein_the_gorger.cpp: Reset, UpdateAI). The encounter state (aggro, fail,
+/// death) is kept by <see cref="StratholmeInstance"/> through its creature hooks.</summary>
+public sealed class RamsteinTheGorgerAI(Creature creature) : ScriptDevBossAI(creature)
+{
+    public const uint SpellTrample = 5568, SpellKnockout = 17307;
+    private uint _trample, _knockout;
+
+    public override void OnRespawn() => ResetFight();
+
+    // ScriptedAI::EnterEvadeMode runs Reset() in vmangos; OnEvade is this repo's hook for it.
+    public override void OnEvade() => ResetFight();
+
+    private void ResetFight()
+    {
+        _trample = 3_000;
+        _knockout = 12_000;
+    }
+
+    public override void OnUpdate(uint diffMs)
+    {
+        if (!InCombat())
+        {
+            return;
+        }
+
+        if (StratholmeTimers.Elapsed(ref _trample, diffMs, 7_000))
+        {
+            DoCast(Me, SpellTrample);
+        }
+
+        if (_knockout > diffMs)
+        {
+            _knockout -= diffMs;
+            return;
+        }
+
+        // Knockout drops the victim's threat to nothing once it landed (modifyThreatPercent(victim, -100)); a failed cast tries again next tick.
+        Unit? victim = Victim;
+        if (victim is not null && DoCast(victim, SpellKnockout) == CreatureCastResult.Ok)
+        {
+            Me.Combat.Threat.ModifyThreatPercent(victim, -100);
+            _knockout = 10_000;
+        }
+        else
+        {
+            _knockout = 0;
+        }
+    }
+}
+
+/// <summary>boss_magistrate_barthilasAI (vmangos stratholme/boss_magistrate_barthilas.cpp: Reset, MoveInLineOfSight, JustDied, UpdateAI).</summary>
+public sealed class MagistrateBarthilasAI(Creature creature) : ScriptDevBossAI(creature)
+{
+    public const uint SpellDrainingBlow = 16793, SpellCrowdPummel = 10887, SpellMightyBlow = 14099, SpellFuriousAnger = 16791;
+    public const uint ModelNormal = 10433, ModelHuman = 3637;
+    public const uint MaxFuriousAnger = 25;
+    private uint _draining, _pummel, _mighty, _anger, _angerCount;
+
+    /// <summary>How many Furious Anger casts he has made this fight.</summary>
+    public uint AngerCount => _angerCount;
+
+    public override void OnRespawn() => ResetFight();
+
+    // ScriptedAI::EnterEvadeMode runs Reset() in vmangos; OnEvade is this repo's hook for it.
+    public override void OnEvade() => ResetFight();
+
+    private void ResetFight()
+    {
+        _draining = 16_000;
+        _pummel = 12_000;
+        _mighty = 8_000;
+        _anger = 5_000;
+        _angerCount = 0;
+        Me.DisplayId = Me.IsAlive ? ModelNormal : ModelHuman; // the undead model while alive, the human one as a corpse
+    }
+
+    public override void OnDeath(Unit? killer) => Me.DisplayId = ModelHuman;
+
+    public override void MoveInLineOfSight(Unit who)
+    {
+        // A player within 10 yards lifts the spawning flag (he starts out unattackable until the run is over).
+        if (who is Player && (Me.UnitFlags & UnitFlags.Spawning) != 0 && WorldGeometry.CenterDistance3D(Me, who) <= 10f)
+        {
+            Me.UnitFlags &= ~UnitFlags.Spawning;
+        }
+
+        base.MoveInLineOfSight(who);
+    }
+
+    public override void OnUpdate(uint diffMs)
+    {
+        if (!InCombat())
+        {
+            return;
+        }
+
+        if (StratholmeTimers.Elapsed(ref _anger, diffMs, 4_000))
+        {
+            // Past 25 casts the whole update stops (the script returns before the other timers).
+            if (_angerCount > MaxFuriousAnger)
+            {
+                return;
+            }
+
+            _angerCount++;
+            DoCast(Me, SpellFuriousAnger);
+        }
+
+        if (StratholmeTimers.Elapsed(ref _draining, diffMs, 15_000))
+        {
+            DoCast(Victim, SpellDrainingBlow);
+        }
+
+        if (StratholmeTimers.Elapsed(ref _pummel, diffMs, 15_000))
+        {
+            DoCast(Victim, SpellCrowdPummel);
+        }
+
+        if (StratholmeTimers.Elapsed(ref _mighty, diffMs, 20_000))
+        {
+            DoCast(Victim, SpellMightyBlow);
+        }
+    }
+}
+
+/// <summary>boss_nerubenkanAI (vmangos stratholme/boss_nerubenkan.cpp: Reset, RaiseUndeadScarab, UpdateAI). The encounter state is kept by
+/// <see cref="StratholmeInstance"/>.</summary>
+public sealed class NerubenkanAI(Creature creature) : ScriptDevBossAI(creature)
+{
+    public const uint SpellEncasingWebs = 4962, SpellPierceArmor = 6016, NpcCryptScarab = 10577, NpcUndeadScarab = 10876;
+    private const float SpawnRadius = 10f;
+    private const uint ScarabLifetimeMs = 10_000;
+    private uint _webs, _pierce, _raise;
+    private Unit? _webbed;
+    private float _webbedThreat;
+
+    public override void OnRespawn() => ResetFight();
+
+    // ScriptedAI::EnterEvadeMode runs Reset() in vmangos; OnEvade is this repo's hook for it.
+    public override void OnEvade() => ResetFight();
+
+    private void ResetFight()
+    {
+        _webs = 7_000;
+        _pierce = 15_000;
+        _raise = 3_000;
+        ForgetWebbed();
+    }
+
+    public override void OnUpdate(uint diffMs)
+    {
+        if (!InCombat())
+        {
+            return;
+        }
+
+        if (_webbed is not null)
+        {
+            // The webbed player's threat was wiped; it comes back once the web is off (a player who left the map is forgotten).
+            if (ReferenceEquals(_webbed.Map, Me.Map))
+            {
+                if (System?.HasAura(_webbed, SpellEncasingWebs) != true)
+                {
+                    Me.Combat.Threat.AddThreat(_webbed, _webbedThreat);
+                    ForgetWebbed();
+                }
+            }
+            else
+            {
+                ForgetWebbed();
+            }
+        }
+
+        Unit? victim = Victim;
+        if (CastWhenReady(ref _webs, diffMs, victim, SpellEncasingWebs, 10_000, 15_000) && victim is not null)
+        {
+            _webbed = victim;
+            _webbedThreat = Me.Combat.Threat.GetThreat(victim);
+            Me.Combat.Threat.ModifyThreatPercent(victim, -100);
+        }
+
+        CastWhenReady(ref _pierce, diffMs, Victim, SpellPierceArmor, 15_000, 20_000);
+
+        if (_raise > diffMs)
+        {
+            _raise -= diffMs;
+        }
+        else
+        {
+            _raise = 0;
+            if (RandomThreatTarget() is { } target)
+            {
+                RaiseUndeadScarab(target, (System?.RandomInt(0, 1) ?? 0) != 0);
+                _raise = (uint)(System?.RandomInt(6_000, 10_000) ?? 6_000);
+            }
+        }
+    }
+
+    private void ForgetWebbed()
+    {
+        _webbed = null;
+        _webbedThreat = 0;
+    }
+
+    /// <summary>RaiseUndeadScarab: the crypt version raises 4, 6 or 8 Crypt Scarabs, the other one Undead Scarab; they spawn on a random point
+    /// within 10 yards of him, fight <paramref name="victim"/> and go 10 s after they are out of combat.</summary>
+    private void RaiseUndeadScarab(Unit victim, bool crypt)
+    {
+        if (System is not { } system)
+        {
+            return;
+        }
+
+        int amount = crypt ? 4 + (2 * system.RandomInt(0, 2)) : 1;
+        uint entry = crypt ? NpcCryptScarab : NpcUndeadScarab;
+        for (int i = 0; i < amount; i++)
+        {
+            double angle = system.RandomInt(0, 35_999) * (Math.PI / 18_000d);
+            double distance = SpawnRadius * Math.Sqrt(system.RandomInt(0, 10_000) / 10_000d);
+            float x = Me.X + (float)(distance * Math.Cos(angle)), y = Me.Y + (float)(distance * Math.Sin(angle));
+            float z = Me.Map is { } map && MapCreatureHeightProvider.Floor(map, x, y, Me.Z + 2f) is { } floor && Math.Abs(floor - Me.Z) <= 10f
+                ? floor : Me.Z;
+            float facing = (float)(Math.Atan2(y - Me.Y, x - Me.X) + Math.PI);
+            system.SummonAt(Me, entry, x, y, z, facing, victim, ScarabLifetimeMs);
+        }
+    }
+}
+
+/// <summary>boss_postmaster_malownAI (vmangos stratholme/boss_postmaster_malown.cpp: Reset, Aggro, KilledUnit, UpdateAI). Each spell rolls
+/// its chance when the timer is up.</summary>
+public sealed class PostmasterMalownAI(Creature creature) : ScriptDevBossAI(creature)
+{
+    public const uint SpellWailingDead = 7713, SpellBackhand = 6253, SpellCurseOfWeakness = 8552, SpellCurseOfTongues = 12889,
+        SpellCallOfTheGrave = 17831;
+    public const int SayAggro = 6504, SayKilled = 6530; // broadcast_text ids
+    private uint _wailing, _backhand, _weakness, _tongues, _grave;
+
+    public override void OnRespawn() => ResetFight();
+
+    // ScriptedAI::EnterEvadeMode runs Reset() in vmangos; OnEvade is this repo's hook for it.
+    public override void OnEvade() => ResetFight();
+
+    private void ResetFight()
+    {
+        _wailing = 19_000;
+        _backhand = 8_000;
+        _weakness = 20_000;
+        _tongues = 22_000;
+        _grave = 25_000;
+    }
+
+    public override void OnAggro(Unit target) => System?.SayText(Me, SayAggro);
+
+    public override void OnKilledUnit(Unit victim) => System?.SayText(Me, SayKilled);
+
+    public override void OnUpdate(uint diffMs)
+    {
+        if (!InCombat())
+        {
+            return;
+        }
+
+        Roll(ref _wailing, diffMs, 19_000, 65, SpellWailingDead);
+        Roll(ref _backhand, diffMs, 8_000, 45, SpellBackhand);
+        Roll(ref _weakness, diffMs, 20_000, 3, SpellCurseOfWeakness);
+        Roll(ref _tongues, diffMs, 22_000, 3, SpellCurseOfTongues);
+        Roll(ref _grave, diffMs, 25_000, 5, SpellCallOfTheGrave);
+    }
+
+    // rand() % 100 < chance, at the victim; the timer restarts either way.
+    private void Roll(ref uint timer, uint diffMs, uint resetMs, int chancePercent, uint spell)
+    {
+        if (StratholmeTimers.Elapsed(ref timer, diffMs, resetMs) && (System?.RandomInt(0, 99) ?? 100) < chancePercent)
+        {
+            DoCast(Victim, spell);
+        }
+    }
+}

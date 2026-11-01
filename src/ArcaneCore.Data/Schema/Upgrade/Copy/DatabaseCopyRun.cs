@@ -345,7 +345,7 @@ internal static partial class DatabaseCopy
     /// decoding), as an order-independent digest. Does not use <see cref="CopyValues.Convert"/>, so a bug in the conversion shows as a difference.
     /// </summary>
     private static async Task<(long Rows, TableDigest Digest)> ModelDigestAsync(
-        DbConnection connection, DbTransaction transaction, ISqlGenerationHelper sql, CopyTable table, string side, bool truncateMicroseconds, CancellationToken ct)
+        DbConnection connection, DbTransaction? transaction, ISqlGenerationHelper sql, CopyTable table, string side, bool truncateMicroseconds, CancellationToken ct)
     {
         var digest = new TableDigest();
         await using DbCommand command = connection.CreateCommand();

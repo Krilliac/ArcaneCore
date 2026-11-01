@@ -4,6 +4,7 @@
     "Port": 8086,
     "WorkerAddress": "127.0.0.1",
     "WorkerPort": 8095,
+    "Workers": [],
     "LinkSecret": "",
     "NodeId": "gateway",
     "RealmId": 1,

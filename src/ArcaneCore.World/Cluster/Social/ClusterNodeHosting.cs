@@ -32,6 +32,8 @@ public static class ClusterNodeHosting
             services.TryAddSingleton<IRealmAuthorityLeaseStore>(sp => sp.GetRequiredService<EfRealmAuthorityLeaseStore>());
             services.TryAddSingleton<ClusterRoleFeatureFilter>();
             services.TryAddSingleton<RealmAuthorityLeaseKeeper>();
+            // The stores of the economy, social and instance singletons verify this node's lease at commit (LeaseFencedWrite).
+            services.TryAddSingleton<IRealmLeaseFenceSource>(sp => sp.GetRequiredService<RealmAuthorityLeaseKeeper>());
         }
 
         return services;

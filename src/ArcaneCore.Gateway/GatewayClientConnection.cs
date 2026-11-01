@@ -330,7 +330,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             return false;
         }
 
-        GatewaySessionLinkClient? link = _server.Link;
+        GatewaySessionLinkClient? link = _server.AcquireLink();
         if (link is null)
         {
             _logger.LogWarning("[{Endpoint}] no worker link; refusing '{Account}' with AUTH_UNAVAILABLE", RemoteEndpoint, request.Account);
@@ -362,7 +362,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             this,
             token).ConfigureAwait(false);
         _pending = null;
-        GatewayMeters.RecordLinkLatency(_server.Options.NodeId, _server.WorkerEndPoint, System.Diagnostics.Stopwatch.GetElapsedTime(openStarted).TotalMilliseconds);
+        GatewayMeters.RecordLinkLatency(_server.Options.NodeId, link.WorkerEndPoint, System.Diagnostics.Stopwatch.GetElapsedTime(openStarted).TotalMilliseconds);
         GatewayMeters.CountSessionOpen(_server.Options.NodeId, reply.Accepted ? "accepted" : "refused");
         if (!reply.Accepted)
         {

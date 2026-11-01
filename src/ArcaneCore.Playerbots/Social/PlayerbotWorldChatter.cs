@@ -2,11 +2,13 @@ using System.Globalization;
 using System.Text.RegularExpressions;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots.Chat;
 using ArcaneCore.World.Playerbots.Progression;
 using ArcaneCore.World.Bots.Progression;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Playerbots.BotSocial;
 
@@ -156,6 +158,17 @@ internal sealed partial class PlayerbotWorldChatter
     /// <summary>The asking price of one item: twice its vendor value (a 2005 player's "fair price"), at least a silver.</summary>
     internal static string Price(BotChatItem item) => PlayerbotChatEvents.Coins(Math.Max(100u, item.SellPrice * 2));
 
+    /// <summary>
+    /// The asking price of one item from the price source (the auction price book's median, else the reference price), as the trade desk would quote it
+    /// (<see cref="PlayerbotVoiceFacts.DealAsk"/>); the vendor-multiple <see cref="Price(BotChatItem)"/> when the source has no price or the item is unknown.
+    /// </summary>
+    internal static string Price(BotChatItem item, IPlayerbotDealPriceSource prices, ItemTemplate? template)
+    {
+        ArgumentNullException.ThrowIfNull(prices);
+        uint reference = template is null ? 0 : prices.ReferencePerUnit(template);
+        return reference == 0 ? Price(item) : PlayerbotChatEvents.Coins((uint)Math.Min(PlayerbotVoiceFacts.DealAsk(reference, item.SellPrice, item.Quality, 1), uint.MaxValue));
+    }
+
     internal static string Normalize(string text)
     {
         if (string.IsNullOrEmpty(text)) return string.Empty;
@@ -255,7 +268,9 @@ internal sealed partial class PlayerbotWorldChatter
         {
             ["surplus"] = item.Name,
             ["surpluscount"] = item.Count.ToString(c),
-            ["price"] = Price(item),
+            ["price"] = pass.Services.GetService<ManagedPlayerbotFeature>()?.DealPrices is { } prices
+                ? Price(item, prices, bot.Player.Inventory.Templates.Find(item.Entry))
+                : Price(item),
         });
     }
 

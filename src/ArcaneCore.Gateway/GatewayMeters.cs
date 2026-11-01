@@ -10,7 +10,7 @@ namespace ArcaneCore.Gateway;
 /// client sockets stay on <see cref="ArcaneMeters"/> (<c>arcanecore.net.*</c>). Every instrument carries the gateway's <c>node</c> (Gateway:NodeId),
 /// so several gateways in one process (the tests) stay apart. Label sets are closed: <c>direction</c> is <c>to_worker</c> or <c>to_client</c>,
 /// <c>result</c> is <c>accepted</c>, <c>refused</c> or <c>no_link</c>, <c>worker</c> is the link's worker endpoint.
-/// Thread safety: the counters and the histogram are thread-safe; the gauges read the attached servers' volatile state from the collector thread.
+/// <c>worker_node</c> is a configured worker's node id. Thread safety: the counters and the histogram are thread-safe; the gauges read the attached servers' volatile state from the collector thread.
 /// </summary>
 internal static class GatewayMeters
 {
@@ -21,11 +21,15 @@ internal static class GatewayMeters
 
     /// <summary>1 while the worker link is registered, 0 while it is down (one series per attached gateway).</summary>
     internal static ObservableGauge<int> LinkState { get; } = Meter.CreateObservableGauge(
-        "arcanecore.gateway.link_state", () => Observe(server => server.Link is null ? 0 : 1), "{state}", "1 while the worker link is up, 0 while it is down.");
+        "arcanecore.gateway.link_state", () => Observe(server => server.ReadyLinkCount), "{link}", "Worker links that are up (with one worker: 1 while its link is up, 0 while it is down).");
+
+    /// <summary>1 while one worker link is registered, 0 while it is down or backing off (a series per link, tagged with the worker's node id and endpoint).</summary>
+    internal static ObservableGauge<int> WorkerLinkState { get; } = Meter.CreateObservableGauge(
+        "arcanecore.gateway.worker_link_state", ObserveLinks, "{state}", "1 while the link to one worker is up, 0 otherwise.");
 
     /// <summary>Sessions open on the current worker link (0 while the link is down).</summary>
     internal static ObservableGauge<int> Sessions { get; } = Meter.CreateObservableGauge(
-        "arcanecore.gateway.sessions", () => Observe(server => server.Link?.SessionCount ?? 0), "{session}", "Sessions open on the worker link.");
+        "arcanecore.gateway.sessions", () => Observe(server => server.TotalSessions), "{session}", "Sessions open across the worker links.");
 
     /// <summary>Client connections of the gateway, authenticated or not.</summary>
     internal static ObservableGauge<int> Connections { get; } = Meter.CreateObservableGauge(
@@ -92,6 +96,21 @@ internal static class GatewayMeters
         if (LinkLatency.Enabled)
         {
             LinkLatency.Record(milliseconds, Node(node), new KeyValuePair<string, object?>("worker", worker.ToString()));
+        }
+    }
+
+    private static IEnumerable<Measurement<int>> ObserveLinks()
+    {
+        foreach (GatewayServer server in Servers.Keys)
+        {
+            foreach (GatewayWorkerLink worker in server.Workers)
+            {
+                yield return new Measurement<int>(
+                    worker.Link is null ? 0 : 1,
+                    Node(server.Options.NodeId),
+                    new KeyValuePair<string, object?>("worker_node", worker.NodeId),
+                    new KeyValuePair<string, object?>("worker", worker.EndPoint.ToString()));
+            }
         }
     }
 

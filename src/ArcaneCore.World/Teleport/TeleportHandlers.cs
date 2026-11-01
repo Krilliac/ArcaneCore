@@ -76,6 +76,15 @@ public sealed class TeleportHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // A trigger script that ran ends the handler (AzerothCore HandleAreaTriggerOpcode: SmartTrigger returns before quest exploration, tavern and teleport).
+        foreach (IAreaTriggerPreemptor preemptor in session.Services.GetServices<IWorldFeature>().OfType<IAreaTriggerPreemptor>())
+        {
+            if (preemptor.Preempts(player, triggerId))
+            {
+                return;
+            }
+        }
+
         // vmangos handles the quest relation (areatrigger_involvedrelation) before teleports.
         // Listeners are world features (discovered, no shared registration edit).
         foreach (IAreaTriggerListener listener in session.Services.GetServices<IWorldFeature>().OfType<IAreaTriggerListener>())

@@ -107,6 +107,55 @@ public sealed class ActivateObjectEffectTests
     }
 
     [Fact]
+    public void AClientNamedObject_OutOfRange_IsRefused_AndNotActivated()
+    {
+        // vmangos Spell::CheckRange (Spell.cpp:6922-6927): a player's cast on a game object target needs interact distance of the spell range.
+        using var rig = new Rig();
+        GameObject near = rig.Objects.Summon(Door, 3, 0, rig.Caster.Z, 0)!;
+        GameObject far = rig.Objects.Summon(Door, 200, 0, rig.Caster.Z, 0)!;
+        near.Flags |= GameObjectFlags.Locked;
+        far.Flags |= GameObjectFlags.Locked;
+
+        var farTargets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = far.Guid };
+        // RED on main: CastOk, and the object 200 yards away is unlocked.
+        Assert.Equal(SpellCastResult.OutOfRange, rig.Kit.System.CastSpell(rig.Caster, 990106, farTargets, triggered: false));
+        Assert.True(far.Flags.HasFlag(GameObjectFlags.Locked));
+
+        var nearTargets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = near.Guid };
+        Assert.Equal(SpellCastResult.CastOk, rig.Kit.System.CastSpell(rig.Caster, 990106, nearTargets, triggered: false));
+        Assert.False(near.Flags.HasFlag(GameObjectFlags.Locked));
+    }
+
+    [Theory]
+    [InlineData(-9f, false)]   // 34 yards at completion: past the strict 30 + 1.25, inside the landing 30 + 6.25
+    [InlineData(-15f, true)]   // 40 yards at completion: past the landing reach too
+    public void AClientNamedObject_AtCastCompletion_UsesTheLandingLeeway(float casterXAtCompletion, bool refused)
+    {
+        // vmangos Spell::CheckRange at completion runs with the wider landing leeway (strict only at the start); the game-object branch
+        // (Spell.cpp:6922-6927) follows the same leeway. A 2 s cast starts with the door 25 yards away and the caster backs off meanwhile.
+        const uint slowUnlock = 990150;
+        SpellInfo spell = Spell(slowUnlock, Effect(SpellEffectName.ActivateObject, 0, SpellImplicitTarget.GameObject, misc: 6)) with
+        {
+            RangeIndex = 4, Range = new SpellRange(0, 30), StartRecoveryCategory = 0, StartRecoveryTime = 0, CastTime = new SpellCastTime(2000, 0, 0),
+        };
+        using var kit = new SpellTestKit(spell);
+        var map = kit.World.GetMap(0);
+        var objects = new GameObjectMapSystem(map, new GameObjectContent([GameObjectTestKit.GoTemplate(Door, GameObjectType.Door)], [], [], [], []));
+        map.AddUpdater(objects);
+        (Player caster, _) = kit.AddPlayer(1);
+        GameObject door = objects.Summon(Door, 25, 0, caster.Z, 0)!;
+        door.Flags |= GameObjectFlags.Locked;
+
+        var targets = new SpellCastTargets { Mask = SpellCastTargetFlags.GameObject, GameObject = door.Guid };
+        Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(caster, slowUnlock, targets, triggered: false));
+        caster.Relocate(casterXAtCompletion, 0, caster.Z, 0, kit.Now);
+        kit.Advance(2100);
+
+        // RED on main for the refused row: no game-object range check, so the door 40 yards away is unlocked.
+        Assert.Equal(refused, door.Flags.HasFlag(GameObjectFlags.Locked));
+    }
+
+    [Fact]
     public void ScriptNearCaster_UsesTheNearestListedObject_OrTheExplicitListedObject()
     {
         const uint spell = 990201;

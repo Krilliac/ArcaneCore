@@ -5,6 +5,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Battlegrounds;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Items;
+using ArcaneCore.World.Playerbots.BotSocial;
 
 namespace ArcaneCore.World.Playerbots.Chat;
 
@@ -114,6 +115,16 @@ internal static partial class PlayerbotVoiceFacts
         long price = (long)sellPrice * Math.Max(1, multiplier);
         return quality >= 2 ? Math.Max(100, price) : Math.Max(1, price);
     }
+
+    /// <summary>
+    /// The price in copper a WTS post asks for one unit, and the one the trade desk quotes a neutral partner for one unit (<see cref="PlayerbotTradeDesk.Quote"/>): the price
+    /// source's per-unit price (<paramref name="referencePerUnit"/>, the auction price book's median or the reference price), never under the vendor value, made a
+    /// chat-exact amount. 0 <paramref name="referencePerUnit"/> (no price evidence) falls back to <see cref="AskingPrice"/>.
+    /// </summary>
+    internal static long DealAsk(uint referencePerUnit, uint sellPrice, uint quality, int multiplier)
+        => referencePerUnit == 0
+            ? AskingPrice(sellPrice, quality, multiplier)
+            : PlayerbotDealRules.RoundUpToQuote(Math.Max(Math.Max(PlayerbotDealRules.SellerAsk(referencePerUnit, 1, 0, 0, 0), sellPrice), 1));
 
     /// <summary>What a bag item can be offered as (<see cref="TradeOffer.None"/>: not at all).</summary>
     internal enum TradeOffer : byte

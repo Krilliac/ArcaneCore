@@ -47,7 +47,7 @@ internal static class PlaybotPolicy
             else choices.Add(new(Id("close-loot"), PlaybotActionKind.CloseLoot, 85, loot.Guid));
             return choices;
         }
-        foreach (PlaybotObject obj in state.Objects.Where(o => (o.Guid >> 48) == 0xF130
+        foreach (PlaybotObject obj in state.Objects.Where(o => (HighGuid)(o.Guid >> 48) == HighGuid.Unit
             && o.Entry is > 0 && o.Position is not null).OrderBy(o => Distance(state.Position, o.Position!)).Take(32))
         {
             if (!state.Queried.Contains(obj.Guid))

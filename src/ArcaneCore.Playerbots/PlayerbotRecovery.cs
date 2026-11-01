@@ -430,6 +430,11 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
     private bool _spiritHealer;
     private bool _preferSpiritHealer;
     private bool _healerRequested;
+
+    // The PvP corpse wait of this death (PlayerbotRecoveryOptions.PvpCampWait): when the first wait began (-1: none yet; a Clear does not
+    // reset it, the bound is per death), and whether the wait was reported (one anomaly per death).
+    private long _pvpWaitSinceMs = -1;
+    private bool _pvpWaitReported;
     private Vector3? _spot;
     private object? _spotKey;
 
@@ -630,7 +635,7 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
 
         // A battleground ghost does not walk back to its body nor look for the world's spirit healer: the graveyard's spirit guide
         // resurrects the dead round it in waves (cmangos npc_spirit_guideAI), and the release already put the ghost beside it.
-        if (ghost && InBattleground(player) && NearestSpiritGuide(player) is { } guide && guide.Guid != _areaGuideWalkStalled)
+        if (ghost && !BattlegroundBodyRun && InBattleground(player) && NearestSpiritGuide(player) is { } guide && guide.Guid != _areaGuideWalkStalled)
         {
             PlayerbotThinkProbe.Phase("recovery area spirit guide");
             return AwaitAreaResurrection(player, guide, elapsedMs, now);
@@ -707,10 +712,33 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
         bool submergedAtCorpse = atCorpse && wait <= 0 && player.Map is { } currentMap && corpse is { } submergedCorpse
             && PlayerbotWater.Submerged(currentMap, new Vector3(submergedCorpse.X, submergedCorpse.Y, submergedCorpse.Z), player.Locomotion.CollisionHeight)
             && !IsDryShore(currentMap, new Vector3(player.X, player.Y, player.Z));
+        // Enemy players at the body (PlayerbotRecoveryOptions.PvpCampWait): outnumbered, the ghost stays one (the living cannot see it) until
+        // the count turns or the bound for this death runs out. Only once the body can be reclaimed, so the reclaim delay is waited first.
+        bool enemyPlayersCamp = false;
+        if (options.Recovery.PvpCampWait && ghost && atCorpse && wait <= 0 && !stalled && !_preferSpiritHealer && corpse is { } campBody)
+        {
+            // The fallback is taken on this think's GiveUp verdict only (spec section 3): a Clear after an earlier give-up reclaims.
+            PlayerbotPvpCampVerdict campVerdict = JudgePvpCampAtBody(player, campBody, now);
+            if (campVerdict == PlayerbotPvpCampVerdict.Wait) enemyPlayersCamp = true;
+            else if (campVerdict == PlayerbotPvpCampVerdict.GiveUp)
+            {
+                if (BattlegroundBodyRun)
+                {
+                    // The guide takes over on the next think (the guide branch above), not the world's spirit healer.
+                    BattlegroundBodyRun = false;
+                    LastStep = PlayerbotRecoveryStep.SpiritHealer;
+                    return false;
+                }
+
+                // Spec section 3: a give-up always takes the spirit healer, unconditionally (never a reclaim among the campers).
+                _preferSpiritHealer = true;
+            }
+        }
+
         bool hostile = atCorpse && wait <= 0 && (Camped(player, Hazards?.Invoke(player) ?? []) || submergedAtCorpse);
-        Vector3? spot = hostile && !stalled && !_preferSpiritHealer && corpse is { } spotCorpse ? ChooseReviveSpot(player, spotCorpse) : null;
+        Vector3? spot = hostile && !enemyPlayersCamp && !stalled && !_preferSpiritHealer && corpse is { } spotCorpse ? ChooseReviveSpot(player, spotCorpse) : null;
         PlayerbotRecoveryStep step = Decide(ghost, place, entrance is not null, atCorpse, wait, hostile, stalled, fallback: _preferSpiritHealer,
-            reviveSpotKnown: spot is not null);
+            reviveSpotKnown: spot is not null, enemyPlayersCampCorpse: enemyPlayersCamp);
         LastStep = step;
         PlayerbotThinkProbe.Phase("recovery action");
         switch (step)
@@ -725,6 +753,12 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
 
             case PlayerbotRecoveryStep.WaitForReclaimDelay:
                 // The client's Resurrect button stays disabled until SMSG_CORPSE_RECLAIM_DELAY runs out; wait like it does.
+                StandStill(player);
+                MarkProgress(now);
+                return false;
+
+            case PlayerbotRecoveryStep.WaitForEnemyPlayers:
+                // Progress: the wait is bounded by PvpCampMaxWaitSeconds (JudgePvpCamp), not by NoProgressMs.
                 StandStill(player);
                 MarkProgress(now);
                 return false;
@@ -771,9 +805,60 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
         }
     }
 
+    /// <summary>
+    /// Counts the enemy and allied players at <paramref name="body"/> and judges them (<see cref="JudgePvpCamp"/>) with the bound of this
+    /// death (<c>_pvpWaitSinceMs</c>, started at the first wait, not reset by a clear). Logs and reports only on the transitions: the
+    /// first wait (one anomaly per death), a give-up (<see cref="PvpCampGaveUp"/>), and a clear after having waited.
+    /// </summary>
+    private PlayerbotPvpCampVerdict JudgePvpCampAtBody(Player player, Corpse body, long now)
+    {
+        PlayerbotRecoveryOptions recovery = options.Recovery;
+        (int enemies, int allies) = PlayersNearBody(player, new Vector3(body.X, body.Y, body.Z), recovery.PvpCampRadiusYards);
+        PvpCampEnemies = enemies;
+        PvpCampAllies = allies;
+        bool battleground = InBattleground(player);
+        bool contested = battleground && ContestedObjectiveNear?.Invoke(player, new Vector3(body.X, body.Y, body.Z)) == true;
+        long maxWaitMs = recovery.PvpCampMaxWaitSeconds * 1000L;
+        if (battleground) maxWaitMs = Math.Min(maxWaitMs, AreaResurrectionIntervalMs);
+        long waited = _pvpWaitSinceMs < 0 ? 0 : now - _pvpWaitSinceMs;
+        PlayerbotPvpCampVerdict verdict = JudgePvpCamp(enemies, allies, recovery.PvpCampMargin, contested, waited, maxWaitMs);
+        switch (verdict)
+        {
+            case PlayerbotPvpCampVerdict.Wait when !_pvpWaitReported:
+                _pvpWaitSinceMs = now;
+                _pvpWaitReported = true;
+                LoggerOf().LogInformation(
+                    "Playerbot {Bot} waits as a ghost at its body ({X:F1}, {Y:F1}, {Z:F1}) map {Map}: {Enemies} enemy players against {Own} at the body within {Radius:F0} yd",
+                    player.Name, body.X, body.Y, body.Z, body.MapId, enemies, 1 + allies, recovery.PvpCampRadiusYards);
+                PlayerbotAnomalies.Report(player, "recovery", "waiting-out-campers",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"{enemies} enemy players vs {1 + allies} at body within {recovery.PvpCampRadiusYards:F0} yd"), AnomalySeverity.Info);
+                break;
+            case PlayerbotPvpCampVerdict.GiveUp when !PvpCampGaveUp:
+                PvpCampGaveUp = true;
+                LoggerOf().LogInformation(
+                    "Playerbot {Bot} gives up waiting out {Enemies} enemy players against {Own} at its body after {Seconds} s and takes the {Way}",
+                    player.Name, enemies, 1 + allies, waited / 1000, BattlegroundBodyRun ? "spirit guide" : "spirit healer");
+                break;
+            case PlayerbotPvpCampVerdict.Clear when _pvpWaitSinceMs >= 0 && !PvpCampGaveUp && LastStep == PlayerbotRecoveryStep.WaitForEnemyPlayers:
+                LoggerOf().LogInformation(
+                    "Playerbot {Bot} reclaims its body: {Enemies} enemy players against {Own} at the body",
+                    player.Name, enemies, 1 + allies);
+                break;
+        }
+
+        return verdict;
+    }
+
     internal void Reset()
     {
         ClearWalk();
+        _pvpWaitSinceMs = -1;
+        _pvpWaitReported = false;
+        PvpCampEnemies = 0;
+        PvpCampAllies = 0;
+        PvpCampGaveUp = false;
+        BattlegroundBodyRun = false;
         _spot = null;
         _spotKey = null;
         _progressMs = -1;
@@ -906,6 +991,8 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
             return PortalWalk.Failed;
         }
 
+        // Walking into this volume is the errand: it is not held back as a portal beside the landing (PlayerbotAreaTriggers.Want).
+        PlayerbotAreaTriggers.Want(player, trigger.Id, session.World.NowMs);
         walked = Walk(player, new Vector3(trigger.X, trigger.Y, trigger.Z), trigger, elapsedMs, now);
         return PortalWalk.Walking;
     }

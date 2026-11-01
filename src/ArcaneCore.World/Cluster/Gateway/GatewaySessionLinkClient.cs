@@ -74,6 +74,9 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
         _wardenPosture = wardenPosture;
     }
 
+    /// <summary>The worker endpoint this link connects to.</summary>
+    public IPEndPoint WorkerEndPoint => _worker;
+
     /// <summary>True from a successful <see cref="ConnectAsync"/> until the link ends.</summary>
     public bool IsConnected => _registered && _channel is { IsOpen: true };
 

@@ -352,7 +352,7 @@ public sealed class GroupLootRollTests
         (Player alice, _) = rig.Join(1);
         (Player bob, FakeSession bobSession) = rig.Join(2, 1, 0);
         rig.Groups.Create(LootMethod.GroupLoot, alice, bob);
-        rig.Loot.Conditions = (player, condition) => condition == 7 && ReferenceEquals(player, alice);
+        rig.Loot.Conditions = (player, _, condition) => condition == 7 && ReferenceEquals(player, alice);
         Creature wolf = rig.KillWolf(alice);
 
         Assert.Equal(LootResult.Ok, rig.Loot.Open(alice, wolf.Guid));

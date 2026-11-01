@@ -1,5 +1,6 @@
 using System.Data;
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Characters.Items;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Characters.ServerMail;
@@ -7,6 +8,7 @@ using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Items;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -21,9 +23,10 @@ namespace ArcaneCore.Data.Economy;
 /// complete inventory must equal its Before snapshot; every row change checks its expected
 /// value; and a final integrity pass proves that each touched item exists exactly once
 /// (in one inventory, or escrowed under exactly one letter or auction). Any mismatch rolls
-/// back with Conflict; any exception rolls back and propagates.
+/// back with Conflict; any exception rolls back and propagates. When a <see cref="IRealmLeaseFenceSource"/> reports a held economy lease, the commit first verifies
+/// that lease in its own transaction (<see cref="LeaseFencedWrite"/>) and throws <see cref="RealmLeaseFenceLostException"/> if it was taken over.
 /// </summary>
-public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
+public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IEconomyStore
 {
     public async Task<EconomyCommitResult> CommitAsync(EconomyCommitRequest request, CancellationToken cancellationToken = default)
     {
@@ -44,6 +47,12 @@ public sealed class EfEconomyStore(CharacterDbContext db) : IEconomyStore
             .ConfigureAwait(false);
         try
         {
+            // A clustered node that holds the economy lease proves, in this transaction, that nobody took the scope over; a former holder is refused before anything is read or written.
+            if (leaseFences?.FenceFor(RealmAuthorityScopes.Economy) is { } fence)
+            {
+                await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+            }
+
             string key = request.OperationId.ToString("D");
             if (await db.Set<EconomyOperationRow>().AsNoTracking().AnyAsync(r => r.Id == key, cancellationToken).ConfigureAwait(false))
             {

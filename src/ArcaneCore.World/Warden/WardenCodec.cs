@@ -125,6 +125,30 @@ internal static class WardenCodec
     /// </summary>
     public static List<WardenCheck>? CheckResult(ReadOnlySpan<byte> body, IReadOnlyList<WardenCheck> checks)
     {
+        List<(WardenCheck Check, WardenCheckOutcome Outcome)>? outcomes = CheckOutcomes(body, checks);
+        if (outcomes is null)
+        {
+            return null;
+        }
+
+        var failed = new List<WardenCheck>();
+        foreach ((WardenCheck check, WardenCheckOutcome outcome) in outcomes)
+        {
+            if (WardenEvidence.IsFailure(outcome))
+            {
+                failed.Add(check);
+            }
+        }
+
+        return failed;
+    }
+
+    /// <summary>
+    /// Decode a CHECK_RESULT into every scan's classified outcome, in request order (MaNGOS Zero WardenServer: each decoded result becomes one
+    /// WardenEvidence). Null when the body is malformed or its checksum is wrong.
+    /// </summary>
+    public static List<(WardenCheck Check, WardenCheckOutcome Outcome)>? CheckOutcomes(ReadOnlySpan<byte> body, IReadOnlyList<WardenCheck> checks)
+    {
         if (body.Length < 7 || body[0] != (byte)WardenClientCommand.CheckResult)
         {
             return null;
@@ -142,16 +166,13 @@ internal static class WardenCodec
             return null;
         }
 
-        var failed = new List<WardenCheck>();
+        var outcomes = new List<(WardenCheck Check, WardenCheckOutcome Outcome)>(checks.Count);
         var reader = new PacketReader(results);
         try
         {
             foreach (WardenCheck check in checks)
             {
-                if (check.Check(ref reader))
-                {
-                    failed.Add(check);
-                }
+                outcomes.Add((check, check.Evaluate(ref reader)));
             }
         }
         catch (ArgumentOutOfRangeException e) when (MalformedPacket.Is(e))
@@ -159,7 +180,7 @@ internal static class WardenCodec
             return null;
         }
 
-        return reader.Remaining == 0 ? failed : null;
+        return reader.Remaining == 0 ? outcomes : null;
     }
 
     /// <summary>The folded checksum: SHA-1 of the bytes, its five little-endian words xored (MaNGOS Zero BuildChecksum; vmangos Warden::BuildChecksum).</summary>

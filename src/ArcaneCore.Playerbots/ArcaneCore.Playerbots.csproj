@@ -53,4 +53,12 @@
     <Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(_WorldHostDir)" SkipUnchangedFiles="true" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
   </Target>
 
+  <!-- The publish counterpart: a publish (Docker, tools/ops/deploy/publish-binaries.sh) puts the pack's assembly and symbols into the
+       directory named by WorldHostPublishDir, normally the world publish output, so no script copies files by hand. Without the property
+       nothing is copied (a plain publish of this project is unchanged). Program.cs refuses to start the world when the pack is absent. -->
+  <Target Name="PublishPackBesideWorldHost" AfterTargets="Publish" Condition="'$(WorldHostPublishDir)' != ''">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(WorldHostPublishDir)" />
+    <Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(WorldHostPublishDir)" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
+  </Target>
+
 </Project>

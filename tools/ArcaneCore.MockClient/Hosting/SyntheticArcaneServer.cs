@@ -42,12 +42,12 @@ public sealed class SyntheticArcaneServer : IAsyncDisposable
     public const uint RewardQuestId = SyntheticQuestContent.RewardQuestId;
     public const uint NpcEntry = SyntheticQuestContent.NpcEntry;
     public const uint NpcSpawn = SyntheticQuestContent.NpcSpawn;
-    public const ulong NpcGuid = ((ulong)0xF130 << 48) | ((ulong)NpcEntry << 24) | NpcSpawn;
+    public const ulong NpcGuid = ((ulong)global::ArcaneCore.Game.HighGuid.Unit << 48) | ((ulong)NpcEntry << 24) | NpcSpawn;
     public const uint TargetEntry = SyntheticQuestContent.TargetEntry;
     public const uint FirstTargetSpawn = SyntheticQuestContent.FirstTargetSpawn;
     public const uint SecondTargetSpawn = SyntheticQuestContent.SecondTargetSpawn;
-    public const ulong FirstTargetGuid = ((ulong)0xF130 << 48) | ((ulong)TargetEntry << 24) | FirstTargetSpawn;
-    public const ulong SecondTargetGuid = ((ulong)0xF130 << 48) | ((ulong)TargetEntry << 24) | SecondTargetSpawn;
+    public const ulong FirstTargetGuid = ((ulong)global::ArcaneCore.Game.HighGuid.Unit << 48) | ((ulong)TargetEntry << 24) | FirstTargetSpawn;
+    public const ulong SecondTargetGuid = ((ulong)global::ArcaneCore.Game.HighGuid.Unit << 48) | ((ulong)TargetEntry << 24) | SecondTargetSpawn;
     public const uint FixedRewardItem = SyntheticQuestContent.FixedRewardItem;
     public const uint UnchosenRewardItem = SyntheticQuestContent.UnchosenRewardItem;
     public const uint ChosenRewardItem = SyntheticQuestContent.ChosenRewardItem;
