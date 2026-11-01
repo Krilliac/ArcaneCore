@@ -649,7 +649,8 @@ public sealed record SupervisedProcessSnapshot(
     ImmutableArray<uint> MapAssignments,
     int ConsecutiveFailures = 0,
     SupervisedExitDisposition? LastDisposition = null,
-    long? LastBeatAgeMs = null);
+    long? LastBeatAgeMs = null,
+    bool Standby = false);
 
 /// <summary>
 /// M15.4 Host Supervisor: manages process admission, windowless/windowed console multiplexing,
@@ -1264,9 +1265,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         foreach (ManagedEntry e in OrderedEntriesUnderLock())
         {
             if (e.Process is { StartTimeUtc: { } startUtc } live && !live.HasExited)
-                records.Add(new SupervisedChildRecord(e.Config.Name, e.Config.Role, live.ProcessId, startUtc.ToUnixTimeMilliseconds()));
+                records.Add(new SupervisedChildRecord(e.Config.Name, e.Config.Role, live.ProcessId, startUtc.ToUnixTimeMilliseconds(), e.Standby));
             else if (e.Stranded is { StartTimeUtcMs: > 0 } stranded)
-                records.Add(stranded);
+                records.Add(stranded with { Standby = e.Standby });
+            else if (e.Standby)
+                records.Add(new SupervisedChildRecord(e.Config.Name, e.Config.Role, 0, 0, Standby: true)); // not running: only the swapped role is kept
         }
 
         try
@@ -1296,8 +1299,27 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         var ignored = new List<string>();
         var failed = new List<string>();
 
+        // The swapped roles come back first, so any relaunch below (and every later one) starts the child as the standby it was.
+        foreach (SupervisedChildRecord standbyRecord in recorded)
+        {
+            if (!standbyRecord.Standby)
+                continue;
+
+            lock (_gate)
+            {
+                if (_entries.TryGetValue(standbyRecord.Name, out ManagedEntry? standbyEntry)
+                    && string.Equals(standbyEntry.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+                {
+                    SetStandbyUnderLock(standbyEntry, true);
+                }
+            }
+        }
+
         foreach (SupervisedChildRecord record in recorded)
         {
+            if (record.ProcessId <= 0)
+                continue; // a standby role with no process behind it: nothing to adopt or kill
+
             if (!_inspector.TryGetStartTimeUtc(record.ProcessId, out DateTimeOffset start))
             {
                 ignored.Add(record.Name); // gone
@@ -1414,6 +1436,12 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             if (SupervisorProtocol.TryParseLifecycleRequest(line, out SupervisorLifecycleRequest request))
             {
                 HandleLifecycleRequest(entry, process, request);
+                return;
+            }
+
+            if (SupervisorProtocol.TryParseChildRestartRequest(line, out SupervisorChildRestartRequest childRestart))
+            {
+                HandleChildRestartRequest(entry, process, childRestart);
                 return;
             }
         }
@@ -1546,6 +1574,171 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 FaultLedger.Shared.Record("cluster.supervisor.lifecycle-request", ex);
+            }
+        });
+    }
+
+    /// <summary>The argument that starts a worker as a standby (the option is <c>Cluster:Worker:Standby</c>).</summary>
+    public const string StandbyArgument = "--Cluster:Worker:Standby=true";
+
+    /// <summary>
+    /// <paramref name="arguments"/> with <see cref="StandbyArgument"/> added at the end (when <paramref name="standby"/> and it is not already a word of the line)
+    /// or removed from the end (when not). Only a trailing occurrence is ever removed, which is the one this supervisor appends; an occurrence an operator wrote
+    /// into the middle of the configured arguments is left alone.
+    /// </summary>
+    internal static string WithStandbyArgument(string? arguments, bool standby)
+    {
+        string text = arguments ?? string.Empty;
+        if (standby)
+        {
+            return $" {text} ".Contains($" {StandbyArgument} ", StringComparison.Ordinal)
+                ? text
+                : text.Length == 0 ? StandbyArgument : text + " " + StandbyArgument;
+        }
+
+        if (string.Equals(text, StandbyArgument, StringComparison.Ordinal))
+            return string.Empty;
+
+        return text.EndsWith(" " + StandbyArgument, StringComparison.Ordinal) ? text[..^(StandbyArgument.Length + 1)] : text;
+    }
+
+    /// <summary>Sets the standby role of <paramref name="entry"/> and keeps its launch arguments in step. Call under <c>_gate</c>.</summary>
+    private static void SetStandbyUnderLock(ManagedEntry entry, bool standby)
+    {
+        entry.Standby = standby;
+        entry.Config.Arguments = WithStandbyArgument(entry.Config.Arguments, standby);
+    }
+
+    /// <summary>The entry whose configured name is <paramref name="name"/>, or whose name reads as <paramref name="name"/> on the protocol line (<see cref="SupervisorProtocol.Sanitize"/>). Call under <c>_gate</c>.</summary>
+    private ManagedEntry? FindEntryByNameUnderLock(string name)
+    {
+        if (_entries.TryGetValue(name, out ManagedEntry? exact))
+            return exact;
+
+        return _entries.Values.FirstOrDefault(e => string.Equals(SupervisorProtocol.Sanitize(e.Config.Name), name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Drains the named child (the same bounded drain, then kill, as <see cref="DrainProcessAsync"/>), records whether it comes back as a standby, and launches it
+    /// again. A child that is already down is simply started. The old process has exited before the new one starts, so it has released what the new one needs
+    /// (a world's writer lock). Throws <see cref="KeyNotFoundException"/> for an unknown name, and <see cref="InvalidOperationException"/> when the old process
+    /// survived its kill (nothing is relaunched then), the role cannot be a standby, or admission refuses the launch.
+    /// </summary>
+    public async Task<SupervisedProcessSnapshot> RestartProcessAsync(string name, bool standby, CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        string configuredName;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ManagedEntry found = FindEntryByNameUnderLock(name) ?? throw new KeyNotFoundException($"Unknown supervised process '{name}'.");
+            if (standby && !string.Equals(found.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException($"Supervised process '{found.Config.Name}' has role '{found.Config.Role}'; only a worker can run as a standby.");
+
+            configuredName = found.Config.Name;
+        }
+
+        SupervisedProcessSnapshot drained = await DrainProcessAsync(configuredName, ct).ConfigureAwait(false);
+        if (drained.State == SupervisedProcessState.Faulted)
+            throw new InvalidOperationException($"Supervised process '{configuredName}' is still running after its drain and kill; it was not relaunched.");
+
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            SetStandbyUnderLock(_entries[configuredName], standby);
+            PersistChildStateUnderLock(); // the swapped role survives a supervisor restart even if the launch below is refused
+        }
+
+        return await StartProcessAsync(configuredName, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// A child asked the supervisor to restart a child by name (<c>lifecycle restart-child</c>). Validates the per-run token and the name, answers the issuer
+    /// at once (<see cref="SupervisorLifecycleStatus.Forwarded"/> means accepted: the drain and relaunch run on, and the outcome goes to the console), and runs
+    /// <see cref="RestartProcessAsync"/> off the issuing child's output pump. A name already being restarted this way is refused.
+    /// </summary>
+    private void HandleChildRestartRequest(ManagedEntry issuer, ISupervisedProcess issuerProcess, SupervisorChildRestartRequest request)
+    {
+        SupervisorLifecycleStatus status;
+        string reason;
+        ManagedEntry? target = null;
+
+        lock (_gate)
+        {
+            if (!ReferenceEquals(issuer.Process, issuerProcess))
+                return;
+
+            if (!TokenMatches(request.Token))
+            {
+                status = SupervisorLifecycleStatus.Rejected;
+                reason = "its token is not this supervisor's";
+            }
+            else if (_disposed)
+            {
+                status = SupervisorLifecycleStatus.Rejected;
+                reason = "the supervisor is stopping";
+            }
+            else if ((target = FindEntryByNameUnderLock(request.Name)) is null)
+            {
+                status = SupervisorLifecycleStatus.UnknownChild;
+                reason = $"unknown child '{request.Name}'";
+            }
+            else if (request.Standby && !string.Equals(target.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+            {
+                status = SupervisorLifecycleStatus.Rejected;
+                reason = $"'{target.Config.Name}' has role '{target.Config.Role}' and cannot run as a standby";
+            }
+            else if (target.ChildRestartInProgress || target.State is SupervisedProcessState.Draining or SupervisedProcessState.Hung or SupervisedProcessState.Faulted)
+            {
+                status = SupervisorLifecycleStatus.Rejected;
+                reason = $"'{target.Config.Name}' is {(target.ChildRestartInProgress ? "already being restarted" : target.State.ToString().ToLowerInvariant())}";
+            }
+            else
+            {
+                target.ChildRestartInProgress = true;
+                status = SupervisorLifecycleStatus.Forwarded;
+                reason = $"restarting '{target.Config.Name}'{(request.Standby ? " as a standby" : string.Empty)}";
+            }
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                string text = status == SupervisorLifecycleStatus.Forwarded
+                    ? $"Restart of child '{target!.Config.Name}'{(request.Standby ? " as a standby" : string.Empty)} requested by {request.By}: {reason}."
+                    : $"WARNING: Ignored the restart of child '{request.Name}' requested by {request.By}: {reason}.";
+                _multiplexer.RouteLine(issuer.Config, text, isStdErr: status != SupervisorLifecycleStatus.Forwarded);
+                issuerProcess.TrySendLine(SupervisorProtocol.FormatChildRestartResult(new SupervisorChildRestartResult(request.Name, status, request.By)));
+
+                if (status != SupervisorLifecycleStatus.Forwarded)
+                    return;
+
+                try
+                {
+                    SupervisedProcessSnapshot snapshot = await RestartProcessAsync(target!.Config.Name, request.Standby, _supervisorStop.Token).ConfigureAwait(false);
+                    _multiplexer.RouteLine(issuer.Config, $"Child '{snapshot.Name}' restarted (pid {snapshot.ProcessId}){(request.Standby ? " as a standby" : string.Empty)}.", isStdErr: false);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException or ObjectDisposedException or OperationCanceledException)
+                {
+                    _multiplexer.RouteLine(issuer.Config, $"ERROR: The restart of child '{target!.Config.Name}' requested by {request.By} failed: {ex.Message}", isStdErr: true);
+                    AnomalyLedger.Shared.Report("cluster", "supervisor-child-restart-failed", target.Config.Name, ex.Message, AnomalySeverity.Error);
+                }
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                FaultLedger.Shared.Record("cluster.supervisor.child-restart-request", ex);
+            }
+            finally
+            {
+                if (status == SupervisorLifecycleStatus.Forwarded)
+                {
+                    lock (_gate)
+                    {
+                        target!.ChildRestartInProgress = false;
+                    }
+                }
             }
         });
     }
@@ -2255,6 +2448,12 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public CancellationTokenSource? StopCts { get; set; }
         public Task? MonitorTask { get; set; }
 
+        /// <summary>True while this child is to run as a standby (<see cref="ClusterHostSupervisor.StandbyArgument"/> is in its arguments); persisted in the state file. Read and written under _gate.</summary>
+        public bool Standby { get; set; }
+
+        /// <summary>True while a restart by name (<see cref="ClusterHostSupervisor.RestartProcessAsync"/>, asked for on the protocol) runs for this child: a second request is refused. Under _gate.</summary>
+        public bool ChildRestartInProgress { get; set; }
+
         /// <summary>A child that survived its drain and kill (and so is no longer <see cref="Process"/>): it stays in the state file, and a second drain leaves the entry Faulted.</summary>
         public SupervisedChildRecord? Stranded { get; set; }
 
@@ -2360,6 +2559,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             [.. MapAssignments],
             ConsecutiveFailures,
             LastDisposition,
-            LastBeatTimestamp is { } beat ? (long)_time.GetElapsedTime(beat).TotalMilliseconds : null);
+            LastBeatTimestamp is { } beat ? (long)_time.GetElapsedTime(beat).TotalMilliseconds : null,
+            Standby);
     }
 }

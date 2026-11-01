@@ -48,6 +48,9 @@ public enum SupervisorLifecycleStatus
 
     /// <summary>The line was refused (bad token, the target is not running, the target cannot be written to).</summary>
     Rejected,
+
+    /// <summary>No supervised child has the name (answer to a <see cref="SupervisorChildRestartRequest"/>).</summary>
+    UnknownChild,
 }
 
 /// <summary>
@@ -59,6 +62,16 @@ public readonly record struct SupervisorLifecycleRequest(string Token, int Realm
 
 /// <summary>The supervisor's answer to a request, sent back to the child that issued it.</summary>
 public readonly record struct SupervisorLifecycleResult(int RealmId, SupervisorLifecycleStatus Status, string By);
+
+/// <summary>
+/// A request to drain and relaunch the supervised child called <paramref name="Name"/> (its configured name, for example <c>worker:EK</c>), optionally as a
+/// standby (<paramref name="Standby"/>: relaunched with <c>--Cluster:Worker:Standby=true</c>, the blue/green swap after a whole-World handoff).
+/// <paramref name="Token"/> is the per-supervisor secret, as in <see cref="SupervisorLifecycleRequest"/>.
+/// </summary>
+public readonly record struct SupervisorChildRestartRequest(string Token, string Name, bool Standby, string By);
+
+/// <summary>The supervisor's answer to a <see cref="SupervisorChildRestartRequest"/>: <see cref="SupervisorLifecycleStatus.Forwarded"/> means the restart was accepted and started.</summary>
+public readonly record struct SupervisorChildRestartResult(string Name, SupervisorLifecycleStatus Status, string By);
 
 /// <summary>
 /// The child side of the cross-world lifecycle commands: the daemon's lifecycle feature implements it and <see cref="SupervisedChildDrain"/>
@@ -79,7 +92,9 @@ public interface ISupervisedLifecycleRequestHandler
 /// ready|alive|stopping</c>, <c>lifecycle stopping intent=&lt;restart|shutdown|failure&gt; code=&lt;n&gt;</c> and <c>lifecycle request token=&lt;t&gt;
 /// realm=&lt;id&gt; action=&lt;restart|shutdown&gt; delay=&lt;s&gt; code=&lt;c&gt; by=&lt;account&gt;</c>. Supervisor to child, on stdin: <c>drain</c>,
 /// <c>lifecycle &lt;restart|shutdown&gt; delay=&lt;s&gt; code=&lt;c&gt; by=&lt;account&gt;</c> and <c>lifecycle result realm=&lt;id&gt;
-/// status=&lt;forwarded|unknown-realm|rejected&gt; by=&lt;account&gt;</c>. Every parser is strict: one space between fields, no extra fields.
+/// status=&lt;forwarded|unknown-realm|rejected&gt; by=&lt;account&gt;</c>. A child can also address another child by name: <c>lifecycle restart-child
+/// token=&lt;t&gt; name=&lt;child&gt; standby=&lt;true|false&gt; by=&lt;account&gt;</c> (child to supervisor), answered by <c>lifecycle child-result name=&lt;child&gt;
+/// status=&lt;forwarded|unknown-child|rejected&gt; by=&lt;account&gt;</c>. Every parser is strict: one space between fields, no extra fields.
 /// <para>Pure and thread-safe; nothing here touches a stream.</para>
 /// </summary>
 public static partial class SupervisorProtocol
@@ -265,6 +280,49 @@ public static partial class SupervisorProtocol
         return true;
     }
 
+    /// <summary>The line a child writes to ask the supervisor to drain and relaunch the child called <see cref="SupervisorChildRestartRequest.Name"/>.</summary>
+    public static string FormatChildRestartRequest(SupervisorChildRestartRequest request)
+        => string.Create(CultureInfo.InvariantCulture,
+            $"{Lifecycle} restart-child token={Sanitize(request.Token)} name={Sanitize(request.Name)} standby={BoolText(request.Standby)} by={Sanitize(request.By)}");
+
+    /// <summary>Parses a <c>lifecycle restart-child</c> line; the caller must still compare the token with the supervisor's. A line holding any control character is rejected.</summary>
+    public static bool TryParseChildRestartRequest(string line, out SupervisorChildRestartRequest request)
+    {
+        request = default;
+        string[]? parts = Split(line, 6);
+        if (parts is null || parts[0] != Lifecycle || parts[1] != "restart-child"
+            || Value(parts[2], "token") is not { Length: > 0 } token
+            || Value(parts[3], "name") is not { Length: > 0 } name
+            || Value(parts[4], "standby") is not { } standbyText || !TryParseBool(standbyText, out bool standby)
+            || Value(parts[5], "by") is not { Length: > 0 } by)
+        {
+            return false;
+        }
+
+        request = new SupervisorChildRestartRequest(token, name, standby, by);
+        return true;
+    }
+
+    /// <summary>The line the supervisor writes back to the child that issued a <see cref="SupervisorChildRestartRequest"/>.</summary>
+    public static string FormatChildRestartResult(SupervisorChildRestartResult result)
+        => string.Create(CultureInfo.InvariantCulture, $"{Lifecycle} child-result name={Sanitize(result.Name)} status={StatusText(result.Status)} by={Sanitize(result.By)}");
+
+    public static bool TryParseChildRestartResult(string line, out SupervisorChildRestartResult result)
+    {
+        result = default;
+        string[]? parts = Split(line, 5);
+        if (parts is null || parts[0] != Lifecycle || parts[1] != "child-result"
+            || Value(parts[2], "name") is not { Length: > 0 } name
+            || Value(parts[3], "status") is not { } statusText || !TryParseStatus(statusText, out SupervisorLifecycleStatus status)
+            || Value(parts[4], "by") is not { Length: > 0 } by)
+        {
+            return false;
+        }
+
+        result = new SupervisorChildRestartResult(name, status, by);
+        return true;
+    }
+
     /// <summary>
     /// One protocol token from free text: whitespace and control characters become <c>_</c> (a name can never end a field or a line),
     /// the length is capped at <see cref="MaxNameLength"/>, and an empty value reads <c>unknown</c>.
@@ -346,10 +404,19 @@ public static partial class SupervisorProtocol
         return text is "restart" or "shutdown";
     }
 
+    private static string BoolText(bool value) => value ? "true" : "false";
+
+    private static bool TryParseBool(string text, out bool value)
+    {
+        value = text == "true";
+        return text is "true" or "false";
+    }
+
     private static string StatusText(SupervisorLifecycleStatus status) => status switch
     {
         SupervisorLifecycleStatus.Forwarded => "forwarded",
         SupervisorLifecycleStatus.UnknownRealm => "unknown-realm",
+        SupervisorLifecycleStatus.UnknownChild => "unknown-child",
         _ => "rejected",
     };
 
@@ -359,8 +426,9 @@ public static partial class SupervisorProtocol
         {
             "forwarded" => SupervisorLifecycleStatus.Forwarded,
             "unknown-realm" => SupervisorLifecycleStatus.UnknownRealm,
+            "unknown-child" => SupervisorLifecycleStatus.UnknownChild,
             _ => SupervisorLifecycleStatus.Rejected,
         };
-        return text is "forwarded" or "unknown-realm" or "rejected";
+        return text is "forwarded" or "unknown-realm" or "unknown-child" or "rejected";
     }
 }
