@@ -295,6 +295,12 @@ public sealed class ClusterSupervisorOptions
     /// <summary>Where hang captures (stack reports and dumps) are written (default <c>logs/supervisor-captures</c>); relative to the working directory.</summary>
     public string HangCaptureDirectory { get; set; } = "logs/supervisor-captures";
 
+    /// <summary>
+    /// Where the supervisor records the children it owns (name, role, pid, start time; default <c>logs/supervisor-children.json</c>, relative to the working directory;
+    /// empty turns the record off). A restarted supervisor reads it to adopt or terminate children a crashed predecessor left running.
+    /// </summary>
+    public string ChildStateFile { get; set; } = "logs/supervisor-children.json";
+
     /// <summary>The longest a hang capture may take before the supervisor drains and kills the child anyway, in seconds (default 300; 1 to 3600).</summary>
     public int HangCaptureTimeoutSeconds { get; set; } = 300;
 
