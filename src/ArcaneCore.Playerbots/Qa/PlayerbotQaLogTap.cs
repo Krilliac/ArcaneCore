@@ -7,8 +7,8 @@ namespace ArcaneCore.World.Playerbots.Qa;
 
 /// <summary>
 /// An <see cref="ILoggerProvider"/> that listens for the bot and creature-script warnings QA aggregates, as well as <see cref="LogLevel.Error"/>
-/// and <see cref="LogLevel.Critical"/> log calls across <c>ArcaneCore.*</c> server categories that did not already go through <see cref="FaultLedger"/>
-/// or <see cref="AnomalyLedger"/>. A log call parses the line and does one non-blocking queue write; it does no I/O, takes no lock beyond the channel's,
+/// and <see cref="LogLevel.Critical"/> log calls in any category (<c>ArcaneCore.*</c>, <c>Microsoft.*</c>, <c>System.*</c>) and every <see cref="LogLevel.Warning"/> or above
+/// that carries an exception, none of which already went through <see cref="FaultLedger"/> or <see cref="AnomalyLedger"/>. A log call parses the line and does one non-blocking queue write; it does no I/O, takes no lock beyond the channel's,
 /// never throws and never logs (it cannot recurse). Thread-safe: log calls come from any thread.
 /// </summary>
 internal sealed class PlayerbotQaLogTap : ILoggerProvider
@@ -24,20 +24,23 @@ internal sealed class PlayerbotQaLogTap : ILoggerProvider
 
     private readonly PlayerbotQaSignalBus _bus;
     private readonly bool _enabled;
+    private readonly bool _logExceptions;
     private readonly Func<string, DateTime, Guid?, (bool Ok, QaSignal? Signal)> _parse;
     private readonly TimeProvider _time;
     private long _failures;
     private long _signals;
 
     public PlayerbotQaLogTap(PlayerbotQaSignalBus bus, IOptions<PlayerbotQaOptions> options)
-        : this(bus, options.Value.Enabled, null, null)
+        : this(bus, options.Value.Enabled, null, null, options.Value.Faults)
     {
     }
 
-    internal PlayerbotQaLogTap(PlayerbotQaSignalBus bus, bool enabled, Func<string, DateTime, Guid?, (bool, QaSignal?)>? parse, TimeProvider? time)
+    internal PlayerbotQaLogTap(PlayerbotQaSignalBus bus, bool enabled, Func<string, DateTime, Guid?, (bool, QaSignal?)>? parse, TimeProvider? time,
+        PlayerbotQaFaultOptions? faults = null)
     {
         _bus = bus;
         _enabled = enabled;
+        _logExceptions = (faults ?? new PlayerbotQaFaultOptions()).LogExceptions;
         _parse = parse ?? ((message, at, key) => (PlayerbotQaSignalParser.TryParse(message, at, key, out QaSignal? signal), signal));
         _time = time ?? TimeProvider.System;
     }
@@ -63,16 +66,30 @@ internal sealed class PlayerbotQaLogTap : ILoggerProvider
 
         if (IsServerErrorCategory(categoryName))
         {
-            return new TapLogger(this, categoryName, warningEnabled: false);
+            return new TapLogger(this, categoryName, warningEnabled: false, exceptionWarnings: _logExceptions);
+        }
+
+        // A framework category (Microsoft.EntityFrameworkCore.*, System.*): its Error entries and its Warning-or-above entries with an exception.
+        if (_logExceptions && IsFrameworkCategory(categoryName))
+        {
+            return new TapLogger(this, categoryName, warningEnabled: false, exceptionWarnings: true);
         }
 
         return NullLogger.Instance;
     }
 
+    /// <summary>
+    /// Whether a category's entries can be server faults. Not the QA's own categories (a fault QA logs about itself must not feed itself) and not the diagnostics categories
+    /// (the crash handler's reports and the anomaly ledger's lines reach QA through <see cref="FaultObservers"/> and the ledgers, not through their log text).
+    /// </summary>
     internal static bool IsServerErrorCategory(string categoryName)
         => categoryName.StartsWith("ArcaneCore.", StringComparison.Ordinal)
             && !categoryName.StartsWith(QaCategoryPrefix, StringComparison.Ordinal)
             && !categoryName.StartsWith(DiagnosticsCategoryPrefix, StringComparison.Ordinal);
+
+    /// <summary>A category of the framework or a library: not ours, and not a QA or diagnostics category either.</summary>
+    internal static bool IsFrameworkCategory(string categoryName)
+        => !categoryName.StartsWith("ArcaneCore.", StringComparison.Ordinal) && !string.Equals(categoryName, "ArcaneCore", StringComparison.Ordinal);
 
     public void Dispose()
     {
@@ -112,7 +129,7 @@ internal sealed class PlayerbotQaLogTap : ILoggerProvider
                 }
             }
 
-            if (logLevel >= LogLevel.Error && TryCreateServerErrorSignal(categoryName, logLevel, eventId, exception, message, template, nowUtc, out QaSignal? faultSignal))
+            if ((logLevel >= LogLevel.Error || exception is not null) && TryCreateServerErrorSignal(categoryName, logLevel, eventId, exception, message, template, nowUtc, out QaSignal? faultSignal))
             {
                 _bus.TryWrite(faultSignal!);
                 Interlocked.Increment(ref _signals);
@@ -151,8 +168,8 @@ internal sealed class PlayerbotQaLogTap : ILoggerProvider
         string site = "log:" + shortCategory;
         if (exception is not null)
         {
-            string sig = FaultLedger.SignatureOf(site, exception, out string type, out IReadOnlyList<string> frames);
-            string id = FaultLedger.HashSignature(sig);
+            // Type and first ArcaneCore frame only, not the category: the same fault logged by two loggers (or seen first-chance) is one finding.
+            string id = PlayerbotQaFaultIds.Describe(exception, out string type, out _, out IReadOnlyList<string> frames);
             string detail = frames.Count > 0 ? string.Join(" > ", frames) : shortCategory;
             string condensed = FaultLedger.FormatCondensedStack(exception);
             signal = new QaSignal
@@ -174,6 +191,7 @@ internal sealed class PlayerbotQaLogTap : ILoggerProvider
         string basis = !string.IsNullOrWhiteSpace(template)
             ? template.Trim()
             : PlayerbotQaFingerprint.Normalise(message);
+        basis = PlayerbotQaRedactor.StripSqlValues(basis); // the SQL's shape, never a value
         if (basis.Length == 0)
         {
             return false;
@@ -203,18 +221,20 @@ internal sealed class PlayerbotQaLogTap : ILoggerProvider
         return dot >= 0 && dot + 1 < categoryName.Length ? categoryName[(dot + 1)..] : categoryName;
     }
 
-    private sealed class TapLogger(PlayerbotQaLogTap owner, string categoryName, bool warningEnabled) : ILogger
+    private sealed class TapLogger(PlayerbotQaLogTap owner, string categoryName, bool warningEnabled, bool exceptionWarnings = false) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
+        // A Warning is enabled when the category carries bot warnings, or when its Warning entries may hold an exception (Log drops the ones that do not).
         public bool IsEnabled(LogLevel logLevel)
-            => warningEnabled
+            => warningEnabled || exceptionWarnings
                 ? logLevel is >= LogLevel.Warning and < LogLevel.None
                 : logLevel is >= LogLevel.Error and < LogLevel.None;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
             if (!IsEnabled(logLevel)) return;
+            if (!warningEnabled && logLevel < LogLevel.Error && exception is null) return; // a plain warning of a server category: nothing to look at, nothing allocated
             owner.Handle(categoryName, warningEnabled, logLevel, eventId, state, exception, formatter);
         }
     }
