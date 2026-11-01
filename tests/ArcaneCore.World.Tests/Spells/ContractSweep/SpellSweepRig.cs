@@ -16,6 +16,7 @@ using ArcaneCore.World.Characters;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
+using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
@@ -108,10 +109,18 @@ internal sealed class SpellSweepRig : IDisposable
         Registry = _services.GetRequiredService<SessionRegistry>();
         Map = World.GetMap(MapId);
         Creatures = Map.FindUpdater<CreatureMapSystem>() ?? AddUpdater(new CreatureMapSystem(Map, new CreatureContent([], [], [], [], []), random: new Random(1)));
-        Objects = Map.FindUpdater<GameObjectMapSystem>();
         World.RunTick(0); // runs the creature feature's posted (empty) content install first, so the install below is the last one
-        Objects?.ReplaceContent(new GameObjectContent(
-            store.All.Where(s => s.RequiresSpellFocus != 0).Select(s => s.RequiresSpellFocus).Distinct().Select(FocusTemplate), [], [], [], []));
+        // The game object feature queues its install with World.Post, so the map's object system exists only after the tick above:
+        // fetch it from the feature now (GetOrCreateSystem), never before the tick.
+        var objectFeature = _services.GetRequiredService<GameObjectLootFeature>();
+        Objects = objectFeature.GetOrCreateSystem(Map);
+        // Merge the focus stand-ins into the content the feature already holds, so any template the sweep gains later is kept.
+        uint[] focusIds = [.. store.All.Where(s => s.RequiresSpellFocus != 0).Select(s => s.RequiresSpellFocus).Distinct()];
+        GameObjectContent existing = objectFeature.Content;
+        HashSet<uint> focusEntries = [.. focusIds.Select(id => FocusEntryBase + id)];
+        objectFeature.ReplaceContent(new GameObjectContent(
+            existing.Templates.Where(t => !focusEntries.Contains(t.Entry)).Concat(focusIds.Select(FocusTemplate)),
+            existing.Spawns, existing.Locks, existing.QuestStarters, existing.QuestEnders));
         _services.GetRequiredService<CreatureWorldFeature>().Install(new CreatureContent(DisplayTemplates(store), [], [], [], []));
     }
 
@@ -187,7 +196,7 @@ internal sealed class SpellSweepRig : IDisposable
 
     public CreatureMapSystem Creatures { get; }
 
-    public GameObjectMapSystem? Objects { get; }
+    public GameObjectMapSystem Objects { get; }
 
     /// <summary>First entry of the stand-in spell focus objects: entry = this + the focus id (Spell.dbc RequiresSpellFocus = SpellFocusObject.dbc id).</summary>
     public const uint FocusEntryBase = 3_000_000_000;
@@ -209,10 +218,10 @@ internal sealed class SpellSweepRig : IDisposable
     /// <summary>
     /// Place the spell focus object a Player cast of a RequiresSpellFocus spell needs (vmangos Spell::CheckItems, Spell.cpp:7230-7243: a spawned
     /// GAMEOBJECT_TYPE_SPELL_FOCUS object whose data0 is the focus id and whose radius reaches the caster) at the caster's position.
-    /// Null when the map has no game object system or the spell needs no focus.
+    /// Null when the spell needs no focus.
     /// </summary>
     public GameObject? StageSpellFocus(SpellInfo spell, WorldObject caster)
-        => spell.RequiresSpellFocus == 0 || Objects is null ? null : Objects.Summon(FocusEntryBase + spell.RequiresSpellFocus, caster.X, caster.Y, caster.Z, 0);
+        => spell.RequiresSpellFocus == 0 ? null : Objects.Summon(FocusEntryBase + spell.RequiresSpellFocus, caster.X, caster.Y, caster.Z, 0);
 
     /// <summary>
     /// Exceptions caught since the last <see cref="TakeFaults"/>: every fault the engine counted in <see cref="FaultLedger.Shared"/> (logged

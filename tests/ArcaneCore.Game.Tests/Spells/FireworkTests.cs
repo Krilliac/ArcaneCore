@@ -72,7 +72,8 @@ public sealed class FireworkTests
             Objects = new GameObjectMapSystem(Kit.Map, new GameObjectContent(
                 [.. objectEntries.Select(entry => entry == Launcher
                     ? GameObjectTestKit.GoTemplate(entry, GameObjectType.SpellFocus, (0, RocketFocus), (1, LauncherFocusRadius))
-                    : GameObjectTestKit.GoTemplate(entry, GameObjectType.SpellFocus))], [], [], [], []));
+                    // vmangos gameobject_template 180854: type 8, data0 0, data1 10.
+                    : GameObjectTestKit.GoTemplate(entry, GameObjectType.SpellFocus, (1, 10u)))], [], [], [], []));
             Kit.Map.AddUpdater(Objects);
             Kit.Spells.System.RegisterCastCheck(new SpellFocusCastCheck(map => ReferenceEquals(map, Kit.Map) ? Objects : null));
             Kit.Spells.System.Store = new SpellStore(Kit.Spells.Store.All, [], [], rows);
@@ -279,9 +280,32 @@ public sealed class FireworkTests
     {
         // A Player using a firework item beside the launcher object is an untriggered cast: CheckItems needs the type 8 focus 1351 within data1 (35) yards.
         using var rig = new Rig([LauncherSpell(spell, npcEntry, activateFirst)], [Row(spell, 0, Launcher)], [npcEntry], [Launcher]);
-        rig.SpawnObject(Launcher, 2, 1);
+        GameObject launcher = rig.SpawnObject(Launcher, 2, 1);
+        rig.Kit.Spells.World.RunTick(0);
+        rig.Session.Clear();
 
         Assert.Equal(SpellCastResult.CastOk, rig.PlayerCast(spell));
+
+        // The accepted cast ran its effects: the creature stands at the launcher and the launcher played its custom animation.
+        Creature firework = Assert.Single(rig.NpcsOf(npcEntry));
+        Assert.Equal((launcher.X, launcher.Y, launcher.Z), (firework.X, firework.Y, firework.Z));
+        byte[] expectedAnim = GameObjectPackets.CustomAnim(launcher.Guid, 0);
+        Assert.Contains(rig.Session.Sent, packet => packet.Opcode == WorldOpcode.SmsgGameobjectCustomAnim && packet.Payload.SequenceEqual(expectedAnim));
+    }
+
+    [Fact]
+    public void Launcher_InsideTheFocusRadiusButOutsideTheScriptTargetRange_IsBadTargetsAndSummonsNothing()
+    {
+        // 30 yards: inside the 35 yard focus radius (the focus check passes) but outside the spell's 5 yard script-target search range.
+        using var rig = new Rig([LauncherSpell(SmallRedLauncher, SmallRedNpc, activateFirst: true)], [Row(SmallRedLauncher, 0, Launcher)],
+            [SmallRedNpc], [Launcher]);
+        rig.SpawnObject(Launcher, 30, 0);
+        rig.Session.Clear();
+
+        Assert.Equal(SpellCastResult.BadTargets, rig.Kit.Cast(rig.Player, SmallRedLauncher));
+
+        Assert.Empty(rig.NpcsOf(SmallRedNpc));
+        Assert.DoesNotContain(rig.Session.Sent, packet => packet.Opcode == WorldOpcode.SmsgGameobjectCustomAnim);
     }
 
     [Fact]

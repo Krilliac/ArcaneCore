@@ -29,7 +29,7 @@ internal sealed class SweepScene : IDisposable
         Spell = spell;
         Kind = kind;
         _before = [.. rig.Creatures.Creatures];
-        _objectsBefore = [.. rig.Objects?.GameObjects ?? []];
+        _objectsBefore = [.. rig.Objects.GameObjects];
         Caster = AddPlayer(cls, level, 0, 0);
         rig.StageSpellFocus(spell, Caster); // a retail player cast of a focus spell stands next to its forge, anvil or launcher
         switch (kind)
@@ -118,12 +118,9 @@ internal sealed class SweepScene : IDisposable
             Rig.RemoveCreature(creature);
         }
 
-        if (Rig.Objects is { } objects)
+        foreach (GameObject go in Rig.Objects.GameObjects.Where(g => !_objectsBefore.Contains(g)).ToArray())
         {
-            foreach (GameObject go in objects.GameObjects.Where(g => !_objectsBefore.Contains(g)).ToArray())
-            {
-                objects.Remove(go);
-            }
+            Rig.Objects.Remove(go);
         }
 
         Rig.World.RunTick(0);
