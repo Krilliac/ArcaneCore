@@ -556,12 +556,29 @@ public sealed partial class WorldRuntime : IDisposable
             return false;
         }
 
-        player.Map?.RemovePlayer(player);
+        // The map's removal hooks run as for any map leave, except that they queue no write: the transfer's capture already queued what logout would
+        // (PlayerTransferPreparing) and flushes it under its hold, and a target that detaches a shadow whose arrival failed does not own the character.
+        IsDetachingForTransfer = true;
+        try
+        {
+            player.Map?.RemovePlayer(player);
+        }
+        finally
+        {
+            IsDetachingForTransfer = false;
+        }
+
         _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
         _online.TryRemove(new KeyValuePair<ObjectGuid, Player>(player.Guid, player));
         _autosaveDue.Remove(player.Guid);
         return true;
     }
+
+    /// <summary>
+    /// True only while <see cref="DetachPlayerForTransfer"/> takes the player out of its map (world thread). A map-removal hook that would persist the leaving
+    /// player's state (the current pet's save) skips the write then: the transfer's capture queued it already.
+    /// </summary>
+    public bool IsDetachingForTransfer { get; private set; }
 
     /// <summary>
     /// Put a player taken out by <see cref="DetachPlayerForTransfer"/> back into its map and the online registry after an aborted transfer
