@@ -29,7 +29,7 @@ internal static partial class QaSpellConsumers
             "Nagmara + Rocknot: Rocknot and Nagmara are not despawned when the bar turns hostile while the aura is on Rocknot (vmangos instance_blackrock_depths.cpp:575)"),
         DbScriptRow(9096, "cast Rift Spawn Becomes Visible 9738"),
         DbScriptRow(11365, "despawn self"),
-        DbScriptRow(21052, "Enthralled Deeprun Rat casts Quiet Suicide"),
+        DbScriptRow(21052, "Enthralled Deeprun Rat casts Suicide 8329"),
         EventAiRow(8894, "Stromgarde Vindicator vengeance, 258501"),
         EventAiRow(8603, "Thistlefur Avenger vengeance, 392502"),
         EventAiRow(9144, "Crushridge Warmonger enrage, 228704"),

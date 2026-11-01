@@ -78,6 +78,34 @@ public sealed class DungeonEventSpellTests
             return creature;
         }
 
+        /// <summary>
+        /// Installs a real <see cref="CreatureMapSystem"/> on map 0 that spawns one creature per (entry, x) pair, so the creatures get their
+        /// <c>Creature.System</c> (StopMoving and forced despawn act only through it) and the map clock runs their delayed despawns.
+        /// </summary>
+        public CreatureMapSystem AddCreatureSystem(params (uint Entry, float X)[] spawns)
+        {
+            Map map = Kit.World.GetMap(0);
+            CreatureTemplate[] templates = [.. spawns.Select(s => s.Entry).Distinct().Select(entry => CreatureTestKit.Template(entry, b =>
+            {
+                b.Faction = 14;
+                b.MinLevelHealth = 100;
+                b.MaxLevelHealth = 100;
+            }))];
+            CreatureSpawn[] rows = [.. spawns.Select((s, i) => CreatureTestKit.Spawn((uint)(i + 1), s.Entry, s.X, 0, Caster.Z))];
+            var system = new CreatureMapSystem(map, CreatureTestKit.Content(templates, rows), random: new Random(1));
+            map.AddUpdater(system);
+            Kit.World.RunTick(0);
+            return system;
+        }
+
+        public void Tick(int steps)
+        {
+            for (int i = 0; i < steps; i++)
+            {
+                Kit.World.RunTick(100);
+            }
+        }
+
         public SpellCastResult Cast(uint spell, Unit target)
             => Kit.System.CastSpell(Caster, spell, SpellCastTargets.ForUnit(target.Guid), triggered: true);
 
@@ -112,21 +140,42 @@ public sealed class DungeonEventSpellTests
         Assert.False(s.Kit.System.HasAura(thundering, BanishExileScript.QuietSuicide));
     }
 
+    private static SpellInfo AnyUnitDummy(uint id) => Instant(Spell(id, Effect(SpellEffectName.Dummy, 0, SpellImplicitTarget.Unit)));
+
     [Fact]
-    public void UnsummonMechanicalYeti_HasItsScript_AndNamesUmisYeti()
+    public void UnsummonMechanicalYeti_StopsUmisYeti_AndDespawnsItAfterOneSecond()
     {
-        Assert.IsType<UnsummonMechanicalYetiScript>(SpellScriptRegistry.Discover(typeof(SpellScriptRegistry).Assembly).Find(UnsummonYeti));
-        Assert.Equal(10980u, UnsummonMechanicalYetiScript.UmisMechanicalYeti);
+        using var s = new Scene(AnyUnitDummy(UnsummonYeti));
+        CreatureMapSystem creatures = s.AddCreatureSystem((UnsummonMechanicalYetiScript.UmisMechanicalYeti, 3f));
+        Creature yeti = Assert.Single(creatures.Creatures);
+        Assert.Same(creatures, yeti.System);
+        creatures.MoveTo(yeti, 40f, 0f, yeti.Z, false, null);
+        Assert.True(yeti.IsMoving);
+
+        Assert.Equal(SpellCastResult.CastOk, s.Cast(UnsummonYeti, yeti));
+
+        Assert.False(yeti.IsMoving);
+        s.Tick(9); // 900 ms: the despawn is delayed by one second
+        Assert.True(yeti.IsAlive);
+        s.Tick(2);
+        Assert.False(yeti.IsAlive);
     }
 
     [Fact]
-    public void UnsummonMechanicalYeti_LeavesAnotherCreatureAlone()
+    public void UnsummonMechanicalYeti_LeavesAnotherCreatureAlone_AndMoving()
     {
-        using var s = new Scene(Charm(UnsummonYeti));
-        Creature other = s.AddCreature(12257, 3);
+        using var s = new Scene(AnyUnitDummy(UnsummonYeti));
+        CreatureMapSystem creatures = s.AddCreatureSystem((UnsummonMechanicalYetiScript.UmisMechanicalYeti, 3f), (12257u, 4f));
+        Creature other = Assert.Single(creatures.Creatures, c => c.Entry == 12257);
+        creatures.MoveTo(other, 40f, 0f, other.Z, false, null);
+        Assert.True(other.IsMoving);
 
         Assert.Equal(SpellCastResult.CastOk, s.Cast(UnsummonYeti, other));
+
+        Assert.True(other.IsMoving);
+        s.Tick(11);
         Assert.True(other.IsAlive);
+        Assert.Same(other, creatures.FindCreature(other.Guid));
     }
 
     [Fact]
