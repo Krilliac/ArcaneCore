@@ -5,6 +5,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Battlegrounds;
@@ -99,10 +100,12 @@ public sealed class BattlegroundClusterQueueTests
     {
         public List<(Player Player, TeleportDestination Destination)> Calls { get; } = [];
 
+        public bool Accept { get; set; } = true;
+
         public bool TryBeginTransfer(Player player, TeleportDestination destination, TeleportOptions options)
         {
             Calls.Add((player, destination));
-            return true;
+            return Accept;
         }
     }
 
@@ -122,7 +125,7 @@ public sealed class BattlegroundClusterQueueTests
 
         private readonly ServiceProvider _services;
 
-        public WorkerWorld(string workerId, IBattlegroundHolderLink holder)
+        public WorkerWorld(string workerId, IBattlegroundHolderLink holder, bool allowInstanceMaps = false)
         {
             ServiceCollection collection = new();
             collection.AddLogging();
@@ -132,9 +135,9 @@ public sealed class BattlegroundClusterQueueTests
             World = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0, CommandTimeBudgetMs = 0 },
                 new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
                 NullLogger<WorldRuntime>.Instance);
-            Assert.True(MapOwnership.TryParse("0", allowInstanceMaps: false, out MapOwnership ownership, out string? error), error);
-            // A worker with AllowInstanceMaps=true would own the match map and never far-transfer a holder-placed match.
-            Assert.False(ownership.Owns(WsgMap, 1));
+            Assert.True(MapOwnership.TryParse("0", allowInstanceMaps, out MapOwnership ownership, out string? error), error);
+            // With AllowInstanceMaps the worker owns instance copies, so the match map counts as its own to the teleport service.
+            Assert.Equal(allowInstanceMaps, ownership.Owns(WsgMap, 1));
             World.Ownership = ownership;
             var teleport = _services.GetRequiredService<TeleportFeature>();
             teleport.Attach(World);
@@ -301,6 +304,50 @@ public sealed class BattlegroundClusterQueueTests
         // The holder's manager bound both players to the match, so the arrival on the holder adds them.
         Assert.True(rig.Manager.EnterBattleground(Alliance[0]));
         Assert.True(rig.Manager.EnterBattleground(Horde[0]));
+    }
+
+    [Fact]
+    public void AcceptingAnInvite_OnAWorkerThatOwnsInstanceMaps_StillReachesTheHoldersMatchByFarTransfer()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+        rig.Manager.Update(1000);
+        using var worker = new WorkerWorld(WorkerA, new ToHolder(rig.Holder), allowInstanceMaps: true);
+        Player player = worker.AddPlayer(1);
+
+        rig.A.Port(new BattlegroundPortRequest(Alliance[0], WsgMap, Action: 1, Level: 60, Deserter: false));
+        rig.Holder.Pump();
+        BattlegroundEnterNotice enter = Assert.Single(rig.Links.To<BattlegroundEnterNotice>(WorkerA));
+
+        worker.Feature.ReceiveNotice(enter);
+        worker.World.RunTick(50);
+
+        (Player moved, TeleportDestination destination) = Assert.Single(worker.Router.Calls);
+        Assert.Same(player, moved);
+        Assert.Equal(new TeleportDestination(WsgMap, 1.5f, 2.5f, 3.5f, 0.5f), destination);
+        Assert.True(rig.Manager.EnterBattleground(Alliance[0]));
+    }
+
+    [Fact]
+    public void ARefusedFarTransfer_IsAFault_NotASilentDrop()
+    {
+        var rig = new Rig();
+        rig.QueueTwoWorkers();
+        rig.Manager.Update(1000);
+        using var worker = new WorkerWorld(WorkerA, new ToHolder(rig.Holder), allowInstanceMaps: true);
+        worker.Router.Accept = false;
+        worker.AddPlayer(1);
+        rig.A.Port(new BattlegroundPortRequest(Alliance[0], WsgMap, Action: 1, Level: 60, Deserter: false));
+        rig.Holder.Pump();
+        BattlegroundEnterNotice enter = Assert.Single(rig.Links.To<BattlegroundEnterNotice>(WorkerA));
+
+        long before = FaultLedger.Shared.Snapshot().Where(f => f.Site == "battleground.remote-entry").Sum(f => (long)f.Count);
+        worker.Feature.ReceiveNotice(enter);
+        worker.World.RunTick(50);
+
+        Assert.Single(worker.Router.Calls);
+        long after = FaultLedger.Shared.Snapshot().Where(f => f.Site == "battleground.remote-entry").Sum(f => (long)f.Count);
+        Assert.Equal(before + 1, after);
     }
 
     [Fact]

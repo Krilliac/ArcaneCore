@@ -1054,11 +1054,36 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
             player.ToggleAfk();
         }
 
-        if (services.GetService<TeleportFeature>() is { } teleport
-            && !teleport.Teleports.TeleportTo(player, notice.MapId, notice.X, notice.Y, notice.Z, notice.Orientation))
+        if (services.GetService<TeleportFeature>() is not { } teleport)
         {
-            _logger.LogWarning("could not teleport {Player} into battleground map {Map} instance {Instance}", player.Name, notice.MapId, notice.InstanceId);
+            FailRemoteEntry(player, notice, "no teleport feature");
+            return;
         }
+
+        // The holder placed the match and already consumed the invitation, so the player always goes through the far transfer, even when this
+        // worker owns instance copies (AllowInstanceMaps): a local teleport would hit the entry gate, which knows no binding for a match held elsewhere.
+        var destination = new TeleportDestination(notice.MapId, notice.X, notice.Y, notice.Z, notice.Orientation);
+        bool started = teleport.Teleports.ClusterFarRouter is not null
+            ? teleport.Teleports.TeleportToClusterMap(player, destination)
+            : teleport.Teleports.TeleportTo(player, notice.MapId, notice.X, notice.Y, notice.Z, notice.Orientation);
+        if (!started)
+        {
+            FailRemoteEntry(player, notice, "the far transfer could not be started");
+        }
+    }
+
+    /// <summary>
+    /// The holder cannot take the invitation back (it consumed it when it sent the notice and no longer serves the player), so a failed entry is
+    /// a fault: it is recorded in the fault and anomaly ledgers and the player is told in the log, never dropped quietly.
+    /// </summary>
+    private void FailRemoteEntry(Player player, BattlegroundEnterNotice notice, string reason)
+    {
+        AnomalyLedger.Shared.Report("battleground", "feature-fault", "remote-entry", $"player={player.Name} map={notice.MapId} instance={notice.InstanceId} reason={reason}");
+        _logger.LogFault(
+            "battleground.remote-entry",
+            new InvalidOperationException($"battleground entry refused: {reason}"),
+            "could not move {Player} into battleground map {Map} instance {Instance}: {Reason}",
+            player.Name, notice.MapId, notice.InstanceId, reason);
     }
 
     /// <summary>A join request of a player of this node: the local manager, or the holder when this node is a worker.</summary>
