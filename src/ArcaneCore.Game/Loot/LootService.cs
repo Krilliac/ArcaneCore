@@ -158,12 +158,8 @@ public sealed partial class LootService : IViewerFieldFilter
     /// Entry 0 normally means "no loot id" and yields an empty bag; fishing_loot_template entry 0 is the failed-cast junk table
     /// (vmangos Player.cpp:7692 FillLoot(0, LootTemplates_Fishing)), so the fishing area asks for it explicitly.
     /// </param>
-    /// <param name="rollProperties">
-    /// False leaves every item's <see cref="LootItem.RandomPropertyId"/> at 0. Durable (instance) chests roll like any other bag: the
-    /// property is persisted in <see cref="LootStateItem.RandomPropertyId"/> and staged with the take's reward grant.
-    /// </param>
     public LootBag Generate(ObjectGuid source, LootSourceKind kind, LootType type, LootTableKind table, uint entry, IReadOnlyList<Player> recipients,
-        bool zeroEntryIsATable = false, bool rollProperties = true)
+        bool zeroEntryIsATable = false)
     {
         ArgumentNullException.ThrowIfNull(recipients);
         var bag = new LootBag(source, kind, type);
@@ -211,7 +207,7 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         IItemRandomPropertySource? properties = null;
-        if (rollProperties && (normal.Count > 0 || quest.Count > 0))
+        if (normal.Count > 0 || quest.Count > 0))
         {
             properties = RandomProperties;
             for (int i = 0; properties is null && i < recipients.Count; i++)

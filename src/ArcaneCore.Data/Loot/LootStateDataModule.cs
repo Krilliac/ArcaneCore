@@ -30,7 +30,7 @@ public sealed class LootStateItemRow
     public bool IsPerPlayer { get; set; }
     public bool IsLooted { get; set; }
 
-    /// <summary>The random property (positive) or suffix (negative) rolled at generation; 0 none. Characters schema 70.</summary>
+    /// <summary>The random property id rolled at generation (1.12 has no suffixes); 0 none. Characters schema 70.</summary>
     public int RandomPropertyId { get; set; }
 }
 
