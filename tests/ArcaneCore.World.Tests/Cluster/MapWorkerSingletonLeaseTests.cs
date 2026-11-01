@@ -160,7 +160,7 @@ public sealed class MapWorkerSingletonLeaseTests
     }
 
     [Fact]
-    public async Task TwoMapWorkers_OnlyTheInstancesLeaseHolderRunsTheResetScheduler_AndWritesRaidResetTimes()
+    public async Task TwoMapWorkers_BothRunTheResetSchedule_ButOnlyTheInstancesLeaseHolderWritesRaidResetTimes()
     {
         using var directory = new TempDirectory("arcanecore-leases-", sqlite: true);
         string database = Path.Combine(directory.Path, "characters.db");
@@ -187,7 +187,7 @@ public sealed class MapWorkerSingletonLeaseTests
         firstClock.Advance(TimeSpan.FromDays(8));
         secondClock.Advance(TimeSpan.FromDays(8));
         Assert.True(await first.Instances.RunScheduleTickAsync().WaitAsync(TimeSpan.FromSeconds(30)));
-        Assert.False(await second.Instances.RunScheduleTickAsync().WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.True(await second.Instances.RunScheduleTickAsync().WaitAsync(TimeSpan.FromSeconds(30))); // the non-holder runs its local schedule too
         await first.Instances.FlushAsync();
         await second.Instances.FlushAsync();
 
@@ -195,9 +195,11 @@ public sealed class MapWorkerSingletonLeaseTests
         Assert.True(next > scheduled);
         Assert.Equal(next, firstStore.ResetTimes[RaidMap]);
         Assert.Equal(1, first.Instances.ScheduleRuns);
-        Assert.Equal(0, second.Instances.ScheduleRuns);
-        Assert.Empty(secondStore.ResetTimes);
-        Assert.Equal(scheduled, second.Instances.Instances.GetRaidResetTime(RaidMap)); // its schedule never moved
+        Assert.Equal(1, second.Instances.ScheduleRuns);
+        Assert.Empty(secondStore.ResetTimes); // no durable write from the non-holder
+        long secondNext = second.Instances.Instances.GetRaidResetTime(RaidMap);
+        Assert.True(secondNext > scheduled); // its in-memory schedule advanced past the global reset
+        Assert.True(secondNext > secondClock.GetUtcNow().ToUnixTimeSeconds()); // so new raid saves and raid info on that node see a future reset
     }
 
     [Theory]

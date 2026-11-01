@@ -107,16 +107,16 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
     public long ScheduleRuns => Interlocked.Read(ref _scheduleRuns);
 
     /// <summary>
-    /// Whether this node runs the instance reset schedule (warnings, resets, the save-expiry sweep, the raid reset time writes): the one node holding the
+    /// Whether this node makes the realm-wide durable writes of the instance reset schedule (raid reset time rows, durable deletion of expired saves): the one node holding the
     /// <see cref="RealmAuthorityScopes.Instances"/> lease in a cluster, every single-process (combined) world, never after <see cref="Halt"/>.
-    /// A non-holder neither runs the schedule nor writes the raid reset time row at load, so exactly one node does.
+    /// Every node still runs the schedule itself (in-memory reset times, warnings, unbinding and resetting its own loaded maps); a non-holder only skips the durable writes.
     /// </summary>
     public bool HoldsScheduleAuthority => !_halted && (_leaseKeeper is null || _leaseKeeper.TokenFor(RealmAuthorityScopes.Instances) is not null);
 
     /// <summary>Turn the 5 s schedule timer off (tests drive <see cref="RunScheduleTickAsync"/> themselves). Set before <see cref="Attach"/>.</summary>
     public bool ScheduleTimerEnabled { get; init; } = true;
 
-    /// <summary>Stop the reset schedule for good (a lost instances realm authority lease: fail-stop like the other scopes). Safe from any thread.</summary>
+    /// <summary>Stop the reset schedule on this node for good (a lost instances realm authority lease: fail-stop like the other scopes). Safe from any thread.</summary>
     public void Halt()
     {
         if (_halted) return;
@@ -129,11 +129,12 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
 
     /// <summary>
     /// Queue the reset schedule update on the world thread; the task completes when it ran (false when it did not run: not attached or halted).
-    /// The update runs only while this node holds the instances lease, checked on the world thread when it runs.
+    /// The update runs on every attached node until halted; the durable writes inside it are made only while this node holds the instances lease
+    /// (<see cref="InstanceManager.HoldsRealmAuthority"/>, evaluated on the world thread when it runs).
     /// </summary>
     public Task<bool> RunScheduleTickAsync()
     {
-        if (_world is not { } world || _manager is not { } manager || !HoldsScheduleAuthority)
+        if (_world is not { } world || _manager is not { } manager || _halted)
         {
             return Task.FromResult(false);
         }
@@ -142,7 +143,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         world.Post(() =>
         {
-            if (!HoldsScheduleAuthority)
+            if (_halted)
             {
                 done.SetResult(false);
                 return;
