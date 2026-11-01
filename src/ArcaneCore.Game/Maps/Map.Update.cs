@@ -257,6 +257,7 @@ public sealed partial class Map
 
             // (2) visibility: players that moved, then other objects that moved or appeared
             long candidatesBefore = PlayerVisibilityCandidates + ObjectVisibilityCandidates;
+            BeginVisibilityPairStage();
             foreach (Player player in _players.Values)
             {
                 if (player.NeedsVisibilityUpdate)
@@ -312,6 +313,7 @@ public sealed partial class Map
                 _movedObjects.Clear();
             }
 
+            EndVisibilityPairStage();
             _newObjects.Clear();
 
             if (diagnostics is not null)
@@ -367,6 +369,7 @@ public sealed partial class Map
         }
         finally
         {
+            EndVisibilityPairStage(); // also on an escaping exception, so a later join is never deduplicated
             _inUpdatePhase = false;
             gate.Dispose();
         }
