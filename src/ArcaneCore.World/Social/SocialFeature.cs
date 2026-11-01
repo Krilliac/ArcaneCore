@@ -374,7 +374,7 @@ public sealed class SocialFeature(
         return new PresenceSnapshot(
             player.Guid.Low, player.Name, player.AccountId, generation, player.MapId, player.ZoneId, 0, player.Level,
             (byte)player.Class, (byte)player.Race, (byte)player.Gender,
-            guild?.Id ?? 0, guild?.Name, group is null ? 0 : (int)group.Id, player.IsAfk, player.IsDnd);
+            guild?.Id ?? 0, guild?.Name, group is null ? 0 : (int)group.Id, player.IsAfk, player.IsDnd, (byte)player.Security, player.GmInvisible);
     }
 
     private void PublishPresenceLogin(Player player)
