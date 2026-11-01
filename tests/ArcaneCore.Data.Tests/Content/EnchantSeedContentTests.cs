@@ -156,8 +156,8 @@ public sealed class EnchantSeedContentTests : IAsyncLifetime
 
         // Crusader (20007) carries no row (mangos-classic sql/base/mangos.sql ships only 8034, 13897, 20004, 20005): it keeps the default
         // chance. "Crusader-style" in this file means "an enchant proc spell with a PPM row", not that Crusader itself has a PPM.
-        // The combat path (PPM versus delay / 600) is covered by ItemCombatProcTests (Game.Tests) and ItemEnchantmentCombatProcWorldTests
-        // (World.Tests); Data.Tests does not reference ArcaneCore.Game, so the file-to-store-to-catalog chain is what this test proves.
+        // Data.Tests does not reference ArcaneCore.Game, so this test proves only the file-to-store-to-catalog chain. The chance formula
+        // (PPM versus delay / 600) is asserted by ItemCombatProcTests.EnchantProc_WithPpmRow_UsesPpmChanceNotDelayOver600 (Game.Tests).
         Assert.Null(catalog.PpmRate(20007));
     }
 }

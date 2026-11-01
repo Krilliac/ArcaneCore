@@ -208,6 +208,36 @@ public sealed class ItemCombatProcTests
         Assert.Equal(3, item.GetInt32(UpdateFields.ItemFieldSpellCharges));
     }
 
+    // Shipped spell 20004 carries PPM 6.0 (sql/content/world/*/0004_item_enchant_procs.sql). With a 2600 ms weapon the PPM chance is
+    // 2600 * 6 / 600 = 26 percent; without a row the enchant (Amount 0) falls back to delay / 600 = 4.33 percent. A roll of 10 sits between.
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void EnchantProc_WithPpmRow_UsesPpmChanceNotDelayOver600(bool withPpmRow, bool expectProc)
+    {
+        const uint spellId = 20004;
+        using var kit = new SpellTestKit(SpellTestKit.Spell(spellId,
+            SpellTestKit.Effect(SpellEffectName.SchoolDamage, 10, SpellImplicitTarget.UnitEnemy)));
+        (Player player, FakeSession session) = kit.AddPlayer(1);
+        (Player victim, _) = kit.AddPlayer(2, 2, 0);
+        kit.System.Random = new FixedRandom(.10);
+        kit.System.ItemEnchantments = new ItemEnchantmentCatalog(
+            [new ItemEnchantmentDefinition(49542, [new ItemEnchantmentEffect(1, spellId, 0)])],
+            withPpmRow ? [new ItemEnchantProc(spellId, 6f)] : []);
+        player.Inventory.Templates = new ItemTemplateStore([new ItemTemplate { Entry = 49543, Class = 2, SubClass = 7,
+            InventoryType = 21, Delay = 2600, Stackable = 1 }]);
+        player.Inventory.GuidAllocator = new ItemGuidAllocator();
+        player.Inventory.Load([new InventoryItemData(0, InventorySlots.MainHand, new ItemInstanceData {
+            Guid = 49544, Entry = 49543, Enchantments = [49542, 0, 0, .. new uint[18]] })]);
+        session.Clear();
+
+        kit.System.HandleItemCombatProc(new MeleeDamageInfo { Attacker = player, Target = victim,
+            AttackType = WeaponAttackType.BaseAttack, HitInfo = HitInfo.AffectsVictim,
+            TargetState = VictimState.Normal, Outcome = MeleeHitOutcome.Normal });
+
+        Assert.Equal(expectProc, session.Sent.Any(p => p.Opcode == WorldOpcode.SmsgSpellGo));
+    }
+
     private static Item EquipProcItem(Player player, uint spellId, float ppm = 0)
     {
         player.Inventory.Templates = new ItemTemplateStore([new ItemTemplate { Entry = 49405, Class = 2, SubClass = 7,
