@@ -130,7 +130,7 @@ public sealed class RealmAuthorityLeaseKeeperTests
 
         _time.Advance(TimeSpan.FromSeconds(10));
         Assert.Equal(0, _lifetime.Stops); // a healthy renewal stops nothing
-        Assert.Equal(3, store.Renewals);
+        Assert.Equal(5, store.Renewals); // one renewal per scope of a map worker: social, economy, instances, maintenance, worldstate
 
         // Another node took the lease over: this node's renewal is refused.
         store.RejectRenewals = true;
@@ -168,7 +168,7 @@ public sealed class RealmAuthorityLeaseKeeperTests
         await keeper.ReleaseAllAsync();
         await keeper.ReleaseAllAsync();
 
-        Assert.Equal(3, store.Releases); // social, economy and instances, once each
+        Assert.Equal(5, store.Releases); // social, economy, instances, maintenance and worldstate, once each
         Assert.Null(_inner.GetCurrent(RealmAuthorityScopes.Social, _time.GetUtcNow()));
         Assert.Equal(1, _inner.GetHighWaterToken(RealmAuthorityScopes.Social)); // the high-water token survives
         Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Social));
@@ -263,7 +263,7 @@ public sealed class RealmAuthorityLeaseKeeperTests
 
         await keeper.ReleaseAllAsync();
 
-        Assert.Equal(3, store.Releases);
+        Assert.Equal(5, store.Releases); // every scope is attempted even though each release throws
     }
 
     [Fact]

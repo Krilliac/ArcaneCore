@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Cluster.Gateway;
@@ -222,6 +223,8 @@ public sealed class DeferredShadowLoadTests
         Assert.False(target.HasShadow(id));
     }
 
+    private static long TargetFaults() => FaultLedger.Shared.Snapshot().Where(f => f.Site == "cluster.transfer-target").Sum(f => f.Count);
+
     [Fact]
     public async Task ADeferredLoadThatFails_IsRepeatedByTheInstallAfterTheCommit()
     {
@@ -233,9 +236,11 @@ public sealed class DeferredShadowLoadTests
         Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
         await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget);
 
+        long faultsBefore = TargetFaults();
         await OpenSessionAsync(rig, accountId, account);
         await WorldTestHost.WaitForAsync(() => loader.Calls >= 1, "the deferred load to run");
-        await WorldTestHost.WaitForAsync(() => !target.HasShadow(id) && target.ReservedCount == 1, "the failed load to be forgotten");
+        // The target records the fault after it cleared the failed load, so the fault count is the signal that the failure is forgotten (no shadow and one reservation are true while the load is still running).
+        await WorldTestHost.WaitForAsync(() => TargetFaults() > faultsBefore && !target.HasShadow(id) && target.ReservedCount == 1, "the failed load to be forgotten");
 
         // The second install (after the commit) loads again and now succeeds; the reservation stayed.
         await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget);
