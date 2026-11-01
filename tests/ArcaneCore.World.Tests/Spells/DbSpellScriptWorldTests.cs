@@ -18,8 +18,8 @@ namespace ArcaneCore.World.Tests.Spells;
 /// <summary>
 /// The spell DB scripts end to end: the classic-db <c>dbscripts_on_spell</c> and vmangos <c>spell_scripts</c> excerpts
 /// (<see cref="DbSpellScriptRows"/>) go through the content importer into a world SQLite database, the creature store loads them, and the
-/// composed world runs a spell's script when its DUMMY or SCRIPT_EFFECT effect hits (cmangos Spell::EffectDummy / EffectScriptEffect,
-/// Spells/SpellEffects.cpp:1517-1532 and :4176-4191; vmangos Spell::EffectScriptEffect, SpellEffects.cpp:4565-4571). The scripted
+/// composed world runs a spell's script when its SCRIPT_EFFECT effect hits (vmangos Spell::EffectScriptEffect, SpellEffects.cpp:4565-4571; a
+/// DUMMY effect starts none, unlike cmangos). The scripted
 /// spells are stand-ins with the ids and the effect layout of Spell.dbc; the spells they cast are marker auras.
 /// </summary>
 public sealed class DbSpellScriptWorldTests
@@ -74,7 +74,7 @@ public sealed class DbSpellScriptWorldTests
     }
 
     [Fact]
-    public async Task RiftSpawnManifestation_Dummy_RunsItsDbScript()
+    public async Task RiftSpawnManifestation_ScriptEffect_RunsItsDbScript()
     {
         await using WorldTestHost host = await StartAsync();
         SpellSystem spells = host.WorldServices.GetRequiredService<SpellFeature>().System;
@@ -119,7 +119,7 @@ public sealed class DbSpellScriptWorldTests
         [
             .. spells.Store.All,
             Scripted(LunarCapStormwind, SpellEffectName.ScriptEffect, SpellImplicitTarget.UnitFriend),
-            Scripted(RiftSpawnManifestation, SpellEffectName.Dummy, SpellImplicitTarget.UnitCaster),
+            Scripted(RiftSpawnManifestation, SpellEffectName.ScriptEffect, SpellImplicitTarget.UnitCaster),
             Marker(TeleportStormwind), Marker(PortToMoonglade), Marker(RiftSpawnBecomesVisible),
         ], [], []);
 

@@ -6,47 +6,20 @@ using ArcaneCore.Kernel.WorldData.Creatures;
 namespace ArcaneCore.Game.Spells;
 
 /// <summary>
-/// The spell DB scripts (<c>dbscripts_on_spell</c>, <see cref="DbScriptKind.Spell"/>): the database fallback at the end of cmangos
-/// Spell::EffectDummy and Spell::EffectScriptEffect (Spells/SpellEffects.cpp:1517-1532 and :4176-4191) and of vmangos
+/// The spell DB scripts (<c>dbscripts_on_spell</c>, <see cref="DbScriptKind.Spell"/>): the database fallback at the end of vmangos
 /// Spell::EffectScriptEffect (SpellEffects.cpp:4565-4571), run through the map's DB script executor
-/// (<see cref="CreatureMapSystem.StartDbScript"/>).
+/// (<see cref="CreatureMapSystem.StartDbScript"/>). Only SCRIPT_EFFECT starts it (retail; cmangos also starts it from DUMMY).
 /// </summary>
 public sealed partial class SpellSystem
 {
     /// <summary>
-    /// cmangos GetSpellStartDBScriptPriority (DBScripts/ScriptMgr.cpp:67-85): SCRIPT_EFFECT 10, DUMMY 9. The trigger effects that name a spell
-    /// missing from the table (5 and 4 there) are not hooked: no imported row needs them, and vmangos starts the table from SCRIPT_EFFECT only.
-    /// </summary>
-    private static int DbScriptPriority(SpellEffectInfo effect) => effect.Effect switch
-    {
-        SpellEffectName.ScriptEffect => 10,
-        SpellEffectName.Dummy => 9,
-        _ => 0,
-    };
-
-    /// <summary>
-    /// cmangos ScriptMgr::CanSpellEffectStartDBScript (ScriptMgr.cpp:88-106): only the effect of the highest priority starts the script, and of
-    /// two with the same priority the lower index, so a spell with two DUMMY effects runs its script once per target, not twice.
+    /// vmangos starts the <c>spell_scripts</c> table from SPELL_EFFECT_SCRIPT_EFFECT only: Spell::EffectScriptEffect's trailing "normal DB scripted
+    /// effect" (SpellEffects.cpp:4565-4571). EffectDummy never does (it has no ScriptsStart of sSpellScripts, only the event start at :1775), so a DUMMY effect
+    /// runs no row. The call is made once per SCRIPT_EFFECT effect that hits a target, as vmangos does; a spell with a ported handler never reaches
+    /// it (<see cref="IsClaimedByCode"/>). cmangos' DUMMY and trigger-effect priority scheme (ScriptMgr.cpp:67-106) is not reproduced.
     /// </summary>
     internal static bool CanEffectStartDbScript(SpellInfo spell, int effectIndex)
-    {
-        int priority = DbScriptPriority(spell.Effects[effectIndex]);
-        if (priority == 0)
-        {
-            return false;
-        }
-
-        for (int i = 0; i < spell.Effects.Count; i++)
-        {
-            int other = DbScriptPriority(spell.Effects[i]);
-            if (other > priority || (other == priority && i < effectIndex))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+        => spell.Effects[effectIndex].Effect == SpellEffectName.ScriptEffect;
 
     /// <summary>
     /// Start the spell's DB script for this effect and target when the spell has one and no spell script in code claims the spell (an
