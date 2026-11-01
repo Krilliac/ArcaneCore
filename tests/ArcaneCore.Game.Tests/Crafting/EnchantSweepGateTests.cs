@@ -2,6 +2,7 @@ using ArcaneCore.Game.Crafting.Enchanting;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Items;
 using ArcaneCore.Kernel.Crafting;
+using ArcaneCore.Kernel.Items;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Crafting;

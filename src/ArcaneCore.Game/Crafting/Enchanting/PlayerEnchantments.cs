@@ -33,7 +33,7 @@ public sealed class PlayerEnchantments
 
     /// <summary>
     /// The slow backstop: a full sweep runs at least this often even when nothing announced a change (a path that writes an item's enchantment fields
-    /// directly). Each character adds its own offset below <see cref="BackstopStaggerMs"/> so a fleet that logged in together does not sweep in one tick.
+    /// directly). Each character adds its own offset of less than half of <see cref="BackstopStaggerMs"/> (<c>WorldRuntime.AutosaveStagger</c> returns a value below half its interval) so a fleet that logged in together does not sweep in one tick.
     /// </summary>
     private const uint BackstopMs = 30_000;
 
