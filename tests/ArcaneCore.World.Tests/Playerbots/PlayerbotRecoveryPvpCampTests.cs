@@ -174,7 +174,8 @@ public sealed class PlayerbotRecoveryPvpCampTests
         {
             Assert.True(scene.Map.Combat.Hooks.CanAttack(far, scene.Bot), "the far orc is not attackable to the flagged bot: the fixture is wrong");
             Assert.Equal((2, 1), PlayerbotRecovery.PlayersNearBody(scene.Bot, scene.Body, 40f));
-            Assert.Equal((3, 1), PlayerbotRecovery.PlayersNearBody(scene.Bot, scene.Body, 70f));   // the far one, not the high one
+            Assert.Equal((3, 1), PlayerbotRecovery.PlayersNearBody(scene.Bot, scene.Body, 55f));   // the high one (3D distance 50), not the far one (60)
+            Assert.Equal((4, 1), PlayerbotRecovery.PlayersNearBody(scene.Bot, scene.Body, 70f));   // both
             Assert.Equal((4, 1), PlayerbotRecovery.PlayersNearBody(scene.Bot, scene.Body, 100f));
             Assert.True(high.IsAlive);
         });
@@ -225,7 +226,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
         Assert.Equal(2, scene.Recovery.PvpCampEnemies);
         Assert.Equal(0, scene.Recovery.PvpCampAllies);
         Assert.False(scene.Recovery.PvpCampGaveUp);
-        Assert.Equal(1, anomalies.Count("recovery/waiting-out-campers")); // one report per death, not one per think
+        Assert.Equal(1, anomalies.Count(PlayerbotAnomalies.Key("recovery", "waiting-out-campers"))); // one report per death, not one per think
     }
 
     [Fact]
@@ -375,9 +376,11 @@ public sealed class PlayerbotRecoveryPvpCampTests
 
         Assert.True(gaveUpAfter >= 5000, $"gave up after {gaveUpAfter} ms, before the 5 s bound");
         Assert.True(gaveUpAfter <= 8000, $"gave up only after {gaveUpAfter} ms");
-        Assert.True(scene.Recovery.SpiritHealerChosen || scene.Recovery.UsingSpiritHealer, "the spirit healer was not chosen");
+        // The give-up chooses the spirit healer on this think (spec section 3); the fixture has no healer or graveyard, so the same think then hands the fallback
+        // back to the corpse run (ResumeCorpseRun clears the flags), and the step is what remains of the choice.
+        Assert.Equal(Step.SpiritHealer, scene.Recovery.LastStep);
         await scene.OnWorldAsync(() => Assert.False(scene.Bot.IsAlive));
-        Assert.Equal(1, anomalies.Count("recovery/waiting-out-campers"));
+        Assert.Equal(1, anomalies.Count(PlayerbotAnomalies.Key("recovery", "waiting-out-campers")));
     }
 
     [Fact]

@@ -507,7 +507,7 @@ public sealed class PlayerbotQaAllFaultsTests : IDisposable
     {
         // The live failure: KeyedStoreWriteQueue / PetsFeature / CreatureRespawnQueue faults were ledger-recorded and became findings, then sat Pending for days behind
         // bot findings (severity 190-360 against 107-125) that used the 5 issues an hour.
-        var ledger = new FaultLedger();
+        var ledger = new FaultLedger(new FaultLedgerLimits(), new ManualTime(QaData.T0)); // the publisher's clock: a fault stamped later than it is future-dated and not fresh
         Exception sqlite = Thrower("database is locked (in-process write gate)");
         ledger.Record("writequeue.keyed", sqlite);
         ledger.Record("pet.persistence", OtherThrower());

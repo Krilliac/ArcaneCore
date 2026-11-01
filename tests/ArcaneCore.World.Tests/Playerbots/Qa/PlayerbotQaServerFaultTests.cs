@@ -167,7 +167,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     [Fact]
     public async Task TheIssue_IsRedacted_AndPublishedWithOneOccurrenceThresholdAndNoDistinctBots()
     {
-        var ledger = new FaultLedger();
+        var ledger = new FaultLedger(new FaultLedgerLimits(), new ManualTime(QaData.T0)); // the publisher's clock: a fault stamped later than it is future-dated and not fresh
         for (int i = 0; i < 3; i++) ledger.Record("worldtick", One(Dirty));
         PlayerbotQaAggregator aggregator = Fold(ledger, new PlayerbotQaFaultFeed(ledger));
         var github = new FakeGitHub();
@@ -200,7 +200,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     [Fact]
     public async Task ServerFaultIssues_RespectTheHourlyCap()
     {
-        var ledger = new FaultLedger();
+        var ledger = new FaultLedger(new FaultLedgerLimits(), new ManualTime(QaData.T0)); // the publisher's clock: a fault stamped later than it is future-dated and not fresh
         for (int i = 0; i < 3; i++)
         {
             ledger.Record("worldtick", One("a"));
@@ -209,7 +209,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
 
         PlayerbotQaAggregator aggregator = Fold(ledger, new PlayerbotQaFaultFeed(ledger));
         var github = new FakeGitHub();
-        var options = new PlayerbotQaOptions { GitHub = { Enabled = true, Repository = QaData.Repo, Publish = true, MinOccurrences = 3, MaxIssuesPerHour = 1 } };
+        var options = new PlayerbotQaOptions { GitHub = { Enabled = true, Repository = QaData.Repo, Publish = true, MinOccurrences = 3, MaxIssuesPerHour = 1, MaxServerFaultIssuesPerHour = 1 } };
         var time = new ManualTime(QaData.T0);
         var publisher = new PlayerbotQaPublisher(options, _directory, aggregator, new PlayerbotQaRedactor(), new ListLogger(),
             name => name == TokenVariable ? QaData.FakeToken : null,
@@ -304,7 +304,7 @@ public sealed class PlayerbotQaServerFaultTests : IDisposable
     [Fact]
     public async Task SingleOccurrence_ServerFault_ActionFault_Quarantine_AndDisabled_PublishImmediately_UnderDefaultThresholds()
     {
-        var ledger = new FaultLedger();
+        var ledger = new FaultLedger(new FaultLedgerLimits(), new ManualTime(QaData.T0)); // the publisher's clock: a fault stamped later than it is future-dated and not fresh
         ledger.Record("worldtick", One("single crash"));
         PlayerbotQaAggregator aggregator = Fold(ledger, new PlayerbotQaFaultFeed(ledger));
         aggregator.Ingest(QaData.Fault(QaData.Bot1, "playerbot-recovery-stalled"), new FakeFacts(), QaData.T0);

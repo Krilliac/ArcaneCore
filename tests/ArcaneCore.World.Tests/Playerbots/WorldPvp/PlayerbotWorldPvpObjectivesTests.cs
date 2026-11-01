@@ -132,8 +132,8 @@ public sealed class PlayerbotWorldPvpObjectivesTests
         {
             o.WorldPvp.Silithyst.ParticipationChance = 0f;
             o.WorldPvp.Silithyst.WarModeParticipationChance = 1f;
-            o.Social.WarMode.Enabled = true;
         });
+        await world.OnWorldAsync(() => world.Options.Social.WarMode.Enabled = true); // the one World:WarMode:Enabled switch, linked at attach (a value set before it is replaced)
         Guid bot = await world.AddBotAsync("Dustwar", 1);
         Assert.True(await RunUntilDeliveredAsync(world, bot), "the bot did not take part under War Mode");
     }
