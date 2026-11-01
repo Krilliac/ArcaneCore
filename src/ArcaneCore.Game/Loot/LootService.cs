@@ -1,4 +1,5 @@
 using ArcaneCore.Game.Combat;
+using ArcaneCore.Game.Conditions;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.GameObjects;
@@ -117,6 +118,12 @@ public sealed partial class LootService : IViewerFieldFilter
     public Func<Player, uint, bool>? Conditions { get; set; }
 
     /// <summary>
+    /// The conditions table the loot groups' team pre-filter reads (resolved at use time; the world daemon wires the conditions feature
+    /// here). Null (or a null result) turns the pre-filter off: groups then pick blind and the per-viewer <see cref="Conditions"/> decides.
+    /// </summary>
+    public Func<ConditionEvaluator?>? ConditionRules { get; set; }
+
+    /// <summary>
     /// The durable store of chest loot in dungeon instances. Without it (or without a live logical
     /// save for the map) such chests stay refused: opening them would reroll awards after the map is recreated.
     /// </summary>
@@ -162,14 +169,14 @@ public sealed partial class LootService : IViewerFieldFilter
 
         var normal = new List<(RolledLoot Roll, ItemTemplate Template, List<Player>? Allowed)>();
         var quest = new List<(RolledLoot Roll, ItemTemplate Template, List<Player> Needing)>();
-        foreach (RolledLoot roll in Generator.Roll(table, entry))
+        Func<Player, uint, bool>? evaluator = Conditions;
+        foreach (RolledLoot roll in Generator.Roll(table, entry, TeamFilter(recipients)))
         {
             if (Items?.Find(roll.ItemId) is not { } template)
             {
                 continue; // vmangos drops rows with unknown items at load
             }
 
-            Func<Player, uint, bool>? evaluator = Conditions;
             List<Player>? allowed = roll.ConditionId == 0 && roll.ReferenceConditions.Count == 0 ? null
                 : evaluator is null ? [] : [.. recipients.Where(p => (roll.ConditionId == 0 || evaluator(p, roll.ConditionId))
                     && roll.ReferenceConditions.All(conditionId => evaluator(p, conditionId)))];
@@ -225,6 +232,65 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         return bag;
+    }
+
+    /// <summary>
+    /// The group pre-filter (vmangos LootStoreItem::AllowedForTeam, LootMgr.cpp:403-433, as LootGroup::Roll uses it). The loot team is
+    /// cross-faction when the recipients are of both factions (or none), else their faction. A row is refused when its condition is missing,
+    /// is a team condition for the other faction (a cross-faction loot team allows every team row), or can be decided without a player and
+    /// is not met. Player-dependent conditions (quest, skill, item, level...) are not pre-decided: such a row keeps its share of the roll
+    /// and the per-viewer <see cref="Conditions"/> check hides it later, as in vmangos. Only the row's own condition counts; the reference
+    /// rows' conditions are not looked at. Null when no conditions table is wired (<see cref="ConditionRules"/>): groups then pick blind.
+    /// </summary>
+    private LootRowFilter? TeamFilter(IReadOnlyList<Player> recipients)
+    {
+        if (ConditionRules?.Invoke() is not { } rules)
+        {
+            return null;
+        }
+
+        bool alliance = false;
+        bool horde = false;
+        foreach (Player player in recipients)
+        {
+            if (player.Team == Team.Alliance)
+            {
+                alliance = true;
+            }
+            else
+            {
+                horde = true;
+            }
+        }
+
+        Team? lootTeam = alliance == horde ? null : alliance ? Team.Alliance : Team.Horde;
+        return (row, _) =>
+        {
+            if (row.ConditionId == 0)
+            {
+                return true;
+            }
+
+            if (rules.Table.Find(row.ConditionId) is null)
+            {
+                return false;
+            }
+
+            if (rules.TeamOf(row.ConditionId) is { } conditionTeam)
+            {
+                if (lootTeam is null)
+                {
+                    return true;
+                }
+
+                if (conditionTeam != lootTeam)
+                {
+                    return false;
+                }
+            }
+
+            return !rules.CanBeUsedWithoutPlayer(row.ConditionId) || rules.EvaluateWithoutSubjects(row.ConditionId) != false;
+        };
     }
 
     /// <summary>
