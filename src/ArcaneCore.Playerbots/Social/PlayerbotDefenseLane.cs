@@ -46,8 +46,6 @@ internal sealed class PlayerbotDefenseLane
     private readonly List<(ulong Guid, long LastMs)> _callers = [];
     private readonly List<Pick> _picks = [];
     private readonly int[] _arrived = new int[CallsPerPass];
-    private readonly int[] _pickedDefenders = new int[CallsPerPass];
-    private readonly int[] _pickedJoiners = new int[CallsPerPass];
     private readonly int[] _attackerMin = new int[CallsPerPass];
     private readonly int[] _attackerMax = new int[CallsPerPass];
     private int _cursor;
@@ -161,7 +159,6 @@ internal sealed class PlayerbotDefenseLane
         for (int c = 0; c < calls; c++)
         {
             DefenseCall call = _calls[c];
-            _pickedDefenders[c] = _pickedJoiners[c] = 0;
             int arrived = 0;
             foreach (ulong guid in call.Defenders)
             {
@@ -190,8 +187,7 @@ internal sealed class PlayerbotDefenseLane
             for (int c = 0; c < calls; c++)
             {
                 if (!Candidate(options, warMode, _calls[c], c, player, out DefenseSide side, out float yards)) continue;
-                _picks.Add(new Pick(c, tier, yards, player.Guid.Value, bot, side));
-                break;
+                _picks.Add(new Pick(c, tier, yards, player.Guid.Value, bot, side)); // every qualifying call: a bot the cap turns away from one call may still take the next
             }
         }
 
@@ -251,17 +247,13 @@ internal sealed class PlayerbotDefenseLane
         if (player.Team == call.CallerTeam)
         {
             if (player.Level + options.MaxLevelBelow < call.Level || player.Level > call.Level + options.MaxLevelAbove) return false;
-            if (call.Defenders.Count + _pickedDefenders[index] >= options.MaxRespondersPerSide) return false;
-            _pickedDefenders[index]++;
-            return true;
+            return call.Defenders.Count < options.MaxRespondersPerSide; // cheap guard only: the cap is applied after the sort, in the assignment loop
         }
 
         if (!(warMode || options.BothSides) || _attackerMax[index] < 0) return false;
         side = DefenseSide.Joiner;
         if (player.Level + options.MaxLevelBelow < _attackerMin[index] || player.Level > _attackerMax[index] + options.MaxLevelAbove) return false;
-        if (call.Joiners.Count + _pickedJoiners[index] >= Math.Min(options.MaxRespondersPerSide, _arrived[index])) return false;
-        _pickedJoiners[index]++;
-        return true;
+        return call.Joiners.Count < Math.Min(options.MaxRespondersPerSide, _arrived[index]); // cheap guard only; the final cap is in the assignment loop
     }
 
     private enum Said : byte { No, Yes, Never }

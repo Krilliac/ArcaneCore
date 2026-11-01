@@ -331,12 +331,12 @@ public sealed class PlayerbotDefenseCallWorldTests
     public async Task TheDefenderCap_HoldsWhenTwoBotsAreFree()
     {
         await using SocialWorld world = await StartAsync();
-        await using WorldTestClient foe = await CallSceneAsync(world, "Rrespa", 40f);
+        await using WorldTestClient foe = await CallSceneAsync(world, "Rrespa", 50f);
         await world.AddBotAsync("Rrespb");
         await world.Host.OnWorldAsync(() =>
         {
             Player caller = RivalryKit.Online(world, "Rcaller"), second = RivalryKit.Online(world, "Rrespb");
-            second.Relocate(caller.X + 50f, caller.Y, caller.Z, 0f, world.Host.World.NowMs);
+            second.Relocate(caller.X + 40f, caller.Y, caller.Z, 0f, world.Host.World.NowMs);
             second.ZoneId = RivalryKit.OrdinaryZone;
             FlagForGood(second);
         });
@@ -344,9 +344,9 @@ public sealed class PlayerbotDefenseCallWorldTests
 
         await RunDefenseLaneAsync(world);
 
-        // One slot on the side: the nearer bot (40 yd against 50) takes it, the other stays free.
-        Assert.True(await world.Host.OnWorldAsync(() => HelpTestKit.BrainOf(world, world.Bots["Rrespa"]).Responding));
-        Assert.False(await world.Host.OnWorldAsync(() => HelpTestKit.BrainOf(world, world.Bots["Rrespb"]).Responding));
+        // One slot on the side: the nearer bot (Rrespb, 40 yd, added second) takes it over the farther Rrespa (50 yd, added first), so examination order and distance order disagree.
+        Assert.True(await world.Host.OnWorldAsync(() => HelpTestKit.BrainOf(world, world.Bots["Rrespb"]).Responding));
+        Assert.False(await world.Host.OnWorldAsync(() => HelpTestKit.BrainOf(world, world.Bots["Rrespa"]).Responding));
     }
 
     /// <summary>
