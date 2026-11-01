@@ -111,7 +111,7 @@ internal sealed class BattlegroundWorldHost(BattlegroundFeature feature) : IBatt
         }
 
         // vmangos BattleGroundHandler.cpp:461-464: a player on a taxi flight has its destinations cleared and its movement expired
-        // before the port; Abort ends the flight where the player is (clears the taxi flag and the persisted route).
+        // before the port; Abort ends the flight where the player is (clears the taxi flag and mount display and raises FlightEnded; subscribers such as NpcServicesFeature clear the persisted route).
         if (feature.Services.GetService<NpcServicesFeature>()?.Flights is { } flights && flights.IsFlying(p))
         {
             flights.Abort(p);
