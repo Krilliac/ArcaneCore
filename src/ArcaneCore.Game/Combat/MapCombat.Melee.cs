@@ -93,6 +93,7 @@ public sealed partial class MapCombat
         c.Victim = victim;
         c.LastVictimGuid = victim.Guid;
         victim.Combat.AttackersInternal.Add(attacker);
+        NotePvpStrike(attacker, victim);
         Track(attacker);
         Track(victim);
 
@@ -1157,14 +1158,66 @@ public sealed partial class MapCombat
     {
         if (combatLink)
         {
+            NotePvpStrike(attacker, victim);
             SetInCombatWithAggressor(victim, attacker, caller);
             SetInCombatWithVictim(attacker, victim, caller);
         }
         else if (direct && !ReferenceEquals(attacker, victim) && threatSpell?.HasAura(AuraType.DamageShield) != true)
         {
+            NotePvpStrike(attacker, victim);
             SetOutOfCombatWithVictim(attacker, victim);
         }
     }
+
+    /// <summary>
+    /// Record that the player <paramref name="attacker"/> struck or started on the player <paramref name="victim"/> (or the owner of a pet or charm that did; an attack start, a damaging hit or a hostile spell hit),
+    /// on the attacker's <see cref="UnitCombat.PvpStrikes"/>. The strike is the attacker's first (it is the aggressor) unless the victim itself is attacking the attacker or
+    /// struck it within <see cref="PvpStrikeMemoryMs"/>; a strike on a pair that is already fighting keeps the flag it had. World thread; no allocation after the
+    /// attacker's dictionary exists, no wire change, no RNG draw.
+    /// </summary>
+    private void NotePvpStrike(Unit attacker, Unit victim)
+    {
+        if (PvpActor(attacker) is not { } a || PvpActor(victim) is not { } v || ReferenceEquals(a, v))
+        {
+            return;
+        }
+
+        uint now = _world.NowMs;
+        Dictionary<ObjectGuid, PvpStrike> strikes = a.Combat.PvpStrikes ??= [];
+        if (strikes.TryGetValue(v.Guid, out PvpStrike known) && unchecked((int)(now - known.LastMs)) < PvpStrikeMemoryMs)
+        {
+            strikes[v.Guid] = new PvpStrike(now, known.First);
+            return;
+        }
+
+        if (strikes.Count >= 8)
+        {
+            foreach (ObjectGuid stale in strikes.Where(e => unchecked((int)(now - e.Value.LastMs)) >= PvpStrikeMemoryMs).Select(e => e.Key).ToArray())
+            {
+                strikes.Remove(stale);
+            }
+        }
+
+        bool retaliation = ReferenceEquals(v.Combat.Victim, a) || StruckWithin(v, a, PvpStrikeMemoryMs);
+        strikes[v.Guid] = new PvpStrike(now, !retaliation);
+    }
+
+    /// <summary>How long a recorded PvP strike keeps its pair's who-started-it answer after the last hit (30 s).</summary>
+    internal const uint PvpStrikeMemoryMs = 30_000;
+
+    private bool StruckWithin(Player attacker, Player victim, uint windowMs)
+        => attacker.Combat.PvpStrikes is { } strikes && strikes.TryGetValue(victim.Guid, out PvpStrike strike) && unchecked((int)(_world.NowMs - strike.LastMs)) < windowMs;
+
+    /// <summary>
+    /// Whether <paramref name="aggressor"/> struck <paramref name="victim"/> first in their current fight: it started on the victim (an attack start, a hit or a hostile spell) and the
+    /// victim had not been attacking or hitting it before, with the last strike within <see cref="PvpStrikeMemoryMs"/>. A pair nobody was seen to start (no strike recorded) is false.
+    /// </summary>
+    public bool StruckFirst(Player aggressor, Player victim)
+        => aggressor.Combat.PvpStrikes is { } strikes && strikes.TryGetValue(victim.Guid, out PvpStrike strike) && strike.First
+            && unchecked((int)(_world.NowMs - strike.LastMs)) < PvpStrikeMemoryMs;
+
+    /// <summary>Whether <paramref name="attacker"/> hit, spelled or started on <paramref name="victim"/> within the last <paramref name="windowMs"/> ms.</summary>
+    public bool StruckRecently(Player attacker, Player victim, uint windowMs) => StruckWithin(attacker, victim, windowMs);
 
     /// <summary>
     /// The player whose PvP flag a unit's hostile act touches: the player behind the unit, so a pet, guardian, totem or charmed unit (or a

@@ -37,6 +37,7 @@ public sealed class HonorKillRewards
     private readonly Func<Player, RewardGroup?> _groups;
     private readonly GroupRewardOptions _range;
     private readonly Func<Unit, bool> _noPvpCredit;
+    private readonly WorldState.WarModeOptions _warMode;
     private readonly HashSet<MapCombat> _attached = [];
     private readonly ConditionalWeakTable<Creature, Tap> _taps = new();
 
@@ -46,12 +47,14 @@ public sealed class HonorKillRewards
     /// <param name="groups">A player's reward group (null for solo).</param>
     /// <param name="range">The group reward distance options.</param>
     /// <param name="noPvpCredit">Whether a unit carries the Honorless Target aura (SPELL_AURA_NO_PVP_CREDIT); null means never.</param>
-    public HonorKillRewards(HonorService honor, Func<Player, RewardGroup?> groups, GroupRewardOptions? range = null, Func<Unit, bool>? noPvpCredit = null)
+    /// <param name="warMode">The live War Mode options (World:WarMode): while enabled, each honourable-kill share is multiplied by HonorMultiplier; null means War Mode is off.</param>
+    public HonorKillRewards(HonorService honor, Func<Player, RewardGroup?> groups, GroupRewardOptions? range = null, Func<Unit, bool>? noPvpCredit = null, WorldState.WarModeOptions? warMode = null)
     {
         _honor = honor ?? throw new ArgumentNullException(nameof(honor));
         _groups = groups ?? throw new ArgumentNullException(nameof(groups));
         _range = range ?? new GroupRewardOptions();
         _noPvpCredit = noPvpCredit ?? (_ => false);
+        _warMode = warMode ?? new WorldState.WarModeOptions();
     }
 
     /// <summary>Subscribe to a map's damage and kill events.</summary>
@@ -323,9 +326,15 @@ public sealed class HonorKillRewards
         }
     }
 
-    // uint32(points): nothing is added for a share that truncates to zero.
+    // uint32(points): nothing is added for a share that truncates to zero. War Mode (not retail) scales each share before that truncation, so a
+    // multiplier of 1 changes nothing and the integer rounding stays the retail one.
     private void Award(Player player, Player victim, float points)
     {
+        if (_warMode.Enabled && victim.Map?.Template is not { IsBattleground: true }) // a battleground keeps its own honour
+        {
+            points *= _warMode.HonorMultiplier;
+        }
+
         uint whole = float.IsFinite(points) && points > 0f ? (uint)points : 0u;
         if (whole != 0)
         {

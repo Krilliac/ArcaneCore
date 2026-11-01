@@ -175,6 +175,22 @@ player outside the bot's group (`UNIT_DYNFLAG_TAPPED` without `TAPPED_BY_PLAYER`
 over `Creature.LootTapPlayerGuid`), or fighting a player who is neither the bot nor a group mate (its victim or its threat list).
 It also skips grey creatures (level at or below `ExperienceFormulas.GrayLevel`); a named quest objective may still be grey.
 
+## Starting a PvP fight (`World:Playerbots:Pvp:Initiate`)
+
+Not retail, off by default. War Mode on (`World:WarMode:Enabled`) already means attack on sight with the same rule and limits, no `World:Playerbots:Pvp:Initiate:Enabled` needed; that key is the opt-in for on-sight engagement while War Mode is off. With both off a bot only fights back (`PlayerbotBrain.Pvp.cs`), and a same-faction helper joins against an enemy player or bot only when that enemy struck the victim first. With either on, an idle bot
+(alive, out of combat and duels, on a free goal, no defend post, no resurrection sickness, not in a group with a real player, at least
+`MinHealthPct` of its health) looks every two seconds for the nearest visible player or bot of the other faction within `RadiusYards` that:
+
+- is alive and PvP-flagged, so the combat hooks allow the attack (a bot never flags a player for it);
+- stands outside the War Mode exempt areas (a capital or city of its own or no team, an arena, a battleground; [world-state.md](world-state.md));
+- is no more than `MaxLevelBelow` levels under the bot and no more than `MaxLevelAbove` over it;
+- does not leave the bot outnumbered: the living players and bots of the other faction within `RadiusYards` are no more than the living ones of
+  its own faction there, the bot counted among them. Only players the bot can see are counted.
+
+It then takes the target on (`PlayerbotEngageReason.Initiate`) and fights it as it fights back, and lets go when the target dies, enters an exempt
+area or gets past the radius. The War Mode grudge hunt runs first and keeps priority. The help lane covers these fights like any other: a
+flagged same-faction bot, or any bot while War Mode is on, joins when the initiator is attacked back and in trouble. All five keys are live.
+
 ## Tests
 
 - `Playerbots/Combat/PlayerbotClassRotationTests.cs`: per class, a synthetic book and a state give the expected next action.
@@ -182,6 +198,7 @@ It also skips grey creatures (level at or below `ExperienceFormulas.GrayLevel`);
   efficient heal, the distancing decision.
 - `Playerbots/Combat/PlayerbotHealerSpellsTests.cs`: heal classification over spell rows modelled on the real ones (Holy Light 635/19968, Flash of Light, Healing Wave, Chain Heal, Desperate Prayer, Prayer of Healing, Renew), and a paladin or shaman bot healing a party member, itself and a tagger through the server.
 - `Playerbots/Combat/PlayerbotTargetEtiquetteTests.cs`: the tap, engaged and grey filters (RED on 08ea5ff6).
+- `Playerbots/Social/PlayerbotPvpInitiateWorldTests.cs`: an idle bot starts on a flagged enemy bot and player; it does not with the rule off, an unflagged target, a level outside the window, outnumbered, under `MinHealthPct`, in combat, a target in an exempt area or outside the radius; a same-faction helper joins when the target fights the initiator back.
 - `Playerbots/PlayerbotCombatSpellsTests.cs`: the spell data rebuild on SMSG_LEARNED_SPELL and the role change; the stance taken
   through the ordinary cast handler.
 - `Playerbots/Combat/PlayerbotKiteModelTests.cs`: the kite decision (no slow, slow ready, half-speed or rooted pursuer, health over the

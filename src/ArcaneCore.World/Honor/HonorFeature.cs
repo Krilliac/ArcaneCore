@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Honor;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Honor;
@@ -115,7 +116,8 @@ public sealed class HonorFeature(IServiceProvider services, IServiceScopeFactory
         _rewards = new HonorKillRewards(
             service,
             RewardGroups.Resolver(services),
-            noPvpCredit: unit => CombatEnvironment.For(world).Auras?.HasAuraType(unit, AuraType.NoPvpCredit) ?? false);
+            noPvpCredit: unit => CombatEnvironment.For(world).Auras?.HasAuraType(unit, AuraType.NoPvpCredit) ?? false,
+            warMode: WorldStateHooks.For(world).WarMode);
         world.MapCreated += OnMapCreated;
         world.MapUnloading += OnMapUnloading;
         foreach (Map map in world.Maps)

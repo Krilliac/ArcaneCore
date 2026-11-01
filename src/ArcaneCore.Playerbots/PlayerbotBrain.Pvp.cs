@@ -27,13 +27,19 @@ internal sealed partial class PlayerbotBrain
     {
         // A player the walk found no path to is set aside for PlayerbotPvpFight.UnreachableMs (a caster on a cliff: the bot would plan a chase it cannot walk at every think).
         Player? opponent = PlayerbotHostility.FirstProvokingPlayer(player, _pvpFight);
+        Player? engaged = EngagedOpponent(player);
+        opponent ??= engaged;
+        // A fight the bot started (help, grudge, initiate) is not chased into an exempt area unless the target keeps attacking the bot from there (self-defense); a player who attacks the bot is fought back as ever.
+        bool anyOpponent = opponent is not null;
+        if (opponent is not null && StartedAndExempt(player, opponent)) opponent = null;
         if (opponent is null && _pvpFight is { Target: Player current } && PlayerbotHostility.IsHostilePlayer(player, current)
-            && !_pvpFight.IsSkipped(current)
+            && !_pvpFight.IsSkipped(current) && !StartedAndExempt(player, current)
             && Vector3.Distance(PlayerbotMotion.CurrentPosition(player), PlayerbotMotion.CurrentPosition(current)) <= PvpPursuitYards)
             opponent = current;
 
         if (opponent is null)
         {
+            if (!anyOpponent) _startedOn = null; // nobody fights the bot any more: the next attacker is a fresh one
             if (_pvpFight is { Target: not null } ended)
             {
                 ended.Stop(player);

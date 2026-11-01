@@ -18,9 +18,14 @@ public sealed class PlayerbotSocialWarPersistenceTests
     private const ulong Rival = 0x5151;
 
     private static WorldTestHost Start(InMemoryAccountStore accounts, InMemoryCharacterStore characters, ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore owners,
-        PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore store, bool war)
-        => ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners, configure: options => options.Social.WarMode.Enabled = war,
+        IPlayerbotRelationStore store, bool war)
+    {
+        WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners,
             extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        // The switch is World:WarMode:Enabled; the bots' options read it once the feature has attached to the world.
+        PartyTestHost.PlayerbotOptionsOf(host).Social.WarMode.Enabled = war;
+        return host;
+    }
 
     /// <summary>A relation with a trade (normal +3, war +3) and two rude emotes (normal -5 each, war -15 each): the layers have diverged.</summary>
     private static void NoteBoth(ManagedPlayerbotFeature feature, Guid bot, int characterId)
@@ -154,8 +159,7 @@ public sealed class PlayerbotSocialWarPersistenceTests
         var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
         var inner = new PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
         var store = new GatedRelationStore(inner);
-        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners, configure: options => options.Social.WarMode.Enabled = true,
-            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        await using WorldTestHost host = Start(accounts, characters, owners, store, war: true);
         var feature = PartyTestHost.Feature(host);
         await feature.StartupAsync(default);
         Guid running = Assert.IsType<Guid>((await feature.CreateAsync("Warstopper", 1, 1)).BotId);
@@ -187,8 +191,7 @@ public sealed class PlayerbotSocialWarPersistenceTests
         var owners = new ManagedPlayerbotLifecycleTests.MemoryManagedPlayerbotStore();
         var inner = new PlayerbotSocialMemoryPersistenceTests.MemoryRelationStore();
         var store = new GatedRelationStore(inner);
-        await using WorldTestHost host = ManagedPlayerbotLifecycleTests.Start(accounts, characters, owners, configure: options => options.Social.WarMode.Enabled = true,
-            extraServices: services => services.AddSingleton<IPlayerbotRelationStore>(store));
+        await using WorldTestHost host = Start(accounts, characters, owners, store, war: true);
         var feature = PartyTestHost.Feature(host);
         await feature.StartupAsync(default);
         Guid idle = Assert.IsType<Guid>((await feature.CreateAsync("Warfailer", 1, 1)).BotId);
