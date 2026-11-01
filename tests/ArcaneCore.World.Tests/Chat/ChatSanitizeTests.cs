@@ -1,5 +1,6 @@
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Chat;
+using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -168,6 +169,23 @@ public sealed class ChatSanitizeTests
             options.StrictLinkSeverity = 0;
             await speaker.SendChatAsync(ChatType.Say, Language.Common, "|Zodd");
             Assert.Equal("|Zodd", (await listener.ReadChatAsync()).Text);
+        }
+    }
+
+    [Fact]
+    public async Task Say_WithAnInvalidLink_TakesTheSessionsWarningGate_ForItsLogLine()
+    {
+        (WorldTestHost host, WorldTestClient speaker, WorldTestClient listener) = await StartAsync();
+        await using (host) await using (speaker) await using (listener)
+        {
+            WorldSession session = (WorldSession)(await host.PlayerAsync("Speaker")).Session;
+
+            await speaker.SendChatAsync(ChatType.Say, Language.Common, "look |TInterface\\Icons\\x:32|t here");
+            await speaker.SendChatAsync(ChatType.Say, Language.Common, Item);
+            Assert.Equal(Item, (await listener.ReadChatAsync()).Text); // the invalid line was handled before this one
+
+            // The invalid line took the gate (the first line of its kind is admitted); a second entry inside the interval is refused (without the gate in the handler it would be admitted here).
+            Assert.False(ClientWarningGates.TryEnter(session, "chat-invalid-link", out _));
         }
     }
 

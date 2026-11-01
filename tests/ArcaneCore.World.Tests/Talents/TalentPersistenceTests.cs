@@ -130,7 +130,9 @@ public sealed class TalentPersistenceTests : IAsyncLifetime
         _persistence.SaveRespec(7, new RespecState(2, 20));
         await _persistence.FlushAsync();
 
-        await Assert.ThrowsAnyAsync<Exception>(() => _persistence.DisposeAsync().AsTask());
+        AggregateException thrown = await Assert.ThrowsAsync<AggregateException>(() => _persistence.DisposeAsync().AsTask());
+        Assert.Contains("unreconciled talent state", thrown.Message);
+        Assert.IsType<IOException>(Assert.Single(thrown.InnerExceptions));
         await _persistence.DisposeAsync();   // a second dispose (test teardown) is a no-op
     }
 

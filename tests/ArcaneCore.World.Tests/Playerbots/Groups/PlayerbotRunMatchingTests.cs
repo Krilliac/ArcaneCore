@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 
 /// <summary>
 /// The role quotas of a dungeon or raid run (<see cref="PlayerbotGroupContent.RunRoleNeeds"/>) and the matcher that fills them
-/// (<see cref="PlayerbotGroupContent.Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions, ValueTuple{int, int}, bool)"/>).
+/// (<see cref="PlayerbotGroupContent.Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions, ValueTuple{int, int}, bool, bool)"/>).
 /// </summary>
 public sealed class PlayerbotRunMatchingTests
 {

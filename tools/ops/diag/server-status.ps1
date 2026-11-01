@@ -33,6 +33,7 @@ param(
     [string] $RealmMetricsUrl = '',
     [switch] $Supervise,
     [int] $HangKillSeconds = 90,
+    [int] $DumpGraceSeconds = 420,
     [switch] $Once,
     [string] $HeartbeatPath = '',
     [string] $WindowTitle = ''
@@ -99,14 +100,23 @@ function Write-SupervisorLog([string] $msg) {
     } catch { }
 }
 
+# How long a heartbeat that says "dumping" excuses the silence: min(max + 60, the cap) when the line carries max=, else the cap.
+function Get-DumpGraceSeconds($maxSec, [int] $cap) {
+    if ($null -ne $maxSec -and [int]$maxSec -gt 0) { return [Math]::Min([int]$maxSec + 60, $cap) }
+    return $cap
+}
+
 function Read-HeartbeatInfo {
     if (-not (Test-Path $heartbeatPath)) { return $null }
     try {
         $item = Get-Item -LiteralPath $heartbeatPath -ErrorAction Stop
         $raw = (Get-Content -LiteralPath $heartbeatPath -Raw -ErrorAction Stop).Trim()
         $ageSec = [Math]::Max(0.0, ((Get-Date).ToUniversalTime() - $item.LastWriteTimeUtc).TotalSeconds)
-        if ($raw -match '^(\S+)\s+pid=(\d+)\s+(\S+)$') {
-            return @{ Stamp = $Matches[1]; Pid = [int]$Matches[2]; State = $Matches[3]; AgeSec = $ageSec; Raw = $raw }
+        # <UTC> pid=<pid> <state> [key=value ...]: the dumping line carries max=<seconds>, the longest the dump can take.
+        if ($raw -match '^(\S+)\s+pid=(\d+)\s+([^\s=]+)((?:\s+\w+=\S+)*)$') {
+            $info = @{ Stamp = $Matches[1]; Pid = [int]$Matches[2]; State = $Matches[3]; AgeSec = $ageSec; Raw = $raw; MaxSec = 0 }
+            if ($Matches[4] -match '\smax=(\d{1,9})(?:\s|$)') { $info.MaxSec = [int]$Matches[1] }
+            return $info
         }
         return @{ Stamp = '?'; Pid = 0; State = $raw; AgeSec = $ageSec; Raw = $raw }
     } catch {
@@ -330,7 +340,7 @@ while ($true) {
         foreach ($svcName in @('Realm', 'World')) {
             $listener = $activeListeners[$svcName]
             if ($null -ne $listener) {
-                if ($svcName -eq 'World' -and $null -ne $hbInfo -and $hbInfo.Pid -eq $listener.Id -and $hbInfo.State -ne 'stopping' -and -not ($hbInfo.State -eq 'dumping' -and $hbInfo.AgeSec -le 420) -and $hbInfo.AgeSec -gt $HangKillSeconds) {
+                if ($svcName -eq 'World' -and $null -ne $hbInfo -and $hbInfo.Pid -eq $listener.Id -and $hbInfo.State -ne 'stopping' -and -not ($hbInfo.State -eq 'dumping' -and $hbInfo.AgeSec -le (Get-DumpGraceSeconds $hbInfo.MaxSec $DumpGraceSeconds)) -and $hbInfo.AgeSec -gt $HangKillSeconds) {
                     Write-SupervisorLog "World pid $($listener.Id) heartbeat stale for $([int]$hbInfo.AgeSec)s (> ${HangKillSeconds}s); killing and restarting"
                     Stop-Process -Id $listener.Id -Force -ErrorAction SilentlyContinue
                     Start-Sleep -Seconds 1

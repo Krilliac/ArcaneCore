@@ -8,7 +8,7 @@ using Xunit;
 namespace ArcaneCore.World.Tests.Playerbots.Groups;
 
 /// <summary>
-/// <see cref="PlayerbotGroupContent.Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions, bool)"/> with <c>needQualifying</c>
+/// <see cref="PlayerbotGroupContent.Match(IReadOnlyList{PlayerbotGroupCandidate}, int, PlayerbotGroupOptions, bool, bool)"/> with <c>needQualifying</c>
 /// (an instance plan must hold a member that is in band or has a direct reason), <see cref="PlayerbotGroupContent.QualifyingAnchor"/> and
 /// <see cref="PlayerbotGroupContent.QualifiesAtLevel"/>. All mages and no role quotas, so only levels, waiting order and Qualifying decide.
 /// </summary>

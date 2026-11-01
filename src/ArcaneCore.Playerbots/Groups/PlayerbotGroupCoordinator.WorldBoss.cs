@@ -313,7 +313,7 @@ public sealed partial class PlayerbotGroupCoordinator
             Unhold(bot.BotId, null);
         var goal = new PlayerbotGroupGoal(PlayerbotGroupGoalKind.WorldBoss, 0, live.Entry, live.Locator.MapId, live.Locator.MapId, bossAt, 0, bossAt, plan.Members.Count,
             PlayerbotWorldBossMuster.LevelFloor(o, live.Level), "worldboss");
-        BotGroup group = Form(goal, plan);
+        BotGroup group = Form(goal, plan, plainApproach: true); // the rally point below replaces the approach point
 
         // The raid gathers RallyYards short of the boss, on the side it comes from.
         Vector3 rally = SnapToMesh(_world is not null ? WorldCollision.Of(_world).Pathfinder : null, goal.MeetingMap, plan.Leader.Position,

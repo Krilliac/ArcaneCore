@@ -12,6 +12,7 @@ using ArcaneCore.Game.WorldState.States;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.WorldState;
 using ArcaneCore.World.Features;
+using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -195,7 +196,8 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         }
         catch (OperationCanceledException)
         {
-            // Expected cancellation during shutdown.
+            // Expected cancellation during shutdown. A cancelled job did not persist its phase either: forget it so the queued phase is written below.
+            _inFlightPhase = null;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -203,7 +205,6 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
             _inFlightPhase = null;
             // The job's failure would have been logged by its apply on the world thread, which no longer runs: log it here.
             // The queued work below is still written.
-            FaultLedger.Shared.Record("world-event.war-effort", ex);
             AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"stop-inflight error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault(LogLevel.Warning, "war-effort.stop-inflight", ex, "the AQ war-effort store job in flight at shutdown failed");
         }
@@ -222,7 +223,6 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("world-event.war-effort", ex);
             AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"stop-flush error={ex.GetType().Name}: {ex.Message}");
             logger.LogFault("war-effort.stop-flush", ex, "could not write the queued AQ war-effort state at shutdown");
         }
@@ -283,7 +283,11 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
                 // boss deaths). Clearing it lost the Gathering start, and that refresh then saw Disabled and stopped event 120.
                 _inFlightPhase = null;
                 foreach (int done in result.FlushedBossDeaths) _pendingBossDeaths.Remove(done);
-                FaultLedger.Shared.Record("world-event.war-effort", ex);
+                // A failed phase write still loaded the durable state (RunStoreAsync): apply it so a persistent write failure does not freeze
+                // the snapshot and the boss-death flush. The event sync stays skipped while the phase is queued.
+                if (result.Snapshot is { } loaded) Volatile.Write(ref _snapshot, loaded);
+                if (result.BossDeathFailure is { } deathFailure)
+                    logger.LogFault("war-effort.persist-boss-death", deathFailure, "could not persist AQ Colossus death; {Count} flag(s) pending retry", _pendingBossDeaths.Count);
                 AnomalyLedger.Shared.Report("world-event", "lifecycle-fault", "war-effort", $"refresh-store error={ex.GetType().Name}: {ex.Message}");
                 logger.LogFault("war-effort.refresh-store", ex, "could not refresh AQ war-effort state");
             });
@@ -293,7 +297,21 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
     {
         using IServiceScope scope = scopes.CreateScope();
         IWarEffortStateStore store = scope.ServiceProvider.GetRequiredService<IWarEffortStateStore>();
-        if (phase is { } start) await store.SetPhaseAsync(start, 0).ConfigureAwait(false);
+        // A failing phase write must not freeze everything else this job does (boss deaths, the snapshot reload): remember it, do the rest,
+        // and rethrow at the end so the caller still sees the phase as unwritten (kept queued, retried by the next refresh).
+        ExceptionDispatchInfo? phaseFailure = null;
+        if (phase is { } start)
+        {
+            try
+            {
+                await store.SetPhaseAsync(start, 0).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OutOfMemoryException and not OperationCanceledException)
+            {
+                phaseFailure = ExceptionDispatchInfo.Capture(ex);
+            }
+        }
+
         try
         {
             foreach (int bossIndex in deaths)
@@ -313,6 +331,7 @@ public sealed partial class WarEffortFeature(IServiceScopeFactory scopes, GameEv
         }
         WarEffortSnapshot state = await store.LoadAsync().ConfigureAwait(false);
         result.Snapshot = state;
+        phaseFailure?.Throw();
         if (!full) return;
         WarEffortPhase? next = state.Phase == WarEffortPhase.Transporting && state.PhaseEndsAtUnix > 0 && state.PhaseEndsAtUnix <= now
             ? WarEffortPhase.Gong

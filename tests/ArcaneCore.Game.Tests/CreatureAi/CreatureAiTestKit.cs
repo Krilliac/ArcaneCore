@@ -1,4 +1,5 @@
 using System.Numerics;
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -15,10 +16,13 @@ internal static class CreatureAiTestKit
     public const string RecorderName = "RecorderAI";
 
     public static (WorldRuntime World, Map Map, CreatureMapSystem System) CreateAiSystem(
-        CreatureContent content, CreatureAiServices? services = null, CreatureOptions? options = null, WorldRuntime? world = null, uint instanceId = 0)
+        CreatureContent content, CreatureAiServices? services = null, CreatureOptions? options = null, WorldRuntime? world = null, uint instanceId = 0,
+        ICombatRandom? combatRandom = null, int combatSeed = 1)
     {
         world ??= TestWorld.CreateRuntime();
         Map map = world.GetMap(0, instanceId);
+        // The map defaults to Random.Shared, so a fight's hit, miss and dodge rolls differed per run; pin them (a test may still replace it).
+        map.Combat.Random = combatRandom ?? new SeededCombatDice(combatSeed);
         var system = new CreatureMapSystem(map, content, options, random: new Random(1), aiServices: services ?? new CreatureAiServices());
         map.AddUpdater(system);
         return (world, map, system);
@@ -305,4 +309,14 @@ internal sealed class FakeCaster : ICreatureSpellCaster
     public void OnCreatureRemoved(Creature creature) => Removed.Add(creature);
 
     public void RaiseHit(Unit caster, Unit target, SpellInfo spell) => SpellHit?.Invoke(caster, target, spell);
+}
+
+/// <summary>A fixed-seed <see cref="ICombatRandom"/>; world thread only (<see cref="Random"/> is not thread-safe).</summary>
+internal sealed class SeededCombatDice(int seed) : ICombatRandom
+{
+    private readonly Random _random = new(seed);
+
+    public int Next(int minInclusive, int maxInclusive) => _random.Next(minInclusive, maxInclusive + 1);
+
+    public float NextFloat(float min, float max) => min + ((float)_random.NextDouble() * (max - min));
 }

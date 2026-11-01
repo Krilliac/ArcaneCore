@@ -179,6 +179,11 @@ public sealed class CreatureWorldFeature(IServiceProvider services, ILogger<Crea
         QueryCache.Clear();
         foreach (uint mapId in content.MapsWithSpawns)
         {
+            if (_world is { } owning && !owning.Owns(mapId))
+            {
+                continue; // a map another worker owns (Cluster:Worker:OwnedMaps) spawns there
+            }
+
             GetOrCreateSystem(mapId);
         }
     }

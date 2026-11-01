@@ -332,7 +332,7 @@ public static partial class ContentImporterCli
         Count("dbscript_relay_template", relayTemplates.Count, relaySteps.Count + relayTemplates.Count > 0);
         Count("creature_template (ScriptName)", relays.ScriptNames.Count, relays.ScriptNames.Count > 0);
         Count(CreatureEquipmentDataModule.EquipTemplateTable, relays.BuildReport().Equipment, relays.HasEquipTemplateTable);
-        Count(CreatureImmunityDataModule.ImmunityTable, relays.BuildReport().Immunities, relays.HasImmunityTable);
+        Count(CreatureImmunityDataModule.ImmunityTable, relays.BuildReport().Immunities, relays.HasImmunityRows);
         Count("npc_vendor_template", gossip.BuildReport().VendorTemplates, gossip.SawVendorTemplateTable);
         Count(NpcTextBroadcastDataModule.Table, gossip.BuildReport().TextBroadcasts, gossip.SawTextBroadcastTable);
         (int scriptDevTexts, int scriptDevPoints) = relays.ScriptDevContentCounts();
@@ -467,7 +467,7 @@ public static partial class ContentImporterCli
                     }
 
                     (int immunityRows, int immunityTemplates) = await relays.RefreshImmunitiesAsync(db, token).ConfigureAwait(false);
-                    if (relays.HasImmunityTable)
+                    if (relays.HasImmunityRows)
                     {
                         counts[CreatureImmunityDataModule.ImmunityTable] = immunityRows;
                     }

@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster;
 
 namespace ArcaneCore.World.Cluster.Gateway;
@@ -42,15 +43,18 @@ public sealed class GatewayWorkerOptions
     /// <summary>World schema version both ends must agree on (an operator label, not read from the database).</summary>
     public int WorldSchemaVersion { get; set; } = 1;
 
+    /// <summary>The maps this worker owns, as a list of ids and inclusive ranges (<c>0,1,30-40</c>; separators comma, semicolon or space). Empty, the default, owns every map, which keeps the combined behaviour. With a list, the world never creates or enters a map outside it (login, teleport, spawn, bot travel refuse cleanly until redirects and far transfers to the owning worker exist), and the list is announced in the link manifest. Lists of different workers must not overlap (the supervisor's Processes:*:Maps check).</summary>
+    public string OwnedMaps { get; set; } = string.Empty;
+
+    /// <summary>With an OwnedMaps list: whether instance copies (dungeons, raids, battlegrounds) of maps outside the list also run on this worker. `true`, the default, lets a continent worker host the instances it hands out; `false` refuses them. Ignored while OwnedMaps is empty.</summary>
+    public bool AllowInstanceMaps { get; set; } = true;
+
     /// <summary>The manifest this worker admits gateways against.</summary>
     public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
-        ClusterRole.Worker, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion);
-}
+        ClusterRole.Worker, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion,
+        TryGetOwnership(out MapOwnership ownership, out _) ? ownership.ToListText() : OwnedMaps.Trim(), AllowInstanceMaps);
 
-/// <summary>Builds the <see cref="ClusterNodeManifest"/> both ends of a gateway link advertise.</summary>
-public static class GatewayLinkManifest
-{
-    public static ClusterNodeManifest Create(
-        ClusterRole role, string nodeId, Guid incarnation, int realmId, string contentRevision, int charactersSchemaVersion, int worldSchemaVersion)
-        => new(realmId, nodeId, incarnation, role, ClusterNodeManifest.CurrentContractVersion, charactersSchemaVersion, worldSchemaVersion, contentRevision);
+    /// <summary>Parses <see cref="OwnedMaps"/> and <see cref="AllowInstanceMaps"/>; false with <paramref name="error"/> when the list is malformed.</summary>
+    public bool TryGetOwnership(out MapOwnership ownership, out string? error)
+        => MapOwnership.TryParse(OwnedMaps, AllowInstanceMaps, out ownership, out error);
 }

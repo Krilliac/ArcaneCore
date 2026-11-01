@@ -29,7 +29,7 @@ public enum TimestampKind
 /// <c>Console:Mode</c>, <c>Timestamps</c> and <c>IncludeScopes</c> are applied live when the configuration file changes; every
 /// file key is read once at start.
 /// </summary>
-[ArcaneCore.Kernel.Configuration.ConfigDaemons(ArcaneCore.Kernel.Configuration.ConfigDaemon.Both)]
+[ArcaneCore.Kernel.Configuration.ConfigDaemons(ArcaneCore.Kernel.Configuration.ConfigDaemon.Both | ArcaneCore.Kernel.Configuration.ConfigDaemon.Gateway)]
 public sealed class ArcaneLoggingOptions
 {
     public const string SectionName = "Logging:ArcaneCore";

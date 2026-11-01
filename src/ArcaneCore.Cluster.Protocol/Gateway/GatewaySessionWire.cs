@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
+using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Protocol;
 
 namespace ArcaneCore.World.Cluster.Gateway;
@@ -24,8 +25,15 @@ public readonly record struct GatewaySessionOpenReply(bool Accepted, AuthRespons
 }
 
 /// <summary>
+/// The Warden posture a gateway reports with every verdict: what it enabled and which module, options and check revision it
+/// runs. The worker compares it with its own expected posture (<c>GatewayWardenManifestVerifier.VerifyPeerGatewayManifest</c>)
+/// and refuses a verdict from a gateway that does not match, so every gateway of a realm scans identically.
+/// </summary>
+public sealed record GatewayWardenPosture(bool Enabled, string ModuleDigestHex, string OptionsSummary, int CheckRevision);
+
+/// <summary>
 /// Encoding of the Tier 3a session-link frames (<c>docs/design/hot-reload-tiers.md</c> §5.3). They ride the length-prefixed
-/// framing and the manifest handshake of <see cref="LoopbackGatewayWorkerHost"/>, and every packet frame carries the same
+/// framing and the manifest handshake of <c>LoopbackGatewayWorkerHost</c>, and every packet frame carries the same
 /// <see cref="ClusterSessionPacket"/> envelope (generation, owner epoch, sequence). All integers little-endian. Every decoder
 /// checks lengths and throws <see cref="InvalidDataException"/> on a frame that does not fit, which closes the link.
 /// </summary>
@@ -103,9 +111,9 @@ public static class GatewaySessionWire
     /// <summary>A client packet (gateway to worker) or a server packet (worker to gateway) in the session envelope.</summary>
     internal static byte[] EncodePacket(GatewayWorkerFrameType type, ClusterSessionPacket packet)
     {
-        byte[] buffer = new byte[1 + LoopbackGatewayWorkerHost.SessionPacketHeaderBytes + packet.Payload.Length];
+        byte[] buffer = new byte[1 + GatewayLinkFraming.SessionPacketHeaderBytes + packet.Payload.Length];
         buffer[0] = (byte)type;
-        LoopbackGatewayWorkerHost.WriteSessionPacketBody(buffer.AsSpan(1), packet);
+        GatewayLinkFraming.WriteSessionPacketBody(buffer.AsSpan(1), packet);
         return buffer;
     }
 
@@ -114,7 +122,7 @@ public static class GatewaySessionWire
         GatewayWorkerFrameType type, long sessionGeneration, int accountId, ulong characterGuid, long ownerEpoch, long sequence,
         uint opcode, ReadOnlySpan<byte> payload)
     {
-        byte[] buffer = new byte[1 + LoopbackGatewayWorkerHost.SessionPacketHeaderBytes + payload.Length];
+        byte[] buffer = new byte[1 + GatewayLinkFraming.SessionPacketHeaderBytes + payload.Length];
         Span<byte> span = buffer;
         span[0] = (byte)type;
         BinaryPrimitives.WriteInt64LittleEndian(span.Slice(1, 8), sessionGeneration);
@@ -129,7 +137,7 @@ public static class GatewaySessionWire
     }
 
     /// <summary>The envelope of a packet frame body; the payload is a slice of <paramref name="body"/> (no copy).</summary>
-    internal static ClusterSessionPacket DecodePacket(ReadOnlyMemory<byte> body) => LoopbackGatewayWorkerHost.DeserializeSessionPacket(body);
+    internal static ClusterSessionPacket DecodePacket(ReadOnlyMemory<byte> body) => GatewayLinkFraming.DeserializeSessionPacket(body);
 
     internal static byte[] EncodeClose(long sessionGeneration, int accountId, ClusterSessionDetachReason reason)
     {
@@ -178,12 +186,123 @@ public static class GatewaySessionWire
         return HMACSHA256.HashData(Encoding.UTF8.GetBytes(linkSecret), nonce);
     }
 
+    /// <summary>
+    /// A Warden verdict of the gateway (gateway to worker). Carries the session generation, the owner epoch the gateway holds for the
+    /// session, the account, the verdict's key (<see cref="ClusterWardenVerdict.CharacterGuid"/>: the gateway has no character, so it
+    /// sends the account id there), the check, the action, a reason clamped to <see cref="MaxTextBytes"/> bytes and the gateway's
+    /// <see cref="GatewayWardenPosture"/>.
+    /// </summary>
+    internal static byte[] EncodeWardenVerdict(ClusterWardenVerdict verdict, GatewayWardenPosture posture)
+    {
+        ArgumentNullException.ThrowIfNull(verdict);
+        ArgumentNullException.ThrowIfNull(posture);
+        byte[] reason = Encoding.UTF8.GetBytes(ClampText(verdict.Reason));
+        byte[] digest = Encoding.UTF8.GetBytes(posture.ModuleDigestHex);
+        byte[] options = Encoding.UTF8.GetBytes(posture.OptionsSummary);
+        if (digest.Length > MaxTextBytes || options.Length > MaxTextBytes)
+        {
+            throw new ArgumentException("Warden posture text too long for a WardenVerdict frame", nameof(posture));
+        }
+
+        byte[] buffer = new byte[1 + 8 + 8 + 4 + 8 + 2 + 1 + 1 + 4 + 4 + reason.Length + 4 + digest.Length + 4 + options.Length];
+        var writer = new FrameWriter(buffer);
+        writer.Byte((byte)GatewayWorkerFrameType.WardenVerdict);
+        writer.Int64(verdict.SessionGeneration);
+        writer.Int64(verdict.OwnerEpoch);
+        writer.Int32(verdict.AccountId);
+        writer.Int64(unchecked((long)verdict.CharacterGuid));
+        writer.UInt16(verdict.CheckId);
+        writer.Byte((byte)verdict.Action);
+        writer.Byte(posture.Enabled ? (byte)1 : (byte)0);
+        writer.Int32(posture.CheckRevision);
+        writer.Text(reason);
+        writer.Text(digest);
+        writer.Text(options);
+        return buffer;
+    }
+
+    internal static (ClusterWardenVerdict Verdict, GatewayWardenPosture Posture) DecodeWardenVerdict(ReadOnlySpan<byte> body)
+    {
+        var reader = new FrameReader(body, "WardenVerdict");
+        long generation = reader.Int64();
+        long epoch = reader.Int64();
+        int accountId = reader.Int32();
+        ulong key = unchecked((ulong)reader.Int64());
+        ushort checkId = reader.UInt16();
+        byte action = reader.Byte();
+        bool enabled = reader.Byte() != 0;
+        int revision = reader.Int32();
+        string reason = reader.Text();
+        string digest = reader.Text();
+        string options = reader.Text();
+        if (!Enum.IsDefined((ClusterWardenAction)action))
+        {
+            throw new InvalidDataException($"WardenVerdict action {action} is not defined");
+        }
+
+        return (new ClusterWardenVerdict(generation, epoch, accountId, key, reason, (ClusterWardenAction)action, checkId),
+            new GatewayWardenPosture(enabled, digest, options, revision));
+    }
+
+    /// <summary>
+    /// The gateway's Warden posture (gateway to worker), sent once right after the link is admitted and before any SessionOpen. The worker
+    /// compares it with its own expected posture and refuses the link on a mismatch, so a gateway that scans differently (or not at all)
+    /// never carries a session. Body: enabled byte, check revision, digest text, options text.
+    /// </summary>
+    internal static byte[] EncodeWardenPosture(GatewayWardenPosture posture)
+    {
+        ArgumentNullException.ThrowIfNull(posture);
+        byte[] digest = Encoding.UTF8.GetBytes(posture.ModuleDigestHex);
+        byte[] options = Encoding.UTF8.GetBytes(posture.OptionsSummary);
+        if (digest.Length > MaxTextBytes || options.Length > MaxTextBytes)
+        {
+            throw new ArgumentException("Warden posture text too long for a WardenPosture frame", nameof(posture));
+        }
+
+        byte[] buffer = new byte[1 + 1 + 4 + 4 + digest.Length + 4 + options.Length];
+        var writer = new FrameWriter(buffer);
+        writer.Byte((byte)GatewayWorkerFrameType.WardenPosture);
+        writer.Byte(posture.Enabled ? (byte)1 : (byte)0);
+        writer.Int32(posture.CheckRevision);
+        writer.Text(digest);
+        writer.Text(options);
+        return buffer;
+    }
+
+    internal static GatewayWardenPosture DecodeWardenPosture(ReadOnlySpan<byte> body)
+    {
+        var reader = new FrameReader(body, "WardenPosture");
+        bool enabled = reader.Byte() != 0;
+        int revision = reader.Int32();
+        string digest = reader.Text();
+        string options = reader.Text();
+        return new GatewayWardenPosture(enabled, digest, options, revision);
+    }
+
+    /// <summary>The text cut to at most <see cref="MaxTextBytes"/> UTF-8 bytes (whole characters only).</summary>
+    private static string ClampText(string text)
+    {
+        string clamped = text.Length > MaxTextBytes ? text[..MaxTextBytes] : text;
+        while (Encoding.UTF8.GetByteCount(clamped) > MaxTextBytes)
+        {
+            clamped = clamped[..^1];
+        }
+
+        return clamped;
+    }
+
     private ref struct FrameWriter(Span<byte> buffer)
     {
         private readonly Span<byte> _buffer = buffer;
         private int _offset;
 
         public void Byte(byte value) => _buffer[_offset++] = value;
+
+        public void UInt16(ushort value)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(_buffer.Slice(_offset, 2), value);
+            _offset += 2;
+        }
 
         public void Int32(int value)
         {
@@ -230,6 +349,8 @@ public static class GatewaySessionWire
         }
 
         public byte Byte() => Take(1)[0];
+
+        public ushort UInt16() => BinaryPrimitives.ReadUInt16LittleEndian(Take(2));
 
         public int Int32() => BinaryPrimitives.ReadInt32LittleEndian(Take(4));
 

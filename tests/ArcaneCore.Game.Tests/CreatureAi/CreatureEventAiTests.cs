@@ -106,11 +106,9 @@ public sealed class CreatureEventAiTests
     }
 
     [Theory]
-    [InlineData(1)]
     [InlineData(5)]
-    public void RangedModeAction_RejectsFullCasterAndTypesPastTypeMax(int type)
+    public void RangedModeAction_RejectsTypesPastTypeMax(int type)
     {
-        // Type 1 needs the main-spell fallback (UnitAI::OnSpellInterrupt) this AI does not have: refused and reported, not run as type 3.
         CreatureContent content = EventContent(
             [Row(1, EventAiEventType.Spawned, a1: Act(EventAiActionType.SetRangedMode, type, 20))]);
         (WorldRuntime runtime, _, CreatureMapSystem system) = CreateAiSystem(content);

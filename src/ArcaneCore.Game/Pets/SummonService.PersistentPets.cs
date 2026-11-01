@@ -760,6 +760,7 @@ public sealed partial class SummonService
             creature.Summon = new SummonLinks(SummonKind.Pet, owner.Guid, 0, TotemSlots.None, 0);
             ApplyOwner(creature, owner, 0);
             InitPet(creature, SummonKind.Pet, owner, snapshot.PetNumber);
+            creature.SetUInt32(UpdateFields.UnitFieldPetnumber, snapshot.PetNumber); // a permanent pet: SetPetNumber(n, true), Pet.cpp:262
             if (owner.Class == Class.Hunter)
             {
                 creature.IgnoreTemplateResistances = true; // a tamed beast loses its innate resistances (Patch 1.3.0)
@@ -863,8 +864,7 @@ public sealed partial class SummonService
         AttachPetAi(pet);
         owner.SetPetGuid(pet.Guid);
         GreyOutForMountedOwner(owner, charm);
-        owner.Session.Send(WorldOpcode.SmsgPetSpells,
-            PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
+        SendPetSpellsAfterCreate(owner, pet, PetPackets.BuildPetSpells(pet, charm, listSpells: true, _spells?.GetActiveCooldowns(pet) ?? []));
         RememberPetForSpiritHealer(owner, pet); // Pet::LoadPetFromDB: "save pet for resurrection by spirit healer"
         if (_spells is { } auraSpells)
         {

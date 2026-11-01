@@ -1701,7 +1701,12 @@ Cluster.Fencing.ClaimWatchIntervalSeconds = 10
 #    Cluster.Fencing.Enabled
 #        Description: Enable durable character ownership fencing at world startup; disabled by
 #                     default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with
-#                     fencing off refuses to start.
+#                     fencing off refuses to start. Also required (startup check, exit 78) with
+#                     Cluster:Node:Role other than Combined and for every world child of a
+#                     Cluster:Supervisor that runs more than one world: an unfenced world skips the
+#                     durable id allocator priming and collides on in-memory id counters. Each world
+#                     of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a
+#                     PostgreSQL or MariaDB characters database.
 #        Type: bool
 #        Default: false
 #        Allowed: true | false
@@ -1713,7 +1718,8 @@ Cluster.Fencing.Enabled = false
 #
 #    Cluster.Fencing.OwnerNode
 #        Description: The durable owner identity; defaults to the current machine name and must be
-#                     stable while the world owns the database.
+#                     stable while the world owns the database. Must be distinct for each world of a
+#                     multi-world cluster (the supervisor check refuses a duplicate).
 #        Type: string
 #        Default: (not set)
 #        Allowed: text
@@ -1861,11 +1867,14 @@ Cluster.Supervisor.CrashLoopWindowSeconds = 300
 
 #
 #    Cluster.Supervisor.DumpGraceSeconds
-#        Description: How long a child that announced dumping (its own crash dump,
+#        Description: The cap on how long a child that announced dumping (its own crash dump,
 #                     Diagnostics:CrashDump) is exempt from the hang timeout and from a hang capture
 #                     of the supervisor's own, in seconds (default 420: three times the default dump
-#                     timeout of 120 s, plus a minute; 1 to 3600). Keep it above three times the
-#                     child's Diagnostics:CrashDump:TimeoutSeconds.
+#                     timeout of 120 s, plus a minute; 1 to 3600). The exemption is min(announced
+#                     max + 60, this): the child's own max= from its authenticated line, bounded by
+#                     this value. Keep it above three times the child's
+#                     Diagnostics:CrashDump:TimeoutSeconds plus a minute, or the cap cuts a long
+#                     dump short.
 #        Type: int
 #        Default: 420
 #        Allowed: a whole number, -2147483648 to 2147483647
@@ -19491,6 +19500,55 @@ World.Playerbots.Travel.TransitBackoffSeconds = 60
 #        Docs: docs/reference/configuration.md#worldplayerbots
 #
 World.Playerbots.Travel.Zeppelins = true
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.Enabled
+#        Description: Let bots pick up and deliver silithyst (on by default). Off: bots ignore the
+#                     geysers; a bot already carrying finishes its trip.
+#        Type: bool
+#        Default: true
+#        Allowed: true | false
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.Enabled = true
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.MaxBotsPerGeyser
+#        Description: The most bots that go for one geyser or mound at the same time (1..8; default
+#                     1).
+#        Type: int
+#        Default: 1
+#        Allowed: a whole number from 1 to 8
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.MaxBotsPerGeyser = 1
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.ParticipationChance
+#        Description: The chance (0..1; default 0.5) that an eligible bot takes part in a given
+#                     two-minute window: each bot rolls once per window from its guid, so a crowd of
+#                     bots in Silithus is not all on the geysers at once.
+#        Type: float
+#        Default: 0.5
+#        Allowed: a number from 0 to 1, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.ParticipationChance = 0.5
+
+#
+#    World.Playerbots.WorldPvp.Silithyst.WarModeParticipationChance
+#        Description: The chance (0..1; default 0.9) of the same roll while
+#                     World:Playerbots:Social:WarMode:Enabled is on.
+#        Type: float
+#        Default: 0.9
+#        Allowed: a number from 0 to 1, '.' is the decimal point
+#        Reload: Live (.reload config applies it to the running server)
+#        Docs: docs/reference/configuration.md#worldplayerbots
+#
+World.Playerbots.WorldPvp.Silithyst.WarModeParticipationChance = 0.9
 
 #----------------------------------------------------------------------------
 # World:Playerbots:Qa

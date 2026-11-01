@@ -49,7 +49,7 @@ public sealed partial class InstanceManager
         => string.Create(CultureInfo.InvariantCulture, $"instance {save.InstanceId} of map {save.MapId}");
 
     private static string SubjectOf(Player player)
-        => string.Create(CultureInfo.InvariantCulture, $"player {player.Name} (guid {player.Guid.Low})");
+        => string.Create(CultureInfo.InvariantCulture, $"player (guid {player.Guid.Low})");
 
     /// <summary>After a bind: the save must still be the one in the save table and not deleted.</summary>
     private void VerifyBindHasSave(InstanceSave save, string kind, ulong id)

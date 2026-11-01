@@ -63,7 +63,7 @@ public sealed class BotGoalLadderTests
 
         Assert.Empty(catalog.Rejected);
         Assert.Equal(16, catalog.RuleCount);
-        Assert.Equal(34, catalog.Goals.Count);
+        Assert.Equal(35, catalog.Goals.Count);
         Assert.Equal(TodaysOrder, PlayerbotLadderContent.Rungs);
     }
 

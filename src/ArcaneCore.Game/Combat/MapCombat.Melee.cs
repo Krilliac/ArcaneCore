@@ -216,14 +216,21 @@ public sealed partial class MapCombat
     /// max(reach, 1.5) of both + 4/3, at least 5 yd, plus 2.66 yd leeway when a player and its
     /// target both move without walking (unless <see cref="CombatOptions.MeleeMovementLeeway"/> is off); 2D distance² &lt; reach², dz² &lt; 36.
     /// </summary>
-    public static bool CanReachWithMeleeAutoAttack(Unit attacker, Unit victim)
+    public static bool CanReachWithMeleeAutoAttack(Unit attacker, Unit victim) => CanReachWithMeleeAutoAttack(attacker, victim, 0f);
+
+    /// <summary>
+    /// <see cref="CanReachWithMeleeAutoAttack(Unit, Unit)"/> with <paramref name="flatMod"/> yards added to the combined combat reach before the
+    /// ATTACK_DISTANCE minimum is applied (cmangos Unit::CanReachWithMeleeAttack(pVictim, flat_mod), which EventAI's ranged-mode return
+    /// threshold uses); the movement leeway is added after the clamp, as in the plain overload.
+    /// </summary>
+    public static bool CanReachWithMeleeAutoAttack(Unit attacker, Unit victim, float flatMod)
     {
         if (!victim.IsInWorld)
         {
             return false;
         }
 
-        float reach = MeleeReach(attacker) + MeleeReach(victim) + CombatConstants.BaseMeleeRangeOffset;
+        float reach = MeleeReach(attacker) + MeleeReach(victim) + CombatConstants.BaseMeleeRangeOffset + flatMod;
         if (reach < CombatConstants.AttackDistance)
         {
             reach = CombatConstants.AttackDistance;
@@ -353,9 +360,11 @@ public sealed partial class MapCombat
                     c.ResetAttackTimer(WeaponAttackType.BaseAttack);
                 }
 
-                if (player is not null)
+                if (player is not null && PvpActor(player) is { } pulsedPlayer)
                 {
-                    TogglePlayerPvpFlagOnAttackVictim(player, victim);
+                    // vmangos Unit::UpdateMeleeAttackingState (Unit.cpp:431-433): the swing of a player pulses TogglePlayerPvPFlagOnAttackVictim, which
+                    // acts for GetAffectingPlayer, so a mind-controlled player's swing flags its charmer.
+                    TogglePlayerPvpFlagOnAttackVictim(pulsedPlayer, victim);
                 }
 
                 if (!extraAttackPerformed && c.IsAttackReady(WeaponAttackType.BaseAttack))
@@ -1143,6 +1152,7 @@ public sealed partial class MapCombat
         c.LastCombatSetBy = caller;
         c.LastCombatSetVia = via;
         c.CombatSetsSinceClear++;
+        c.CombatSetSerial++;
         Track(unit);
     }
 
@@ -1221,7 +1231,7 @@ public sealed partial class MapCombat
 
     /// <summary>
     /// The player whose PvP flag a unit's hostile act touches: the player behind the unit, so a pet, guardian, totem or charmed unit (or a
-    /// mind-controlled player) resolves to its owner or charmer (the per-swing pulse in the melee loop stays player-only, Unit.cpp:432-433; (vmangos Unit::GetAffectingPlayer, used by TogglePlayerPvPFlagOnAttackVictim and SetInCombatWithAggressor, Unit.cpp:5959-6053).
+    /// mind-controlled player) resolves to its owner or charmer (the per-swing pulse in the melee loop runs only for a player's own swing, Unit.cpp:432-433, and acts for the charmer of a mind-controlled player; vmangos Unit::GetAffectingPlayer, used by TogglePlayerPvPFlagOnAttackVictim and SetInCombatWithAggressor, Unit.cpp:5959-6053).
     /// </summary>
     private static Player? PvpActor(Unit unit) => DuelRules.ControllingPlayer(unit);
 

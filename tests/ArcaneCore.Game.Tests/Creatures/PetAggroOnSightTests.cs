@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Combat;
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
@@ -37,10 +38,41 @@ public sealed class PetAggroOnSightTests
         public Creature SpawnMob(float x, float y) => System.SpawnTemporary(Template(MobEntry) with { ExtraFlags = 0x02 }, x, y, 83.5f, 0);
     }
 
-    private static Yard Start(ReactState react)
+    /// <summary>
+    /// The first <paramref name="swings"/> table rolls in the fight are misses (a roll of 0 is inside the miss band), every later roll comes from
+    /// a fixed seed. The dice is shared by both fighters: the defensive mob swings back at the pet, and whoever swings first takes the first
+    /// roll, so forcing only the first roll can land on the mob's swing and leave the pet's first swing free to hit; three misses cover the pet's first swing and its next one (an earlier version of
+    /// this case did exactly that and could not fail). A hit always deals at least 1 damage (MeleeHitTable.ApplyArmor), so a miss (like a
+    /// dodge, a parry or a full block) is the only way a swing leaves the mob's health alone; unseeded, those outcomes decided whether
+    /// the pet had struck by the end of the window.
+    /// </summary>
+    private sealed class FirstSwingsMiss(int seed, int swings) : ICombatRandom
+    {
+        private readonly SeededCombatDice _rest = new(seed);
+        private int _rolled;
+
+        /// <summary>True once the scripted swings have all rolled the hit table.</summary>
+        public bool Spent => _rolled >= swings;
+
+        public int Next(int minInclusive, int maxInclusive)
+        {
+            if (Spent)
+            {
+                return _rest.Next(minInclusive, maxInclusive);
+            }
+
+            _rolled++;
+            return minInclusive;
+        }
+
+        public float NextFloat(float min, float max) => _rest.NextFloat(min, max);
+    }
+
+    private static Yard Start(ReactState react, int seed = 1, ICombatRandom? dice = null)
     {
         CreatureContent content = Content([Template(PetEntry), Template(MobEntry)], []);
-        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new CreaturesOnly() });
+        (WorldRuntime runtime, Map map, CreatureMapSystem system) = CreateAiSystem(content, new CreatureAiServices { Hostility = new CreaturesOnly() },
+            combatRandom: dice, combatSeed: seed);
         (Player owner, FakeSession session) = AddPlayer(runtime, 1, 0, 0);
 
         Creature pet = system.SpawnTemporary(Template(PetEntry), 2, 0, 83.5f, 0);
@@ -55,10 +87,15 @@ public sealed class PetAggroOnSightTests
         return new Yard(runtime, map, system, owner, session, pet);
     }
 
-    [Fact]
-    public void AnAggressivePet_AttacksAHostileCreatureThatComesIntoRange_AndTheOwnerHearsIt()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void AnAggressivePet_AttacksAHostileCreatureThatComesIntoRange_AndTheOwnerHearsIt(int seed)
     {
-        using Yard y = Start(ReactState.Aggressive);
+        using Yard y = Start(ReactState.Aggressive, seed);
         Creature mob = y.SpawnMob(12, 0);
 
         Run(y.World, 1100); // the mob's relocation notify reaches the pet
@@ -74,6 +111,37 @@ public sealed class PetAggroOnSightTests
         Assert.True(y.Pet.Combat.IsInCombat);
         Assert.True(mob.Health < mob.MaxHealth, "the pet never struck");
         Assert.Null(y.Owner.Combat.Victim);
+    }
+
+    [Fact]
+    public void AnAggressivePetWhoseFirstSwingMisses_StillStrikesWithinOneAttackSpeed()
+    {
+        var dice = new FirstSwingsMiss(1, swings: 3);
+        using Yard y = Start(ReactState.Aggressive, dice: dice);
+        Creature mob = y.SpawnMob(12, 0);
+        Run(y.World, 1100);
+        Assert.Same(mob, y.Pet.Combat.Victim);
+
+        // Chase until the first three swings have rolled the table (the scripted misses); allow the same 3 s the seeded theory uses.
+        uint waited = 0;
+        while (!dice.Spent && waited < 3000)
+        {
+            Run(y.World, 100);
+            waited += 100;
+        }
+
+        Assert.True(dice.Spent, "the first three swings never all happened");
+        Assert.True(mob.Health == mob.MaxHealth, $"the scripted first swings missed, health {mob.Health}/{mob.MaxHealth} after {waited} ms");
+
+        // The next swing is one attack speed later (the pet template's base attack time is 2 s).
+        uint untilStrike = 0;
+        while (mob.Health >= mob.MaxHealth && untilStrike < 2000)
+        {
+            Run(y.World, 100);
+            untilStrike += 100;
+        }
+
+        Assert.True(mob.Health < mob.MaxHealth, $"the pet never struck within one attack speed after its first swing missed (health {mob.Health}/{mob.MaxHealth}, {untilStrike} ms)");
     }
 
     [Theory]

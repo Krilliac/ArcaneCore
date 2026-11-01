@@ -81,6 +81,56 @@ public sealed class SessionAnomalyTests
         loud.Kick("test over");
     }
 
+    private static byte[] MailResultPacket(uint mailId, uint result)
+    {
+        var payload = new byte[12];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(payload, mailId);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8), result);
+        return payload;
+    }
+
+    [Fact]
+    public async Task MailInternalErrorSent_ReportsServerErrorRejection()
+    {
+        const string key = "client/rejection-server-error";
+        await using var host = WorldTestHost.Start();
+        WorldSession faulty = await NewBotAsync(host, "SASRVERRA");
+        WorldSession refused = await NewBotAsync(host, "SASRVERRB");
+        using AnomalyCapture capFaulty = CaptureOf(faulty);
+        using AnomalyCapture capRefused = CaptureOf(refused);
+
+        faulty.Send(WorldOpcode.SmsgSendMailResult, MailResultPacket(77, (uint)ArcaneCore.Game.Economy.MailResult.InternalError));
+        refused.Send(WorldOpcode.SmsgSendMailResult, MailResultPacket(77, (uint)ArcaneCore.Game.Economy.MailResult.NotEnoughMoney)); // the player's refusal, not the server's
+        refused.Send(WorldOpcode.SmsgSendMailResult, MailResultPacket(77, 0)); // success: not a refusal at all
+
+        Assert.Equal(1, capFaulty.Count(key));
+        Assert.Contains("MailResult InternalError", capFaulty.Notices.Single().Detail, StringComparison.Ordinal);
+        Assert.False(capRefused.Any(key));
+        faulty.Kick("test over");
+        refused.Kick("test over");
+    }
+
+    [Fact]
+    public async Task UnhandledGameplayOpcode_Reports()
+    {
+        const string key = "session/opcode-unhandled";
+        await using var host = WorldTestHost.Start();
+        await using WorldTestClient client = await host.EnterWorldAsync("SAUNHANDLED", "Saunhandled");
+        await client.CollectAsync();
+        using AnomalyCapture capture = AnomalyLedger.Shared.Capture(n => n.Key == key);
+
+        await client.SendAsync(WorldOpcode.CmsgSkillBuyStep, []); // a real gameplay request with no handler
+        await client.SendAsync(WorldOpcode.CmsgNewSpellSlot, []); // named, not gameplay
+        await client.SendAsync(WorldOpcode.CmsgPvpPortObsolete, []); // obsolete: never reported
+        await WorldTestHost.WaitForAsync(
+            () => capture.Notices.Any(n => n.Subject == "CMSG_SKILL_BUY_STEP") && capture.Notices.Any(n => n.Subject == "CMSG_NEW_SPELL_SLOT"),
+            "both unhandled opcodes to be reported");
+
+        Assert.Equal(AnomalySeverity.Warning, capture.Notices.First(n => n.Subject == "CMSG_SKILL_BUY_STEP").Severity);
+        Assert.Equal(AnomalySeverity.Info, capture.Notices.First(n => n.Subject == "CMSG_NEW_SPELL_SLOT").Severity);
+        Assert.DoesNotContain(capture.Notices, n => n.Subject.Contains("OBSOLETE", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task AKickWithoutAReason_IsReported_AndOneWithAReasonIsNot()
     {

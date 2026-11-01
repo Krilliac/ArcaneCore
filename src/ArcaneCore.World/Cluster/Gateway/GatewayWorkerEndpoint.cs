@@ -1,7 +1,13 @@
+using System.Collections.Concurrent;
 using System.Net;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Cluster.Auxiliary;
+using ArcaneCore.Kernel.Diagnostics;
+using ArcaneCore.World.Cluster.Auxiliary;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
+using ArcaneCore.World.Warden;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -15,6 +21,12 @@ namespace ArcaneCore.World.Cluster.Gateway;
 /// The worker-mode listener (Cluster:Worker): a <see cref="GatewaySessionLinkHost"/> whose sessions are
 /// <see cref="RemoteWorldSession"/>s of this world. Registered after <see cref="WorldServer"/>, so it starts after the world
 /// host and stops (closing every gateway-backed session and waiting for it) before the world host drains its stores.
+/// <para>
+/// With a <paramref name="wardenVerifier"/> (registered by <see cref="GatewayWorkerServiceCollectionExtensions.AddGatewayWorker"/>) the
+/// gateway owns Warden for its sessions: it sends WardenVerdict frames, the link host checks each against the verifier, and an accepted
+/// verdict is applied here (Kick disconnects the session, Ban also bans the account through <see cref="IBanStore"/> for
+/// <see cref="WardenOptions.BanSeconds"/>; Log needs nothing: the host logged it).
+/// </para>
 /// </summary>
 public sealed class GatewayWorkerEndpoint(
     IServiceScopeFactory scopes,
@@ -24,8 +36,14 @@ public sealed class GatewayWorkerEndpoint(
     WorldRuntime world,
     SessionRegistry registry,
     ILoggerFactory loggers,
-    WorkerAdmission? admission = null) : IHostedService, IAsyncDisposable
+    WorkerAdmission? admission = null,
+    IOptions<WardenOptions>? wardenOptions = null,
+    GatewayWardenManifestVerifier? wardenVerifier = null) : IHostedService, IAsyncDisposable
 {
+    private static readonly TimeSpan PendingBanStopWait = TimeSpan.FromSeconds(5);
+
+    // Ban writes still running; StopAsync waits (bounded) so a ban accepted just before shutdown is not abandoned with the process.
+    private readonly ConcurrentDictionary<Task, int> _pendingBans = new();
     private GatewaySessionLinkHost? _host;
 
     /// <summary>The acceptor of the running listener (null before start): its open sessions.</summary>
@@ -50,7 +68,9 @@ public sealed class GatewayWorkerEndpoint(
             () => world.CharacterOwnership is { Epoch: > 0 } token ? token.Epoch : 1,
             config.LinkSecret,
             new IPEndPoint(IPAddress.Parse(config.BindAddress), config.Port),
-            logger);
+            logger,
+            wardenVerifier,
+            wardenVerifier is null ? null : ApplyWardenVerdict);
         _host.Start();
         logger.LogInformation("Worker mode: gateway link listening on {Endpoint}", _host.BoundEndPoint);
         return Task.CompletedTask;
@@ -66,6 +86,77 @@ public sealed class GatewayWorkerEndpoint(
         await StopInOrderAsync(
             host is null ? null : host.DisposeAsync,
             acceptor is null ? null : acceptor.StopAsync).ConfigureAwait(false);
+        Task[] bans = [.. _pendingBans.Keys];
+        if (bans.Length > 0)
+        {
+            try
+            {
+                await Task.WhenAll(bans).WaitAsync(PendingBanStopWait, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
+            {
+                loggers.CreateLogger<GatewayWorkerEndpoint>().LogWarning("{Count} Warden ban write(s) still pending at stop; the ban(s) may be lost", bans.Length);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies a verdict the link host accepted (on the link's receive loop; never blocks). The session is the one the verdict names by
+    /// generation and account; a session that is already gone needs nothing. Kick and Ban disconnect it at once (a banned client must not
+    /// keep sending opcodes while the ban commits); the ban write runs off this thread.
+    /// </summary>
+    private void ApplyWardenVerdict(long generation, ClusterWardenVerdict verdict)
+    {
+        ILogger logger = loggers.CreateLogger<GatewayWorkerEndpoint>();
+        RemoteWorldSession? remote = null;
+        if (Acceptor?.Sessions.TryGetValue(generation, out remote) != true || remote is null || remote.Session.AccountId != verdict.AccountId)
+        {
+            logger.LogInformation("Warden verdict for generation {Generation} (account {Account}) has no open session; nothing to apply", generation, verdict.AccountId);
+            return;
+        }
+
+        WorldSession session = remote.Session;
+        logger.LogWarning("Warden (gateway): account {Account} ({AccountId}): {Reason}; action {Action}", session.AccountName, session.AccountId, verdict.Reason, verdict.Action);
+        switch (verdict.Action)
+        {
+            case ClusterWardenAction.Kick:
+                session.Kick("Warden: " + verdict.Reason);
+                break;
+            case ClusterWardenAction.Ban:
+                session.Kick("Warden: " + verdict.Reason);
+                StartBan(session.AccountId, verdict.Reason);
+                break;
+        }
+    }
+
+    private void StartBan(int accountId, string reason)
+    {
+        Task write = Task.Run(() => BanAsync(accountId, reason)); // BanAsync records its own failures and never throws
+        _pendingBans.TryAdd(write, accountId);
+        _ = write.ContinueWith(static (done, state) => ((ConcurrentDictionary<Task, int>)state!).TryRemove(done, out _), _pendingBans,
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private async Task BanAsync(int accountId, string reason)
+    {
+        ILogger logger = loggers.CreateLogger<GatewayWorkerEndpoint>();
+        try
+        {
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            if (scope.ServiceProvider.GetService<IBanStore>() is not { } bans)
+            {
+                logger.LogWarning("Warden: ban of account {Account} skipped: no ban store", accountId);
+                return;
+            }
+
+            long seconds = (wardenOptions?.Value ?? new WardenOptions()).BanSeconds;
+            await bans.BanAccountAsync(new BanRequest(accountId, seconds, $"Warden: {reason}", WardenFeature.BanAuthor)).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            AnomalyLedger.Shared.Report("warden", "check-fault", $"account {accountId}", $"ban error={ex.GetType().Name}: {ex.Message}");
+            logger.LogFault("warden.ban", ex, "Warden: ban of account {Account} failed", accountId);
+        }
     }
 
     /// <summary>Stop the link host first, then the acceptor; the acceptor is stopped even when the host's disposal throws. If both throw, both exceptions are kept (AggregateException).</summary>
@@ -126,6 +217,10 @@ public static class GatewayWorkerServiceCollectionExtensions
             services.PostConfigure<Clustering.CharacterFencingOptions>(fencing => fencing.RequiredByWorkerMode = true);
             bool standby = section.GetValue<bool>(nameof(GatewayWorkerOptions.Standby));
             services.AddSingleton(new WorkerAdmission(standby ? WorkerAdmission.StandbyReason : null));
+            // The gateway runs Warden for the sessions it forwards; the worker verifies its verdicts against the manifest it derives from the same options.
+            services.AddSingleton(sp => new GatewayWardenManifestVerifier(GatewayWardenManifestVerifier.BuildManifest(
+                sp.GetRequiredService<IOptions<GatewayWorkerOptions>>().Value.RealmId,
+                sp.GetService<IOptions<WardenOptions>>()?.Value ?? new WardenOptions())));
             if (standby)
             {
                 AddStandby(services);

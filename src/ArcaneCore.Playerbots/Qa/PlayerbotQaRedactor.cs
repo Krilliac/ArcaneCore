@@ -58,11 +58,37 @@ internal sealed partial class PlayerbotQaRedactor
     [GeneratedRegex(@"\s+", RegexOptions.CultureInvariant)]
     private static partial Regex WhitespacePattern();
 
+    [GeneratedRegex(@"(?<name>@\w+)\s*=\s*'(?:[^']|'')*'", RegexOptions.CultureInvariant)]
+    private static partial Regex SqlParameterPattern();
+
+    [GeneratedRegex(@"\b(?:SELECT|INSERT|UPDATE|DELETE|REPLACE|MERGE)\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
+    private static partial Regex SqlVerbPattern();
+
+    [GeneratedRegex(@"'(?:[^']|'')*'", RegexOptions.CultureInvariant)]
+    private static partial Regex SqlStringLiteralPattern();
+
+    [GeneratedRegex(@"(?<![\w@.:])-?\d+(?:\.\d+)?(?![\w.])", RegexOptions.CultureInvariant)]
+    private static partial Regex SqlNumberPattern();
+
     [GeneratedRegex(@"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s""'<>|*?]*|\\\\[^\s\\""'<>|*?]+\\[^\s""'<>|*?]*|(?<![\w:/.\\-])/(?:[\w.@+-]+/)+[\w.@+-]*", RegexOptions.CultureInvariant)]
     private static partial Regex FilePathPattern();
 
     [GeneratedRegex(@"\b0[xX][0-9a-fA-F]{6,16}\b|\b(?<k>guid|owner|caster|account)(?<s>\s*[=:#]?\s*)\d{3,}\b", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase)]
     private static partial Regex GameIdPattern();
+
+    /// <summary>The word before a <c>(guid N)</c> tail: a player (or bot) name in <c>player Name (guid 5)</c>, <c>to Name (guid 5)</c>.</summary>
+    [GeneratedRegex(@"(?<![\p{L}\p{N}_])(?<w>\p{L}{2,24})(?=\s+\(guid\s+[0-9A-Fa-f]+\))", RegexOptions.CultureInvariant)]
+    private static partial Regex NameBeforeGuidPattern();
+
+    /// <summary>A capitalised word after <c>player</c> (game names are capitalised; <c>player alive</c> stays).</summary>
+    [GeneratedRegex(@"\b(?<k>[Pp]layer)(?<s>\s+)\p{Lu}\p{L}{1,23}\b", RegexOptions.CultureInvariant)]
+    private static partial Regex PlayerNamePattern();
+
+    /// <summary>Words that precede a <c>(guid N)</c> tail as the kind of the subject, not as a name.</summary>
+    private static readonly HashSet<string> SubjectKinds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "player", "creature", "unit", "bot", "gameobject", "object", "item", "pet", "npc", "character", "spawn", "transport",
+    };
 
     /// <summary>
     /// <see cref="Redact"/> for text taken from an exception (a server fault's message): also removes absolute file paths (drive, UNC and
@@ -72,9 +98,24 @@ internal sealed partial class PlayerbotQaRedactor
     public string RedactFault(string? text)
     {
         if (string.IsNullOrEmpty(text)) return string.Empty;
+        text = StripSqlValues(text);
         text = FilePathPattern().Replace(text, "<path>"); // before Redact: its user-folder rule would leave a path tail behind
         text = Redact(text);
         return GameIdPattern().Replace(text, m => m.Groups["k"].Success ? m.Groups["k"].Value + m.Groups["s"].Value + "<id>" : "<id>");
+    }
+
+    /// <summary>
+    /// Keeps the shape of SQL text and drops every value in it: the quoted value of an EF Core parameter (<c>@p0='Name' (Size = 4)</c> becomes <c>@p0='?' (Size = 4)</c>) and,
+    /// in text that holds a SQL statement, every string literal and number (<c>SET name = 'x' WHERE guid = 42</c> becomes <c>SET name = '?' WHERE guid = ?</c>). Text with no SQL is
+    /// left alone apart from the parameter rule. A value can be a player name, a guid or an item: none of it belongs in a public issue.
+    /// </summary>
+    internal static string StripSqlValues(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+        text = SqlParameterPattern().Replace(text, "${name}='?'");
+        if (!SqlVerbPattern().IsMatch(text)) return text;
+        text = SqlStringLiteralPattern().Replace(text, "'?'");
+        return SqlNumberPattern().Replace(text, "?");
     }
 
     /// <summary>A redactor with the same names that also removes the literal <paramref name="token"/> wherever it appears.</summary>
@@ -108,6 +149,8 @@ internal sealed partial class PlayerbotQaRedactor
         text = Ipv4Pattern().Replace(text, "<ip>");
         text = Ipv6Pattern().Replace(text, "<ip>");
         text = UserPathPattern().Replace(text, m => m.Groups["root"].Value + "<user>");
+        text = NameBeforeGuidPattern().Replace(text, m => SubjectKinds.Contains(m.Groups["w"].Value) ? m.Value : "<name>");
+        text = PlayerNamePattern().Replace(text, "${k}${s}<name>");
         HashSet<string> names = _names;
         if (names.Count > 0) text = WordPattern().Replace(text, m => names.Contains(m.Value) ? "<name>" : m.Value);
         return text;
