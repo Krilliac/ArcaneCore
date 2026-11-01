@@ -9,7 +9,7 @@ namespace ArcaneCore.World.Tests.Cluster.Social;
 /// Custom channel moderation held at the presence holder (S2c): owner, moderators, bans and mutes live in the <see cref="InMemoryClusterSocialRouter"/> the holder serves, so a ban
 /// or mute decided on one worker binds a character that joins or speaks from another. Two in-process <see cref="ClusterChatRouting"/> workers share one holder.
 /// </summary>
-public sealed class CrossWorkerChannelModerationTests : IAsyncDisposable
+public sealed class CrossWorkerChannelModerationTests : IAsyncLifetime
 {
     private const string GatewayId = "gateway";
     private const string Channel = "X";
@@ -47,7 +47,9 @@ public sealed class CrossWorkerChannelModerationTests : IAsyncDisposable
         _b = new Worker("worker-b", _directory, _router);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    async Task IAsyncLifetime.DisposeAsync()
     {
         await _a.DisposeAsync();
         await _b.DisposeAsync();
@@ -120,6 +122,45 @@ public sealed class CrossWorkerChannelModerationTests : IAsyncDisposable
         _a.Routing.ModerateChannel(Channel, ChannelModerationAction.Unban, 1, 3);
         await _a.Routing.FlushAsync();
         Assert.True(_router.JoinChannel(Channel, 3, 8));
+    }
+
+    [Fact]
+    public async Task BanDecidedByTheLocalOwnerOnWorkerB_WhoDoesNotOwnAtTheHolder_StillBindsTheRealm()
+    {
+        Register(_a, 1, "Alice", 5);
+        Register(_b, 2, "Bob", 7);
+        Register(_b, 4, "Carol", 8);
+        await JoinAsync(_a, 1, "Alice");
+        _a.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 1, 1);
+        _a.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimModerator, 1, 1);
+        await _a.Routing.FlushAsync();
+
+        // Bob joins first on worker B, so he owns B's channel object; the holder refuses his owner claim but takes him as a moderator.
+        await JoinAsync(_b, 2, "Bob");
+        await JoinAsync(_b, 4, "Carol");
+        _b.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimOwner, 2, 2);
+        _b.Routing.ModerateChannel(Channel, ChannelModerationAction.ClaimModerator, 2, 2);
+        await _b.Routing.FlushAsync();
+        ChannelModerationState before = Assert.IsType<ChannelModerationState>(_router.GetChannelModeration(Channel));
+        Assert.Equal(1UL, before.Owner);
+        Assert.Contains(2UL, before.Moderators);
+
+        // Bob bans Carol as the handler does: unsubscribe, then record the ban.
+        _b.Routing.LeaveChannel(Sender(4, "Carol"), Channel);
+        _b.Routing.ModerateChannel(Channel, ChannelModerationAction.Ban, 2, 4);
+        await _b.Routing.FlushAsync();
+        Assert.Equal([4UL], _router.GetChannelModeration(Channel)!.Banned);
+
+        // Carol rejoins from worker A: refused, and her lines never reach worker B's Bob.
+        Register(_a, 4, "Carol", 9);
+        await JoinAsync(_a, 4, "Carol");
+        Assert.False(_router.JoinChannel(Channel, 4, 9));
+        await SpeakAsync(_a, 4, "Carol", "spam");
+        Assert.Equal(0, _b.Routing.PumpOnce());
+        Assert.Empty(_b.Received);
+
+        // A plain member who never claimed cannot moderate.
+        Assert.False(_router.ModerateChannel(Channel, ChannelModerationAction.ClaimModerator, 2, 1), "a claim is for oneself");
     }
 
     [Fact]

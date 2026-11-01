@@ -19,7 +19,7 @@ namespace ArcaneCore.World.Tests.Cluster.Social;
 /// own <see cref="ClusterChatRouting"/> registered the way the cluster hosting does. A chat packet sent by a client on worker A must arrive as SMSG bytes on a client of worker B
 /// (and the whisper's answer back on A). The pump is driven by the test (it is a background timer in production). Presence is published by the test, as the publisher would.
 /// </summary>
-public sealed class CrossWorkerChatGameplayTests : IAsyncDisposable
+public sealed class CrossWorkerChatGameplayTests : IAsyncLifetime
 {
     private const string GatewayId = "gateway";
     private const string WorkerA = "worker-a";
@@ -43,7 +43,9 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncDisposable
         _hostB = WorldTestHost.Start(configureServices: services => services.AddSingleton(_routingB));
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    async Task IAsyncLifetime.DisposeAsync()
     {
         foreach (WorldTestClient client in _clients)
         {

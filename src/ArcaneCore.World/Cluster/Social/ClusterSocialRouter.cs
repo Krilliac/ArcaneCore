@@ -92,6 +92,12 @@ public enum ChannelModerationAction : byte
     Mute = 7,
 
     Unmute = 8,
+
+    /// <summary>
+    /// The actor, a member whose worker made it owner or moderator of its own worker's channel object, becomes a moderator here so the moderation it decides binds the whole realm.
+    /// The holder keeps its own owner; the actor must be the target and a member.
+    /// </summary>
+    ClaimModerator = 9,
 }
 
 /// <summary>The moderation state the holder keeps for one custom channel: its owner (0 when none) and the sorted guids of its moderators, banned and muted characters.</summary>
@@ -425,6 +431,12 @@ public sealed class InMemoryClusterSocialRouter : IClusterSocialRouter
                 state.Owner = actorGuid;
                 state.Moderators.Add(actorGuid);
                 return true;
+            }
+
+            if (action == ChannelModerationAction.ClaimModerator)
+            {
+                return actorGuid == targetGuid && members.ContainsKey(actorGuid)
+                    && (state.Moderators.Contains(actorGuid) || (state.Moderators.Count < MaxModerationEntries && state.Moderators.Add(actorGuid)));
             }
 
             bool actorMayModerate = actorGuid == state.Owner

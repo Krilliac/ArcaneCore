@@ -1,3 +1,4 @@
+using ArcaneCore.Game;
 using ArcaneCore.Game.Channels;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Protocol;
@@ -61,6 +62,7 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
             {
                 // The first joiner of a custom channel owns it locally; the holder grants the claim only while no other worker's member owns it already.
                 cluster.ModerateChannel(channel.Name, ChannelModerationAction.ClaimOwner, player.Guid.Value, player.Guid.Value);
+                cluster.ModerateChannel(channel.Name, ChannelModerationAction.ClaimModerator, player.Guid.Value, player.Guid.Value);
             }
         }
     }
@@ -78,6 +80,8 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
         if (!channel.IsConstant && !channel.Owner.IsEmpty)
         {
             cluster.ModerateChannel(channel.Name, ChannelModerationAction.ClaimOwner, channel.Owner.Value, channel.Owner.Value);
+            // Refused while another worker's member owns the channel at the holder: the local owner is then a holder moderator, so its bans and mutes still bind the realm.
+            cluster.ModerateChannel(channel.Name, ChannelModerationAction.ClaimModerator, channel.Owner.Value, channel.Owner.Value);
         }
     }
 
@@ -136,13 +140,11 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // Always unsubscribe at the router, whatever the holder answers to the ban.
+        cluster.LeaveChannel(SenderOf(target), channel.Name);
         if (ban)
         {
             cluster.ModerateChannel(channel.Name, ChannelModerationAction.Ban, player.Guid.Value, target.Guid.Value);
-        }
-        else
-        {
-            cluster.LeaveChannel(SenderOf(target), channel.Name);
         }
 
         ClaimLocalOwner(cluster, channel);

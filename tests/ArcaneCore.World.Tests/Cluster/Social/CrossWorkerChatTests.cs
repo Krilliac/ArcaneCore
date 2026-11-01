@@ -10,7 +10,7 @@ namespace ArcaneCore.World.Tests.Cluster.Social;
 /// <see cref="InMemoryClusterSocialRouter"/>, as the peer link would reach), and the "world thread" side of each is a recording <see cref="ClusterChatRouting.Deliver"/>.
 /// Also pins the bytes of <see cref="ClusterChatFrame"/>.
 /// </summary>
-public sealed class CrossWorkerChatTests : IAsyncDisposable
+public sealed class CrossWorkerChatTests : IAsyncLifetime
 {
     private const string GatewayId = "gateway";
 
@@ -48,7 +48,9 @@ public sealed class CrossWorkerChatTests : IAsyncDisposable
         _b = new Worker("worker-b", _directory, _router);
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    async Task IAsyncLifetime.DisposeAsync()
     {
         await _a.DisposeAsync();
         await _b.DisposeAsync();
