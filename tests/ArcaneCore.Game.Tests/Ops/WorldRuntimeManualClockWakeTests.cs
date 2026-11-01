@@ -84,8 +84,11 @@ public sealed class WorldRuntimeManualClockWakeTests
             }
 
             double seconds = wall.Elapsed.TotalSeconds;
-            double perSecond = (Volatile.Read(ref ticks) - before) / seconds;
-            // 1000 / 50 = 20 ticks per second; every Post would add one if it woke the thread. No lower bound: a loaded runner drops ticks.
+            int ran = Volatile.Read(ref ticks) - before;
+            double perSecond = ran / seconds;
+            // A loaded runner drops ticks, so the floor only proves the loop runs (40 expected in 2 s).
+            Assert.True(ran >= 5, $"the tick loop ran {ran} ticks in {seconds:F1} s");
+            // 1000 / 50 = 20 ticks per second; every Post would add one if it woke the thread.
             Assert.True(perSecond <= 26, $"{perSecond:F1} ticks/s for {Volatile.Read(ref posted)} posts");
         }
         finally
