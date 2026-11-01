@@ -22,22 +22,24 @@ public sealed partial class SpellSystem
         uint dealt = 0;
         uint absorbed = 0;
         uint resisted = 0;
+        uint blocked = 0;
         bool critical = false;
         foreach (MeleeSpellDamageComponent component in outcome.MeleeSpellDamage)
         {
             dealt += component.Dealt;
             absorbed += component.Absorbed;
             resisted += component.Resisted;
+            blocked += component.Blocked;
             critical |= component.Critical;
         }
 
         SendNextMeleeSpellAttackerStateUpdate(outcome.Cast.Caster, outcome.Target, outcome.Cast.Spell, eligible,
-            dealt, absorbed, resisted, critical, outcome.Cast, components: outcome.MeleeSpellDamage);
+            dealt, absorbed, resisted, critical, outcome.Cast, components: outcome.MeleeSpellDamage, blocked: blocked);
         foreach (DeferredNonMeleeDamageLog log in outcome.DeferredNonMeleeLogs)
         {
             SendToSet(outcome.Cast.Caster, WorldOpcode.SmsgSpellnonmeleedamagelog,
                 SpellPackets.BuildSpellNonMeleeDamageLog(log.Target, log.Caster, log.SpellId, log.Damage, log.School,
-                    absorbed: log.Absorbed, resisted: log.Resisted, hitInfo: log.HitInfo), includeSelf: true);
+                    absorbed: log.Absorbed, resisted: log.Resisted, blocked: log.Blocked, hitInfo: log.HitInfo), includeSelf: true);
         }
     }
 
@@ -64,9 +66,15 @@ public sealed partial class SpellSystem
         (HitInfo hitInfo, VictimState victimState) = NextMeleeSpellOutcome(miss);
         if (miss == SpellMissInfo.None)
         {
-            if (dealt != 0)
+            if (dealt != 0 || blocked != 0)
             {
                 hitInfo |= HitInfo.AffectsVictim;
+            }
+
+            if (blocked != 0)
+            {
+                // vmangos Unit::DealDamage melee-spell path (Unit.cpp:1621-1634): a partial block sets the rolled-block and block hit flags.
+                hitInfo |= HitInfo.RolledBlock | HitInfo.Block;
             }
 
             if (critical)
