@@ -327,6 +327,24 @@ public sealed class CrossWorkerGroupTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PendingInvite_IsDroppedLocally_WhenTheInviteeLogsOutBeforeTheHolderCancelsIt()
+    {
+        (Player alice, _) = await Login(_a, AliceId, "Alice");
+        (Player bob, _) = await Login(_b, BobId, "Bob");
+
+        await On(_a, () => _a.Context.Groups.Invite(alice, "Bob"));
+        await Settle();
+        Assert.NotNull(_b.Context.Groups.GetInvite(bob.Guid));
+
+        // The presence logout reaches the holder first, so its InviteCancelled event has no worker to go to.
+        Assert.Equal(PresenceMutationResult.Applied, _directory.TryRemove(BobId, long.MaxValue, long.MaxValue));
+        await On(_b, () => _b.Context.Groups.OnLoggingOut(bob));
+        await Settle();
+
+        Assert.Null(_b.Context.Groups.GetInvite(bob.Guid));
+    }
+
+    [Fact]
     public async Task OfflineLeader_IsReplacedByTheHolder_AndNeverByAMirror()
     {
         long now = 1_000;

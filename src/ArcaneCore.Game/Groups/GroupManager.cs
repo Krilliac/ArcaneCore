@@ -809,6 +809,8 @@ public sealed partial class GroupManager(SocialContext context)
         {
             // The holder drops the invites and shows the member offline; this worker forgets its mirror when no other member of the group is here.
             Authority.Forward(CommandOf(player, GroupCommandKind.Logout));
+            // The holder's InviteCancelled event can be lost when the presence logout beats this command, so drop the local invite mirror here.
+            _invitedTo.Remove(player.Guid);
             Group? mirrored = GetGroup(player.Guid);
             _pendingPetName.Remove(player.Guid);
             _pendingPetAuras.Remove(player.Guid);
