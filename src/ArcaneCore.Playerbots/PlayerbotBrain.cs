@@ -232,6 +232,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     private long _exploreSearchStartedAt;
     private PlayerbotExploreAtlas.FindCursor? _exploreFindCursor;
     private uint _exploreFindBegunAt;
+    private uint _exploreFindLastStepAt;
+    private int _exploreFindSlices;
     private Func<bool>? _exploreFindOutOfBudget;
     private long _thinkStartedAt;
     private PlayerbotGoalKind _goal = PlayerbotGoalKind.Explore;
@@ -4252,15 +4254,17 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             // by a bot that changed map or level, moved on, or searched for too long is dropped and the search begins again.
             var from = new System.Numerics.Vector3(player.X, player.Y, player.Z);
             if (_exploreFindCursor is { } held
-                && (held.SearchMap != mapId || held.SearchLevel != player.Level
-                    || unchecked(now - _exploreFindBegunAt) > ExploreFindMaxAgeMs
-                    || System.Numerics.Vector3.DistanceSquared(held.SearchFrom, from) > PlayerbotExploreAtlas.CellYards * PlayerbotExploreAtlas.CellYards))
+                && ExploreFindCursorStale(held.SearchMap, held.SearchLevel, mapId, player.Level, unchecked(now - _exploreFindLastStepAt),
+                    unchecked(now - _exploreFindBegunAt), System.Numerics.Vector3.DistanceSquared(held.SearchFrom, from)))
                 _exploreFindCursor = null;
             if (_exploreFindCursor is null)
             {
                 _exploreFindCursor = new PlayerbotExploreAtlas.FindCursor();
                 _exploreFindBegunAt = now;
+                _exploreFindSlices = 0;
             }
+            _exploreFindLastStepAt = now;
+            _exploreFindSlices++;
             PlayerbotThinkProbe.Phase("explore atlas find");
             PlayerbotExploreAtlas.FindStatus found = atlas.FindStep(_exploreFindCursor, mapId, player.Level, from, _exploreEligibleFilter,
                 _exploreBlockedFilter, ExploreFindSliceChecks, _exploreFindOutOfBudget ??= ExploreFindOutOfBudget,
@@ -4269,7 +4273,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             _exploreFindCursor = null;
             // The best candidate of a resumed search was judged in an earlier slice: a spawn marked visited or suspended since is not taken.
             // The search begins again at the next think (no search-after delay: nothing was exhausted).
-            if (foundCandidate is { } judged && !_exploreEligibleFilter(judged)) return false;
+            // A search that ended in its first slice was judged by this very think's filter: no second pass over the winner.
+            if (_exploreFindSlices > 1 && foundCandidate is { } judged && !_exploreEligibleFilter(judged)) return false;
             _exploreCandidate = foundCandidate;
             if (_exploreCandidate is null)
             {
@@ -4343,8 +4348,30 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>The milliseconds one slice of the explore atlas find runs at most (read after each occupied cell). The unbounded search took 635 ms in one think (audit evidence).</summary>
     internal const double ExploreFindSliceMs = 4.0;
 
-    /// <summary>How long a resumable explore find may stay unfinished (world milliseconds) before it begins again: the eligibility inputs (hazards, suspensions, blocked cells) have moved on.</summary>
-    internal const uint ExploreFindMaxAgeMs = 20_000;
+    /// <summary>
+    /// How long a resumable explore find may go without a slice (world milliseconds) before it begins again: a bot that left Explore for
+    /// other goals comes back to inputs (hazards, suspensions, blocked cells) that have moved on. A walk still taking a slice every think
+    /// is not stale however long it runs: its result is re-checked against the eligibility filter when it is found, and the walk is
+    /// bounded by <see cref="ExploreFindMaxAgeMs"/>.
+    /// </summary>
+    internal const uint ExploreFindMaxIdleMs = 20_000;
+
+    /// <summary>
+    /// The ceiling on one search's life (world milliseconds), far above what a full ring walk needs at one slice per think (a search of
+    /// several hundred slices at the default 500 ms think interval); it only stops a search that is somehow never finishing.
+    /// </summary>
+    internal const uint ExploreFindMaxAgeMs = 600_000;
+
+    /// <summary>
+    /// Whether a held explore find cursor is dropped: the bot changed map or level, moved more than a cell from where the search began,
+    /// has not stepped the search for <see cref="ExploreFindMaxIdleMs"/> (its inputs went stale), or the search is older than
+    /// <see cref="ExploreFindMaxAgeMs"/>. Wall time since the search began is deliberately not the test while slices keep coming: at
+    /// 4 ms per slice (one occupied cell on a loaded think) and a slice per 500 ms think, a 20 s age cut the search off after about 40
+    /// cells and a bot whose nearest eligible spawn lay beyond them restarted for ever.
+    /// </summary>
+    internal static bool ExploreFindCursorStale(uint heldMap, uint heldLevel, uint mapId, uint level, uint idleMs, uint ageMs, float movedSquared)
+        => heldMap != mapId || heldLevel != level || idleMs > ExploreFindMaxIdleMs || ageMs > ExploreFindMaxAgeMs
+            || movedSquared > PlayerbotExploreAtlas.CellYards * PlayerbotExploreAtlas.CellYards;
 
     /// <summary>Whether the running slice of the explore find has used its time or the think its optional budget.</summary>
     private bool ExploreFindOutOfBudget()

@@ -205,6 +205,49 @@ public sealed class PlayerbotExploreBudgetTests
         Assert.Equal(1u, atlas.Find(0, 8, Origin, _ => true, (_, _) => false, out _)!.Value.Spawn.Guid);
     }
 
+    /// <summary>
+    /// A search needing far more than 40 slices (the old 20 s age at one slice per 500 ms think) still finishes: the brain's cursor policy
+    /// (<see cref="PlayerbotBrain.ExploreFindCursorStale"/>) keeps a cursor that is stepped every think, whatever its total age.
+    /// </summary>
+    [Fact]
+    public void ASearchNeedingMoreThanFortySlices_KeepsItsCursor_AndFinishes()
+    {
+        const int thinkMs = 500;
+        PlayerbotExploreAtlas atlas = RowAtlas(40);
+        var cursor = new PlayerbotExploreAtlas.FindCursor();
+        uint begun = 0, now = 0;
+        int slices = 0;
+        PlayerbotExploreAtlas.FindStatus status;
+        PlayerbotExploreAtlas.Candidate? found;
+        do
+        {
+            now += thinkMs;
+            slices++;
+            // The cursor held at the start of this think: the policy must not drop it (same map, level and place, a slice every think).
+            if (slices > 1)
+                Assert.False(PlayerbotBrain.ExploreFindCursorStale(0, 8, 0, 8, thinkMs, unchecked(now - begun), 0f),
+                    $"slice {slices} at {now - begun} ms: a walk that is still progressing was dropped");
+            status = atlas.FindStep(cursor, 0, 8, Origin, c => c.Spawn.Guid == 39, (_, _) => false, 1, null, out found, out _);
+            Assert.True(slices < 1_000, "the search never finished");
+        }
+        while (status == PlayerbotExploreAtlas.FindStatus.Pending);
+        Assert.Equal(PlayerbotExploreAtlas.FindStatus.Found, status);
+        Assert.Equal(39u, found!.Value.Spawn.Guid);
+        Assert.True(slices > 40, $"the search took {slices} slices: the test must exceed the 40 an age of 20 s allowed");
+    }
+
+    [Fact]
+    public void AnExploreCursor_IsDropped_WhenItsInputsWentStale()
+    {
+        // Idle past the limit (the bot did something else), map or level changed, moved past a cell, or older than the ceiling.
+        Assert.True(PlayerbotBrain.ExploreFindCursorStale(0, 8, 0, 8, PlayerbotBrain.ExploreFindMaxIdleMs + 1, 0, 0f));
+        Assert.True(PlayerbotBrain.ExploreFindCursorStale(0, 8, 1, 8, 0, 0, 0f));
+        Assert.True(PlayerbotBrain.ExploreFindCursorStale(0, 8, 0, 9, 0, 0, 0f));
+        Assert.True(PlayerbotBrain.ExploreFindCursorStale(0, 8, 0, 8, 0, PlayerbotBrain.ExploreFindMaxAgeMs + 1, 0f));
+        Assert.True(PlayerbotBrain.ExploreFindCursorStale(0, 8, 0, 8, 0, 0, (PlayerbotExploreAtlas.CellYards * PlayerbotExploreAtlas.CellYards) + 1f));
+        Assert.False(PlayerbotBrain.ExploreFindCursorStale(0, 8, 0, 8, PlayerbotBrain.ExploreFindMaxIdleMs, 0, 0f));
+    }
+
     // --- the quests phase: the starter search's resumable scan (audit cid 43, 1,184 ms in one think) ------------------------------
 
     private static readonly ArcaneCore.Game.ObjectGuid[] Givers = [.. Enumerable.Range(1, 6).Select(i => new ArcaneCore.Game.ObjectGuid((ulong)i))];

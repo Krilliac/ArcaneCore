@@ -662,9 +662,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         if (_stage == Stage.None && TryShedGreyQuest(player, services, state, now)) return true;
 
         long phaseStartTicks = PlayerbotThinkProbe.Timestamp();
-        _starterScan.BeginThink(now);
-        QuestTarget? target = FindCandidate(player, services, state, refreshBagSpace: false, phaseStartTicks: phaseStartTicks, resumable: true);
-        _starterScan.EndThink(target is not null);
+        QuestTarget? target = FindResumableCandidate(player, services, state, phaseStartTicks, now);
         if (target is null && _roomWanted && _stage == Stage.None && TryMakeRoomInFullLog(player, services, state, now))
             return true;
         if (target is null)
@@ -942,6 +940,30 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
         }
     }
 
+    /// <summary>One think's resumable starter search: <see cref="StarterScan"/> is begun and ended around <see cref="FindCandidate(Player, QuestNpcServices, PlayerNpcState, bool, long, bool)"/>.</summary>
+    private QuestTarget? FindResumableCandidate(Player player, QuestNpcServices services, PlayerNpcState state, long phaseStartTicks, uint now)
+    {
+        _starterScan.BeginThink(now);
+        QuestTarget? target = FindCandidate(player, services, state, refreshBagSpace: false, phaseStartTicks: phaseStartTicks, resumable: true);
+        _starterScan.EndThink(target is not null);
+        return target;
+    }
+
+    /// <summary>
+    /// One think of the quests phase's resumable starter search as <see cref="Update"/> runs it, without the exchange that follows: the id of the
+    /// quest the search chose (0: none this think). <paramref name="phaseStartTicks"/> is the phase's start on the think clock
+    /// (<see cref="PlayerbotThinkProbe.Timestamp"/>), so a caller can start the phase with its budget already spent. Thread affinity: the world thread.
+    /// </summary>
+    internal uint FindStarterThink(Player player, long phaseStartTicks)
+    {
+        QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
+        return services?.StateOf(player) is { Loaded: true } state
+            ? FindResumableCandidate(player, services, state, phaseStartTicks, _session.World.NowMs)?.Quest.Id ?? 0 : 0;
+    }
+
+    /// <summary>The resumable starter search's memory (read by tests).</summary>
+    internal StarterScan Scan => _starterScan;
+
     private QuestTarget? FindCandidate(Player player)
     {
         QuestNpcServices? services = _session.Services.GetService<QuestNpcFeature>()?.Services;
@@ -1073,7 +1095,7 @@ internal sealed class PlayerbotQuestGoals(WorldSession session, PlayerbotOptions
                     if (!hasFreeSlot)
                     {
                         if (!IsGrey(player, quest)) _roomWanted = true;
-                        if (resumable) _starterScan.Judged(npc.Guid, id, _session.World.NowMs, _roomWanted);
+                        // Not remembered as judged: this is the quest the room is made for, and a later think of the pass must see it again once a slot is free.
                         continue;
                     }
                 }
