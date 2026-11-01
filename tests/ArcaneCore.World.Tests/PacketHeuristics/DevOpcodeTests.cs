@@ -157,6 +157,9 @@ public sealed class DevOpcodeTests
     [
         WorldOpcode.CmsgNewSpellSlot, // 0x012D obsolete (vmangos Opcodes.cpp:382)
         WorldOpcode.MsgMoveTimeSkipped, // 0x0319 only ever broadcast by the server (vmangos MovementHandler.cpp:1014)
+        WorldOpcode.CmsgChatFiltered, // 0x0331 INVALID_PACKET Unhandled (vmangos Opcodes.cpp:932), no handler on purpose
+        WorldOpcode.CmsgGmUpdateTicketStatus, // 0x0327 INVALID_PACKET Unhandled (vmangos Opcodes.cpp:920), no handler on purpose
+        WorldOpcode.MsgDelayGhostTeleport, // 0x032E INVALID_PACKET Unhandled (vmangos Opcodes.cpp:927), no handler on purpose
     ];
 
     private static WorldOpcode[] Stripped => [.. StrippedInventory.Select(i => i.Opcode)];
