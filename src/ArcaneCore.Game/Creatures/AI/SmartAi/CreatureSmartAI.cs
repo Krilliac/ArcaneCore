@@ -89,6 +89,19 @@ public sealed class CreatureSmartAI : AggressorAI
     /// <summary>AzerothCore SmartAI::sQuestReward (SmartAI.cpp:1221-1224): SMART_EVENT_REWARD_QUEST with the player as invoker and the quest as var0.</summary>
     public override void OnQuestRewarded(Player player, uint questId) => Script.ProcessEventsFor(SmartEvent.RewardQuest, player, questId);
 
+    /// <summary>
+    /// AzerothCore SmartAI::MovementInform (SmartAI.cpp:707-714): every movement raises MOVEMENTINFORM with the AzerothCore motion type
+    /// (<see cref="SmartMotionTypes"/>) and the point or node id. The escort events (40 ESCORT_REACHED, 108 WAYPOINT_REACHED) are not raised.
+    /// </summary>
+    public override void OnMovementInform(MovementGeneratorType type, uint pointId)
+    {
+        base.OnMovementInform(type, pointId);
+        if (SmartMotionTypes.ToSmart(type) is { } smartType) Script.ProcessEventsFor(SmartEvent.MovementInform, null, smartType, null, pointId);
+    }
+
+    /// <summary>AzerothCore SmartAI::SetData (SmartAI.cpp:1171-1173): SMART_EVENT_DATA_SET with the setter as invoker, var0 the id and var1 the value.</summary>
+    public void SetData(uint id, uint value, Unit? setter = null) => Script.ProcessEventsFor(SmartEvent.DataSet, setter, id, null, value);
+
     public override void OnSpellHit(Unit caster, SpellInfo spell) => Script.ProcessEventsFor(SmartEvent.SpellHit, caster, spell: spell);
 
     /// <summary>AzerothCore SmartAI::UpdateAI: the timers every update, then the aggressor's victim choice and melee.</summary>

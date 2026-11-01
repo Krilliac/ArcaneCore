@@ -59,6 +59,13 @@ public sealed class SmartScript
     private readonly List<SmartHolder> _timedList = [];
     private readonly List<string> _unsupported = [];
     private bool _processingTimedList;
+
+    // SMART_ACTION_TALK bookkeeping for SMART_EVENT_TEXT_OVER (SmartScript.cpp:259-262, 5322-5335): the last text group said, who said it, and the
+    // countdown of its duration.
+    private uint _textTimerMs;
+    private uint _lastTextGroup;
+    private uint _talkerEntry;
+    private bool _useTextTimer;
     private int _actionDepth;
 
     internal SmartScript(CreatureSmartAI ai, IReadOnlyList<SmartScriptRow> rows, SmartScriptCatalog? catalog = null)
@@ -182,6 +189,22 @@ public sealed class SmartScript
         }
 
         if (needCleanup) _timedList.Clear();
+
+        // SmartScript.cpp:5322-5335: the said text's duration ran out (a countdown below this update, so duration 0 fires on the next one).
+        if (_useTextTimer && Me is not null)
+        {
+            if (_textTimerMs < diffMs)
+            {
+                uint group = _lastTextGroup;
+                uint entry = _talkerEntry;
+                _lastTextGroup = 0;
+                _talkerEntry = 0;
+                _textTimerMs = 0;
+                _useTextTimer = false;
+                ProcessEventsFor(SmartEvent.TextOver, null, group, null, entry);
+            }
+            else _textTimerMs -= diffMs;
+        }
     }
 
     /// <summary>AzerothCore UpdateTimer: phase and combat gates, the cast delay while casting, then the timed events run.</summary>
@@ -387,6 +410,23 @@ public sealed class SmartScript
                     if (r.EventParam1 != var0 || r.EventParam2 != var1) return;
                     ProcessAction(e, invoker);
                     break;
+                case SmartEvent.MovementInform:
+                    // SmartScript.cpp:4683-4693: param1 the movement type (0 any; var0, AzerothCore numbering), param2 the point id (0 any; var1).
+                    // The path id (param3) is refused unless 0 at load.
+                    if ((r.EventParam1 != 0 && var0 != r.EventParam1) || (r.EventParam2 != 0 && var1 != r.EventParam2)) return;
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.DataSet:
+                    // SmartScript.cpp:4757-4764: param1 the data id (var0) and param2 the value (var1) must both match; cooldown param3..param4.
+                    if (r.EventParam1 != var0 || r.EventParam2 != var1) return;
+                    RecalcTimer(e, r.EventParam3, r.EventParam4);
+                    ProcessAction(e, invoker);
+                    break;
+                case SmartEvent.TextOver:
+                    // SmartScript.cpp:4750-4756: param1 the text group said (var0), param2 the speaker's entry (0 any; var1).
+                    if (var0 != r.EventParam1 || (r.EventParam2 != 0 && var1 != r.EventParam2)) return;
+                    ProcessAction(e, invoker);
+                    break;
                 case SmartEvent.GossipHello:
                     // SmartScript.cpp:4499-4520: filter 0 always, 1 not when var0 (report use) is set, 2 only then. var0 is 0 on 1.12.
                     if ((r.EventParam1 == 1 && var0 != 0) || (r.EventParam1 == 2 && var0 == 0)) return;
@@ -442,6 +482,15 @@ public sealed class SmartScript
                         if (system is null) break;
                         Unit? talkTarget = targets.OfType<Unit>().FirstOrDefault() ?? invoker;
                         system.SayText(me, (int)r.ActionParam1, talkTarget);
+
+                        // SmartScript.cpp:253-262: only an existing text arms SMART_EVENT_TEXT_OVER; param2 is the duration in milliseconds.
+                        if (system.TextExists((int)r.ActionParam1))
+                        {
+                            _talkerEntry = me.Entry;
+                            _lastTextGroup = r.ActionParam1;
+                            _textTimerMs = r.ActionParam2;
+                            _useTextTimer = true;
+                        }
                     }
                     else
                     {
