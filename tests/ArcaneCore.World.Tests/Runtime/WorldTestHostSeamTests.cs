@@ -30,6 +30,39 @@ public sealed class WorldTestHostSeamTests
     }
 
     [Fact]
+    public async Task ManualHost_WallTimeProviderFlag_KeepsTheDiTimeProviderOnTheWallClock()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual(), wallTimeProvider: true);
+        var provider = (TimeProvider)host.WorldServices.GetService(typeof(TimeProvider))!;
+        var game = (GameTimeProvider)host.WorldServices.GetService(typeof(GameTimeProvider))!;
+        long stamp = provider.GetTimestamp();
+        long gameStamp = game.GetTimestamp();
+
+        await host.AdvanceAsync(1000);
+
+        Assert.Same(TimeProvider.System, provider);
+        Assert.Equal(gameStamp + 1000, game.GetTimestamp());
+        Assert.True(provider.GetElapsedTime(stamp) < TimeSpan.FromMilliseconds(900), "the wall provider must not follow the manual advance");
+    }
+
+    [Fact]
+    public async Task ManualHost_DefaultsToTheGameTimeProvider_AsTheDiTimeProvider()
+    {
+        await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual());
+
+        Assert.Same(host.WorldServices.GetService(typeof(GameTimeProvider)), host.WorldServices.GetService(typeof(TimeProvider)));
+    }
+
+    [Fact]
+    public async Task WallTimeSource_AnchorsTheRealClockHostsGameUtc()
+    {
+        var anchor = new DateTime(2027, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+        await using WorldTestHost host = WorldTestHost.Start(wallTime: () => anchor);
+
+        Assert.True(Math.Abs((host.World.Clock.UtcNow.UtcDateTime - anchor).TotalSeconds) < 30);
+    }
+
+    [Fact]
     public async Task AClosedSession_FailsWaitForDelivery_Within2Seconds_EvenAfterTheClientWasDisposed()
     {
         await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual());

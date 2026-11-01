@@ -58,7 +58,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     private WorldTestHost(
         int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices, WorldSessionOptions? sessionOptions, ILogger? sessionLogger,
-        BanOptions? banOptions, TestClock clock)
+        BanOptions? banOptions, TestClock clock, Func<DateTime>? wallTime, bool wallTimeProvider)
     {
         Clock = clock;
         _sessionOptions = sessionOptions ?? new WorldSessionOptions { PreAuthTimeout = TestPreAuthTimeout };
@@ -99,8 +99,17 @@ internal sealed class WorldTestHost : IAsyncDisposable
         if (clock.IsManual)
         {
             // Game time for features that take a time provider; a TimeProvider registered by the test (configureServices) replaces this one.
+            // wallTimeProvider (opt-in) keeps the DI TimeProvider on the wall clock instead, so timeout/retry/circuit-breaker policies
+            // run in wall time between manual steps; the GameTimeProvider itself stays resolvable.
             collection.AddSingleton(_ => new GameTimeProvider(World!.Clock));
-            collection.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<GameTimeProvider>());
+            if (wallTimeProvider)
+            {
+                collection.AddSingleton(TimeProvider.System);
+            }
+            else
+            {
+                collection.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<GameTimeProvider>());
+            }
         }
 
         configureServices?.Invoke(collection);
@@ -112,6 +121,10 @@ internal sealed class WorldTestHost : IAsyncDisposable
         SaveQueue = _services.GetRequiredService<CharacterSaveQueue>();
         World = new WorldRuntime(options, SaveQueue, NullLogger<WorldRuntime>.Instance);
         Opcodes = WorldServiceCollectionExtensions.BuildOpcodeTable();
+        if (wallTime is not null)
+        {
+            World.Clock.UseWallTimeSource(wallTime);
+        }
 
         if (clock.IsManual)
         {
@@ -188,11 +201,16 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     public int Port { get; }
 
-    /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
+    /// <summary>
+    /// Start a host. Compression is off by default so tests can read update blocks directly. <paramref name="wallTime"/> replaces the system clock
+    /// the world clock anchors game UTC on (<see cref="WorldClock"/> time-source seam; UTC ticks); <paramref name="wallTimeProvider"/> opts the
+    /// manual-clock host's DI <see cref="TimeProvider"/> out of game time (it is <see cref="TimeProvider.System"/>).
+    /// </summary>
     public static WorldTestHost Start(
         int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null, Action<IServiceCollection>? configureServices = null,
-        WorldSessionOptions? sessionOptions = null, ILogger? sessionLogger = null, BanOptions? banOptions = null, TestClock? clock = null)
-        => new(compressionThreshold, configure, configureServices, sessionOptions, sessionLogger, banOptions, clock ?? TestClock.Real);
+        WorldSessionOptions? sessionOptions = null, ILogger? sessionLogger = null, BanOptions? banOptions = null, TestClock? clock = null,
+        Func<DateTime>? wallTime = null, bool wallTimeProvider = false)
+        => new(compressionThreshold, configure, configureServices, sessionOptions, sessionLogger, banOptions, clock ?? TestClock.Real, wallTime, wallTimeProvider);
 
     /// <summary>How this host's game clock moves (<see cref="TestClock.Real"/> unless the test chose the manual clock).</summary>
     public TestClock Clock { get; }
