@@ -10,6 +10,7 @@ using ArcaneCore.Data.Auth;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Content;
 using ArcaneCore.Data.Content.Items;
+using ArcaneCore.Data.Content.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Realms;
@@ -101,6 +102,12 @@ public sealed class ClusterOptions
     /// client creates), so a new character owns a persisted <c>item_instance</c> row. Null, the default, seeds nothing.
     /// </summary>
     public uint? StartingItemEntry { get; init; }
+
+    /// <summary>
+    /// When set, the world database gets the <c>map_template</c> row of the Deadmines (map 36, a dungeon), so the workers know the map: with an empty <c>map_template</c> a world
+    /// knows only the two continents (<c>MapRegistry.DefaultContinents</c>) and refuses any teleport to another map before it reaches the cluster. False, the default, seeds nothing.
+    /// </summary>
+    public bool SeedDeadminesTemplate { get; init; }
 }
 
 /// <summary>One launched world worker.</summary>
@@ -418,6 +425,17 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                     Entry = startingItem, Class = 7, Name = "Crash Test Cloth", DisplayId = 3776, Quality = 1, AllowableClass = -1, AllowableRace = -1, Stackable = 20,
                 });
                 world.Set<PlayerCreateInfoItemRow>().Add(new PlayerCreateInfoItemRow { Race = 1, Class = 1, ItemId = startingItem, Amount = 1 });
+                await world.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (_options.SeedDeadminesTemplate)
+            {
+                // The values of the Data.Tests map_template case (MapDataModuleTests): a 10-player instance whose ghosts enter in Westfall.
+                await using WorldDbContext world = await scope.ServiceProvider.GetRequiredService<IDbContextFactory<WorldDbContext>>().CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+                world.Set<MapTemplateRow>().Add(new MapTemplateRow
+                {
+                    Entry = 36, Parent = 0, MapType = 1, PlayerLimit = 10, GhostEntranceMap = 0, GhostEntranceX = -11208.4f, GhostEntranceY = 1672.3f, MapName = "Deadmines",
+                });
                 await world.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
             }
 

@@ -35,6 +35,7 @@ public sealed class CrossWorkerTransferTests
     // The far-teleport router always submits target instance 0 and the gateway resolves that through the listed maps (an instanceable map outside every
     // list is refused as unassigned), so the instance worker lists map 36: a dungeon entry from the first worker has to cross.
     // The account is a game master: .go xyz is how a client starts a far teleport.
+    // The Deadmines map_template row is seeded: without it the workers know only the continents and .go refuses map 36 before any transfer.
     private static ClusterOptions Crossing() => new()
     {
         WorkerCount = 2,
@@ -43,6 +44,7 @@ public sealed class CrossWorkerTransferTests
         InstanceWorkerIndex = 1,
         Security = AccountSecurity.GameMaster,
         Transfers = true,
+        SeedDeadminesTemplate = true,
     };
 
     [PostgresClusterFact]
