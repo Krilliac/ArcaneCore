@@ -80,7 +80,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
     private static readonly string[] ScrubbedEnvironmentPrefixes =
     [
         "Cluster__", "Gateway__", "World__", "Auth__", "Database__", "Realm__", "Realms__", "Net__", "Ops__", "Logging__", "ClientData__",
-        "DOTNET_gc", "DOTNET_ENVIRONMENT", "ASPNETCORE_ENVIRONMENT", "ARCANECORE_TEST_",
+        "DOTNET_gc", "DOTNET_ENVIRONMENT", "ASPNETCORE_ENVIRONMENT", "ARCANECORE_TEST_", "ARCANECORE_CONFIG",
     ];
 
     private readonly ClusterOptions _options;
@@ -106,7 +106,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         _options = options;
         _postgresBase = Environment.GetEnvironmentVariable(PostgresVariable)!.Trim().TrimEnd(';');
         AccountName = "E2E" + Convert.ToHexString(RandomNumberGenerator.GetBytes(4)); // uppercase, 11 characters
-        AccountPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)); // uppercase: the client uppercases it before hashing
+        AccountPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(8)); // 16 uppercase hex chars: the client caps passwords at 16 and uppercases them before hashing
     }
 
     /// <summary>The reason every cluster test is skipped, or null when <c>ARCANECORE_TEST_POSTGRES</c> is set.</summary>
@@ -499,10 +499,10 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
                     throw new InvalidOperationException($"The gateway refused the login with response code 0x{code:X2}.");
                 }
             }
-            catch (Exception ex) when (ex is (IOException and not MockProtocolException) or SocketException && !cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (ex is (IOException and not (MockProtocolException or MockAuthException)) or SocketException && !cancellationToken.IsCancellationRequested)
             {
-                // A listener that is not up yet, or a link that dropped mid-handshake. A MockProtocolException (a deterministic protocol
-                // failure) and a MockAuthException (bad credentials) are not retried: they fail the test at once.
+                // A listener that is not up yet, or a link that dropped mid-handshake. MockProtocolException (a deterministic protocol
+                // failure) and MockAuthException (bad credentials) are both IOExceptions but are excluded, so they are not retried: they fail the test at once.
             }
             finally
             {
@@ -656,6 +656,7 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
             Directory.CreateDirectory(workingDirectory);
             var info = new ProcessStartInfo
             {
+                // The temp working directory is the host content root, so the daemons skip their shipped appsettings.json and run on options defaults (deliberate isolation).
                 WorkingDirectory = workingDirectory,
                 UseShellExecute = false,
                 CreateNoWindow = true,
