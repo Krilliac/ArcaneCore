@@ -353,6 +353,26 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         Assert.Equal(QaPublicationState.Published, state.Get(fresh.Id)!.Publication.State);
     }
 
+    // Minor 1, server-side kind: a stale ServerFault with no issue must still sort behind a fresh non-server-side finding, or it is skipped before any index read.
+    [Fact]
+    public async Task AStaleServerSideFinding_IsDeferredBehindAFreshNonServerSideOne_AndStillLinkedFromTheList()
+    {
+        QaFindingView stale = Stale(1656) with { Kind = QaSignalKind.ServerFault, Severity = 90 };
+        QaFindingView fresh = Fresh(1700) with { Count = 5, DistinctBots = 2, BuildCounts = [new QaBuildCount(CurrentBuild, 5)], FirstBuild = CurrentBuild, Severity = 10 };
+        Assert.True(QaKinds.Of(stale.Kind).ServerSide && !QaKinds.Of(fresh.Kind).ServerSide, "the test needs a server-side stale finding and a non-server-side fresh one");
+        PlayerbotQaAggregator state = Restored(stale, fresh);
+        var transport = new StaleCreateTransport();
+        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(stale.Id) + "
+Playerbot QA finding: opened last week");
+
+        await Run(NewPublisher(state, transport), state);
+
+        QaFindingView after = state.Get(stale.Id)!;
+        Assert.Equal(issue, after.Publication.Issue);
+        Assert.Equal(QaPublicationState.Published, after.Publication.State);
+        Assert.Single(transport.Created);
+    }
+
     // Minor 2. RED on main: the publisher took its own construction time as the start, so after a detach and re-attach a finding seen since the process's first attach looked stale.
     // The feature now passes the process's first StartedUtc (here an hour before this re-attach's publisher is built at T0).
     [Fact]
@@ -388,9 +408,11 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         Assert.True(transport.Created.Count == 0, $"a finding last seen before the attach was given an issue as if met since start-up ({transport.Created.Count} created)");
     }
 
-    // Minor 3. RED on main: with CreateWithinHours = 0 only the build clause can make a finding fresh, and a finding dated in the future with no count on this build had none.
-    [Fact]
-    public async Task AFindingDatedInTheFuture_IsFresh_NotStale()
+    // Minor 3. A finding dated in the future (a clock that stepped back) is not vouched for: not fresh, whatever CreateWithinHours says, so no issue is created.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(48)]
+    public async Task AFindingDatedInTheFuture_IsNotFresh_AndOpensNoIssue(int createWithinHours)
     {
         QaFindingView future = Persisted(1656, v => v with
         {
@@ -400,9 +422,25 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         PlayerbotQaAggregator state = Restored(future);
         var transport = new StaleCreateTransport();
 
-        await Run(NewPublisher(state, transport, configure: o => o.GitHub.CreateWithinHours = 0), state);
+        await Run(NewPublisher(state, transport, configure: o => o.GitHub.CreateWithinHours = createWithinHours), state);
 
-        Assert.True(transport.Created.Count == 1, $"a finding dated in the future was treated as stale ({transport.Created.Count} created)");
+        Assert.True(transport.Created.Count == 0, $"a finding dated in the future was treated as fresh ({transport.Created.Count} created)");
+    }
+
+    [Fact]
+    public async Task ReopenClosed_DoesNotReopenTheClosedIssueOfAFutureDatedFinding()
+    {
+        QaFindingView probe = Fresh() with { LastSeenUtc = QaData.T0.AddHours(3) };
+        var transport = new StaleCreateTransport();
+        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(probe.Id) + "
+Playerbot QA finding: closed last week", open: false);
+        QaFindingView closed = probe with { Publication = new QaPublication(QaPublicationState.KnownClosed, issue), OccurrencesReported = 0 };
+        PlayerbotQaAggregator state = Restored(closed);
+
+        await Run(NewPublisher(state, transport, configure: o => o.GitHub.ReopenClosed = true), state);
+
+        Assert.True(transport.Reopened.Count == 0, $"a future-dated finding's closed issue was reopened ({transport.Reopened.Count} reopened)");
+        Assert.Empty(transport.Created);
     }
 
     // Minor 4. RED on main: ReopenClosed reopened the closed issue of a finding this process never met.

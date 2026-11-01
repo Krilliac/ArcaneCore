@@ -200,9 +200,10 @@ internal sealed class PlayerbotQaPublisher
         if (!git.Enabled) return;
         DateTime start = _time.GetUtcNow().UtcDateTime;
         // A finding that may not open an issue (known only from history) and holds none can only be linked from an issue list some other finding of this pass has
-        // already read, so it goes last: whatever its severity or state, the list is read by then if any finding needs it.
+        // already read, so it goes last: whatever its kind, severity or state, the list is read by then if any finding needs it. This is the primary key (ahead of the
+        // server-side budget priority): a stale finding never creates an issue, so moving it back costs the server-side findings nothing.
         QaFindingView[] eligible = [.. findings.Where(f => Eligible(f, findings))
-            .OrderBy(f => QaKinds.Of(f.Kind).ServerSide ? 0 : 1).ThenBy(f => !f.Publication.HoldsIssue && !MayCreate(f, start) ? 1 : 0)
+            .OrderBy(f => !f.Publication.HoldsIssue && !MayCreate(f, start) ? 1 : 0).ThenBy(f => QaKinds.Of(f.Kind).ServerSide ? 0 : 1)
             .ThenBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
         if (eligible.Length == 0 && _state.PendingDuplicates().Count == 0 && !findings.Any(f => QuietFor(f, start) is not null)) return;
         if (!git.Publish)
@@ -305,8 +306,8 @@ internal sealed class PlayerbotQaPublisher
     /// A finding known only from history (loaded at start-up, even one last met on this same build before a restart) fails this; updating its existing issue is not affected.
     /// </summary>
     private bool MayCreate(QaFindingView f, DateTime now)
-        => f.LastSeenUtc > now // dated in the future (a clock that stepped back): it was just seen, so it is fresh, not stale
-            || (f.CountOnBuild(_build) > 0 && f.LastSeenUtc >= _startedUtc) || (_options.GitHub.CreateWithinHours > 0 && now - f.LastSeenUtc <= TimeSpan.FromHours(_options.GitHub.CreateWithinHours));
+        => f.LastSeenUtc <= now // dated in the future (a clock that stepped back): it cannot be vouched for, so it is not fresh through either clause
+            && ((f.CountOnBuild(_build) > 0 && f.LastSeenUtc >= _startedUtc) || (_options.GitHub.CreateWithinHours > 0 && now - f.LastSeenUtc <= TimeSpan.FromHours(_options.GitHub.CreateWithinHours)));
 
     private bool Eligible(QaFindingView f, IReadOnlyList<QaFindingView> all)
     {
@@ -330,7 +331,7 @@ internal sealed class PlayerbotQaPublisher
     /// Whether <see cref="PlayerbotQaGitHubOptions.ReopenClosed"/> may reopen <paramref name="f"/>'s closed issue: only a finding seen since this publisher started. A stale one
     /// (known only from history) is not recurring, so its closed issue stays closed.
     /// </summary>
-    private bool MayReopen(QaFindingView f) => _options.GitHub.ReopenClosed && f.LastSeenUtc >= _startedUtc;
+    private bool MayReopen(QaFindingView f) => _options.GitHub.ReopenClosed && f.LastSeenUtc >= _startedUtc && f.LastSeenUtc <= _time.GetUtcNow().UtcDateTime; // a future-dated one is not trusted either
 
     private static bool CoveredByStall(QaFindingView setAside, IReadOnlyList<QaFindingView> all)
         => setAside.Quest != 0
