@@ -122,7 +122,7 @@ public sealed class DuelResetScriptTests
         Assert.True(script.HasSavedState(rig.A));
         rig.A.Health = 900;
 
-        rig.Service.Complete(rig.A, Combat.DuelCompleteType.Fled);
+        rig.Service.Complete(rig.A, ArcaneCore.Game.Combat.DuelCompleteType.Fled);
 
         Assert.Equal(900u, rig.A.Health);
         Assert.False(script.HasSavedState(rig.A));
@@ -230,7 +230,7 @@ public sealed class DuelResetScriptTests
         rig.AcceptAndStart();
         StartPetCooldown(rig, pet, ShortCooldown, 40_000);
 
-        rig.Service.Complete(rig.A, Combat.DuelCompleteType.Fled);
+        rig.Service.Complete(rig.A, ArcaneCore.Game.Combat.DuelCompleteType.Fled);
 
         Assert.Equal(40_000u, PetLeft(rig, pet, ShortCooldown));
     }

@@ -148,7 +148,7 @@ public sealed class RitualOfDoomTests
         for (int i = 0; i < 4; i++)
         {
             Assert.Equal(GameObjectUseResult.Ok, system.Use(players[i], ritual.Guid));
-            Assert.Empty(kit.Creatures.Creatures.Where(c => c.Entry == DemonEntry));
+            Assert.DoesNotContain(kit.Creatures.Creatures, c => c.Entry == DemonEntry);
         }
 
         // The fifth participant completes the ritual: the first user casts the ritual spell at the portal.

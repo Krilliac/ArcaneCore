@@ -1,4 +1,4 @@
-using ArcaneCore.Game.Creatures.AI;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.WorldState;
