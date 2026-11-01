@@ -483,6 +483,14 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         if (Managed is { IsStopping: true }) return _pass = Task.CompletedTask;
         // Quiescing for a detach, or the managed feature is (its operations would refuse): no new pass.
         if (_quiesced || Managed is { IsDetaching: true }) return _pass = Task.CompletedTask;
+        // The pass's durable writes (membership rows, bot creation) belong to the maintenance lease holder (writer-lock design section 4, row 7): on a clustered node that does not
+        // hold it the pass would create a bot and then be refused the membership row, leaving an orphan character per pass.
+        if (Managed is { HoldsMaintenanceLease: false })
+        {
+            Publish(PopulationStatus.Idle(true, "not-holder", "this node does not hold the maintenance lease; the population pass runs on the holder"));
+            return _pass = Task.CompletedTask;
+        }
+
         Interlocked.Increment(ref _passesStarted);
         PassInput? input;
         try { input = Capture(rushCount, shedOnly); }
@@ -1456,6 +1464,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             if (!rush && _createTimes.Count >= pop.MaxCreatePerMinute) return (created, $"creation is limited to {pop.MaxCreatePerMinute} per minute", false);
             if (ctx.Known.Count + ctx.Created >= _options.MaxRegisteredBots) return (created, "the bot registry is full (MaxRegisteredBots)", false);
             if (ctx.Input.RunningAll + ctx.Started + ctx.Created >= _options.MaxBots) return (created, "the running bot cap (MaxBots) is reached", false);
+            // A lease lost since the pass began: the membership write after the create would be refused and leave the new bot an orphan.
+            if (!managed.HoldsMaintenanceLease) return (created, "the maintenance lease is no longer held", false);
 
             PopulationRaceClassCache cache = await PairsFor(ctx.Scoped, pop, ct).ConfigureAwait(false);
             PopulationPlan? plan = null;

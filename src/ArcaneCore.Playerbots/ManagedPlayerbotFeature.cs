@@ -3873,6 +3873,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 }
 
                 if (_warWipePending.IsEmpty) continue;
+                // The relation ledger is the maintenance holder's to write; a non-holder keeps the wipe in memory and does not retry the refused write.
+                if (!HoldsMaintenanceLease) { _warWipePending.Clear(); continue; }
                 await using AsyncServiceScope scope = scopes.CreateAsyncScope();
                 if (scope.ServiceProvider.GetService<IPlayerbotRelationStore>() is not { } store)
                 {
@@ -3991,6 +3993,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             foreach ((_, IReadOnlyList<int> characterIds) in removed)
                 foreach (int characterId in characterIds)
                     if (characterId > 0) survivors.UnionWith(memory.ForgetOthers(ArcaneCore.Game.ObjectGuid.Player((uint)characterId).Value));
+            if (!HoldsMaintenanceLease) return; // the stored ledgers are the maintenance holder's to write; the memory above is already forgotten
             if (provider.GetService<IPlayerbotRelationStore>() is not { } store) return;
             foreach ((Guid botId, _) in removed)
             {
