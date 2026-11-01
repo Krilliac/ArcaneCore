@@ -133,6 +133,10 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         Assert.True(SpinWait.SpinUntil(() => s.System.PathJobsFinished == s.System.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not publish its answer");
     }
 
+    // Each tick waits out the job it dispatched, so the tick budget no longer races the pool's threads.
+    private static void SettlePool(CreatureMapSystem system) =>
+        Assert.True(SpinWait.SpinUntil(() => system.PathJobsFinished == system.PathJobsInFlight, TimeSpan.FromSeconds(10)), "path job did not finish");
+
     [Fact]
     public void AWanderingCreature_SearchesOnAWorker_AndWalksTheWorkersPath()
     {
@@ -142,7 +146,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         for (int i = 0; i < 300 && !s.Wolf.IsMoving; i++)
         {
             s.World.RunTick(100);
-            Thread.Sleep(1);
+            SettlePool(s.System);
         }
 
         Assert.True(s.Wolf.IsMoving, "the wolf never started a wander leg");
@@ -250,7 +254,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         for (int i = 0; i < 200 && s.System.PathJobsApplied == 0; i++)
         {
             s.World.RunTick(50);
-            Thread.Sleep(1);
+            SettlePool(s.System);
         }
 
         Assert.True(s.System.PathJobsApplied >= 1, "no follow answer from the pool was applied");
@@ -820,7 +824,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
         for (int i = 0; i < 200 && s.System.PathJobsApplied == 0; i++)
         {
             s.World.RunTick(50);
-            Thread.Sleep(1);
+            SettlePool(s.System);
         }
 
         Assert.True(s.System.PathJobsApplied >= 1, "no chase answer from the pool was applied");
@@ -865,7 +869,7 @@ public sealed class CreaturePathJobTests(ITestOutputHelper output)
             for (int i = 0; i < 200 && (!follower.IsMoving || system.PathJobsApplied < 2); i++)
             {
                 world.RunTick(50);
-                Thread.Sleep(1);
+                SettlePool(system);
             }
 
             Assert.True(follower.IsMoving, "the formation follower did not set off on the pool's path");

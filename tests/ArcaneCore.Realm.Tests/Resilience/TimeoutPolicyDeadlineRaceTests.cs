@@ -87,7 +87,8 @@ public sealed class TimeoutPolicyDeadlineRaceTests
                     for (int i = 0; i < 300; i++)
                     {
                         TimeoutPolicy policy = (i & 1) == 0 ? cooperative : pessimistic;
-                        int delay = random.Next(0, 4); // completes around the 2 ms deadline, on either side of it
+                        // Completes around the 2 ms deadline; every tenth (pessimistic) call outlives it by far, so both outcomes always occur.
+                        int delay = i % 10 == 9 ? 40 : random.Next(0, 4);
                         try
                         {
                             await policy.ExecuteAsync(

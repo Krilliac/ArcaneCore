@@ -58,6 +58,8 @@ public sealed class SteepSlopeLegTests
             CreatureContent content = Content([Template()], [Spawn(1, WolfEntry, spawn.X, spawn.Y, z: spawn.Z, movementType: movementType, wander: wander)]);
             (World, _, Creatures) = CreateAiSystem(content);
             WorldCollision.Of(World).Install(pathfinder: nav);
+            // PlanPath is called outside a tick: leftover path-time from the setup ticks must not turn it into Deferred on a loaded host.
+            Creatures.PathBudget = CreaturePathBudget.Unlimited;
             (Player player, _) = AddPlayer(World, 1, -30, 0); // off the tile, out of the way of every leg
             Wolf = Assert.Single(Creatures.Creatures);
 
