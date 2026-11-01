@@ -93,8 +93,8 @@ later, and the comparison survives the 32-bit clock wrapping):
   id by `PlayerbotAuctionPace` (one per world, world thread only). A house limit is soft: it is checked when a bot sends and noted when
   a buyout settles (the money fell or the item arrived; a settle that only took money counts) or when a bid still pending at an abort is booked, so bots with an action in flight together can overshoot it by their number (in-flight actions are not counted).
 
-The limits are read live and checked before every sell and every buyout; a count is noted only when the house confirms the listing or the
-buyout. 0 allows nothing. A capped listing or buying part ends gracefully and the visit goes on (mailbox).
+The limits are read live and checked before every sell and every buyout; a listing is counted when the house confirms it, and a buyout
+when it settles (a settle that only took money counts) or when a bid still pending at an abort is booked. 0 allows nothing. A capped listing or buying part ends gracefully and the visit goes on (mailbox).
 
 ### What the bot lists and buys
 

@@ -77,6 +77,22 @@ public sealed class ConfDistTests : IDisposable
     }
 
     [Fact]
+    public void Generator_NeverPrintsARangeThatExcludesTheDefault()
+    {
+        ConfigEntry off = new("X", "X:Gap", "int", "0", "Gap (50..10000). 0 (the default) means automatic.", "restart", RawDefault: "0");
+        Assert.Equal("a whole number, -2147483648 to 2147483647", Assert.Single(ConfCatalogGenerator.Build([off]).Keys).Allowed);
+    }
+
+    [Fact]
+    public void ZeroMeansOffKeys_AllowedTextNamesZero()
+    {
+        ConfKey gap = Generated.Keys.Single(k => k.Path == "World:Playerbots:ThinkStarvedGapMs");
+        Assert.Equal("a whole number: 0 (the report is off) or 1000 to 3600000", gap.Allowed);
+        ConfKey brake = Generated.Keys.Single(k => k.Path == "World:Playerbots:Population:RushBrakeP95Ms");
+        Assert.Contains("0 (", brake.Allowed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CreateWithinHours_AllowedTextIsItsRange_AndTheDefaultStays24()
     {
         ConfKey key = Generated.Keys.Single(k => k.Path == "World:Playerbots:Qa:GitHub:CreateWithinHours");

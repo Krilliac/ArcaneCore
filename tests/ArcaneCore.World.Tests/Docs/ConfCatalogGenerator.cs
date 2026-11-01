@@ -82,6 +82,10 @@ internal static class ConfCatalogGenerator
         if (!long.TryParse(m.Groups[1].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long min)
             || !long.TryParse(m.Groups[2].Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long max)
             || min > max) return null;
+        // An off value such as "0 turns it off" is stated outside the parentheses; a default outside the parsed range means the range is
+        // not the whole story, so keep the type-range text rather than print a range that excludes the key's own default.
+        if (long.TryParse(entry.RawDefault, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long def) && (def < min || def > max))
+            return null;
         return "a whole number from " + min.ToString(CultureInfo.InvariantCulture) + " to " + max.ToString(CultureInfo.InvariantCulture);
     }
 
