@@ -79,7 +79,7 @@ public sealed partial class SpellSystem
     private static bool IsOriginalFactionFriendly(Unit caster, Unit target)
     {
         // a charmed summon keeps its CharmInfo in Creature.Summon.Charm (CharmService.InitCharmInfo), anything else in the control state
-        if (target.GetCharmInfo() is null)
+        if (target.GetCharmInfo() is not { } charmInfo)
         {
             return false;
         }
@@ -95,7 +95,8 @@ public sealed partial class SpellSystem
             return false;
         }
 
-        uint original = target switch
+        // the faction recorded when the charm took the unit (a summon's is its owner's); a unit with no record falls back to its own template
+        uint original = charmInfo.OriginalFactionTemplate ?? target switch
         {
             Creature creature => creature.Template.Faction,
             Player player => player.RaceFactionTemplate,

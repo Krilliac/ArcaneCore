@@ -66,12 +66,14 @@ public sealed partial class CharmService
         }
 
         SetCharmerGuid(target, caster.Guid);
+        uint factionBeforeCharm = target.FactionTemplate;
         target.FactionTemplate = caster.FactionTemplate;
         SetCharm(caster, target);
 
         StopAllFighting(target);
 
         CharmInfo info = InitCharmInfo(target);
+        info.OriginalFactionTemplate = factionBeforeCharm;
         List<uint> charmSpells = InitCharmCreateSpells(target, info);
         info.ReactState = ReactState.Defensive;
         info.CommandState = CommandState.Follow;
@@ -135,6 +137,10 @@ public sealed partial class CharmService
     private void RemoveCharm(Unit? caster, Unit target, AuraRemoveMode removeMode, SpellSystem spells)
     {
         SetCharmerGuid(target, default);
+        if (target.GetCharmInfo() is { } charmedInfo)
+        {
+            charmedInfo.OriginalFactionTemplate = null;
+        }
 
         if (target is Creature creature)
         {

@@ -59,6 +59,7 @@ public sealed partial class CharmService
             target.UnitFlags |= UnitFlags.Possessed;
             SetCharmerGuid(target, caster.Guid);
             state.Possessor = caster.Guid;
+            uint factionBeforePossess = target.FactionTemplate;
             target.FactionTemplate = caster.FactionTemplate;
 
             // Target should become visible at SetView (if not visible before), otherwise the client ignores its packets.
@@ -69,6 +70,7 @@ public sealed partial class CharmService
             StopAllFighting(target);
 
             CharmInfo info = InitCharmInfo(target);
+            info.OriginalFactionTemplate = factionBeforePossess;
             InitPossessCreateSpells(target, info);
             info.ReactState = ReactState.Passive;
             info.CommandState = CommandState.Stay;
@@ -118,6 +120,11 @@ public sealed partial class CharmService
         target.UnitFlags &= ~UnitFlags.Possessed;
         SetCharmerGuid(target, default);
         state.Possessor = default;
+
+        if (target.GetCharmInfo() is { } possessedInfo)
+        {
+            possessedInfo.OriginalFactionTemplate = null;
+        }
 
         RestoreFaction(target);
         StopAllFighting(target);
