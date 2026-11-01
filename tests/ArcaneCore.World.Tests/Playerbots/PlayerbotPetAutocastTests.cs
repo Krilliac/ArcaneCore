@@ -20,7 +20,6 @@ public sealed class PlayerbotPetAutocastTests
     private const uint UnknownId = 940005;
     private const uint SameNameId = 940006;
 
-
     private static readonly Dictionary<uint, SpellInfo> Book = new()
     {
         [GrowlId] = Hostile("Growl", id: GrowlId),

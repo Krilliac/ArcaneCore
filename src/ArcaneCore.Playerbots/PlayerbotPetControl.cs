@@ -12,7 +12,7 @@ namespace ArcaneCore.World.Playerbots;
 /// autocast off (<c>ACT_DECIDE</c>, Pet.cpp:1887-1975), so a bot that only sends the attack command leaves them uncast. The bot turns them on the way
 /// a client does, with CMSG_PET_SPELL_AUTOCAST, which <c>PetController.HandleAutocast</c> validates. Spells are told apart by id: a spell name is
 /// shared by every rank and by unrelated spells, an id is one spell.
-/// <para>Thread affinity: the world thread that runs the bot's think. Allocation: none while every harmful spell is already on.</para>
+/// <para>Thread affinity: the world thread that runs the bot's think. Allocation: one small list per call, plus the boxed enumerator of the spell-state dictionary.</para>
 /// </summary>
 internal static class PlayerbotPetControl
 {

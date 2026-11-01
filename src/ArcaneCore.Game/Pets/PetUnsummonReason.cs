@@ -4,7 +4,7 @@ namespace ArcaneCore.Game.Pets;
 
 /// <summary>
 /// Why a summon left the world through <see cref="SummonService.Unsummon(ArcaneCore.Game.Creatures.Creature, PetUnsummonReason)"/>
-/// (the cause behind vmangos' <c>Pet::Unsummon(PetSaveMode)</c>, Pet.cpp:1040-1140). Only the log line reads it.
+/// (the cause behind vmangos' <c>Pet::Unsummon(PetSaveMode)</c>, Pet.cpp:1023-1141). Only the log line reads it.
 /// </summary>
 public enum PetUnsummonReason
 {
