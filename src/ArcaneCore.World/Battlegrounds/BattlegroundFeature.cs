@@ -878,6 +878,18 @@ public sealed partial class BattlegroundFeature(IServiceProvider services, IServ
         bg.RemovePlayerAtLeave(player.Guid, teleportToEntryPoint, sendStatus: true);
     }
 
+    /// <summary>
+    /// vmangos <c>Player::ToggleAFK</c> (Player.cpp:1734-1745): "afk player not allowed in battleground". A player who went AFK while bound to a
+    /// match runs the full leave sequence (<see cref="LeaveBattleground"/>, deserter rules and the return to the entry point included).
+    /// </summary>
+    internal void OnPlayerWentAfk(Player player)
+    {
+        if (BattlegroundOf(player.Guid) is not null)
+        {
+            LeaveBattleground(player, teleportToEntryPoint: true);
+        }
+    }
+
     // ------------------------------------------------------------------ the battleground raid
 
     /// <summary>

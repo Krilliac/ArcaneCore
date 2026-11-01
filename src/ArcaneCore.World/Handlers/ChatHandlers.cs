@@ -9,6 +9,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Battlegrounds;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Chat;
 using ArcaneCore.World.Commands;
@@ -288,9 +289,16 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
 
                 if (message.Length == 0 || !player.IsAfk)
                 {
-                    if (player.ToggleAfk() && player.IsDnd)
+                    if (player.ToggleAfk())
                     {
-                        player.ToggleDnd();
+                        if (player.IsDnd)
+                        {
+                            player.ToggleDnd();
+                        }
+
+                        // vmangos Player::ToggleAFK (Player.cpp:1742-1743): an AFK player is not allowed in a battleground; the full leave
+                        // sequence runs (deserter rules included).
+                        session.Services.GetService<BattlegroundFeature>()?.OnPlayerWentAfk(player);
                     }
                 }
 
