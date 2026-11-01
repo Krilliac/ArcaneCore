@@ -159,7 +159,7 @@ public sealed partial class SpellSystem
     private Dictionary<SpellEffectName, SpellEffectHandler> CreateEffectHandlers() => new()
     {
         [SpellEffectName.SchoolDamage] = EffectSchoolDamage,
-        [SpellEffectName.Dummy] = static _ => { }, // no generic behaviour: scripts hook it; vmangos starts no DB script from DUMMY (SpellSystem.DbSpellScripts.cs)
+        [SpellEffectName.Dummy] = EffectDummy, // no generic behaviour (scripts hook it); the spell's DB script is the fallback when no code claims the spell (SpellSystem.DbSpellScripts.cs)
         [SpellEffectName.SendEvent] = EffectSendEvent,
         [SpellEffectName.TeleportUnits] = EffectTeleportUnits,
         [SpellEffectName.ApplyAura] = EffectApplyAura,

@@ -8,18 +8,46 @@ namespace ArcaneCore.Game.Spells;
 /// <summary>
 /// The spell DB scripts (<c>dbscripts_on_spell</c>, <see cref="DbScriptKind.Spell"/>): the database fallback at the end of vmangos
 /// Spell::EffectScriptEffect (SpellEffects.cpp:4565-4571), run through the map's DB script executor
-/// (<see cref="CreatureMapSystem.StartDbScript"/>). Only SCRIPT_EFFECT starts it (retail; cmangos also starts it from DUMMY).
+/// (<see cref="CreatureMapSystem.StartDbScript"/>). SCRIPT_EFFECT starts it (retail); a DUMMY-only spell no code claims does too (fallback, see <see cref="CanEffectStartDbScript"/>).
 /// </summary>
 public sealed partial class SpellSystem
 {
     /// <summary>
-    /// vmangos starts the <c>spell_scripts</c> table from SPELL_EFFECT_SCRIPT_EFFECT only: Spell::EffectScriptEffect's trailing "normal DB scripted
-    /// effect" (SpellEffects.cpp:4565-4571). EffectDummy never does (it has no ScriptsStart of sSpellScripts, only the event start at :1775), so a DUMMY effect
-    /// runs no row. The call is made once per SCRIPT_EFFECT effect that hits a target, as vmangos does; a spell with a ported handler never reaches
-    /// it (<see cref="IsClaimedByCode"/>). cmangos' DUMMY and trigger-effect priority scheme (ScriptMgr.cpp:67-106) is not reproduced.
+    /// vmangos starts the <c>spell_scripts</c> table from SPELL_EFFECT_SCRIPT_EFFECT: Spell::EffectScriptEffect's trailing "normal DB scripted
+    /// effect" (SpellEffects.cpp:4565-4571), once per SCRIPT_EFFECT effect that hits a target. vmangos EffectDummy never does, because its
+    /// DUMMY spells are hard-coded in C++. ArcaneCore has not ported most of those cases, and the imported classic-db rows of DUMMY-only spells
+    /// (9096, 11365, 11885-11889, 16378, 19250, 21052, 21914, 21917, 23359, 25716) are the only implementation of their quest behaviour, so a
+    /// DUMMY effect is the documented fallback (cmangos starts the table from DUMMY as well, ScriptMgr.cpp:67-106): it starts the row from the
+    /// FIRST DUMMY effect of a spell that has no SCRIPT_EFFECT effect, and only when no code claims the spell (<see cref="IsClaimedByCode"/>).
+    /// A spell with both a DUMMY and a SCRIPT_EFFECT effect starts its row from the SCRIPT_EFFECT only.
     /// </summary>
     internal static bool CanEffectStartDbScript(SpellInfo spell, int effectIndex)
-        => spell.Effects[effectIndex].Effect == SpellEffectName.ScriptEffect;
+    {
+        SpellEffectName effect = spell.Effects[effectIndex].Effect;
+        if (effect == SpellEffectName.ScriptEffect)
+        {
+            return true;
+        }
+
+        if (effect != SpellEffectName.Dummy)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < spell.Effects.Count; i++)
+        {
+            SpellEffectName other = spell.Effects[i].Effect;
+            if (other == SpellEffectName.ScriptEffect || (other == SpellEffectName.Dummy && i < effectIndex))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>The DUMMY effect: no generic behaviour (spell scripts hook it); the spell's DB script is the fallback, see <see cref="CanEffectStartDbScript"/>.</summary>
+    private void EffectDummy(SpellEffectContext context) => StartDbSpellScript(context);
 
     /// <summary>
     /// Start the spell's DB script for this effect and target when the spell has one and no spell script in code claims the spell (an

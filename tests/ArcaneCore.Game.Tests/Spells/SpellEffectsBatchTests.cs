@@ -2,6 +2,7 @@ using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Game.Spells.Utility.Targets;
 using ArcaneCore.Game.Tests.Pets;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -72,14 +73,13 @@ public sealed class SpellEffectsBatchTests
         Assert.True(kit.System.HasAura(rogue, Stealth));
     }
 
-    [Fact]
-    public void GrimoireLearnSpellAimedAtThePet_TeachesTheDemon_AndSendsPetSpells()
+    private static PetTestKit GrimoireKit(uint grimoireLevel = 0)
     {
-        using PetTestKit kit = new(
+        PetTestKit kit = new(
             extraSpells:
             [
                 Spell(GrimoireOfSacrifice, Effect(SpellEffectName.LearnSpell, 0, SpellImplicitTarget.UnitCasterPet, trigger: FirebluntPetSpell))
-                    with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
+                    with { StartRecoveryCategory = 0, StartRecoveryTime = 0, SpellLevel = grimoireLevel },
                 Spell(FirebluntPetSpell, Effect(SpellEffectName.Dummy, 1)) with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
             ],
             extraTemplates:
@@ -93,6 +93,13 @@ public sealed class SpellEffectsBatchTests
                     b.Faction = 14;
                 }) with { CreatureType = SummonService.CreatureTypeBeast, TypeFlags = SummonService.TypeFlagTameable, Family = 1 },
             ]);
+        // The world's PetTargetFeature installs the TARGET_UNIT_CASTER_PET selector; the kit does not (see CharmPossessTests).
+        PetTargets.Install(kit.Spells.System);
+        return kit;
+    }
+
+    private static (Player Owner, FakeSession Session, CharmInfo Charm) TamePet(PetTestKit kit)
+    {
         (Player owner, FakeSession session) = kit.AddPlayer(1);
         owner.SetByte(UpdateFields.UnitFieldBytes0, 1, (byte)Class.Hunter);
         owner.Level = 30;
@@ -101,24 +108,38 @@ public sealed class SpellEffectsBatchTests
         CharmInfo charm = pet.Summon!.Charm!;
         Assert.False(charm.HasSpell(FirebluntPetSpell));
         session.Clear();
+        return (owner, session, charm);
+    }
+
+    // The pet is a tamed beast: SummonService.TameCreature only takes tameable beasts and the learn path has no creature-type rule of its own.
+    [Fact]
+    public void GrimoireLearnSpellAimedAtThePet_TeachesThePet_AndSendsPetSpells()
+    {
+        using PetTestKit kit = GrimoireKit();
+        (Player owner, FakeSession session, CharmInfo charm) = TamePet(kit);
 
         Assert.Equal(SpellCastResult.CastOk, kit.Cast(owner, GrimoireOfSacrifice));
 
         Assert.True(charm.HasSpell(FirebluntPetSpell));
-        Assert.False(kit.Spells.Spellbook.HasSpell(owner, FirebluntPetSpell)); // the demon learned it, not the warlock
+        Assert.False(kit.Spells.Spellbook.HasSpell(owner, FirebluntPetSpell)); // the pet learned it, not the caster
         Assert.NotEmpty(Packets(session, WorldOpcode.SmsgPetSpells));
+    }
+
+    [Fact]
+    public void GrimoireWithAPetBelowTheSpellLevel_IsRefusedByTheLearnPetSpellChecks()
+    {
+        using PetTestKit kit = GrimoireKit(grimoireLevel: 60);
+        (Player owner, _, CharmInfo charm) = TamePet(kit);
+
+        Assert.Equal(SpellCastResult.Lowlevel, kit.Cast(owner, GrimoireOfSacrifice));
+
+        Assert.False(charm.HasSpell(FirebluntPetSpell));
     }
 
     [Fact]
     public void GrimoireWithoutAPet_IsRefusedWithNoPet()
     {
-        using PetTestKit kit = new(
-            extraSpells:
-            [
-                Spell(GrimoireOfSacrifice, Effect(SpellEffectName.LearnSpell, 0, SpellImplicitTarget.UnitCasterPet, trigger: FirebluntPetSpell))
-                    with { StartRecoveryCategory = 0, StartRecoveryTime = 0 },
-                Spell(FirebluntPetSpell, Effect(SpellEffectName.Dummy, 1)),
-            ]);
+        using PetTestKit kit = GrimoireKit();
         (Player owner, _) = kit.AddPlayer(1);
 
         Assert.Equal(SpellCastResult.NoPet, kit.Cast(owner, GrimoireOfSacrifice));
@@ -139,7 +160,7 @@ public sealed class SpellEffectsBatchTests
 
     [Theory]
     [InlineData(SpellEffectName.ScriptEffect, true)]
-    [InlineData(SpellEffectName.Dummy, false)]
+    [InlineData(SpellEffectName.Dummy, true)]
     [InlineData(SpellEffectName.TriggerSpell, false)]
     [InlineData(SpellEffectName.SchoolDamage, false)]
     public void OnlyScriptEffect_StartsTheSpellScripts(SpellEffectName effect, bool starts)
@@ -156,5 +177,15 @@ public sealed class SpellEffectsBatchTests
 
         Assert.False(SpellSystem.CanEffectStartDbScript(spell, 0));
         Assert.True(SpellSystem.CanEffectStartDbScript(spell, 1));
+    }
+
+    [Fact]
+    public void OnlyTheFirstDummyEffect_StartsTheSpellScripts()
+    {
+        SpellInfo spell = Spell(930_022, Effect(SpellEffectName.SchoolDamage, 0), Effect(SpellEffectName.Dummy, 0), Effect(SpellEffectName.Dummy, 0));
+
+        Assert.False(SpellSystem.CanEffectStartDbScript(spell, 0));
+        Assert.True(SpellSystem.CanEffectStartDbScript(spell, 1));
+        Assert.False(SpellSystem.CanEffectStartDbScript(spell, 2));
     }
 }
