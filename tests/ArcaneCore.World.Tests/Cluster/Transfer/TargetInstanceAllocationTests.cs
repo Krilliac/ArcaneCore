@@ -260,6 +260,23 @@ public sealed class TargetInstanceAllocationTests : IDisposable
     }
 
     [Fact]
+    public async Task Activate_WhenTheClientLeftBeforeActivation_ReleasesTheReservedInstance()
+    {
+        SpyAllocator spy = NewSpy();
+        WorkerTransferTarget target = NewTarget(spy);
+        Guid id = Guid.NewGuid();
+        TransferSlotReservation reservation = await target.ReserveSlotAsync(id, Character, Dungeon, 0);
+        await target.InstallPassiveShadowAsync(id, NewBundle(id, reservation.InstanceId));
+        _entry.AttachResult = false;
+
+        await target.ActivateTargetPlayerAsync(id, NewBundle(id, reservation.InstanceId), TargetToken);
+
+        Assert.Equal(1, spy.Releases);
+        await WaitUntilGoneAsync(reservation.InstanceId); // otherwise the held map (unload timer 0) would stay loaded until restart
+        Assert.Empty(_persistence.Binds);
+    }
+
+    [Fact]
     public async Task Discard_LeavesAnInstanceTheCharacterIsBoundTo()
     {
         WorkerTransferTarget target = NewTarget(NewSpy());
@@ -398,10 +415,13 @@ public sealed class TargetInstanceAllocationTests : IDisposable
 
     private sealed class FakeEntry(ConcurrentQueue<string> events) : ITransferSessionEntry
     {
+        /// <summary>False simulates a client that left before the activation.</summary>
+        public bool AttachResult { get; set; } = true;
+
         public bool TryAttach(Player player)
         {
             events.Enqueue("attach");
-            return true;
+            return AttachResult;
         }
 
         public void ResumeSaves(Player player) => events.Enqueue("resume");

@@ -608,6 +608,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             {
                 // A very late duplicate of a transfer whose id is no longer remembered: its character is already here under this very token.
                 ReleaseShadow(shadow);
+                ReleaseUnboundInstance(slot);
                 Finish(slot);
                 return false;
             }
@@ -645,6 +646,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             _logger.LogInformation("Transfer {TransferId}: the client of character {Character} left before activation; nothing to add", slot.TransferId, bundle.CharacterGuid);
             claims?.AbandonTicket(characterId, claimTicket);
             ReleaseShadow(shadow);
+            ReleaseUnboundInstance(slot);
             Finish(slot);
             return false;
         }
@@ -681,6 +683,25 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         Finish(slot);
         return true;
+    }
+
+    /// <summary>On the world thread: drops the instance this slot's reservation allocated when the activation ends without binding it (the held map would otherwise never unload). An instance somebody is bound to stays.</summary>
+    private void ReleaseUnboundInstance(Slot slot)
+    {
+        if (!slot.Allocated || slot.InstanceId == 0 || _instances is not { } allocator)
+        {
+            return;
+        }
+
+        try
+        {
+            allocator.Release(slot.MapId, slot.InstanceId);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target-instance", ex);
+            _logger.LogError(ex, "Releasing the reserved instance {Instance} of map {Map} failed", slot.InstanceId, slot.MapId);
+        }
     }
 
     private void BindReservedInstance(Slot slot, Player shadow)
