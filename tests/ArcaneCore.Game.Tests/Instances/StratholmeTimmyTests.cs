@@ -45,7 +45,10 @@ public sealed class StratholmeTimmyTests
         Assert.Single(TimmysIn(rig));
 
         rig.Tick(100);
-        Assert.Null(rig.Creatures.FindCreature(guard.Guid));
+        // A database spawn's forced despawn leaves the same Creature object registered (it respawns later), dead with its corpse gone.
+        Assert.Equal(CreatureDeathState.Dead, guard.DeathState);
+        Assert.False(guard.IsAlive);
+        Assert.Single(TimmysIn(rig));
     }
 
     [Fact]
