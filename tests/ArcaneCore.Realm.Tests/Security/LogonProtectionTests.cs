@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -24,8 +25,8 @@ public sealed class LogonProtectionTests
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(20);
 
-    private static NetGuard Guard(NetProtectionOptions options, NetGuardTests.CapturingLogger? log = null)
-        => new(options, () => 0, () => 0, log ?? new NetGuardTests.CapturingLogger());
+    private static NetGuard Guard(NetProtectionOptions options, CapturingLogger? log = null)
+        => new(options, () => 0, () => 0, log ?? new CapturingLogger());
 
     /// <summary>A real session over loopback, told its peer is 127.0.0.1 so the address table has a key.</summary>
     private static NetworkStream StartSession(IAccountStore accounts, AuthOptions options, NetGuard guard, string endpoint = "127.0.0.1:50000")
@@ -58,7 +59,7 @@ public sealed class LogonProtectionTests
     [Fact]
     public async Task FailureBudgetSpent_RefusesTheNextChallenge_WithFailNoAccess_AndCloses()
     {
-        var log = new NetGuardTests.CapturingLogger();
+        var log = new CapturingLogger();
         NetGuard guard = Guard(new NetProtectionOptions { AuthFailureBurstPerIp = 2, AuthFailuresPerMinutePerIp = 1 }, log);
         await using NetworkStream c = StartSession(new InMemoryAccountStore(), new AuthOptions(), guard);
 
@@ -124,7 +125,7 @@ public sealed class LogonProtectionTests
     [Fact]
     public async Task UnauthenticatedLifetime_ClosesAConnectionThatNeverProves()
     {
-        var log = new NetGuardTests.CapturingLogger();
+        var log = new CapturingLogger();
         NetGuard guard = Guard(new NetProtectionOptions { LogonUnauthenticatedLifetime = TimeSpan.FromMilliseconds(300) }, log);
         await using NetworkStream c = StartSession(new InMemoryAccountStore(), new AuthOptions(), guard);
 
@@ -135,7 +136,7 @@ public sealed class LogonProtectionTests
     [Fact]
     public async Task FrameReadTimeout_ClosesAChallengeWhoseBodyNeverArrives()
     {
-        var log = new NetGuardTests.CapturingLogger();
+        var log = new CapturingLogger();
         NetGuard guard = Guard(new NetProtectionOptions
         {
             FrameReadTimeout = TimeSpan.FromMilliseconds(300), LogonUnauthenticatedLifetime = TimeSpan.Zero,
