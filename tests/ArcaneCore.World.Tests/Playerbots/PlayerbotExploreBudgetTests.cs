@@ -213,7 +213,10 @@ public sealed class PlayerbotExploreBudgetTests
     public void ASearchNeedingMoreThanFortySlices_KeepsItsCursor_AndFinishes()
     {
         const int thinkMs = 500;
-        PlayerbotExploreAtlas atlas = RowAtlas(40);
+        // One spawn per cell along +X: cell i holds guid i+1 and is reached in ring i. Only the guid-41 spawn (cell 40, the last ring
+        // MaxRing allows) is eligible. With maxExamined 1 a slice ends right after each occupied cell it examines: slices 1..41 end after
+        // the cells of rings 0..40 (the ring-40 cell becomes the best candidate), slice 42 finishes ring 40 and returns Found: 42 slices.
+        PlayerbotExploreAtlas atlas = RowAtlas(PlayerbotExploreAtlas.MaxRing + 1);
         var cursor = new PlayerbotExploreAtlas.FindCursor();
         uint begun = 0, now = 0;
         int slices = 0;
@@ -227,12 +230,13 @@ public sealed class PlayerbotExploreBudgetTests
             if (slices > 1)
                 Assert.False(PlayerbotBrain.ExploreFindCursorStale(0, 8, 0, 8, thinkMs, unchecked(now - begun), 0f),
                     $"slice {slices} at {now - begun} ms: a walk that is still progressing was dropped");
-            status = atlas.FindStep(cursor, 0, 8, Origin, c => c.Spawn.Guid == 39, (_, _) => false, 1, null, out found, out _);
+            status = atlas.FindStep(cursor, 0, 8, Origin, c => c.Spawn.Guid == 41, (_, _) => false, 1, null, out found, out _);
             Assert.True(slices < 1_000, "the search never finished");
         }
         while (status == PlayerbotExploreAtlas.FindStatus.Pending);
         Assert.Equal(PlayerbotExploreAtlas.FindStatus.Found, status);
-        Assert.Equal(39u, found!.Value.Spawn.Guid);
+        Assert.Equal(41u, found!.Value.Spawn.Guid);
+        Assert.Equal(42, slices);
         Assert.True(slices > 40, $"the search took {slices} slices: the test must exceed the 40 an age of 20 s allowed");
     }
 
