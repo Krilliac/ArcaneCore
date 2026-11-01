@@ -335,6 +335,15 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
+        // A map another worker owns (Cluster:Worker:OwnedMaps): hand the session to the gateway, which re-opens it on the owner with this login packet.
+        // Before the character is loaded, claimed or put anywhere, so the fenced claim happens only on the target worker.
+        if (session.IsRemote && !session.World.Owns(character.MapId, 0) && session.TryRedirectRemote(character.MapId, 0))
+        {
+            session.Logger.LogInformation("[{Endpoint}] character {Guid} is saved on map {Map}, owned by another worker; redirecting the session",
+                session.RemoteEndpoint, character.Id, character.MapId);
+            return;
+        }
+
         var guid = ObjectGuid.Player((uint)character.Id);
         if (!await WaitUntilOfflineAsync(session.World, guid).ConfigureAwait(false))
         {

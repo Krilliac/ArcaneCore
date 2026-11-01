@@ -231,6 +231,28 @@ public sealed class GatewayServer : BackgroundService
         return best;
     }
 
+    /// <summary>
+    /// The registered link of the worker that owns the map copy, resolved through the <see cref="Routes"/> table (login redirect). Null when no ready
+    /// worker owns it or its link is not registered at this moment.
+    /// </summary>
+    internal GatewaySessionLinkClient? FindLinkForMap(uint mapId, uint instanceId)
+    {
+        if (!_routes.TryResolve(mapId, instanceId, out string nodeId))
+        {
+            return null;
+        }
+
+        foreach (GatewayWorkerLink worker in _workers)
+        {
+            if (string.Equals(worker.NodeId, nodeId, StringComparison.Ordinal))
+            {
+                return worker.Link;
+            }
+        }
+
+        return null;
+    }
+
     private IPEndPoint ConfiguredWorker()
     {
         GatewayWorkerEntry entry = _options.Value.EffectiveWorkers()[0];

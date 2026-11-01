@@ -51,9 +51,18 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
 
     /// <summary>The gateway clock reading when the frame being dispatched was fully read. Written and read by the read loop only.</summary>
     private uint _packetReceivedMs;
-    private GatewaySessionLinkClient? _link;
+    private volatile GatewaySessionLinkClient? _link;
     private long _generation;
     private int _accountId;
+    private string _accountName = string.Empty;
+    private uint _build;
+
+    // Login redirect: the CMSG_PLAYER_LOGIN forwarded last (kept to re-send to the map owner), whether this connection was moved already (once only:
+    // a second redirect would be a routing loop), and the client packets held while the move is in flight (non-null exactly then; guarded by _redirectGate).
+    private LoginPacket? _loginPacket;
+    private int _redirected;
+    private readonly Lock _redirectGate = new();
+    private List<HeldPacket>? _redirectHeld;
     private PendingAuth? _pending;
     private string? _kickReason;
     private GatewayWardenSession? _warden;
@@ -65,6 +74,15 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         Forwarding,
         Closed,
     }
+
+    /// <summary>Most client packets held while a login redirect is in flight; a client past it is disconnected.</summary>
+    private const int MaxHeldPackets = 256;
+
+    private static readonly TimeSpan RedirectTimeout = TimeSpan.FromSeconds(30);
+
+    private sealed record LoginPacket(byte[] Payload, uint ReceivedMs);
+
+    private sealed record HeldPacket(WorldOpcode Opcode, byte[] Payload, uint ReceivedMs);
 
     private sealed record PendingAuth(IClientProtocol Protocol, byte[] SessionKey, byte[] AddonBlock, string Account, uint Build, AccountSecurity Security);
 
@@ -248,6 +266,26 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
 
     private bool Forward(WorldOpcode opcode, byte[] payload)
     {
+        if (opcode == WorldOpcode.CmsgPlayerLogin && payload.Length <= GatewaySessionWire.MaxAdoptPacketBytes)
+        {
+            Volatile.Write(ref _loginPacket, new LoginPacket(payload, _packetReceivedMs));
+        }
+
+        lock (_redirectGate)
+        {
+            if (_redirectHeld is { } held)
+            {
+                if (held.Count >= MaxHeldPackets)
+                {
+                    _logger.LogWarning("[{Endpoint}] more than {Limit} packets while the login redirect ran; disconnecting", RemoteEndpoint, MaxHeldPackets);
+                    return false;
+                }
+
+                held.Add(new HeldPacket(opcode, payload, _packetReceivedMs));
+                return true;
+            }
+        }
+
         if (_link is { } link && link.SendClientPacket(SessionGeneration, opcode, payload, _packetReceivedMs))
         {
             GatewayMeters.CountForwarded(_server.Options.NodeId, "to_worker", payload.Length);
@@ -351,6 +389,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         }
 
         _link = link;
+        _accountName = request.Account;
+        _build = request.Build;
         _pending = new PendingAuth(protocol, stored.SessionKey, request.AddonBlock.ToArray(), request.Account, request.Build, stored.Security);
         _state = ConnectionState.Authenticating;
         // The link takes the generation and queues the open under one lock: concurrent logins reach the worker in generation order
@@ -382,6 +422,12 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     /// <summary>The worker accepted: engage the cipher and answer the client, before the link delivers anything else of the session.</summary>
     void IGatewaySessionSink.OnOpened(GatewaySessionOpenReply reply)
     {
+        if (Volatile.Read(ref _redirected) != 0)
+        {
+            // The target worker adopted a redirected session: the client was answered and the cipher engaged at the first open.
+            return;
+        }
+
         PendingAuth pending = _pending ?? throw new InvalidOperationException("session opened without a pending authentication");
         lock (_sendLock)
         {
@@ -449,6 +495,123 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     {
         GatewayMeters.CountForwarded(_server.Options.NodeId, "to_client", payload.Length);
         Send(opcode, payload);
+    }
+
+    /// <summary>
+    /// The login worker found that another worker owns the saved map of the character the client asked for. Resolve that worker through the route table,
+    /// hold the client's packets and re-open the session there with the buffered login packet (<see cref="AdoptAsync"/>). False (the connection ends as a
+    /// worker close would end it) when no ready worker owns the map, it is the same worker, the connection was moved before, or no login packet was seen.
+    /// </summary>
+    bool IGatewaySessionSink.OnRedirect(GatewaySessionRedirect redirect)
+    {
+        GatewaySessionLinkClient? from = _link;
+        LoginPacket? login = Volatile.Read(ref _loginPacket);
+        GatewaySessionLinkClient? target = _server.FindLinkForMap(redirect.MapId, redirect.InstanceId);
+        if (from is null || login is null || target is null || ReferenceEquals(target, from) || redirect.SessionGeneration != SessionGeneration
+            || _state != ConnectionState.Forwarding || Interlocked.CompareExchange(ref _redirected, 1, 0) != 0)
+        {
+            _logger.LogInformation("[{Endpoint}] no worker to redirect to for map {Map} (instance {Instance}); closing", RemoteEndpoint, redirect.MapId, redirect.InstanceId);
+            return false;
+        }
+
+        lock (_redirectGate)
+        {
+            _redirectHeld = [];
+        }
+
+        _ = Task.Run(() => AdoptAsync(from, target, redirect, login), CancellationToken.None);
+        return true;
+    }
+
+    /// <summary>
+    /// Re-open the session on the map owner and close it on the login worker. The new generation comes from the target link's own allocator lock (opens leave
+    /// in generation order), the account, name and build are the ones authenticated here. Only after the target accepted does the login worker's session
+    /// close and the held packets follow the login packet; the fenced ownership claim happens on the target only. A refusal, a timeout or a lost link ends the connection.
+    /// </summary>
+    private async Task AdoptAsync(GatewaySessionLinkClient from, GatewaySessionLinkClient target, GatewaySessionRedirect redirect, LoginPacket login)
+    {
+        long newGeneration = 0;
+        try
+        {
+            using var timeout = new CancellationTokenSource(RedirectTimeout);
+            GatewaySessionOpenReply reply = await target.AdoptAsync(
+                _server.NextGeneration,
+                generation =>
+                {
+                    newGeneration = generation;
+                    return new GatewaySessionAdoptRequest(
+                        new GatewaySessionOpenRequest(generation, AccountId, _accountName, _build, RemoteEndpoint),
+                        (uint)WorldOpcode.CmsgPlayerLogin, login.Payload, login.ReceivedMs);
+                },
+                this,
+                timeout.Token).ConfigureAwait(false);
+            GatewayMeters.CountSessionOpen(_server.Options.NodeId, reply.Accepted ? "redirected" : "redirect_refused");
+            if (!reply.Accepted)
+            {
+                _logger.LogInformation("[{Endpoint}] the map owner refused the redirected session: {Code} ({Reason})", RemoteEndpoint, reply.RefusalCode, reply.Reason);
+                EndRedirect(from, redirect.SessionGeneration, "the map owner refused the redirected session");
+                return;
+            }
+
+            from.CloseSession(redirect.SessionGeneration, ClusterSessionDetachReason.Transferred);
+            bool delivered = true;
+            lock (_redirectGate)
+            {
+                _link = target;
+                Interlocked.Exchange(ref _generation, newGeneration);
+                if (_redirectHeld is { } held)
+                {
+                    foreach (HeldPacket packet in held)
+                    {
+                        if (!target.SendClientPacket(newGeneration, packet.Opcode, packet.Payload, packet.ReceivedMs))
+                        {
+                            delivered = false;
+                            break;
+                        }
+                    }
+
+                    _redirectHeld = null;
+                }
+            }
+
+            _logger.LogInformation("[{Endpoint}] session moved to the map owner for map {Map} (generation {Generation})", RemoteEndpoint, redirect.MapId, newGeneration);
+            if (!delivered)
+            {
+                Kick("the worker link is gone");
+            }
+
+            if (_state == ConnectionState.Closed)
+            {
+                // The client left while the session moved: Close ran against the old link and saw the old generation.
+                long left = Interlocked.Exchange(ref _generation, 0);
+                if (left != 0)
+                {
+                    target.CloseSession(left, ClusterSessionDetachReason.ClientDisconnect);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (ex is not (OperationCanceledException or InvalidOperationException))
+            {
+                FaultLedger.Shared.Record("cluster.gateway-client", ex);
+            }
+
+            _logger.LogWarning("[{Endpoint}] login redirect failed ({Error}); closing", RemoteEndpoint, ex.Message);
+            EndRedirect(from, redirect.SessionGeneration, "the login redirect failed");
+        }
+    }
+
+    /// <summary>A redirect that did not complete: the login worker's session closes, the held packets are dropped and the client is disconnected.</summary>
+    private void EndRedirect(GatewaySessionLinkClient from, long oldGeneration, string reason)
+    {
+        from.CloseSession(oldGeneration, ClusterSessionDetachReason.Transferred);
+        lock (_redirectGate)
+        {
+            _redirectHeld = null;
+        }
+
+        Kick(reason);
     }
 
     void IGatewaySessionSink.OnClosed(ClusterSessionDetachReason reason)

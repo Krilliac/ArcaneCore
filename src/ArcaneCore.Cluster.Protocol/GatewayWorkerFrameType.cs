@@ -31,4 +31,12 @@ internal enum GatewayWorkerFrameType : byte
     // The gateway's monotonic clock reading, sent once right after admission (gateway to worker only): the worker derives the clock offset
     // it uses to translate the receive time stamped on every SessionClientPacket (docs/areas/anticheat.md).
     LinkClock = 20,
+
+    // Login redirect (worker to gateway): the login worker found the character's saved map on another worker and asks the gateway to
+    // move the session there. Sent before any world state exists; the gateway answers with SessionAdopt on the owning worker's link.
+    SessionRedirect = 21,
+
+    // Login redirect (gateway to worker): opens a session on the map owner with the generation, the authenticated account and the
+    // buffered CMSG_PLAYER_LOGIN. Answered with SessionOpenReply, like SessionOpen.
+    SessionAdopt = 22,
 }

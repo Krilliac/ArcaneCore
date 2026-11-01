@@ -19,6 +19,12 @@ public interface IRemoteSessionOutput
 {
     /// <summary>Queue one server packet for the gateway. False when the link is gone; the session then closes.</summary>
     bool TrySend(WorldOpcode opcode, ReadOnlySpan<byte> payload);
+
+    /// <summary>
+    /// Ask the gateway to move the session to the worker that owns the map copy (login redirect). The gateway answers by opening the session
+    /// on that worker and closing this one; the session does nothing further until then. False when the output cannot redirect (the default) or the link is gone.
+    /// </summary>
+    bool TryRedirect(uint mapId, uint instanceId) => false;
 }
 
 /// <summary>
@@ -175,6 +181,19 @@ public sealed partial class WorldSession
 
         _logger.LogWarning("[{Endpoint}] gateway inbound backlog over its bound; disconnecting", RemoteEndpoint);
         Kick("gateway inbound backlog over its bound");
+    }
+
+    /// <summary>
+    /// Login redirect: ask the gateway to move this session to the worker that owns <paramref name="mapId"/> (the saved map of the character the
+    /// client asked for). Nothing of the character exists here yet. False when the session is not gateway-backed, is closed, or the output cannot redirect;
+    /// the caller then keeps its own refusal path. Called from the session task.
+    /// </summary>
+    internal bool TryRedirectRemote(uint mapId, uint instanceId)
+    {
+        lock (_sendLock)
+        {
+            return _state != SessionState.Closed && _remoteOutput is { } output && output.TryRedirect(mapId, instanceId);
+        }
     }
 
     /// <summary>The gateway closed the client side (disconnect, superseded, link lost): stop reading and close.</summary>
