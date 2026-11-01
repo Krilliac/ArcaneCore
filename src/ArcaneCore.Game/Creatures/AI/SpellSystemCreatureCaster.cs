@@ -141,6 +141,34 @@ public sealed class SpellSystemCreatureCaster : ICreatureSpellCaster, ICreatureA
             ? CreatureCastResult.Ok : CreatureCastResult.Failed;
     }
 
+    /// <inheritdoc/>
+    public bool CanCastMainSpell(Creature caster, uint spellId)
+    {
+        ArgumentNullException.ThrowIfNull(caster);
+        SpellSystem spells = Spells;
+        if (spells.Store.Get(spellId) is not { } spell)
+        {
+            return true;
+        }
+
+        // cmangos IsMainSpellPrevented (UnitAI.cpp:1115-1124): not ready, or silenced/pacified for the spell's prevention type.
+        if (!spells.IsSpellReadyIgnoringGlobalCooldown(caster, spell))
+        {
+            return false;
+        }
+
+        UnitFlags flags = caster.UnitFlags;
+        if ((spell.PreventionType == SpellConstants.PreventionTypeSilence && (flags & UnitFlags.Silenced) != 0)
+            || (spell.PreventionType == SpellConstants.PreventionTypePacify && (flags & UnitFlags.Pacified) != 0))
+        {
+            return false;
+        }
+
+        // cmangos IsEligibleForDistancing (UnitAI.cpp:1126-1132): a mana user needs more than twice the main spell's cost.
+        return caster.PowerType != PowerType.Mana
+            || (ulong)SpellSystem.CalculatePowerCost(caster, spell) * 2 < SpellSystem.GetPower(caster, PowerType.Mana);
+    }
+
     public bool IsCasting(Creature caster)
         => Spells.GetState(caster.Guid) is { Unit: var unit, CurrentCast: { State: SpellCastState.Preparing or SpellCastState.Casting } }
             && ReferenceEquals(unit, caster);

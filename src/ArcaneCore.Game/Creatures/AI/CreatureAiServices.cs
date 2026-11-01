@@ -139,6 +139,12 @@ public interface ICreatureSpellCaster
     /// </summary>
     CreatureCastResult CastByUnit(Unit caster, uint spellId, Unit? target, bool triggered) => CreatureCastResult.NoSpellSystem;
 
+    /// <summary>
+    /// cmangos UnitAI::IsEligibleForDistancing and !IsMainSpellPrevented for <paramref name="spellId"/> (UnitAI.cpp:1126-1147): the spell is ready, the
+    /// caster is not silenced or pacified for it and a mana user has more than twice its cost. True by default.
+    /// </summary>
+    bool CanCastMainSpell(Creature caster, uint spellId) => true;
+
     bool IsCasting(Creature caster);
 
     bool HasAura(Unit unit, uint spellId);

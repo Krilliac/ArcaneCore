@@ -51,6 +51,9 @@ public sealed class EventAiRangedTests
     {
         public CreatureCastResult Result { get; set; } = result;
 
+        /// <summary>Whether the main spell is usable now (cmangos IsEligibleForDistancing and not IsMainSpellPrevented): the answer for the return to ranged mode.</summary>
+        public bool MainSpellUsable { get; set; } = true;
+
         public List<uint> Casts { get; } = [];
 
         public event Action<Unit, Unit, SpellInfo>? SpellHit
@@ -64,6 +67,8 @@ public sealed class EventAiRangedTests
             Casts.Add(spellId);
             return Result;
         }
+
+        public bool CanCastMainSpell(Creature caster, uint spellId) => MainSpellUsable;
 
         public bool IsCasting(Creature caster) => false;
 
@@ -115,12 +120,30 @@ public sealed class EventAiRangedTests
         using WorldRuntime world = runtime;
         Assert.True(ai.IsMainSpell(MainSpellId));
 
+        // Out of mana or silenced: the main spell stays unusable, so it is not eligible to return to ranged mode (TooClose leaves it usable).
+        caster.MainSpellUsable = result == CreatureCastResult.TooClose;
+
         ai.OnUpdate(600);
 
         Assert.Contains(MainSpellId, caster.Casts);
         Assert.False(ai.CurrentRangedMode);
         Assert.Equal(0f, ai.AttackDistance); // melee reach: it chases to melee range
         Assert.True(ai.RangedMode);
+
+        if (type is 2 or 4 && result != CreatureCastResult.TooClose)
+        {
+            // The victim is still 45 yd out, past reach + 3, but the unusable main spell keeps the creature closing in on every later update.
+            ai.OnUpdate(100);
+            ai.OnUpdate(100);
+            Assert.False(ai.CurrentRangedMode);
+            Assert.Equal(0f, ai.AttackDistance);
+
+            // cmangos returns to ranged mode once the caster is eligible again (mana back, silence gone).
+            caster.MainSpellUsable = true;
+            ai.OnUpdate(100);
+            Assert.True(ai.CurrentRangedMode);
+            Assert.Equal(20f, ai.AttackDistance);
+        }
     }
 
     [Theory]

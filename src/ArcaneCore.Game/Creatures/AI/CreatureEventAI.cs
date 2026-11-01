@@ -48,6 +48,7 @@ public class CreatureEventAI : AggressorAI
     private float _chaseDistance;
     private int _rangedModeType;
     private readonly HashSet<uint> _mainSpells = [];
+    private uint _mainSpellId;
 
     /// <summary>
     /// EventAI on the live handler registry, <see cref="EventAiRegistry.Default"/>: the registry object is the swappable holder (its table is
@@ -148,6 +149,7 @@ public class CreatureEventAI : AggressorAI
     private void RebuildMainSpells()
     {
         _mainSpells.Clear();
+        _mainSpellId = 0;
         foreach (EventAiHolder holder in _engine.Holders)
         {
             foreach (CreatureAiAction action in holder.Event.Actions)
@@ -155,6 +157,10 @@ public class CreatureEventAI : AggressorAI
                 if (action.Type == (byte)EventAiActionType.Cast && (action.Param3 & CastMainSpell) != 0 && action.Param1 > 0)
                 {
                     _mainSpells.Add((uint)action.Param1);
+                    if (_mainSpellId == 0)
+                    {
+                        _mainSpellId = (uint)action.Param1; // cmangos AddMainSpell keeps the first as m_mainSpellId (UnitAI.cpp:962)
+                    }
                 }
             }
         }
@@ -212,6 +218,13 @@ public class CreatureEventAI : AggressorAI
         return true;
     }
 
+    /// <summary>
+    /// cmangos <c>IsEligibleForDistancing() && !IsMainSpellPrevented(m_mainSpellInfo)</c> (UnitAI.cpp:1100-1104, 1126-1147): the first main spell is
+    /// ready, the caster is not silenced or pacified for it and, for a mana user, has more than twice its cost. True when the creature has no
+    /// main spell or no spell caster is attached (nothing to gate on).
+    /// </summary>
+    private bool MainSpellUsable() => _mainSpellId == 0 || (System?.CanCastMainSpell(Me, _mainSpellId) ?? true);
+
     /// <summary>cmangos UnitAI::SetCurrentRangedMode for the proximity and distancer types: ranged back on chases at the chase distance, off closes in.</summary>
     private void SetCurrentRangedMode(bool state)
     {
@@ -223,7 +236,7 @@ public class CreatureEventAI : AggressorAI
     /// <summary>
     /// cmangos UnitAI::UpdateAI for TYPE_PROXIMITY and TYPE_DISTANCER (UnitAI.cpp:1096-1110): in ranged mode a victim inside melee reach ends
     /// it; out of ranged mode it returns once the victim is more than 3 yd past melee reach. Not delivered: the distancing step away from an
-    /// immobilised victim (DistanceYourself) and the main-spell-prevented conditions.
+    /// immobilised victim (DistanceYourself). The return needs a usable main spell (<see cref="MainSpellUsable"/>), so an out-of-mana or silenced creature keeps closing to melee.
     /// </summary>
     private void UpdateRangedModeByReach()
     {
@@ -243,7 +256,7 @@ public class CreatureEventAI : AggressorAI
         }
 
         // cmangos CanReachWithMeleeAttack(victim, 3.f): the 3 yd is added to the reach before the minimum (ATTACK_DISTANCE) clamp.
-        if (!MapCombat.CanReachWithMeleeAutoAttack(Me, victim, ReturnThreshold))
+        if (!MapCombat.CanReachWithMeleeAutoAttack(Me, victim, ReturnThreshold) && MainSpellUsable())
         {
             SetCurrentRangedMode(true);
         }
