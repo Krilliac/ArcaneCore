@@ -161,6 +161,8 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         if (ownedMaps is not null)
             throw new ArgumentException("the world ownership scope owns every map", nameof(ownedMaps));
         await using var tx = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        // The gating UPDATE must stay the first statement of the transaction: MariaDB REPEATABLE READ takes its snapshot at the first read,
+        // so any read before the row lock could see a stale worker row.
         int changed = await db.Set<CharacterOwnershipRow>()
             .Where(r => r.Scope == scope && !r.Active && r.Epoch < long.MaxValue && r.WriteSequence < long.MaxValue)
             .ExecuteUpdateAsync(setters => setters

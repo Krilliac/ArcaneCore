@@ -152,6 +152,7 @@ public sealed class CharacterOwnershipShardTests : IAsyncLifetime
     }
 
     [Theory]
+    [Trait("Category", "Timing")] // waits 1.5 s of wall time to prove the writer is blocked
     [MemberData(nameof(Providers))]
     public async Task TokenlessWrite_BlockedBehindAClaimsGate_IsRefusedWhenTheClaimCommits(DatabaseProvider provider)
     {
