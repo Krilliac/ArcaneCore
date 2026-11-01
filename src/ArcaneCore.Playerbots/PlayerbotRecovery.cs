@@ -549,9 +549,7 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
     internal bool PvpCampGaveUp { get; private set; }
 
     /// <summary>This battleground death runs back to the body instead of the spirit guide (inspection and tests).</summary>
-    internal bool BattlegroundBodyRun => _bgBodyRun;
-
-    private bool _bgBodyRun;
+    internal bool BattlegroundBodyRun { get; private set; }
 
     /// <summary>A battleground ghost takes the corpse run over the spirit guide only for a body this close (straight line) to it. ArcaneCore choice.</summary>
     internal const float BattlegroundBodyRunMaxYards = 250f;
