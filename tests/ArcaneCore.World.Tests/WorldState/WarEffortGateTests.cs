@@ -22,11 +22,13 @@ public sealed class WarEffortGateTests
         public Task<WarEffortSnapshot> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(State);
 
         public bool FailFirstPhaseWrite { get; set; }
+        public bool FailPhaseWrites { get; set; }
         public int PhaseAttempts { get; private set; }
         public int PhaseWrites { get; private set; }
 
         public Task SetPhaseAsync(WarEffortPhase phase, long phaseEndsAtUnix, CancellationToken cancellationToken = default)
         {
+            if (FailPhaseWrites) throw new InvalidOperationException("injected persistent phase write failure");
             if (FailFirstPhaseWrite && PhaseAttempts++ == 0) throw new InvalidOperationException("injected phase write failure");
             PhaseWrites++;
             State = State with { Phase = phase, PhaseEndsAtUnix = phaseEndsAtUnix };
@@ -157,6 +159,64 @@ public sealed class WarEffortGateTests
 
         Assert.Equal(1, rig.Store.PhaseWrites);
         Assert.Equal(WarEffortPhase.Gathering, rig.Store.State.Phase);
+    }
+
+    [Fact]
+    public async Task StopWritesAQueuedPhaseWhoseDeferredInFlightJobFailedAfterTheStopBegan()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        rig.Store.FailFirstPhaseWrite = true;
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.War.StoreOffload = work => Task.Run(async () =>
+        {
+            await gate.Task; // the store job is still in flight when shutdown starts
+            await work();
+        });
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false);
+        Assert.Equal(0, rig.Store.PhaseAttempts);
+
+        Task stop = rig.War.StopAsync(); // waits for the deferred job; the job then fails, and StopAsync must forget that phase and write it
+        gate.SetResult();
+        await stop.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, rig.Store.PhaseWrites);
+        Assert.Equal(WarEffortPhase.Gathering, rig.Store.State.Phase);
+    }
+
+    [Fact]
+    public async Task StopWritesAQueuedPhaseWhoseDeferredInFlightJobWasCancelled()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        var job = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        rig.War.StoreOffload = _ => job.Task; // the store job never runs: it is cancelled while in flight
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false);
+        Assert.Equal(0, rig.Store.PhaseWrites);
+
+        Task stop = rig.War.StopAsync();
+        job.SetCanceled();
+        await stop.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, rig.Store.PhaseWrites);
+        Assert.Equal(WarEffortPhase.Gathering, rig.Store.State.Phase);
+    }
+
+    [Fact]
+    public void APersistentPhaseWriteFailureDoesNotFreezeTheSnapshotAndTheNextRefreshRetriesIt()
+    {
+        using Rig rig = new(WarEffortSnapshot.Disabled);
+        rig.Store.FailPhaseWrites = true;
+        // The durable state moved on (a quest turn-in, a GM command) while the phase write keeps failing.
+        rig.Store.State = new WarEffortSnapshot(WarEffortPhase.Gong, 0, new long[WarEffortCatalog.ResourceCount]);
+
+        rig.War.OnEventChanged(WarEffortCatalog.GatheringEvent, active: true, resume: false);
+
+        Assert.Equal(0, rig.Store.PhaseWrites);
+        Assert.Equal(WarEffortPhase.Gong, rig.War.Snapshot.Phase); // the failed write still reloaded the durable state
+
+        rig.Store.FailPhaseWrites = false;
+        rig.World.RunTick(5_000); // the five-second refresh relaunches the kept phase write
+
+        Assert.Equal(1, rig.Store.PhaseWrites);
     }
 
     [Fact]

@@ -371,6 +371,11 @@ public sealed class SpellbookCache : ISpellbook, IAsyncDisposable
         await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
         if (scope.ServiceProvider.GetService<ICharacterSpellStore>() is not { } store)
         {
+            // Nothing can be written, but the failed set must not vanish silently: report it once, with the characters whose spellbook is lost.
+            _logger.LogFault("writequeue.spellbook-shutdown-no-store",
+                new InvalidOperationException("no ICharacterSpellStore could be resolved at shutdown"),
+                "Spellbook shutdown reconcile skipped, no store available; unwritten spellbooks of {Count} character(s): {CharacterIds}",
+                failed.Length, string.Join(',', failed));
             return;
         }
 
