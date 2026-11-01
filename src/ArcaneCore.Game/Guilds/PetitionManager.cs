@@ -691,7 +691,7 @@ public sealed class PetitionManager
             return false;
         }
 
-        if (!held || GetByCharter(itemGuid) is not { } petition || petition.OwnerId != offerer.Guid.Low)
+        if (!held || GetByCharter(itemGuid) is not { } petition)
         {
             return false;
         }

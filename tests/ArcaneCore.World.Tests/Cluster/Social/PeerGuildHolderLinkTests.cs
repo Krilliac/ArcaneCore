@@ -1,12 +1,14 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Guilds;
+using ArcaneCore.Game.Items;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Cluster.Social;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
@@ -367,36 +369,80 @@ public sealed class PeerGuildHolderLinkTests : IAsyncLifetime
         Assert.NotNull(alice);
     }
 
-    [Fact]
-    public async Task PetitionOffered_ToATargetOnAnotherWorker_ReachesIt_AndAGuildedTargetRefusesTheOfferer()
+    private static readonly ItemTemplateStore CharterTemplates = new(
+        [new ItemTemplate { Entry = PetitionConstants.CharterEntry, Class = 12, Name = "Guild Charter", DisplayId = 16161, Quality = 1, Flags = 0x2000, MaxCount = 1, Bonding = 1 }], []);
+
+    /// <summary>A real charter item in the player's bags bound to petition 1 (what a purchase leaves), made on the player's world thread. Returns its guid.</summary>
+    private static Task<ObjectGuid> GiveCharterAsync(Worker worker, Player player)
+        => OnWorldAsync(worker, () =>
+        {
+            player.Inventory.Templates = CharterTemplates;
+            player.Inventory.GuidAllocator = new ItemGuidAllocator(player.Guid.Low * 1000);
+            player.Inventory.Load([]);
+            var destination = new List<ItemPosCount>();
+            Assert.Equal(InventoryResult.Ok, player.Inventory.CanStoreNewItem(PetitionConstants.CharterEntry, 1, destination, out _));
+            Item charter = player.Inventory.StoreNewItem(destination, CharterTemplates.Find(PetitionConstants.CharterEntry)!, 1);
+            charter.SetUInt32(UpdateFields.ItemFieldEnchantment + (PetitionConstants.EnchantmentSlot * 3), 1);
+            return charter.Guid;
+        });
+
+    private async Task LoadPetitionAsync(ObjectGuid charter, int ownerId, params PetitionSignatureData[] signatures)
     {
-        (Player alice, RecordingSession aliceSession) = await JoinAsync(_a, AliceId, "Alice");
-        (Player bob, RecordingSession bobSession) = await JoinAsync(_b, BobId, "Bob");
-        (Player dave, RecordingSession daveSession) = await JoinAsync(_a, DaveId, "Dave");
-        ObjectGuid charter = ObjectGuid.Item(500);
-        var stored = new PetitionData(1, BobId, 500, GuildName, [new PetitionSignatureData(CarolId, 153)]);
+        var stored = new PetitionData(1, ownerId, (int)charter.Low, GuildName, signatures);
         foreach (Worker worker in new[] { _a, _b })
         {
             await OnWorldAsync(worker, () => worker.Context.Petitions.Load([stored]));
         }
+    }
 
-        // Bob's worker saw the charter in his bags (B = 1) and forwards the offer to Dave, who is on the holder's worker: the signature list reaches Dave's session there.
-        Assert.True(_b.Link.Forward(new GuildRequest(GuildRequestKind.PetitionOffer, bob.Guid, Item: charter.Value, A: dave.Guid.Low, B: 1), null));
-        await WaitUntilAsync(() => daveSession.Of(WorldOpcode.SmsgPetitionShowSignatures).Count == 1, "the signature list on the holder's worker");
-        byte[] expected = await OnWorldAsync(_a, () => PetitionPackets.BuildShowSignatures(charter, bob.Guid, 1, _a.Context.Petitions.Get(1)!.Signatures));
-        Assert.Equal(expected, Assert.Single(daveSession.Of(WorldOpcode.SmsgPetitionShowSignatures)));
+    [Fact]
+    public async Task PetitionOffer_FromAnotherWorker_GoesThroughTheHandler_ReachesTheTargetOnTheHolder_AndOnlyWithACharterInTheBags()
+    {
+        (Player bob, RecordingSession bobSession) = await JoinAsync(_b, BobId, "Bob");
+        (_, RecordingSession daveSession) = await JoinAsync(_a, DaveId, "Dave");
+        ObjectGuid charter = await GiveCharterAsync(_b, bob);
+        await LoadPetitionAsync(charter, BobId, new PetitionSignatureData(CarolId, 153));
 
-        // An offer the offerer's worker did not see a charter for is not sent.
-        daveSession.Clear();
-        _b.Link.Forward(new GuildRequest(GuildRequestKind.PetitionOffer, bob.Guid, Item: charter.Value, A: dave.Guid.Low, B: 0), null);
+        // Bob offers a charter guid that is not in his bags: his worker marks it unheld and the holder sends nothing.
+        await OnWorldAsync(_b, () => _b.Context.Petitions.Offer(bob, ObjectGuid.Item(999_999), ObjectGuid.Player(DaveId)));
         await _b.Link.FlushAsync();
 
-        // A guilded target refuses: the offerer is told on his own worker, by his own name (vmangos reports the offerer's name for an offer).
+        // The real charter: Offer sees Dave is not on this worker, forwards, and the holder sends the list to Dave's session there.
+        await OnWorldAsync(_b, () => _b.Context.Petitions.Offer(bob, charter, ObjectGuid.Player(DaveId)));
+        await WaitUntilAsync(() => daveSession.Of(WorldOpcode.SmsgPetitionShowSignatures).Count >= 1, "the signature list on the holder's worker");
+        await _b.Link.FlushAsync();
+        byte[] expected = await OnWorldAsync(_a, () => PetitionPackets.BuildShowSignatures(charter, bob.Guid, 1, _a.Context.Petitions.Get(1)!.Signatures));
+        Assert.Equal(expected, Assert.Single(daveSession.Of(WorldOpcode.SmsgPetitionShowSignatures)));
+        Assert.Empty(bobSession.Of(WorldOpcode.SmsgPetitionShowSignatures));
+    }
+
+    [Fact]
+    public async Task PetitionOffer_FromTheHolder_ToATargetOnAnotherWorker_ArrivesThroughTheDrain()
+    {
+        (Player alice, _) = await JoinAsync(_a, AliceId, "Alice");
+        (_, RecordingSession bobSession) = await JoinAsync(_b, BobId, "Bob");
+        ObjectGuid charter = await GiveCharterAsync(_a, alice);
+        await LoadPetitionAsync(charter, AliceId, new PetitionSignatureData(CarolId, 153));
+
+        await OnWorldAsync(_a, () => _a.Context.Petitions.Offer(alice, charter, ObjectGuid.Player(BobId)));
+        await WaitUntilAsync(() => bobSession.Of(WorldOpcode.SmsgPetitionShowSignatures).Count == 1, "the signature list on worker B");
+        byte[] expected = await OnWorldAsync(_a, () => PetitionPackets.BuildShowSignatures(charter, alice.Guid, 1, _a.Context.Petitions.Get(1)!.Signatures));
+        Assert.Equal(expected, Assert.Single(bobSession.Of(WorldOpcode.SmsgPetitionShowSignatures)));
+    }
+
+    [Fact]
+    public async Task PetitionOffer_ToAGuildedTargetOnAnotherWorker_RefusesTheOffererByHisOwnName()
+    {
+        (Player alice, RecordingSession aliceSession) = await JoinAsync(_a, AliceId, "Alice");
+        (Player bob, RecordingSession bobSession) = await JoinAsync(_b, BobId, "Bob");
+        ObjectGuid charter = await GiveCharterAsync(_b, bob);
+        await LoadPetitionAsync(charter, BobId);
         await FoundAsync();
-        _b.Link.Forward(new GuildRequest(GuildRequestKind.PetitionOffer, bob.Guid, Item: charter.Value, A: alice.Guid.Low, B: 1), null);
+
+        // Alice leads a guild on the holder; Bob offers her a charter from worker B: the refusal names the offerer and is answered on his worker.
+        await OnWorldAsync(_b, () => _b.Context.Petitions.Offer(bob, charter, alice.Guid));
         byte[] refusal = GuildPackets.BuildCommandResult(GuildCommand.Invite, "Bob", GuildCommandError.AlreadyInGuildS);
         await WaitUntilAsync(() => Received(bobSession, WorldOpcode.SmsgGuildCommandResult, refusal), "the refusal on the offerer's worker");
-        Assert.Empty(daveSession.Of(WorldOpcode.SmsgPetitionShowSignatures));
         Assert.Empty(aliceSession.Of(WorldOpcode.SmsgPetitionShowSignatures));
     }
 
