@@ -289,6 +289,29 @@ public sealed class DbCopyTests : IAsyncLifetime
         Assert.Equal(DbUpgradeExitCodes.Ok, (await RunCopyAsync(source, "characters", target)).Code);
     }
 
+    [Fact]
+    public async Task Copy_OfCharacters_WithAnInvalidWorkerScope_IsRefusedWithoutThrowing_AndAFreeShardCreatesNoLockFile()
+    {
+        DatabaseConnectionOptions source = await SeededSourceAsync("characters");
+        DatabaseConnectionOptions target = await _databases.CreateAsync(DatabaseProvider.Sqlite);
+        await SetOwnershipAsync(source, "UPDATE \"character_ownership\" SET \"active\" = 0");
+
+        // A scope whose shard id is not usable cannot be probed: the preflight refuses it instead of throwing.
+        await SetOwnershipAsync(source, "UPDATE \"character_ownership\" SET \"scope\" = 'worker:bad id' WHERE \"scope\" IN (SELECT \"scope\" FROM \"character_ownership\" LIMIT 1)");
+        (int invalid, _, string invalidError) = await RunCopyAsync(source, "characters", target);
+        Assert.True(invalid == DbUpgradeExitCodes.Refused, $"exit {invalid}\n{invalidError}");
+        Assert.Contains("not a valid worker shard id", invalidError, StringComparison.Ordinal);
+        Assert.False(File.Exists(UpgradeTestSupport.SqlitePath(target)));
+
+        // A valid shard no worker holds: the preflight finds it free without leaving a shard sidecar next to the source.
+        await SetOwnershipAsync(source, "UPDATE \"character_ownership\" SET \"scope\" = 'worker:s2' WHERE \"scope\" = 'worker:bad id'");
+        string shardLock = CharacterDatabaseWriterLock.ShardLockPathFor(source, "s2")!;
+        Assert.False(File.Exists(shardLock));
+        (int free, _, string freeError) = await RunCopyAsync(source, "characters", target);
+        Assert.True(free == DbUpgradeExitCodes.Ok, $"exit {free}\n{freeError}");
+        Assert.False(File.Exists(shardLock));
+    }
+
     private static async Task SetOwnershipAsync(DatabaseConnectionOptions sqlite, string sql)
     {
         await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(sqlite.ConnectionString + ";Pooling=False");

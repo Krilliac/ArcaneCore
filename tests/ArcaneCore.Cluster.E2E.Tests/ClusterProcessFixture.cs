@@ -43,8 +43,8 @@ public sealed class PostgresClusterFactAttribute : FactAttribute
 public sealed class ClusterOptions
 {
     /// <summary>
-    /// Fenced world workers to launch. One is the supported shape today: the characters writer lock is one advisory lock per realm
-    /// (s1-per-worker-writer-lock), so a second concurrent worker is refused. Greater than one needs <see cref="WorkerMaps"/>.
+    /// Fenced world workers to launch (default 1). More than one runs with <c>Cluster:Fencing:Scope=Worker</c>: each worker takes its own shard advisory lock and ownership
+    /// row, so they write the one characters database concurrently, and needs <see cref="WorkerMaps"/>.
     /// </summary>
     public int WorkerCount { get; init; } = 1;
 

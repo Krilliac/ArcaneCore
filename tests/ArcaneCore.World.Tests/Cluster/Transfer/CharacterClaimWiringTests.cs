@@ -333,7 +333,7 @@ public sealed class CharacterClaimWiringTests
 
         (_, long older) = await claims.ClaimWithTicketAsync(40, a);
         (_, long duplicate) = await claims.ClaimWithTicketAsync(40, a);
-        claims.AbandonTicket(40, duplicate, a, () => true); // the older login is still live: its logout owns the release
+        claims.AbandonTicket(40, duplicate, a, () => false); // nobody is online, so only the older live ticket keeps the claim: its logout owns the release
         await claims.DrainAsync();
         Assert.Equal(a, rig.Store.GetActiveOwnership(40));
 
@@ -347,6 +347,61 @@ public sealed class CharacterClaimWiringTests
         claims.AbandonTicket(41, second, a, () => true); // no live ticket is left but the character is online: the claim stays
         await claims.DrainAsync();
         Assert.Equal(a, rig.Store.GetActiveOwnership(41));
+    }
+
+    [Fact]
+    public async Task ATicketlessRelease_RefusesToDeleteTheClaim_WhileALoginTicketIsLive()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var services = new ServiceCollection();
+        services.AddSingleton(rig.Store);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        (_, long live) = await claims.ClaimWithTicketAsync(52, a);
+        claims.ScheduleRelease(52, a, () => false); // ticket zero: what an abandoned login's release carries
+        await claims.DrainAsync();
+        Assert.Equal(a, rig.Store.GetActiveOwnership(52)); // the live ticket keeps the claim
+
+        claims.ScheduleRelease(52, a, () => false, live);
+        await claims.DrainAsync();
+        Assert.Null(rig.Store.GetActiveOwnership(52));
+    }
+
+    [Fact]
+    public async Task RegressionPin_AnAbandonedLoginsRelease_NeverDeletesTheClaimOfALoginThatClaimsRightAfter()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        var services = new ServiceCollection();
+        services.AddSingleton(rig.Store);
+        await using ServiceProvider provider = services.BuildServiceProvider();
+        using var claims = new CharacterClaimService(provider);
+
+        (_, long abandoned) = await claims.ClaimWithTicketAsync(53, a);
+
+        // Hold the character's release gate so the scheduled release cannot run before the new login's ticket exists (the window of the race).
+        System.Reflection.FieldInfo gates = typeof(CharacterClaimService).GetField("_gates", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            ?? throw new InvalidOperationException("CharacterClaimService._gates was renamed; update this test.");
+        SemaphoreSlim gate = ((SemaphoreSlim[])gates.GetValue(claims)!)[53 % 32];
+        await gate.WaitAsync();
+        try
+        {
+            claims.AbandonTicket(53, abandoned, a, () => false); // the release marker is registered with the "no live ticket" observation
+            long next = claims.IssueTicketForReceivedClaim(53, a); // a new login's ticket lands right after: it supersedes the pending release
+            Assert.NotEqual(0L, next);
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        await claims.DrainAsync();
+
+        Assert.Equal(a, rig.Store.GetActiveOwnership(53));
     }
 
     [Fact]

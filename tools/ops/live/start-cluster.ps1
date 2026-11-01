@@ -305,7 +305,8 @@ if ($Gateway) {
 if ($split) {
     $heartbeatDirectory = Split-Path -Parent $HeartbeatPath
     $order = 1
-    # The lease holder starts first so its schema DDL is done before the validate-only worlds check the schema.
+    # The lease holder starts first, and the supervisor (Cluster:Supervisor:StartGroupReadySeconds, set below) waits for its first heartbeat before it launches the next start-order group,
+    # so its schema DDL is done before the validate-only worlds check the schema.
     foreach ($world in @($splitWorlds | Where-Object { $_.Slug -eq $LeaseHolder }) + @($splitWorlds | Where-Object { $_.Slug -ne $LeaseHolder })) {
         # Fenced with its own OwnerNode and NodeId (the supervisor check needs both distinct); the same text for both.
         $heartbeatFile = if ($world.Slug -eq 'EK') { $HeartbeatPath } else { Join-Path $heartbeatDirectory "world-$($world.Slug).heartbeat" }
@@ -357,6 +358,8 @@ foreach ($child in $children.Values) {
     if ($child.Capture) { $clusterEnvironment[$prefix + 'HangCapture'] = $HangCapture }
     if ($child.Maps) { $clusterEnvironment[$prefix + 'Maps'] = $child.Maps }
 }
+# Split: each start-order group waits (up to 10 minutes) for the previous group's first heartbeat; a silent child only delays the start by that long.
+if ($split) { $clusterEnvironment['Cluster__Supervisor__StartGroupReadySeconds'] = '600' }
 if ($HangCapture -ne 'None') {
     $clusterEnvironment['Cluster__Supervisor__HangCaptureDirectory'] = $captureDirectory
     $clusterEnvironment['Cluster__Supervisor__HangCaptureTimeoutSeconds'] = [string]$HangCaptureTimeoutSeconds

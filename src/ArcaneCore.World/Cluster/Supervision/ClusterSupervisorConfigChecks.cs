@@ -1,5 +1,6 @@
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.World.Cluster.Gateway;
+using ArcaneCore.World.Clustering;
 using Microsoft.Extensions.Configuration;
 
 namespace ArcaneCore.World.Cluster.Supervision;
@@ -115,7 +116,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
 
                 // Worker fencing scope: the durable scope and the shard advisory lock are named after the shard, compared without regard to case, so two shard ids that differ only in case are one shard.
                 string scopeText = args.GetValueOrDefault("Cluster:Fencing:Scope") ?? configuration["Cluster:Fencing:Scope"] ?? string.Empty;
-                if (string.Equals(scopeText, "Worker", StringComparison.OrdinalIgnoreCase))
+                if (Enum.TryParse(scopeText, ignoreCase: true, out CharacterFencingScope scopeValue) && Enum.IsDefined(scopeValue) && scopeValue == CharacterFencingScope.Worker) // names and numbers, as the options binder reads them
                 {
                     string shardText = args.GetValueOrDefault("Cluster:Fencing:Shard") ?? configuration["Cluster:Fencing:Shard"] ?? string.Empty;
                     string shard = (string.IsNullOrWhiteSpace(shardText) ? nodeId : shardText).Trim();

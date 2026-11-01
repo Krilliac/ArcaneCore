@@ -66,11 +66,10 @@ public sealed class ClusterSupervisorHostedService : IHostedService
         }
 
         _supervisor.BelowMinimum += OnBelowMinimum;
-        foreach (string name in plan.Admitted)
-        {
-            SupervisedProcessSnapshot snapshot = await _supervisor.StartProcessAsync(name, cancellationToken).ConfigureAwait(false);
-            _logger.LogInformation("Supervisor started {Process} (role {Role}, pid {ProcessId})", snapshot.Name, snapshot.Role, snapshot.ProcessId);
-        }
+        await _supervisor.StartInGroupsAsync(
+            plan.Admitted,
+            snapshot => _logger.LogInformation("Supervisor started {Process} (role {Role}, pid {ProcessId})", snapshot.Name, snapshot.Role, snapshot.ProcessId),
+            cancellationToken).ConfigureAwait(false);
 
         _supervisor.BeginMinimumWatch(); // an exit during the launches above must not stop the supervisor half-started
     }
