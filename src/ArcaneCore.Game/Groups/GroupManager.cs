@@ -22,6 +22,10 @@ public sealed partial class GroupManager(SocialContext context)
     private readonly Dictionary<ObjectGuid, Group> _memberOf = [];
     private readonly Dictionary<ObjectGuid, Group> _invitedTo = [];
     private readonly Dictionary<ObjectGuid, GroupMemberStatsSnapshot> _sentStats = [];
+    // The second buffer of each member's double-buffered snapshot: refilled in place each stats pass, then swapped with the sent one.
+    private readonly Dictionary<ObjectGuid, GroupMemberStatsSnapshot> _spareStats = [];
+    private readonly HashSet<Group> _leaderPassSeen = [];
+    private readonly List<Group> _leaderPassGroups = [];
     private readonly HashSet<ObjectGuid> _pendingPetName = [];
     private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingPetAuras = [];
     private readonly Dictionary<ObjectGuid, (uint Positive, ushort Negative)> _pendingAuras = [];
@@ -784,6 +788,7 @@ public sealed partial class GroupManager(SocialContext context)
         _pendingPetAuras.Remove(player.Guid);
         _pendingAuras.Remove(player.Guid);
         _sentStats.Remove(player.Guid);
+        _spareStats.Remove(player.Guid);
         if (GetGroup(player.Guid) is { } group)
         {
             if (group.IsLeader(player.Guid))
@@ -809,10 +814,22 @@ public sealed partial class GroupManager(SocialContext context)
                 continue;
             }
 
-            GroupMemberStatsSnapshot now = GroupMemberStatsSnapshot.Capture(player);
+            // Double buffer: fill the spare in place, diff against the sent one, then swap. SendStatsOutOfRange builds its
+            // packet from both and keeps neither, so the next pass may overwrite the buffer that becomes the spare.
+            if (!_spareStats.Remove(guid, out GroupMemberStatsSnapshot? now))
+            {
+                now = new GroupMemberStatsSnapshot();
+            }
+
+            now.CaptureFrom(player);
             GroupMemberStatsSnapshot? before = _sentStats.GetValueOrDefault(guid);
             GroupUpdateFlags changed = before is null ? GroupUpdateFlags.Full : now.Diff(before);
             _sentStats[guid] = now;
+            if (before is not null)
+            {
+                _spareStats[guid] = before;
+            }
+
             // A marked pet rename or visible pet aura slot forces its bit even when the snapshot diff alone would not (a rename
             // back to the same text, or a slot that changed and changed back inside one pass); the aura lists themselves are
             // written as the snapshot delta, so a forced bit with nothing changed carries an empty mask.
@@ -856,8 +873,20 @@ public sealed partial class GroupManager(SocialContext context)
         }
 
         long now = UnixSecondsClock();
-        foreach (Group group in _memberOf.Values.Distinct().ToArray())
+        _leaderPassSeen.Clear();
+        _leaderPassGroups.Clear();
+        foreach (Group candidate in _memberOf.Values)
         {
+            if (_leaderPassSeen.Add(candidate))
+            {
+                _leaderPassGroups.Add(candidate);
+            }
+        }
+
+        // Iterate a copy: ChooseLeader and SendUpdate may change membership.
+        for (int i = 0; i < _leaderPassGroups.Count; i++)
+        {
+            Group group = _leaderPassGroups[i];
             if (context.World.FindOnlinePlayer(group.LeaderGuid) is not null)
             {
                 group.LeaderLastOnlineUnixSeconds = now;
@@ -960,6 +989,7 @@ public sealed partial class GroupManager(SocialContext context)
 
             // vmangos: SetGroupUpdateFlag(GROUP_UPDATE_FULL) — the new member's stats go out.
             _sentStats.Remove(guid);
+            _spareStats.Remove(guid);
         }
 
         MemberAdded?.Invoke(group, guid);
@@ -996,6 +1026,7 @@ public sealed partial class GroupManager(SocialContext context)
         _pendingPetAuras.Remove(guid);
         _pendingAuras.Remove(guid);
         _sentStats.Remove(guid);
+        _spareStats.Remove(guid);
         bool leaderChanged = group.LeaderGuid == guid;
         if (leaderChanged)
         {
@@ -1045,6 +1076,7 @@ public sealed partial class GroupManager(SocialContext context)
             _pendingPetAuras.Remove(guid);
             _pendingAuras.Remove(guid);
             _sentStats.Remove(guid);
+            _spareStats.Remove(guid);
             if (context.World.FindOnlinePlayer(guid) is { } player)
             {
                 if (!hideDestroy)
