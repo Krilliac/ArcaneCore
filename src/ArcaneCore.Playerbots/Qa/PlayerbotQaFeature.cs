@@ -214,7 +214,7 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
 
         var aggregator = new PlayerbotQaAggregator(options.MaxFindings, options.MaxSamples, salt, options.StaleHours > 0 ? TimeSpan.FromHours(options.StaleHours) : null, _log, Build);
         _facts = new PlayerbotQaContentFacts(services);
-        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time, Build);
+        _publisher = new PlayerbotQaPublisher(options, _directory, aggregator, Redactor, _log, EnvironmentReader, TransportFactory, Time, Build, startedUtc: StartedUtc);
         if (saved is not null)
         {
             int dropped = aggregator.Restore(new QaAggregatorState(saved.Findings, saved.Bots, saved.Absorbed, saved.Tombstones, saved.Builds, saved.EvictedBuilds), Now);
@@ -344,7 +344,9 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             batch.Clear();
             moved = _bus.Drain(batch, Math.Min(4096, max - total));
             DateTime now = Now;
-            bool starved = batch.Count > 0 && HostStarved(now);
+            // The monitor is read on every pass, signals or not, so each overrun is stamped near when it happened (not at the next signal).
+            bool hostStarved = HostStarved(now);
+            bool starved = hostStarved && batch.Count > 0;
             long discountedBefore = Interlocked.Read(ref _discountedStalls);
             foreach (QaSignal signal in batch)
             {

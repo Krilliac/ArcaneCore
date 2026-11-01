@@ -124,11 +124,11 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         FirstBuild = OldBuild, LastBuild = CurrentBuild, BuildCounts = [new QaBuildCount(CurrentBuild, 5), new QaBuildCount(OldBuild, 2242)],
     });
 
-    private PlayerbotQaPublisher NewPublisher(PlayerbotQaAggregator state, StaleCreateTransport transport, bool publish = true, Action<PlayerbotQaOptions>? configure = null)
+    private PlayerbotQaPublisher NewPublisher(PlayerbotQaAggregator state, StaleCreateTransport transport, bool publish = true, Action<PlayerbotQaOptions>? configure = null, DateTime? startedUtc = null)
     {
         var options = new PlayerbotQaOptions { GitHub = { Enabled = true, Repository = QaData.Repo, Publish = publish } };
         configure?.Invoke(options);
-        return new PlayerbotQaPublisher(options, _directory, state, new PlayerbotQaRedactor(), new ListLogger(), _ => QaData.FakeToken, _ => transport, new ManualTime(QaData.T0), CurrentBuild);
+        return new PlayerbotQaPublisher(options, _directory, state, new PlayerbotQaRedactor(), new ListLogger(), _ => QaData.FakeToken, _ => transport, new ManualTime(QaData.T0), CurrentBuild, startedUtc: startedUtc);
     }
 
     private static Task Run(PlayerbotQaPublisher publisher, PlayerbotQaAggregator state) => publisher.RunAsync(state.Snapshot(), CancellationToken.None);
@@ -353,9 +353,27 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         Assert.Equal(QaPublicationState.Published, state.Get(fresh.Id)!.Publication.State);
     }
 
-    // Minor 2: the publisher is built when QA attaches, and a finding last seen before that moment is not "since start-up", whatever its per-build counts say.
+    // Minor 2. RED on main: the publisher took its own construction time as the start, so after a detach and re-attach a finding seen since the process's first attach looked stale.
+    // The feature now passes the process's first StartedUtc (here an hour before this re-attach's publisher is built at T0).
     [Fact]
-    public async Task AFindingSeenASecondBeforeTheAttach_IsNotFreshEvenOnTheCurrentBuild()
+    public async Task AReAttach_KeepsTheProcessStart_SoAFindingSeenSinceTheFirstAttachIsFresh()
+    {
+        QaFindingView seen = Persisted(1656, v => v with
+        {
+            Count = 50, DistinctBots = 10, FirstSeenUtc = QaData.T0.AddMinutes(-50), LastSeenUtc = QaData.T0.AddSeconds(-1),
+            FirstBuild = CurrentBuild, LastBuild = CurrentBuild, BuildCounts = [new QaBuildCount(CurrentBuild, 50)],
+        });
+        PlayerbotQaAggregator state = Restored(seen);
+        var transport = new StaleCreateTransport();
+
+        await Run(NewPublisher(state, transport, configure: o => o.GitHub.CreateWithinHours = 0, startedUtc: QaData.T0.AddHours(-1)), state);
+
+        Assert.True(transport.Created.Count == 1, $"a finding seen after the process's first attach was treated as stale ({transport.Created.Count} created)");
+    }
+
+    // Minor 2, other side: a finding last seen before the process's first attach is still not "since start-up", whatever its per-build counts say.
+    [Fact]
+    public async Task AFindingSeenBeforeTheProcessStart_IsNotFreshEvenOnTheCurrentBuild()
     {
         QaFindingView before = Persisted(1656, v => v with
         {
@@ -365,7 +383,7 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         PlayerbotQaAggregator state = Restored(before);
         var transport = new StaleCreateTransport();
 
-        await Run(NewPublisher(state, transport, configure: o => o.GitHub.CreateWithinHours = 0), state);
+        await Run(NewPublisher(state, transport, configure: o => o.GitHub.CreateWithinHours = 0, startedUtc: QaData.T0), state);
 
         Assert.True(transport.Created.Count == 0, $"a finding last seen before the attach was given an issue as if met since start-up ({transport.Created.Count} created)");
     }

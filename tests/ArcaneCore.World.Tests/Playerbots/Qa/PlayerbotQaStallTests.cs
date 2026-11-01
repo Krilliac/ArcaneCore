@@ -100,6 +100,29 @@ public sealed class PlayerbotQaStallTests : IDisposable
     }
 
     [Fact]
+    public async Task RoutineOverrunsSpreadOverAQuietSpell_DoNotSuppressTheFirstStallAfterIt()
+    {
+        (PlayerbotQaFeature feature, PlayerbotQaSignalBus bus, ManualTime time, ServiceProvider services) = Start();
+        using (services)
+        {
+            // Twice the threshold, one overrun a minute for far longer than the 120 s window, and no signal at all: each empty look stamps its overrun with its own time.
+            for (int i = 0; i < PlayerbotQaFeature.StarvationOverruns * 2; i++)
+            {
+                time.Advance(TimeSpan.FromSeconds(60));
+                Interlocked.Increment(ref _overruns);
+                feature.Drain();
+            }
+
+            Assert.True(bus.TryWrite(QaData.Stall(QaData.Bot1, -5608.8f, -439.4f, at: time.GetUtcNow().UtcDateTime)));
+            feature.Drain();
+
+            Assert.Equal(0, feature.DiscountedStalls);
+            Assert.Equal(1, StallFindings(feature));
+            await feature.StopAsync();
+        }
+    }
+
+    [Fact]
     public async Task AHangCountsAsStarvationToo()
     {
         (PlayerbotQaFeature feature, PlayerbotQaSignalBus bus, _, ServiceProvider services) = Start();
@@ -157,12 +180,15 @@ public sealed class PlayerbotQaStallTests : IDisposable
         (PlayerbotQaFeature feature, PlayerbotQaSignalBus bus, _, ServiceProvider services) = Start();
         using (services)
         {
-            Interlocked.Add(ref _overruns, 5);
+            Interlocked.Add(ref _overruns, 40);
             Assert.True(bus.TryWrite(QaData.Relay(8)));
+            Assert.True(bus.TryWrite(QaData.Stall(QaData.Bot1, -5608.8f, -439.4f)));
 
             feature.Drain();
 
-            Assert.Equal(2, feature.Aggregator!.Count);
+            Assert.Equal(1, feature.DiscountedStalls); // the host really was starved: the stall of the same batch was dropped
+            Assert.Equal(0, StallFindings(feature));
+            Assert.Equal(2, feature.Aggregator!.Count); // the relay finding was filed all the same
             await feature.StopAsync();
         }
     }

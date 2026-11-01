@@ -164,7 +164,7 @@ internal sealed class PlayerbotQaPublisher
 
     public PlayerbotQaPublisher(PlayerbotQaOptions options, string directory, IQaPublicationState state, PlayerbotQaRedactor redactor, ILogger logger,
         Func<string, string?>? getEnvironmentVariable = null, Func<string, IQaIssueTransport>? createClient = null, TimeProvider? time = null, string? build = null,
-        Func<string?, IQaIssueTransport?>? createGhClient = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<string?, IQaIssueTransport?>? createGhClient = null, Func<TimeSpan, CancellationToken, Task>? delay = null, DateTime? startedUtc = null)
     {
         _options = options;
         _directory = directory;
@@ -181,7 +181,8 @@ internal sealed class PlayerbotQaPublisher
         });
         _time = time ?? TimeProvider.System;
         _build = build ?? PlayerbotQaIssueComposer.BuildVersion();
-        _startedUtc = _time.GetUtcNow().UtcDateTime;
+        // The process's first attach when the feature passes it (an attach after a detach builds a new publisher, but findings seen since the first attach are still "since start-up").
+        _startedUtc = startedUtc ?? _time.GetUtcNow().UtcDateTime;
     }
 
     /// <summary>The most lookups outside the issue list (an issue by number, the REST search) one pass makes.</summary>
