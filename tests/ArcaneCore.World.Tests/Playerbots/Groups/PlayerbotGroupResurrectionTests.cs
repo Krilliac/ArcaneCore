@@ -86,7 +86,7 @@ public sealed class PlayerbotGroupResurrectionTests
     [InlineData(Paladin, RealRedemption)]
     public async Task AHealer_ResurrectsADeadMember_WithTheRealSpell(byte healerClass, uint spell)
     {
-        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], questLevel: 20);
         await AddRealSpellsAsync(world);
         var tank = await world.AddBotAsync("Realtank", Human, Warrior, 20, [Taunt]);
         uint[] heals = healerClass == Priest ? [LesserHeal, Smite, spell] : [HolyLight, spell];
@@ -115,7 +115,7 @@ public sealed class PlayerbotGroupResurrectionTests
     [Fact]
     public async Task AHealer_ResurrectsAMemberThatReleased_ThroughItsCorpse()
     {
-        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest]);
+        await using GroupTestWorld world = await GroupTestWorld.StartAsync([DuoQuest], questLevel: 20);
         await AddRealSpellsAsync(world);
         var tank = await world.AddBotAsync("Ghosttank", Human, Warrior, 20, [Taunt]);
         var healer = await world.AddBotAsync("Ghostprie", Human, Priest, 20, [LesserHeal, Smite, RealResurrection]);

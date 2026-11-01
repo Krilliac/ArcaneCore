@@ -26,7 +26,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Groups;
 public sealed class PlayerbotWorldBossWorldTests
 {
     /// <summary>Two warriors, three priests and four mages: roles for a raid of five or six (one tank, two healers) with room for a refusal.</summary>
-    private static Task<List<(Guid Id, string Name)>> RaidersAsync(GroupTestWorld world, string prefix = "Wb", byte level = 60) => AddBotsAsync(world, prefix, 2, 3, 4, level);
+    private static Task<List<(Guid Id, string Name)>> RaidersAsync(GroupTestWorld world, string prefix = "Wb", byte level = 60) => AddBotsAsync(world, prefix, 2, 3, 4, level, parkSpares: true);
 
     private static Task<bool> RaidFormedAsync(GroupTestWorld world, uint maxMs = 300_000)
         => world.RunUntilAsync(maxMs, () => Raid(world) is { State: not PlayerbotGroupState.Forming });
@@ -400,7 +400,9 @@ public sealed class PlayerbotWorldBossWorldTests
         // teleports a straggler to its leader (Party.TeleportToLeader, on by default); a world-boss raid does not unless CatchUpTeleport is on.
         await using GroupTestWorld world = await StartAsync(boss => { boss.CatchUpTeleport = false; boss.HoldSeconds = 600; }, options => options.Party.TeleportToLeader = true, Passive());
         List<(Guid Id, string Name)> bots = await AddBotsAsync(world, "We", 1, 2, 2);
-        (Guid Id, string Name) far = await world.AddBotAsync("Wbstraggler", Human, Mage, 60, [Fireball], new Vector3(StartX - 500f, StartY, StartZ));
+        // 500 yards due south of the start, off the line to the quest elites (the warlord stands 70 yards west): a straggler walking in from the west
+        // meets the warlord, fights it and dies, and the graveyard (689 yards away) is then what moves it, not a catch-up teleport.
+        (Guid Id, string Name) far = await world.AddBotAsync("Wbstraggler", Human, Mage, 60, [Fireball], new Vector3(StartX, StartY - 500f, StartZ));
         await SpawnAsync(world, bots[0].Id, Passive(), BossAt);
 
         var jumps = new List<(string Name, float Yards)>();

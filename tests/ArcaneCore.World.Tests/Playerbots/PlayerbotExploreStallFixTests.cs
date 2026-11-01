@@ -374,12 +374,13 @@ public sealed class PlayerbotExploreStallFixTests
                 return true;
             });
             MethodInfo explore = typeof(PlayerbotBrain).GetMethod("Explore", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            var thinkClock = new PlayerbotThinkProbeTests.ManualClock();
             var plans = new List<int>();
             for (int think = 0; think < 4; think++)
             {
                 plans.Add(await host.OnWorldAsync(() =>
                 {
-                    var probe = new PlayerbotThinkProbe();
+                    var probe = new PlayerbotThinkProbe(thinkClock); // a frozen clock: the atlas find's 4 ms slice and the 15 ms optional budget never run out, so the candidate is found and planned in the first think whatever the load
                     probe.Begin();
                     try
                     {

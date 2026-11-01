@@ -1774,8 +1774,10 @@ internal static class PlayerbotNavigation
 
     /// <summary>
     /// Whether any step along the leg from <paramref name="from"/> to <paramref name="to"/> hangs in the air without ground
-    /// support (<see cref="PlayerbotMotionAnomalies.AirwalkYards"/>), testing the floor under the chord exactly as
-    /// <see cref="PlayerbotMotion.Validate"/> does so the planner never plans a cliff fall the mover will refuse.
+    /// support, testing the floor under the chord as <see cref="PlayerbotMotion.Validate"/> does so the planner never plans a cliff fall the
+    /// mover will refuse. The mover brings a step down onto the floor under it from as high as <see cref="PlayerbotMoveCheck.DirectStepMaxDrapeYards"/>
+    /// (a drape: a chord over a hollow, a bot a few yards above the ground) and refuses only a deeper drop, so that is the bound here; the
+    /// smaller <see cref="PlayerbotMotionAnomalies.AirwalkYards"/> refused Ironwander's slope, whose start already hangs seven yards above the floor.
     /// </summary>
     internal static bool IsSteepEscapeFall(Player player, Map map, PlayerbotOptions options, Vector3 from, Vector3 to)
     {
@@ -1795,7 +1797,7 @@ internal static class PlayerbotNavigation
 
             float maxCeilingZ = MathF.Max(stepFrom.Z, candidate.Z) + 1.25f;
             float directFloor = PlayerbotMotion.ResolveWalkFloor(map, candidate.X, candidate.Y, candidate.Z, 0f, maxCeilingZ);
-            if (PlayerbotMotion.ValidHeight(directFloor) && candidate.Z - directFloor > PlayerbotMotionAnomalies.AirwalkYards)
+            if (PlayerbotMotion.ValidHeight(directFloor) && candidate.Z - directFloor > PlayerbotMoveCheck.DirectStepMaxDrapeYards)
                 return true;
 
             if (along >= legDist) break;

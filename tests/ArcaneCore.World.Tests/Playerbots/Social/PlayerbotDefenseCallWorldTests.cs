@@ -9,6 +9,7 @@ using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.Playerbots.Chat;
 using ArcaneCore.World.Tests.Playerbots.Combat;
+using ArcaneCore.World.Tests.Playerbots.Party;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -359,6 +360,13 @@ public sealed class PlayerbotDefenseCallWorldTests
         return foe;
     }
 
+    /// <summary>
+    /// Flat open ground under the scene (the test maps have no terrain, and the planner refuses a no-mmap walk without heights), so a responder can plan its walk to the call.
+    /// Only the tests that watch the walk need it: the lane's assignment and the board read positions, not routes.
+    /// </summary>
+    private static async Task InstallGroundAsync(SocialWorld world)
+        => await PartyTestHost.InstallFlatGroundAsync(world.Host, await world.Host.PlayerStateAsync("Rcaller", p => p.Z));
+
     private static Task<int> RunDefenseLaneAsync(SocialWorld world)
         => world.Host.OnWorldAsync(() =>
         {
@@ -449,6 +457,7 @@ public sealed class PlayerbotDefenseCallWorldTests
     {
         await using SocialWorld world = await StartAsync();
         await using WorldTestClient foe = await CallSceneAsync(world, "Rwalker", 60f);
+        await InstallGroundAsync(world);
         Guid responder = world.Bots["Rwalker"];
         PlayerbotBrain brain = HelpTestKit.BrainOf(world, responder);
         await HelpTestKit.UntilAsync(() => IsFreeGoal(world, responder), "the responder to be on a free goal");
@@ -466,6 +475,7 @@ public sealed class PlayerbotDefenseCallWorldTests
     {
         await using SocialWorld world = await StartAsync();
         await using WorldTestClient foe = await CallSceneAsync(world, "Rexempt", 50f);
+        await InstallGroundAsync(world);
         Guid responder = world.Bots["Rexempt"];
         PlayerbotBrain brain = HelpTestKit.BrainOf(world, responder);
         await HelpTestKit.UntilAsync(() => IsFreeGoal(world, responder), "the responder to be on a free goal");
