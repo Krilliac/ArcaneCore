@@ -362,8 +362,7 @@ public sealed class PlayerbotQaStaleCreateTests : IDisposable
         Assert.True(QaKinds.Of(stale.Kind).ServerSide && !QaKinds.Of(fresh.Kind).ServerSide, "the test needs a server-side stale finding and a non-server-side fresh one");
         PlayerbotQaAggregator state = Restored(stale, fresh);
         var transport = new StaleCreateTransport();
-        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(stale.Id) + "
-Playerbot QA finding: opened last week");
+        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(stale.Id) + "\nPlayerbot QA finding: opened last week");
 
         await Run(NewPublisher(state, transport), state);
 
@@ -432,8 +431,7 @@ Playerbot QA finding: opened last week");
     {
         QaFindingView probe = Fresh() with { LastSeenUtc = QaData.T0.AddHours(3) };
         var transport = new StaleCreateTransport();
-        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(probe.Id) + "
-Playerbot QA finding: closed last week", open: false);
+        int issue = transport.Add(PlayerbotQaIssueComposer.MarkerOf(probe.Id) + "\nPlayerbot QA finding: closed last week", open: false);
         QaFindingView closed = probe with { Publication = new QaPublication(QaPublicationState.KnownClosed, issue), OccurrencesReported = 0 };
         PlayerbotQaAggregator state = Restored(closed);
 
