@@ -364,6 +364,8 @@ cell takes one region-graph leg (only with the optional think budget) toward the
 its home's centre, when that place is at least 30 yd away and in the bot's own walking component (a count is dropped when the bot leaves
 the cell, changes map or is away from wandering for 30 s). A candidate held pending past the bound has its cell set aside (bot QA #1464).
 
+After two refused wander legs in a row, `TryWanderToMeshPoint` replaces the ray with a point the map's mesh says is reachable (`IMeshPointQuery.TryGetRandomPointAround`, up to 4 samples per think, only with the optional think budget): the point is planned exactly and walked (traced `wander-mesh-point`), and the shortfall rule of rays does not apply to it. The sample must keep the home's limits (`PlayerbotBrain.OutsideHomeLimits`): at most `ExploreRadius` from the centre, except that a bot already beyond `ExploreRadius` (a pocket outside the circle) may take points nearer the centre than itself; and, for a zone-clipped home, in the home's zone, except a clipped home whose own centre has no known zone (`zone=unknown`), which is limited by the circle alone, as its walk home is (before, such a home refused every sample and every deflected leg). A run in which no sample gave a leg (not one cut short by the think budget) backs the fallback off for 10 s, doubling per empty run in a row up to 80 s (`WanderMeshBackoffMs`); a leg taken resets it.
+
 **Ashenvale quest 6562 (bot QA #199).** Je'neu Sancrea (entry 12736) is an overworld ender on map 1 at
 (3355.07, 1033.14, 6.03), not a creature inside Blackfathom Deeps (map 48). From the recorded stall at
 (2770.4, 1275.2, 319.1), the real mesh with steep polygons excluded ends at the bot's feet; with them allowed, the first
@@ -1140,7 +1142,7 @@ no reference server anchors a bot, so every number here is an ArcaneCore choice.
 * **Staying inside.** "Inside" means inside the circle and, for a clipped home, in its zone. Goal selection ignores creatures outside the area (`IsSkipped`; a
   bot still fights back against whatever attacks it), new quests are taken only from a giver inside the area and only if every creature that ends the quest
   and every creature it asks to kill has a spawn inside (`QuestInside`), the destinations of the world walks (quest givers, enders, kill spawns) are the
-  ones inside, and an exploring bot inside `ExploreRadius` whose next leg would cross a clipped home's zone border deflects along the boundary (`ZoneBorderDeflectDegrees`, `DeflectZoneBorderLeg`: ±35°, ±65°, ±95°, ±125° from its heading) before falling back to the centre.
+  ones inside, and an exploring bot inside `ExploreRadius` whose next leg would cross a clipped home's zone border deflects along the boundary (`BorderDeflectDegrees`, `DeflectZoneBorderLeg`: +45°, -45°, +90°, -90°, +135°, -135° from its heading, the first pair chosen by the refusal count and the sign flipped when the leg's spread is negative) before falling back to the centre.
 * **Walking home.** A bot on the home map outside the radius, or inside it but out of a clipped home's zone (a bot that wandered over to Raven Hill), with
   no errand, drops its intent and walks to the centre through the ordinary route planner
   (`PlayerbotNavigation`), in route-sized legs with the same hazard guard and risk model as every other walk. **Hysteresis:** it starts at 1.0 of the
