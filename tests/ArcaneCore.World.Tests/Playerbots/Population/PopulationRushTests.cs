@@ -310,6 +310,22 @@ public sealed class PopulationRushTests
         Assert.Equal(3, world.Feature.RushStatus.Requested);
     }
 
+    private static async Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
+    {
+        PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
+        {
+            o.MaxBots = 6;
+            o.Population.Enabled = false;      // the rush needs no running population
+            o.Population.TargetOnline = 0;
+            o.Population.MaxCreatePerMinute = 1; // the rush bypasses it
+            o.Population.WindowTicks = 20;
+            o.Population.RushBrakeWindows = 3;
+            o.Population.RushBrakeWindowSeconds = 1;
+            configure?.Invoke(o);
+        }, dataStore: store);
+        return world;
+    }
+
     private static async Task<string> SayAsync(WorldTestClient admin, string command, Func<string, bool> reply)
     {
         await admin.SendChatAsync(ChatType.Say, Language.Common, command);
@@ -373,22 +389,6 @@ public sealed class PopulationRushLogicTests
 
         // A window is not counted twice: no new ticks, no new window.
         Assert.False(brake.WindowDue(now + 5000, total, 5000)); // five seconds but no ticks: no evidence
-    }
-
-    private static async Task<PopulationTestHost> StartAsync(Action<PlayerbotOptions>? configure = null, Func<ArcaneCore.Kernel.WorldData.IWorldDataStore>? store = null)
-    {
-        PopulationTestHost world = await PopulationTestHost.StartAsync(o =>
-        {
-            o.MaxBots = 6;
-            o.Population.Enabled = false;      // the rush needs no running population
-            o.Population.TargetOnline = 0;
-            o.Population.MaxCreatePerMinute = 1; // the rush bypasses it
-            o.Population.WindowTicks = 20;
-            o.Population.RushBrakeWindows = 3;
-            o.Population.RushBrakeWindowSeconds = 1;
-            configure?.Invoke(o);
-        }, dataStore: store);
-        return world;
     }
 
     [Fact]

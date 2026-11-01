@@ -80,7 +80,7 @@ public sealed class UnreachableClassificationTests
         int exitCode = (int)failure.GetType().GetProperty("ExitCode")!.GetValue(failure)!;
 
         Assert.Equal(ExitCodes.Database, exitCode);
-        Assert.DoesNotContain(Password, message, StringComparison.Ordinal);
-        Assert.DoesNotContain(ConnectionString, message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(ConnectionString, failure.Message, StringComparison.Ordinal);
     }
 }
