@@ -194,6 +194,7 @@ internal static class SocialTestKit
             Recorder = PartyTestHost.Feature(host).Social,
             Coordinator = host.WorldServices.GetService<ArcaneCore.World.Playerbots.Groups.PlayerbotGroupCoordinator>(),
             Events = PartyTestHost.Feature(host).EventBoard,
+            DefenseCalls = PartyTestHost.Feature(host).DefenseCalls,
         };
     }
 
