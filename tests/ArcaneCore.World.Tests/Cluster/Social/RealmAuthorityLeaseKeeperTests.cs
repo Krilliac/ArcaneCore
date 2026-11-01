@@ -284,6 +284,65 @@ public sealed class RealmAuthorityLeaseKeeperTests
     }
 
     [Fact]
+    public async Task LateRenewalAfterRelease_DoesNotRenewTheRemainingScopes_OrHoldTheLease()
+    {
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.BlockRenewals = true;
+
+        Task tick = Task.Run(() => _time.Advance(TimeSpan.FromSeconds(10))); // the tick enters the store for its first scope and hangs
+        try
+        {
+            await WaitUntilAsync(() => store.BlockedRenewals == 1);
+            await keeper.ReleaseAllAsync(); // the orderly stop gives every lease back while that renewal is late
+        }
+        finally
+        {
+            store.Release();
+        }
+
+        await tick.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(1, store.Renewals); // the other scopes were not renewed after the release
+        Assert.Equal(0, _lifetime.Stops); // and the late result is not a loss
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Social));
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Economy));
+        Assert.Null(keeper.TokenFor(RealmAuthorityScopes.Instances));
+    }
+
+    [Fact]
+    public async Task Lose_HaltsTheSingletonsWithinTheTickThatFindsTheLoss()
+    {
+        var bot = new FakeHalt();
+        var broadcast = new FakeHalt();
+        var store = new ControlledStore(_inner);
+        await using RealmAuthorityLeaseKeeper keeper = Create(store, [bot, broadcast]);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        store.RejectRenewals = true;
+
+        _time.Advance(TimeSpan.FromSeconds(10)); // exactly one renewal tick
+
+        Assert.Equal(1, bot.Calls);
+        Assert.Equal(1, broadcast.Calls);
+    }
+
+    [Fact]
+    public async Task Lose_AfterRelease_HaltsNothing()
+    {
+        var halt = new FakeHalt();
+        var store = new ControlledStore(_inner) { RejectRenewals = true };
+        await using RealmAuthorityLeaseKeeper keeper = Create(store, [halt]);
+        await keeper.AcquireAtStartAsync(Guid.NewGuid(), CancellationToken.None);
+        await keeper.ReleaseAllAsync();
+
+        _time.Advance(TimeSpan.FromSeconds(60));
+
+        Assert.Equal(0, halt.Calls);
+        Assert.Equal(0, _lifetime.Stops);
+    }
+
+    [Fact]
     public async Task Lose_HaltsEachSingletonOnce_ThenStopsTheApplication()
     {
         var first = new FakeHalt();
