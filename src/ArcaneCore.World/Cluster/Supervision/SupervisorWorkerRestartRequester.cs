@@ -1,4 +1,5 @@
 using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.World.Cluster.Handoff;
 using ArcaneCore.Kernel.Ops;
 using ArcaneCore.Kernel.Ops.ServerConsole;
 using ArcaneCore.World.Ops.Lifecycle;
@@ -41,14 +42,14 @@ public sealed class SupervisorWorkerRestartRequester(
         return Task.FromResult(true);
     }
 
-    /// <summary>The realm id of the supervised child named <paramref name="worker"/> (its <see cref="SupervisedProcessConfig.Name"/> or its key), or 0 when none matches.</summary>
+    /// <summary>The realm id of the supervised child named <paramref name="worker"/> (its <see cref="SupervisedProcessConfig.Name"/> or its key), or 0 when none matches (ordinal, like the handoff driver and the placement table: <see cref="WorkerNodeNames"/>).</summary>
     public static int RealmIdOf(ClusterSupervisorOptions options, WorkerNodeId worker)
     {
         ArgumentNullException.ThrowIfNull(options);
         foreach ((string key, SupervisedProcessConfig config) in options.Processes)
         {
             if (config.RealmId > 0
-                && (string.Equals(config.Name, worker.Value, StringComparison.OrdinalIgnoreCase) || string.Equals(key, worker.Value, StringComparison.OrdinalIgnoreCase)))
+                && (WorkerNodeNames.Comparer.Equals(config.Name, worker.Value) || WorkerNodeNames.Comparer.Equals(key, worker.Value)))
             {
                 return config.RealmId;
             }

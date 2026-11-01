@@ -117,7 +117,7 @@ public sealed class WorldHandoffCoordinator(
     /// <summary>
     /// Run a handoff to completion. <paramref name="afterStage"/> runs after each stage is journalled (tests use it to fail or crash at a
     /// stage). Throws <see cref="WorldHandoffAbortedException"/> when the handoff aborted; any other exception after the takeover leaves it
-    /// committed for <see cref="RecoverAsync"/>.
+    /// committed for <see cref="RecoverAsync"/>. The token applies only before the epoch takeover; the roll-forward after it is not cancellable.
     /// </summary>
     public async Task<WorldHandoffRecord> RunAsync(
         Guid handoffId,
@@ -164,7 +164,7 @@ public sealed class WorldHandoffCoordinator(
             // The takeover is one transaction: either it committed (then only roll forward) or nothing changed (then abort). Ask the journal.
             WorldHandoffRecord? after = await store.GetAsync(handoffId, CancellationToken.None).ConfigureAwait(false);
             if (after is { IsCommittedOrBeyond: true })
-                return await RollForwardAsync(after, afterStage, cancellationToken).ConfigureAwait(false);
+                return await RollForwardAsync(after, afterStage, CancellationToken.None).ConfigureAwait(false);
             throw await AbortAsync(handoffId, ex).ConfigureAwait(false);
         }
 
@@ -173,8 +173,10 @@ public sealed class WorldHandoffCoordinator(
 
         _logger.LogInformation("World handoff {Handoff}: epoch takeover committed at epoch {Epoch}; rolling forward",
             handoffId, committed.TargetOwnershipToken!.Epoch);
-        await Hook(afterStage, WorldHandoffStage.EpochTakeover, cancellationToken).ConfigureAwait(false);
-        return await RollForwardAsync(committed, afterStage, cancellationToken).ConfigureAwait(false);
+        // Past the point of no return the caller's token no longer applies: a host stop or a dropped operator connection must not leave a half handoff.
+        // It finishes here, or RecoverAsync finishes it on the next start.
+        await Hook(afterStage, WorldHandoffStage.EpochTakeover, CancellationToken.None).ConfigureAwait(false);
+        return await RollForwardAsync(committed, afterStage, CancellationToken.None).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -188,7 +190,7 @@ public sealed class WorldHandoffCoordinator(
         if (record.IsResolved)
             return record;
         if (record.IsCommittedOrBeyond)
-            return await RollForwardAsync(record, afterStage: null, cancellationToken).ConfigureAwait(false);
+            return await RollForwardAsync(record, afterStage: null, CancellationToken.None).ConfigureAwait(false);
 
         // Before the takeover A still owns the characters, so resuming it is safe; resume first, so a journal write that fails leaves A running
         // (the handoff stays open, pre-commit, for a later recovery to abort) rather than parked with its admission closed.

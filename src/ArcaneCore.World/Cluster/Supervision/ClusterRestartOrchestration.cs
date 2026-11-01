@@ -24,7 +24,7 @@ public interface IWorkerHandoffDriver
 /// <summary>Asks the cluster host supervisor to restart the (already drained and retired) worker process.</summary>
 public interface IWorkerRestartRequester
 {
-    /// <summary>True when the supervisor accepted the request; false when it refused it (unknown or not running).</summary>
+    /// <summary>True when the request was queued toward a supervisor; false when it could not be sent. It does not wait for the supervisor's verdict (unknown realm, not running), which comes back asynchronously on the lifecycle channel.</summary>
     Task<bool> RequestRestartAsync(WorkerNodeId worker, string requestedBy, CancellationToken cancellationToken);
 }
 
@@ -37,6 +37,9 @@ public enum ClusterRestartOutcome
     /// <summary>The placement table does not know the worker; nothing was done.</summary>
     UnknownWorker,
 
+    /// <summary>This node has no handoff coordinator configured (no standby target or router, or not an active worker): unavailable, nothing was done.</summary>
+    HandoffUnavailable,
+
     /// <summary>The handoff aborted before the epoch takeover: the worker kept its players and keeps running; no restart was requested.</summary>
     HandoffAborted,
 
@@ -46,8 +49,8 @@ public enum ClusterRestartOutcome
     /// <summary>The handoff finished but the supervisor did not accept the restart; the retired worker was not restarted.</summary>
     RestartNotAccepted,
 
-    /// <summary>The worker was handed off (sessions kept) and the supervisor accepted its restart.</summary>
-    Restarted,
+    /// <summary>The worker was handed off (sessions kept) and the restart request was queued toward the supervisor. The supervisor's verdict arrives later on the lifecycle channel and is reported to the staff there; this is not a confirmed restart.</summary>
+    RestartQueued,
 }
 
 /// <summary>The result of <see cref="ClusterRestartOrchestration.RunAsync"/>: the outcome, one operator-facing line and the handoff journal record when one ran.</summary>
@@ -113,6 +116,14 @@ public sealed class ClusterRestartOrchestration(
                 $"Handoff of '{worker}' aborted ({ex.Record.AbortReason}); the worker keeps running with its players and was not restarted.",
                 ex.Record);
         }
+        catch (WorldHandoffUnavailableException ex)
+        {
+            _logger.LogWarning("Operator restart of {Worker} requested by {By}: no handoff is configured on this node ({Reason})", worker, invokerName, ex.Message);
+            return new ClusterRestartResult(
+                ClusterRestartOutcome.HandoffUnavailable,
+                $"Cluster restart is unavailable: no worker handoff is configured on this node ({ex.Message}); nothing was done.",
+                null);
+        }
         catch (OperationCanceledException)
         {
             throw;
@@ -141,7 +152,9 @@ public sealed class ClusterRestartOrchestration(
         }
         catch (OperationCanceledException)
         {
-            throw;
+            // The handoff is complete and cannot be undone: report that, never "cancelled".
+            _logger.LogWarning("Operator restart of {Worker} requested by {By}: cancelled after the handoff finished; the restart was not requested", worker, invokerName);
+            accepted = false;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -150,8 +163,8 @@ public sealed class ClusterRestartOrchestration(
         }
 
         return accepted
-            ? new ClusterRestartResult(ClusterRestartOutcome.Restarted, $"Worker '{worker}' was handed off (sessions kept) and the supervisor was asked to restart it.", record)
-            : new ClusterRestartResult(ClusterRestartOutcome.RestartNotAccepted, $"Worker '{worker}' was handed off (sessions kept) but the supervisor did not accept its restart.", record);
+            ? new ClusterRestartResult(ClusterRestartOutcome.RestartQueued, $"Worker '{worker}' was handed off (sessions kept) and a restart was queued toward the supervisor; its verdict is reported separately.", record)
+            : new ClusterRestartResult(ClusterRestartOutcome.RestartNotAccepted, $"Worker '{worker}' was handed off (sessions kept) but its restart was not queued (not supervised, no realm id, or the host is stopping).", record);
     }
 }
 
@@ -174,8 +187,9 @@ public static class ClusterRestartHosting
         }
 
         services.TryAddSingleton<IWorkerHandoffDriver>(sp => new CoordinatorWorkerHandoffDriver(
-            () => sp.GetService<WorldHandoffCoordinator>(),
-            () => sp.GetService<IWorldHandoffSource>()));
+            () => sp.GetService<WorldHandoffCoordinator>() ?? sp.GetService<WorldHandoffCoordinatorProvider>()?.Coordinator,
+            () => sp.GetService<IWorldHandoffSource>(),
+            sp.GetService<WorldHandoffInFlight>()));
         services.TryAddSingleton<IWorkerRestartRequester>(sp =>
         {
             var options = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ClusterSupervisorOptions>>();

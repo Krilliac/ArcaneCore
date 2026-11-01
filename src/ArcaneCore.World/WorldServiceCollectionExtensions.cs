@@ -108,6 +108,7 @@ public static class WorldServiceCollectionExtensions
         services.AddHostedService<WorldHost>();
         services.AddHostedService<WorldServer>();
         Cluster.Gateway.GatewayWorkerServiceCollectionExtensions.AddGatewayWorker(services, configuration); // Cluster:Worker (Tier 3a), off by default: registers nothing
+        Cluster.Handoff.WorldHandoffHosting.AddWorldHandoff(services, configuration); // whole-World handoff source, coordinator provider and start-up recovery (worker mode only)
         Cluster.Social.ClusterNodeHosting.AddClusterNodeRole(services, configuration); // Cluster:Node (M15.2), Combined by default: registers only the options
         Cluster.Social.ClusterPresenceHosting.AddClusterPresence(services); // realm presence directory, social router and the publisher the social feature feeds (M15.2)
         Cluster.Social.ClusterPeerLinkHosting.AddClusterPeerLink(services, configuration); // Cluster:Peer: peer link client and the Social holder's presence listener (cluster mode only)

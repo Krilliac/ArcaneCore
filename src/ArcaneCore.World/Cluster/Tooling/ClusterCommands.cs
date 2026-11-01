@@ -216,7 +216,8 @@ public sealed class ClusterCommands : ICommandGroup
             }
             catch (OperationCanceledException)
             {
-                reply = "Cluster restart was cancelled.";
+                // Only reachable before the handoff's epoch takeover (the coordinator ignores the token afterwards), so nothing changed.
+                reply = "Cluster restart was cancelled before the handoff committed; nothing was changed.";
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -226,14 +227,72 @@ public sealed class ClusterCommands : ICommandGroup
 
             try
             {
-                PostAndRelease(world, hold, () => context.Reply(reply));
+                if (context.IsConsole)
+                {
+                    // The console and RA print through their own output, not the world thread. The issuing world may be retired by now (its simulation
+                    // thread stays parked after a handoff), so a post to it would never run and the operator would never see the verdict.
+                    try
+                    {
+                        context.Reply(reply);
+                    }
+                    finally
+                    {
+                        hold.Dispose();
+                    }
+                }
+                else
+                {
+                    await ReplyOnWorldThreadOrGiveUpAsync(world, hold, () => context.Reply(reply), logger).ConfigureAwait(false);
+                }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                logger?.LogFault("cluster.operator-restart-post", ex, "cluster restart could not post its reply to the world thread");
+                logger?.LogFault("cluster.operator-restart-post", ex, "cluster restart could not deliver its reply");
             }
         });
         return true;
+    }
+
+    /// <summary>How long a restart's final reply waits for the issuing world thread before giving up (a retired world never runs it).</summary>
+    private static readonly TimeSpan RestartReplyPostTimeout = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// Post <paramref name="reply"/> to the world thread and wait for it to run. A world that was handed off stays parked, so the post may never run: after
+    /// <see cref="RestartReplyPostTimeout"/> the hold is released and the verdict is logged (the player's session has moved to the new world, which has no copy of this command).
+    /// </summary>
+    private static async Task ReplyOnWorldThreadOrGiveUpAsync(WorldRuntime world, IDisposable hold, Action reply, ILogger? logger)
+    {
+        var ran = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            world.Post(() =>
+            {
+                try
+                {
+                    reply();
+                }
+                finally
+                {
+                    hold.Dispose();
+                    ran.TrySetResult();
+                }
+            });
+        }
+        catch
+        {
+            hold.Dispose();
+            throw;
+        }
+
+        try
+        {
+            await ran.Task.WaitAsync(RestartReplyPostTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger?.LogWarning("Cluster restart: the issuing world did not run the reply within {Seconds} s (it was probably handed off and retired); the operator's reply was not delivered", RestartReplyPostTimeout.TotalSeconds);
+            hold.Dispose();
+        }
     }
 
     /// <summary>What <c>.cluster status</c> and <c>.cluster nodes</c> say instead of a node list while the node bridge is switched off.</summary>
