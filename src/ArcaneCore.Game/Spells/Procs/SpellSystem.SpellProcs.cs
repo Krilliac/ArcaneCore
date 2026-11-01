@@ -20,7 +20,7 @@ public sealed partial class SpellSystem
     /// no-damage branch builds the outcome and the amount, and the suppress attributes clear a side.
     /// </summary>
     internal void FireSpellHitProcs(SpellCast cast, Unit target, SpellMissInfo miss, uint amount, uint originalAmount, bool critical, uint absorbed,
-        int effectMask, bool reflected, uint healing = 0)
+        int effectMask, bool reflected, uint healing = 0, uint blocked = 0)
     {
         if (!ProcFlagRules.CanTrigger(cast) || _objectCastDepth > 0)
         {
@@ -53,9 +53,9 @@ public sealed partial class SpellSystem
             eventAmount = healing;
             eventOriginal = healing;
         }
-        else if (amount + absorbed > 0 && miss is SpellMissInfo.None or SpellMissInfo.Reflect)
+        else if (amount + absorbed + blocked > 0 && miss is SpellMissInfo.None or SpellMissInfo.Reflect)
         {
-            extra = ProcFlagRules.ExtendMask(miss, hasDamageInfo: true, critical, absorbed);
+            extra = ProcFlagRules.ExtendMask(miss, hasDamageInfo: true, critical, absorbed, blocked);
             victim |= ProcFlags.TakenAnyDamage;
             // JoR and JoC: paladin melee spells trigger melee procs instead of magic ones (Spell.cpp:1430-1441; CF_PALADIN_JUDGEMENT_OF_RIGHTEOUSNESS is bit 10).
             if ((spell.IsFitToFamily(10, 10) && spell.SpellIconId == 25) || (spell.SpellFamilyName == 10 && spell.SpellIconId == 561 && spell.SpellVisual == 0))

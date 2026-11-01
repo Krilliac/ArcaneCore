@@ -4,9 +4,9 @@ using ArcaneCore.Protocol;
 
 namespace ArcaneCore.Game.Spells;
 
-internal readonly record struct MeleeSpellDamageComponent(uint SchoolMask, uint Dealt, uint Absorbed, uint Resisted, bool Critical);
+internal readonly record struct MeleeSpellDamageComponent(uint SchoolMask, uint Dealt, uint Absorbed, uint Resisted, bool Critical, uint Blocked = 0);
 
-internal readonly record struct DeferredNonMeleeDamageLog(ObjectGuid Target, ObjectGuid Caster, uint SpellId, uint Damage, SpellSchool School, uint Absorbed, uint Resisted, uint HitInfo);
+internal readonly record struct DeferredNonMeleeDamageLog(ObjectGuid Target, ObjectGuid Caster, uint SpellId, uint Damage, SpellSchool School, uint Absorbed, uint Resisted, uint HitInfo, uint Blocked = 0);
 
 public sealed partial class SpellSystem
 {

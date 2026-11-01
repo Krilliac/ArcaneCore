@@ -114,7 +114,7 @@ public sealed partial class SpellSystem
                 hit.ProcsDone = true;
                 // A reflected hit procs with PROC_EX_REFLECT plus the hit bits (CreateProcExtendMask falls through from REFLECT, Unit.cpp:8811-8828).
                 FireSpellHitProcs(hit.Cast, target, hit.Reflected ? SpellMissInfo.Reflect : SpellMissInfo.None, amount, original + resisted, crit, absorbed,
-                    hit.EffectMask, hit.Reflected);
+                    hit.EffectMask, hit.Reflected, blocked: blocked);
             }
         }
 
@@ -127,8 +127,8 @@ public sealed partial class SpellSystem
             && ReferenceEquals(outcome.Cast, packetCast) && ReferenceEquals(outcome.Target, target)
             && ReferenceEquals(packetCast.Caster, caster) && packetCast.Spell.Id == spell.Id)
         {
-            outcome.MeleeSpellDamage.Add(new MeleeSpellDamageComponent(spell.SchoolMask(), dealt, absorbed, resisted, crit));
-            outcome.DeferredNonMeleeLogs.Add(new DeferredNonMeleeDamageLog(target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed, resisted, spellHitInfo));
+            outcome.MeleeSpellDamage.Add(new MeleeSpellDamageComponent(spell.SchoolMask(), dealt, absorbed, resisted, crit, blocked));
+            outcome.DeferredNonMeleeLogs.Add(new DeferredNonMeleeDamageLog(target.Guid, caster.Guid, spell.Id, dealt, spell.School, absorbed, resisted, spellHitInfo, blocked));
         }
         else
         {
