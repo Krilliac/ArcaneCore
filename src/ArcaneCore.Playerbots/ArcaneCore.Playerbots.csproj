@@ -16,6 +16,9 @@
     <RootNamespace>ArcaneCore.World.Playerbots</RootNamespace>
     <AssemblyName>ArcaneCore.Playerbots</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- The marker tools/ops/live/RedeployPlan.ps1 reads to find the packs the World loads from beside its executable (it matches this
+         property, not the name of the copy target below). Keep it true while CopyPackBesideWorldHost exists. -->
+    <LoadedBesideWorldHost>true</LoadedBesideWorldHost>
   </PropertyGroup>
 
   <ItemGroup>
@@ -42,7 +45,7 @@
        The world project's output path is asked from the world project itself, so the artifacts layout (- -artifacts-path) and
        the plain bin/<Configuration> layout both work. Building only ArcaneCore.World does not refresh the copy: build this
        project or the solution. -->
-  <Target Name="CopyPackBesideWorldHost" AfterTargets="Build">
+  <Target Name="CopyPackBesideWorldHost" AfterTargets="Build" Condition="'$(LoadedBesideWorldHost)' == 'true'">
     <MSBuild Projects="..\ArcaneCore.World\ArcaneCore.World.csproj" Targets="GetTargetPath">
       <Output TaskParameter="TargetOutputs" ItemName="_WorldHostTargetPath" />
     </MSBuild>
