@@ -310,7 +310,7 @@ public sealed class StratholmeBossTests
     }
 
     [Fact]
-    public void Malown_ASpellWhoseTimerIsNotUpIsNotRolled()
+    public void Malown_EachSpellIsCastOnlyAtItsOwnInterval()
     {
         var caster = new DungeonTestCaster();
         (DungeonScriptTestKit rig, Creature boss) = Fighting(Malown, caster);
@@ -319,11 +319,47 @@ public sealed class StratholmeBossTests
             var ai = new PostmasterMalownAI(boss);
             ai.OnRespawn();
 
-            // Wailing Dead (19 s) comes due once in 19 s, a single 65 % roll: two 9.5 s ticks never roll it twice.
-            ai.OnUpdate(9_500);
-            ai.OnUpdate(9_500);
-            Assert.InRange(caster.Casts.Count(c => c.Spell == PostmasterMalownAI.SpellWailingDead), 0, 1);
-            Assert.InRange(caster.Casts.Count(c => c.Spell == PostmasterMalownAI.SpellBackhand), 0, 2);
+            // Spell -> first due time and reset interval (ms); both are equal for every Malown spell.
+            Dictionary<uint, uint> intervals = new()
+            {
+                [PostmasterMalownAI.SpellWailingDead] = 19_000,
+                [PostmasterMalownAI.SpellBackhand] = 8_000,
+                [PostmasterMalownAI.SpellCurseOfWeakness] = 20_000,
+                [PostmasterMalownAI.SpellCurseOfTongues] = 22_000,
+                [PostmasterMalownAI.SpellCallOfTheGrave] = 25_000,
+            };
+
+            // 1 s ticks for 5000 s: a timer comes due once per interval, so a cast can only land at initial + k * interval.
+            List<(uint Spell, uint ElapsedMs)> castTimes = [];
+            uint elapsed = 0;
+            for (int i = 0; i < 5_000; i++)
+            {
+                int before = caster.Casts.Count;
+                ai.OnUpdate(1_000);
+                elapsed += 1_000;
+                for (int c = before; c < caster.Casts.Count; c++)
+                {
+                    castTimes.Add((caster.Casts[c].Spell, elapsed));
+                }
+            }
+
+            Assert.Equal(caster.Casts.Count, castTimes.Count);
+            Assert.All(castTimes, t =>
+            {
+                uint interval = intervals[t.Spell];
+                Assert.True(t.ElapsedMs % interval == 0, $"spell {t.Spell} cast at {t.ElapsedMs} ms, not a multiple of {interval} ms");
+            });
+
+            // The two common spells must have been cast (zero casts would pass the check above), and never before their first due time.
+            Assert.Contains(castTimes, t => t.Spell == PostmasterMalownAI.SpellWailingDead);
+            Assert.Contains(castTimes, t => t.Spell == PostmasterMalownAI.SpellBackhand);
+            Assert.All(castTimes, t => Assert.True(t.ElapsedMs >= intervals[t.Spell]));
+
+            // A cast count above the number of due times would mean the timer was reset short (for example to 0).
+            int backhandRolls = 5_000 / 8;
+            int wailingRolls = 5_000 / 19;
+            Assert.InRange(castTimes.Count(t => t.Spell == PostmasterMalownAI.SpellBackhand), 1, backhandRolls);
+            Assert.InRange(castTimes.Count(t => t.Spell == PostmasterMalownAI.SpellWailingDead), 1, wailingRolls);
         }
     }
 }
