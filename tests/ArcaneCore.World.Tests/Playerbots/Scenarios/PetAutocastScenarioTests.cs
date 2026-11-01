@@ -6,6 +6,7 @@ using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.Characters.Pets;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Pets;
+using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Scenarios;
 using ArcaneCore.World.Spells;
 using ArcaneCore.World.Tests.Playerbots.Combat;
@@ -18,7 +19,7 @@ namespace ArcaneCore.World.Tests.Playerbots.Scenarios;
 /// A managed hunter bot with a live pet turns on the autocast of the pet's harmful spells (Growl, Claw) through the real packet path: the 13-byte
 /// CMSG_PET_SPELL_AUTOCAST that <see cref="PlayerbotPetControl.EnableHarmfulAutocast"/> builds goes through the managed session to
 /// <c>PetController.HandleAutocast</c>, and the pet's <see cref="CharmInfo"/> ends with both spells enabled (vmangos HandlePetSpellAutocastOpcode,
-/// PetHandler.cpp:420-450). A passive spell and a beneficial spell stay as they were.
+/// PetHandler.cpp:451-478). A passive spell and a beneficial spell stay as they were.
 /// </summary>
 public sealed class PetAutocastScenarioTests
 {
