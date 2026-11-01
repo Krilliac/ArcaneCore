@@ -2,12 +2,12 @@ using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
+using ArcaneCore.TestSupport;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.AntiCheat.PacketHeuristics;
 using ArcaneCore.World.Gm.ServerConfig;
 using ArcaneCore.World.Rates;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -453,7 +453,7 @@ public sealed class OptionCatalogEdgeTests
             Assert.Equal(OptionSetResult.Ok, catalog.TrySet(scope, catalog.Find("Rate.XP.Kill")!, "2", Tester, out _, out _, out _));
         });
 
-        Assert.Single(logger.Lines, l => l.Contains("Rate.XP.Kill", StringComparison.Ordinal));
+        Assert.Single(logger.Messages, l => l.Contains("Rate.XP.Kill", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -509,18 +509,6 @@ public sealed class OptionCatalogEdgeTests
         public void RegisterOptions(IOptionRegistry registry) => throw new InvalidOperationException("bad pack");
     }
 
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Lines { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Lines.Add(formatter(state, exception));
-    }
-
     [Fact]
     public async Task APackKey_RefusedBeforeItsWriter_DoesNotCallIt_AndAWriterlessOrOfflineKeyIsReadOnlyOrUnavailable()
     {
@@ -573,7 +561,7 @@ public sealed class OptionCatalogEdgeTests
         Assert.Equal("old-secret-value", pack.Token);
         Assert.Equal("********", shown);
         Assert.Equal("********", described);
-        Assert.DoesNotContain(logger.Lines, l => l.Contains("secret-value", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Messages, l => l.Contains("secret-value", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -591,7 +579,7 @@ public sealed class OptionCatalogEdgeTests
         Assert.True(keys > 100);
         Assert.True(hasBuiltIn);
         Assert.True(hasPack);
-        Assert.Contains(logger.Lines, l => l.Contains("ThrowingPack", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, l => l.Contains("ThrowingPack", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -57,6 +57,7 @@ that is not listed; `ClientDbcConsumers.Directories` holds the `*DbcDirectory` k
 | `World:Chat:ChatChannelsDbcPath` | ChatChannels.dbc | the six transcribed channels, English names only |
 | `World:Chat:EmotesDbcPath`, `World:Chat:EmotesTextDbcPath` | Emotes.dbc, EmotesText.dbc | text emotes are only announced |
 | `World:GmCommands:DebugDraw:GameObjectDisplayInfoDbcPath` | GameObjectDisplayInfo.dbc | `.debug vis` marker models are not checked against the client |
+| `World:Playerbots:Pvp:Defense:WorldMapAreaDbcPath` | WorldMapArea.dbc | bot defense calls name the place without map coordinates |
 
 One key takes a directory, not a file (`ClientDbcConsumers.Directories`; a test fails when an options class gains a `*DbcDirectory` key that is not listed). When it is unset, `ClientData:DbcDirectory` fills it with itself:
 

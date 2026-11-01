@@ -5,6 +5,7 @@ using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Net;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Net;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -21,8 +22,8 @@ public sealed class NetGuardExemptionTests
 {
     private static readonly IPAddress Remote = IPAddress.Parse("198.51.100.10");
 
-    private static NetGuard Build(NetProtectionOptions options, IPAddress? bind, int daemonPerIp = 0, int daemonTotal = 0, NetGuardTests.CapturingLogger? log = null)
-        => new(options, () => daemonTotal, () => daemonPerIp, log ?? new NetGuardTests.CapturingLogger(), () => 0, bind);
+    private static NetGuard Build(NetProtectionOptions options, IPAddress? bind, int daemonPerIp = 0, int daemonTotal = 0, CapturingLogger? log = null)
+        => new(options, () => daemonTotal, () => daemonPerIp, log ?? new CapturingLogger(), () => 0, bind);
 
     private static int Admitted(NetGuard guard, IPAddress address, int attempts)
     {
@@ -71,7 +72,7 @@ public sealed class NetGuardExemptionTests
     [Fact]
     public void ExemptAddresses_ExemptTheListedAddressesAndNetworks_OnAPublicBind()
     {
-        var log = new NetGuardTests.CapturingLogger();
+        var log = new CapturingLogger();
         NetGuard guard = Build(new NetProtectionOptions
         {
             ConnectionBurstPerIp = 0, MaxConnectionsPerIp = 2,

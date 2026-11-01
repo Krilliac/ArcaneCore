@@ -16,16 +16,18 @@ public static class AcceptLoop
 
     private static readonly TimeSpan LogInterval = TimeSpan.FromSeconds(10);
 
+    /// <param name="logClock">Millisecond clock for the error-log throttle; null uses the shared monotonic clock (tests inject a fixed one).</param>
     public static async Task RunAsync(
         Func<CancellationToken, ValueTask<TcpClient>> accept,
         Action<TcpClient> onClient,
         ILogger logger,
         CancellationToken stoppingToken,
-        TimeSpan? backoff = null)
+        TimeSpan? backoff = null,
+        Func<long>? logClock = null)
     {
         TimeSpan delay = backoff ?? DefaultBackoff;
         // per call: the logon and world daemons must not share one throttle
-        var logGate = new LogGate(LogInterval);
+        var logGate = new LogGate(LogInterval, logClock);
 
         while (!stoppingToken.IsCancellationRequested)
         {

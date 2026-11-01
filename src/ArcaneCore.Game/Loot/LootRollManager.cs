@@ -207,7 +207,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             item.RollActive = true;
             _rolls.Add(roll);
             Broadcast(roll, WorldOpcode.SmsgLootStartRoll,
-                GroupLootPackets.StartRoll(bag.Source, item.Slot, item.ItemId, service.Options.RollTimeoutMs));
+                GroupLootPackets.StartRoll(bag.Source, item.Slot, item.ItemId, service.Options.RollTimeoutMs, item.RandomPropertyId));
         }
     }
 
@@ -253,7 +253,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
         }
 
         who.Vote = vote;
-        Broadcast(roll, WorldOpcode.SmsgLootRoll, GroupLootPackets.VoteAnnouncement(source, roll.Item.Slot, player.Guid, roll.Item.ItemId, vote));
+        Broadcast(roll, WorldOpcode.SmsgLootRoll, GroupLootPackets.VoteAnnouncement(source, roll.Item.Slot, player.Guid, roll.Item.ItemId, vote, roll.Item.RandomPropertyId));
         if (AllVoted(roll))
         {
             Resolve(roll);
@@ -408,7 +408,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
 
         if (winner is not { } won)
         {
-            Broadcast(roll, WorldOpcode.SmsgLootAllPassed, GroupLootPackets.AllPassed(bag.Source, item.Slot, item.ItemId));
+            Broadcast(roll, WorldOpcode.SmsgLootAllPassed, GroupLootPackets.AllPassed(bag.Source, item.Slot, item.ItemId, item.RandomPropertyId));
             return;
         }
 
@@ -423,7 +423,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
     {
         LootBag bag = roll.Bag;
         LootItem item = roll.Item;
-        Broadcast(roll, WorldOpcode.SmsgLootRollWon, GroupLootPackets.RollWon(bag.Source, item.Slot, item.ItemId, winner.Guid, number, vote));
+        Broadcast(roll, WorldOpcode.SmsgLootRollWon, GroupLootPackets.RollWon(bag.Source, item.Slot, item.ItemId, winner.Guid, number, vote, item.RandomPropertyId));
         InventoryResult stored = service.AwardItem(winner, bag, item);
         if (stored == InventoryResult.Ok)
         {
@@ -455,7 +455,7 @@ public sealed class LootRollManager(LootService service, Random random) : IMapUp
             }
 
             byte number = (byte)random.Next(1, 101);
-            Broadcast(roll, WorldOpcode.SmsgLootRoll, GroupLootPackets.ResolvedRoll(roll.Bag.Source, roll.Item.Slot, p.Guid, roll.Item.ItemId, number, vote));
+            Broadcast(roll, WorldOpcode.SmsgLootRoll, GroupLootPackets.ResolvedRoll(roll.Bag.Source, roll.Item.Slot, p.Guid, roll.Item.ItemId, number, vote, roll.Item.RandomPropertyId));
             if (best is not { } current || number > current.Number)
             {
                 best = (player, number);

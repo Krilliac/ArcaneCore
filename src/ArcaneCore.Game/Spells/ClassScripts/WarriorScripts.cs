@@ -222,14 +222,19 @@ public sealed class BloodFuryScript : ISpellScript
     {
         if (context.EffectIndex == 0 && context.Effect.Effect == SpellEffectName.Dummy)
         {
-            Trigger(context.System, context.Caster, context.Value);
+            Trigger(context.System, context.Cast, context.Value);
         }
     }
 
-    internal static void Trigger(SpellSystem system, Unit caster, int percent)
+    /// <summary>Casts already handled: the dummy effect and the cast observer both call <see cref="Trigger"/> for one cast, only the first acts.</summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<SpellCast, object> HandledCasts = new();
+
+    internal static void Trigger(SpellSystem system, SpellCast cast, int percent)
     {
-        // Both the dummy effect and the cast observer call this for one cast; the debuff marks the cast as handled.
-        if (caster is not Player || system.HasAura(caster, BloodFuryDebuff))
+        // Marked per cast, not by the debuff: vmangos applies the buff and a fresh debuff on every cast, so a recast within the debuff's
+        // 25 s (after a cooldown reset) must still apply both (SpellEffects.cpp:971-985).
+        Unit caster = cast.Caster;
+        if (caster is not Player || !HandledCasts.TryAdd(cast, HandledCasts))
         {
             return;
         }
@@ -303,7 +308,7 @@ public sealed class WarriorScriptsModule : ISpellHandlerModule
         {
             if (cast.Spell.Id == BloodFuryScript.BloodFury)
             {
-                BloodFuryScript.Trigger(system, cast.Caster, cast.Spell.SimpleValue(0));
+                BloodFuryScript.Trigger(system, cast, cast.Spell.SimpleValue(0));
             }
             else if (cast.Spell.Id == CannibalizeScript.Cannibalize
                 && cast.Spell.HasEffect(SpellEffectName.Dummy)

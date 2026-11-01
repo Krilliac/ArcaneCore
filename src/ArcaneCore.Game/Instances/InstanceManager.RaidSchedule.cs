@@ -27,11 +27,38 @@ public sealed partial class InstanceManager
     public long GetRaidResetTime(uint mapId) => _raidSchedules.TryGetValue(mapId, out RaidSchedule? schedule) ? schedule.ResetTime : 0;
 
     /// <summary>
+    /// Whether this node may make realm-wide durable writes (default: always, a single-process world).
+    /// A cluster node that does not hold the instances realm authority lease returns false, so only the holder makes realm-wide durable writes (reset time rows at <see cref="Load"/> and in <see cref="UpdateSchedule"/>, durable save deletion in the sweep); the in-memory schedule and local effects run on every node.
+    /// </summary>
+    public Func<bool> HoldsRealmAuthority { get; set; } = static () => true;
+
+    /// <summary>
     /// The instance reset schedule (vmangos <c>DungeonResetScheduler::Update</c>; the world
     /// feature runs it on a timer, tests call it directly): global raid warnings and resets,
     /// and the reset of normal dungeons whose time has come while they are empty.
     /// </summary>
     public void UpdateSchedule()
+    {
+        // Every node advances its in-memory schedule and runs the local effects (warnings, unbinding and resetting its own loaded maps, dropping
+        // saves from memory). Only the realm authority holder makes the durable writes (raid reset time rows, durable save deletion and the bind
+        // row deletes that come with it); a non-holder routes them to the null sink for the duration of the sweep.
+        IInstancePersistence durable = _persistence;
+        if (!HoldsRealmAuthority())
+        {
+            _persistence = NullInstancePersistence.Instance;
+        }
+
+        try
+        {
+            RunSchedule();
+        }
+        finally
+        {
+            _persistence = durable;
+        }
+    }
+
+    private void RunSchedule()
     {
         long now = Now;
         foreach ((uint mapId, RaidSchedule schedule) in _raidSchedules)
@@ -106,7 +133,7 @@ public sealed partial class InstanceManager
             var schedule = new RaidSchedule(t);
             schedule.SkipPastEvents(now);
             _raidSchedules[template.Entry] = schedule;
-            if (!storedByMap.TryGetValue(template.Entry, out long old) || old != t)
+            if ((!storedByMap.TryGetValue(template.Entry, out long old) || old != t) && HoldsRealmAuthority())
             {
                 _persistence.RaidResetTimeChanged(template.Entry, t);
             }

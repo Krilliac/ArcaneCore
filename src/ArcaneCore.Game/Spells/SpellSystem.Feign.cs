@@ -166,16 +166,7 @@ public sealed partial class SpellSystem
     /// <summary>vmangos WorldObject::IsWithinDistInMap: same map, 3D distance below the limit plus both bounding radii.</summary>
     private static bool IsWithinDistInMap(Unit a, Unit b, float distance)
     {
-        if (!ReferenceEquals(a.Map, b.Map))
-        {
-            return false;
-        }
-
-        float dx = a.X - b.X;
-        float dy = a.Y - b.Y;
-        float dz = a.Z - b.Z;
-        float max = distance + a.BoundingRadius + b.BoundingRadius;
-        return (dx * dx) + (dy * dy) + (dz * dz) < max * max;
+        return WorldGeometry.IsWithinDist(a, b, distance, inclusive: false, addRadii: true, MapCheck.Ref);
     }
 
     /// <summary>

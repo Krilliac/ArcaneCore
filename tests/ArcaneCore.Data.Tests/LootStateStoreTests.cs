@@ -320,6 +320,23 @@ public sealed class LootStateStoreTests : IAsyncLifetime
         Assert.Contains(typeof(LootStateDataModule), CharacterDataCleanups.All.Select(c => c.GetType()));
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task Commit_RoundTripsTheRandomPropertyOfEachStack(DatabaseProvider provider)
+    {
+        Seed seed = await CreateAsync(provider);
+        LootStateRecord generated = Generated(seed);
+        generated = generated with
+        {
+            Items = [generated.Items[0] with { RandomPropertyId = 1001 }, generated.Items[1] with { RandomPropertyId = -77 }, generated.Items[2]],
+        };
+        Assert.Equal(LootCommitResult.Committed, await CommitAsync(seed, Generation(generated)));
+
+        LootStateRecord loaded = Assert.Single(await LoadAsync(seed));
+        Assert.Equal([1001, -77, 0], loaded.Items.OrderBy(i => i.Slot).Select(i => i.RandomPropertyId));
+        Assert.Equal(generated, loaded);
+    }
+
     // --- fixtures ----------------------------------------------------------------------------
 
     /// <summary>A shared stack, a per-player stack and a quest stack for the first character.</summary>

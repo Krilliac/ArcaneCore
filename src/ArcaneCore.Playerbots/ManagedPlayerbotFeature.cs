@@ -15,6 +15,7 @@ using ArcaneCore.World.Teleport;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Honor;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Persistence;
@@ -42,7 +43,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (Dawnrover and Ironwander, 2026-10-07). The fault history lives in this process; a world restart restores every desired bot.
 /// </para>
 /// </summary>
-public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IDetachableWorldFeature, IPlayerbotService
+public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IDetachableWorldFeature, IPlayerbotService, IPlayerInspectReceiver
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private IServiceScopeFactory scopes => services.GetRequiredService<IServiceScopeFactory>();
@@ -1310,6 +1311,25 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>The bot's fight tracker (null for an unknown bot; tests and inspection).</summary>
     internal BotSocial.PlayerbotFightSocial? FightOf(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) ? active.Fight : null;
 
+    /// <summary>
+    /// A real player inspected a playerbot (<see cref="IPlayerInspectReceiver"/>; world thread, after the reply was sent): the autonomous
+    /// bot holds still for <see cref="PlayerbotOptions.InspectHoldSeconds"/> after this request (0 turns the hold off). A paused bot, a
+    /// bot a <c>.botctl</c> controller holds, one that follows a party or runs in a group or battleground is left alone.
+    /// </summary>
+    public void Inspected(Player inspector, Player target)
+    {
+        int seconds = _options.InspectHoldSeconds;
+        if (seconds <= 0) return;
+        foreach (ActiveBot active in _active.Values)
+        {
+            if (!ReferenceEquals(active.Session.Player, target)) continue;
+            if (active.Paused || active.Controller is not null || active.PartyDriven || active.GroupDriven || active.BattlegroundDriven
+                || active.Record.State != ManagedPlayerbotState.Running) return;
+            active.Brain.HoldForInspector(inspector.Guid, unchecked(active.Session.World.NowMs + ((uint)seconds * 1000u)));
+            return;
+        }
+    }
+
     /// <summary>The brain of a running bot (inspection and the scenario harness; null when not running).</summary>
     internal PlayerbotBrain? FindBrain(Guid botId) => _active.TryGetValue(botId, out ActiveBot? active) && !active.Paused ? active.Brain : null;
 
@@ -2486,7 +2506,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             {
                 ActiveBot? leader = FindOrderedBot(bots, botId);
                 string? context = leader?.Session.Player is { } player ? leader.Brain.QaReportContext(player, report) : null;
-                string? diag = leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null;
+                string? diag = groups.TakeStallDiagnostic(botId) ?? (leader?.Session.Player is { } leaderPlayer ? leader.Brain.FormatDiagnosticSnapshot(leaderPlayer) : null);
                 LogStall(logger, botId, name, stallCount: 1, stallsLogged: 0, report, outsideHome: false, everyone: null, context, diag: diag);
             }
         }
@@ -2891,7 +2911,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 active.StallsLogged, report, active.Brain.StallOutsideHome, active.Brain.SharedSetAside,
                 willLogStall && report is not null ? active.Brain.QaReportContext(driven, report) : null,
                 awaitRelease,
-                willLogStall ? active.Brain.FormatDiagnosticSnapshot(driven) : null);
+                willLogStall ? active.Brain.StallSnapshot ?? active.Brain.FormatDiagnosticSnapshot(driven) : null);
+            active.Brain.StallSnapshot = null;
             if (sharedLogged) active.Brain.SharedSetAside = null;
             IReadOnlyList<string> unreachable = active.Brain.TakeUnreachableReports();
             if (unreachable.Count > 0)

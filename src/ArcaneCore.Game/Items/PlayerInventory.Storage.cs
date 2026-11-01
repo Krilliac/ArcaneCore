@@ -152,6 +152,7 @@ public sealed partial class PlayerInventory
             }
 
             _items[slot] = null;
+            BumpLayout();
             SetSlotField(slot, ObjectGuid.Empty);
         }
         else
@@ -453,6 +454,7 @@ public sealed partial class PlayerInventory
     private void PlaceInOwnSlot(byte slot, Item item)
     {
         _items[slot] = item;
+        BumpLayout();
         SetSlotField(slot, item.Guid);
         item.ContainedIn = _ownerGuid;
         item.OwnerGuid = _ownerGuid;

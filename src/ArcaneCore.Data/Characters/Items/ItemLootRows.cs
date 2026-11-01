@@ -41,6 +41,9 @@ public sealed class ItemLootRow
 
     public bool Quest { get; set; }
 
+    /// <summary>The random property rolled at generation (vmangos <c>item_loot.property</c>); 0 for none. Added by characters schema 70.</summary>
+    public int RandomPropertyId { get; set; }
+
     internal static void Configure(EntityTypeBuilder<ItemLootRow> entity)
     {
         entity.ToTable("item_loot");
@@ -50,6 +53,7 @@ public sealed class ItemLootRow
         entity.Property(r => r.ItemId).HasColumnName("item_id");
         entity.Property(r => r.Amount).HasColumnName("amount");
         entity.Property(r => r.Quest).HasColumnName("quest");
+        entity.Property(r => r.RandomPropertyId).HasColumnName("random_property_id").HasDefaultValue(0);
     }
 }
 
@@ -93,7 +97,7 @@ public static class ItemLootPersistence
         ILookup<uint, ItemLootRow> byItem = rows.ToLookup(r => r.ItemGuid);
         return states.ToDictionary(
             s => s.ItemGuid,
-            s => new ItemLootData(s.Gold, [.. byItem[s.ItemGuid].OrderBy(r => r.Slot).Select(r => new ItemLootEntry(r.Slot, r.ItemId, r.Amount, r.Quest))]));
+            s => new ItemLootData(s.Gold, [.. byItem[s.ItemGuid].OrderBy(r => r.Slot).Select(r => new ItemLootEntry(r.Slot, r.ItemId, r.Amount, r.Quest, r.RandomPropertyId))]));
     }
 
     internal static async Task StageReplaceForOwnerAsync(
@@ -294,11 +298,11 @@ public static class ItemLootPersistence
             {
                 if (have is not null && have.Remove(entry.Slot, out ItemLootRow? row))
                 {
-                    (row.ItemId, row.Amount, row.Quest) = (entry.ItemId, entry.Count, entry.IsQuest);
+                    (row.ItemId, row.Amount, row.Quest, row.RandomPropertyId) = (entry.ItemId, entry.Count, entry.IsQuest, entry.RandomPropertyId);
                 }
                 else
                 {
-                    db.Add(new ItemLootRow { ItemGuid = guid, Slot = entry.Slot, ItemId = entry.ItemId, Amount = entry.Count, Quest = entry.IsQuest });
+                    db.Add(new ItemLootRow { ItemGuid = guid, Slot = entry.Slot, ItemId = entry.ItemId, Amount = entry.Count, Quest = entry.IsQuest, RandomPropertyId = entry.RandomPropertyId });
                 }
             }
 

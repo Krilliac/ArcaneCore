@@ -84,6 +84,15 @@ public sealed class WorldHost(
         _fencing.Validate();
         if (_worker is { Enabled: false, Standby: true })
             throw new InvalidOperationException("Cluster:Worker:Standby requires Cluster:Worker:Enabled = true: a standby world is a gateway worker");
+        if (_worker is { Enabled: true })
+        {
+            if (!_worker.TryGetOwnership(out MapOwnership ownedMaps, out string? ownedError))
+                throw new InvalidOperationException($"Cluster:Worker:OwnedMaps is not a map list: {ownedError}");
+            world.Ownership = ownedMaps;
+            if (!ownedMaps.OwnsEverything)
+                logger.LogInformation("Worker owns maps: {Maps}", ownedMaps);
+        }
+
         bool acquiredHere = false;
         try
         {
@@ -233,8 +242,11 @@ public sealed class WorldHost(
             return keeper.TokenFor(scope) is { } token ? $"{feature.Name} attached here (token {token})" : $"{feature.Name} not attached (lease held by another node)";
         }
 
-        logger.LogInformation("Cluster node role {Role} as {Node}: {AutoBroadcast}; {AuctionBot}", role, keeper.NodeId,
-            Describe(typeof(ServerMail.AutoBroadcastFeature)), Describe(typeof(Economy.AuctionBotFeature)));
+        string instances = keeper.TokenFor(ArcaneCore.Kernel.Cluster.Social.RealmAuthorityScopes.Instances) is { } instancesToken
+            ? $"instance raid reset times written here (token {instancesToken})"
+            : "instance raid reset times written by another node";
+        logger.LogInformation("Cluster node role {Role} as {Node}: {AutoBroadcast}; {AuctionBot}; {Instances}", role, keeper.NodeId,
+            Describe(typeof(ServerMail.AutoBroadcastFeature)), Describe(typeof(Economy.AuctionBotFeature)), instances);
     }
 
     /// <summary>

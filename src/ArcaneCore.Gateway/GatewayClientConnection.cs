@@ -5,6 +5,7 @@ using System.Threading.Channels;
 using ArcaneCore.Cryptography;
 using ArcaneCore.Kernel;
 using ArcaneCore.Kernel.Accounts;
+using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
@@ -15,6 +16,7 @@ using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Net.Versioning;
+using ArcaneCore.World.Warden;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -51,6 +53,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     private int _accountId;
     private PendingAuth? _pending;
     private string? _kickReason;
+    private GatewayWardenSession? _warden;
 
     private enum ConnectionState
     {
@@ -60,7 +63,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         Closed,
     }
 
-    private sealed record PendingAuth(IClientProtocol Protocol, byte[] SessionKey, byte[] AddonBlock, string Account);
+    private sealed record PendingAuth(IClientProtocol Protocol, byte[] SessionKey, byte[] AddonBlock, string Account, uint Build, AccountSecurity Security);
 
     internal GatewayClientConnection(GatewayServer server, TcpClient client, NetGuard guard, ILogger logger)
     {
@@ -226,6 +229,13 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
                 _logger.LogWarning("[{Endpoint}] {Opcode} before authentication; disconnecting", RemoteEndpoint, WorldOpcodeNames.GetName(opcode));
                 return false;
             case ConnectionState.Forwarding:
+                if (opcode == WorldOpcode.CmsgWardenData && Volatile.Read(ref _warden) is { } warden)
+                {
+                    // The gateway owns this session's Warden: the reply is decrypted and checked here, never forwarded.
+                    warden.Handle(payload);
+                    return true;
+                }
+
                 return Forward(opcode, payload);
             default:
                 return false;
@@ -236,6 +246,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
     {
         if (_link is { } link && link.SendClientPacket(SessionGeneration, opcode, payload))
         {
+            GatewayMeters.CountForwarded(_server.Options.NodeId, "to_worker", payload.Length);
             return true;
         }
 
@@ -255,6 +266,14 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         if (!_guard.AllowsAuthAttempt(_address))
         {
             SendAuthResponse(AuthResponseCode.Failed);
+            return false;
+        }
+
+        if (_server.Warden is { IsReady: false } unready)
+        {
+            // Warden is on but unusable here: a client must not get an unscanned session through this gateway.
+            _logger.LogWarning("[{Endpoint}] Warden is not ready on this gateway ({Reason}); refusing '{Account}' with AUTH_UNAVAILABLE", RemoteEndpoint, unready.NotReadyReason, request.Account);
+            SendAuthResponse(AuthResponseCode.Unavailable);
             return false;
         }
 
@@ -315,6 +334,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         if (link is null)
         {
             _logger.LogWarning("[{Endpoint}] no worker link; refusing '{Account}' with AUTH_UNAVAILABLE", RemoteEndpoint, request.Account);
+            GatewayMeters.CountSessionOpen(_server.Options.NodeId, "no_link");
             SendAuthResponse(AuthResponseCode.Unavailable);
             return false;
         }
@@ -327,10 +347,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
         }
 
         _link = link;
-        _pending = new PendingAuth(protocol, stored.SessionKey, request.AddonBlock.ToArray(), request.Account);
+        _pending = new PendingAuth(protocol, stored.SessionKey, request.AddonBlock.ToArray(), request.Account, request.Build, stored.Security);
         _state = ConnectionState.Authenticating;
         // The link takes the generation and queues the open under one lock: concurrent logins reach the worker in generation order
         // (it refuses an open not above the last one it saw).
+        long openStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         GatewaySessionOpenReply reply = await link.OpenAsync(
             _server.NextGeneration,
             generation =>
@@ -341,6 +362,8 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             this,
             token).ConfigureAwait(false);
         _pending = null;
+        GatewayMeters.RecordLinkLatency(_server.Options.NodeId, _server.WorkerEndPoint, System.Diagnostics.Stopwatch.GetElapsedTime(openStarted).TotalMilliseconds);
+        GatewayMeters.CountSessionOpen(_server.Options.NodeId, reply.Accepted ? "accepted" : "refused");
         if (!reply.Accepted)
         {
             _logger.LogInformation("[{Endpoint}] worker refused '{Account}': {Code} ({Reason})", RemoteEndpoint, request.Account, reply.RefusalCode, reply.Reason);
@@ -372,9 +395,57 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             RemoteEndpoint, pending.Account, SessionGeneration, reply.OwnerEpoch);
         SendAuthResponse(AuthResponseCode.Ok);
         Send(WorldOpcode.SmsgAddonInfo, AddonInfo.BuildResponse(pending.AddonBlock, _logger, RemoteEndpoint));
+        StartWarden(pending);
     }
 
-    void IGatewaySessionSink.OnServerPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload) => Send(opcode, payload);
+    /// <summary>Start this session's Warden (when the gateway runs one and the session is scanned); MODULE_USE follows SMSG_ADDON_INFO.</summary>
+    private void StartWarden(PendingAuth pending)
+    {
+        if (_server.Warden is not { } gatewayWarden)
+        {
+            return;
+        }
+
+        GatewayWardenSession? session = gatewayWarden.Begin(pending.Build, pending.Security, pending.Account, pending.SessionKey,
+            body => Send(WorldOpcode.SmsgWardenData, body), OnWardenVerdict);
+        if (session is null)
+        {
+            return;
+        }
+
+        Volatile.Write(ref _warden, session);
+        if (_state == ConnectionState.Closed)
+        {
+            // The client left while Warden started: Close already ran and saw no session.
+            Interlocked.Exchange(ref _warden, null)?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// A Warden batch called for Kick or Ban: report it to the worker (which applies a ban) and disconnect the client at once, as the
+    /// world's own Warden does. The frame is queued before the close, so the worker sees the verdict while the session is still open.
+    /// </summary>
+    private void OnWardenVerdict(WardenAction action, string reason, uint? checkId)
+    {
+        long generation = SessionGeneration;
+        if (generation != 0 && _link is { } link && _server.Warden is { } gatewayWarden)
+        {
+            ClusterWardenAction wire = action == WardenAction.Ban ? ClusterWardenAction.Ban : ClusterWardenAction.Kick;
+            if (!link.SendWardenVerdict(generation, (ushort)Math.Min(checkId ?? 0u, (uint)ushort.MaxValue), wire, reason, gatewayWarden.Posture))
+            {
+                _logger.LogWarning("[{Endpoint}] Warden {Action} verdict ({Reason}) could not be sent: the session is closed or the worker link is down",
+                    RemoteEndpoint, wire, reason);
+            }
+        }
+
+        Kick("Warden: " + reason);
+    }
+
+    void IGatewaySessionSink.OnServerPacket(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    {
+        GatewayMeters.CountForwarded(_server.Options.NodeId, "to_client", payload.Length);
+        Send(opcode, payload);
+    }
 
     void IGatewaySessionSink.OnClosed(ClusterSessionDetachReason reason)
     {
@@ -438,6 +509,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink
             _outbound.Writer.TryComplete();
         }
 
+        Interlocked.Exchange(ref _warden, null)?.Dispose();
         long generation = Interlocked.Exchange(ref _generation, 0);
         if (generation != 0)
         {

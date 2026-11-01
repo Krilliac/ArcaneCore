@@ -109,6 +109,12 @@ public interface ISupervisedProcess : IDisposable
     int? ExitCode { get; }
 
     /// <summary>
+    /// When the OS started this process (UTC), or null when unknown. The supervisor records it with the pid so a restarted supervisor can tell the
+    /// same child from a recycled pid. A null start time is never recorded.
+    /// </summary>
+    DateTimeOffset? StartTimeUtc => null;
+
+    /// <summary>
     /// Fired when the child writes a line to stdout (<c>isStdErr = false</c>) or stderr (<c>isStdErr = true</c>).
     /// </summary>
     event Action<string, bool>? OutputLineReceived;
@@ -174,7 +180,7 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
     /// <summary>
     /// Pids of children this launcher started whose exit it has not yet observed. A pid leaves only when the OS reports the exit
     /// (never on a cancelled wait, never on the kill call itself); a child whose kill failed stays here and is reported as a fault.
-    /// In memory only: it does not survive a supervisor restart (M15.4 restart reconciliation is an open gap).
+    /// In memory only; the supervisor's own state file (<see cref="SupervisorChildStateFile"/>) is what lets a restarted supervisor find the children.
     /// </summary>
     private readonly ConcurrentDictionary<int, byte> _ownedPids = new();
 
@@ -280,6 +286,15 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
             _process = process;
             _pid = pid;
             _ownedPids = ownedPids;
+            try
+            {
+                StartTimeUtc = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or NotSupportedException)
+            {
+                StartTimeUtc = null; // unreadable (already exited, or no access): the child is simply not recorded
+            }
+
             if (onOutputLine is not null)
                 OutputLineReceived += (line, isStdErr) => onOutputLine(this, line, isStdErr); // subscribed before the pumps start: no early line is lost
 
@@ -294,6 +309,8 @@ public sealed class SystemProcessSupervisedLauncher : ISupervisedProcessLauncher
         }
 
         public int ProcessId => _pid;
+
+        public DateTimeOffset? StartTimeUtc { get; private set; }
 
         public bool HasExited
         {
@@ -605,6 +622,17 @@ public sealed record SupervisorStartPlan(IReadOnlyList<string> Admitted, IReadOn
 public sealed record SupervisorBelowMinimum(int Running, int Minimum, bool AnyGaveUp);
 
 /// <summary>
+/// Outcome of <see cref="ClusterHostSupervisor.ReconcileOrphans"/>, by recorded child name: <paramref name="Adopted"/> (alive with the recorded start time, kept and
+/// watched), <paramref name="Terminated"/> (alive with the recorded start time, killed), <paramref name="Ignored"/> (gone, or the pid belongs to a process with a
+/// different start time) and <paramref name="Failed"/> (a kill the OS did not complete).
+/// </summary>
+public sealed record SupervisorReconciliationReport(
+    IReadOnlyList<string> Adopted,
+    IReadOnlyList<string> Terminated,
+    IReadOnlyList<string> Ignored,
+    IReadOnlyList<string> Failed);
+
+/// <summary>
 /// Immutable point-in-time status snapshot of a supervised process.
 /// </summary>
 public sealed record SupervisedProcessSnapshot(
@@ -639,6 +667,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     private readonly TimeProvider _time;
     private readonly ISupervisedHangCapture? _hangCapture;
     private readonly SupervisorCrashDialog? _crashDialog;
+    private readonly SupervisorChildStateFile? _childStateFile;
+    private readonly ISupervisorProcessInspector _inspector;
     private readonly ILogger _logger;
     private readonly string _protocolToken = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
     private int _belowMinimumRaised;
@@ -656,7 +686,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         TimeProvider? timeProvider = null,
         ISupervisedHangCapture? hangCapture = null,
         SupervisorCrashDialog? crashDialog = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        SupervisorChildStateFile? childStateFile = null,
+        ISupervisorProcessInspector? processInspector = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(launcher);
@@ -670,6 +702,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         _delayAsync = delayAsync ?? ((delay, ct) => Task.Delay(delay, _time, ct));
         _hangCapture = hangCapture;
         _crashDialog = crashDialog;
+        _childStateFile = childStateFile;
+        _inspector = processInspector ?? new SystemSupervisorProcessInspector();
 
         foreach ((string key, SupervisedProcessConfig config) in _options.Processes)
         {
@@ -933,6 +967,10 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             if (entry.State is SupervisedProcessState.Stopped or SupervisedProcessState.Drained)
                 return entry.ToSnapshot();
 
+            // A drain that ended Faulted (the child survived its kill) has nothing left to drain: a second drain must not call it Drained.
+            if (entry.State == SupervisedProcessState.Faulted && entry.Stranded is not null)
+                return entry.ToSnapshot();
+
             entry.State = SupervisedProcessState.Draining;
             process = entry.Process;
             monitorTask = entry.MonitorTask;
@@ -1009,13 +1047,16 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             toDispose = entry.Process;
             entry.Process = null;
             entry.State = stillAlive ? SupervisedProcessState.Faulted : SupervisedProcessState.Drained;
+            entry.Stranded = stillAlive
+                ? new SupervisedChildRecord(entry.Config.Name, entry.Config.Role, process!.ProcessId, process.StartTimeUtc?.ToUnixTimeMilliseconds() ?? 0)
+                : null;
+            PersistChildStateUnderLock();
             snapshot = entry.ToSnapshot();
         }
 
         if (process is not null && process.HasExited)
             _logger.LogInformation("Supervised process {Process} (pid {ProcessId}) exited with code {ExitCode} during its drain", entry.Config.Name, process.ProcessId, process.ExitCode);
 
-        // A second DrainProcessAsync on an entry that ended Faulted finds no process and marks it Drained (follow-up: keep Faulted until reconciled).
         // Outside _gate: the wrapper's Dispose kills again and can block (up to the confirm timeout) when a kill was refused; no one else may wait on that.
         toDispose?.Dispose();
         return snapshot;
@@ -1123,7 +1164,139 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         entry.Process = process;
         entry.Incarnation++;
         entry.State = SupervisedProcessState.Running;
+        entry.Stranded = null;
         StartHangWatchUnderLock(entry, process);
+        PersistChildStateUnderLock();
+    }
+
+    // ---- restart reconciliation ----
+
+    /// <summary>
+    /// Rewrites the state file from the live children (and any child a drain could not kill). Call under <c>_gate</c>. A write failure is a fault, never
+    /// a supervisor failure: the file is a recovery aid.
+    /// </summary>
+    private void PersistChildStateUnderLock()
+    {
+        if (_childStateFile is null)
+            return;
+
+        var records = new List<SupervisedChildRecord>();
+        foreach (ManagedEntry e in OrderedEntriesUnderLock())
+        {
+            if (e.Process is { StartTimeUtc: { } startUtc } live && !live.HasExited)
+                records.Add(new SupervisedChildRecord(e.Config.Name, e.Config.Role, live.ProcessId, startUtc.ToUnixTimeMilliseconds()));
+            else if (e.Stranded is { StartTimeUtcMs: > 0 } stranded)
+                records.Add(stranded);
+        }
+
+        try
+        {
+            _childStateFile.Save(records);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogFault("cluster.supervisor.child-state", ex, "The supervisor could not write its child state file {Path}", _childStateFile.Path);
+        }
+    }
+
+    /// <summary>
+    /// Run once at supervisor start, before anything is launched: finds the children a previous supervisor recorded and left running. A record counts only when the
+    /// pid is alive with the recorded start time (a recycled pid is ignored, never touched). By role: a <c>worker</c> holds leases and the writer lock and
+    /// its drain channel died with the old supervisor, so it is terminated and relaunched fresh; any other role is adopted (<see cref="AdoptedOrphanProcess"/>)
+    /// and watched, and relaunched normally if it dies. Records for names no longer configured are terminated. The state file is rewritten afterwards.
+    /// </summary>
+    public SupervisorReconciliationReport ReconcileOrphans()
+    {
+        if (_childStateFile is null)
+            return new SupervisorReconciliationReport([], [], [], []);
+
+        IReadOnlyList<SupervisedChildRecord> recorded = _childStateFile.Load();
+        var adopted = new List<string>();
+        var terminated = new List<string>();
+        var ignored = new List<string>();
+        var failed = new List<string>();
+
+        foreach (SupervisedChildRecord record in recorded)
+        {
+            if (!_inspector.TryGetStartTimeUtc(record.ProcessId, out DateTimeOffset start))
+            {
+                ignored.Add(record.Name); // gone
+                continue;
+            }
+
+            if (!SupervisedChildIdentity.SameStart(record.StartTimeUtcMs, start))
+            {
+                ignored.Add(record.Name); // the pid was recycled by an unrelated process
+                _logger.LogWarning("Supervisor state file lists {Process} as pid {ProcessId}, but that pid started at a different time; it is not ours and is left alone", record.Name, record.ProcessId);
+                continue;
+            }
+
+            ManagedEntry? entry;
+            lock (_gate)
+            {
+                _entries.TryGetValue(record.Name, out entry);
+            }
+
+            string role = entry?.Config.Role ?? record.Role;
+            bool adopt = entry is not null && !string.Equals(role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase);
+            if (adopt)
+            {
+                lock (_gate)
+                {
+                    ObjectDisposedException.ThrowIf(_disposed, this);
+                    if (entry!.State is SupervisedProcessState.Running or SupervisedProcessState.BackingOff or SupervisedProcessState.Hung or SupervisedProcessState.Draining)
+                    {
+                        adopt = false; // already has a live incarnation: the orphan is a stray
+                    }
+                    else
+                    {
+                        ManagedEntry adoptee = entry;
+                        adoptee.StopCts?.Dispose();
+                        adoptee.StopCts = CancellationTokenSource.CreateLinkedTokenSource(_supervisorStop.Token);
+                        CancellationToken stopToken = adoptee.StopCts.Token;
+                        adoptee.LaunchUtc = start;
+                        adoptee.BeginIncarnation(_time.GetTimestamp());
+                        adoptee.Process = new AdoptedOrphanProcess(record.ProcessId, start, _inspector);
+                        adoptee.Incarnation++;
+                        adoptee.State = SupervisedProcessState.Running;
+                        adoptee.Stranded = null;
+                        adoptee.MonitorTask = Task.Run(() => MonitorProcessLoopAsync(adoptee, stopToken));
+                    }
+                }
+
+                if (adopt)
+                {
+                    adopted.Add(record.Name);
+                    _logger.LogInformation("Supervisor adopted orphaned {Process} (pid {ProcessId}, role {Role}) left by a previous supervisor", record.Name, record.ProcessId, role);
+                    continue;
+                }
+            }
+
+            if (_inspector.TryKill(record.ProcessId))
+            {
+                terminated.Add(record.Name);
+                _logger.LogWarning("Supervisor terminated orphaned {Process} (pid {ProcessId}, role {Role}) left by a previous supervisor", record.Name, record.ProcessId, role);
+            }
+            else
+            {
+                failed.Add(record.Name);
+                AnomalyLedger.Shared.Report("cluster", "supervisor-orphan-kill-failed", record.Name, $"pid={record.ProcessId}", AnomalySeverity.Error);
+                if (entry is not null)
+                {
+                    lock (_gate)
+                    {
+                        entry.Stranded = record; // still alive and still ours: it stays in the state file for the next start
+                    }
+                }
+            }
+        }
+
+        lock (_gate)
+        {
+            PersistChildStateUnderLock();
+        }
+
+        return new SupervisorReconciliationReport(adopted, terminated, ignored, failed);
     }
 
     // ---- the line protocol (child stdout) ----
@@ -1676,6 +1849,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                     entry.EndIncarnation();
                     entry.Process?.Dispose();
                     entry.Process = null;
+                    PersistChildStateUnderLock();
 
                     switch (disposition)
                     {
@@ -1959,6 +2133,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                 entry.MonitorTask = null;
             }
 
+            PersistChildStateUnderLock(); // the children are gone: only a child that survived its kill stays listed
             _supervisorStop.Dispose();
             _multiplexer.Dispose();
         }
@@ -1982,6 +2157,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public int DumpingGraceSeconds { get; set; }
         public CancellationTokenSource? StopCts { get; set; }
         public Task? MonitorTask { get; set; }
+
+        /// <summary>A child that survived its drain and kill (and so is no longer <see cref="Process"/>): it stays in the state file, and a second drain leaves the entry Faulted.</summary>
+        public SupervisedChildRecord? Stranded { get; set; }
 
         // Per-incarnation hang-watch state; all of it is read and written under the supervisor's _gate.
         public long LaunchTimestamp { get; set; }

@@ -525,6 +525,7 @@ public sealed class SqliteWriteGateProgressTests
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // wall-bound: checks the gate against the real clock while holders take real time in turn
     public async Task AWaiterBehindAMovingQueue_DoesNotTimeOut_OnTheRealClock()
     {
         // Public API, real time: 8 writers hold the gate ~120 ms each in turn (~1 s in all) against a 2 s bound (hard cap 8 s). The bound is wide enough that building the

@@ -140,6 +140,12 @@ public sealed class PlayerbotOptions
     public double SlowThinkLogMs { get; set; } = 50;
 
     /// <summary>
+    /// A real player's inspect (<c>CMSG_INSPECT</c> or the Honor tab's <c>MSG_INSPECT_HONOR_STATS</c>) holds an autonomous bot still for this many seconds after the latest request, so the client's 10-yard inspect range keeps its gear visible (0..120; 0 turns it off).
+    /// </summary>
+    [ArcaneCore.Kernel.Configuration.ConfigAllowed("a whole number from 0 to 120; 0 turns the hold off")]
+    public int InspectHoldSeconds { get; set; } = 20;
+
+    /// <summary>
     /// The most navigation-mesh search nodes the fallback path queries of one bot think may create together (the steep escape, the
     /// starts beside the bot, the hazard detours; <c>PlayerbotThinkProbe.NodeBudget</c>): past it a fallback runs with what is
     /// left, or not at all, and finds nothing (its plan may then fail, as when no such way exists). A plan's own query is neither held
@@ -201,6 +207,12 @@ public sealed class PlayerbotOptions
     /// <summary>Maximum same-map straight-line trip from a quest giver to its nearest present ender for an unhomed bot (0 disables the distance limit; 0..100000).</summary>
     [ArcaneCore.Kernel.Configuration.ConfigAllowed("a number from 0 to 100000 ('.' is the decimal point); 0 disables the distance limit")]
     public float MaxDeliveryYards { get; set; } = 1200f;
+
+    /// <summary>
+    /// Abandon an incomplete quest that has turned grey for the bot (quest level at or below its vmangos grey level) and hunt no objective of it
+    /// (on by default). A completed grey quest is still turned in. Off: grey quests are kept until a full log sheds one. Live: <c>.reload config</c>.
+    /// </summary>
+    public bool DropGreyQuests { get; set; } = true;
 
     /// <summary>The bots' movement speed in yards per second, never above the player's run speed (above 0, at most 100).</summary>
     public float MoveSpeed { get; set; } = 7f;
@@ -275,6 +287,9 @@ public sealed class PlayerbotOptions
     /// <summary>Chests, gathering nodes and rare creatures a bot weighs against their guards and goes for when worth it (<c>World:Playerbots:Opportunities</c>; live; docs/areas/playbots-opportunities.md).</summary>
     public PlayerbotOpportunityOptions Opportunities { get; set; } = new();
 
+    /// <summary>World PvP objectives bots take part in: the Silithus Silithyst run (<c>World:Playerbots:WorldPvp</c>; live; docs/areas/playbots-social.md).</summary>
+    public PlayerbotWorldPvpOptions WorldPvp { get; set; } = new();
+
     /// <summary>
     /// Bots answer players who talk to them (<c>World:Playerbots:Chat</c>; live): built-in template replies by default, with optional
     /// model providers (Anthropic, OpenAI-compatible, local servers) in front of them (docs/areas/playbots.md, Bot chat).
@@ -289,6 +304,9 @@ public sealed class PlayerbotOptions
 
     /// <summary>How a homed bot returns to its home area: walk, teleport, or teleport when the walk is long or unsafe (<c>World:Playerbots:Home</c>; live).</summary>
     public PlayerbotHomeOptions Home { get; set; } = new();
+
+    /// <summary>How a dead bot weighs enemy players at its body before reclaiming (<c>World:Playerbots:Recovery</c>; read when the bot dies).</summary>
+    public PlayerbotRecoveryOptions Recovery { get; set; } = new();
 
     /// <summary>How bots share the mobs of one place: soft claims, helping a tagger, leaving someone else's mob alone (<c>World:Playerbots:Contention</c>; live).</summary>
     public PlayerbotContentionOptions Contention { get; set; } = new();
@@ -366,6 +384,7 @@ public sealed class PlayerbotOptions
         if (!float.IsFinite(CornerCentringMaxYards) || CornerCentringMaxYards is < 0f or > 10f) throw new InvalidOperationException($"{SectionName}: CornerCentringMaxYards must be 0..10.");
         if (!float.IsFinite(CornerTurnLeadYards) || CornerTurnLeadYards is < 0f or > 6f) throw new InvalidOperationException($"{SectionName}: CornerTurnLeadYards must be 0..6.");
         if (!double.IsFinite(SlowThinkLogMs) || SlowThinkLogMs is < 0 or > 60_000) throw new InvalidOperationException($"{SectionName}: SlowThinkLogMs must be 0..60000.");
+        if (InspectHoldSeconds is < 0 or > 120) throw new InvalidOperationException($"{SectionName}: InspectHoldSeconds must be 0..120.");
         if (MaxThinkSearchNodes != 0 && MaxThinkSearchNodes is < ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes or > 10_000_000)
             throw new InvalidOperationException($"{SectionName}: MaxThinkSearchNodes must be 0 or {ArcaneCore.Game.Maps.Collision.PathOptions.DefaultMaxSearchNodes}..10000000.");
         if (PathJobsMaxPerBot is < 1 or > 8) throw new InvalidOperationException($"{SectionName}: PathJobsMaxPerBot must be 1..8.");
@@ -402,6 +421,8 @@ public sealed class PlayerbotOptions
         Pvp.Validate();
         if (Opportunities is null) throw new InvalidOperationException($"{SectionName}:Opportunities is missing.");
         Opportunities.Validate();
+        if (WorldPvp is null) throw new InvalidOperationException($"{SectionName}:WorldPvp is missing.");
+        WorldPvp.Validate();
         if (Chat is null) throw new InvalidOperationException($"{SectionName}:Chat is missing.");
         Chat.Validate();
         if (Groups is null) throw new InvalidOperationException($"{SectionName}:Groups is missing.");
@@ -410,6 +431,8 @@ public sealed class PlayerbotOptions
         Follow.Validate();
         if (Home is null) throw new InvalidOperationException($"{SectionName}:Home is missing.");
         Home.Validate();
+        if (Recovery is null) throw new InvalidOperationException($"{SectionName}:Recovery is missing.");
+        Recovery.Validate();
         if (Contention is null) throw new InvalidOperationException($"{SectionName}:Contention is missing.");
         Contention.Validate();
         if (Taxi is null) throw new InvalidOperationException($"{SectionName}:Taxi is missing.");

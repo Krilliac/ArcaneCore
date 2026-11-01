@@ -406,6 +406,7 @@ public sealed class Container : Item
     internal void StoreItem(byte slot, Item item)
     {
         _slots[slot] = item;
+        Inventory?.BumpLayout();
         SetUInt64(UpdateFields.ContainerFieldSlot1 + (slot * 2), item.Guid.Value);
         item.ContainedIn = Guid;
         item.OwnerGuid = OwnerGuid;
@@ -416,6 +417,7 @@ public sealed class Container : Item
     /// <summary>vmangos Bag::RemoveItem.</summary>
     internal void RemoveItem(byte slot)
     {
+        Inventory?.BumpLayout();
         if (_slots[slot] is { } item)
         {
             item.Container = null;

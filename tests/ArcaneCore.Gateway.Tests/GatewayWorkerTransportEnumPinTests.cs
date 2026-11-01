@@ -15,7 +15,7 @@ public sealed class GatewayWorkerTransportEnumPinTests
             ("DetachSessionRequest", 5), ("DetachSessionReply", 6), ("ClientSessionPacket", 7),
             ("ClientSessionPacketAck", 8), ("ServerSessionPacket", 9), ("ServerSessionDetached", 10),
             ("SessionOpen", 11), ("SessionOpenReply", 12), ("SessionClientPacket", 13), ("SessionServerPacket", 14),
-            ("SessionClose", 15), ("LinkChallenge", 16), ("LinkProof", 17),
+            ("SessionClose", 15), ("LinkChallenge", 16), ("LinkProof", 17), ("WardenVerdict", 18), ("WardenPosture", 19),
         };
 
         Assert.Equal(typeof(byte), Enum.GetUnderlyingType(typeof(GatewayWorkerFrameType)));

@@ -198,7 +198,6 @@ public sealed class TradeOfferedItemMoveTests
         Assert.Equal(5u, await ReceiverCountAsync(rig));
     }
 
-    [Trait("Category", "Timing")]
     [Fact]
     public async Task SplitOfAnotherStack_WhileSomethingIsOffered_StillWorks()
     {
@@ -210,7 +209,13 @@ public sealed class TradeOfferedItemMoveTests
         await AcceptAsync(rig);
 
         await rig.Sender.SendAsync(WorldOpcode.CmsgSplitItem, [InventorySlots.Bag0, otherSlot, InventorySlots.Bag0, free, 6], rig.Token);
-        await SyncAsync(rig);
+        // The split is a legal change, so the proof is its own effect read on the world thread (a world-queue round trip per poll), not the
+        // scam-prevention bounce of a second accept: that bounce depends on the trade clock staying inside one second.
+        while (!await rig.Server.World.InvokeAsync(() =>
+            rig.Server.World.FindOnlinePlayer(new ObjectGuid(rig.SenderGuid))!.Inventory.GetItem(InventorySlots.Bag0, free) is not null).WaitAsync(rig.Token))
+        {
+            await Task.Delay(5, rig.Token);
+        }
 
         await rig.Server.World.InvokeAsync(() =>
         {

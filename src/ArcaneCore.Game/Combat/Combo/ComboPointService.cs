@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Spells;
 
@@ -26,7 +25,7 @@ public sealed class ComboPointService
 
     private readonly SpellSystem _spells;
     private readonly Func<Player, ObjectGuid, Unit?> _findUnit;
-    private readonly ConditionalWeakTable<Player, State> _states = new();
+    private readonly InstanceAttachments<Player, State> _states = new();
     private readonly Dictionary<ObjectGuid, HashSet<Player>> _holders = [];
     private readonly HashSet<MapCombat> _observed = new(ReferenceEqualityComparer.Instance);
 
@@ -69,10 +68,10 @@ public sealed class ComboPointService
     }
 
     /// <summary>vmangos Player::GetComboPoints.</summary>
-    public int GetComboPoints(Player player) => _states.TryGetValue(player, out State? state) ? state.Points : 0;
+    public int GetComboPoints(Player player) => _states.Find(player)?.Points ?? 0;
 
     /// <summary>vmangos Player::GetComboTargetGuid (empty = none).</summary>
-    public ObjectGuid GetComboTarget(Player player) => _states.TryGetValue(player, out State? state) ? state.Target : default;
+    public ObjectGuid GetComboTarget(Player player) => _states.Find(player)?.Target ?? default;
 
     /// <summary>
     /// vmangos Player::AddComboPoints: points on the current target add up, a new target restarts the count; capped to
@@ -88,7 +87,7 @@ public sealed class ComboPointService
         }
 
         RemoveRetainAuras(player);
-        State state = _states.GetOrCreateValue(player);
+        State state = _states.GetOrCreate(player, static _ => new State());
         if (target.Guid == state.Target)
         {
             state.Points += count;
@@ -113,7 +112,7 @@ public sealed class ComboPointService
     public void ClearComboPoints(Player player)
     {
         ArgumentNullException.ThrowIfNull(player);
-        if (!_states.TryGetValue(player, out State? state) || state.Target.IsEmpty)
+        if (_states.Find(player) is not { } state || state.Target.IsEmpty)
         {
             return;
         }
@@ -306,13 +305,13 @@ public sealed class ComboValueModifier(ComboPointService combos) : ISpellValueMo
 /// </summary>
 public sealed class ComboFinishObserver(ComboPointService combos) : ISpellCastObserver
 {
-    private readonly ConditionalWeakTable<SpellCast, object> _missed = new();
+    private readonly InstanceAttachments<SpellCast, object> _missed = new();
 
     public void OnTargetOutcome(SpellCast cast, SpellTargetOutcome outcome)
     {
         if (cast.Spell.NeedsComboPoints && outcome.Miss != SpellMissInfo.None && !ReferenceEquals(outcome.Target, cast.Caster))
         {
-            _missed.TryAdd(cast, new object());
+            _missed.Attach(cast, new object());
         }
     }
 
@@ -320,7 +319,7 @@ public sealed class ComboFinishObserver(ComboPointService combos) : ISpellCastOb
     {
         if (completed && cast.Caster is Player player && cast.Spell.NeedsComboPoints)
         {
-            bool drop = cast.Spell.IsPositive || !_missed.TryGetValue(cast, out _);
+            bool drop = cast.Spell.IsPositive || _missed.Find(cast) is null;
             _missed.Remove(cast);
             if (drop)
             {

@@ -42,6 +42,7 @@ public sealed class NpcDumpImporter
     private bool _sawVendorTemplateTable;
     private bool _sawTextBroadcastTable;
     private bool _vendorTemplateTableRejected;
+    private bool _poiTableRejected;
     private readonly HashSet<(string Table, IReadOnlyList<string> Columns)> _validatedLayouts = [];
     private static readonly ConcurrentDictionary<Type, Dictionary<string, PropertyInfo>> PropertyCache = new();
     private int _replaced;
@@ -50,6 +51,7 @@ public sealed class NpcDumpImporter
     public void Read(TextReader dump)
     {
         _vendorTemplateTableRejected = false;
+        _poiTableRejected = false;
         foreach (object item in new MySqlDumpReader(dump).Read())
         {
             if (item is DumpTable definition && string.Equals(definition.Name, VendorTemplateTable, StringComparison.OrdinalIgnoreCase))
@@ -78,6 +80,14 @@ public sealed class NpcDumpImporter
                         continue;
                     }
 
+                    // points_of_interest is a side table of the gossip options: a dump whose copy lacks a column loses only the map markers,
+                    // with a warning, instead of aborting the whole NPC import.
+                    if (table == PointsOfInterestTable)
+                    {
+                        RejectPointsOfInterestTable(required.Where(c => !row.Has(c)));
+                        continue;
+                    }
+
                     throw new InvalidDataException($"{table} is missing one or more required columns: {missing}");
                 }
 
@@ -89,6 +99,8 @@ public sealed class NpcDumpImporter
                 if (_vendorTemplateTableRejected) continue;
                 _sawVendorTemplateTable = true;
             }
+
+            if (table == PointsOfInterestTable && _poiTableRejected) continue;
 
             try
             {
@@ -105,7 +117,7 @@ public sealed class NpcDumpImporter
                         break;
                     }
                     // vmangos/cmangos points_of_interest: map markers for gossip options (action_poi_id). Coordinates are world x/y and may be negative.
-                    case "points_of_interest": { PointOfInterest x = ConvertModel<PointOfInterest>(row, allowNegativeFloats: true); RequirePositive(x.Entry, table, "entry"); Put(_pois, x, v => v.Entry); break; }
+                    case "points_of_interest": { PointOfInterest x = ConvertModel<PointOfInterest>(row, allowNegativeFloats: true); RequirePositive(x.Entry, table, "entry"); RequireMapCoord(x.X, table, "x"); RequireMapCoord(x.Y, table, "y"); Put(_pois, x, v => v.Entry); break; }
                     case "npc_text": { NpcTextRow x = ConvertModel<NpcTextRow>(row); RequirePositive(x.Id, table, "ID"); Put(_texts, x, v => v.Id); break; }
                     case NpcTextBroadcastDataModule.Table:
                     {
@@ -165,6 +177,42 @@ public sealed class NpcDumpImporter
     public bool VendorTemplateTableRejected => _vendorTemplateTableRejected;
 
     private const string VendorTemplateTable = "npc_vendor_template";
+    private const string PointsOfInterestTable = "points_of_interest";
+
+    // MaNGOS::IsValidMapCoord(c): finite and |c| <= MAP_HALFSIZE - 0.5, MAP_HALFSIZE = 64 grids of 533.33333 yards / 2 (vmangos/cmangos
+    // GridDefines.h; the same bound as GridDefines.IsValidMapCoord, which this assembly cannot reference).
+    private const float MapHalfSize = 533.33333f * 64 / 2;
+
+    /// <summary>The dump's points_of_interest lacked required columns and was skipped (see <see cref="NpcImportReport.Diagnostics"/>).</summary>
+    public bool PointsOfInterestTableRejected => _poiTableRejected;
+
+    private static void RequireMapCoord(float value, string table, string column)
+    {
+        if (!float.IsFinite(value) || MathF.Abs(value) > MapHalfSize - 0.5f)
+            throw new InvalidDataException($"{table}.{column} {value.ToString(CultureInfo.InvariantCulture)} is not a valid map coordinate");
+    }
+
+    private void RejectPointsOfInterestTable(IEnumerable<string> absentColumns)
+    {
+        if (_poiTableRejected) return;
+        _poiTableRejected = true;
+        _pois.Clear();
+        _skipped++;
+        _diagnostics.Add($"{PointsOfInterestTable}: skipped, the table is missing required columns: {string.Join(", ", absentColumns)}");
+    }
+
+    /// <summary>
+    /// Refresh the gossip map markers (world schema 11, <c>points_of_interest</c>) in an existing world. A dump with no valid
+    /// <c>points_of_interest</c> row leaves the table as it is. Returns the rows written.
+    /// </summary>
+    public async Task<int> RefreshPointsOfInterestAsync(WorldDbContext db, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(db);
+        if (_pois.Count == 0) return 0;
+        await db.Set<PointOfInterest>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
+        await InsertBatchedAsync(db, _pois.Values, 2000, cancellationToken).ConfigureAwait(false);
+        return _pois.Count;
+    }
 
     private void RejectVendorTemplateTable(IEnumerable<string> absentColumns)
     {

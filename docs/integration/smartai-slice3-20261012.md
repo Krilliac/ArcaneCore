@@ -125,7 +125,7 @@ this script has no logger, so it does nothing silently.
 
 ## Still open (slice 3f and later)
 
-By the same count, the largest single blockers left are event 38 DATA_SET (205 rows that need nothing else), 40 ESCORT_REACHED (160, needs action
-53 and an escort), 106 and 105 (AzerothCore-only ids, 98 and 84) and 52 TEXT_OVER (76). Also open: MOVEMENTINFORM (34, needs
-the AC motion-type numbering mapped), the remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending
+By the same count, the largest single blockers left are 40 ESCORT_REACHED (160, needs action 53 and an escort), 106 and 105
+(AzerothCore-only ids, 98 and 84). Events 38 DATA_SET, 52 TEXT_OVER and 34 MOVEMENTINFORM are open since slice 3f (creatures only; SMART_ACTION_SET_DATA (45)
+is not wired yet, so DATA_SET is accepted at load but has no production caller; MOVEMENTINFORM refuses a path id and a type above 19). Also open: the remaining rejected events, actions and targets in the slice-2 tables, AIName for game objects, and ending
 the area-trigger handler when a script ran.

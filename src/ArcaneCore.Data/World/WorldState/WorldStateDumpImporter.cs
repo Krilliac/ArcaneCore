@@ -114,7 +114,14 @@ public static class WorldStateDumpImporter
             rest = rest[5..].TrimStart();
         }
 
-        return rest.StartsWith($"`{table}`", StringComparison.Ordinal);
+        // The table name is backticked in a mysqldump but a hand-edited file may leave the backticks out.
+        if (rest.StartsWith('`'))
+        {
+            return rest.StartsWith($"`{table}`", StringComparison.Ordinal);
+        }
+
+        return rest.StartsWith(table, StringComparison.Ordinal)
+            && (rest.Length == table.Length || !(char.IsLetterOrDigit(rest[table.Length]) || rest[table.Length] is '_' or '$'));
     }
 
     private static string Shorten(string line) => line.Length <= 80 ? line : line[..80] + "...";

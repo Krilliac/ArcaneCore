@@ -335,6 +335,7 @@ public sealed class PlayerbotCommands : ICommandGroup
         }
 
         var goal = new System.Numerics.Vector3(x, y, z);
+        PlayerbotTravel.ClearPlanCooldown(bot); // a GM asks to plan now
         if (!travel.TryBegin(session, bot, mapId, goal, out string? why))
         {
             context.Reply($"Playerbot travel refused: {status.Name}: {why}");

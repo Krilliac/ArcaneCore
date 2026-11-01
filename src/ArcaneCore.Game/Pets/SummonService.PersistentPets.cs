@@ -792,7 +792,15 @@ public sealed partial class SummonService
                 ? Math.Clamp(snapshot.Health, 1u, creature.MaxHealth)
                 : Math.Min(snapshot.Health, creature.MaxHealth);
             creature.SetUInt32(UpdateFields.UnitFieldPower1, Math.Min(snapshot.Mana, creature.GetUInt32(UpdateFields.UnitFieldMaxpower1)));
-            creature.SetUInt32(UpdateFields.UnitFieldPower5, snapshot.Happiness);
+            if (owner.Class == Class.Hunter)
+            {
+                // Pet.cpp:382-384: happiness bar (max 1 050 000), Focus power type, 100 focus.
+                PetPower.InitHunterPet(creature, snapshot.Happiness);
+            }
+            else
+            {
+                creature.SetUInt32(UpdateFields.UnitFieldPower5, snapshot.Happiness);
+            }
             if (creature.Summon.Charm is { } reactCharm)
             {
                 reactCharm.ReactState = (ReactState)Math.Clamp((int)snapshot.ReactState, 0, 2);
