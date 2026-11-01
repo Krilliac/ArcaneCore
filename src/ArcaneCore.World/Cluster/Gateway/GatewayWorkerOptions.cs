@@ -51,7 +51,8 @@ public sealed class GatewayWorkerOptions
 
     /// <summary>The manifest this worker admits gateways against.</summary>
     public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
-        ClusterRole.Worker, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion, OwnedMaps.Trim(), AllowInstanceMaps);
+        ClusterRole.Worker, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion,
+        TryGetOwnership(out MapOwnership ownership, out _) ? ownership.ToListText() : OwnedMaps.Trim(), AllowInstanceMaps);
 
     /// <summary>Parses <see cref="OwnedMaps"/> and <see cref="AllowInstanceMaps"/>; false with <paramref name="error"/> when the list is malformed.</summary>
     public bool TryGetOwnership(out MapOwnership ownership, out string? error)

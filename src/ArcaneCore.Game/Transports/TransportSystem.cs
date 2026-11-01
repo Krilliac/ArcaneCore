@@ -135,6 +135,12 @@ public sealed partial class TransportSystem
         // vmangos loads the continents at startup and their ships with them; this base creates maps on first use.
         foreach (TransportTemplate template in _templates)
         {
+            // A ship whose path starts on a map another worker owns (Cluster:Worker:OwnedMaps) is that worker's: skipped here, not an error.
+            if (!template.InInstance && template.KeyFrames.Count > 0 && !_world.Owns(template.KeyFrames[0].Node.MapId))
+            {
+                continue;
+            }
+
             if (!template.InInstance && !template.Spawned && template.KeyFrames.Count > 0)
             {
                 _world.GetMap(template.KeyFrames[0].Node.MapId);
@@ -438,6 +444,13 @@ public sealed partial class TransportSystem
     internal void TeleportTransport(ShipTransport ship, uint newMapId, float x, float y, float z, float o)
     {
         Map? oldMap = ship.CurrentMap;
+        if ((oldMap is null || oldMap.MapId != newMapId) && !_world.Owns(newMapId))
+        {
+            // The next frame is on a map another worker owns: hold the ship where it is (no far transfer between workers yet) instead of
+            // creating the map. The update calls this again each tick while the path stays on the unowned map; it is cheap and silent.
+            return;
+        }
+
         Map newMap = oldMap is not null && oldMap.MapId == newMapId ? oldMap : _world.GetMap(newMapId);
         RemoveFromMap(ship);
         ship.CurrentMap = newMap;

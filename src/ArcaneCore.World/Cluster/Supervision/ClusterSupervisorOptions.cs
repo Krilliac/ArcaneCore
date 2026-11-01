@@ -1,4 +1,4 @@
-using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.World.Persistence;
 
 namespace ArcaneCore.World.Cluster.Supervision;

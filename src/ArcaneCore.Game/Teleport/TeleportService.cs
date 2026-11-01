@@ -334,6 +334,23 @@ public sealed partial class TeleportService
             return false;
         }
 
+        // Cluster:Worker:OwnedMaps: a destination another worker owns is refused here, before TRANSFER_PENDING / NEW_WORLD reach the client
+        // (a loading screen for a map this worker cannot serve). A far transfer to the owner replaces this refusal later.
+        if (!_world.Owns(mapId, target.Instanceable ? 1u : 0u))
+        {
+            if (log)
+            {
+                _logger.LogWarning("teleport of {Player} to map {MapId} refused: the map is owned by another worker", player.Name, mapId);
+                ServerAnomalies.Report(
+                    player,
+                    ServerAnomalies.Teleport,
+                    "map-not-owned",
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"teleport refused: map {mapId} is not owned by this worker (destination {x:F1},{y:F1},{z:F1})"));
+            }
+
+            return false;
+        }
+
         // Player::TeleportTo (Player.cpp:1861-1864): "don't let enter battlegrounds without assigned battleground id" — only the
         // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map.
         if (target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
@@ -794,7 +811,18 @@ public sealed partial class TeleportService
         Map? map;
         try
         {
-            map = resolver is null ? _world.GetMap(dest.MapId) : resolver.ResolveEntry(player, dest.MapId);
+            if (resolver is null)
+            {
+                // The typed answer is the seam the redirect / far transfer to the owning worker hooks into.
+                if (_world.TryGetMap(dest.MapId, 0, out map) == MapAccessResult.NotOwned)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                map = resolver.ResolveEntry(player, dest.MapId);
+            }
         }
         catch (MapNotOwnedException)
         {
