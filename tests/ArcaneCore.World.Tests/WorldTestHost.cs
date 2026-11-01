@@ -38,6 +38,10 @@ internal sealed class WorldTestHost : IAsyncDisposable
     // finalizer of its TcpClient closes the socket, which logs the player out in the middle of the test (a GC-timing flake). Keeping them
     // here ties each connection to the host's lifetime; DisposeAsync closes them (a repeated dispose is harmless).
     private readonly List<WorldTestClient> _clients = [];
+
+    // The endpoint each client had when it connected: a client the test disposed no longer reports one, but its session is still
+    // looked up by it (guarded by _clients).
+    private readonly Dictionary<WorldTestClient, string> _clientEndpoints = [];
     private readonly Task _acceptLoop;
 
     /// <summary>
@@ -209,9 +213,14 @@ internal sealed class WorldTestHost : IAsyncDisposable
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, Port);
         var connected = new WorldTestClient(client);
+        string? endpoint = connected.LocalEndpoint;
         lock (_clients)
         {
             _clients.Add(connected);
+            if (endpoint is not null)
+            {
+                _clientEndpoints[connected] = endpoint;
+            }
         }
 
         return connected;
@@ -432,15 +441,15 @@ internal sealed class WorldTestHost : IAsyncDisposable
     /// </summary>
     private void ThrowIfAClientsSessionIsGone()
     {
-        WorldTestClient[] clients;
+        (WorldTestClient Client, string? Endpoint)[] clients;
         lock (_clients)
         {
-            clients = [.. _clients];
+            clients = [.. _clients.Select(c => (c, _clientEndpoints.GetValueOrDefault(c)))];
         }
 
-        foreach (WorldTestClient client in clients)
+        foreach ((WorldTestClient client, string? connectedEndpoint) in clients)
         {
-            string? local = client.LocalEndpoint;
+            string? local = client.LocalEndpoint ?? connectedEndpoint;
             if (local is null)
             {
                 continue;
