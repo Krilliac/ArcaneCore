@@ -237,7 +237,7 @@ public sealed partial class PlayerbotGroupCoordinator
             if (!_bots.TryGetValue(botId, out PlayerbotGroupBot bot) || bot.Session.Player is not { IsAlive: true } player || player.MapId != goal.MeetingMap) continue;
             if (player.Level < goal.MinLevel) continue;
             if (Vector3.Distance(new Vector3(player.X, player.Y, player.Z), goal.Meeting) > MaxMeetingYards) continue;
-            candidates.Add(Candidate(botId, player, waiting.SinceMs) with { Qualifying = waiting.Goal.Anchors });
+            candidates.Add(Candidate(botId, player, waiting.SinceMs) with { Qualifying = waiting.Goal.Anchors, Anchoring = waiting.Goal.Anchors });
         }
 
         if (candidates.Count < 2 || !Coop.Recruit || GuildsOrNull() is not { } guilds) return candidates;
@@ -419,7 +419,7 @@ public sealed partial class PlayerbotGroupCoordinator
         var all = new List<PlayerbotGroupCandidate>(waiting.Count + picks.Count);
         all.AddRange(waiting);
         all.AddRange(picks);
-        if (PlayerbotGroupContent.Match(all, size, _options.Groups, goal.InInstance) is not { } plan) return null;
+        if (PlayerbotGroupContent.Match(all, size, _options.Groups, goal.InInstance, needAnchoring: goal.InInstance) is not { } plan) return null;
         foreach ((PlayerbotGroupCandidate member, PlayerbotGroupRole _, byte _) in plan.Members)
             if (!waiting.Exists(w => w.BotId == member.BotId)) recruited.Add(member.BotId);
         return recruited.Count == 0 ? null : plan;

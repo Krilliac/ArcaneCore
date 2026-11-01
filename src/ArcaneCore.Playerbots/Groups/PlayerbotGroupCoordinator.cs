@@ -565,7 +565,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         if (RunSummary() is { } runSummary) lines.Add(runSummary);
         lines.AddRange(WorldBossReport());
         lines.Add(HandoffSummary());
-        foreach ((Guid _, Waiting waiting) in _waiting.OrderBy(w => w.Value.SinceMs))
+        foreach ((Guid _, Waiting waiting) in _waiting.OrderBy(w => w.Value.SinceMs, PlayerbotGroupContent.SinceOrder))
             lines.Add(string.Create(CultureInfo.InvariantCulture, $"waiting {waiting.Name} {waiting.Goal} for {unchecked(Now - waiting.SinceMs) / 1000}s"));
         foreach (string line in Events.TakeLast(5)) lines.Add("last: " + line);
         return lines;
@@ -1042,7 +1042,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
         foreach (var wanting in _waiting
                      .Select(w => (BotId: w.Key, Waiting: w.Value))
                      .GroupBy(w => (w.Waiting.Goal.Key, Team: _bots[w.BotId].Session.Player?.Team ?? 0))
-                     .OrderBy(g => g.Min(w => w.Waiting.SinceMs)).ToArray())
+                     .OrderBy(g => g.Select(w => w.Waiting.SinceMs).Aggregate((a, b) => unchecked((int)(b - a)) < 0 ? b : a), PlayerbotGroupContent.SinceOrder).ToArray())
         {
             bool slotFree = QuestGroupSlotFree();
             if (!slotFree)
@@ -1057,11 +1057,11 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
                 continue;
             }
 
-            PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs).First().Waiting.Goal;
+            PlayerbotGroupGoal goal = wanting.OrderBy(w => w.Waiting.SinceMs, PlayerbotGroupContent.SinceOrder).First().Waiting.Goal;
             if (goal.InInstance)
             {
                 // Bots waiting only on derived reasons (a companion, a forming group) never anchor a group; the goal is the longest-waiting anchor's.
-                var anchor = wanting.Where(w => w.Waiting.Goal.Anchors).OrderBy(w => w.Waiting.SinceMs).FirstOrDefault();
+                var anchor = wanting.Where(w => w.Waiting.Goal.Anchors).OrderBy(w => w.Waiting.SinceMs, PlayerbotGroupContent.SinceOrder).FirstOrDefault();
                 if (anchor.Waiting is null) continue;
                 goal = anchor.Waiting.Goal;
             }
@@ -1072,7 +1072,7 @@ public sealed partial class PlayerbotGroupCoordinator(IServiceProvider services,
             // A player who asked for the group (Volunteers.cs) comes first, ahead of surplus bots; it forms even with the cap full.
             ObjectGuid? volunteer = null;
             PlayerbotGroupPlan? plan = candidates.Count >= 1 ? MatchWithVolunteer(candidates, size, goal, groupManager, out volunteer) : null;
-            if (plan is null && slotFree) plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups, goal.InInstance);
+            if (plan is null && slotFree) plan = PlayerbotGroupContent.Match(candidates, size, _options.Groups, goal.InInstance, needAnchoring: goal.InInstance);
             List<Guid> recruited = [];
             if (plan is null && slotFree && candidates.Count >= 1) plan = RecruitFor(candidates, size, goal, wanting.Key.Team, out recruited); // free bots nearby (Recruit.cs)
             if (plan is null && slotFree && _options.Groups.InvitePlayers && candidates.Count >= 1)
