@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets;
+using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Net;
@@ -47,7 +48,7 @@ internal static class PlayerbotPetControl
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(spells);
         if (player.PetGuid.IsEmpty || player.Map?.FindObject(player.PetGuid) is not Creature { IsAlive: true } pet
-            || pet.OwnerGuid != player.Guid || pet.Summon?.Charm is not { } charm)
+            || pet.OwnerGuid != player.Guid || pet.GetCharmInfo() is not { } charm)
         {
             return 0;
         }
