@@ -70,6 +70,17 @@ public sealed class ParallelMapOptions
     /// </summary>
     public bool BotThinkPerMap { get; set; }
 
+    /// <summary>
+    /// Helper threads a map thread may lend to the data-parallel stages inside one map update (<see cref="MapLocalStage{TItem, TResult}"/>;
+    /// docs/research/map-local-stages-design-20261024.md, section 4.3 and wave 6a), 0..64 (default 0: every stage runs on the map's own
+    /// thread, in today's order). A stage computes per-item results (helpers may share this work, results land in per-item slots) and then
+    /// applies them on the map thread in item order, so the outcome is the same at every helper count. Needs a restart.
+    /// </summary>
+    public int MapHelpers { get; set; }
+
     /// <summary>The thread count actually used (clamped to 1..64).</summary>
     internal int EffectiveMapUpdateThreads => Math.Clamp(MapUpdateThreads, 1, 64);
+
+    /// <summary>The helper count actually used (clamped to 0..64).</summary>
+    internal int EffectiveMapHelpers => Math.Clamp(MapHelpers, 0, 64);
 }
