@@ -354,9 +354,7 @@ public sealed class PlayerbotWorldBossWorldTests
         Assert.Equal(0, counts.Of(PlayerbotWorldBossOutcomes.Killed));
     }
 
-    // Timing: the wipe-and-regroup sequence runs on the real world loop and a 15 s wall wait; a loaded host can leave the first regroup unobserved (flake ledger 2026-10-29).
     [Fact]
-    [Trait("Category", "Timing")]
     public async Task WithMaxWipesTwo_TheFirstWipeRegroups_AndTheSecondEndsTheAttempt()
     {
         // The generic Wiped arm gives up at the const MaxFailures (2) for every other group; this raid counts its own wipes against MaxWipes.
@@ -381,8 +379,10 @@ public sealed class PlayerbotWorldBossWorldTests
         }), await world.TraceAsync());
 
         Assert.True(regrouped, "no regroup after the first wipe: " + await world.TraceAsync());
+        // Not a wall-clock test: the manual clock drives it with a 2,400 s game budget. The one failure seen (flake ledger 2026-10-29: Expected 2, Actual 1)
+        // means the raid ended after the first wipe for a reason other than the second wipe; the trace names it (the "gave up ... : <reason>" note).
+        Assert.True(Noted(world, "disbanded (wiped)"), "the raid ended without its second wipe (wipes seen: " + mostWipes + "): " + await world.TraceAsync());
         Assert.Equal(2, mostWipes);
-        Assert.True(Noted(world, "disbanded (wiped)"), await world.TraceAsync());
         Assert.Equal(1, counts.Of(PlayerbotWorldBossOutcomes.Wiped));
     }
 
