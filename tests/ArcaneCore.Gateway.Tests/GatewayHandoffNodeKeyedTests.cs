@@ -115,6 +115,37 @@ public sealed class GatewayHandoffNodeKeyedTests
     }
 
     [Fact]
+    public async Task AHeldConnection_ThatIsNoLongerForwardingOnTheSourceLink_IsStillReleased()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Cluster cluster = await Cluster.StartAsync(cts.Token);
+        await using WorldClient kalimdorClient = await cluster.EnterKalimdorWorldAsync("KALREPOINT", "Kalrepoint", cts.Token);
+        GatewayServer gateway = cluster.Gateway;
+        const System.Reflection.BindingFlags Private = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+
+        var connections = (System.Collections.Concurrent.ConcurrentDictionary<GatewayClientConnection, Task>)typeof(GatewayServer).GetField("_connections", Private)!.GetValue(gateway)!;
+        GatewayClientConnection connection = Assert.Single(connections.Keys.Where(c => c.IsForwardingOn(gateway.Workers[1].Link!)));
+        System.Reflection.FieldInfo linkField = typeof(GatewayClientConnection).GetField("_link", Private)!;
+        System.Reflection.FieldInfo holding = typeof(GatewayClientConnection).GetField("_handoffHolding", Private)!;
+
+        Assert.Equal(1, gateway.HoldSessionsForHandoff(KalimdorNode));
+        Assert.True((bool)holding.GetValue(connection)!);
+
+        // A per-player transfer re-points the held connection to the other worker's link while the source is frozen (the hold stays).
+        linkField.SetValue(connection, gateway.Workers[0].Link);
+        Assert.False(connection.IsForwardingOn(gateway.Workers[1].Link!));
+
+        // Another node's release leaves it held; the source node's release (keyed on where the hold began) frees it.
+        gateway.ReleaseHandoffHold(EastNode);
+        Assert.True((bool)holding.GetValue(connection)!);
+        gateway.ReleaseHandoffHold(KalimdorNode);
+        Assert.False((bool)holding.GetValue(connection)!);
+
+        // Put the link back so the client disposes normally.
+        linkField.SetValue(connection, gateway.Workers[1].Link);
+    }
+
+    [Fact]
     public void TheNodeKeyedForms_RefuseAnUnknownNode_AndTheRouterRefusesBadArguments()
     {
         using ServiceProvider provider = new ServiceCollection().BuildServiceProvider();

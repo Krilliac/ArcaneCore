@@ -294,15 +294,12 @@ public sealed class GatewayServer : BackgroundService
 
         bool[] results = await Task.WhenAll(moves).ConfigureAwait(false);
 
-        // A connection that holds but was not moved (it left Forwarding after the hold began, or a login redirect took it) would keep holding until it overflows:
-        // release it to the world it is on. A connection the move finished no longer holds, so this is a no-op for it.
-        // Only connections of the worker being moved: another worker's connections may be holding for a handoff of their own.
+        // A connection that holds but was not moved (it left Forwarding after the hold began, a per-player transfer re-pointed it, or a login redirect took it) would keep
+        // holding until it overflows: release it to the world it is on. A connection the move finished no longer holds, so this is a no-op for it.
+        // Keyed on the link the hold began on, not the link the connection forwards on now: another worker's connections may be holding for a handoff of their own.
         foreach (GatewayClientConnection connection in _connections.Keys)
         {
-            if (connection.IsForwardingOn(previous))
-            {
-                connection.EndHandoffHold();
-            }
+            connection.EndHandoffHold(previous);
         }
 
         int moved = results.Count(result => result);
@@ -326,7 +323,7 @@ public sealed class GatewayServer : BackgroundService
         int held = 0;
         foreach (GatewayClientConnection connection in _connections.Keys)
         {
-            if (connection.BeginHandoffHold(link))
+            if (connection.BeginHandoffHold(link, workers[0]))
             {
                 held++;
             }
@@ -342,7 +339,8 @@ public sealed class GatewayServer : BackgroundService
     /// </summary>
     public int HoldSessionsForHandoff(string nodeId)
     {
-        if (RequireWorker(nodeId).Link is not { } link)
+        GatewayWorkerLink slot = RequireWorker(nodeId);
+        if (slot.Link is not { } link)
         {
             return 0;
         }
@@ -350,7 +348,7 @@ public sealed class GatewayServer : BackgroundService
         int held = 0;
         foreach (GatewayClientConnection connection in _connections.Keys)
         {
-            if (connection.BeginHandoffHold(link))
+            if (connection.BeginHandoffHold(link, slot))
             {
                 held++;
             }
@@ -360,22 +358,17 @@ public sealed class GatewayServer : BackgroundService
     }
 
     /// <summary>
-    /// The node-keyed form of <see cref="ReleaseHandoffHold()"/>: the handoff of that worker aborted, so only the connections forwarding on its link replay their held
-    /// packets and forward again. Another worker's holds stay in place. Idempotent. Throws <see cref="ArgumentException"/> for a node id that is not a configured worker.
+    /// The node-keyed form of <see cref="ReleaseHandoffHold()"/>: the handoff of that worker aborted, so every connection that node's hold took (whatever link it
+    /// forwards on now, and even when the node has no link or a re-registered one) replays its held packets and forwards again. Another worker's holds stay in place.
+    /// Idempotent. Throws <see cref="ArgumentException"/> for a node id that is not a configured worker.
     /// </summary>
     public void ReleaseHandoffHold(string nodeId)
     {
-        if (RequireWorker(nodeId).Link is not { } link)
-        {
-            return;
-        }
-
+        GatewayWorkerLink slot = RequireWorker(nodeId);
+        GatewaySessionLinkClient? link = slot.Link;
         foreach (GatewayClientConnection connection in _connections.Keys)
         {
-            if (connection.IsForwardingOn(link))
-            {
-                connection.EndHandoffHold();
-            }
+            connection.EndHandoffHold(link, slot);
         }
     }
 
