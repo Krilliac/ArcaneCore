@@ -2,6 +2,7 @@ using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Characters.Transfers;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
