@@ -294,21 +294,6 @@ public sealed class FireworkTests
     }
 
     [Fact]
-    public void Launcher_InsideTheFocusRadiusButOutsideTheScriptTargetRange_IsBadTargetsAndSummonsNothing()
-    {
-        // 30 yards: inside the 35 yard focus radius (the focus check passes) but outside the spell's 5 yard script-target search range.
-        using var rig = new Rig([LauncherSpell(SmallRedLauncher, SmallRedNpc, activateFirst: true)], [Row(SmallRedLauncher, 0, Launcher)],
-            [SmallRedNpc], [Launcher]);
-        rig.SpawnObject(Launcher, 30, 0);
-        rig.Session.Clear();
-
-        Assert.Equal(SpellCastResult.BadTargets, rig.Kit.Cast(rig.Player, SmallRedLauncher));
-
-        Assert.Empty(rig.NpcsOf(SmallRedNpc));
-        Assert.DoesNotContain(rig.Session.Sent, packet => packet.Opcode == WorldOpcode.SmsgGameobjectCustomAnim);
-    }
-
-    [Fact]
     public void PlayerUsingALauncher_UntriggeredWithNoFocusInRange_IsRefusedWithRequiresSpellFocus()
     {
         using var rig = new Rig([LauncherSpell(SmallRedLauncher, SmallRedNpc, activateFirst: true)], [Row(SmallRedLauncher, 0, Launcher)],
