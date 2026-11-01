@@ -23,6 +23,13 @@ public static class GatewayServiceCollectionExtensions
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IValidateOptions<GatewayOptions>, GatewayOptionsValidator>());
         services.Configure<NetProtectionOptions>(configuration.GetSection(NetProtectionOptions.SectionName));
         services.AddAuthDatabase(configuration);
+        services.Configure<ArcaneCore.World.Warden.WardenOptions>(configuration.GetSection(ArcaneCore.World.Warden.WardenOptions.SectionName));
+        // Warden runs here, not on the worker (the gateway holds the session key and the client stream). The worker derives the same manifest from
+        // its own Warden section and refuses verdicts from a gateway that differs.
+        services.AddSingleton(sp => new GatewayWarden(
+            sp.GetRequiredService<IOptions<GatewayOptions>>().Value.RealmId,
+            sp.GetRequiredService<IOptions<ArcaneCore.World.Warden.WardenOptions>>().Value,
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>().CreateLogger<GatewayWarden>()));
         services.AddSingleton<GatewayServer>();
         services.AddHostedService(sp => sp.GetRequiredService<GatewayServer>());
         return services;

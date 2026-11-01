@@ -41,7 +41,8 @@ public sealed class GatewayServer : BackgroundService
         IServiceScopeFactory scopes,
         IOptions<GatewayOptions> options,
         ILoggerFactory loggers,
-        IOptions<NetProtectionOptions>? protection = null)
+        IOptions<NetProtectionOptions>? protection = null,
+        GatewayWarden? warden = null)
     {
         ArgumentNullException.ThrowIfNull(scopes);
         ArgumentNullException.ThrowIfNull(options);
@@ -51,8 +52,18 @@ public sealed class GatewayServer : BackgroundService
         _options = options;
         _loggers = loggers;
         _protection = protection;
+        Warden = warden;
         _logger = loggers.CreateLogger<GatewayServer>();
     }
+
+    /// <summary>The gateway's Warden (null when none was registered: Warden stays on the world, as in a hand-built test server).</summary>
+    public GatewayWarden? Warden { get; }
+
+    /// <summary>
+    /// False when Warden is enabled on this gateway but unusable (invalid options, module missing or failing its digest check): the gateway
+    /// then answers every login with AUTH_UNAVAILABLE. True when Warden is off or usable.
+    /// </summary>
+    public bool IsWardenReady => Warden is null || Warden.IsReady;
 
     internal GatewayOptions Options => _options.Value;
 

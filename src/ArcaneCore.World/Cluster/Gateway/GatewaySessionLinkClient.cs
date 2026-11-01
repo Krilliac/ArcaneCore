@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using ArcaneCore.Kernel.Cluster;
+using ArcaneCore.Kernel.Cluster.Auxiliary;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Protocol;
@@ -196,6 +197,32 @@ public sealed class GatewaySessionLinkClient : IAsyncDisposable
             byte[] frame = GatewaySessionWire.EncodePacket(GatewayWorkerFrameType.SessionClientPacket, session.Generation, session.AccountId, 0,
                 session.Epoch, ++session.OutboundSequence, (uint)opcode, payload);
             return channel.TryEnqueue(frame);
+        }
+    }
+
+    /// <summary>
+    /// Tell the worker of a Warden verdict about an open session (the gateway runs Warden; the worker applies the penalty). The frame
+    /// carries the session's own generation, account and owner epoch, and the account id as the verdict key (the gateway has no
+    /// character). False when the session is not open or the link is down; the frame follows every packet already queued.
+    /// </summary>
+    public bool SendWardenVerdict(long sessionGeneration, ushort checkId, ClusterWardenAction action, string reason, GatewayWardenPosture posture)
+    {
+        ArgumentNullException.ThrowIfNull(reason);
+        ArgumentNullException.ThrowIfNull(posture);
+        if (_channel is not { } channel || !_sessions.TryGetValue(sessionGeneration, out ClientSession? session))
+        {
+            return false;
+        }
+
+        lock (session.Gate)
+        {
+            if (!session.IsOpen)
+            {
+                return false;
+            }
+
+            var verdict = new ClusterWardenVerdict(session.Generation, session.Epoch, session.AccountId, (ulong)session.AccountId, reason, action, checkId);
+            return channel.TryEnqueue(GatewaySessionWire.EncodeWardenVerdict(verdict, posture));
         }
     }
 
