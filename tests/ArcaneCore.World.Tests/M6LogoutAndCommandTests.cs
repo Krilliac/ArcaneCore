@@ -355,6 +355,8 @@ public sealed class M6LogoutAndCommandTests
 
         await CommandAsync(gm, ".kick victim");
         Assert.True(await victim.IsClosedByServerAsync());
+        // KickCore records the reason and closes on another thread: wait for the session to leave the world before asserting it.
+        await host.WaitForWorldAsync(() => host.World.FindOnlinePlayer("Victim") is null, "the victim to leave");
 
         Assert.False(capture.Any("session/kick-no-reason"));
         Assert.Equal("kicked by a GM command", session.KickReason);

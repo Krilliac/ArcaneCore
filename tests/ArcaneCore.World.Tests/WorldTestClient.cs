@@ -516,8 +516,13 @@ internal sealed class WorldTestClient : IAsyncDisposable
                 }
             }
         }
-        catch (IOException)
+        catch (OperationCanceledException)
         {
+            throw new TimeoutException($"the server did not close the connection within {ReadTimeout.TotalSeconds:0} s");
+        }
+        catch (Exception e) when (e is IOException or System.Net.Sockets.SocketException or ObjectDisposedException)
+        {
+            // a reset or an already-torn-down socket is the server closing the connection
             return true;
         }
     }
