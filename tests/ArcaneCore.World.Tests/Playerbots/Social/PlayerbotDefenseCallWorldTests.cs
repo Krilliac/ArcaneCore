@@ -7,6 +7,7 @@ using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Combat;
 using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.Playerbots.Chat;
+using ArcaneCore.World.Tests.Playerbots.Combat;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -216,5 +217,192 @@ public sealed class PlayerbotDefenseCallWorldTests
             return calls.Count;
         });
         Assert.Equal(1, open); // coordination does not depend on the line
+    }
+
+    // --- responders (design 1.4 and 1.5) ---------------------------------------------------------------------------------------------------------
+
+    public enum Assignment { None, OutsideRadius, LevelOutsideWindow, InCombat, HelpPending, NoRespondersAllowed, UnflaggedWarModeOff, JoinerBothSidesOff, JoinerBothSidesOn }
+
+    private static void FlagForGood(Player player)
+    {
+        player.Flags |= PlayerFlags.PvpDesired; // the world's PvP timer keeps a wanted flag
+        PlayerbotPvpTestKit.Flag(player);
+    }
+
+    private static bool IsFreeGoal(SocialWorld world, Guid bot)
+        => world.Host.OnWorldAsync(() => SocialTestKit.BotPass(world.Host, 0).Bots.First(b => b.Id == bot) is { } entry && PlayerbotHelpLane.IsFree(entry)).Result;
+
+    /// <summary>
+    /// The scene: a caller bot (Alliance), its enemy player standing 3 yd east of it and attacking it, and the responder bot <paramref name="responder"/> standing
+    /// <paramref name="dx"/> yd east of the caller. Everyone is flagged for PvP (War Mode stays off) except as <paramref name="flagResponder"/> says. The caller reports,
+    /// so one call is open on the board. The frozen world runs no social pass: the test drives the defense lane by hand.
+    /// </summary>
+    private static async Task<WorldTestClient> CallSceneAsync(SocialWorld world, string responder, float dx, byte race = SocialTestKit.Human, bool flagResponder = true)
+    {
+        await world.AddBotAsync("Rcaller");
+        await world.AddBotAsync(responder, race: race);
+        WorldTestClient foe = await world.AddPlayerAsync("Rfoe", RivalryKit.Undead);
+        await HelpTestKit.StandAsync(world, "Rcaller", ("Rfoe", 3f));
+        Guid callerId = world.Bots["Rcaller"], responderId = world.Bots[responder];
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player caller = RivalryKit.Online(world, "Rcaller"), enemy = RivalryKit.Online(world, "Rfoe"), resp = RivalryKit.Online(world, responder);
+            resp.Relocate(caller.X + dx, caller.Y, caller.Z, 0f, world.Host.World.NowMs);
+            foreach (Player player in world.Host.World.OnlinePlayers) player.ZoneId = RivalryKit.OrdinaryZone;
+            FlagForGood(caller);
+            FlagForGood(enemy);
+            if (flagResponder) FlagForGood(resp);
+            PvpAreaState.SetWarModeExempt(caller, false);
+            PvpAreaState.SetWarModeExempt(enemy, false);
+            PvpAreaState.SetWarModeExempt(resp, false);
+            world.Options.Social.WarMode.Enabled = false;
+            world.Options.Pvp.Defense.MaxRespondersPerSide = 1;
+            // The enemy starts on the caller (the aggressor), so the rule "only the one who struck first" holds for a defender with War Mode off.
+            Assert.True(caller.Map!.Combat.Attack(enemy, caller), "the enemy could not attack the caller");
+            caller.Map!.Combat.DealDamage(enemy, caller, 1);
+            DefenseReportRefusal refusal = HelpTestKit.BrainOf(world, callerId).TryReportDefense(caller, enemy, out DefenseReport report);
+            Assert.Equal(DefenseReportRefusal.None, refusal);
+            Assert.True(report.Accepted, "the call was not opened");
+        });
+        _ = responderId;
+        return foe;
+    }
+
+    private static Task<int> RunDefenseLaneAsync(SocialWorld world)
+        => world.Host.OnWorldAsync(() =>
+        {
+            PlayerbotDefenseLane lane = SocialTestKit.Feature(world.Host).Defense;
+            lane.Run(SocialTestKit.BotPass(world.Host, 1_000));
+            return lane.Assigned;
+        });
+
+    [Theory]
+    [InlineData(Assignment.None, true)]
+    [InlineData(Assignment.OutsideRadius, false)]
+    [InlineData(Assignment.LevelOutsideWindow, false)]
+    [InlineData(Assignment.InCombat, false)]
+    [InlineData(Assignment.HelpPending, false)]
+    [InlineData(Assignment.NoRespondersAllowed, false)]
+    [InlineData(Assignment.UnflaggedWarModeOff, false)]
+    [InlineData(Assignment.JoinerBothSidesOff, false)]
+    [InlineData(Assignment.JoinerBothSidesOn, true)]
+    public async Task TheLane_AssignsAFreeBotOnlyWhenEveryRuleHolds(Assignment variation, bool assigned)
+    {
+        await using SocialWorld world = await StartAsync();
+        bool joiner = variation is Assignment.JoinerBothSidesOff or Assignment.JoinerBothSidesOn;
+        await using WorldTestClient foe = await CallSceneAsync(world, "Rresp", variation == Assignment.OutsideRadius ? 400f : 60f,
+            joiner ? RivalryKit.Undead : SocialTestKit.Human, flagResponder: variation != Assignment.UnflaggedWarModeOff);
+        Guid responder = world.Bots["Rresp"];
+        PlayerbotBrain brain = HelpTestKit.BrainOf(world, responder);
+        await HelpTestKit.UntilAsync(() => IsFreeGoal(world, responder), "the responder to be on a free goal");
+
+        int assignedCount = await world.Host.OnWorldAsync(() =>
+        {
+            Player resp = RivalryKit.Online(world, "Rresp");
+            switch (variation)
+            {
+                case Assignment.LevelOutsideWindow:
+                    resp.Level = 30;
+                    break;
+                case Assignment.InCombat:
+                    HelpTestKit.Engage(HelpTestKit.SpawnMob(resp, -4f), resp);
+                    break;
+                case Assignment.HelpPending:
+                    Assert.True(brain.RequestHelp(PlayerbotHelpKind.Assist, RivalryKit.Online(world, "Rcaller").Guid));
+                    break;
+                case Assignment.NoRespondersAllowed:
+                    world.Options.Pvp.Defense.MaxRespondersPerSide = 0;
+                    break;
+                case Assignment.JoinerBothSidesOn:
+                    world.Options.Pvp.Defense.BothSides = true;
+                    break;
+            }
+
+            PlayerbotDefenseLane lane = SocialTestKit.Feature(world.Host).Defense;
+            lane.Run(SocialTestKit.BotPass(world.Host, 1_000));
+            return lane.Assigned;
+        });
+
+        Assert.Equal(assigned ? 1 : 0, assignedCount);
+        Assert.Equal(assigned, await world.Host.OnWorldAsync(() => brain.Responding));
+    }
+
+    [Fact]
+    public async Task TheDefenderCap_HoldsWhenTwoBotsAreFree()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient foe = await CallSceneAsync(world, "Rrespa", 50f);
+        await world.AddBotAsync("Rrespb");
+        await world.Host.OnWorldAsync(() =>
+        {
+            Player caller = RivalryKit.Online(world, "Rcaller"), second = RivalryKit.Online(world, "Rrespb");
+            second.Relocate(caller.X + 40f, caller.Y, caller.Z, 0f, world.Host.World.NowMs);
+            second.ZoneId = RivalryKit.OrdinaryZone;
+            FlagForGood(second);
+        });
+        await HelpTestKit.UntilAsync(() => IsFreeGoal(world, world.Bots["Rrespa"]) && IsFreeGoal(world, world.Bots["Rrespb"]), "both responders to be free");
+
+        await RunDefenseLaneAsync(world);
+
+        // One slot on the side: the nearer bot (Rrespb, 40 yd, added second) takes it over the farther Rrespa (50 yd, added first), so examination order and distance order disagree.
+        Assert.True(await world.Host.OnWorldAsync(() => HelpTestKit.BrainOf(world, world.Bots["Rrespb"]).Responding));
+        Assert.False(await world.Host.OnWorldAsync(() => HelpTestKit.BrainOf(world, world.Bots["Rrespa"]).Responding));
+    }
+
+    /// <summary>
+    /// The responder, 60 yd off, is assigned, walks to the call and takes the attacker on for the Defense reason. RED proof: with the <c>TryRespond</c> line removed from
+    /// the brain's think nothing ever engages (the bot keeps to its own goal), and this test times out waiting for the engagement.
+    /// </summary>
+    [Fact]
+    public async Task AResponder_WalksToTheCall_AndEngagesTheAttackerOnArrival()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient foe = await CallSceneAsync(world, "Rwalker", 60f);
+        Guid responder = world.Bots["Rwalker"];
+        PlayerbotBrain brain = HelpTestKit.BrainOf(world, responder);
+        await HelpTestKit.UntilAsync(() => IsFreeGoal(world, responder), "the responder to be on a free goal");
+
+        Assert.Equal(1, await RunDefenseLaneAsync(world));
+        Assert.True(await world.Host.OnWorldAsync(() => brain.Responding));
+
+        Player enemy = await world.Host.OnWorldAsync(() => RivalryKit.Online(world, "Rfoe"));
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() => ReferenceEquals(brain.EngagedPlayer, enemy) && brain.EngagedReason == PlayerbotEngageReason.Defense).Result,
+            "the responder to take the attacker on", seconds: 40);
+    }
+
+    [Fact]
+    public async Task AResponder_NeverReachesIntoAnExemptArea()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient foe = await CallSceneAsync(world, "Rexempt", 50f);
+        Guid responder = world.Bots["Rexempt"];
+        PlayerbotBrain brain = HelpTestKit.BrainOf(world, responder);
+        await HelpTestKit.UntilAsync(() => IsFreeGoal(world, responder), "the responder to be on a free goal");
+        Assert.Equal(1, await RunDefenseLaneAsync(world));
+
+        // The attacker runs into its capital after the call: the responder may walk to the call, but it never takes the attacker on.
+        await world.Host.OnWorldAsync(() => PvpAreaState.SetWarModeExempt(RivalryKit.Online(world, "Rfoe"), true));
+        await HelpTestKit.UntilAsync(() => world.Host.OnWorldAsync(() =>
+            PlayerbotGeometry.Distance(RivalryKit.Online(world, "Rexempt"), RivalryKit.Online(world, "Rcaller")) <= PlayerbotBrain.DefenseArrivalYards).Result,
+            "the responder to reach the call", seconds: 40);
+
+        Assert.Null(await world.Host.OnWorldAsync(() => brain.EngagedPlayer));
+        Assert.Null(await world.Host.OnWorldAsync(() => brain.InspectionPvpTarget));
+    }
+
+    [Fact]
+    public async Task HelpAndDefense_AreMutuallyExclusive_ForOneBot()
+    {
+        await using SocialWorld world = await StartAsync();
+        await using WorldTestClient foe = await CallSceneAsync(world, "Rexcl", 60f);
+        Guid responder = world.Bots["Rexcl"];
+        PlayerbotBrain brain = HelpTestKit.BrainOf(world, responder);
+        await HelpTestKit.UntilAsync(() => IsFreeGoal(world, responder), "the responder to be on a free goal");
+
+        // A responder is no longer free for the help lane, and a bot with a help request pending refuses a defense request.
+        Assert.Equal(1, await RunDefenseLaneAsync(world));
+        Assert.False(IsFreeGoal(world, responder));
+        Assert.False(await world.Host.OnWorldAsync(() => brain.RequestHelp(PlayerbotHelpKind.Assist, RivalryKit.Online(world, "Rcaller").Guid)
+            && brain.RequestDefense(1, DefenseSide.Defender)));
     }
 }

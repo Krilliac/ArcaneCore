@@ -108,10 +108,10 @@ internal sealed class PlayerbotHelpLane
 
     // --- the bot is free -----------------------------------------------------------------------------------------------------
 
-    /// <summary>Whether the bot may lend a hand now: its own brain drives it, it is alive, out of combat, healthy, on a free goal with no request pending.</summary>
+    /// <summary>Whether the bot may lend a hand now: its own brain drives it, it is alive, out of combat, healthy, on a free goal with no request pending and not answering a defense call (help and defense never double-book a bot).</summary>
     internal static bool IsFree(PlayerbotSocialBot bot)
     {
-        if (bot.PartyDriven || bot.GroupDriven || bot.Brain is not { PendingHelp: PlayerbotHelpKind.None } brain) return false;
+        if (bot.PartyDriven || bot.GroupDriven || bot.Brain is not { PendingHelp: PlayerbotHelpKind.None, Responding: false } brain) return false;
         Player player = bot.Player;
         if (!player.IsAlive || player.Map is null || player.Combat.IsInCombat || player.Duel is not null || player.MaxHealth == 0 || !PlayerbotHelpRules.IsFreeGoal(brain.Goal)) return false;
         (int health, int? mana) = PlayerbotPersonaFacts.Vitals(player);

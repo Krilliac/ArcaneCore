@@ -460,8 +460,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 _contention.ReleaseClaim();
                 ReleaseEventSpot(PlayerbotEventMeters.Done);
+                ReleaseDefenseCall();
             }
-            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); ReleaseEventSpot(PlayerbotEventMeters.Done); return true; });
+            else _ = world.InvokeAsync(() => { _contention.ReleaseClaim(); ReleaseEventSpot(PlayerbotEventMeters.Done); ReleaseDefenseCall(); return true; });
         }
         _destinations.Dispose();
     }
@@ -769,6 +770,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!_deathIntentRetired)
             {
                 RecordDeath(player);
+                NoteDefenseDeath();
                 _opportunities?.BotDied();
                 _worldPvp?.BotDied();
                 RetireDeathIntent();
@@ -1052,6 +1054,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             if (!_deathIntentRetired)
             {
                 RecordDeath(player);
+                NoteDefenseDeath();
                 RetireDeathIntent();
                 _deathIntentRetired = true;
             }
@@ -1132,6 +1135,10 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
 
         // A scenario stay (PlayerbotStay) owns the bot while its lease lives: no quest, grind or explore step chooses a destination.
         if (TryStay(player, interval)) return;
+
+        // A defense call (World:Playerbots:Pvp:Defense, PlayerbotBrain.Defense.cs): a bot the social pass assigned as a reinforcement walks to the call and takes on its
+        // attackers. After the stay (which owns the bot) and before the hunt, initiate and every errand, so an en-route responder is not grabbed by them.
+        if (TryRespond(player, interval)) return;
 
         // War Mode (World:WarMode:Enabled): an idle bot hunts a flagged enemy it holds a grudge against, and World:Playerbots:Pvp:Initiate starts on a flagged
         // enemy near it (PlayerbotBrain.Hunt.cs). Both come after the scenario stay, which owns the bot while its lease lives.
@@ -1779,6 +1786,9 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     internal void GiveUpStalledGoal(Player player, bool shareable = true)
     {
         uint now = _session.World.NowMs;
+        // A stalled responder gives its call up (and sits out the blocked-walk backoff): the stall belongs to the call's walk, not to the home walk below.
+        bool responding = _defenseCallId != 0;
+        if (responding) DropDefense(player, DefenseBackoffMs);
         // Before the give-up stops the bot and the think plans a new leg. Taken once per reported stall (the feature logs a stall once);
         // the repeated give-ups of one stall do not build the string again.
         if (StallCount != _snapshotStallCount)
@@ -1878,7 +1888,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
                 if (stalledChest) TargetEntry = 0;
                 break;
             case PlayerbotGoalKind.Home:
-                _homeReturn.MarkBlocked(now);
+                if (!responding) _homeReturn.MarkBlocked(now);
                 break;
             case PlayerbotGoalKind.Explore:
                 if (_exploreCandidate is { } explore) BlockExploreCell(explore);

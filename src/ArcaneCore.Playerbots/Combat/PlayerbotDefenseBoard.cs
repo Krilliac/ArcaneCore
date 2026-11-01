@@ -255,6 +255,9 @@ internal sealed class PlayerbotDefenseBoard
         return new DefenseReport(DefenseReportOutcome.Opened, opened.Id);
     }
 
+    /// <summary>The board's clock now (the one every call time uses): lets a responder ask <see cref="DefenseCall.IsOpen"/> on the right clock.</summary>
+    public long NowMs => _clock();
+
     /// <summary>The call with this id, following the redirect of an absorbed call; null when it is gone (swept). The call may be closed: check <see cref="DefenseCall.IsOpen"/>.</summary>
     public DefenseCall? Find(int id)
     {

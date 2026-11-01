@@ -39,6 +39,13 @@ internal enum PlayerbotEngageReason : byte
     /// and numbers are the caller's (<c>PlayerbotBrain.TryInitiate</c>); this only names the reason.
     /// </summary>
     Initiate,
+
+    /// <summary>
+    /// The bot answers a defense call (<c>World:Playerbots:Pvp:Defense</c>, <c>PlayerbotBrain.TryRespond</c>): a reinforcement walks to the call and takes on one of its attackers
+    /// (or, joining the attacking side, one of its callers). Handled exactly like <see cref="Help"/>: allowed outside the War Mode exempt areas, the gating (side, level window,
+    /// who struck first) is the caller's.
+    /// </summary>
+    Defense,
 }
 
 /// <summary>
@@ -63,7 +70,7 @@ internal static class PlayerbotHostility
     /// (it attacks the bot), or, with <paramref name="groups"/>,
     /// it attacks a member of the bot's group or is the victim of the group's leader (<see cref="PlayerbotEngageReason.GroupProvoked"/>), or
     /// <paramref name="granted"/> is an initiating reason (<see cref="PlayerbotEngageReason.Ordered"/>, <see cref="PlayerbotEngageReason.Defend"/>,
-    /// <see cref="PlayerbotEngageReason.Siege"/>), or it helps a victim (<see cref="PlayerbotEngageReason.Help"/>) or holds a grudge while War Mode is on
+    /// <see cref="PlayerbotEngageReason.Siege"/>), or it helps a victim (<see cref="PlayerbotEngageReason.Help"/>) or answers a defense call (<see cref="PlayerbotEngageReason.Defense"/>) or holds a grudge while War Mode is on
     /// (<see cref="PlayerbotEngageReason.Grudge"/>, <paramref name="warMode"/> enabled) or starts on it unprovoked (<see cref="PlayerbotEngageReason.Initiate"/>,
     /// <paramref name="initiate"/> enabled), all three outside the exempt areas. Real players and bots share this rule.
     /// </summary>
@@ -72,8 +79,8 @@ internal static class PlayerbotHostility
     {
         if (!IsHostilePlayer(self, other)) return false;
         // Help and the War Mode hunt never reach into an exempt area (a capital or neutral town of the player's own side, a battleground, an arena).
-        if (granted is PlayerbotEngageReason.Help or PlayerbotEngageReason.Grudge or PlayerbotEngageReason.Initiate)
-            return (granted switch { PlayerbotEngageReason.Help => true, PlayerbotEngageReason.Grudge => warMode is { Enabled: true }, _ => initiate is { Enabled: true } || warMode is { Enabled: true } }) && !PvpAreaState.IsWarModeProtected(other);
+        if (granted is PlayerbotEngageReason.Help or PlayerbotEngageReason.Defense or PlayerbotEngageReason.Grudge or PlayerbotEngageReason.Initiate)
+            return (granted switch { PlayerbotEngageReason.Help or PlayerbotEngageReason.Defense => true, PlayerbotEngageReason.Grudge => warMode is { Enabled: true }, _ => initiate is { Enabled: true } || warMode is { Enabled: true } }) && !PvpAreaState.IsWarModeProtected(other);
         if (granted is PlayerbotEngageReason.Ordered or PlayerbotEngageReason.Defend or PlayerbotEngageReason.Siege) return true;
         if (IsProvokedBy(self, other)) return true;
         return groups is not null && IsGroupProvokedBy(self, other, groups);
