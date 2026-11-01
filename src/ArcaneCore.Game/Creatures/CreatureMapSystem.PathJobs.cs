@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Numerics;
+using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
 using Microsoft.Extensions.Logging;
 
@@ -54,6 +55,25 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     internal const float PathJobReanchorStepYards = 2f;
 
+    /// <summary>
+    /// How far (yd) the target's re-asked point may lie from a still-unfinished lagging job's before the job is dropped and asked again
+    /// instead of waited for: a job this far behind its target answers for a place the target left long ago.
+    /// </summary>
+    internal const float PathJobLagMaxDriftYards = 12f;
+
+    /// <summary>
+    /// How long (ms, from submission) a lagging job that has not finished is waited for before it is dropped and asked again. Without
+    /// the bound a lagging job that never answers (a saturated pool, a stuck worker below <see cref="PathJobPendingTimeoutMs"/>) holds its creature.
+    /// </summary>
+    internal const long PathJobLagMaxWaitMs = 2_000;
+
+    /// <summary>
+    /// How far (yd) a lagging answer's path may end past the target's new point, along the direction the path travels, when the target
+    /// has meanwhile moved back against that direction (<see cref="LaggingAnswerStillCloses"/>): farther, the follower would run one
+    /// leg past an owner who reversed.
+    /// </summary>
+    internal const float PathJobReversalOvershootYards = 1.5f;
+
     /// <summary>The most already-passed leading corners a re-anchored path drops (<see cref="TryReanchorAtCreature"/>).</summary>
     internal const int PathJobReanchorMaxSkips = 4;
 
@@ -84,8 +104,10 @@ public sealed partial class CreatureMapSystem
     /// <summary>
     /// What a job was asked with. <c>Spline</c> is the spline a follower, formation member or chaser was running when it asked (null
     /// otherwise, or when it stood): only travel along that spline carries the job's start (<see cref="RanOnAlongItsSpline"/>).
+    /// <c>Target</c> is the unit the creature's chase or follow was after when it asked (null for other motions): a job asked for
+    /// another target answers for the wrong unit and is dropped, never waited for as a lagging answer.
     /// </summary>
-    private sealed record PathJobKey(PathOptions Options, bool ToSpawn, bool AnyDestination, CreatureSpline? Spline = null);
+    private sealed record PathJobKey(PathOptions Options, bool ToSpawn, bool AnyDestination, CreatureSpline? Spline = null, Unit? Target = null);
 
     /// <summary>
     /// The pool this map's eligible searches go to, or null (synchronous searches only): the process pool when
@@ -202,7 +224,8 @@ public sealed partial class CreatureMapSystem
         if (_creaturePathJobs.TryGetValue(creature, out NavJob? job))
         {
             var key = (PathJobKey)job.Tag!;
-            bool sameKey = ReferenceEquals(key.Options, options) && key.ToSpawn == toSpawn && key.AnyDestination == anyDestination;
+            bool sameKey = ReferenceEquals(key.Options, options) && key.ToSpawn == toSpawn && key.AnyDestination == anyDestination
+                && ReferenceEquals(key.Target, creature.Motion.TargetedUnit);
             bool startFits = Vector3.DistanceSquared(job.Start, start) <= PathJobStartTolerance * PathJobStartTolerance;
 
             // A follower, formation member or chaser running at ~7 yd/s is 0.7 yd past the job's start one 100 ms update later: past
@@ -226,7 +249,13 @@ public sealed partial class CreatureMapSystem
             // (LaggingAnswerStillCloses). Dropping it would restart the wait every time the target moves another yard, so a pool slower
             // than that would never answer at all.
             bool lagging = sameRequest && !destinationFits && (follow || formation || chasing);
-            if (!done && !overdue && ((sameRequest && destinationFits) || lagging))
+
+            // The wait for a lagging job is bounded by how far its target has gone (distance) and how long the job has been out (time):
+            // past either, the job is dropped and asked again from where the creature stands for where the target is now.
+            bool lagWaitSpent = lagging && !done
+                && (Vector3.DistanceSquared(job.Destination, destination) > PathJobLagMaxDriftYards * PathJobLagMaxDriftYards
+                    || _clockMs - job.SubmittedAtMs > PathJobLagMaxWaitMs);
+            if (!done && !overdue && ((sameRequest && destinationFits) || (lagging && !lagWaitSpent)))
             {
                 PathJobWaits++;
                 _lastPlanQueued = true;
@@ -238,7 +267,7 @@ public sealed partial class CreatureMapSystem
             // nothing about where it stands now (on a chase it would feed the unreachable-target evade). It is asked again from here.
             bool fits = !overdue
                 && sameRequest
-                && (destinationFits || (lagging && job.Status == NavJobStatus.Completed && LaggingAnswerStillCloses(start, job.Result, destination)))
+                && (destinationFits || (lagging && job.Status == NavJobStatus.Completed && LaggingAnswerStillCloses(start, job.Result, destination, job.Destination)))
                 && (!carried || job.Status != NavJobStatus.Completed || job.Result is { HasPath: true });
 
             if (fits && job.Status == NavJobStatus.Completed && job.Result is not null && !HasDrapeBudget)
@@ -284,7 +313,7 @@ public sealed partial class CreatureMapSystem
 
         var next = new NavJob(shared, Map.MapId, start, destination, options, urgent: !anyDestination)
         {
-            Tag = new PathJobKey(options, toSpawn, anyDestination, mayCarry ? creature.Spline : null),
+            Tag = new PathJobKey(options, toSpawn, anyDestination, mayCarry ? creature.Spline : null, creature.Motion.TargetedUnit),
             SubmittedAtMs = _clockMs,
         };
         if (!jobs.TrySubmit(next))
@@ -311,9 +340,31 @@ public sealed partial class CreatureMapSystem
     /// follower would stand until the target stopped. A creature already moving takes such an answer mid-spline, re-anchored at where
     /// it now stands (<see cref="TryReanchorAtCreature"/>); <paramref name="start"/> is that position.
     /// </summary>
-    private static bool LaggingAnswerStillCloses(Vector3 start, PathResult? result, Vector3 wanted)
+    private static bool LaggingAnswerStillCloses(Vector3 start, PathResult? result, Vector3 wanted, Vector3 askedFor)
         => result is { HasPath: true } path
-            && Vector3.DistanceSquared(path.Points[^1], wanted) < Vector3.DistanceSquared(start, wanted);
+            && Vector3.DistanceSquared(path.Points[^1], wanted) < Vector3.DistanceSquared(start, wanted)
+            && !OvershootsReversedTarget(path.Points[0], path.Points[^1], wanted, askedFor);
+
+    /// <summary>
+    /// Whether a lagging path would carry its creature one leg past a target that reversed: the target's point moved against the
+    /// direction the path travels (from <paramref name="pathStart"/> to <paramref name="pathEnd"/>), and the path ends more than
+    /// <see cref="PathJobReversalOvershootYards"/> beyond <paramref name="wanted"/> along that direction. Such an answer is closer
+    /// than where the creature stands, yet ends on the far side of the owner it follows. 2D, like the other follow tolerances.
+    /// </summary>
+    private static bool OvershootsReversedTarget(Vector3 pathStart, Vector3 pathEnd, Vector3 wanted, Vector3 askedFor)
+    {
+        var travel = new Vector2(pathEnd.X - pathStart.X, pathEnd.Y - pathStart.Y);
+        float length = travel.Length();
+        if (length < 1e-3f)
+        {
+            return false;
+        }
+
+        Vector2 along = travel / length;
+        var drift = new Vector2(wanted.X - askedFor.X, wanted.Y - askedFor.Y);
+        float overshoot = Vector2.Dot(new Vector2(pathEnd.X - wanted.X, pathEnd.Y - wanted.Y), along);
+        return Vector2.Dot(drift, along) < 0f && overshoot > PathJobReversalOvershootYards;
+    }
 
     /// <summary>
     /// Whether the creature got from <paramref name="jobStart"/> to <paramref name="here"/> only by running the spline it ran when the job
