@@ -39,6 +39,9 @@ public sealed class GraveyardDumpImporter
     private readonly SpecKeyReader _keys = new();
     private readonly Dictionary<uint, WorldSafeLocRow> _locs = [];
     private readonly Dictionary<uint, float> _facing = [];
+
+    /// <summary>Ids that only <see cref="AddMissingSafeLocs"/> supplied: the DBC has no facing, so their orientation is unknown, not 0.</summary>
+    private readonly HashSet<uint> _dbcOnly = [];
     private readonly Dictionary<(uint, uint), GraveyardZoneRow> _links = [];
     private readonly List<string> _warnings = [];
     private int _skippedKind;
@@ -102,6 +105,7 @@ public sealed class GraveyardDumpImporter
                 {
                     Id = loc.Id, MapId = loc.MapId, X = loc.X, Y = loc.Y, Z = loc.Z, Orientation = loc.Orientation, Name = FitName(loc.Id, loc.Name),
                 };
+                _dbcOnly.Add(loc.Id);
                 added++;
             }
         }
@@ -159,7 +163,9 @@ public sealed class GraveyardDumpImporter
     /// Write both tables atomically with the contract of <see cref="ImportTransaction"/>. With
     /// <paramref name="replace"/> they are emptied first; without it an existing key fails the write and nothing changes. With
     /// <paramref name="onlyCarried"/> a table is emptied only when the inputs carried rows for it (<see cref="HasSafeLocs"/>,
-    /// <see cref="HasLinks"/>), so a table the inputs do not carry is left as it is (the refresh command).
+    /// <see cref="HasLinks"/>), so a table the inputs do not carry is left as it is (the refresh command). In that mode a safe
+    /// location that only <c>WorldSafeLocs.dbc</c> supplied (no dump row, no facing table row) keeps the facing the world already has for
+    /// its id, because the DBC carries none and writing 0 would erase the stored one.
     /// </summary>
     public async Task<GraveyardImportReport> WriteAsync(WorldDbContext db, bool replace, CancellationToken cancellationToken = default, bool onlyCarried = false)
     {
@@ -171,6 +177,16 @@ public sealed class GraveyardDumpImporter
             db.ChangeTracker.AutoDetectChangesEnabled = false;
             try
             {
+                IReadOnlyCollection<WorldSafeLocRow> safeLocs = snapshot.SafeLocs;
+                if (replace && onlyCarried && HasSafeLocs && _dbcOnly.Count > 0)
+                {
+                    Dictionary<uint, float> stored = await db.Set<WorldSafeLocRow>().AsNoTracking()
+                        .ToDictionaryAsync(r => r.Id, r => r.Orientation, token).ConfigureAwait(false);
+                    safeLocs = [.. safeLocs.Select(loc => _dbcOnly.Contains(loc.Id) && !_facing.ContainsKey(loc.Id) && stored.TryGetValue(loc.Id, out float facing)
+                        ? new WorldSafeLocRow { Id = loc.Id, MapId = loc.MapId, X = loc.X, Y = loc.Y, Z = loc.Z, Orientation = facing, Name = loc.Name }
+                        : loc)];
+                }
+
                 if (replace)
                 {
                     if (!onlyCarried || HasLinks)
@@ -184,7 +200,7 @@ public sealed class GraveyardDumpImporter
                     }
                 }
 
-                await ImportBatch.InsertAsync(db, snapshot.SafeLocs, token).ConfigureAwait(false);
+                await ImportBatch.InsertAsync(db, safeLocs, token).ConfigureAwait(false);
                 await ImportBatch.InsertAsync(db, snapshot.Links, token).ConfigureAwait(false);
             }
             finally
@@ -198,6 +214,7 @@ public sealed class GraveyardDumpImporter
     private void ReadSafeLoc(DumpRow row)
     {
         uint id = _keys.Read(row, GraveyardDataModule.SafeLocsTable)[0];
+        _dbcOnly.Remove(id);
         _locs[id] = new WorldSafeLocRow
         {
             Id = id,

@@ -169,12 +169,18 @@ public sealed class DbScriptDumpImporter
         }
     }
 
-    /// <summary>Insert every script and waypoint row read (the full import, inside the caller's transaction).</summary>
-    internal async Task InsertAllAsync(WorldDbContext db, CancellationToken cancellationToken)
+    /// <summary>
+    /// Insert every script and waypoint row read (inside the caller's transaction). A vmangos spell script condition resolves against the
+    /// input's own cmangos <c>conditions</c> rows; with <paramref name="resolveFromStoredConditions"/> it may also resolve against the
+    /// world's stored <c>conditions</c> table. The full import leaves that off: it writes <c>conditions</c> later in the same transaction (and
+    /// empties it first with <c>--replace</c>), so the stored table is the pre-import one and an id found there may not exist afterwards. The
+    /// refresh does not touch <c>conditions</c>, so there the stored table is the one the rows will reference.
+    /// </summary>
+    internal async Task InsertAllAsync(WorldDbContext db, CancellationToken cancellationToken, bool resolveFromStoredConditions = false)
     {
         await InsertRowsAsync(db, _scripts.Values.SelectMany(rows => rows), cancellationToken).ConfigureAwait(false);
         await InsertRowsAsync(db, WaypointRows(), cancellationToken).ConfigureAwait(false);
-        await InsertRowsAsync(db, await ResolveVmangosSpellScriptsAsync(db, cancellationToken).ConfigureAwait(false), cancellationToken)
+        await InsertRowsAsync(db, await ResolveVmangosSpellScriptsAsync(db, resolveFromStoredConditions, cancellationToken).ConfigureAwait(false), cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -184,11 +190,11 @@ public sealed class DbScriptDumpImporter
     /// (vmangos mangos.sql has none; cmangos mangos.sql and classic-db do). It resolves only when its type means the same in both cores,
     /// which is checked for CONDITION_TEAM (6, value1 the team: vmangos Conditions.h:67 and Conditions.cpp:204-207, cmangos Conditions.h:39)
     /// with flags and the other values 0, to the cmangos row of the same type and values (cmangos keeps them unique, mangos.sql
-    /// <c>unique_conditions</c>): a <c>conditions</c> row of the input that has a <c>comments</c> column first, else the world's own
-    /// <c>conditions</c> table. The ids differ between the databases (vmangos 2 and 3 are classic-db 3 and 4, Horde and Alliance), so an id is
+    /// <c>unique_conditions</c>): a <c>conditions</c> row of the input that has a <c>comments</c> column first, else (refresh only, see
+    /// <see cref="InsertAllAsync"/>) the world's own <c>conditions</c> table. The ids differ between the databases (vmangos 2 and 3 are classic-db 3 and 4, Horde and Alliance), so an id is
     /// never copied. A spell with a step whose condition does not resolve is left out whole and named in <see cref="Warnings"/>.
     /// </summary>
-    private async Task<List<SpellScriptRow>> ResolveVmangosSpellScriptsAsync(WorldDbContext db, CancellationToken cancellationToken)
+    private async Task<List<SpellScriptRow>> ResolveVmangosSpellScriptsAsync(WorldDbContext db, bool resolveFromStoredConditions, CancellationToken cancellationToken)
     {
         _warnings.Clear();
         var rows = new List<SpellScriptRow>();
@@ -205,7 +211,7 @@ public sealed class DbScriptDumpImporter
             {
                 if (vmangosCondition != 0)
                 {
-                    uint? condition = await ResolveConditionAsync(db, vmangosCondition, cancellationToken).ConfigureAwait(false);
+                    uint? condition = await ResolveConditionAsync(db, vmangosCondition, resolveFromStoredConditions, cancellationToken).ConfigureAwait(false);
                     if (condition is null)
                     {
                         failure = $"vmangos condition {vmangosCondition} has no cmangos equivalent here";
@@ -231,7 +237,7 @@ public sealed class DbScriptDumpImporter
         return rows;
     }
 
-    private async Task<uint?> ResolveConditionAsync(WorldDbContext db, uint vmangosCondition, CancellationToken cancellationToken)
+    private async Task<uint?> ResolveConditionAsync(WorldDbContext db, uint vmangosCondition, bool resolveFromStoredConditions, CancellationToken cancellationToken)
     {
         const int Team = 6;
         if (!_vmangosConditions.TryGetValue(vmangosCondition, out ConditionRow? vm) || vm.Type != Team || vm.Flags != 0
@@ -243,6 +249,11 @@ public sealed class DbScriptDumpImporter
         if (_cmangosConditions.TryGetValue((vm.Type, vm.Value1, 0, 0, 0, 0), out uint entry))
         {
             return entry;
+        }
+
+        if (!resolveFromStoredConditions)
+        {
+            return null;
         }
 
         List<uint> entries = await db.Set<ConditionRow>()
@@ -336,7 +347,7 @@ public sealed class DbScriptDumpImporter
         if (HasRows)
         {
             await DeleteAllAsync(db, cancellationToken).ConfigureAwait(false);
-            await InsertAllAsync(db, cancellationToken).ConfigureAwait(false);
+            await InsertAllAsync(db, cancellationToken, resolveFromStoredConditions: true).ConfigureAwait(false);
         }
 
         int quests = 0;

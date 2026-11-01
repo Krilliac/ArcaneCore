@@ -1200,6 +1200,7 @@ public static partial class ContentImporterCli
                 ("item_template", await db.Set<ItemTemplateRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("quest_template", await db.Set<QuestTemplate>().CountAsync(ct).ConfigureAwait(false)),
                 ("npc_vendor_template", await db.Set<VendorTemplateItemRow>().CountAsync(ct).ConfigureAwait(false)),
+                ("points_of_interest", await db.Set<PointOfInterest>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_questrelation", await db.Set<CreatureQuestStarterRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("creature_involvedrelation", await db.Set<CreatureQuestEnderRow>().CountAsync(ct).ConfigureAwait(false)),
                 ("playercreateinfo_item", await db.Set<PlayerCreateInfoItemRow>().CountAsync(ct).ConfigureAwait(false)),
