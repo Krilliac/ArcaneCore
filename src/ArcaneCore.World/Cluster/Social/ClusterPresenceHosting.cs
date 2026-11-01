@@ -14,7 +14,8 @@ namespace ArcaneCore.World.Cluster.Social;
 /// Registration of realm presence (M15.2): the in-memory <see cref="IRealmPresenceDirectory"/> and <see cref="IClusterSocialRouter"/>, the <see cref="PresenceHolderService"/> over
 /// them, one <see cref="LeaseRoutedPresence"/> answering for the directory, router and <see cref="IPresenceAuthority"/>, and the <see cref="ClusterPresencePublisher"/> the social
 /// feature feeds. In Combined mode (no <see cref="RealmAuthorityLeaseKeeper"/>) the local service is always the authority: the in-process fast path, no peer link. Otherwise this
-/// node is the authority while it holds the Social lease and writes through the <see cref="PeerLinkClient"/> to the holder when that is registered.
+/// node is the authority while it holds the Social lease and writes through the <see cref="PeerLinkClient"/> to the holder: the client and the holder's listener are
+/// built by <see cref="PeerLinkHostedService"/> (<see cref="ClusterPeerLinkHosting.AddClusterPeerLink"/>), published through <see cref="PeerLinkRuntime"/>.
 /// </summary>
 public static class ClusterPresenceHosting
 {
@@ -35,10 +36,11 @@ public static class ClusterPresenceHosting
         services.TryAddSingleton(sp =>
         {
             RealmAuthorityLeaseKeeper? keeper = sp.GetService<RealmAuthorityLeaseKeeper>();
+            PeerLinkRuntime? runtime = sp.GetService<PeerLinkRuntime>();
             PeerLinkClient? link = sp.GetService<PeerLinkClient>();
-            PeerPresenceClient? remote = link is null ? null : new PeerPresenceClient(link);
+            PeerPresenceClient? fixedRemote = link is null ? null : new PeerPresenceClient(link);
             Func<bool> holdsSocial = keeper is null ? static () => true : () => keeper.TokenFor(RealmAuthorityScopes.Social) is not null;
-            return new LeaseRoutedPresence(sp.GetRequiredService<PresenceHolderService>(), holdsSocial, () => remote);
+            return new LeaseRoutedPresence(sp.GetRequiredService<PresenceHolderService>(), holdsSocial, () => runtime?.Presence ?? fixedRemote);
         });
         services.TryAddSingleton<IRealmPresenceDirectory>(sp => sp.GetRequiredService<LeaseRoutedPresence>());
         services.TryAddSingleton<IClusterSocialRouter>(sp => sp.GetRequiredService<LeaseRoutedPresence>());

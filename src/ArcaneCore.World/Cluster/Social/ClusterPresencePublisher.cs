@@ -193,7 +193,14 @@ public sealed class ClusterPresencePublisher : IAsyncDisposable
         {
             while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
             {
-                await FlushAsync(ct).ConfigureAwait(false);
+                try
+                {
+                    await FlushAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not (OutOfMemoryException or OperationCanceledException))
+                {
+                    _logger.LogFault("cluster.presence.flush", ex, "Realm presence flush pass failed; the loop continues");
+                }
             }
         }
         catch (OperationCanceledException)
