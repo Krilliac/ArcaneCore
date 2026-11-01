@@ -154,6 +154,34 @@ public sealed class CharacterDatabaseWriterLock : IDisposable
         }
     }
 
+    /// <summary>
+    /// Whether the lock of worker shard <paramref name="shard"/> is free right now, without keeping it: the proof, for the login-time reap (design _wf/writer-lock-DESIGN.md section 5.4),
+    /// that no process of that shard is alive. True also when the database has no lock at all. SQLite: a try-open of the shard sidecar (<see cref="ShardLockPathFor"/>); MariaDB/MySQL:
+    /// <c>IS_USED_LOCK(name) IS NULL</c>; PostgreSQL: try-take then release. An unreachable server propagates the driver's <see cref="System.Data.Common.DbException"/>; a throw for an invalid shard id is <see cref="ArgumentException"/>.
+    /// </summary>
+    public static bool ProbeShardFree(DatabaseConnectionOptions options, string shard)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ValidateShard(shard);
+        if (options.Provider != DatabaseProvider.Sqlite)
+            return ServerAdvisoryWriterLock.DatabaseNameOf(options) is not { } name || ServerAdvisoryWriterLock.ProbeFree(options, name, shard);
+
+        if (ShardLockPathFor(options, shard) is not { } path) return true;
+        try
+        {
+            using var probe = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None);
+            return true;
+        }
+        catch (IOException ex) when (IsSharingViolation(ex))
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException($"could not probe the characters database shard lock '{path}': {ex.Message}", ex);
+        }
+    }
+
     private static CharacterDatabaseWriterLock? Acquire(DatabaseConnectionOptions options, string? shard, Action<string>? onLost, TimeSpan? healthInterval,
         Action<string>? onRecovered, Action<string>? onConflict, Action<string>? onRetakeBlocked)
     {

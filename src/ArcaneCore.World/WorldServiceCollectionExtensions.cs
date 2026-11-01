@@ -91,6 +91,7 @@ public static class WorldServiceCollectionExtensions
         services.AddSingleton<CharacterSaveQueue>();
         services.AddSingleton<ICharacterSaveQueue>(sp => sp.GetRequiredService<CharacterSaveQueue>());
         services.AddSingleton<CharacterPersistenceBarrier>();
+        services.AddSingleton<CharacterClaimService>(); // Worker scope: the login claim (with the login-time reap) and the logout release of a character's cluster_transfer_owner claim
         services.AddSingleton(sp => Gm.Diagnostics.WorldPersistenceProbes.CreateRegistry(sp)); // every write-behind queue, for .arcane queues
         services.AddSingleton(sp => new WorldRuntime(
             sp.GetRequiredService<IOptions<WorldRuntimeOptions>>().Value,

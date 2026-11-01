@@ -71,6 +71,22 @@ public sealed class WorldWriterGuard(IOptions<DatabaseOptions>? databaseOptions 
         => databaseOptions?.Value is not { } options || CharacterDatabaseWriterLock.ProbeRealmFree(options.Resolve(DatabaseComponent.Characters));
 
     /// <summary>
+    /// Whether the advisory lock of the worker scope <paramref name="workerScope"/> (<c>worker:&lt;shard&gt;</c>) is free right now, without keeping it: the login-time reap's liveness proof
+    /// (design _wf/writer-lock-DESIGN.md section 5.4; <see cref="CharacterClaimService"/>). False for a scope that is not a valid worker scope, so it is never reaped. True when there are no database
+    /// options or the database has no lock. An unreachable server propagates the driver's <see cref="System.Data.Common.DbException"/>. Synchronous, one short round trip.
+    /// </summary>
+    public bool ProbeShardFree(string workerScope)
+    {
+        ArgumentNullException.ThrowIfNull(workerScope);
+        if (!CharacterOwnershipScopes.IsWorker(workerScope))
+            return false;
+        string shard = workerScope[CharacterOwnershipScopes.WorkerPrefix.Length..];
+        if (!CharacterDatabaseWriterLock.IsValidShardId(shard))
+            return false;
+        return databaseOptions?.Value is not { } options || CharacterDatabaseWriterLock.ProbeShardFree(options.Resolve(DatabaseComponent.Characters), shard);
+    }
+
+    /// <summary>
     /// Takes the lock if this database has one and it is not held yet. Returns true only when this call took it (false: already held, or this database has no lock).
     /// Throws <see cref="CharacterDatabaseAlreadyOwnedException"/> when another process holds it.
     /// </summary>

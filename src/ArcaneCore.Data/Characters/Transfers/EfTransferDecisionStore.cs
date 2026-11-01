@@ -80,8 +80,8 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     /// its heartbeat is older than <see cref="CharacterClaimReapPolicy.ReapAfter"/> is the shard row set inactive with its epoch bumped, and the claim then
     /// taken over. A realm-scope token yields <see cref="CharacterClaimOutcome.NotWorkerScope"/> and issues no SQL.
     /// <para>
-    /// Everything after the probe runs in one transaction (fence-exempt: the claim table is the claim's own fence). A concurrent first claim of the same
-    /// character loses on the primary key and the exception propagates to the login, which is refused.
+    /// The probe runs before the claim transaction opens; everything after it runs in one transaction (fence-exempt: the claim table is the claim's own fence).
+    /// A concurrent first claim of the same character loses on the primary key and is reported as <see cref="CharacterClaimOutcome.RefusedLiveOwner"/>.
     /// </para>
     /// </summary>
     public async Task<CharacterClaimResult> TryClaimCharacterAsync(
@@ -94,6 +94,47 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         if (!CharacterOwnershipScopes.IsWorker(token.Scope))
             return new CharacterClaimResult(CharacterClaimOutcome.NotWorkerScope, null, null);
 
+        // The shard-lock probe is an external round trip, so it runs before the claim transaction opens (on SQLite an open transaction holds the database write lock).
+        // It is only a pre-check: the reap's compare-and-swap below still requires the holder's exact epoch, incarnation and a stale heartbeat, so a shard that restarted
+        // after the probe (new incarnation) is never reaped on a stale "lock is free" answer.
+        string? probedScope = null;
+        bool probedFree = false;
+        if (reapPolicy is not null)
+        {
+            string? heldScope = await ReadClaimScopeAsync((long)characterGuid, cancellationToken).ConfigureAwait(false);
+            if (heldScope is not null && CharacterOwnershipScopes.IsWorker(heldScope) && !string.Equals(heldScope, token.Scope, StringComparison.Ordinal))
+            {
+                probedScope = heldScope;
+                probedFree = await reapPolicy.IsShardLockFree(heldScope, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        try
+        {
+            return await ClaimInTransactionAsync(characterGuid, token, reapPolicy, probedScope, probedFree, cancellationToken).ConfigureAwait(false);
+        }
+        catch (DbUpdateException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A concurrent first claim of the same character won the primary key between this call's read and its insert (or a competing write raced the same row): the other
+            // login holds the claim, so this one is refused like any live owner. A failure that left no claim row behind is a real storage fault and propagates.
+            string? now = await ReadClaimScopeAsync((long)characterGuid, cancellationToken).ConfigureAwait(false);
+            if (now is null)
+                throw;
+            return new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, now);
+        }
+    }
+
+    private async Task<string?> ReadClaimScopeAsync(long guid, CancellationToken cancellationToken)
+    {
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        return await db.Set<ClusterTransferOwnerRow>().AsNoTracking().Where(r => r.CharacterGuid == guid).Select(r => r.Scope)
+            .SingleOrDefaultAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<CharacterClaimResult> ClaimInTransactionAsync(
+        ulong characterGuid, CharacterOwnershipToken token, CharacterClaimReapPolicy? reapPolicy, string? probedScope, bool probedFree, CancellationToken cancellationToken)
+    {
         return await InTransactionAsync(async (db, ct) =>
         {
             long guid = (long)characterGuid;
@@ -135,8 +176,8 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
                     // A live-looking owner. Only the login-time reap can still free the claim.
                     if (reapPolicy is null || !CharacterOwnershipScopes.IsWorker(heldScope))
                         return new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, row.Scope);
-                    if (!await reapPolicy.IsShardLockFree(heldScope, ct).ConfigureAwait(false))
-                        return new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, row.Scope);
+                    if (!probedFree || !string.Equals(probedScope, heldScope, StringComparison.Ordinal))
+                        return new CharacterClaimResult(CharacterClaimOutcome.RefusedLiveOwner, null, row.Scope); // the lock was not free, or the claim moved to another shard since the probe
 
                     long newestReapable = now - (long)reapPolicy.ReapAfter.TotalMilliseconds;
                     long holderEpoch = holder.Epoch;

@@ -6,12 +6,27 @@ namespace ArcaneCore.Data.Stores;
 /// <see cref="ArcaneCore.Kernel.Characters.CharacterOwnershipRejectedException"/>: that exception is terminal for a whole save queue and halts the host,
 /// while losing one character to another worker is routine and concerns that character only. The write is refused; nothing was changed.
 /// </summary>
-public sealed class CharacterClaimRejectedException(int characterId, string scope)
-    : InvalidOperationException($"character {characterId} is not claimed by scope '{scope}'; the write was refused")
+public sealed class CharacterClaimRejectedException : InvalidOperationException
 {
-    public int CharacterId { get; } = characterId;
+    public CharacterClaimRejectedException(int characterId, string scope)
+        : this(characterId, scope, $"character {characterId} is not claimed by scope '{scope}'; the write was refused")
+    {
+    }
 
-    public string Scope { get; } = scope;
+    private CharacterClaimRejectedException(int characterId, string scope, string message) : base(message)
+    {
+        CharacterId = characterId;
+        Scope = scope;
+    }
+
+    /// <summary>The refusal of <see cref="CharacterClaimRequirement.HeldByAnyLiveWorker"/>: nobody live holds the character (no claim, a dead owner, or a transfer in flight). <paramref name="scope"/> is the writer's.</summary>
+    internal static CharacterClaimRejectedException NotHeldByAnyLiveWorker(int characterId, string scope)
+        => new(characterId, scope, $"character {characterId} is not held by any live worker (no claim, a dead owner or a transfer in flight); the write by scope '{scope}' was refused");
+
+    public int CharacterId { get; }
+
+    /// <summary>The scope that attempted the write.</summary>
+    public string Scope { get; }
 }
 
 /// <summary>What a claim check requires of the character rows a write transaction touches.</summary>

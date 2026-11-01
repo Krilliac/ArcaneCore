@@ -510,9 +510,9 @@ public abstract class CharacterKeyedWriteQueue<TValue>
         for (int i = 0; i < retained.Length; i++)
         {
             Exception? failure = await ExecuteAsync(retained[i], onlyIfFailed: true, clearQueued: false, sweep: true).ConfigureAwait(false);
-            if (failure is null)
+            if (failure is null or CharacterClaimRejectedException)
             {
-                continue;
+                continue; // a claim refusal is routine (the snapshot was dropped, see ExecuteAsync): neither a failed retry nor a sweep fault
             }
 
             failed++;

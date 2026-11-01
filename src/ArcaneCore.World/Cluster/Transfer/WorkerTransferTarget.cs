@@ -258,6 +258,12 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
     public Guid Incarnation { get; }
 
+    /// <summary>
+    /// The <c>worker:&lt;shard&gt;</c> scope this world claims under (its own ownership token), which a committed transfer moves the character's claim to, so the source's retained saves are
+    /// refused from the commit on (design _wf/writer-lock-DESIGN.md section 1b). Null in Realm scope (the realm-wide token is not a worker token): the claim keeps the source's scope.
+    /// </summary>
+    public string? OwnershipScope => _world.CharacterOwnership is { } token && ArcaneCore.Data.Characters.Ownership.CharacterOwnershipScopes.IsWorker(token.Scope) ? token.Scope : null;
+
     /// <summary>Transfers that hold a slot (reserved or shadowed, not yet activated or discarded).</summary>
     public int ReservedCount
     {

@@ -71,7 +71,9 @@ internal static class CharacterClaimGuard
             }
 
             if (!held)
-                throw new CharacterClaimRejectedException(characterId, token.Scope);
+                throw frame.Requirement == CharacterClaimRequirement.HeldByAnyLiveWorker
+                    ? CharacterClaimRejectedException.NotHeldByAnyLiveWorker(characterId, token.Scope)
+                    : new CharacterClaimRejectedException(characterId, token.Scope);
         }
     }
 

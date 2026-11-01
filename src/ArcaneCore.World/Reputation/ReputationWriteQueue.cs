@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Reputation;
@@ -672,14 +673,26 @@ public sealed class ReputationWriteQueue(IServiceScopeFactory scopes, ILogger lo
                     await store.DeleteDeletedCharacterAsync(characterId).ConfigureAwait(false); // conditional: skipped while the id has a character row again
                 }
 
-                if (snapshot.Rows.Length > 0)
+                try
                 {
-                    await store.SaveFactionsAsync(characterId, snapshot.Rows, ownership: snapshot.Ownership).ConfigureAwait(false);
-                }
+                    // The character's own reputation rows are claim-checked by the write fence in Worker scope (design _wf/writer-lock-DESIGN.md C5); the delete above is not.
+                    using CharacterWriteClaim.Scope claim = CharacterWriteClaim.Use(characterId);
+                    if (snapshot.Rows.Length > 0)
+                    {
+                        await store.SaveFactionsAsync(characterId, snapshot.Rows, ownership: snapshot.Ownership).ConfigureAwait(false);
+                    }
 
-                if (snapshot.Watched is { } watched)
+                    if (snapshot.Watched is { } watched)
+                    {
+                        await store.SaveWatchedFactionAsync(characterId, watched, ownership: snapshot.Ownership).ConfigureAwait(false);
+                    }
+                }
+                catch (CharacterClaimRejectedException ex)
                 {
-                    await store.SaveWatchedFactionAsync(characterId, watched, ownership: snapshot.Ownership).ConfigureAwait(false);
+                    // Another world holds the character now (or nobody does): the write is durably refused and superseded. Dropped, not retained
+                    // (a retained write would fault every barrier of this character), and not a queue fault.
+                    FaultLedger.Shared.Record("writequeue.reputation-claim", ex);
+                    logger.LogWarning("reputation write for character {Character} dropped: {Reason}", characterId, ex.Message);
                 }
 
                 progress.Succeeded();

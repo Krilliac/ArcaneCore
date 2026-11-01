@@ -260,16 +260,16 @@ internal sealed class ServerAdvisoryWriterLock : IDisposable
         => string.IsNullOrWhiteSpace(options.WriterLockDatabase) ? CharacterDatabaseWriterLock.DefaultPostgresLockDatabase : options.WriterLockDatabase;
 
     /// <summary>
-    /// Whether the realm lock of <paramref name="databaseName"/> is free right now, without keeping it. MariaDB/MySQL: <c>IS_USED_LOCK(name) IS NULL</c> (a pure read, it never takes the lock).
+    /// Whether the realm lock of <paramref name="databaseName"/> (or, with <paramref name="shard"/>, that worker shard's lock) is free right now, without keeping it. MariaDB/MySQL: <c>IS_USED_LOCK(name) IS NULL</c> (a pure read, it never takes the lock).
     /// PostgreSQL: a try-take on a short-lived connection that is given back at once, which also sees a holder in another lock database. A refusal whose holder is already gone counts as not free (it was
     /// held a moment ago; the caller refuses and may retry). A server that cannot be reached propagates the driver's <see cref="DbException"/>.
     /// </summary>
-    public static bool ProbeFree(DatabaseConnectionOptions options, string databaseName)
+    public static bool ProbeFree(DatabaseConnectionOptions options, string databaseName, string? shard = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         bool postgres = options.Provider == DatabaseProvider.PostgreSql;
-        string mySqlName = MySqlLockName(databaseName, null);
-        long key = PostgresLockKey(databaseName, null);
+        string mySqlName = MySqlLockName(databaseName, shard);
+        long key = PostgresLockKey(databaseName, shard);
         TimeSpan stale = StaleSessionTimeoutFor(HealthInterval);
         using DbConnection connection = Open(postgres, options.ConnectionString, LockDatabaseOf(options), stale, HealthInterval);
         if (!postgres)
