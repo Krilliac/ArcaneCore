@@ -77,7 +77,7 @@ public sealed class PickpocketLoot(LootService loot, Random? random = null) : IL
         List<Player> recipients = loot.RecipientsFor(player, creature, out _);
         if (!state.Picked)
         {
-            LootBag fresh = loot.Generate(creature.Guid, LootSourceKind.Creature, LootType.Pickpocketing, LootTableKind.Pickpocketing, lootId, recipients);
+            LootBag fresh = loot.Generate(creature.Guid, LootSourceKind.Creature, LootType.Pickpocketing, LootTableKind.Pickpocketing, lootId, recipients, lootTarget: creature);
             uint a = (uint)_random.Next(0, (creature.Level / 2) + 1);
             uint b = (uint)_random.Next(0, (player.Level / 2) + 1);
             fresh.Gold += (uint)Math.Min(10.0 * (a + b) * loot.Options.MoneyRate, LootService.MaxMoneyAmount);
@@ -88,7 +88,7 @@ public sealed class PickpocketLoot(LootService loot, Random? random = null) : IL
         else if (state.Bag is null || !state.Allowed.Contains(player.Guid))
         {
             // Not an original looter, or nothing left: only the quest items this player needs, no money (LootMgr.h:329-332 leaveOnlyQuestItems).
-            LootBag questOnly = loot.Generate(creature.Guid, LootSourceKind.Creature, LootType.Pickpocketing, LootTableKind.Pickpocketing, lootId, recipients);
+            LootBag questOnly = loot.Generate(creature.Guid, LootSourceKind.Creature, LootType.Pickpocketing, LootTableKind.Pickpocketing, lootId, recipients, lootTarget: creature);
             questOnly.KeepOnlyQuestItems();
             state.Bag = questOnly;
         }

@@ -88,7 +88,8 @@ public sealed class InsigniaLoot(LootService loot, Random? random = null)
     private LootBag Create(Corpse bones, Player looter, Player? victim)
     {
         uint refLoot = victim is not null ? RefLootOf?.Invoke(victim) ?? 0 : 0;
-        LootBag bag = loot.Generate(bones.Guid, LootSourceKind.Bones, LootType.Insignia, LootTableKind.Reference, refLoot, [looter]);
+        LootBag bag = loot.Generate(bones.Guid, LootSourceKind.Bones, LootType.Insignia, LootTableKind.Reference, refLoot, [looter],
+            lootTarget: (WorldObject?)victim ?? bones); // Loot::GetLootTarget: a corpse's owner when online (LootMgr.cpp:819-824)
         bag.Recipients.Clear(); // ALL_PERMISSION: "Everyone can loot"
         if (victim is not null)
         {
