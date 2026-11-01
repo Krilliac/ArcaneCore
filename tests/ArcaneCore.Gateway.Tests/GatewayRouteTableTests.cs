@@ -127,9 +127,7 @@ public sealed class GatewayRouteTableTests
         Task connect = client.ConnectAsync(cts.Token);
         using TcpClient raw = await listener.AcceptTcpClientAsync(cts.Token);
         await using var worker = new GatewayLinkChannel(raw);
-        worker.TryEnqueue(GatewaySessionWire.EncodeNonceFrame(GatewayWorkerFrameType.LinkChallenge, new byte[GatewaySessionWire.NonceBytes]));
-        Assert.Equal((byte)GatewayWorkerFrameType.LinkProof, (await worker.ReadFrameAsync(cts.Token))![0]);
-        Assert.Equal((byte)GatewayWorkerFrameType.HelloRegister, (await worker.ReadFrameAsync(cts.Token))![0]);
+        await LinkIntegrityTests.FakeWorkerHandshakeAsync(worker, Secret, cts.Token);
         worker.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloAckFrame(true, string.Empty, "0,30-40", allowInstanceMaps: false));
         await connect;
 
@@ -179,9 +177,7 @@ public sealed class GatewayRouteTableTests
             Task connect = client.ConnectAsync(token);
             using TcpClient raw = await listener.AcceptTcpClientAsync(token);
             await using var worker = new GatewayLinkChannel(raw);
-            worker.TryEnqueue(GatewaySessionWire.EncodeNonceFrame(GatewayWorkerFrameType.LinkChallenge, new byte[GatewaySessionWire.NonceBytes]));
-            Assert.Equal((byte)GatewayWorkerFrameType.LinkProof, (await worker.ReadFrameAsync(token))![0]);
-            Assert.Equal((byte)GatewayWorkerFrameType.HelloRegister, (await worker.ReadFrameAsync(token))![0]);
+            await LinkIntegrityTests.FakeWorkerHandshakeAsync(worker, Secret, token);
             worker.TryEnqueue(ack);
             await assertOutcome(connect);
             return client;

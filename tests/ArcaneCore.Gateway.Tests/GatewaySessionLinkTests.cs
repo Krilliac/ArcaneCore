@@ -243,9 +243,7 @@ public sealed class GatewaySessionLinkTests
         Task connect = client.ConnectAsync(cts.Token);
         using TcpClient raw = await listener.AcceptTcpClientAsync(cts.Token);
         await using var worker = new GatewayLinkChannel(raw);
-        worker.TryEnqueue(GatewaySessionWire.EncodeNonceFrame(GatewayWorkerFrameType.LinkChallenge, new byte[GatewaySessionWire.NonceBytes]));
-        Assert.Equal((byte)GatewayWorkerFrameType.LinkProof, (await worker.ReadFrameAsync(cts.Token))![0]);
-        Assert.Equal((byte)GatewayWorkerFrameType.HelloRegister, (await worker.ReadFrameAsync(cts.Token))![0]);
+        await LinkIntegrityTests.FakeWorkerHandshakeAsync(worker, Secret, cts.Token);
         worker.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloAckFrame(true, string.Empty));
         await connect;
         Assert.Equal((byte)GatewayWorkerFrameType.LinkClock, (await worker.ReadFrameAsync(cts.Token))![0]); // the clock reading follows the admission
