@@ -2,6 +2,7 @@ using System.Globalization;
 using ArcaneCore.Game.Locomotion;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
+using ArcaneCore.Game.WorldState;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Playerbots;
@@ -14,7 +15,7 @@ namespace ArcaneCore.World.Reload;
 /// the social rules (<see cref="SocialOptions"/>), the playerbot options (<see cref="PlayerbotOptions"/>) and the movement rules
 /// (<see cref="LocomotionOptions"/>, whose player speed rates are live). A side that is not known reads as null.
 /// </summary>
-public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null, PlayerbotOptions? Playerbots = null, LocomotionOptions? Locomotion = null);
+public readonly record struct WorldConfigView(WorldRuntimeOptions Runtime, WorldOptions? Listener, SocialOptions? Social = null, PlayerbotOptions? Playerbots = null, LocomotionOptions? Locomotion = null, WarModeOptions? WarMode = null);
 
 /// <summary>
 /// One option under the <c>World</c> section and what <c>.reload config</c> does with it. A live
@@ -170,6 +171,8 @@ public static class WorldConfigKeys
         LivePlayerbotsValue("MaxBulkCommand", o => o.MaxBulkCommand, (o, v) => o.MaxBulkCommand = v,
             v => v is >= 1 and <= PlayerbotOptions.MaxBotsCeiling ? null : $"must be 1..{PlayerbotOptions.MaxBotsCeiling}"),
 
+        // Quest-goal choice: PlayerbotQuestGoals reads the shared options on every think.
+        LivePlayerbots("DropGreyQuests", o => o.DropGreyQuests, (o, v) => o.DropGreyQuests = v),
         // Not a vmangos key: how bot movement reaches the world (client packets through the handlers, or applied by the server).
         // PlayerbotMotion reads the shared PlayerbotOptions at every movement packet. The playerbot options not listed here are read at start.
         LivePlayerbots("MovementPackets", o => o.MovementPackets, (o, v) => o.MovementPackets = v),
@@ -237,6 +240,14 @@ public static class WorldConfigKeys
         LivePlayerbots("Opportunities:LockedChests", o => o.Opportunities.LockedChests, (o, v) => o.Opportunities.LockedChests = v),
         LivePlayerbots("Opportunities:Nodes", o => o.Opportunities.Nodes, (o, v) => o.Opportunities.Nodes = v),
         LivePlayerbots("Opportunities:Rares", o => o.Opportunities.Rares, (o, v) => o.Opportunities.Rares = v),
+        // PlayerbotWorldPvpObjectives reads the shared PlayerbotOptions.WorldPvp at every scan and decision.
+        LivePlayerbots("WorldPvp:Silithyst:Enabled", o => o.WorldPvp.Silithyst.Enabled, (o, v) => o.WorldPvp.Silithyst.Enabled = v),
+        LivePlayerbotsValue("WorldPvp:Silithyst:ParticipationChance", o => o.WorldPvp.Silithyst.ParticipationChance, (o, v) => o.WorldPvp.Silithyst.ParticipationChance = v,
+            PlayerbotSilithystOptions.CheckChance),
+        LivePlayerbotsValue("WorldPvp:Silithyst:WarModeParticipationChance", o => o.WorldPvp.Silithyst.WarModeParticipationChance, (o, v) => o.WorldPvp.Silithyst.WarModeParticipationChance = v,
+            PlayerbotSilithystOptions.CheckChance),
+        LivePlayerbotsValue("WorldPvp:Silithyst:MaxBotsPerGeyser", o => o.WorldPvp.Silithyst.MaxBotsPerGeyser, (o, v) => o.WorldPvp.Silithyst.MaxBotsPerGeyser = v,
+            PlayerbotSilithystOptions.CheckMaxBots),
 
         // Not vmangos keys: bot chat (docs/areas/playbots.md, Bot chat). PlayerbotChat reads the shared PlayerbotOptions.Chat at every
         // line and every provider attempt; the provider list is compared and replaced as one value.
@@ -672,6 +683,7 @@ public static class WorldConfigKeys
         LivePlayerbots("Social:Emotes:Enabled", o => o.Social.Emotes.Enabled, (o, v) => o.Social.Emotes.Enabled = v),
         LivePlayerbots("Social:Rivalry:Enabled", o => o.Social.Rivalry.Enabled, (o, v) => o.Social.Rivalry.Enabled = v),
         LivePlayerbots("Social:Rivalry:AllowOptOut", o => o.Social.Rivalry.AllowOptOut, (o, v) => o.Social.Rivalry.AllowOptOut = v),
+        LivePlayerbots("Social:Invites:AllowOptOut", o => o.Social.Invites.AllowOptOut, (o, v) => o.Social.Invites.AllowOptOut = v),
         LivePlayerbots("Social:Rivalry:Emotes:Enabled", o => o.Social.Rivalry.Emotes.Enabled, (o, v) => o.Social.Rivalry.Emotes.Enabled = v),
         LivePlayerbots("Social:Rivalry:Emotes:RivalEmotes", o => o.Social.Rivalry.Emotes.RivalEmotes, (o, v) => o.Social.Rivalry.Emotes.RivalEmotes = v),
         LivePlayerbots("Social:Rivalry:Emotes:RudeAtBots", o => o.Social.Rivalry.Emotes.RudeAtBots, (o, v) => o.Social.Rivalry.Emotes.RudeAtBots = v),
@@ -766,12 +778,31 @@ public static class WorldConfigKeys
             v => v is >= -500 and <= 500 ? null : "must be -500..500"),
         LivePlayerbotsValue("Social:Memory:TrustPerTradeScam", o => o.Social.Memory.TrustPerTradeScam, (o, v) => o.Social.Memory.TrustPerTradeScam = v,
             v => v is >= -500 and <= 500 ? null : "must be -500..500"),
-        LivePlayerbots("Social:WarMode:Enabled", o => o.Social.WarMode.Enabled, (o, v) => o.Social.WarMode.Enabled = v),
         LivePlayerbotsValue("Social:WarMode:NegativeMultiplier", o => o.Social.WarMode.NegativeMultiplier, (o, v) => o.Social.WarMode.NegativeMultiplier = v,
             v => float.IsFinite(v) && v is >= 1f and <= 10f ? null : "must be 1..10"),
         LivePlayerbots("Social:WarMode:NeverForget", o => o.Social.WarMode.NeverForget, (o, v) => o.Social.WarMode.NeverForget = v),
         LivePlayerbots("Social:WarMode:RemoveCaps", o => o.Social.WarMode.RemoveCaps, (o, v) => o.Social.WarMode.RemoveCaps = v),
         LivePlayerbots("Social:WarMode:ClearOnDisable", o => o.Social.WarMode.ClearOnDisable, (o, v) => o.Social.WarMode.ClearOnDisable = v),
+        // Bots starting PvP fights (non-retail, off by default): read at the bot's next think.
+        LivePlayerbots("Pvp:Initiate:Enabled", o => o.Pvp.Initiate.Enabled, (o, v) => o.Pvp.Initiate.Enabled = v),
+        LivePlayerbotsValue("Pvp:Initiate:RadiusYards", o => o.Pvp.Initiate.RadiusYards, (o, v) => o.Pvp.Initiate.RadiusYards = v, PlayerbotPvpInitiateOptions.CheckRadius),
+        LivePlayerbotsValue("Pvp:Initiate:MaxLevelBelow", o => o.Pvp.Initiate.MaxLevelBelow, (o, v) => o.Pvp.Initiate.MaxLevelBelow = v, PlayerbotPvpInitiateOptions.CheckLevels),
+        LivePlayerbotsValue("Pvp:Initiate:MaxLevelAbove", o => o.Pvp.Initiate.MaxLevelAbove, (o, v) => o.Pvp.Initiate.MaxLevelAbove = v, PlayerbotPvpInitiateOptions.CheckLevels),
+        LivePlayerbotsValue("Pvp:Initiate:MinHealthPct", o => o.Pvp.Initiate.MinHealthPct, (o, v) => o.Pvp.Initiate.MinHealthPct = v, PlayerbotPvpInitiateOptions.CheckHealth),
+        LivePlayerbots("Pvp:Defense:Enabled", o => o.Pvp.Defense.Enabled, (o, v) => o.Pvp.Defense.Enabled = v),
+        LivePlayerbots("Pvp:Defense:Announce", o => o.Pvp.Defense.Announce, (o, v) => o.Pvp.Defense.Announce = v),
+        LivePlayerbots("Pvp:Defense:BothSides", o => o.Pvp.Defense.BothSides, (o, v) => o.Pvp.Defense.BothSides = v),
+        LivePlayerbotsValue("Pvp:Defense:RespondRadiusYards", o => o.Pvp.Defense.RespondRadiusYards, (o, v) => o.Pvp.Defense.RespondRadiusYards = v, PlayerbotPvpDefenseOptions.CheckRespondRadius),
+        LivePlayerbotsValue("Pvp:Defense:MaxRespondersPerSide", o => o.Pvp.Defense.MaxRespondersPerSide, (o, v) => o.Pvp.Defense.MaxRespondersPerSide = v, PlayerbotPvpDefenseOptions.CheckResponders),
+        LivePlayerbotsValue("Pvp:Defense:MaxLevelBelow", o => o.Pvp.Defense.MaxLevelBelow, (o, v) => o.Pvp.Defense.MaxLevelBelow = v, PlayerbotPvpInitiateOptions.CheckLevels),
+        LivePlayerbotsValue("Pvp:Defense:MaxLevelAbove", o => o.Pvp.Defense.MaxLevelAbove, (o, v) => o.Pvp.Defense.MaxLevelAbove = v, PlayerbotPvpInitiateOptions.CheckLevels),
+        LivePlayerbotsValue("Pvp:Defense:CallerCooldownSeconds", o => o.Pvp.Defense.CallerCooldownSeconds, (o, v) => o.Pvp.Defense.CallerCooldownSeconds = v, PlayerbotPvpDefenseOptions.CheckCallerCooldown),
+        LivePlayerbotsValue("Pvp:Defense:ZoneAnnounceSeconds", o => o.Pvp.Defense.ZoneAnnounceSeconds, (o, v) => o.Pvp.Defense.ZoneAnnounceSeconds = v, PlayerbotPvpDefenseOptions.CheckZoneAnnounce),
+        LivePlayerbotsValue("Pvp:Defense:MaxActiveCallsPerZone", o => o.Pvp.Defense.MaxActiveCallsPerZone, (o, v) => o.Pvp.Defense.MaxActiveCallsPerZone = v, PlayerbotPvpDefenseOptions.CheckCallsPerZone),
+        LivePlayerbotsValue("Pvp:Defense:MaxOpenCallsPerMap", o => o.Pvp.Defense.MaxOpenCallsPerMap, (o, v) => o.Pvp.Defense.MaxOpenCallsPerMap = v, PlayerbotPvpDefenseOptions.CheckCallsPerMap),
+        LivePlayerbotsValue("Pvp:Defense:ProvokeThrottleSeconds", o => o.Pvp.Defense.ProvokeThrottleSeconds, (o, v) => o.Pvp.Defense.ProvokeThrottleSeconds = v, PlayerbotPvpDefenseOptions.CheckProvokeThrottle),
+        LivePlayerbotsValue("Social:WarMode:HuntRadiusYards", o => o.Social.WarMode.HuntRadiusYards, (o, v) => o.Social.WarMode.HuntRadiusYards = v,
+            v => v is >= Playerbots.BotSocial.PlayerbotWarModeOptions.MinHuntRadiusYards and <= Playerbots.BotSocial.PlayerbotWarModeOptions.MaxHuntRadiusYards ? null : $"must be {Playerbots.BotSocial.PlayerbotWarModeOptions.MinHuntRadiusYards}..{Playerbots.BotSocial.PlayerbotWarModeOptions.MaxHuntRadiusYards}"),
 
         // Not vmangos keys: bots using the faction auction house (docs/areas/playbots-economy.md). PlayerbotEconomy reads the shared
         // PlayerbotOptions.Economy at every decision.
@@ -884,6 +915,13 @@ public static class WorldConfigKeys
         LivePlayerbots("Chat:Safety:RequireOptIn", o => o.Chat.Safety.RequireOptIn, (o, v) => o.Chat.Safety.RequireOptIn = v),
         LivePlayerbots("Chat:Safety:StripPersonalData", o => o.Chat.Safety.StripPersonalData, (o, v) => o.Chat.Safety.StripPersonalData = v),
 
+        // War Mode (non-retail, off by default): the switch and its two costs. Every reader (MapCombat, HonorKillRewards, the playerbot pack) reads the
+        // shared WorldStateHooks.WarMode object at each use, so a reload takes effect at the next tick, kill or death.
+        LiveWarMode("Enabled", o => o.Enabled, (o, v) => o.Enabled = v, null),
+        LiveWarMode("HonorMultiplier", o => o.HonorMultiplier, (o, v) => o.HonorMultiplier = v, WarModeOptions.CheckHonorMultiplier),
+        LiveWarMode("PvpDeathDurabilityLoss", o => o.PvpDeathDurabilityLoss, (o, v) => o.PvpDeathDurabilityLoss = v, WarModeOptions.CheckPvpDeathDurabilityLoss),
+        LiveWarMode("ExemptAreas", o => o.ExemptAreas, (o, v) => o.ExemptAreas = v, WarModeOptions.CheckExemptAreas),
+
         // The player speed rates (non-retail when not 1; the MaNGOS Zero fork's Movement.*SpeedRate): UnitSpeed.SetRate reads them through the
         // player's copy, which the reload refreshes for every online player (ConfigContentReloadable re-sends the speeds after these keys).
         LiveSpeedRate("PlayerSpeedRate", o => o.PlayerSpeedRate, (o, v) => o.PlayerSpeedRate = v),
@@ -910,6 +948,13 @@ public static class WorldConfigKeys
             v => (float)v! is >= LocomotionOptions.MinSpeedRate and <= LocomotionOptions.MaxSpeedRate
                 ? null
                 : $"must be between {LocomotionOptions.MinSpeedRate.ToString(CultureInfo.InvariantCulture)} and {LocomotionOptions.MaxSpeedRate.ToString(CultureInfo.InvariantCulture)}");
+
+    private static WorldConfigKey LiveWarMode<T>(string path, Func<WarModeOptions, T> get, Action<WarModeOptions, T> set, Func<T, string?>? check)
+        => new(
+            $"{WarModeOptions.SectionName}:{path}",
+            v => v.WarMode is { } warMode ? get(warMode) : null,
+            (view, v) => set(view.WarMode!, (T)v!),
+            check is null ? null : v => check((T)v!));
 
     private static string? NonNegative<T>(T value) where T : struct, IComparable<T>
         => value.CompareTo(default) < 0 ? "must not be negative" : null;

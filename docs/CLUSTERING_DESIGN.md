@@ -18,9 +18,37 @@ the older pin. The [auxiliary services](#auxiliary-services) section (requested
 2026-10-10) and the importer row of the component table were checked against
 `db9df29420b7ddf844b48ee7d459a8912e8924da`.
 
+## Decisions and staged plan (2026-10-30)
+
+Source: the cluster split scope of 2026-10-30, surveyed on `integrate/2026-10-29`. These decisions override any earlier text in
+this document that names gRPC, a Login/Realm/CharServer chain, or separate social or coordinator World processes.
+
+- **D1 Database.** A split live realm uses PostgreSQL 16 (MariaDB or PostgreSQL was acceptable; PostgreSQL gives session advisory
+  locks, transactional DDL and parity with the CI `postgres:16` image). Map processes must write one characters database
+  concurrently, which SQLite's one-writer-process design does not allow.
+- **D2 Topology.** A gateway, whole-map workers (Eastern Kingdoms, Kalimdor, instances), and a lease-holding realm authority on one
+  worker. The Login/Realm/CharServer plan and the gRPC wording are retired; the transport is the custom TCP link.
+- **D3 Realm-wide state.** Guilds, groups, mail, auctions, friends, channels and battleground queues stay on the worker that holds
+  the Social/Economy leases; other workers call it over the link. There is no dedicated social or economy process.
+- **D4 Transfers.** A player moves between processes only at far teleports and instance entry (the 1.12.1 client already shows a
+  loading screen there: `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`); never mid-map.
+
+Stages. Each is shippable and keeps the combined single world working; the split stays opt-in until S6 passes.
+
+| Stage | Content |
+|---|---|
+| S0 Safety and docs | Unfenced worlds on server databases claim an exclusive marker or refuse; a promoted standby on SQLite takes the sidecar lock; reconcile the stale cluster docs and the ROADMAP M15 table. |
+| S1 Fenced by default for cluster mode | Run the cluster with `Cluster:Fencing:Enabled` and durable id blocks; prove the ownership token and id reservation on the live provider; a lease for the Instances scope; migrate live to PostgreSQL 16 (copy tool, backups, rollback). |
+| S2 Link protocol for realm services | Link frames for whisper, group/raid/guild chat and events, channel chat, who, mail notify and auctions; a real presence directory and social router; the lease holder serves them. |
+| S3 Realm-wide state behind the lease holder | Guild, group, mail, auction, friend and battleground-queue operations from a non-holder go to the holder; caches live only there; id counters come from durable blocks. Needs S2. |
+| S4 Map ownership and routing | Workers refuse maps they do not own; the gateway keeps a map-to-worker table from the supervisor's exclusive map assignments and opens each session on the owning worker. Parallel with S2. |
+| S5 Player transfer at far teleports | Production `ITransferSourceWorker`, `ITransferTargetWorker` and `ITransferGatewayRouter` over the existing coordinator, bundle and journal; the gateway re-points the session during the loading screen; abort and crash recovery per stage. Needs S4 and S1. |
+| S6 Proof | A multi-process end-to-end test (gateway, two workers, a mock client crossing EK to Kalimdor and into an instance, a worker crash mid-transfer), then real-client acceptance. |
+| S7 Live topology | `start-cluster.ps1` starts the gateway and the EK, Kalimdor and instances workers; the status window lists the nodes actually started. |
+
 ## Decision and reference comparison
 
-Build an independent .NET 10/gRPC design with stable client gateways, one owner
+Build an independent .NET design with stable client gateways, one owner
 per map/instance, realm-wide social services and durable ownership fencing.
 Keep the current local realm/world mode and use the same simulation and protocol
 implementations in both modes. This combines the useful parts of the references
@@ -55,11 +83,10 @@ complete instance/epoch authority. Same-realm clustering and federation are
 separate: shared auth or cross-realm discovery does not move a character or its
 client transparently between realms. Federation is outside M15's first phases.
 
-Internal transport will use versioned protobuf contracts over ASP.NET Core gRPC.
-Its [HTTP/2 and TLS requirements](https://learn.microsoft.com/en-us/aspnet/core/grpc/aspnetcore?view=aspnetcore-10.0)
-and [deadline behavior](https://grpc.io/docs/guides/deadlines/) inform deployment
-and cancellation tests. Package versions are selected and pinned when the first
-transport phase is implemented. Local mode retains an in-process implementation
+Internal transport is custom TCP framing, as built: `GatewayLinkChannel` carries length-prefixed frames
+(`GatewayWorkerFrameType`) and the link opens with a `LinkChallenge` nonce answered by an HMAC, so the link is
+authenticated by a shared secret. The earlier gRPC/protobuf plan and the Login/Realm/CharServer process split are retired
+(decision D2 below). Local mode retains an in-process implementation
 of the same semantic contracts.
 
 ## Current executable and state boundaries
@@ -327,14 +354,15 @@ process. A launch, heartbeat, or signal alone is not readiness or completed drai
 
 Status: hosted as an opt-in mode of `ArcaneCore.World` (`Cluster:Supervisor:Enabled`, off by default; see the bullets below), with
 `MinClusterProcesses` enforced at start. Not built: the coordinator role, restart reconciliation and placement of new or empty maps
-(see [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond)). No World role other than combined and worker exists yet.
+(see [gateway.md](areas/gateway.md#not-done-yet-rest-of-3a-and-beyond)). No World role other than combined and map worker exists.
 
 A single clustered host runs **3 executables** across **6 to 9 OS processes**:
-`ArcaneCore.Realm`, `ArcaneCore.World` (selected by role: `combined | gateway | worker | social | coordinator`),
+`ArcaneCore.Realm`, `ArcaneCore.World` (a World process runs `Combined` or `MapWorker`; `ClusterNodeOptions.Validate` refuses Social, Economy and Gateway),
 and the host supervisor (`ClusterHostSupervisor` in `src/ArcaneCore.World/Cluster/Supervision/`).
+The decided topology (D2/D3) is the separate `ArcaneCore.Gateway` executable, whole-map workers, and a lease-holding realm authority on one worker.
 Bots remain in-process on the `worker` that owns their map; there is no separate bot-world executable.
 
-- **Default merged console (`Merged`).** By default, the supervisor spawns every child windowless (`CreateNoWindow = true`, redirected `stdout`/`stderr`), writes every line to that child's per-process log file, and multiplexes output into the single supervisor console prefixed with its `[<name>]` role tag (for example `[realm]`, `[gateway:1]`, `[worker:EK]`, `[worker:Kalimdor]`, `[worker:Instances]`, `[social]`, `[coordinator]`).
+- **Default merged console (`Merged`).** By default, the supervisor spawns every child windowless (`CreateNoWindow = true`, redirected `stdout`/`stderr`), writes every line to that child's per-process log file, and multiplexes output into the single supervisor console prefixed with its `[<name>]` role tag (for example `[realm]`, `[gateway:1]`, `[worker:EK]`, `[worker:Kalimdor]`, `[worker:Instances]`).
 - **Per-process console switch.** Each supervised child configures `Cluster:Supervisor:Processes:<name>:Console` as `merged` (default), `window` (own OS console window with `CreateNoWindow = false`), or `none` (silent background process, log file only).
 - **Unconditional error/exception visibility.** Regardless of whether a child is configured for `merged`, `window`, or `none`, any `stderr` output or error/exception line (`ERROR`, `FATAL`, `CRIT`, `[ERR]`, `[FTL]`, `Unhandled exception`, `Exception:`) is always surfaced in the supervisor's merged console alongside its `[<name>]` prefix and written to the child's log file so crashes or faults are never hidden.
 - **Lifecycle, backoff, and capacity admission.** Unexpected child exits trigger capped exponential restart backoff (`1 s -> 2 s -> 4 s -> ... -> 60 s` maximum) and increment the child's incarnation and restart counters. Before launch, `CheckCapacityAdmission` enforces `MaxConcurrentProcesses`, `MaxTotalAllocatedMemoryMb`, `MinFreeMemoryReserveMb`, and single-writer map ownership across workers. `DrainAndStopAsync` drains and terminates only supervisor-owned child processes and never restarts a drained child.
@@ -368,9 +396,9 @@ validates and applies them on its own tick. Common rules (planned):
   mode keeps today's in-process code behind the same contract interface, as the
   charter's seam rule requires (`ARCANECORE_CHARTER.md:135-139`). The combined
   World executable always runs Local.
-- **Transport.** The M15.1 gRPC transport, with the membership/readiness family:
-  versioned registration, a unique service incarnation, mutual authentication
-  scoped to realm and role, deadlines, and bounded in-flight requests on both sides.
+- **Transport.** The M15.1 custom TCP link transport (`GatewayLinkChannel`, HMAC challenge), with the membership/readiness family:
+  versioned registration, a unique service incarnation, authentication
+  (today one-way: the gateway proves the shared secret to the worker via the HMAC challenge; mutual authentication scoped to realm and role is planned), deadlines, and bounded in-flight requests on both sides.
   Retry only requests that carry an idempotency key.
 - **Fail closed.** The world never waits on a service inside a tick. When a
   service is down or not ready, its feature pauses: no new intents are applied
@@ -590,7 +618,7 @@ The roadmap owns phase status ([clustering phase status](ROADMAP.md#clustering-p
 | M15.1 — transport/session owner | Versioned contracts, gateway hosting and one separate game worker; retain combined World hosting and a local contract adapter; realm replicas and account-generation claims | Real owned subprocess registration/receive loop/readiness; actual SRP/M2/world cipher; two gateways replace duplicate sessions consistently; one-worker mock lifecycle remains equivalent |
 | M15.2 — realm services/game owner | Routed identity/presence/social authority; one fenced realm auction/mail authority; scoped feature registration; true distinct Map instances and durable instance bindings | Cross-gateway social delivery and logout ordering, concurrent names/group/guild IDs, single auction/mail scheduling and custody ownership, isolated instances, restart recovery and all existing feature tests |
 | M15.3 — transfer/game/data owners | Complete feature state capture/install, durable transfer decisions, fenced residency, deadlines and acknowledgement routing; static multiple-worker map placement | Seamless 5875 TCP connection across workers; quests/timers, inventory, casts/auras/cooldowns and corpse semantics preserved; duplicate/lost/reordered/late messages and crashes at every handoff stage cannot activate two owners |
-| M15.4 — operations/recovery owner | Host daemon/coordinator supervision, distinct readiness/drain, capacity admission, restart reconciliation and placement of new/empty maps; live map relocation only after complete map snapshots | Kill only fixture-owned subprocesses at defined stages; coordinator/worker/gateway/social/storage partitions, cold starts, drains and constrained-host overload recover with bounded resources and measured data loss policy |
+| M15.4 — operations/recovery owner | Host daemon/coordinator supervision, distinct readiness/drain, capacity admission, restart reconciliation and placement of new/empty maps; live map relocation only after complete map snapshots | Kill only fixture-owned subprocesses at defined stages; coordinator/worker/gateway/storage partitions, cold starts, drains and constrained-host overload recover with bounded resources and measured data loss policy |
 | M15.5 — tooling/compatibility owner | Job contracts for existing CLIs/import/codegen/mock, content revision rollout, mixed-version policy, upgrade/rollback runbook and cluster diagnostics | Offline tools retain CLI use; live content replacement is refused or coordinated; Windows/Linux and private cross-host tests; deterministic output artifacts; compatible rollout and safe local-mode rollback |
 | M15.6 — auxiliary services owner | In value order: Warden hosted on the gateway with a realm-wide Warden manifest; the optional Remote bot chat service; the optional Remote bot planner; the optional Remote auction house bot planner with durable intent ids, plus one fenced auction and mail owner per realm. Also the AutoBroadcast placement, cluster metrics labels and the server-mail idempotency fix ([auxiliary services](#auxiliary-services)) | Every Remote service runs as a real owned subprocess and is also tested in Local mode; Local mode stays equivalent to today. Killing a service at each intent stage leaves the custody audit clean, with no lost or duplicated item or copper; a replayed intent returns Duplicate. A down chat service sends nothing to providers and the built-in replies continue. A gateway with Warden enabled and an unusable module is not ready. Stale-epoch plans and verdicts are discarded |
 

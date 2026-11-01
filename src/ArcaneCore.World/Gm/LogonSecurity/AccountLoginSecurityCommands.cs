@@ -41,7 +41,7 @@ public sealed class AccountLoginSecurityCommands : ICommandGroup
         Run(context, async services =>
         {
             Account? account = await services.GetRequiredService<IAccountStore>().FindByUsernameAsync(name).ConfigureAwait(false);
-            if (account is null) { context.Reply("Account does not exist."); return; }
+            if (account is null) { context.Fail("no-such-account"); context.Reply("Account does not exist."); return; }
             string secret = method == AccountLockFlags.FixedPin
                 ? RandomNumberGenerator.GetInt32(100000, 1000000).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : Totp.NewSecret();
@@ -59,7 +59,7 @@ public sealed class AccountLoginSecurityCommands : ICommandGroup
         Run(context, async services =>
         {
             Account? account = await services.GetRequiredService<IAccountStore>().FindByUsernameAsync(name).ConfigureAwait(false);
-            if (account is null) { context.Reply("Account does not exist."); return; }
+            if (account is null) { context.Fail("no-such-account"); context.Reply("Account does not exist."); return; }
             if (!account.LockFlags.HasFlag(method)) { context.Reply("That factor is not enabled."); return; }
             await services.GetRequiredService<IAccountLoginSecurityStore>().SetAsync(name,
                 AccountLockFlags.None, string.Empty).ConfigureAwait(false);
@@ -75,7 +75,7 @@ public sealed class AccountLoginSecurityCommands : ICommandGroup
         Run(context, async services =>
         {
             Account? account = await services.GetRequiredService<IAccountStore>().FindByUsernameAsync(name).ConfigureAwait(false);
-            if (account is null) { context.Reply("Account does not exist."); return; }
+            if (account is null) { context.Fail("no-such-account"); context.Reply("Account does not exist."); return; }
             if (parts[1] == "on" && account.LastIp.Length == 0
                 && (account.LockFlags & (AccountLockFlags.FixedPin | AccountLockFlags.Totp)) == 0)
             {

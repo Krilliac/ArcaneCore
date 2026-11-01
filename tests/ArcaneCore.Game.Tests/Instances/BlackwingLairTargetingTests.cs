@@ -85,13 +85,13 @@ public sealed class BlackwingLairTargetingTests
     [Fact]
     public void Orb_PossessLandsOnRazorgore_ThroughTheProductionPlayerCast()
     {
-        using var bwl = new Bwl([Possess()], [12435, 12557], [177808]);
+        using var bwl = new Bwl([Possess(), MindExhaustion()], [12435, 12557], [177808]);
         Creature razorgore = bwl.Spawn(12435, 20);
         GameObject orb = bwl.Objects.Summon(177808, 1, 0, Z, 0)!;
         Player player = bwl.AddPlayer(1, 0);
         // InstanceFeature.ScriptCastPlayerTargetSpell: the player casts the spell at the GUID, triggered.
         bwl.Raid.CastPlayerTargetSpell = (p, spell, target) =>
-            bwl.Kit.System.CastSpell(p, spell, SpellCastTargets.ForUnit(target), triggered: true);
+            bwl.Kit.System.CastSpell(p, spell, SpellCastTargets.ForUnit(target), triggered: true) == SpellCastResult.CastOk;
         bwl.Raid.SetData(0, EncounterState.InProgress);
         Creature grethok = bwl.Spawn(12557, 5);
         bwl.Map.Combat.Kill(player, grethok);
@@ -116,7 +116,7 @@ public sealed class BlackwingLairTargetingTests
         GameObject orb = bwl.Objects.Summon(177808, 1, 0, Z, 0)!;
         Player player = bwl.AddPlayer(1, 0);
         bwl.Raid.CastPlayerTargetSpell = (p, spell, target) =>
-            bwl.Kit.System.CastSpell(p, spell, SpellCastTargets.ForUnit(target), triggered: true);
+            bwl.Kit.System.CastSpell(p, spell, SpellCastTargets.ForUnit(target), triggered: true) == SpellCastResult.CastOk;
         bwl.Raid.SetData(0, EncounterState.InProgress);
         bwl.Map.Combat.Kill(player, bwl.Spawn(12557, 5));
 
@@ -126,6 +126,24 @@ public sealed class BlackwingLairTargetingTests
 
         bwl.Kit.System.RemoveAuras(razorgore, 19832); // the possession ends
         Assert.True(bwl.Raid.OnGameObjectUse(player, orb));
+        Assert.False(bwl.Kit.System.HasAura(razorgore, 19832));
+    }
+
+    [Fact]
+    public void Orb_DoesNotPossess_WhenTheMindExhaustionCastFails()
+    {
+        // Mind Exhaustion is absent from the spell store, so its cast fails (SpellCastResult.NotFound); the orb must not possess Razorgore then.
+        using var bwl = new Bwl([Possess()], [12435, 12557], [177808]);
+        Creature razorgore = bwl.Spawn(12435, 20);
+        GameObject orb = bwl.Objects.Summon(177808, 1, 0, Z, 0)!;
+        Player player = bwl.AddPlayer(1, 0);
+        bwl.Raid.CastPlayerTargetSpell = (p, spell, target) =>
+            bwl.Kit.System.CastSpell(p, spell, SpellCastTargets.ForUnit(target), triggered: true) == SpellCastResult.CastOk;
+        bwl.Raid.SetData(0, EncounterState.InProgress);
+        bwl.Map.Combat.Kill(player, bwl.Spawn(12557, 5));
+
+        Assert.True(bwl.Raid.OnGameObjectUse(player, orb));
+        Assert.False(bwl.Kit.System.HasAura(player, 23958));
         Assert.False(bwl.Kit.System.HasAura(razorgore, 19832));
     }
 

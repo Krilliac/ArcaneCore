@@ -279,6 +279,44 @@ public sealed class ClusterHostSupervisorRecoveryTests
     }
 
     [Fact]
+    public async Task Hang_DumpingLine_GraceFollowsTheAnnouncedMax_PlusAMinute()
+    {
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true);
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess dumping = launcher.Last;
+        dumping.Beat();
+        dumping.Beat(SupervisorProtocol.FormatDumpingState(30, dumping.Token)); // max 30 s: grace 90 s, under the 120 s hang timeout
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(100));
+        await rig.Delays.PulseAsync();
+        await rig.Delays.PulseAsync();
+        Assert.Equal(0, dumping.Drains); // inside the 120 s hang timeout
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(30)); // 130 s: past the hang timeout and past the 90 s grace; the fixed 420 s would still be excusing it
+        await rig.Delays.ReleaseUntilAsync(() => dumping.Drains == 1, "the hang watch to act once the announced max plus a minute is spent");
+    }
+
+    [Fact]
+    public async Task Hang_DumpingLine_GraceIsCappedByDumpGraceSeconds()
+    {
+        var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };
+        await using var rig = new SupervisorRig(SupervisorRig.OneProcess(), launcher, holdAllDelays: true);
+        await rig.Supervisor.StartProcessAsync("world");
+        ScriptedProcess dumping = launcher.Last;
+        dumping.Beat();
+        dumping.Beat(SupervisorProtocol.FormatDumpingState(100_000, dumping.Token)); // an authenticated child still cannot buy more than the 420 s cap
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(400));
+        await rig.Delays.PulseAsync();
+        await rig.Delays.PulseAsync();
+        Assert.Equal(0, dumping.Drains);
+
+        rig.Clock.Advance(TimeSpan.FromSeconds(30)); // 430 s
+        await rig.Delays.ReleaseUntilAsync(() => dumping.Drains == 1, "the hang watch to act once the cap is spent");
+    }
+
+    [Fact]
     public async Task Hang_UnauthenticatedDumpingLine_GetsNoDumpGrace()
     {
         var launcher = new ScriptedLauncher { Configure = (_, p) => p.Drain = DrainBehaviour.IgnoresDrain };

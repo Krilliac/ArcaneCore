@@ -10,7 +10,7 @@ namespace ArcaneCore.Data.Tests;
 /// <summary>
 /// The unreachable-server fixtures use a refused loopback port (see <see cref="ClosedLoopbackPort"/>), so they no longer reach
 /// the driver's connect-timeout path. These tests feed synthetic timeout-shaped exceptions straight into the classifiers
-/// (private, so by reflection) to keep that path covered: still "unreachable"/database failure, never echoing the password.
+/// (through the internal DbUpgradeCli.ClassifyFailure seam) to keep that path covered: still "unreachable"/database failure, never echoing the password.
 /// </summary>
 public sealed class UnreachableClassificationTests
 {
@@ -48,33 +48,23 @@ public sealed class UnreachableClassificationTests
     [MemberData(nameof(TimeoutShapes))]
     public void DbUpgradeCli_ClassifiesTimeoutShapedFailuresAsUnreachable_WithoutThePassword(string shape)
     {
-        Type run = typeof(DbUpgradeCli).GetNestedType("Run", BindingFlags.NonPublic)!;
         var options = new DatabaseOptions { Provider = DatabaseProvider.MariaDb, ConnectionString = ConnectionString };
-        object instance = Activator.CreateInstance(run, options, TextWriter.Null, TextWriter.Null)!;
-        MethodInfo classify = run.GetMethod("Classify", BindingFlags.NonPublic | BindingFlags.Instance)!;
-
-        var failure = (Exception)classify.Invoke(instance, ["auth", Build(shape)])!;
-        int exitCode = (int)failure.GetType().GetProperty("ExitCode")!.GetValue(failure)!;
+        (int exitCode, string message) = DbUpgradeCli.ClassifyFailure(options, "auth", Build(shape));
 
         Assert.Equal(DbUpgradeExitCodes.Unreachable, exitCode);
-        Assert.StartsWith("auth:", failure.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain(Password, failure.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain(ConnectionString, failure.Message, StringComparison.Ordinal);
+        Assert.StartsWith("auth:", message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Password, message, StringComparison.Ordinal);
+        Assert.DoesNotContain(ConnectionString, message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void DbUpgradeCli_ClassifiesAServerRejectedStep_AsFailure_NotUnreachable()
     {
-        Type run = typeof(DbUpgradeCli).GetNestedType("Run", BindingFlags.NonPublic)!;
         var options = new DatabaseOptions { Provider = DatabaseProvider.MariaDb, ConnectionString = ConnectionString };
-        object instance = Activator.CreateInstance(run, options, TextWriter.Null, TextWriter.Null)!;
-        MethodInfo classify = run.GetMethod("Classify", BindingFlags.NonPublic | BindingFlags.Instance)!;
-
-        var failure = (Exception)classify.Invoke(instance, ["world", new ServerRejectedDbException("Specified key was too long; max key length is 3072 bytes")])!;
-        int exitCode = (int)failure.GetType().GetProperty("ExitCode")!.GetValue(failure)!;
+        (int exitCode, string message) = DbUpgradeCli.ClassifyFailure(options, "world", new ServerRejectedDbException("Specified key was too long; max key length is 3072 bytes"));
 
         Assert.Equal(DbUpgradeExitCodes.Failure, exitCode);
-        Assert.DoesNotContain("could not be reached", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("could not be reached", message, StringComparison.Ordinal);
     }
 
     [Theory]

@@ -327,7 +327,13 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
         {
             try
             {
+                ulong before = (current.Script as SilithusZone)?.TurnInsTotal ?? 0;
                 current.Script.HandleAreaTrigger(new OutdoorPvPPlayer(player.Guid, current.Team), triggerId);
+                if (current.Script is SilithusZone silithus && silithus.TurnInsTotal != before)
+                {
+                    logger.LogDebug("outdoor-pvp.silithyst: turn-in by {Player} ({Team}) at trigger {Trigger}: camp count {Count}, {Total} turn-in(s) in total",
+                        player.Name, current.Team, triggerId, silithus.LastTurnInCount, silithus.TurnInsTotal);
+                }
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -363,6 +369,14 @@ public sealed partial class OutdoorPvPFeature(IServiceProvider services, ILogger
     /// </summary>
     private void OnHolderAdded(SpellAuraHolder holder)
     {
+        // A re-applied flag replaces the old holder (removed in the same tick, OnHolderRemoved): the carrier already counted as a pickup.
+        if (holder.Target is Player taker && holder.Spell.Id == SilithusCatalog.SpellSilithystFlag && Silithus is { } silithus
+            && !(_flagRemovedAt.TryGetValue(taker.Guid, out uint removedAt) && removedAt == World.NowMs))
+        {
+            silithus.NotePickup();
+            logger.LogDebug("outdoor-pvp.silithyst: pickup by {Player} ({Team}): {Total} pickup(s) in total", taker.Name, taker.Team, silithus.PickupsTotal);
+        }
+
         if (holder.Target is not Player player || player.ZoneId != SilithusCatalog.SilithusZone
             || !(holder.Spell.HasAura(AuraType.ModStealth) || holder.Spell.HasAura(AuraType.Mounted)))
         {

@@ -56,8 +56,10 @@ public sealed class RootAckHandler : IOpcodeHandlerGroup
         // The anticheat checks the acknowledgement's clock (docs/areas/anticheat.md).
         AntiCheat.AntiCheatFeature? antiCheat = session.Services.GetService<AntiCheat.AntiCheatFeature>();
         antiCheat?.OnAcknowledgement(session, player, ack.Movement.Time, knockback: false);
+        session.SessionTrace?.Ack(session, player, rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, ack.Movement.Time, knockback: false);
         MovementHandlers.ApplyObserved(session, player, rooted ? WorldOpcode.CmsgForceMoveRootAck : WorldOpcode.CmsgForceMoveUnrootAck, ack.Movement);
         antiCheat?.AfterMovement(player);
+        session.SessionTrace?.AfterMovement(player);
         MovementControl.ApplyReal(player, MovementChangeType.Root, rooted);
         MovementControl.RelayToObservers(player, MovementChangeType.Root, rooted);
     }

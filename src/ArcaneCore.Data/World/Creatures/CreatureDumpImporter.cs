@@ -242,6 +242,12 @@ public sealed class CreatureDumpImporter
     /// <summary>The dump carried a <c>creature_immunities</c> table (cmangos only).</summary>
     public bool HasImmunityTable => _sawImmunityTable;
 
+    /// <summary>
+    /// The dump can supply <c>creature_immunities</c> rows: it carried the table (cmangos) or a vmangos <c>creature_template.immunity_flags</c> column
+    /// (whose TAUNT bit becomes rows). <see cref="RefreshImmunitiesAsync"/> replaces the table in exactly this case, so refresh counts it then.
+    /// </summary>
+    public bool HasImmunityRows => _sawImmunityTable || _sawImmunityFlagsColumn;
+
     /// <summary>The dump's creature_template carries a mechanic or school immunity mask column (cmangos <c>MechanicImmuneMask</c>, vmangos <c>mechanic_immune_mask</c>).</summary>
     public bool HasImmunityMaskColumns => _sawImmunityMaskColumns;
 
@@ -258,7 +264,7 @@ public sealed class CreatureDumpImporter
     {
         ArgumentNullException.ThrowIfNull(db);
         int rows = 0;
-        if (_sawImmunityTable || _sawImmunityFlagsColumn)
+        if (HasImmunityRows)
         {
             await db.Set<CreatureImmunityRow>().ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
             await InsertBatchedAsync(db, _immunities.Values, cancellationToken).ConfigureAwait(false);

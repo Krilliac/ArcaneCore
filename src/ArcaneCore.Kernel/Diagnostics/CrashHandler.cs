@@ -39,6 +39,7 @@ public sealed class CrashHandler : IDisposable
     private volatile ICrashSink _sink;
     private volatile IReadOnlyList<ICrashContextProvider> _providers;
     private volatile bool _firstChanceHooked;
+    private volatile bool _logFirstChance;
     private volatile CrashDumpService _dumpService = new();
     private readonly object _dumpGate = new();
     private string? _dumpDoneNote;
@@ -91,7 +92,7 @@ public sealed class CrashHandler : IDisposable
         set => _dumpAnnouncer = value;
     }
 
-    /// <summary>Whether the first-chance hook is attached (Debug Kernel build with the option on).</summary>
+    /// <summary>Whether the first-chance hook is attached (Debug Kernel build with the option on, or any build while an <see cref="IFaultObserver"/> is registered).</summary>
     public bool FirstChanceHooked => _firstChanceHooked;
 
     /// <summary>
@@ -127,7 +128,10 @@ public sealed class CrashHandler : IDisposable
         _options = options;
         _sink = sink;
         _providers = providers ?? [];
-        HookFirstChance();
+        lock (InstallGate)
+        {
+            HookFirstChance();
+        }
     }
 
     /// <summary>Render the report this handler would write for <paramref name="exception"/>, with the current providers.</summary>
@@ -159,20 +163,37 @@ public sealed class CrashHandler : IDisposable
         }
     }
 
+    /// <summary>Re-evaluate whether the first-chance hook is needed (an <see cref="IFaultObserver"/> was added or removed).</summary>
+    internal void RefreshFirstChanceHook()
+    {
+        lock (InstallGate)
+        {
+            if (!_disposed)
+            {
+                HookFirstChance();
+            }
+        }
+    }
+
     private void HookFirstChance()
     {
+        // The log of every throw is a Debug build feature; the observers (bot QA) need the hook in every build while one is registered.
+        bool log = false;
 #if DEBUG
-        if (_options.FirstChanceExceptions && !_firstChanceHooked)
+        log = _options.FirstChanceExceptions;
+#endif
+        _logFirstChance = log;
+        bool wanted = log || FaultObservers.Any;
+        if (wanted && !_firstChanceHooked)
         {
             AppDomain.CurrentDomain.FirstChanceException += _onFirstChance;
             _firstChanceHooked = true;
         }
-        else if (!_options.FirstChanceExceptions && _firstChanceHooked)
+        else if (!wanted && _firstChanceHooked)
         {
             AppDomain.CurrentDomain.FirstChanceException -= _onFirstChance;
             _firstChanceHooked = false;
         }
-#endif
     }
 
     private void OnUnhandled(object? sender, UnhandledExceptionEventArgs e)
@@ -182,6 +203,7 @@ public sealed class CrashHandler : IDisposable
         bool failFast = options.OnUnhandled == UnhandledExceptionPolicy.FailFast;
         string? report = Report(CrashKind.Unhandled, exception, LogLevel.Critical, terminating: true, CrashDumpService.DescribePlan(options.CrashDump, failFast));
         string? faultId = RecordFault("unhandled", exception, terminating: true); // the runtime ends the process after this handler whatever the policy
+        NotifyObservers(FaultObservation.Unhandled, exception, faultId);
         string? dumpNote = WriteCrashDump(failFast);
         ShowDialog(options, CrashKind.Unhandled, exception, failFast, "Diagnostics:OnUnhandled = " + options.OnUnhandled, "unhandled", faultId, report, dumpNote);
         Terminate(failFast, exception);
@@ -197,6 +219,7 @@ public sealed class CrashHandler : IDisposable
         bool failFastPolicy = policy == UnobservedTaskPolicy.FailFast;
         string? report = Report(CrashKind.UnobservedTask, e.Exception, LogLevel.Critical, terminating, terminating ? CrashDumpService.DescribePlan(options.CrashDump, failFastPolicy) : null);
         string? faultId = RecordFault("unobserved-task", e.Exception, terminating);
+        NotifyObservers(FaultObservation.UnobservedTask, e.Exception, faultId);
         if (!terminating)
         {
             e.SetObserved();
@@ -220,7 +243,7 @@ public sealed class CrashHandler : IDisposable
     /// Write the in-process crash dump (<c>Diagnostics:CrashDump</c>) of a process that is about to end, after the crash report and before the
     /// exit policy runs; used by the hooks here and by the tick watchdog's fatal path. <paramref name="failFast"/> is whether the process ends by
     /// <see cref="Environment.FailFast(string)"/> (the runtime's own dump may then cover it) or by <see cref="Environment.Exit(int)"/>. Returns the
-    /// note for the crash dialog (null when nothing is configured). Never throws; bounded by <c>Diagnostics:CrashDump:TimeoutSeconds</c> per attempt.
+    /// note for the crash dialog (null when nothing is configured). Never throws; bounded by <see cref="CrashDumpService.MaxWaitSeconds"/> (three times <c>Diagnostics:CrashDump:TimeoutSeconds</c>) for the whole Full, Heap, Mini chain, not per attempt.
     /// </summary>
     public string? WriteCrashDump(bool failFast)
     {
@@ -321,8 +344,28 @@ public sealed class CrashHandler : IDisposable
         }
     }
 
+    /// <summary>Hand a hook's exception to the registered <see cref="IFaultObserver"/>s; <paramref name="faultId"/> is the ledger signature (null when nothing was recorded, the overflow bucket does not count as recorded).</summary>
+    private static void NotifyObservers(FaultObservation kind, Exception? exception, string? faultId)
+    {
+        if (exception is not null)
+        {
+            FaultObservers.Notify(kind, exception, faultId is not null && !string.Equals(faultId, FaultLedger.OverflowId, StringComparison.Ordinal));
+        }
+    }
+
     private void OnFirstChance(object? sender, FirstChanceExceptionEventArgs e)
     {
+        // The observers (bot QA) see the raw stream; they decide what is benign (their own re-entrancy guard covers throws inside them).
+        if (FaultObservers.Any)
+        {
+            FaultObservers.Notify(FaultObservation.FirstChance, e.Exception, ledgerRecorded: false);
+        }
+
+        if (!_logFirstChance)
+        {
+            return;
+        }
+
         // Every throw in the process lands here, including throws inside the sink: the thread-static
         // guard in Report makes a nested one a no-op. Expected cancellation signals, controlled
         // malformed-packet layout rejections, and internal BCL expression-interpreter probes are skipped
@@ -340,6 +383,13 @@ public sealed class CrashHandler : IDisposable
     /// and world-thread fuzzing/startup probes do not pay for full stack/process crash-report rendering.
     /// </summary>
     public static bool ShouldIgnoreFirstChance(Exception? exception)
+        => exception is null || IsCancellationOrSocket(exception) || IsControlledProbe(exception);
+
+    /// <summary>
+    /// A cancellation, a socket failure or an I/O failure that wraps one: the normal way a shutdown, a timeout or a client that went away ends an
+    /// operation. Part of <see cref="ShouldIgnoreFirstChance"/>.
+    /// </summary>
+    public static bool IsCancellationOrSocket(Exception? exception)
     {
         if (exception is null or OperationCanceledException or System.Net.Sockets.SocketException)
         {
@@ -355,9 +405,18 @@ public sealed class CrashHandler : IDisposable
         }
 
         // Task.Wait / WaitAll at shutdown wrap cancelled tasks in an AggregateException: the same expected cancellation signal.
-        if (exception is AggregateException aggregate && IsCancellationOnly(aggregate))
+        return exception is AggregateException aggregate && IsCancellationOnly(aggregate);
+    }
+
+    /// <summary>
+    /// An exception the code throws on purpose and catches at once (a malformed-packet layout rejection, a BCL delegate-binding probe, the
+    /// managed-revision conflict, a log writer's own I/O): never a defect. Part of <see cref="ShouldIgnoreFirstChance"/>.
+    /// </summary>
+    public static bool IsControlledProbe(Exception? exception)
+    {
+        if (exception is null)
         {
-            return true;
+            return false;
         }
 
         if (exception is ArgumentOutOfRangeException { ParamName: "packet" or "payload" })
@@ -387,13 +446,8 @@ public sealed class CrashHandler : IDisposable
             return true;
         }
 
-        if (exception is IOException or UnauthorizedAccessException
-            && Thread.CurrentThread.Name?.StartsWith("ArcaneCore.Log.", StringComparison.Ordinal) == true)
-        {
-            return true;
-        }
-
-        return false;
+        return exception is IOException or UnauthorizedAccessException
+            && Thread.CurrentThread.Name?.StartsWith("ArcaneCore.Log.", StringComparison.Ordinal) == true;
     }
 
     private static bool IsCancellationOnly(AggregateException aggregate)

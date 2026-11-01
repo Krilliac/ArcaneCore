@@ -968,6 +968,65 @@ public sealed class OpsScriptTests
 
     private static string[] Strings(JsonElement array) => array.EnumerateArray().Select(e => e.GetString()!).ToArray();
 
+    private static readonly string ServerStatus = Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "server-status.ps1");
+
+    /// <summary>
+    /// server-status.ps1 honours <c>dumping max=&lt;s&gt;</c> from the heartbeat file: a World that announced a 30 s dump is excused for
+    /// min(30 + 60, cap) = 90 s of silence, then treated like any stale heartbeat; a bare <c>dumping</c> (older writer) gets the cap, and the
+    /// cap bounds a larger max. The functions are lifted out of the script with the PowerShell parser (the script itself runs a status loop).
+    /// </summary>
+    [PwshFact]
+    public void ServerStatus_DumpingHeartbeat_HonoursMax_AndTheCap()
+    {
+        JsonElement r = Eval($$"""
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile('{{ServerStatus.Replace("'", "''")}}', [ref]$null, [ref]$null)
+            $fns = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in 'Read-HeartbeatInfo', 'Get-DumpGraceSeconds' }, $true)
+            foreach ($f in $fns) { . ([scriptblock]::Create($f.Extent.Text)) }
+            $dir = Join-Path ([System.IO.Path]::GetTempPath()) ('arcane-hb-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $dir | Out-Null
+            try {
+                $heartbeatPath = Join-Path $dir 'world.heartbeat'
+                function Probe([string] $tail, [double] $ageSec, [int] $cap = 420) {
+                    [System.IO.File]::WriteAllText($heartbeatPath, "2026-10-31T00:00:00.000Z pid=123 $tail`n")
+                    (Get-Item $heartbeatPath).LastWriteTimeUtc = (Get-Date).ToUniversalTime().AddSeconds(-$ageSec)
+                    $info = Read-HeartbeatInfo
+                    [ordered]@{
+                        state = $info.State; pid = $info.Pid; max = $info.MaxSec
+                        grace = (Get-DumpGraceSeconds $info.MaxSec $cap)
+                        waits = ($info.State -eq 'dumping' -and $info.AgeSec -le (Get-DumpGraceSeconds $info.MaxSec $cap))
+                    }
+                }
+                [ordered]@{
+                    inside = (Probe 'dumping max=30' 80)
+                    outside = (Probe 'dumping max=30' 100)
+                    bare = (Probe 'dumping' 400)
+                    capped = (Probe 'dumping max=3600' 400)
+                    cappedPast = (Probe 'dumping max=3600' 430)
+                    alive = (Probe 'alive' 1)
+                }
+            } finally { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+            """);
+
+        JsonElement inside = r.GetProperty("inside");
+        Assert.Equal("dumping", inside.GetProperty("state").GetString());
+        Assert.Equal(123, inside.GetProperty("pid").GetInt32());
+        Assert.Equal(30, inside.GetProperty("max").GetInt32());
+        Assert.Equal(90, inside.GetProperty("grace").GetInt32());
+        Assert.True(inside.GetProperty("waits").GetBoolean());
+        Assert.False(r.GetProperty("outside").GetProperty("waits").GetBoolean());
+        Assert.Equal(420, r.GetProperty("bare").GetProperty("grace").GetInt32());
+        Assert.True(r.GetProperty("bare").GetProperty("waits").GetBoolean());
+        Assert.Equal(420, r.GetProperty("capped").GetProperty("grace").GetInt32());
+        Assert.True(r.GetProperty("capped").GetProperty("waits").GetBoolean());
+        Assert.False(r.GetProperty("cappedPast").GetProperty("waits").GetBoolean());
+        Assert.Equal("alive", r.GetProperty("alive").GetProperty("state").GetString());
+
+        // The supervise branch uses the same grace: a refactor must not put the fixed number back.
+        string script = File.ReadAllText(ServerStatus);
+        Assert.Contains("$hbInfo.AgeSec -le (Get-DumpGraceSeconds $hbInfo.MaxSec $DumpGraceSeconds)", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("-le 420", script, StringComparison.Ordinal);
+    }
+
     private static JsonElement Eval(string body) => EvalWith(body, new { });
 
     private static string EvalError(string body)

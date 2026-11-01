@@ -40,7 +40,7 @@ public sealed partial class InstanceManager
 
     public Action<Player, uint>? ScriptCastPlayerSpell { get; set; }
 
-    public Action<Player, uint, ObjectGuid>? ScriptCastPlayerTargetSpell { get; set; }
+    public Func<Player, uint, ObjectGuid, bool>? ScriptCastPlayerTargetSpell { get; set; }
 
     /// <summary>
     /// vmangos Map::CreateInstanceData (Maps/Map.cpp:1987-2037) for a map with a script (<see cref="Scripts"/>): the script is created and

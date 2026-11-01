@@ -230,7 +230,7 @@ public sealed class HeartbeatTests
             using var sink = new FileHeartbeatSink(path, 4242);
             Assert.True(sink.Beat());
             Assert.True(sink.Dumping("dump", 360));
-            Assert.EndsWith(" pid=4242 dumping\n", File.ReadAllText(path), StringComparison.Ordinal);
+            Assert.EndsWith(" pid=4242 dumping max=360\n", File.ReadAllText(path), StringComparison.Ordinal);
         }
         finally
         {

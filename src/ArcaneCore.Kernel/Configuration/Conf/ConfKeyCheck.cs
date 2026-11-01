@@ -20,7 +20,7 @@ public sealed class ConfKeyCheck(ConfCatalog catalog, ConfigDaemon daemon) : ICo
         }
 
         string daemonName = ConfCatalog.DaemonName(daemon);
-        string otherFile = ConfCatalog.FileName(daemon == ConfigDaemon.Realm ? ConfigDaemon.World : ConfigDaemon.Realm);
+        string otherFile = ConfCatalog.OtherFiles(daemon);
         foreach (ConfConfigurationProvider provider in root.Providers.OfType<ConfConfigurationProvider>())
         {
             ConfDocument? document = provider.Document;

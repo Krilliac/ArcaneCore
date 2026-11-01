@@ -26,4 +26,10 @@ public interface IRealmStatusStore
 
     /// <summary>Write the population hint shown on the realm-list screen.</summary>
     Task<bool> SetPopulationAsync(int realmId, float population, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Write the lowest account security level that sees this realm online (<see cref="RealmEntry.AllowedSecurityLevel"/>; vmangos
+    /// World::SetPlayerLimit, World.cpp:2918-2920, <c>UPDATE realmlist SET allowedSecurityLevel</c>): only that column changes.
+    /// </summary>
+    Task<bool> SetAllowedSecurityLevelAsync(int realmId, byte level, CancellationToken cancellationToken = default);
 }

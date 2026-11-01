@@ -320,6 +320,10 @@ public sealed partial class WorldSession : IPlayerSession
         }
 
         ObserveOutbound(opcode, payload);
+        if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Outbound(opcode, payload);
+        }
 
         if (opcode == WorldOpcode.SmsgNewWorld)
         {
@@ -474,6 +478,11 @@ public sealed partial class WorldSession : IPlayerSession
                 {
                     return;
                 }
+            }
+
+            if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+            {
+                sessionTrace.Handled(packet.Handler.Opcode, handlerStart, packet.ReceivedMs);
             }
         }
     }
@@ -837,7 +846,13 @@ public sealed partial class WorldSession : IPlayerSession
                 return true;
             }
 
+            long traceStart = Volatile.Read(ref _sessionTrace) is null ? 0 : Stopwatch.GetTimestamp();
             await handler.Session!(this, payload).ConfigureAwait(false);
+            if (traceStart != 0 && Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+            {
+                sessionTrace.Handled(opcode, traceStart, 0);
+            }
+
             return true;
         }
         catch (Exception ex) when (IsMalformed(ex))
@@ -947,6 +962,7 @@ public sealed partial class WorldSession : IPlayerSession
     private void ReportUnhandled(WorldOpcode opcode, int length)
     {
         long count = _unhandled.Record(opcode);
+        NoteUnhandledOpcode(opcode);
         if (count == 1)
         {
             string label = UnhandledOpcodeTracker.LabelOf(opcode);
@@ -1036,6 +1052,22 @@ public sealed partial class WorldSession : IPlayerSession
             _guard?.RecordAuthFailure(_address);
             SendAuthResponse(AuthResponseCode.Banned);
             return false;
+        }
+
+        // .server plimit: a realm lock above the account's security level, or a full world for a plain player, is refused before the
+        // account data is read (vmangos WorldSocket.cpp:349-358 AUTH_UNAVAILABLE; World.cpp:316 queue, which ArcaneCore answers the same way).
+        // A reconnect of an account that already has a session replaces it, so that account is not counted against the limit.
+        // Managed sessions (playerbots, console) are not clients waiting for a slot, so they are left out: ArcaneCore has no login queue,
+        // and counting bots would refuse every real player once enough bots are online.
+        if (Services.GetService<WorldLoginAdmission>() is { } admission)
+        {
+            int others = admission.AmountLimit > 0 ? WorldLoginAdmission.CountOtherSessions(_registry.Sessions, stored.Id) : 0;
+            if (admission.Check(stored.Security, others) is { } refusal)
+            {
+                _logger.LogInformation("[{Endpoint}] refused world login for '{Account}': the realm is locked or full (limit {Limit})", RemoteEndpoint, account, admission.Limit);
+                SendAuthResponse(refusal);
+                return false;
+            }
         }
 
         // An earlier session of the account may hold values not yet written (throttled or queued): take them before the read and lay
@@ -1207,6 +1239,10 @@ public sealed partial class WorldSession : IPlayerSession
         // The 1.12 client uploads its changed settings in a burst as it logs out: the last session of the account queues what the throttle
         // still holds (the feature writes from a scope of its own, so this session's scope ending does not matter).
         Interlocked.Exchange(ref _accountDataFeature, null)?.EndSession(_accountDataAccountId);
+        if (Volatile.Read(ref _sessionTrace) is { } sessionTrace)
+        {
+            sessionTrace.Disconnected(this);
+        }
 
         _registry.Unregister(this);
         DiscardQueuedPackets(); // a closed session retains nothing

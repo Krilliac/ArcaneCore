@@ -118,6 +118,24 @@ public sealed class RealmStatusStoreTests : IAsyncLifetime
         Assert.Equal(0, (await ReadCountsAsync(cs, 7))[1]); // a negative count is stored as 0
     }
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task SetAllowedSecurityLevel_ChangesOnlyTheLock_AndAnUnknownRealmIsReported(DatabaseProvider provider)
+    {
+        DatabaseConnectionOptions cs = await _databases.CreateAsync(provider);
+        int id = await SeedAsync(cs, new RealmEntry { Name = "Lock", Address = "127.0.0.1:8085", Flags = RealmFlags.Recommended, Population = 1.5f, Category = 1 });
+
+        Assert.True(await WithStoreAsync(cs, s => s.SetAllowedSecurityLevelAsync(id, 2)));
+        RealmEntry locked = await ReadAsync(cs, id);
+        Assert.Equal(2, locked.AllowedSecurityLevel);
+        Assert.Equal(RealmFlags.Recommended, locked.Flags);
+        Assert.Equal(1.5f, locked.Population, 3);
+
+        Assert.True(await WithStoreAsync(cs, s => s.SetAllowedSecurityLevelAsync(id, 0)));
+        Assert.Equal(0, (await ReadAsync(cs, id)).AllowedSecurityLevel);
+        Assert.False(await WithStoreAsync(cs, s => s.SetAllowedSecurityLevelAsync(id + 1000, 1)));
+    }
+
     private async Task<int> SeedAsync(DatabaseConnectionOptions cs, RealmEntry realm)
     {
         await using AuthDbContext seed = TestContexts.Create<AuthDbContext>(cs);

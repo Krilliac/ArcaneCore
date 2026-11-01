@@ -306,8 +306,8 @@ How to read the tables:
 | Key | Type | Default | Reload | Meaning |
 |---|---|---|---|---|
 | `Cluster:Fencing:ClaimWatchIntervalSeconds` | `int` | `10` | - | With fencing disabled, how often the world reads the characters ownership row to notice that a fenced world has claimed the database, in seconds (1 to 300). Independent of autosave; an unfenced world can keep writing for up to this long after a claim. |
-| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. |
-| `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. |
+| `Cluster:Fencing:Enabled` | `bool` | `false` | - | Enable durable character ownership fencing at world startup; disabled by default. Mandatory in worker mode (Cluster:Worker:Enabled): a worker with fencing off refuses to start. Also required (startup check, exit 78) with Cluster:Node:Role other than Combined and for every world child of a Cluster:Supervisor that runs more than one world: an unfenced world skips the durable id allocator priming and collides on in-memory id counters. Each world of such a cluster needs its own OwnerNode and Cluster:Worker:NodeId, on a PostgreSQL or MariaDB characters database. |
+| `Cluster:Fencing:OwnerNode` | `string` | `"<machine-name>"` | - | The durable owner identity; defaults to the current machine name and must be stable while the world owns the database. Must be distinct for each world of a multi-world cluster (the supervisor check refuses a duplicate). |
 | `Cluster:Fencing:TakeoverEpoch` | `long?` | `null` | - | The positive ownership epoch to compare and swap during an explicit takeover; pair with `TakeoverIncarnation`. |
 | `Cluster:Fencing:TakeoverIncarnation` | `Guid?` | `null` | - | The non-empty ownership incarnation to compare and swap during an explicit takeover; pair with `TakeoverEpoch`. |
 
@@ -332,7 +332,7 @@ How to read the tables:
 |---|---|---|---|---|
 | `Cluster:Supervisor:CrashLoopMaxRestarts` | `int` | `5` | - | How many times a child may be restarted within `CrashLoopWindowSeconds` before the supervisor gives up on it (default 5; 1 to 1000): that many restarts are allowed, and the next failure inside the window (the one after the last allowed restart) leaves it Faulted and is recorded in the fault and anomaly ledgers. A restart request (exit code 2) after a healthy run does not count. |
 | `Cluster:Supervisor:CrashLoopWindowSeconds` | `int` | `300` | - | The window the crash-loop count is taken over, in seconds (default 300; 10 to 86400). |
-| `Cluster:Supervisor:DumpGraceSeconds` | `int` | `420` | - | How long a child that announced `dumping` (its own crash dump, `Diagnostics:CrashDump`) is exempt from the hang timeout and from a hang capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600). Keep it above three times the child's `Diagnostics:CrashDump:TimeoutSeconds`. |
+| `Cluster:Supervisor:DumpGraceSeconds` | `int` | `420` | - | The cap on how long a child that announced `dumping` (its own crash dump, `Diagnostics:CrashDump`) is exempt from the hang timeout and from a hang capture of the supervisor's own, in seconds (default 420: three times the default dump timeout of 120 s, plus a minute; 1 to 3600). The exemption is `min(announced max + 60, this)`: the child's own `max=` from its authenticated line, bounded by this value. Keep it above three times the child's `Diagnostics:CrashDump:TimeoutSeconds` plus a minute, or the cap cuts a long dump short. |
 | `Cluster:Supervisor:Enabled` | `bool` | `false` | - | Runs this World process as the host supervisor only (default: false): it launches and watches the configured `Processes` and starts no world, database, listener or feature. Off, a World start is unchanged. |
 | `Cluster:Supervisor:HangCaptureDirectory` | `string` | `"logs/supervisor-captures"` | - | Where hang captures (stack reports and dumps) are written (default `logs/supervisor-captures`); relative to the working directory. |
 | `Cluster:Supervisor:HangCaptureTimeoutSeconds` | `int` | `300` | - | The longest a hang capture may take before the supervisor drains and kills the child anyway, in seconds (default 300; 1 to 3600). |
@@ -2014,6 +2014,10 @@ How to read the tables:
 | `World:Playerbots:Travel:TransitBackoffMaxSeconds` | `int` | `300` | live | The longest wait (seconds) before a failed transit point is tried again (10..86400; default 300). Must not be below `TransitBackoffSeconds`. |
 | `World:Playerbots:Travel:TransitBackoffSeconds` | `int` | `60` | live | The first wait (seconds) before a bot tries a transit point again (one flight master's node, tram platform, lift, dock) that just failed it; each further failure of the same point doubles the wait up to `TransitBackoffMaxSeconds` (10..3600; default 60). |
 | `World:Playerbots:Travel:Zeppelins` | `bool` | `true` | live | Let Horde bots ride the zeppelins (Orgrimmar - Undercity, Orgrimmar - Grom'gol, Undercity - Grom'gol; on by default). |
+| `World:Playerbots:WorldPvp:Silithyst:Enabled` | `bool` | `true` | live | Let bots pick up and deliver silithyst (on by default). Off: bots ignore the geysers; a bot already carrying finishes its trip. |
+| `World:Playerbots:WorldPvp:Silithyst:MaxBotsPerGeyser` | `int` | `1` | live | The most bots that go for one geyser or mound at the same time (1..8; default 1). |
+| `World:Playerbots:WorldPvp:Silithyst:ParticipationChance` | `float` | `0.5` | live | The chance (0..1; default 0.5) that an eligible bot takes part in a given two-minute window: each bot rolls once per window from its guid, so a crowd of bots in Silithus is not all on the geysers at once. |
+| `World:Playerbots:WorldPvp:Silithyst:WarModeParticipationChance` | `float` | `0.9` | live | The chance (0..1; default 0.9) of the same roll while `World:Playerbots:Social:WarMode:Enabled` is on. |
 
 ## `World:Playerbots:Qa`
 

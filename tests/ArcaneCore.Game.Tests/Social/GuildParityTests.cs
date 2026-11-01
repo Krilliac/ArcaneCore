@@ -220,6 +220,7 @@ public sealed class GuildParityTests
         Send(f, a, action, new string('x', Limit(action) + 1));
 
         Assert.True(f.Session(a).Kicked);
+        Assert.Equal("guild packet oversized", f.Session(a).KickReason);
         Assert.Equal(before, guild.Motd + "|" + guild.Info + "|" + guild.Ranks.Count + "|" + guild.Find(1)!.PublicNote);
         Assert.All(guild.Ranks, r => Assert.NotEqual(new string('x', Limit(action) + 1), r.Name));
     }

@@ -146,7 +146,7 @@ internal sealed class PlayerbotHelpLane
             float helpfulness = PlayerbotTraits.For(self.Guid.Value).Helpfulness;
             bool answers = PlayerbotCallForHelp.Askable(known, affinity, rival)
                 && PlayerbotCallForHelp.Answers(self.Guid.Value, askerGuid.Value, (uint)(pass.NowMs / 15_000), helpfulness, affinity)
-                && PlayerbotHelpRules.AttackerOf(self, asker, PlayerbotHelpRules.MayFlag(self, pass.Options.WarMode.Enabled), GroupSizeOf(pass, self)) is not null
+                && PlayerbotHelpRules.AttackerOf(self, asker, PlayerbotHelpRules.MayFlag(self, pass.Options.WarMode.Enabled), GroupSizeOf(pass, self), pass.Options.WarMode.Enabled) is not null
                 && bot.Brain!.RequestHelp(PlayerbotHelpKind.Assist, asker.Guid);
             if (answers)
             {
@@ -279,7 +279,7 @@ internal sealed class PlayerbotHelpLane
         (_, int affinity, bool rival) = Feelings(recorder, bot.Id, victim.Guid.Value);
         if (rival) return false;
         Player self = bot.Player;
-        if (PlayerbotHelpRules.AttackerOf(self, victim, mayFlag, GroupSizeOf(pass, self)) is null) return false;
+        if (PlayerbotHelpRules.AttackerOf(self, victim, mayFlag, GroupSizeOf(pass, self), pass.Options.WarMode.Enabled) is null) return false;
         uint episode = (uint)_trouble[victim.Guid.Value].Since;
         if (!PlayerbotHelpRules.Helps(self.Guid.Value, victim.Guid.Value, episode, helpfulness, affinity)) return false;
         if (!bot.Brain!.RequestHelp(PlayerbotHelpKind.Assist, victim.Guid)) return false;

@@ -33,6 +33,12 @@ public sealed partial class UnitCombat
 
     internal HashSet<Unit> AttackersInternal { get; } = [];
 
+    /// <summary>
+    /// For a player: the players it struck or started on lately, by guid, with the time of the last strike and whether it was the one that started the fight
+    /// (<see cref="MapCombat.StruckFirst"/>). Null until the player first strikes another player. Written by <see cref="MapCombat"/> on the world thread only.
+    /// </summary>
+    internal Dictionary<ObjectGuid, PvpStrike>? PvpStrikes { get; set; }
+
     /// <summary>Units whose threat lists hold this one (vmangos HostileRefManager).</summary>
     public IReadOnlySet<Unit> ThreatenedBy => ThreatenedByInternal;
 
@@ -93,18 +99,26 @@ public sealed partial class UnitCombat
     internal uint CombatCheckTimer { get; set; }
 
     /// <summary>
-    /// Diagnostics for combat/combat-never-left: the member that last put this unit in combat (<see cref="MapCombat.SetInCombatState"/>'s
-    /// caller name, a constant string) and how many times it was put in combat since its flag was last cleared.
+    /// Diagnostics for combat/combat-never-left and playerbot phantom-combat: the member that last put this unit in combat
+    /// (<see cref="MapCombat.SetInCombatState"/>'s caller name, a constant string) and how many times it was put in combat since its flag
+    /// was last cleared.
     /// </summary>
-    internal string? LastCombatSetBy { get; set; }
+    public string? LastCombatSetBy { get; internal set; }
 
-    internal uint CombatSetsSinceClear { get; set; }
+    public uint CombatSetsSinceClear { get; internal set; }
+
+    /// <summary>
+    /// Monotonically increasing counter of times this unit has entered combat or had its combat state refreshed.
+    /// Unlike <see cref="CombatSetsSinceClear"/>, this serial is never reset when leaving combat, allowing watches
+    /// to detect flicker (clear-then-set) episodes where <see cref="CombatSetsSinceClear"/> returns to 1.
+    /// </summary>
+    public uint CombatSetSerial { get; internal set; }
 
     /// <summary>The helper <see cref="LastCombatSetBy"/> went through (SetInCombatWithAggressor / SetInCombatWithVictim), or null for a direct call; a constant string.</summary>
-    internal string? LastCombatSetVia { get; set; }
+    public string? LastCombatSetVia { get; internal set; }
 
     /// <summary>The report text "by Caller/Helper xN": built only when a report is written, never on the combat path.</summary>
-    internal string DescribeLastCombatSet()
+    public string DescribeLastCombatSet()
         => $"by {LastCombatSetBy ?? "?"}{(LastCombatSetVia is null ? "" : "/" + LastCombatSetVia)} x{CombatSetsSinceClear}";
 
     /// <summary>Diagnostics for creature/evade-loop: the last unit this one started auto-attacking (<see cref="MapCombat.Attack"/>).</summary>
@@ -333,3 +347,6 @@ public sealed partial class UnitCombat
         }
     }
 }
+
+/// <summary>One recorded PvP strike on a player: the world time (ms) of the last strike and whether the striker started the fight.</summary>
+internal readonly record struct PvpStrike(uint LastMs, bool First);

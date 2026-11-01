@@ -66,7 +66,7 @@ public sealed class TestDatabasesIsolationTests
         string? root = checkout is null ? null : Path.Combine(checkout, "tests", "ArcaneCore.Data.Tests");
         Assert.True(root is not null && File.Exists(Path.Combine(root, "ArcaneCore.Data.Tests.csproj")),
             "the ArcaneCore.Data.Tests sources were not found in the ArcaneCore checkout");
-        var call = new System.Text.RegularExpressions.Regex(@"\.ClearAllPools\s*\(");
+        var call = new System.Text.RegularExpressions.Regex(@"(?<!MySqlConnection)\.ClearAllPools\s*\("); // MySqlConnection.ClearAllPools is allowed: TestDatabases uses it before a MariaDB drop
         string separator = Path.DirectorySeparatorChar.ToString();
         string[] sources = [.. Directory.EnumerateFiles(root!, "*.cs", SearchOption.AllDirectories)
             .Where(p => !p.Contains(separator + "obj" + separator, StringComparison.Ordinal)

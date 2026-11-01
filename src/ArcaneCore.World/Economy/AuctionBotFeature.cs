@@ -7,6 +7,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Economy;
 using ArcaneCore.Kernel.Items;
 using ArcaneCore.Kernel.Tuning;
+using ArcaneCore.Kernel.WorldData.GameObjects;
 using ArcaneCore.Kernel.WorldData.Loot;
 using ArcaneCore.World.Creatures;
 using ArcaneCore.World.Features;
@@ -34,6 +35,12 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     /// <summary>Terminal custody rows are kept this long (MaNGOS Zero custody TTL sweep).</summary>
     public const long TerminalRetentionSeconds = 2 * AuctionBotCustodyLedger.SecondsPerDay;
 
+    /// <summary>
+    /// The most bot listings a rebuild's refill may have in flight at once: half of the economy's <see cref="EconomySettlements.MaxConcurrentOperations"/>
+    /// transaction slots, so players' trades, mail and auctions still get slots. The rest of a large refill follows on the next sell ticks.
+    /// </summary>
+    public const int RebuildMaxInFlight = EconomySettlements.MaxConcurrentOperations / 2;
+
     private readonly TimeProvider _clock = clock ?? TimeProvider.System;
     private readonly Random _random = new();
     private readonly HashSet<string> _inFlight = new(StringComparer.Ordinal);
@@ -44,7 +51,14 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     private ItemsFeature? _items;
     private Timer? _timer;
     private IItemTemplateStore? _poolSource;
+    private ArcaneCore.Game.Npc.NpcStore? _vendorSource;
     private LootContent? _lootSource;
+    private GameObjectContent? _gameObjectSource;
+    // The dynamic required level cap in force (0 = not computed) and when it was last refreshed (unix seconds). World thread.
+    private uint _dynamicLevel;
+    private long _dynamicLevelAt;
+    // The required level cap the current pool was built with.
+    private uint _poolLevel;
     private AuctionBotPlanner? _planner;
     private AuctionBotLootSources? _loot;
     private Dictionary<uint, AuctionBotItemOverride> _overrides = [];
@@ -243,6 +257,8 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
     /// World thread: cMaNGOS AuctionHouseBot::Rebuild (<c>.ahbot rebuild [all]</c>): the bot's auctions without a bid (all of them with
     /// <paramref name="all"/>, which sells those with a player bid to that player) expire now, then sell passes refill every house
     /// (without buying) until a pass lists nothing, the room or the day's item budget is spent, or the cMaNGOS pass count is reached.
+    /// A call starts at most <see cref="RebuildMaxInFlight"/> listings in total (less those already in flight, split across the houses),
+    /// so it cannot take every economy transaction slot; the rest of a large refill follows on the normal sell ticks.
     /// Returns (auctions expired, listings reserved).
     /// </summary>
     public (int Expired, int Listed) Rebuild(bool all)
@@ -254,13 +270,18 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
 
         int expired = economy.ExpireBotAuctions(all);
         int listed = 0;
+        int total = RebuildRefillShare(_inFlight.Count);
         int passes = (int)(((Options.TimeMaxHours - Options.TimeMinHours) / 2) + Options.TimeMinHours) * 90;
-        foreach (uint house in Options.HouseIds())
+        IReadOnlyList<uint> houses = [.. Options.HouseIds()];
+        for (int h = 0; h < houses.Count; h++)
         {
-            for (int i = 0; i < passes; i++)
+            // Each house gets its own part of what is left, so the first house cannot take the whole share.
+            int share = (total - listed + (houses.Count - h) - 1) / (houses.Count - h);
+            for (int i = 0; i < passes && share > 0; i++)
             {
-                int pass = Sell(economy, planner, house, Now);
+                int pass = Sell(economy, planner, houses[h], Now, share);
                 listed += pass;
+                share -= pass;
                 if (pass == 0)
                 {
                     break;
@@ -271,6 +292,9 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         Flush();
         return (expired, listed);
     }
+
+    /// <summary>How many more listings a rebuild's refill may start when <paramref name="inFlight"/> bot movements are already in flight.</summary>
+    internal static int RebuildRefillShare(int inFlight) => Math.Max(0, RebuildMaxInFlight - inFlight);
 
     /// <summary>
     /// World thread: <c>.ahbot reload</c> (cMaNGOS ReloadAllConfig): re-read the options and the <c>ahbot_items</c> rows and rebuild the
@@ -493,7 +517,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
     }
 
-    private int Sell(EconomyFeature economy, AuctionBotPlanner planner, uint houseId, long now)
+    private int Sell(EconomyFeature economy, AuctionBotPlanner planner, uint houseId, long now, int maxStarts = int.MaxValue)
     {
         if (economy.ItemGuids is not { } guids || _items is null)
         {
@@ -502,7 +526,7 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
 
         // Never reuse an auction id a custody row names (its listing key would be refused forever).
         economy.RaiseAuctionIdTo(Ledger.MaxAuctionId);
-        int room = (int)Math.Min(Options.MaxAuctionsPerHouse, int.MaxValue) - economy.BotAuctionCount(houseId);
+        int room = Math.Min((int)Math.Min(Options.MaxAuctionsPerHouse, int.MaxValue) - economy.BotAuctionCount(houseId), maxStarts);
         int started = 0;
         foreach (AuctionBotSellIntent intent in planner.PlanSell(room, _items.Templates.Find, _loot?.Roll()))
         {
@@ -775,6 +799,42 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
         }
     }
 
+    /// <summary>
+    /// The items a vendor sells, which <see cref="AuctionBotPricing"/> values at the vendor price: the direct <c>npc_vendor</c> rows plus the shared
+    /// <c>npc_vendor_template</c> stock that <c>NpcStore</c> merges into every vendor window.
+    /// </summary>
+    internal static HashSet<uint> VendorItemSet(ArcaneCore.Game.Npc.NpcStore? npcs)
+        => npcs is null ? [] : [.. npcs.Content.VendorItems.Select(v => v.Item), .. npcs.Content.VendorTemplateItems.Select(v => v.Item)];
+
+    /// <summary>
+    /// Whether the planner (and with it the pricing built from the vendor set) must be rebuilt: the item store changed, or the NPC store did
+    /// (<c>.reload npc_vendor</c> and the other NPC tables swap the whole <c>NpcStore</c>), or there is no planner yet.
+    /// </summary>
+    internal static bool PlannerIsStale(IItemTemplateStore store, IItemTemplateStore? poolSource, ArcaneCore.Game.Npc.NpcStore? npcs, ArcaneCore.Game.Npc.NpcStore? vendorSource, bool hasPlanner)
+        => !hasPlanner || !ReferenceEquals(store, poolSource) || !ReferenceEquals(npcs, vendorSource);
+
+    /// <summary>
+    /// World thread: the required level cap in force. Without <c>DynamicMaxRequiredLevel</c> it is <c>MaxRequiredLevel</c>; with it, the highest
+    /// level of the characters online, refreshed every <c>DynamicRefreshMinutes</c> (cMaNGOS UpdateDynamicMaxLevel; nobody online keeps the cap in force).
+    /// </summary>
+    internal uint CurrentMaxRequiredLevel(long now)
+    {
+        if (!Options.DynamicMaxRequiredLevel || _world is not { } world)
+        {
+            _dynamicLevel = 0;
+            return Options.MaxRequiredLevel;
+        }
+
+        if (_dynamicLevel == 0 || now - _dynamicLevelAt >= Options.DynamicRefreshMinutes * 60L)
+        {
+            _dynamicLevel = AuctionBotItemPool.DynamicMaxLevel(world.OnlinePlayers.Select(p => (uint)p.Level),
+                _dynamicLevel == 0 ? Options.MaxRequiredLevel : _dynamicLevel);
+            _dynamicLevelAt = now;
+        }
+
+        return _dynamicLevel;
+    }
+
     private AuctionBotPlanner? EnsurePlanner()
     {
         if (_items is null || _items.LoadedStore is not ItemTemplateStore store || ReferenceEquals(store, ItemTemplateStore.Empty))
@@ -797,23 +857,37 @@ public sealed class AuctionBotFeature(IServiceProvider services, ILogger<Auction
             _loot = null;
         }
 
-        if (!ReferenceEquals(store, _poolSource) || _planner is null)
+        uint maxLevel = CurrentMaxRequiredLevel(Now);
+        if (maxLevel != _poolLevel)
         {
-            HashSet<uint> vendorItems = services.GetService<QuestNpcFeature>()?.Services?.Npcs.Content.VendorItems.Select(v => v.Item).ToHashSet() ?? [];
+            _poolLevel = maxLevel;
+            _planner = null;
+        }
+
+        ArcaneCore.Game.Npc.NpcStore? npcs = services.GetService<QuestNpcFeature>()?.Services?.Npcs;
+        if (PlannerIsStale(store, _poolSource, npcs, _vendorSource, _planner is not null))
+        {
+            HashSet<uint> vendorItems = VendorItemSet(npcs);
             var pricing = new AuctionBotPricing(Options, vendorItems, tuning);
-            var pool = new AuctionBotItemPool(store.All, Options, pricing);
+            var pool = new AuctionBotItemPool(store.All, Options, pricing, maxLevel);
             _planner = new AuctionBotPlanner(Options, pricing, pool, _random) { Overrides = new Dictionary<uint, AuctionBotItemOverride>(_overrides) };
             _poolSource = store;
+            _vendorSource = npcs;
             _lootSource = null;
-            logger.LogInformation("AHBot item pool: {Count} items ({Qualities})", pool.Count,
+            logger.LogInformation("AHBot item pool: {Count} items at required level {Level} or below ({Qualities})", pool.Count, maxLevel,
                 string.Join(", ", pool.CountByQuality().OrderBy(p => p.Key).Select(p => $"quality {p.Key}: {p.Value}")));
         }
 
-        if (services.GetService<GameObjectLootFeature>()?.LootContent is { } loot && (!ReferenceEquals(loot, _lootSource) || _loot is null))
+        GameObjectLootFeature? gameObjects = services.GetService<GameObjectLootFeature>();
+        if (gameObjects?.LootContent is { } loot
+            && (!ReferenceEquals(loot, _lootSource) || !ReferenceEquals(gameObjects.Content, _gameObjectSource) || _loot is null))
         {
             CreatureWorldFeature? creatures = services.GetService<CreatureWorldFeature>();
-            _loot = new AuctionBotLootSources(loot, entry => creatures?.Content.FindTemplate(entry)?.Rank, Options, _random, tuning);
+            // Gameobject loot only from objects that are spawned and respawn (cMaNGOS AuctionHouseBot::Initialize).
+            _loot = new AuctionBotLootSources(loot, entry => creatures?.Content.FindTemplate(entry)?.Rank, Options, _random, tuning,
+                AuctionBotLootSources.RespawningLootIds(gameObjects.Content));
             _lootSource = loot;
+            _gameObjectSource = gameObjects.Content;
             logger.LogInformation("AHBot loot sources: {Sources}", string.Join(", ", _loot.Sources.Select(s => $"{s.Name}: {s.Tables.Count}")));
         }
 

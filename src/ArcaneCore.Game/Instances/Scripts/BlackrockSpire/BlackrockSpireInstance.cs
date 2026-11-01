@@ -65,6 +65,7 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
     private readonly HashSet<ObjectGuid> _roomMobs = [];
     private readonly HashSet<ObjectGuid>[] _roomAssigned = [[], [], [], [], [], [], []];
     private readonly HashSet<ObjectGuid> _incarcerators = [];
+    private UrokChallengeAI? _urokChallenge;
     private int _stadiumWave;
     private int _stadiumDialogueStep;
     private uint _stadiumTimer;
@@ -119,6 +120,10 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
             case GoGythExit:
                 OpenIf(go, Encounters[TypeStadium] == EncounterState.Done);
                 break;
+            case UrokChallengeAI.GoChallenge:
+                // go_urok_challenge: the Challenge to Urok object runs its own script (Instance script registers it once for the map).
+                Instance.FindUpdater<GameObjectMapSystem>()?.RegisterAi(go.Entry, _urokChallenge ??= new UrokChallengeAI());
+                return;
             case GoEmberseerCombat or GoGythEntry or GoGythCombat or GoDrakkisathDoor1 or GoDrakkisathDoor2
                 or GoFatherFlame or GoDragonspine:
                 break;
@@ -188,6 +193,16 @@ public sealed class BlackrockSpireInstance(Map instance) : ScriptedInstance(inst
     /// <summary>ProcessEventId_event_spell_altar_emberseer (scriptdev2.sql event 4884, sent by the Blackrock Altar's ritual spell 16533).</summary>
     public override bool OnSpellEvent(Unit caster, uint eventId)
     {
+        if (eventId == UrokChallengeAI.EventBannerDestroyed)
+        {
+            // ProcessEventId_event_banner_destroyed: the underling that cast Destroy Spear ends the challenge. Always overrides the event script.
+            if ((caster as Creature)?.AI is UrokUnderlingAI underling)
+            {
+                underling.BannerDestroyed();
+            }
+            return true;
+        }
+
         if (eventId != EventAltarEmberseer)
         {
             return false;

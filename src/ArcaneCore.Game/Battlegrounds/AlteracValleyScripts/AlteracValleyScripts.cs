@@ -16,6 +16,9 @@ namespace ArcaneCore.Game.Battlegrounds.AlteracValleyScripts;
 /// <item>av_warrider (<see cref="AvWarRiderAI"/>): the six commanders' war riders and gryphons.</item>
 /// <item>npc_worldboss_h_av / _a_av (<see cref="AvWorldBossAI"/>): Lokholar the Ice Lord and Ivus the Forest Lord.</item>
 /// <item>npc_frostwolf_shaman / npc_druid_of_the_grove (<see cref="AvSummonerAddAI"/>).</item>
+/// <item>npc_Vanndar / npc_DrekThar / npc_Balinda / npc_Galvangar / npc_WarMaster (<see cref="AvVanndarAI"/>, <see cref="AvDrekTharAI"/>,
+/// <see cref="AvBalindaAI"/>, <see cref="AvGalvangarAI"/>, <see cref="AvWarMasterAI"/>): the four generals and the marshals and warmasters at their side.</item>
+/// <item>npc_AlteracBowman (<see cref="AvBowmanAI"/>): the Stormpike and Frostwolf tower bowmen.</item>
 /// <item>go_av_beacon (<see cref="AvBeaconAi"/>): the six beacons.</item>
 /// </list>
 /// World thread; one instance per match map.
@@ -46,6 +49,13 @@ public sealed class AlteracValleyScripts
         AlteracValley.NpcGryphonSlidore, AlteracValley.NpcGryphonIchman, AlteracValley.NpcGryphonVipore,
     ];
 
+    private static readonly uint[] s_warMasterEntries = [.. AvWarMasterAI.Entries];
+
+    private static readonly uint[] s_bowmanEntries = [.. AvBowmanAI.Entries];
+
+    private static readonly uint[] s_generalEntries =
+        [AvVanndarAI.EntryVanndar, AvDrekTharAI.EntryDrekThar, AvBalindaAI.EntryBalinda, AvGalvangarAI.EntryGalvangar];
+
     private static readonly uint[] s_beaconEntries =
     [
         AlteracValley.GameObjectBeaconGuse, AlteracValley.GameObjectBeaconJeztor, AlteracValley.GameObjectBeaconMulverick,
@@ -69,7 +79,7 @@ public sealed class AlteracValleyScripts
     /// <summary>Every creature entry a script of this class drives.</summary>
     public static IEnumerable<uint> CreatureEntries
         => [.. s_eventEntries, .. s_troopsChiefEntries, .. s_cavalryEntries, .. s_warRiderEntries, AlteracValley.NpcLokholar, AlteracValley.NpcIvus,
-            AlteracValley.NpcFrostwolfShaman, AlteracValley.NpcDruidOfTheGrove];
+            AlteracValley.NpcFrostwolfShaman, AlteracValley.NpcDruidOfTheGrove, .. s_generalEntries, .. s_warMasterEntries, .. s_bowmanEntries];
 
     /// <summary>Every object entry a script of this class drives.</summary>
     public static IReadOnlyList<uint> GameObjectEntries => s_beaconEntries;
@@ -108,6 +118,19 @@ public sealed class AlteracValleyScripts
         creatures.RegisterEntryAi(AlteracValley.NpcIvus, c => new AvWorldBossAI(c, this, horde: false));
         creatures.RegisterEntryAi(AlteracValley.NpcFrostwolfShaman, c => new AvSummonerAddAI(c, this));
         creatures.RegisterEntryAi(AlteracValley.NpcDruidOfTheGrove, c => new AvSummonerAddAI(c, this));
+        creatures.RegisterEntryAi(AvVanndarAI.EntryVanndar, c => new AvVanndarAI(c, this));
+        creatures.RegisterEntryAi(AvDrekTharAI.EntryDrekThar, c => new AvDrekTharAI(c, this));
+        creatures.RegisterEntryAi(AvBalindaAI.EntryBalinda, c => new AvBalindaAI(c, this));
+        creatures.RegisterEntryAi(AvGalvangarAI.EntryGalvangar, c => new AvGalvangarAI(c, this));
+        foreach (uint entry in s_warMasterEntries)
+        {
+            creatures.RegisterEntryAi(entry, c => new AvWarMasterAI(c, this));
+        }
+
+        foreach (uint entry in s_bowmanEntries)
+        {
+            creatures.RegisterEntryAi(entry, c => new AvBowmanAI(c));
+        }
     }
 
     /// <summary>Run the beacon script on the match map's objects (idempotent per system).</summary>

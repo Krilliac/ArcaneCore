@@ -74,7 +74,19 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
         }
 
         // The at-login rename flag becomes CHARACTER_FLAG_RENAME, so the client prompts for a new name (Player::BuildEnumData).
-        IReadOnlyDictionary<int, uint> flags = await CharacterRename.CharEnumFlagsOfAccountAsync(session).ConfigureAwait(false);
+        IReadOnlyDictionary<int, uint> renameFlags = await CharacterRename.CharEnumFlagsOfAccountAsync(session).ConfigureAwait(false);
+
+        // The stored hide-helm/hide-cloak bits join the enum flags word, as vmangos Player::BuildEnumData sends characters.character_flags
+        // (Player.cpp:1682-1683, 0e3ff01) and cmangos maps the stored PLAYER_FLAGS hide bits to char_flags (Player.cpp:1748-1754, ff53dfc).
+        var flags = new Dictionary<int, uint>(renameFlags);
+        foreach (CharacterRecord record in list)
+        {
+            uint hidden = record.CharacterFlags & CharacterAppearanceFlags.Mask;
+            if (hidden != 0)
+            {
+                flags[record.Id] = flags.GetValueOrDefault(record.Id) | hidden;
+            }
+        }
 
         session.Send(WorldOpcode.SmsgCharEnum, CharacterPackets.BuildCharEnum(list, equipment, flags));
         await RealmCharacterCounts.RefreshAsync(session, owned).ConfigureAwait(false); // repairs a count that drifted; a no-op write when it did not
@@ -469,7 +481,7 @@ public sealed class CharacterHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        LoginSequence.SendLoginPackets(session, world, player, account.DataMd5);
+        LoginSequence.SendLoginPackets(session, world, map, player, account.DataMd5);
         LoginSequence.SendInitialPacketsBeforeAddToMap(session, player, account.TutorialFlags);
 
         try

@@ -53,6 +53,14 @@ the day from a template (`CMSG_GUILD_MOTD`), screened like every other line.
   widens `GuildOrFriends`, `Anyone` and `Affinity`, never `None`. With the switch off bots invite and accept as before.
 * **Fail-closed declines.** With no invitation packet seen (the bounded capture queue may have dropped it) and no expectation, the
   answer is a decline; so it is when the inviter is offline, the guild name differs from the packet's, or the policy refuses.
+* **Opting out of unsolicited invitations** (`World:Playerbots:Social:Invites:AllowOptOut`, on). A real player whispers any bot of their faction
+  `invites off`, and from then on no bot sends them an unsolicited invitation: neither the group invitation a short bot group sends a nearby
+  player on its goal (`World:Playerbots:Groups:InvitePlayers`) nor the guild invitation by affinity above. `invites on` undoes it and `invites`
+  alone tells the status; the line is read as the "ai off" command is (letters and spaces, any case), answered by a system message at most once per
+  10 seconds, and consumed. Asking is still consent: a player who whispers "inv" to a bot's group call is invited
+  whatever this says, and the bots' own accept policy (how a bot answers an invitation) is unchanged. As with `rivals off`, **the choice lasts
+  until the server restarts** (it is kept in memory, per account, shared by every bot; the answers say so), the store holds 8192 players and
+  never drops an opt-out. `AllowOptOut` only decides whether the line is parsed; a choice already recorded is always honoured.
 
 ## Friend and ignore lists (`World:Playerbots:Social:Lists`, live)
 
@@ -188,9 +196,9 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   other member, and every other bot member loses `TrustPerFirstDeathInWipe` (-30) toward the member seen dead first in a wipe. Trust stays
   within 0..1000. On a success and on a wipe each bot member also stores the role (tank, healer or damage) every other bot member played,
   replacing the one it stored before; the role of a real player is not known and is left alone.
-- *War Mode* (`World:Playerbots:Social:WarMode`, **off by default**; a server mode for massive world PvP) is a separate layer. The normal layer
+- *War Mode* (the switch is `World:WarMode:Enabled`, **off by default**, one server-wide switch for the game rules and for the bots; the bots' memory and hunt knobs are `World:Playerbots:Social:WarMode`; a server mode for massive world PvP) is a separate layer. The normal layer
   (affinity, trust, flags, drift, daily cap, apology limit) is always updated with the normal rules and War Mode never writes to it. Each
-  relation also has a war layer (`WarAffinity`, `WarFlags`: Rival and a seeded marker, stored in the same row). While `Enabled`, every event is
+  relation also has a war layer (`WarAffinity`, `WarFlags`: Rival and a seeded marker, stored in the same row). While War Mode is on, every event is
   also applied to the war layer under the war rules: negative changes multiplied by `NegativeMultiplier` (3); with `NeverForget` negative war
   affinity does not drift and the war Rival flag is not cleared by drift; with `RemoveCaps` the war layer has no daily cap and no
   once-a-day apology limit. The normal rules alone decide what a full memory evicts, so the normal layer is the same with or without War Mode;
@@ -202,8 +210,11 @@ recorded exactly once even right after a teleport or a brain replacement; no pro
   normal layer effective at once; the war layer takes no events while it is off but is not frozen: its drift still follows the clock, so
   positive war affinity halves on its half-life while dormant and, with `NeverForget` off, so does negative war affinity (with it on, a
   war grudge keeps its value). It comes back as it has drifted when War Mode is switched on again, war-only rows included, unless
-  `ClearOnDisable` is set, in which case the first checkpoint after the switch starts a background task (one at a time, never inside a bot's own save or stop) that wipes the war layers and deletes the war-only rows of every bot, running or not, and writes each bot it changed once. The keys are live. War Mode changes what the bots remember, not the rules of the game: it
-  never force-flags anyone for PvP and a player's opt-out still applies (the first rivalry that acts on this memory is Rivalry (P6a) below: emotes only; hunting parties are a later phase).
+  `ClearOnDisable` is set, in which case the first checkpoint after the switch starts a background task (one at a time, never inside a bot's own save or stop) that wipes the war layers and deletes the war-only rows of every bot, running or not, and writes each bot it changed once. The keys are live. War Mode is also a rule of the game, not only a memory: it is the same switch as the player rules in
+  [World state and exploration](world-state.md#war-mode-non-retail) (every player and bot is PvP-flagged outside the exempt areas, honour is multiplied, a
+  PvP death costs durability), so it does flag everyone, bots included, and there is no opt-out. A rivalry opt-out (`rivals off`) still silences the
+  rivalry *emotes*; it does not exempt anyone from War Mode. The war layer decides the Rival grudges the bots act on: the rivalry emote lane reads it toward bots
+  as toward players (`RudeAtBots` still gates a rude emote at a bot), and the hunt below attacks on it.
 
 **Persistence**: loaded at startup; a bot's rows are written by the checkpoint when its version changed, and on stop or drop (not under a
 split-brain latch), off the world thread with the transient-busy retry. A failed write is a fault and a warning, never a blocked stop.
@@ -239,6 +250,19 @@ alive, in a fight (not a duel) and below 40% health, or a caster below 20% mana 
 helpfulness and by `1 + affinity / 100`, so the answer is the same on every pass of one fight and a rival is never helped. The bot must be free
 (see above) and take the victim's attacker under the flag rule below; the help is the same assist lane as answering a call.
 
+**Against players and bots.** The attacker a helping bot takes (`PlayerbotHelpRules.AttackerOf`) is a creature, or a player or bot of the other
+faction that is PvP-flagged, the nearest first. A player attacker needs the same flag rule as a creature that would flag the helper (the helper is flagged
+already, or War Mode is on), is not at more than three levels above the helper, must be attackable under the combat hooks and is never taken inside an
+exempt area (`PvpAreaState.IsWarModeExempt`). This holds with War Mode off too: a bot attacked by a flagged enemy bot or player draws a same-faction
+helper that is flagged. The helper's brain takes such an attacker on with the PvP fight (`PlayerbotBrain.Hunt.cs`, engage reason `Help`) and lets go
+when the attacker dies, runs out of reach or enters an exempt area. Calls for help and the trouble scan work against these attackers unchanged.
+
+**The hunt** (`World:Playerbots:Social:WarMode:HuntRadiusYards`, default 60, 10 to 150, live). Only while `World:WarMode:Enabled` is on. An idle bot
+(alive, out of combat and duels, no defend post, no resurrection sickness, not in a group with a real player) looks at most every two seconds for the
+nearest visible player or bot of the other faction within the radius that is PvP-flagged, outside the exempt areas and a Rival in its *war* layer, and attacks
+it (`PlayerbotHostility.MayEngage` with the `Grudge` reason, allowed only while War Mode is on). It never attacks into an exempt area and gives up the chase when
+the target enters one, dies, or is farther than the radius plus 10 yards. Real players and bots are the same to the rule.
+
 **Resurrecting** (`ResurrectStrangers`). A priest, paladin, druid or shaman that is free and sees a same-faction player dead within reach (25 yards,
 unit or, once released, the corpse) rolls once per corpse and casts its resurrection spell (the group AI's `FindResurrectionSpell`: highest
 rank, reagents carried). A dead player the bot owes a favour (gratitude, below) bypasses the roll. A flagged corpse is not raised by an unflagged
@@ -248,10 +272,10 @@ bot. A bot that is raised by a same-faction player it does not hold as a rival a
 paladin (Blessing of Might) that passes a same-faction player out of combat within 25 yards offers the buff with a small hash chance, once per
 bot and stranger per `BuffCooldownMinutes` (default 30), never to a player who carries it already or to a flagged one when the bot is not flagged.
 
-**Never against a fight that would flag the bot.** A creature a player controls (a pet or a totem), or a player, would flag the bot for PvP:
-the bot takes such a fight only when it is flagged already or `World:Playerbots:Social:WarMode:Enabled` is on, and the brain's targets are
-creatures, so a player attacker is never taken. A heal is only cast at a unit `IsSafeHealTarget` allows (never a flagged player for an unflagged
-healer).
+**Only a fight the bot may take.** A creature a player controls (a pet or a totem), or a player, would flag the bot for PvP: the bot takes such a fight
+only when it is flagged already or `World:WarMode:Enabled` is on. A player or bot attacker is taken like any other attacker (see *Against players and
+bots* above), a creature a player controls is a creature target. A heal is only cast at a unit `IsSafeHealTarget` allows (never a flagged player for an
+unflagged healer).
 
 ## Gratitude (`World:Playerbots:Social:Gratitude`, live)
 
@@ -421,6 +445,38 @@ emotes, and now and then say a line that names the festival. Code: `src/ArcaneCo
 - **Cost.** One dictionary lookup per held bot and pass, no allocation per think; a small listener list is allocated per emote or line attempt (one attempt per 30 to 90 s per held bot) and per arrival; the board is rebuilt only when a festival event changes; the walk to a place is the ordinary town walk.
 - **Not done in this slice.** Targeted festival emotes at friendly real players, and the war-effort and scenario festival chapters.
   Tests: `tests/ArcaneCore.World.Tests/Playerbots/Events/`.
+
+## World PvP: Silithyst (P7c phase 1, `World:Playerbots:WorldPvp:Silithyst`, live)
+
+Bots take part in the Silithus objective as a player does. The server half is unchanged ([outdoor PvP](outdoor-pvp.md)); `Events/PlayerbotWorldPvpObjectives.cs`
+is the bot half, one controller per brain.
+
+- **Who.** A bot in Silithus proper (map 1, zone 1377), level 55 or more, alive, out of combat, that rolls in. The roll is made once per two-minute window from the bot's guid
+  against `ParticipationChance` (default 0.5), or `WarModeParticipationChance` (default 0.9) while `World:Playerbots:Social:WarMode:Enabled` is on, so a crowd of bots is not all on the geysers at once.
+  `Enabled` (default true) off: no new run starts; a bot already carrying finishes its trip.
+- **The run.** *Seek*: the nearest spawned Silithyst Geyser (181598) or Mound (181597) that is ready, not set aside and claimed by fewer than `MaxBotsPerGeyser` (1..8, default 1) other bots
+  (`PlayerbotClaims`, the same claim table as mobs and chests). *Use*: walk to within 4 yards, stop, CMSG_GAMEOBJ_USE (the goober casts 29518, whose script gives the flag aura 29519).
+  *Await*: 3 s for the flag. *Carry*: walk on foot to the centre of the own faction's turn-in trigger (4162 Alliance, 4168 Horde); the ordinary area trigger packet fires on entering it and the server counts the
+  delivery and applies Traces of Silithyst (29534). *Deliver* is done when the flag is gone within the trigger's radius plus 8 yards and 29534 was newly put on by this turn-in (an older 29534 still running does not count). A bot that picked the flag up inside the
+  trigger volume, or stands at its centre with the flag still on, walks out (radius + 8 yards) and back in, up to twice more, because the trigger fires on entering (the motion's loop blacklist is lifted for those two places). The carry limit (5 minutes) counts only the time the carry rung runs, not rest or fights.
+  A mound a carrier dropped (the server puts it down at the carrier's feet when the dust is cancelled or lost) is taken the same way as a geyser by the next bot that seeks.
+  The geyser is looked at again after a minute. After a delivery or a give-up before the carry the bot starts no new run for two minutes (one roll window); after a carry given up with the flag on, ten (Giving up).
+- **Priority.** A run in progress, or a bot found holding the flag, is driven high in the think ladder: after rest and equipment, before class upkeep, home, town errands, the goal policy and quests (a fight still comes first).
+  A new run is only started low, next to the opportunity goal. The goal kind reported is `WorldPvp` (appended to `PlayerbotGoalKind`; it is not a goal-policy rung).
+- **A carrier never mounts or stealths.** The server drops the dust when the carrier mounts or stealths away from its trigger. `PlayerbotMount.CanMountHere` refuses while 29519 is on inside zone 1377 (the server drops the dust only there; elsewhere on the map the carrier may ride), and the class upkeep gets
+  `RotationState.NoStealth` (rogue Stealth and Vanish, druid Prowl); a rogue's retreat does not choose Vanish either (`EscapeSituation.CarriesSilithyst`). A mount-up cast under way when the flag lands, and a mount already on, are cancelled in zone 1377 only.
+  Using the geyser still dismounts the bot (ordinary game object use). A cancel of that cast the action budget refuses is kept and sent at the next think.
+- **Giving up.** A geyser someone else used, or a lost flag away from the trigger, ends the run quietly (the geyser is set aside 30 s to a minute). A death, no route, or a stalled walk sets it aside with the ledger's backoff (60 s doubling to 5 min, `PlayerbotOpportunityLedger`). The brain's stall watch giving the goal up ends the run the same way. A carry given up while the flag is still on (no trigger row, no route, a refused turn-in, the carry limit, a stall) cancels the flag with CMSG_CANCEL_AURA (five tries, one second apart); the server then drops a Silithyst Mound at the bot's feet (29533, [outdoor PvP](outdoor-pvp.md)). For ten minutes after that (`GiveUpBackoffMs`) the bot starts no seek, so it does not take its own mound up again (the mound stands three minutes), and does not take up a flag it still holds (the aura never expires; without the hold-off every think would open the same failing carry). The hold-off is the bot's own: another bot or a player may take the mound. In those ten minutes the bot reports at most one carry fault, whatever flag or mound the carry came from; a delivery clears the window.
+- **Anomalies** (area `world-pvp`, none on success or an early loss of the flag): `silithyst-use-no-aura` (the use gave no 29519 within 3 s; once per run, the geyser is set aside), `silithyst-carry-timeout` (a carry of more than 5 minutes of carry time) and `silithyst-unreachable-trigger` (no route to the trigger, no trigger row loaded, or the flag still on after three entries into the volume); of the last two, at most one per bot per ten minutes (the give-up hold-off above), a delivery clearing the window.
+- **Observability (server).** Each pickup and each turn-in writes a debug line `outdoor-pvp.silithyst` with the player, team and count; `SilithusZone.PickupsTotal` and `TurnInsTotal` count them since start.
+- **Cost.** The controller's own flag and Traces view is one aura walk per think, shared by the two ladder rungs of the run (`SilithystThisThink`), and the brain takes it only in zone 1377 or while the controller has work
+  (a run, a drop or cancel pending, or a flag seen at the last scan). A bot elsewhere with no run does no walk and allocates nothing, so a flag holder outside the zone is adopted only if it was seen at the last scan or is in a run, and then only on map 1;
+  off map 1 the flag is cancelled once and no longer watched, and a run ends quietly when the bot changes map. The mount check, the retreat and the combat view do their own zone-gated walks (a zone compare, one walk only in zone 1377). Once the controller exists, `Update` costs a few field checks per rung, plus `Eligible` every 5 s. An eligible bot not cooling down seeks every 5 s with one dictionary lookup per geyser spawn of the map (16 in the real data, no enumerator, no allocation). The geyser guids come from the map's
+  spawn table (`GameObjectMapSystem.SpawnGuidsOf`), so the list is complete whichever grids are loaded: an object in an unloaded grid is skipped at the lookup and found at the next seek once its grid loads. The table is read once
+  per map, shared by the bots of the map, and again every 10 minutes (a content reload). Mounds (181597) are not in the spawn table, so the loaded objects of the map are scanned for them once a minute per map (one enumerator);
+  a mound in a grid that loads in between is seen up to a minute late.
+- **Not done in phase 1.** Eastern Plaguelands towers, dust bags, dropping the flag on purpose, escorting a carrier, killing enemy carriers on purpose and group runs. A flag the server dropped (the Silithyst Mound, 181597) is sought like a geyser.
+  Tests: `tests/ArcaneCore.World.Tests/Playerbots/WorldPvp/`, and the server end to end in `tests/ArcaneCore.World.Tests/OutdoorPvP/SilithystEndToEndTests.cs`.
 
 ## Review round 1 (P2)
 

@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Npc;
 using ArcaneCore.Game.WorldState.Events;
 using ArcaneCore.Kernel.WorldData.Creatures;
 using ArcaneCore.Protocol;
@@ -63,10 +64,16 @@ public sealed partial class CreatureMapSystem
             bool allowed = SpawnAllowed(guid);
             if (!allowed)
             {
-                _respawnAt.Remove(guid);
+                ForgetRespawnForGate(guid);
                 if (live is not null)
                 {
                     Despawn(live);
+                    if ((live.NpcFlags & (uint)NpcFlags.SpiritGuide) != 0)
+                    {
+                        // A battleground spirit guide went away: the ghosts waiting at it go to another graveyard
+                        // (vmangos npc_spirit_guideAI::CorpseRemoved, battleground.cpp:74-93).
+                        Map.Combat.RepopWaitingGhostsNear(live.X, live.Y, live.Z);
+                    }
                 }
 
                 continue;
@@ -74,7 +81,7 @@ public sealed partial class CreatureMapSystem
 
             if (live is null && _grids.TryGetValue(GridDefines.ComputeGridCoord(spawn.X, spawn.Y), out LoadedGrid? grid))
             {
-                _respawnAt.Remove(guid); // a stale death of an earlier run of the event
+                ForgetRespawnForGate(guid); // a stale death of an earlier run of the event
                 LoadSpawns(grid, [spawn]);
             }
         }

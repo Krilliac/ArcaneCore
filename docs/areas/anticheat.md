@@ -71,6 +71,7 @@ Weights follow the fork. A finding adds its weight (clamped 0..100) to the chara
 | Climbed into the air | Vertical | 15 | a steep climb (dz > 1 and > 2 × horizontal) on the ground that ends more than 3 yd above the floor | no terrain and vmap data |
 | Through a wall | Physics | 15 | a ground step over 4 yd without line of sight, twice within five seconds (one can be a corner) | no vmap tile at both ends |
 | Unknown spell | Spell | 10 | `CMSG_CAST_SPELL` refused as `NotKnown` by the spell system | |
+| Honeypot spell | Spell | `SpellHoneypot:Weight` (60) | `CMSG_CAST_SPELL` of a spell that is `NeverCast`, `TestSpell` or `Deprecated` in `DeliberatelyInertSpells`, or listed in `SpellHoneypot:ToolSpellIds`; only with `AntiCheat:SpellHoneypot:Enabled` (default **false**: retail just refuses the cast). The cast is dropped before the spell system, as an unknown spell is | GMs and every exempt session |
 | Trade-window item | Item | 30 | `CMSG_USE_ITEM` of an item offered in the trade (vmangos "cheat way only"); also `CMSG_SWAP_ITEM`, `CMSG_SWAP_INV_ITEM`, `CMSG_AUTOEQUIP_ITEM`, `CMSG_AUTOSTORE_BAG_ITEM`, `CMSG_SPLIT_ITEM`, `CMSG_DESTROYITEM` and `CMSG_SELL_ITEM` whose **source** is an offered item | |
 | Far interaction | Interact | 15 | `CMSG_GAMEOBJ_USE` refused as too far, and more than 20 yd + run speed × 2 × latency away | at the edge of the range |
 
@@ -153,7 +154,8 @@ GameMaster and SEC_ADMINISTRATOR to Administrator.
 The whole `AntiCheat` section (see the [configuration reference](../reference/configuration.md)) is validated at start
 (`AntiCheatConfigChecks`, exit 78) and applied as a whole by `.reload config` (`ConfigContentReloadable`): one bad value
 rejects the reload and nothing changes. A ceiling of Kick without the autoban is a startup warning (a kicked cheater can
-reconnect at once). The `Net:Protection:World*` packet budgets are restart-only.
+reconnect at once). `AntiCheat:SpellHoneypot` (a deviation, off by default) adds the strong signal for casts no client can send; its
+`ToolSpellIds` list names GM-tool spell ids, empty by default. The `Net:Protection:World*` packet budgets are restart-only.
 
 ## Tests
 
@@ -161,6 +163,8 @@ reconnect at once). The `Net:Protection:World*` packet budgets are restart-only.
   switch), `MovementAntiCheatTests` (every check positive and its look-alikes negative: lag bunching, knockback, speed
   decrease and pending increase, server relocation, known/unknown/fake transports, dead players, grants, terrain with and
   without data), `AntiCheatScoresTests` (decay, ceiling, autoban points and ladder, validation).
+* `Game.Tests/AntiCheat/CastSpellHoneypotTests` (flag off: no signal; flag on: a non-GM gets the signal, a GM does not; the trap
+  categories and the tool id list; validation).
 * `Kernel.Tests/Net/OpcodeRateLimiterTests` (the fork's test_gateway_rate cases, a retail cadence under the defaults).
 * `World.Tests/AntiCheat/AntiCheatWorldTests` through real sockets: a legitimate client running, jumping and stopping
   scores nothing (and the same client's blink is scored), a managed playerbot is exempt (and scored with the exemption off),

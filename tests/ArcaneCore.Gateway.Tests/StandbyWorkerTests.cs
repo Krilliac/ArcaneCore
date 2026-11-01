@@ -352,6 +352,12 @@ public sealed class StandbyWorkerTests
                 services.GetRequiredService<ILoggerFactory>(),
                 admission);
         await endpoint.StartAsync(token);
+        // A worker-mode server holds a Warden manifest verifier, so the gateway must prove the same posture (realm and Warden options) or its sessions are refused.
+        int realmId = services.GetService<IOptions<GatewayWorkerOptions>>()?.Value.RealmId ?? new GatewayWorkerOptions().RealmId;
+        var warden = new GatewayWarden(
+            realmId,
+            services.GetService<IOptions<ArcaneCore.World.Warden.WardenOptions>>()?.Value ?? new ArcaneCore.World.Warden.WardenOptions(),
+            services.GetRequiredService<ILoggerFactory>().CreateLogger<GatewayWarden>());
         var gateway = new GatewayServer(
             server.Services.GetRequiredService<IServiceScopeFactory>(),
             Options.Create(new GatewayOptions
@@ -363,7 +369,8 @@ public sealed class StandbyWorkerTests
                 LinkSecret = Secret,
                 LinkRetryDelay = TimeSpan.FromMilliseconds(100),
             }),
-            server.Services.GetRequiredService<ILoggerFactory>());
+            server.Services.GetRequiredService<ILoggerFactory>(),
+            warden: warden);
         await gateway.StartAsync(token);
         await gateway.WaitForLinkAsync(token);
         return new Linked(endpoint, gateway);

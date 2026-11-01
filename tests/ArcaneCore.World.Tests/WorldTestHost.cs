@@ -38,6 +38,10 @@ internal sealed class WorldTestHost : IAsyncDisposable
     // finalizer of its TcpClient closes the socket, which logs the player out in the middle of the test (a GC-timing flake). Keeping them
     // here ties each connection to the host's lifetime; DisposeAsync closes them (a repeated dispose is harmless).
     private readonly List<WorldTestClient> _clients = [];
+
+    // The endpoint each client had when it connected: a client the test disposed no longer reports one, but its session is still
+    // looked up by it (guarded by _clients).
+    private readonly Dictionary<WorldTestClient, string> _clientEndpoints = [];
     private readonly Task _acceptLoop;
 
     /// <summary>
@@ -54,7 +58,7 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     private WorldTestHost(
         int compressionThreshold, Action<WorldRuntimeOptions>? configure, Action<IServiceCollection>? configureServices, WorldSessionOptions? sessionOptions, ILogger? sessionLogger,
-        BanOptions? banOptions, TestClock clock)
+        BanOptions? banOptions, TestClock clock, Func<DateTime>? wallTime, bool wallTimeProvider)
     {
         Clock = clock;
         _sessionOptions = sessionOptions ?? new WorldSessionOptions { PreAuthTimeout = TestPreAuthTimeout };
@@ -95,8 +99,17 @@ internal sealed class WorldTestHost : IAsyncDisposable
         if (clock.IsManual)
         {
             // Game time for features that take a time provider; a TimeProvider registered by the test (configureServices) replaces this one.
+            // wallTimeProvider (opt-in) keeps the DI TimeProvider on the wall clock instead, so timeout/retry/circuit-breaker policies
+            // run in wall time between manual steps; the GameTimeProvider itself stays resolvable.
             collection.AddSingleton(_ => new GameTimeProvider(World!.Clock));
-            collection.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<GameTimeProvider>());
+            if (wallTimeProvider)
+            {
+                collection.AddSingleton(TimeProvider.System);
+            }
+            else
+            {
+                collection.AddSingleton<TimeProvider>(sp => sp.GetRequiredService<GameTimeProvider>());
+            }
         }
 
         configureServices?.Invoke(collection);
@@ -108,6 +121,10 @@ internal sealed class WorldTestHost : IAsyncDisposable
         SaveQueue = _services.GetRequiredService<CharacterSaveQueue>();
         World = new WorldRuntime(options, SaveQueue, NullLogger<WorldRuntime>.Instance);
         Opcodes = WorldServiceCollectionExtensions.BuildOpcodeTable();
+        if (wallTime is not null)
+        {
+            World.Clock.UseWallTimeSource(wallTime);
+        }
 
         if (clock.IsManual)
         {
@@ -184,11 +201,16 @@ internal sealed class WorldTestHost : IAsyncDisposable
 
     public int Port { get; }
 
-    /// <summary>Start a host. Compression is off by default so tests can read update blocks directly.</summary>
+    /// <summary>
+    /// Start a host. Compression is off by default so tests can read update blocks directly. <paramref name="wallTime"/> replaces the system clock
+    /// the world clock anchors game UTC on (<see cref="WorldClock"/> time-source seam; UTC ticks); <paramref name="wallTimeProvider"/> opts the
+    /// manual-clock host's DI <see cref="TimeProvider"/> out of game time (it is <see cref="TimeProvider.System"/>).
+    /// </summary>
     public static WorldTestHost Start(
         int compressionThreshold = 0, Action<WorldRuntimeOptions>? configure = null, Action<IServiceCollection>? configureServices = null,
-        WorldSessionOptions? sessionOptions = null, ILogger? sessionLogger = null, BanOptions? banOptions = null, TestClock? clock = null)
-        => new(compressionThreshold, configure, configureServices, sessionOptions, sessionLogger, banOptions, clock ?? TestClock.Real);
+        WorldSessionOptions? sessionOptions = null, ILogger? sessionLogger = null, BanOptions? banOptions = null, TestClock? clock = null,
+        Func<DateTime>? wallTime = null, bool wallTimeProvider = false)
+        => new(compressionThreshold, configure, configureServices, sessionOptions, sessionLogger, banOptions, clock ?? TestClock.Real, wallTime, wallTimeProvider);
 
     /// <summary>How this host's game clock moves (<see cref="TestClock.Real"/> unless the test chose the manual clock).</summary>
     public TestClock Clock { get; }
@@ -209,9 +231,14 @@ internal sealed class WorldTestHost : IAsyncDisposable
         var client = new TcpClient();
         await client.ConnectAsync(IPAddress.Loopback, Port);
         var connected = new WorldTestClient(client);
+        string? endpoint = connected.LocalEndpoint;
         lock (_clients)
         {
             _clients.Add(connected);
+            if (endpoint is not null)
+            {
+                _clientEndpoints[connected] = endpoint;
+            }
         }
 
         return connected;
@@ -432,15 +459,15 @@ internal sealed class WorldTestHost : IAsyncDisposable
     /// </summary>
     private void ThrowIfAClientsSessionIsGone()
     {
-        WorldTestClient[] clients;
+        (WorldTestClient Client, string? Endpoint)[] clients;
         lock (_clients)
         {
-            clients = [.. _clients];
+            clients = [.. _clients.Select(c => (c, _clientEndpoints.GetValueOrDefault(c)))];
         }
 
-        foreach (WorldTestClient client in clients)
+        foreach ((WorldTestClient client, string? connectedEndpoint) in clients)
         {
-            string? local = client.LocalEndpoint;
+            string? local = client.LocalEndpoint ?? connectedEndpoint;
             if (local is null)
             {
                 continue;

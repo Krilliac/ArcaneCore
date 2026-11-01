@@ -6,7 +6,7 @@ namespace ArcaneCore.Kernel.Configuration;
 /// the process behaving as the .NET runtime would without this section, except that each event is
 /// now written to the log first. Read once when the daemon starts; none of these keys is live.
 /// </summary>
-[ConfigDaemons(ConfigDaemon.Both)]
+[ConfigDaemons(ConfigDaemon.Both | ConfigDaemon.Gateway)]
 public sealed class DiagnosticsOptions
 {
     public const string SectionName = "Diagnostics";

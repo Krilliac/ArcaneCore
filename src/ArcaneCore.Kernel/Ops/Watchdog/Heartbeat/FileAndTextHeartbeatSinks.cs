@@ -6,7 +6,7 @@ namespace ArcaneCore.Kernel.Ops.Watchdog.Heartbeat;
 
 /// <summary>
 /// A liveness file: every beat rewrites it (write to a sibling temporary file, then an atomic
-/// rename over the target) with <c>&lt;UTC ISO-8601&gt; pid=&lt;pid&gt; &lt;state&gt;</c>, so a
+/// rename over the target) with <c>&lt;UTC ISO-8601&gt; pid=&lt;pid&gt; &lt;state&gt;</c> (the <c>dumping</c> state is followed by <c>max=&lt;seconds&gt;</c>), so a
 /// supervisor that checks the modification time or the content never reads a half-written file.
 /// The last line written at stop says <c>stopping</c>; the file is deliberately left in place.
 /// </summary>
@@ -37,7 +37,7 @@ public sealed class FileHeartbeatSink : IHeartbeatSink
 
     public bool Stopping(string status) => Write("stopping");
 
-    public bool Dumping(string status, int maxSeconds) => Write("dumping");
+    public bool Dumping(string status, int maxSeconds) => Write(string.Create(CultureInfo.InvariantCulture, $"dumping max={Math.Max(1, maxSeconds)}"));
 
     public void Dispose()
     {
