@@ -404,6 +404,98 @@ public sealed class PlayerbotTradeDeskTests
         Assert.Equal(0, scene.Desk.Count);
     }
 
+    // --- stack splitting ----------------------------------------------------------------------------------------------------------
+
+    /// <summary>The first empty backpack slot of the bot (where <see cref="PlayerbotTradeGifts.PlanSplit"/> puts a split-off stack).</summary>
+    private static Task<byte> FirstEmptyBackpackSlotAsync(Scene scene) => scene.World.Host.OnWorldAsync(() =>
+    {
+        Player bot = HelpTestKit.Online(scene.World, BotName);
+        for (byte slot = InventorySlots.ItemStart; slot < InventorySlots.ItemEnd; slot++)
+            if (bot.Inventory.GetItem(InventorySlots.Bag0, slot) is null) return slot;
+        return (byte)0;
+    });
+
+    /// <summary>
+    /// A seller whose stacks cannot sum to the count (20 and 5 for 8) splits the missing 3 off the 20 into the first empty backpack slot (CMSG_SPLIT_ITEM through the party AI),
+    /// then puts the 5 and the new 3 into the window. Broken: no split (the deal would fail), a split of the wrong stack or amount, or the bot never putting both stacks in.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_Seller_SplitsTheShortfallOffALargerStack_ThenPutsBothStacksIn()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        byte[] big = await scene.GiveAsync(BotName, DealEntry, 20);
+        await scene.GiveAsync(BotName, DealEntry, 5);
+        byte destination = await FirstEmptyBackpackSlotAsync(scene);
+        Assert.NotEqual(big[2], destination);
+        PlayerbotDealQuote quote = await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry, 8);
+        Assert.True(quote.Ok, quote.Refusal.ToString());
+        await scene.OpenWindowAsync(scene.Customer!);
+
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgSplitItem) >= 1, "the bot to split a stack");
+        await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            Assert.Equal(17u, bot.Inventory.GetItem(big[1], big[2])!.Count); // 3 came off the 20
+            Item created = bot.Inventory.GetItem(InventorySlots.Bag0, destination)!;
+            Assert.Equal((DealEntry, 3u), (created.Entry, created.Count));
+            return true;
+        });
+
+        // The window is nudged (a changed partner side wakes the bot's drive; the split gap is a second) until both stacks are in.
+        for (uint nudge = 1; nudge <= 6 && (await scene.TradeAsync()).BotItems < 2; nudge++)
+        {
+            await Task.Delay(1100);
+            await scene.Customer!.SendAsync(WorldOpcode.CmsgSetTradeGold, Gold(nudge));
+            await Task.Delay(300);
+        }
+
+        Assert.Equal(2, (await scene.TradeAsync()).BotItems);
+        Assert.Equal(1, scene.BotSent(WorldOpcode.CmsgSplitItem));
+    }
+
+    /// <summary>
+    /// A split that never makes the count (the stacks are put back as they were before each drive, as a refused split would leave them) is tried <see cref="PlayerbotTradeDesk.MaxSplits"/> times,
+    /// each as a Split step naming the 20-stack as the source, the first empty slot as the destination and 3 as the amount, one split-gap apart; the next drive cancels the deal,
+    /// blaming nobody (the same pair can be quoted again at once). The desk's clock is the test's and every drive runs in one world-thread step, so the bot's own ticks cannot interleave.
+    /// </summary>
+    [Fact]
+    public async Task TradeDesk_Seller_SplitsAtMostMaxSplitsTimes_ThenFailsWithoutBlame()
+    {
+        await using Scene scene = await Scene.StartAsync();
+        await scene.AddCustomerAsync();
+        DeskClock clock = scene.UseDeskClock();
+        byte[] big = await scene.GiveAsync(BotName, DealEntry, 20);
+        await scene.GiveAsync(BotName, DealEntry, 5);
+        byte destination = await FirstEmptyBackpackSlotAsync(scene);
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry, 8)).Ok);
+        await scene.OpenWindowAsync(scene.Customer!);
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgSplitItem) == 1, "the bot's first split"); // the desk's clock stands still: the gap keeps it at one
+
+        List<PlayerbotDealStep> steps = await scene.World.Host.OnWorldAsync(() =>
+        {
+            Player bot = HelpTestKit.Online(scene.World, BotName);
+            var driven = new List<PlayerbotDealStep>();
+            for (int i = 0; i < PlayerbotTradeDesk.MaxSplits; i++)
+            {
+                bot.Inventory.Load([]);
+                Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(DealEntry, 20, out _));
+                Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(DealEntry, 5, out _));
+                clock.Advance(PlayerbotTradeDesk.SplitGapMs + 100);
+                driven.Add(scene.Desk.Drive(scene.Bot, bot, scene.Economy.TradeOf(bot)));
+            }
+
+            return driven;
+        });
+
+        // One split was made by the bot itself above, so MaxSplits - 1 more are allowed and the drive after them fails the deal.
+        Assert.Equal([PlayerbotDealStepKind.Split, PlayerbotDealStepKind.Split, PlayerbotDealStepKind.Cancel], steps.Select(step => step.Kind));
+        foreach (PlayerbotDealStep split in steps.Take(2))
+            Assert.Equal((big[1], big[2], (byte)InventorySlots.Bag0, destination, (byte)3), (split.Bag, split.Slot, split.DstBag, split.DstSlot, split.Amount));
+        Assert.False(scene.Desk.HasDeal(scene.Bot));
+        Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry, 8)).Ok, "no cooldown: the failure blamed nobody");
+    }
+
     // --- scams --------------------------------------------------------------------------------------------------------------------
 
     /// <summary>

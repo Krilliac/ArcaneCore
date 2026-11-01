@@ -449,13 +449,13 @@ internal sealed partial class PlayerbotPartyAI
             return;
         }
 
-        // A groupmate's "me" to the bot's "anyone need {item}?" is the claim: taken before the chat service hears the line.
-        if (TryClaimGroupGift(player, line, sender)) return;
         // A player on the bot's ignore list is not heard at all, as a client hides an ignored player's chat: no reply, no listener (so no
-        // affinity from the talk). The master and a game master are never dropped.
+        // affinity from the talk), and no claim on a gift. The master and a game master are never dropped.
         if (sender is not null && sender.Guid != player.Guid && sender.Guid != master && !isGm
             && Services.Social?.Friends.HasIgnore(player, sender.Guid) == true)
             return;
+        // A groupmate's "me" to the bot's "anyone need {item}?" is the claim: taken before the chat service hears the line.
+        if (TryClaimGroupGift(player, line, sender)) return;
         // Every line heard is input for the chat service's listeners (later lanes react to channel talk, needs, LFG calls), bots' lines too.
         // A line the bot voice answered itself (an "inv" to its LFG call, a price question to its WTS call) gets no other reply; the
         // master's lines are never taken from the orders.
@@ -1073,8 +1073,14 @@ internal sealed partial class PlayerbotPartyAI
             }
             case 2 or 7:
                 // The window opened (2) or changed (7, not a terminal status): a desk window reacts at once; the gift this bot hands out gets its item put in.
-                if (AdvanceGiftOut(player)) break;
+                if (AdvanceGiftOut(player))
+                {
+                    AnswerGiftOut(player); // the giver accepts first once its side is exactly the gift and the partner's is empty: a bot heir never accepts before it sees an accept
+                    break;
+                }
+
                 if (OwnsLiveTrade(player)) DriveDeal(player, TradeDesk!);
+                else AnswerPartnerAccept(player); // a groupmate's accept the server bounced as too early is answered again here (a no-op while the partner has not accepted)
                 break;
             case 4:
                 if (OwnsLiveTrade(player)) DriveDeal(player, TradeDesk!);
@@ -1184,7 +1190,7 @@ internal sealed partial class PlayerbotPartyAI
     {
         if (_tradePartner.IsEmpty || _session.Services.GetService<EconomyFeature>()?.TradeOf(player) is not { Opened: true, Settling: false } trade) return;
         TradeSide mine = trade.SideOf(player), theirs = trade.OtherSide(player);
-        if (theirs.Player.Guid != _tradePartner || !theirs.Accepted) return;
+        if (theirs.Player.Guid != _tradePartner || !theirs.Accepted || mine.Accepted) return;
         if (Owners?.Is(player, BotSocial.PlayerbotTradeOwner.Gift, _tradePartner, trade) == false) return; // another driver's window (a tip, a fee, a desk deal)
         bool gave = mine.Gold != 0;
         foreach (ObjectGuid _ in mine.TradedItems) { gave = true; break; }

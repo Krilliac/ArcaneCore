@@ -1,11 +1,13 @@
 using ArcaneCore.Game.Economy;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps.Collision;
+using ArcaneCore.Kernel.Items;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Economy;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.Party;
+using ArcaneCore.World.Tests.Items;
 using ArcaneCore.World.Tests.Playerbots.Party;
 using ArcaneCore.World.Tests.Playerbots.Travel;
 using Microsoft.Extensions.DependencyInjection;
@@ -89,6 +91,81 @@ public sealed class PlayerbotTradeGiftsWorldTests(ITestOutputHelper output)
             Assert.True(host.WorldServices.GetRequiredService<EconomyFeature>().TradeOf(host.World.FindOnlinePlayer("Giftanswers")!) is { Opened: false });
             return true;
         });
+    }
+
+    /// <summary>
+    /// The group gift fallback between two managed bots, the whole award path: the giving bot (its offer unclaimed, a groupmate bot awarded the item) opens the window, puts the
+    /// item in, and accepts first once the partner's side is empty; the receiving bot sees that accept and accepts; the window completes (status 8) and the item moves. Broken: the
+    /// giver waited for the other side to accept and the receiver for the giver, so neither accepted and the window timed out (TradeMaxMs) with the item still in the giver's bags.
+    /// </summary>
+    [Fact]
+    public async Task ABotAwardedAGift_ByAGroupmateBot_CompletesTheTrade_AndTheItemMoves()
+    {
+        const uint GiftEntry = 996_501;
+        var items = new ItemTestContent();
+        items.Templates.Templates.Add(new ItemTemplate { Entry = GiftEntry, Class = 15, SubClass = 0, Name = "Giftgiven Trinket", DisplayId = 1, Quality = 2, SellPrice = 150, Stackable = 1 });
+        WorldTestHost host;
+        using (items.Use())
+            host = PartyTestHost.Start(options => options.Party.InvitePolicy = PlayerbotInvitePolicy.Anyone,
+                services => services.AddScoped<ArcaneCore.Kernel.Economy.IEconomyStore>(_ => new PlayerbotPartyTests.StubEconomyStore()));
+        await using WorldTestHost hostScope = host;
+        WorldSession giverSession = await PartyTestHost.EnterManagedAsync(host, "GIFTGIVER", "Giftgiver");
+        WorldSession receiverSession = await PartyTestHost.EnterManagedAsync(host, "GIFTRECVR", "Giftreceiver");
+        try
+        {
+            PlayerbotOptions options = PartyTestHost.PlayerbotOptionsOf(host);
+            var giverAi = new PlayerbotPartyAI(giverSession, options);
+            var receiverAi = new PlayerbotPartyAI(receiverSession, options);
+            Player giver = giverSession.Player!, receiver = receiverSession.Player!;
+            ObjectGuid itemGuid = await host.OnWorldAsync(() =>
+            {
+                ArcaneCore.Game.Groups.GroupManager groups = host.WorldServices.GetRequiredService<ArcaneCore.World.Social.SocialFeature>().Context.Groups;
+                groups.Invite(giver, receiver.Name);
+                groups.Accept(receiver);
+                Assert.True(groups.AreInSameGroup(giver.Guid, receiver.Guid));
+                receiver.Inventory.Load([]);
+                giver.Inventory.Load([]);
+                receiver.Relocate(giver.X + 2f, giver.Y, giver.Z, 0f, host.World.NowMs);
+                Assert.Equal(ArcaneCore.Game.Items.InventoryResult.Ok, giver.Inventory.AddItem(GiftEntry, 1, out ArcaneCore.Game.Entities.Item? gift));
+                return gift!.Guid;
+            });
+            await host.WaitForWorldAsync(() => giver.VisibleObjects.Contains(receiver.Guid) && receiver.VisibleObjects.Contains(giver.Guid), "the bots in sight of each other");
+            await host.OnWorldAsync(() =>
+            {
+                // The state the unclaimed-offer branch of the tick reaches: the item was offered, no claim came, the groupmate bot is awarded it.
+                long now = (long)host.World.Uptime.TotalMilliseconds;
+                giverAi.GroupGifts.Begin(itemGuid, now);
+                Assert.True(giverAi.GroupGifts.Award(receiver.Guid, now));
+                return true;
+            });
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (clock.Elapsed < TimeSpan.FromSeconds(20) && await host.OnWorldAsync(() => receiver.Inventory.GetItemCount(GiftEntry) == 0))
+            {
+                await host.OnWorldAsync(() =>
+                {
+                    giverAi.Intake(giver);
+                    receiverAi.Intake(receiver);
+                    return true;
+                });
+                await Task.Delay(50);
+            }
+
+            output.WriteLine($"gift trade took {clock.ElapsedMilliseconds} ms");
+            await host.OnWorldAsync(() =>
+            {
+                Assert.Equal(1u, receiver.Inventory.GetItemCount(GiftEntry));
+                Assert.Equal(0u, giver.Inventory.GetItemCount(GiftEntry));
+                return true;
+            });
+        }
+        finally
+        {
+            giverSession.Kick();
+            await giverSession.ManagedClosed;
+            receiverSession.Kick();
+            await receiverSession.ManagedClosed;
+        }
     }
 
     /// <summary>

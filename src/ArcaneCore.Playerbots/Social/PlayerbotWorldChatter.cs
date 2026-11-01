@@ -296,7 +296,7 @@ internal sealed partial class PlayerbotWorldChatter
     /// price. The sender then agrees ("ok", a counter-offer) in a whisper and the desk's normal buyer flow takes over. Null when the bot needs nothing the line names,
     /// the desk is off or refuses, or the bot has no spellbook.
     /// </summary>
-    private static BotSpeech? WtsAnswer(PlayerbotSocialPass pass, PlayerbotSocialBot bot, BotHeardLine line, string normalizedText)
+    internal static BotSpeech? WtsAnswer(PlayerbotSocialPass pass, PlayerbotSocialBot bot, BotHeardLine line, string normalizedText)
     {
         if (bot.Session.Services.GetService<SpellFeature>() is not { } feature || pass.Services.GetService<ManagedPlayerbotFeature>()?.TradeDesk is not { Enabled: true } desk) return null;
         Player player = bot.Player;

@@ -16,6 +16,11 @@ internal sealed partial class PlayerbotPartyAI
 {
     private BotSocial.PlayerbotGroupGifts? _groupGifts;
 
+    /// <summary>Time (ms, <see cref="Now"/>) of the giver's last put or accept in the gift window, and the wait before its next accept (the server's scam-prevention bounce).</summary>
+    private long _giftActMs;
+
+    private const long GiftActGapMs = 1100;
+
     /// <summary>The bot's group gift flow (<c>Social:Trading:Gifts</c>); a test may replace it.</summary>
     internal BotSocial.PlayerbotGroupGifts GroupGifts
     {
@@ -65,7 +70,13 @@ internal sealed partial class PlayerbotPartyAI
         }
 
         // A window is already open (the gift's own, or another driver's): the status handlers answer it; the time bound ends a window that never goes.
-        if (LiveTrade(player) is not null || Distance(recipient, player) > TradeReach) return;
+        if (LiveTrade(player) is not null)
+        {
+            AnswerGiftOut(player); // retry a giver accept the server bounced; false (and nothing sent) for a window that is not the gift's
+            return;
+        }
+
+        if (Distance(recipient, player) > TradeReach) return;
         BotSocial.PlayerbotTradeOwners? owners = Owners;
         if (owners?.TryClaim(player, BotSocial.PlayerbotTradeOwner.Gift, recipient.Guid, null) == false) return;
         if (Act(WorldOpcode.CmsgInitiateTrade, PlayerbotNavigation.GuidPayload(recipient.Guid.Value), budgeted: false))
@@ -165,16 +176,24 @@ internal sealed partial class PlayerbotPartyAI
         }
 
         if (free < 0 || player.Inventory.GetItemByGuid(gifts.Item) is not { } item || player.Inventory.CanBeTraded(item) != InventoryResult.Ok) AbandonGroupGift(player, Now);
-        else Act(WorldOpcode.CmsgSetTradeItem, [(byte)free, item.BagSlot, item.Slot], budgeted: false);
+        else if (Act(WorldOpcode.CmsgSetTradeItem, [(byte)free, item.BagSlot, item.Slot], budgeted: false)) _giftActMs = Now;
         return true;
     }
 
-    /// <summary>The partner accepted: accept too when the bot's side is exactly the offered item. False when it is not the gift's window.</summary>
+    /// <summary>
+    /// The giver's accept (called on a window status and on every gift tick while the window is open). The giver accepts first: once its side is exactly the offered item and
+    /// the partner's side is empty (a recipient that has put something in is waited for), or at any time the partner has already accepted. A groupmate bot receiving the gift
+    /// accepts only after it sees this accept (<see cref="AnswerPartnerAccept"/>), so one side must go first or neither ever would. The server bounces an accept that follows
+    /// a change by less than its scam-prevention time, so a put or an accept is followed by <see cref="GiftActGapMs"/> before the next accept. False when it is not the gift's window.
+    /// </summary>
     private bool AnswerGiftOut(Player player)
     {
         if (!GiftOutWindow(player, out TradeSession trade)) return false;
-        TradeSide mine = trade.SideOf(player);
-        if (!trade.OtherSide(player).Accepted || mine.Gold != 0) return true;
+        TradeSide mine = trade.SideOf(player), theirs = trade.OtherSide(player);
+        if (mine.Accepted || mine.Gold != 0 || Now - _giftActMs < GiftActGapMs) return true;
+        bool partnerEmpty = theirs.Gold == 0;
+        foreach (ObjectGuid _ in theirs.TradedItems) { partnerEmpty = false; break; }
+        if (!theirs.Accepted && !partnerEmpty) return true;
         int items = 0;
         bool onlyOffered = true;
         foreach (ObjectGuid guid in mine.TradedItems)
@@ -185,7 +204,7 @@ internal sealed partial class PlayerbotPartyAI
 
         if (items != 1 || !onlyOffered) return true;
         _tradeCounts = true; // the bot gave something: the window counts as a trade for its memory
-        Act(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u), budgeted: false);
+        if (Act(WorldOpcode.CmsgAcceptTrade, BitConverter.GetBytes(1u), budgeted: false)) _giftActMs = Now;
         return true;
     }
 
