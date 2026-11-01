@@ -756,7 +756,13 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
 
         public Task FreezeAsync(CancellationToken cancellationToken) => RequiredAsync(ControlVerb.Freeze, cancellationToken);
 
-        public Task FlushAsync(CancellationToken cancellationToken) => RequiredAsync(ControlVerb.Flush, cancellationToken);
+        public async Task FlushAsync(CancellationToken cancellationToken)
+        {
+            await RequiredAsync(ControlVerb.Flush, cancellationToken).ConfigureAwait(false);
+
+            // The source's saves are durable: the held clients now survive the loss of its link (a crashed source) and move to the promoted world.
+            owner.Server.MarkHandoffFlushed(slot.SlotNode);
+        }
 
         public Task ResumeAsync(CancellationToken cancellationToken) => BestEffortAsync(ControlVerb.Resume, cancellationToken);
 
