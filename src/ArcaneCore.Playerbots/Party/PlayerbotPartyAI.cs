@@ -762,6 +762,8 @@ internal sealed class PlayerbotPartyAI
                 if (persona.Facts is null) return;
                 if (_options.Chat.Voice.LfgNearDungeonOnly)
                 {
+                    // The locality/planner work is the cost of this lookup: a pass of bots asking at once is capped like the voice path (8), the rest retry on a later line.
+                    if (!LfgLookupBudget.Of(_session.World).TryTake(Now)) return;
                     if (LfgDungeon(player) is not { } lfgDungeon) return;
                     persona = persona with { Facts = persona.Facts with { SuitedDungeon = lfgDungeon.Name } };
                 }
@@ -775,6 +777,44 @@ internal sealed class PlayerbotPartyAI
                     chat.TrySpeak(_botId, player.Guid, Chat.BotSpeech.InChannel(Chat.PlayerbotChannelMembership.LookingForGroup, text, "lfg", Chat.BotSpeechPriority.Normal));
                 return;
             }
+        }
+    }
+
+    /// <summary>The most <see cref="LfgDungeon"/> lookups (entrance search and the locality planner) one world takes in one <see cref="LfgLookupPassMs"/> window, like <c>PlayerbotNeedsVoice.MaxLocalityVerdictsPerPass</c>.</summary>
+    internal const int MaxLfgLookupsPerPass = 8;
+
+    /// <summary>The length of one lookup window, in world milliseconds (a social pass).</summary>
+    internal const long LfgLookupPassMs = 1000;
+
+    /// <summary>
+    /// Counts the <see cref="LfgDungeon"/> lookups of the current window. One per world (<see cref="Of"/>), used on the world thread only,
+    /// so it takes no lock; a clock that went backwards starts a fresh window.
+    /// </summary>
+    internal sealed class LfgLookupBudget
+    {
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, LfgLookupBudget> PerWorld = new();
+        private long _windowStartMs = long.MinValue;
+        private int _used;
+
+        /// <summary>The budget of <paramref name="world"/>, created on first use.</summary>
+        internal static LfgLookupBudget Of(object world)
+        {
+            ArgumentNullException.ThrowIfNull(world);
+            return PerWorld.GetValue(world, static _ => new LfgLookupBudget());
+        }
+
+        /// <summary>Takes one lookup of the window containing <paramref name="nowMs"/>; false when the window's <see cref="MaxLfgLookupsPerPass"/> are spent.</summary>
+        internal bool TryTake(long nowMs)
+        {
+            if (_windowStartMs == long.MinValue || nowMs < _windowStartMs || nowMs - _windowStartMs >= LfgLookupPassMs)
+            {
+                _windowStartMs = nowMs;
+                _used = 0;
+            }
+
+            if (_used >= MaxLfgLookupsPerPass) return false;
+            _used++;
+            return true;
         }
     }
 
