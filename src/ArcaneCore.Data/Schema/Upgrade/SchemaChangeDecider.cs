@@ -77,6 +77,7 @@ internal static class SchemaChangeDecider
         EnsureRowChange[] seeds = [.. definition.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>()
             .Concat(definition.ModelSeedDeclarations)
             .Where(seed => string.Equals(seed.Table, operation.Table, StringComparison.Ordinal))];
+        HashSet<(string Table, string Column)> addedColumns = [.. definition.Steps.SelectMany(s => s.Changes).OfType<AddColumnChange>().Select(c => (c.Table, c.Column))];
         if (seeds.Length == 0 || !string.IsNullOrEmpty(operation.Schema) || operation.Columns.Length == 0 || operation.Values.GetLength(1) != operation.Columns.Length)
             return false;
 
@@ -89,11 +90,12 @@ internal static class SchemaChangeDecider
                 foreach ((string column, object? value) in seed.Values)
                     expected.Add(column, value);
                 // A later step may add nullable columns to a seeded table; the frozen seed of the earlier step omits them and
-                // the model's HasData row carries null for them, so an operation column the seed omits is accepted when it is null.
+                // the model's HasData row carries null for them, so an operation column the seed omits is accepted when it is null
+                // AND the definition adds that (table, column) through an AddColumnChange. Any other omitted column must be seeded.
                 if (expected.Keys.All(column => operation.Columns.Contains(column, StringComparer.Ordinal))
                     && operation.Columns.Select((column, index) => expected.TryGetValue(column, out object? want)
                         ? Equals(want, operation.Values[row, index])
-                        : operation.Values[row, index] is null).All(match => match))
+                        : operation.Values[row, index] is null && addedColumns.Contains((operation.Table, column))).All(match => match))
                 {
                     matched = true;
                     break;
