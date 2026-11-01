@@ -130,6 +130,8 @@ internal sealed class GroupTestWorld : IAsyncDisposable
         {
             Enabled = true, MaxBots = 10, AllowedMaps = [0, 1], ThinkIntervalMs = 200, MaxActionsPerTick = 32,
             Groups = { FormationTimeoutSeconds = 600 },
+            // The group tests hold level-60 bots with a grey dungeon quest (the fit rule's subject); by default bots skip grey quests (DropGreyQuests).
+            DropGreyQuests = false,
         };
         configure?.Invoke(options);
         var content = new GroupContent(quests, dungeon, openWorldTrophyDrop, [.. extraCreatures ?? [], .. (rfc ? GroupRfcContent.Creatures() : [])], extraTemplates ?? [], dungeonQuestLevel, extraLoot ?? []);

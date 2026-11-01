@@ -224,11 +224,12 @@ public sealed class PlayerbotVolunteerExpiryAndAnchorWorldTests : PlayerbotVolun
     }
 
     /// <summary>
-    /// No list makes a plan with a waiting anchor (the anchor is the youngest waiter, left out of both lists): the volunteer is not promised
-    /// anything, no group forms, and the volunteer stays kept across the Match ticks (a rejected plan loses nobody).
+    /// A plan of two derived-only bots and the tanking player passes the qualifying rule alone, but Match asks for an anchoring member and
+    /// reserves a damage slot for the waiting anchor (the youngest waiter): the group that forms holds the anchor and the player, and the
+    /// older derived-only bot that the anchor displaced keeps waiting.
     /// </summary>
     [Fact]
-    public async Task ForAnInstanceGoal_WhenNoPlanHoldsAWaitingAnchor_TheVolunteerIsKept_AndNoGroupForms()
+    public async Task ForAnInstanceGoal_AnUnanchoredPlanIsNotFormed_MatchReservesASlotForTheWaitingAnchor()
     {
         await using GroupTestWorld world = await GroupTestWorld.StartAsync([DungeonQuest], DungeonQuiet, dungeon: true);
         await world.World.PrepareCharacterAsync("VOLKEEP", "Volkeep", AccountSecurity.Player);
@@ -244,7 +245,7 @@ public sealed class PlayerbotVolunteerExpiryAndAnchorWorldTests : PlayerbotVolun
         Assert.True(world.Coordinator.IsVolunteer(volunteer, key));
 
         // The player steps out of reach while the others arrive, so the group does not form on the way: two derived-only bots, then the
-        // anchor (the youngest), then the first anchor leaves. No plan of the three that wait can then hold the anchor.
+        // anchor (the youngest), then the first anchor leaves.
         await world.OnWorldAsync(() =>
         {
             Player real = Online(world, "Volkeep");
@@ -264,11 +265,12 @@ public sealed class PlayerbotVolunteerExpiryAndAnchorWorldTests : PlayerbotVolun
         // The window below must end before the volunteer would expire on its own, or a kept volunteer could not be told from an expired one.
         Assert.True(world.Coordinator.VolunteerRemainingMs(volunteer) > 65_000, $"setup used too much of the volunteer's life ({world.Coordinator.VolunteerRemainingMs(volunteer)} ms left)");
 
-        Assert.False(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Count > 0 || PlayerInvited(world)), "a group formed without a waiting anchor" + Environment.NewLine + await world.TraceAsync());
-        Assert.True(world.Coordinator.IsVolunteer(volunteer, key), "the volunteer was dropped when its plan was rejected");
-        Assert.Equal(0, world.Coordinator.Totals.Formed);
-        Assert.Null(await world.OnWorldAsync(() => world.GroupManager.GetInvite(volunteer)));
-        foreach (var bot in new[] { first, second, anchor })
-            Assert.Contains(world.Coordinator.WaitingBots, w => w.BotId == bot.Id);
+        Assert.True(await world.RunUntilAsync(60_000, () => world.Coordinator.Groups.Count > 0 || PlayerInvited(world)), "no group formed with the anchor" + Environment.NewLine + await world.TraceAsync());
+        PlayerbotGroupCoordinator.BotGroup group = world.Coordinator.Groups.Single();
+        Assert.Equal(3, group.Members.Count);
+        Assert.Contains(group.Members, m => m.Real);
+        Assert.Contains(group.Members, m => m.BotId == anchor.Id); // the plan holds the waiting anchor
+        Assert.Equal(1, world.Coordinator.Totals.Formed);
+        Assert.Single(new[] { first, second }, b => world.Coordinator.WaitingBots.Any(w => w.BotId == b.Id)); // one derived-only bot is left out and still waits
     }
 }
