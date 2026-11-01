@@ -16,13 +16,14 @@ public sealed partial class SpellSystem
     /// vmangos Unit::SetFeignDeath(apply) with the default arguments (SpellAuras.cpp:2103-2112 calls it for a creature target of 29266 Permanent
     /// Feign Death, Unit.cpp:9228-9278): on apply the unit stops, spells aimed at it are interrupted, combat stops, stealth and invisibility end, the
     /// hostile threat references go and the dead dynamic flag is set; on remove the flag goes. The state is not an aura of the unit's own
-    /// (the unit keeps no resist roll: <c>success</c> is true), so <see cref="IsFeigningDeath"/> does not report it.
+    /// (the unit keeps no resist roll: <c>success</c> is true), and <see cref="IsFeigningDeath"/> reports the state until the aura goes.
     /// </summary>
     internal void SetCreatureFeignDeath(Unit target, bool apply)
     {
         if (!apply)
         {
             target.RemoveFlag(UpdateFields.UnitDynamicFlags, UnitDynFlags.Dead);
+            SetCreatureFeignState(target, false); // ClearUnitState(UNIT_STATE_FEIGN_DEATH); the creature's motion master resumes on its next update (RestoreMovement)
             return;
         }
 
@@ -36,6 +37,7 @@ public sealed partial class SpellSystem
         }
 
         InterruptSpellsCastedOn(target);
+        SetCreatureFeignState(target, true); // AddUnitState(UNIT_STATE_FEIGN_DEATH)
         target.Map?.Combat.CombatStop(target);
         RemoveHoldersWithAuraInterrupt(target, StealthInvisCancelsFlag);
         foreach (Unit attacker in target.Combat.ThreatenedBy.ToArray())
