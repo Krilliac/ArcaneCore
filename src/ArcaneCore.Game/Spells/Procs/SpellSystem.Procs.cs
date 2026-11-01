@@ -111,6 +111,11 @@ public sealed partial class SpellSystem
             return;
         }
 
+        if (!StackGuard.TryEnter("spell.proc"))
+        {
+            return; // a proc chain too deep for the stack: the nested event is dropped (the fault is recorded)
+        }
+
         _procDepth++;
         using ProcEventScope scope = BeginProcEvent(); // a standalone event (a kill outside a cast or swing) is its own event
         List<TriggeredProc> triggered = _procDepth == 1 ? _triggeredScratch ??= [] : [];

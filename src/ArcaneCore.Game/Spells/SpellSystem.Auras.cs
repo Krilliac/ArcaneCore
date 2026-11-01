@@ -350,6 +350,11 @@ public sealed partial class SpellSystem
 
     internal void AddAuraHolder(SpellAuraHolder holder)
     {
+        if (!StackGuard.TryEnter("spell.aura-apply"))
+        {
+            return; // nested aura applies too deep for the stack: this one is dropped (the fault is recorded)
+        }
+
         ValidateAuraHolder(holder, requirePositiveDuration: true);
         holder.ResolvePolarity(Store.Get);
         UnitSpellState state = GetOrCreateState(holder.Target);
@@ -976,9 +981,9 @@ public sealed partial class SpellSystem
 
     private void RemoveHolder(UnitSpellState state, SpellAuraHolder holder, AuraRemoveMode mode = AuraRemoveMode.Default)
     {
-        if (holder.IsRemoved)
+        if (holder.IsRemoved || !StackGuard.TryEnter("spell.aura-remove"))
         {
-            return;
+            return; // already gone, or nested removals too deep for the stack (the fault is recorded; the holder stays until the next removal)
         }
 
         holder.RemoveMode = mode;

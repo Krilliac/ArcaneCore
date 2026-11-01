@@ -211,6 +211,11 @@ public sealed partial class CreatureMapSystem
     /// </summary>
     private bool ExecuteRelayStep(RelayScriptPendingStep pending)
     {
+        if (!StackGuard.TryEnter("dbscript.relay"))
+        {
+            return true; // a script chain too deep for the stack: the run ends here (the fault is recorded)
+        }
+
         RelayScriptStep step = pending.Step;
         if ((step.DataFlags & ~SupportedDataFlags) != 0)
         {
