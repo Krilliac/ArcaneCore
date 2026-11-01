@@ -2,6 +2,7 @@ using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
+using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Gm.FirstLogin;
 using ArcaneCore.World.Handlers;
@@ -24,8 +25,13 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgCancelChannelling, HandleCancelChannelling);
     }
 
-    /// <summary>The audited GM and developer tool spell ids: no player ever has these, so a cast of one is a honeypot trap.</summary>
-    private static readonly HashSet<uint> GmToolSpellIds = [.. GmFirstLoginToolCatalog.All.Select(spell => spell.Id)];
+    /// <summary>
+    /// The audited GM-only and developer tool spell ids: no player class can learn these, so a cast of one is a honeypot trap. The catalog's
+    /// Moderator entries (2970 Detect Invisibility, 11743 Detect Greater Invisibility) are excluded on purpose: they are also the trainable
+    /// Warlock ranks, so a legitimate player casts them.
+    /// </summary>
+    private static readonly HashSet<uint> GmToolSpellIds =
+        [.. GmFirstLoginToolCatalog.All.Where(spell => spell.MinimumSecurity >= AccountSecurity.GameMaster).Select(spell => spell.Id)];
 
     private static SpellSystem Spells(WorldSession session) => session.Services.GetRequiredService<SpellFeature>().System;
 

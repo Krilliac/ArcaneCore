@@ -1,10 +1,12 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using ArcaneCore.Data.Content.Spells;
 using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.AntiCheat;
 using ArcaneCore.World.Gm.FirstLogin;
+using ArcaneCore.World.Tests.Spells;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -18,6 +20,7 @@ public sealed class SpellHoneypotWorldTests
 {
     private const uint NeverCastSpell = 482; // DeliberatelyInertSpells: NeverCast
     private const uint GmToolSpell = 27204; // GmFirstLoginToolCatalog: QADebug Instant Cast
+    private const uint WarlockDetectInvisibility = 2970; // GmFirstLoginToolCatalog Moderator entry, and the trainable Warlock rank
     private static readonly TimeSpan Settle = TimeSpan.FromMilliseconds(400);
 
     private static AntiCheatFeature FeatureOf(WorldTestHost host) => host.WorldServices.GetRequiredService<AntiCheatFeature>();
@@ -36,6 +39,12 @@ public sealed class SpellHoneypotWorldTests
         return host.OnWorldAsync(() => FeatureOf(host).ApplyOptions(options));
     }
 
+    /// <summary>A world host whose spell store holds the three ids used here (none in the character's spellbook), so an unlearned cast reaches the spell system's NotKnown refusal.</summary>
+    private static WorldTestHost StartHost() => WorldTestHost.Start(configureServices: services =>
+        services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(new SpellContent(
+            [NeverCastSpell, GmToolSpell, WarlockDetectInvisibility].Select(id => new SpellTemplateRow { Id = id, SpellName = "Honeypot test " + id, RangeIndex = 1 }).ToList(),
+            [], [], [new SpellRangeRow { Id = 1 }], [], [], []))));
+
     private static byte[] CastPayload(uint spellId)
     {
         byte[] payload = new byte[6]; // u32 spell, u16 target flags (self)
@@ -49,7 +58,7 @@ public sealed class SpellHoneypotWorldTests
     [Fact]
     public async Task FlagOff_ATrapCast_KeepsTheRetailNotKnownSignalOnly()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestHost host = StartHost();
         await ApplyAsync(host, honeypot: false);
         ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
         await using WorldTestClient client = await host.EnterWorldAsync("TRAPOFF", "Trapoff");
@@ -69,7 +78,7 @@ public sealed class SpellHoneypotWorldTests
     [InlineData(GmToolSpell)]
     public async Task FlagOn_ANonGmTrapCast_IsRefusedAndRecordedOnceAsSpell60(uint spellId)
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestHost host = StartHost();
         await ApplyAsync(host, honeypot: true);
         ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
         await using WorldTestClient client = await host.EnterWorldAsync("TRAPON", "Trapon");
@@ -89,9 +98,27 @@ public sealed class SpellHoneypotWorldTests
     }
 
     [Fact]
+    public async Task FlagOn_ANonGmCastOfTheTrainableWarlockRank_IsNotATrap()
+    {
+        await using WorldTestHost host = StartHost();
+        await ApplyAsync(host, honeypot: true);
+        ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
+        await using WorldTestClient client = await host.EnterWorldAsync("TRAPWL", "Trapwl");
+
+        // Spell 2970 is in the GM tool catalog but also a normal class spell: only the ordinary NotKnown signal (weight 10) may come, never the honeypot's.
+        await client.SendAsync(WorldOpcode.CmsgCastSpell, CastPayload(WarlockDetectInvisibility));
+        await host.WaitForWorldAsync(() => !seen.IsEmpty, "the NotKnown signal");
+        await Task.Delay(Settle);
+
+        (string Player, AntiCheatFinding Finding) only = Assert.Single(seen);
+        Assert.Equal(10f, only.Finding.Weight);
+        Assert.NotEqual(CastSpellHoneypot.Detail, only.Finding.Detail);
+    }
+
+    [Fact]
     public async Task FlagOn_StaffAccount_IsNotFlagged()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestHost host = StartHost();
         await ApplyAsync(host, honeypot: true);
         ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
         await using WorldTestClient staff = await host.EnterWorldAsync("TRAPSTAFF", "Trapstaff", AccountSecurity.GameMaster);
@@ -106,7 +133,7 @@ public sealed class SpellHoneypotWorldTests
     [Fact]
     public async Task FlagOn_AGameMasterInGmMode_IsNotFlagged_AndIsFlaggedWithGmModeOff()
     {
-        await using WorldTestHost host = WorldTestHost.Start();
+        await using WorldTestHost host = StartHost();
         await ApplyAsync(host, honeypot: true, exemptSecurity: AccountSecurity.Administrator);
         ConcurrentQueue<(string Player, AntiCheatFinding Finding)> seen = Watch(host);
         await using WorldTestClient gm = await host.EnterWorldAsync("TRAPGM", "Trapgm", AccountSecurity.GameMaster);
