@@ -246,21 +246,20 @@ public sealed class AccountDataPersistenceTests
     }
 
     [Fact]
-    [Trait("Category", "Timing")]
     public async Task AStaleFlushTimer_OfAnEndedSession_DoesNotRemoveTheNextSessionsState_AndTheHeldValueSurvivesStop()
     {
         const int interval = 3000;
+        var clock = new SteppedClock();
         await using var db = await TestDatabase.CreateAsync();
-        await using var host = db.StartHost(interval);
+        await using var host = db.StartHost(interval, services => services.AddSingleton<TimeProvider>(clock));
         AccountDataFeature feature = host.WorldServices.GetRequiredService<AccountDataFeature>();
         byte[] key = await host.AddAccountAsync("ADSTALE");
         int accountId = (await host.Accounts.FindByUsernameAsync("ADSTALE"))!.Id;
 
-        // Session A: one write at once, one held (a flush timer is scheduled for t0 + interval), then A leaves and the held value is confirmed.
+        // Session A: one write at once, one held (a flush timer is armed for t0 + interval), then A leaves and the held value is confirmed.
         WorldTestClient a = await host.ConnectAsync();
         await a.AuthenticateAsync("ADSTALE", key);
         await a.CollectAsync();
-        var clock = System.Diagnostics.Stopwatch.StartNew(); // A's timer is due at or after clock + interval
         await a.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "A 1"));
         await a.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "A 2"));
         await a.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
@@ -268,34 +267,135 @@ public sealed class AccountDataPersistenceTests
         await a.DisposeAsync();
         await db.WaitForBlobAsync(accountId, 0, "A 2");
         await WorldTestHost.WaitForAsync(() => feature.TrackedAccounts == 0, "A's state to be released");
+        Assert.Equal(1, clock.PendingTimers); // A's timer is still armed, due at t0 + interval
 
         // Session B starts half an interval later: its own flush timer is due at t(B) + interval, after A's stale one.
-        await Task.Delay(interval / 2);
+        clock.Advance(TimeSpan.FromMilliseconds(interval / 2));
         WorldTestClient b = await host.ConnectAsync();
         await b.AuthenticateAsync("ADSTALE", key);
         await b.CollectAsync();
-        Assert.True(clock.ElapsedMilliseconds < interval - 200, "B must start before A's timer is due, or the test proves nothing");
-        var bClock = System.Diagnostics.Stopwatch.StartNew(); // B's timer is due at or after bClock + interval
         await b.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "B 1"));
         await b.SendAsync(WorldOpcode.CmsgUpdateAccountData, AccountData(0, "B 2")); // held
         await b.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
         await b.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
         await db.WaitForBlobAsync(accountId, 0, "B 1");
+        Assert.Equal(2, clock.PendingTimers); // A's stale timer and B's own
 
-        // Past A's timer (due about clock + interval) but before B's (due after clock + 1.5 interval, B having started half an interval in).
-        long wait = interval + 250 - clock.ElapsedMilliseconds;
-        if (wait > 0)
-        {
-            await Task.Delay((int)wait);
-        }
+        // Past A's timer (due at t0 + interval) but before B's (due at t0 + 1.5 interval).
+        clock.Advance(TimeSpan.FromMilliseconds(interval / 2));
+        await WorldTestHost.WaitForAsync(() => feature.TimersFired == 1, "A's stale flush timer to run");
 
         Assert.Equal(1, feature.TrackedAccounts); // A's timer must not have forgotten B's state
-        Assert.True(clock.ElapsedMilliseconds >= interval, "A's timer is due by now");
-        Assert.True(bClock.ElapsedMilliseconds < interval, "B's own timer must not have fired yet");
+        Assert.Equal(1, clock.PendingTimers);     // B's own timer has not fired yet
 
         await feature.StopAsync().WaitAsync(Budget); // queues what is held in the accounts still tracked
         await db.WaitForBlobAsync(accountId, 0, "B 2");
         await b.DisposeAsync();
+    }
+
+    /// <summary>A <see cref="TimeProvider"/> the test steps by hand (1 tick = 1 ms): <see cref="Advance"/> fires every timer that falls due, in order.</summary>
+    private sealed class SteppedClock : TimeProvider
+    {
+        private readonly Lock _gate = new();
+        private readonly List<StepTimer> _timers = [];
+        private readonly DateTimeOffset _start = DateTimeOffset.UtcNow;
+        private long _ms = 1_000_000;
+
+        public override long TimestampFrequency => 1000;
+
+        public override long GetTimestamp()
+        {
+            lock (_gate)
+            {
+                return _ms;
+            }
+        }
+
+        public override DateTimeOffset GetUtcNow() => _start.AddMilliseconds(GetTimestamp() - 1_000_000);
+
+        /// <summary>Timers armed and not yet fired or disposed.</summary>
+        public int PendingTimers
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _timers.Count(t => t.Due is not null);
+                }
+            }
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new StepTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+
+        public void Advance(TimeSpan by)
+        {
+            long target;
+            lock (_gate)
+            {
+                target = _ms + (long)by.TotalMilliseconds;
+            }
+
+            while (true)
+            {
+                StepTimer? next;
+                lock (_gate)
+                {
+                    next = _timers.Where(t => t.Due is not null && t.Due <= target).OrderBy(t => t.Due).FirstOrDefault();
+                    if (next is null)
+                    {
+                        _ms = target;
+                        return;
+                    }
+
+                    _ms = Math.Max(_ms, next.Due!.Value);
+                    next.Due = null;
+                }
+
+                next.Fire();
+            }
+        }
+
+        private sealed class StepTimer(SteppedClock owner, TimerCallback callback, object? state) : ITimer
+        {
+            public long? Due;
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                lock (owner._gate)
+                {
+                    if (!owner._timers.Contains(this))
+                    {
+                        owner._timers.Add(this);
+                    }
+
+                    Due = dueTime == Timeout.InfiniteTimeSpan ? null : owner._ms + Math.Max(0, (long)dueTime.TotalMilliseconds);
+                }
+
+                return true;
+            }
+
+            public void Fire() => callback(state);
+
+            public void Dispose()
+            {
+                lock (owner._gate)
+                {
+                    owner._timers.Remove(this);
+                    Due = null;
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return default;
+            }
+        }
     }
 
     private const int ShortIntervalMs = 300;
@@ -360,10 +460,11 @@ public sealed class AccountDataPersistenceTests
         /// A world host whose <see cref="IAccountDataStore"/> is the scoped <see cref="EfAccountDataStore"/> over a pooled
         /// <see cref="CharacterDbContext"/> (pool size 1: a context is reused as soon as its scope ends), as <c>AddCharacterDatabase</c> wires it.
         /// </summary>
-        public WorldTestHost StartHost(int intervalMs) => WorldTestHost.Start(
+        public WorldTestHost StartHost(int intervalMs, Action<IServiceCollection>? extraServices = null) => WorldTestHost.Start(
             configure: o => o.AccountDataWriteIntervalMs = intervalMs,
             configureServices: services =>
             {
+                extraServices?.Invoke(services);
                 services.AddDbContextPool<CharacterDbContext>(builder => builder.UseSqlite(ConnectionString(_path)), poolSize: 1);
                 services.AddScoped<IAccountDataStore>(provider => new CountingStore(
                     new EfAccountDataStore(provider.GetRequiredService<CharacterDbContext>()), async accountId =>

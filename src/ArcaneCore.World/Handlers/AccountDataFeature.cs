@@ -44,10 +44,14 @@ public sealed class AccountDataFeature : IWorldFeature
     private readonly CancellationTokenSource _stopping = new();
     private readonly Lazy<Task> _stop;
     private ILogger _logger = Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+    private readonly TimeProvider _time;
+    private int _timersFired;
     private bool _stopped;
 
-    public AccountDataFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
+    /// <param name="time">The clock of the write throttle and the flush timer; tests inject one they step by hand (default: the system clock).</param>
+    public AccountDataFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers, TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
         _services = services;
         _scopes = scopes;
         _loggers = loggers;
@@ -253,10 +257,10 @@ public sealed class AccountDataFeature : IWorldFeature
     /// Under the gate. True: write now (the first change, or the interval has passed with nothing held). False: hold it; when no flush is
     /// scheduled yet, one is, and <paramref name="delayMs"/> says when (otherwise -1: the scheduled flush writes the latest value).
     /// </summary>
-    private static bool Admit(AccountState state, int intervalMs, out long delayMs)
+    private bool Admit(AccountState state, int intervalMs, out long delayMs)
     {
         delayMs = -1;
-        long now = Clock.Milliseconds();
+        long now = NowMs();
         if (!state.FlushScheduled && (intervalMs <= 0 || !state.Written || now - state.LastWriteMs >= intervalMs))
         {
             state.Written = true;
@@ -273,6 +277,12 @@ public sealed class AccountDataFeature : IWorldFeature
         return false;
     }
 
+    /// <summary>Flush timers that have elapsed so far, whether or not they still owned their account (tests wait on it instead of sleeping).</summary>
+    internal int TimersFired => Volatile.Read(ref _timersFired);
+
+    /// <summary>Monotonic milliseconds on the feature's clock.</summary>
+    private long NowMs() => (long)((double)_time.GetTimestamp() * 1000.0 / _time.TimestampFrequency);
+
     private void ScheduleFlush(int accountId, AccountState state, long delayMs)
     {
         if (delayMs >= 0)
@@ -285,7 +295,8 @@ public sealed class AccountDataFeature : IWorldFeature
     {
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(delayMs), _stopping.Token).ConfigureAwait(false);
+            await Task.Delay(TimeSpan.FromMilliseconds(delayMs), _time, _stopping.Token).ConfigureAwait(false);
+            Interlocked.Increment(ref _timersFired);
             KeyedStoreWriteQueue<IAccountDataStore>? writes = Writes;
             lock (_gate)
             {
@@ -295,7 +306,7 @@ public sealed class AccountDataFeature : IWorldFeature
                 }
 
                 state.FlushScheduled = false;
-                state.LastWriteMs = Clock.Milliseconds();
+                state.LastWriteMs = NowMs();
                 if (writes is not null)
                 {
                     PushHeld(writes, accountId, state);
