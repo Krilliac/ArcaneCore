@@ -220,71 +220,12 @@ public sealed partial class CreatureMapSystem : IMapUpdater, IMapUpdateBreakdown
         return now;
     }
 
-    /// <summary>Where the last <see cref="Update"/> spent its time (ticks of <see cref="Stopwatch"/>); filled on every update, read only to log a slow one.</summary>
-    private struct UpdateTiming
-    {
-        public long CatchUp, Linked, Creatures, SpawnGroups, PendingAi, Relay, Despawns, AfterUpdate;
-
-        /// <summary>Inside <see cref="Creatures"/>: AI updates, motion generator updates, and (inside either) path searches.</summary>
-        public long Ai, Motion, Path;
-
-        /// <summary>The spline pass of World:Parallel:CreatureSplinePass (inside <see cref="Creatures"/>; 0 when the pass is off).</summary>
-        public long SplinePass;
-        public int UngatedWanderers;
-
-        public int Walked, Updated, Searches;
-        public long SlowestCreatureTicks;
-        public uint SlowestEntry;
-        public Type? SlowestGenerator;
-
-        /// <summary>The update's slowest A* search (<see cref="SearchPath"/>): its time, who asked, the endpoints and the work it did.</summary>
-        public long SlowestSearchTicks;
-        public SlowSearch SlowestSearch;
-
-        /// <summary>Path-job answers applied this update (<see cref="TryPlanPathByJob"/>): count, worker time, slowest (not on this thread).</summary>
-        public int JobSearches;
-        public long JobSearchTicks, SlowestJobSearchTicks;
-    }
-
-    /// <summary>
-    /// One search's detail for the slow-map-update line. Few nodes and expansions with a long time mean the search didn't get the
-    /// thread (a GC, paging, the host). Many nodes mean the search did the work. LS-008: single creature searches of 120-560 ms with
-    /// no GC on the live 2026-10-17 run, under node caps of 512-2048.
-    /// </summary>
-    private readonly record struct SlowSearch(
-        uint Entry, MovementGeneratorType Motion, Vector3 From, Vector3 To, long Nodes, long Expansions, PathType Result, bool GcDuring);
-
+    /// <summary>Where the last <see cref="Update"/> spent its time; the type and the slow-line wording live in <see cref="CreatureUpdateReport"/>.</summary>
     private UpdateTiming _timing;
-
-    private static string TickMs(long ticks) => (ticks * 1000.0 / Stopwatch.Frequency).ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>The last update's stages for the slow-map-update line (<see cref="IMapUpdateBreakdown"/>). World thread; allocates.</summary>
     string IMapUpdateBreakdown.DescribeLastUpdate()
-    {
-        UpdateTiming t = _timing;
-        string text = $"creatures {TickMs(t.Creatures)} ms over {t.Updated}/{t.Walked} active (ai {TickMs(t.Ai)}, motion {TickMs(t.Motion)}{(t.SplinePass > 0 ? $", spline pass {TickMs(t.SplinePass)}" : "")}{(t.UngatedWanderers > 0 ? $", {t.UngatedWanderers} wanderers outside the gate" : "")}), path searches {TickMs(t.Path)} ms in {t.Searches} searches from any stage, "
-            + $"catch-up moves {TickMs(t.CatchUp)}, linked followers {TickMs(t.Linked)}, spawn groups {TickMs(t.SpawnGroups)}, pending ai {TickMs(t.PendingAi)}, "
-            + $"relay scripts {TickMs(t.Relay)}, forced despawns {TickMs(t.Despawns)}, observers {TickMs(t.AfterUpdate)}, "
-            + $"path outcomes so far: {NoPathPaths} no-path, {DirectFallbackPaths} straight authored routes, {DeferredPathSearches} deferred, {HomePathTeleports} home teleports";
-        if (t.SlowestCreatureTicks > 0)
-        {
-            text += $"; slowest creature entry {t.SlowestEntry} {TickMs(t.SlowestCreatureTicks)} ms, top generator {t.SlowestGenerator?.Name ?? "none"}";
-        }
-
-        if (t.JobSearches > 0 || _creaturePathJobs.Count > 0)
-        {
-            text += $"; path jobs applied {t.JobSearches} (worker time {TickMs(t.JobSearchTicks)} ms, slowest {TickMs(t.SlowestJobSearchTicks)} ms), in flight {_creaturePathJobs.Count}";
-        }
-
-        if (t.SlowestSearchTicks > 0)
-        {
-            SlowSearch s = t.SlowestSearch;
-            text += string.Create(System.Globalization.CultureInfo.InvariantCulture,
-                $"; slowest path search {TickMs(t.SlowestSearchTicks)} ms: entry {s.Entry} ({s.Motion}) from {s.From.X:F1},{s.From.Y:F1},{s.From.Z:F1} to {s.To.X:F1},{s.To.Y:F1},{s.To.Z:F1}, {s.Nodes} nodes, {s.Expansions} expansions, {s.Result}{(s.GcDuring ? ", a GC ran during it" : "")}");
-        }
-
-        return text;
-    }
+        => CreatureUpdateReport.Describe(in _timing, NoPathPaths, DirectFallbackPaths, DeferredPathSearches, HomePathTeleports, _creaturePathJobs.Count);
 
     public void OnPlayerRemoved(Map map, Player player)
     {
