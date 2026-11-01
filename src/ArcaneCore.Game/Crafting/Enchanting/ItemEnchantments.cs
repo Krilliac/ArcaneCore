@@ -79,6 +79,11 @@ public static class ItemEnchantments
         item.SetUInt32(Field(slot, EnchantSlots.IdOffset), id);
         item.SetUInt32(Field(slot, EnchantSlots.DurationOffset), duration);
         item.SetUInt32(Field(slot, EnchantSlots.ChargesOffset), charges);
+        if (duration > 0)
+        {
+            // A timed enchantment written onto a held item that does not move: the next sweep gate must look for its timer.
+            item.Inventory?.Player?.Enchantments?.RequestSweep();
+        }
     }
 
     /// <summary>vmangos <c>Item::SetEnchantmentDuration</c>.</summary>
