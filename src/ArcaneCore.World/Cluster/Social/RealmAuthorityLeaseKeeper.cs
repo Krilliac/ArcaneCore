@@ -226,7 +226,7 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
                 {
                     if (_lost || _released)
                     {
-                        return; // an orderly release (or a loss) began while an earlier scope was in the store: never renew a lease that was just given back
+                        return; // an orderly release (or a loss) began while an earlier scope was in the store: do not start a new renewal (a racing one is refused by the store)
                     }
                 }
 
