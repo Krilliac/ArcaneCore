@@ -199,11 +199,11 @@ public sealed class CharacterDatabaseWriterLockTests
         Assert.Equal(1, Volatile.Read(ref reports)); // one loss, one report, however many ticks follow (the lock is then re-taken: CharacterDatabaseWriterLockHardeningTests)
     }
 
-    internal static async Task KillLockSessionAsync(DatabaseConnectionOptions options, string databaseName)
+    internal static async Task KillLockSessionAsync(DatabaseConnectionOptions options, string databaseName, string? shard = null)
     {
         if (options.Provider == DatabaseProvider.PostgreSql)
         {
-            long key = ServerAdvisoryWriterLock.PostgresLockKey(databaseName);
+            long key = ServerAdvisoryWriterLock.PostgresLockKey(databaseName, shard);
             var builder = new Npgsql.NpgsqlConnectionStringBuilder(options.ConnectionString) { Pooling = false, Database = CharacterDatabaseWriterLock.DefaultPostgresLockDatabase };
             await using var connection = new Npgsql.NpgsqlConnection(builder.ConnectionString);
             await connection.OpenAsync();
@@ -220,7 +220,7 @@ public sealed class CharacterDatabaseWriterLockTests
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();
             command.CommandText = "SELECT IS_USED_LOCK(@name)";
-            command.Parameters.AddWithValue("@name", ServerAdvisoryWriterLock.MySqlLockName(databaseName));
+            command.Parameters.AddWithValue("@name", ServerAdvisoryWriterLock.MySqlLockName(databaseName, shard));
             object? id = await command.ExecuteScalarAsync();
             Assert.NotNull(id);
             await using var kill = connection.CreateCommand();
@@ -232,4 +232,134 @@ public sealed class CharacterDatabaseWriterLockTests
     [Fact]
     public void TheMariaDbLockName_IsCaseFolded()
         => Assert.Equal(ServerAdvisoryWriterLock.MySqlLockName("Characters_R1"), ServerAdvisoryWriterLock.MySqlLockName("characters_r1"));
+
+    // ---- Shard locks (design step C2 of _wf/writer-lock-DESIGN.md): one advisory identity per worker shard, the realm identity unchanged.
+
+    [Fact]
+    public void ShardLockKeysAndNames_ArePinned_AndTheRealmKeysAreUnchanged()
+    {
+        // Realm identity: no shard, exactly the values the single-lock design always produced.
+        Assert.Equal("arcanecore.world.writer:characters_r1", ServerAdvisoryWriterLock.MySqlLockName("characters_r1", null));
+        Assert.Equal(-5420518811949707971L, ServerAdvisoryWriterLock.PostgresLockKey("characters_r1"));
+        Assert.Equal(-5420518811949707971L, ServerAdvisoryWriterLock.PostgresLockKey("characters_r1", null));
+
+        // PostgreSQL: LE64(SHA256("arcanecore.world.writer:" + db + "#shard:" + shard)); the shard keeps its case.
+        Assert.Equal(6206709683818362613L, ServerAdvisoryWriterLock.PostgresLockKey("characters_r1", "w1"));
+        Assert.Equal(-6126584325180618514L, ServerAdvisoryWriterLock.PostgresLockKey("characters_r1", "w2"));
+        Assert.Equal(8850108496697634045L, ServerAdvisoryWriterLock.PostgresLockKey("characters_r1", "W1"));
+
+        // MariaDB/MySQL: prefix + lower(db) + "#shard:" + lower(shard), SHA-256 fallback (32 hex of the folded identity) past 64 characters.
+        Assert.Equal("arcanecore.world.writer:characters_r1#shard:w1", ServerAdvisoryWriterLock.MySqlLockName("Characters_R1", "W1"));
+        Assert.Equal("arcanecore.world.writer:fde3a7f9c50eab24a8e5ac758915bf75", ServerAdvisoryWriterLock.MySqlLockName(new string('x', 80), "w1"));
+        Assert.Equal(64, ServerAdvisoryWriterLock.MySqlLockName("characters_r1", new string('w', 20)).Length); // exactly at the limit: not hashed
+        Assert.NotEqual(ServerAdvisoryWriterLock.MySqlLockName("characters_r1", null), ServerAdvisoryWriterLock.MySqlLockName("characters_r1", "w1"));
+    }
+
+    [Fact]
+    public void TheSqliteShardSidecar_IsPinned_AndIsNotTheRealmSidecar()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "arcanecore-writerlock-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string database = Path.Combine(directory, "characters.db");
+            DatabaseConnectionOptions options = Sqlite($"Data Source={database}");
+
+            Assert.Equal(database + ".world.60c5590f72eef292.lock", CharacterDatabaseWriterLock.ShardLockPathFor(options, "w1")); // first 8 bytes of SHA-256("w1")
+            Assert.Equal(database + ".world.06f8faea3b5f6976.lock", CharacterDatabaseWriterLock.ShardLockPathFor(options, "w2"));
+            Assert.Equal(database + ".world.lock", CharacterDatabaseWriterLock.LockPathFor(options));
+            Assert.Null(CharacterDatabaseWriterLock.ShardLockPathFor(Sqlite("Data Source=:memory:"), "w1"));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("w1", true)]
+    [InlineData("Worker:1.a_b-c", true)]
+    [InlineData("", false)]
+    [InlineData("has space", false)]
+    [InlineData("semi;colon", false)]
+    [InlineData("quote'", false)]
+    public void AShardId_MustMatchTheScopeAlphabet(string shard, bool valid)
+        => Assert.Equal(valid, CharacterDatabaseWriterLock.IsValidShardId(shard));
+
+    [Fact]
+    public void AShardId_IsLimitedTo57Characters_AndAnInvalidOneIsRefusedBeforeAnyLockIsTaken()
+    {
+        Assert.True(CharacterDatabaseWriterLock.IsValidShardId(new string('a', 57)));
+        Assert.False(CharacterDatabaseWriterLock.IsValidShardId(new string('a', 58)));
+        Assert.False(CharacterDatabaseWriterLock.IsValidShardId(null));
+        Assert.Throws<ArgumentException>(() => CharacterDatabaseWriterLock.TryAcquireShard(Sqlite("Data Source=:memory:"), "bad shard"));
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TwoShardsCoexist_AndTheSameShardIsRefused_OnEveryProvider(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        CharacterDatabaseWriterLock first = CharacterDatabaseWriterLock.TryAcquireShard(options, "w1")!;
+        Assert.NotNull(first);
+        try
+        {
+            using CharacterDatabaseWriterLock second = CharacterDatabaseWriterLock.TryAcquireShard(options, "w2")!;
+            Assert.NotNull(second);
+            Assert.NotEqual(first.Path, second.Path);
+
+            CharacterDatabaseAlreadyOwnedException refused = Assert.Throws<CharacterDatabaseAlreadyOwnedException>(() => CharacterDatabaseWriterLock.TryAcquireShard(options, "w1"));
+            Assert.Equal(first.Path, refused.LockPath);
+        }
+        finally { first.Dispose(); }
+
+        using CharacterDatabaseWriterLock again = CharacterDatabaseWriterLock.TryAcquireShard(options, "w1")!; // released by Dispose
+        Assert.NotNull(again);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task AShardLock_AndTheRealmLock_AreIndependent_OnEveryProvider(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        using CharacterDatabaseWriterLock shard = CharacterDatabaseWriterLock.TryAcquireShard(options, "w1")!;
+        using CharacterDatabaseWriterLock realm = CharacterDatabaseWriterLock.TryAcquire(options)!; // the exclusion between them is the claim-then-probe step, not the locks
+        Assert.NotNull(shard);
+        Assert.NotNull(realm);
+        Assert.NotEqual(shard.Path, realm.Path);
+    }
+
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheRealmProbe_SeesTheRealmHolder_AndNotAShardHolder_OnEveryProvider(DatabaseProvider provider)
+    {
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        Assert.True(CharacterDatabaseWriterLock.ProbeRealmFree(options));
+
+        using (CharacterDatabaseWriterLock shard = CharacterDatabaseWriterLock.TryAcquireShard(options, "w1")!)
+        {
+            Assert.NotNull(shard);
+            Assert.True(CharacterDatabaseWriterLock.ProbeRealmFree(options)); // a worker's own shard lock is not the realm lock
+        }
+
+        CharacterDatabaseWriterLock realm = CharacterDatabaseWriterLock.TryAcquire(options)!;
+        Assert.NotNull(realm);
+        try
+        {
+            Assert.False(CharacterDatabaseWriterLock.ProbeRealmFree(options));
+            Assert.False(CharacterDatabaseWriterLock.ProbeRealmFree(options)); // probing never takes the lock, so it stays seen
+        }
+        finally { realm.Dispose(); }
+
+        Assert.True(CharacterDatabaseWriterLock.ProbeRealmFree(options));
+        using CharacterDatabaseWriterLock again = CharacterDatabaseWriterLock.TryAcquire(options)!; // the probe left nothing held
+        Assert.NotNull(again);
+    }
+
+    [Fact]
+    public void TheRealmProbe_IsTrueWhenTheDatabaseHasNoLock()
+    {
+        Assert.True(CharacterDatabaseWriterLock.ProbeRealmFree(Sqlite("Data Source=:memory:")));
+        Assert.True(CharacterDatabaseWriterLock.ProbeRealmFree(new DatabaseConnectionOptions { Provider = DatabaseProvider.MariaDb, ConnectionString = "Server=h;User=u" }));
+    }
 }
