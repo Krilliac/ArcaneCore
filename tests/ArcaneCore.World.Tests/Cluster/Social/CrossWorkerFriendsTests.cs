@@ -84,12 +84,14 @@ public sealed class CrossWorkerFriendsTests
 
             // Alice comes online on worker A: the refresh reports her, and Bob (same faction) is told FRIEND_ONLINE with her zone, level and class.
             Assert.Equal(PresenceMutationResult.Applied, directory.TryUpsert(AliceOnWorkerA(), out _));
-            Assert.Equal([(ulong)AliceId], await cross.RefreshAsync(wanted));
+            RemotePresenceChange cameOnline = Assert.Single(await cross.RefreshAsync(wanted));
+            Assert.True(cameOnline.Online);
+            Assert.Equal((ulong)AliceId, cameOnline.Guid);
             bobSession.Clear();
             carolSession.Clear();
             await world.InvokeAsync(() =>
             {
-                context.Friends.NotifyRemotePresence(ObjectGuid.Player(AliceId));
+                context.Friends.NotifyRemotePresence(cameOnline);
                 return true;
             });
 
@@ -115,23 +117,68 @@ public sealed class CrossWorkerFriendsTests
             Assert.Equal(1, list[0]);
             Assert.Contains((byte)FriendStatus.Online, list.Skip(9).Take(1));
 
-            // A level-up on worker A is a change too; an unchanged refresh is not.
-            Assert.Equal(PresenceMutationResult.Applied, directory.TryUpsert(AliceOnWorkerA(level: 11) with { PresenceVersion = 2 }, out _));
-            Assert.Equal([(ulong)AliceId], await cross.RefreshAsync(wanted));
+            // A level-up or zone change on worker A is not an online/offline transition: the cache follows silently and no SMSG_FRIEND_STATUS is sent.
+            Assert.Equal(PresenceMutationResult.Applied, directory.TryUpsert(AliceOnWorkerA(level: 11, zone: 14) with { PresenceVersion = 2 }, out _));
             Assert.Empty(await cross.RefreshAsync(wanted));
+            Assert.True(cross.TryGet(ObjectGuid.Player(AliceId), out RemoteFriendInfo moved));
+            Assert.Equal(11u, moved.Level);
+            Assert.Equal(14u, moved.Area);
 
-            // She logs out on worker A: FRIEND_OFFLINE.
+            // She logs out on worker A: FRIEND_OFFLINE to Bob, nothing to the other faction (Carol never saw her online).
             Assert.Equal(PresenceMutationResult.Applied, directory.TryRemove(AliceId, 2, 1, "worker-a"));
-            Assert.Equal([(ulong)AliceId], await cross.RefreshAsync(wanted));
+            RemotePresenceChange wentOffline = Assert.Single(await cross.RefreshAsync(wanted));
+            Assert.False(wentOffline.Online);
+            Assert.Equal(11u, wentOffline.Info.Level);
             bobSession.Clear();
+            carolSession.Clear();
             await world.InvokeAsync(() =>
             {
-                context.Friends.NotifyRemotePresence(ObjectGuid.Player(AliceId));
+                context.Friends.NotifyRemotePresence(wentOffline);
                 return true;
             });
             byte[] offline = Assert.Single(bobSession.Of(WorldOpcode.SmsgFriendStatus));
             Assert.Equal((byte)FriendsResult.Offline, offline[0]);
             Assert.Equal(ObjectGuid.Player(AliceId).Value, BitConverter.ToUInt64(offline, 1));
+            Assert.Empty(carolSession.Of(WorldOpcode.SmsgFriendStatus));
+        }
+    }
+
+    [Fact]
+    public async Task FriendAlreadyOnlineOnAnotherWorker_WhenFirstWatched_IsNotAnnounced()
+    {
+        var directory = new InMemoryRealmPresenceDirectory();
+        Assert.Equal(PresenceMutationResult.Applied, directory.TryUpsert(AliceOnWorkerA(), out _));
+        (WorldRuntime world, SocialContext context) = CreateWorld();
+        using (world)
+        {
+            var bobSession = new RecordingSession();
+            Player bob = CreatePlayer(BobId, "Bob", Race.Human, bobSession);
+            var cross = new CrossWorkerSocial(directory);
+            world.Start();
+            await world.InvokeAsync(() =>
+            {
+                world.AddPlayer(bob);
+                context.Friends.Load(bob, [new SocialEntry(AliceId, SocialFlags.Friend)]);
+                context.Friends.Remote = cross;
+                return true;
+            });
+
+            // Alice is already online when Bob's list is first watched: the cache knows her, and no "has come online" is sent.
+            ulong[] wanted = await world.InvokeAsync(() => context.Friends.RemoteFriendCandidates());
+            bobSession.Clear();
+            IReadOnlyList<RemotePresenceChange> changes = await cross.RefreshAsync(wanted);
+            Assert.Empty(changes);
+            Assert.True(cross.TryGet(ObjectGuid.Player(AliceId), out _));
+            await world.InvokeAsync(() =>
+            {
+                foreach (RemotePresenceChange change in changes)
+                {
+                    context.Friends.NotifyRemotePresence(change);
+                }
+
+                return true;
+            });
+            Assert.Empty(bobSession.Of(WorldOpcode.SmsgFriendStatus));
         }
     }
 

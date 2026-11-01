@@ -116,6 +116,7 @@ public enum RoutedWhisperOutcome
 public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger? logger = null) : IRemoteFriendPresence
 {
     private Dictionary<ulong, RemoteFriendInfo> _view = [];
+    private HashSet<ulong> _watched = [];
     private int _busy;
 
     /// <inheritdoc />
@@ -123,11 +124,12 @@ public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger
         => Volatile.Read(ref _view).TryGetValue(friend.Low, out info);
 
     /// <summary>
-    /// Reads <paramref name="wanted"/> from the directory, replaces the cache and returns the characters whose presence changed (came online, went offline, moved
-    /// zone, changed level, class or away status). Runs on the thread pool because the directory may block on the peer link; never call the directory on the world
-    /// thread. A directory failure propagates and leaves the previous cache in place.
+    /// Reads <paramref name="wanted"/> from the directory, replaces the cache and returns the real online/offline transitions of friends that were already
+    /// watched in the previous refresh. A zone, level, class or away change updates the cache silently, and a friend newly added to the watched set is not
+    /// announced (the friend list shows it). Runs on the thread pool because the directory may block on the peer link; never call the directory on the
+    /// world thread. A directory failure propagates and leaves the previous cache in place.
     /// </summary>
-    public Task<IReadOnlyList<ulong>> RefreshAsync(IReadOnlyCollection<ulong> wanted)
+    public Task<IReadOnlyList<RemotePresenceChange>> RefreshAsync(IReadOnlyCollection<ulong> wanted)
     {
         ArgumentNullException.ThrowIfNull(wanted);
         return Task.Run(() =>
@@ -144,31 +146,38 @@ public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger
             }
 
             Dictionary<ulong, RemoteFriendInfo> previous = Volatile.Read(ref _view);
-            var changed = new List<ulong>();
-            foreach ((ulong guid, RemoteFriendInfo info) in next)
+            HashSet<ulong> watched = _watched;
+            var changes = new List<RemotePresenceChange>();
+            foreach (ulong guid in wanted)
             {
-                if (!previous.TryGetValue(guid, out RemoteFriendInfo old) || old != info)
+                if (!watched.Contains(guid))
                 {
-                    changed.Add(guid);
+                    continue;
+                }
+
+                bool was = previous.TryGetValue(guid, out RemoteFriendInfo old);
+                if (next.TryGetValue(guid, out RemoteFriendInfo now))
+                {
+                    if (!was)
+                    {
+                        changes.Add(new RemotePresenceChange(guid, true, now));
+                    }
+                }
+                else if (was)
+                {
+                    changes.Add(new RemotePresenceChange(guid, false, old));
                 }
             }
 
-            foreach (ulong guid in previous.Keys)
-            {
-                if (!next.ContainsKey(guid))
-                {
-                    changed.Add(guid);
-                }
-            }
-
+            _watched = [.. wanted];
             Volatile.Write(ref _view, next);
-            return (IReadOnlyList<ulong>)changed;
+            return (IReadOnlyList<RemotePresenceChange>)changes;
         });
     }
 
     /// <summary>
-    /// One pass (world thread, from the feature's periodic timer): starts a refresh unless one is still running, then tells the listers of every friend whose presence
-    /// changed (<see cref="FriendsService.NotifyRemotePresence"/>) back on the world thread. A failing directory is logged and retried on the next pass.
+    /// One pass (world thread, from the feature's periodic timer): starts a refresh unless one is still running, then tells the listers of every friend that came
+    /// online or went offline (<see cref="FriendsService.NotifyRemotePresence"/>) back on the world thread. A failing directory is logged and retried on the next pass.
     /// </summary>
     public void Tick(WorldRuntime world, SocialContext context)
     {
@@ -180,32 +189,25 @@ public sealed class CrossWorkerSocial(IRealmPresenceDirectory directory, ILogger
         ulong[] wanted = context.Friends.RemoteFriendCandidates();
         _ = Task.Run(async () =>
         {
-            IReadOnlyList<ulong> changed = [];
+            IReadOnlyList<RemotePresenceChange> changes = [];
             try
             {
-                changed = await RefreshAsync(wanted).ConfigureAwait(false);
+                changes = await RefreshAsync(wanted).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
                 logger?.LogFault(LogLevel.Warning, "social.cross-worker-friends", ex, "Reading friend presence from the realm directory failed; retrying on the next pass.");
             }
 
-            try
+            // Post does not throw. If the world has stopped the lambda never runs and _busy stays 1, which is harmless at shutdown.
+            world.Post(() =>
             {
-                world.Post(() =>
+                Volatile.Write(ref _busy, 0);
+                foreach (RemotePresenceChange change in changes)
                 {
-                    Volatile.Write(ref _busy, 0);
-                    foreach (ulong guid in changed)
-                    {
-                        context.Friends.NotifyRemotePresence(ObjectGuid.Player((uint)guid));
-                    }
-                });
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                Volatile.Write(ref _busy, 0); // the world is gone: nothing to notify
-                logger?.LogFault(LogLevel.Debug, "social.cross-worker-friends-post", ex, "Posting friend presence changes to the world failed.");
-            }
+                    context.Friends.NotifyRemotePresence(change);
+                }
+            });
         });
     }
 

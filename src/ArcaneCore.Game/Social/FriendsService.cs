@@ -42,6 +42,12 @@ public enum FriendStatus : byte
 public readonly record struct RemoteFriendInfo(FriendStatus Status, uint Area, uint Level, uint Class, Team Team);
 
 /// <summary>
+/// A real online/offline transition of a watched friend who lives on another worker. <see cref="Info"/> is the current presence when
+/// <see cref="Online"/>, and the last cached presence (used for the visibility rule) when not.
+/// </summary>
+public readonly record struct RemotePresenceChange(ulong Guid, bool Online, RemoteFriendInfo Info);
+
+/// <summary>
 /// Non-blocking read of the characters online on other workers (a cache of realm presence). Implementations must never block the world thread:
 /// <see cref="TryGet"/> answers from memory.
 /// </summary>
@@ -381,14 +387,10 @@ public sealed class FriendsService(SocialContext context)
     /// <see cref="SocialContext.CanSeeOnline"/>; realm presence carries no GM level, so a remote staff member counts as a plain player).
     /// </summary>
     private RemoteFriendInfo? RemoteVisible(Player viewer, ObjectGuid friend)
-    {
-        if (Remote is not { } remote || !remote.TryGet(friend, out RemoteFriendInfo info))
-        {
-            return null;
-        }
+        => Remote is { } remote && remote.TryGet(friend, out RemoteFriendInfo info) && CanSeeRemote(viewer, info) ? info : null;
 
-        return viewer.Security > AccountSecurity.Player || info.Team == viewer.Team || context.World.Options.AllowTwoSideWhoList ? info : null;
-    }
+    private bool CanSeeRemote(Player viewer, RemoteFriendInfo info)
+        => viewer.Security > AccountSecurity.Player || info.Team == viewer.Team || context.World.Options.AllowTwoSideWhoList;
 
     /// <summary>
     /// Guids of the listed friends of every loaded list who are not online in this process: the characters to look up in realm presence.
@@ -412,32 +414,35 @@ public sealed class FriendsService(SocialContext context)
     }
 
     /// <summary>
-    /// A friend on another worker came online, went offline or changed zone, level or status: tells every online lister here who lists it and may see
-    /// it (FRIEND_ONLINE, or FRIEND_OFFLINE when the directory no longer lists it). A friend online in this process is skipped, its own
+    /// A watched friend on another worker really came online or went offline (like <see cref="BroadcastPresence"/>, only at login and logout; zone, level
+    /// and away changes reach the client silently through the friend list): tells every online lister here who lists it and may see it (the faction rule
+    /// of <see cref="SocialContext.CanSeeOnline"/>, applied to the last known presence for an offline). A friend online in this process is skipped, its own
     /// <see cref="BroadcastPresence"/> covers it. World thread.
     /// </summary>
-    public void NotifyRemotePresence(ObjectGuid friend)
+    public void NotifyRemotePresence(RemotePresenceChange change)
     {
-        if (!friend.IsPlayer || context.World.FindOnlinePlayer(friend) is not null)
+        if (change.Guid is 0 or > uint.MaxValue)
         {
             return;
         }
 
-        bool listed = Remote is { } remote && remote.TryGet(friend, out _);
+        ObjectGuid friend = ObjectGuid.Player((uint)change.Guid);
+        if (context.World.FindOnlinePlayer(friend) is not null)
+        {
+            return;
+        }
+
+        RemoteFriendInfo info = change.Info;
+        byte[] packet = change.Online
+            ? SocialPackets.BuildFriendStatus(FriendsResult.Online, friend, info.Status, info.Area, info.Level, info.Class)
+            : SocialPackets.BuildFriendStatus(FriendsResult.Offline, friend, FriendStatus.Offline, 0, 0, 0);
         foreach ((ObjectGuid listerGuid, PlayerSocial social) in _socials)
         {
-            if (!social.Has(friend.Low, SocialFlags.Friend) || context.World.FindOnlinePlayer(listerGuid) is not { } lister)
+            if (social.Has(friend.Low, SocialFlags.Friend)
+                && context.World.FindOnlinePlayer(listerGuid) is { } lister
+                && CanSeeRemote(lister, info))
             {
-                continue;
-            }
-
-            if (!listed)
-            {
-                lister.Session.Send(WorldOpcode.SmsgFriendStatus, SocialPackets.BuildFriendStatus(FriendsResult.Offline, friend, FriendStatus.Offline, 0, 0, 0));
-            }
-            else if (RemoteVisible(lister, friend) is { } info)
-            {
-                lister.Session.Send(WorldOpcode.SmsgFriendStatus, SocialPackets.BuildFriendStatus(FriendsResult.Online, friend, info.Status, info.Area, info.Level, info.Class));
+                lister.Session.Send(WorldOpcode.SmsgFriendStatus, packet);
             }
         }
     }
