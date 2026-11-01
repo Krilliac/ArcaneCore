@@ -10,6 +10,8 @@ using ArcaneCore.World.GameObjects;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ArcaneCore.World.Cluster.Transfer;
 
@@ -139,7 +141,8 @@ public sealed class WorkerTransferSource(
     WorldRuntime world,
     ITransferPersistence persistence,
     ITransferPlayerProbe probe,
-    TimeProvider? timeProvider = null) : ITransferSourceWorker
+    TimeProvider? timeProvider = null,
+    ILogger<WorkerTransferSource>? logger = null) : ITransferSourceWorker
 {
     /// <summary>The failure code of a suspend whose player is not online here.</summary>
     public const string ErrorPlayerNotOnline = "player-not-online";
@@ -148,6 +151,7 @@ public sealed class WorkerTransferSource(
     private readonly Dictionary<ulong, Suspension> _suspended = [];
     private readonly HashSet<Guid> _retired = [];
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly ILogger _logger = logger ?? NullLogger<WorkerTransferSource>.Instance;
 
     public WorkerNodeId WorkerId => workerId;
 
@@ -174,21 +178,27 @@ public sealed class WorkerTransferSource(
     {
         Capture captured = await world.InvokeAsync(
             () => CaptureOnWorldThread(transferId, characterGuid, targetWorkerId, targetMapId, targetInstanceId, targetPosition),
-            cancellationToken).ConfigureAwait(false);
+            CancellationToken.None).ConfigureAwait(false); // the command must not lose a race to cancellation after it removed the player
 
         if (captured.Suspension is not { } suspension)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return captured.Bundle; // blocked or already captured: nothing more to wait for
         }
 
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             await suspension.Save.WaitAsync(cancellationToken).ConfigureAwait(false);
             await persistence.FlushAsync(suspension.CharacterId, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            FaultLedger.Shared.Record("cluster.transfer-source", ex);
+            if (ex is not OperationCanceledException)
+            {
+                FaultLedger.Shared.Record("cluster.transfer-source", ex);
+            }
+
             // Not durable: the player must not stay frozen out of the world; put it back, then fail the capture.
             await RestoreAsync(suspension, CancellationToken.None).ConfigureAwait(false);
             throw;
@@ -223,9 +233,12 @@ public sealed class WorkerTransferSource(
                 throw new InvalidOperationException($"character {characterGuid} is suspended by transfer '{found.TransferId}', not '{transferId}'");
             }
 
+            // The coordinator's per-character token need not equal the world-scope token captured here. An abort must always put back a player
+            // this worker froze for this transfer, so a difference is logged, never a reason to leave the player out of the world.
             if (!Equals(found.Token, ownershipToken))
             {
-                throw new InvalidOperationException($"transfer '{transferId}' resumes under a different ownership token than it captured");
+                _logger.LogWarning("Transfer {TransferId} resumes character {CharacterGuid} under ownership token {Resumed}, captured under {Captured}; restoring anyway",
+                    transferId, characterGuid, ownershipToken, found.Token);
             }
 
             suspension = found;
@@ -260,9 +273,12 @@ public sealed class WorkerTransferSource(
                 throw new InvalidOperationException($"character {characterGuid} is suspended by transfer '{found.TransferId}', not '{transferId}'");
             }
 
+            // Same as resume: the coordinator's token is authoritative for the commit, so a difference from the captured world token is logged
+            // and the committed roll-forward still completes.
             if (!Equals(found.Token, supersededToken))
             {
-                throw new InvalidOperationException($"transfer '{transferId}' retires under a token that is not the claim this worker captured");
+                _logger.LogWarning("Transfer {TransferId} retires character {CharacterGuid} under superseded token {Superseded}, captured under {Captured}",
+                    transferId, characterGuid, supersededToken, found.Token);
             }
 
             // Release the claim before refusing saves: from here no path can resume or re-add the entity.
@@ -303,13 +319,14 @@ public sealed class WorkerTransferSource(
         CharacterOwnershipToken token = player.CharacterOwnership ?? world.CharacterOwnership
             ?? throw new InvalidOperationException("the source world holds no characters ownership");
 
-        probe.CloseInterruptible(player);
         TransferActiveBlockers blockers = probe.Inspect(player);
         PlayerTransferBundle bundle = BuildBundle(transferId, player, map, token, targetWorkerId, targetMapId, targetInstanceId, targetPosition, blockers);
         if (blockers.HasAny)
         {
             return new Capture(bundle, null); // refused: the player stays in the world untouched
         }
+
+        probe.CloseInterruptible(player);
 
         // Freeze: snapshot, start the settlement save, suppress later snapshots, leave the map; one world-thread command, so no tick runs between.
         CharacterState state = player.CreateSnapshot(world.NowMs);
@@ -322,7 +339,8 @@ public sealed class WorkerTransferSource(
 
         try
         {
-            world.RemovePlayer(player);
+            // Not RemovePlayer: that is the logout path (PlayerLoggingOut, OnLogout, features untrack the player) and abort could not undo it.
+            world.DetachPlayerForTransfer(player);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

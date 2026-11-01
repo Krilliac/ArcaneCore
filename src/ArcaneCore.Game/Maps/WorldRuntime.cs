@@ -511,6 +511,27 @@ public sealed partial class WorldRuntime : IDisposable
     }
 
     /// <summary>
+    /// Take a player out of its map and the online registry for a cluster transfer (world thread), without the logout path: no
+    /// <see cref="PlayerLoggingOut"/>, no <c>OnLogout</c> script hook and no snapshot is queued (the transfer saves under its own hold). The
+    /// player object keeps all its feature state, so <see cref="AddPlayer"/> after an aborted transfer brings it back whole. Returns false
+    /// when <paramref name="player"/> is not the online entity of its guid.
+    /// </summary>
+    public bool DetachPlayerForTransfer(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (!_online.TryGetValue(player.Guid, out Player? current) || !ReferenceEquals(current, player))
+        {
+            return false;
+        }
+
+        player.Map?.RemovePlayer(player);
+        _onlineByName.TryRemove(new KeyValuePair<string, Player>(player.Name, player));
+        _online.TryRemove(new KeyValuePair<ObjectGuid, Player>(player.Guid, player));
+        _autosaveDue.Remove(player.Guid);
+        return true;
+    }
+
+    /// <summary>
     /// Complete a logout (world thread): save and remove the player, then return its client to
     /// the character screen (vmangos WorldSession::LogoutPlayer → SMSG_LOGOUT_COMPLETE).
     /// </summary>
