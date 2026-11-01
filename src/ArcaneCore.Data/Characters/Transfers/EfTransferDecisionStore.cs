@@ -1,4 +1,3 @@
-using System.Text.Json;
 using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
@@ -26,7 +25,6 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     /// <summary>The characters ownership scope a whole-World handoff moves (<see cref="ICharacterOwnershipStore"/>).</summary>
     public const string WorldScope = "world";
 
-    private static readonly JsonSerializerOptions BundleJson = new(JsonSerializerDefaults.General);
     private readonly Func<long> _clock = clockUtcMs ?? (() => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
     // ---------------------------------------------------------------- per-character ownership
@@ -375,7 +373,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
 
             await EnsureOwnerAsync(db, row.CharacterGuid, SourceToken(row), ct).ConfigureAwait(false);
             if (capturedBundle is not null)
-                row.Bundle = JsonSerializer.Serialize(capturedBundle, BundleJson);
+                row.Bundle = PlayerTransferBundleJson.Serialize(capturedBundle);
             if (nextStage == PlayerTransferStage.SuspendAndCapture && row.Bundle is null)
                 throw new InvalidOperationException($"Stage {PlayerTransferStage.SuspendAndCapture} requires a non-null PlayerTransferBundle.");
 
@@ -952,7 +950,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         DecisionState: (PlayerTransferDecisionState)row.State,
         SourceOwnershipToken: SourceToken(row),
         TargetOwnershipToken: TargetToken(row),
-        CapturedBundle: row.Bundle is null ? null : JsonSerializer.Deserialize<PlayerTransferBundle>(row.Bundle, BundleJson),
+        CapturedBundle: row.Bundle is null ? null : PlayerTransferBundleJson.Deserialize(row.Bundle),
         AbortReason: row.AbortReason,
         UpdatedAtUtcMs: row.UpdatedAtUtcMs);
 

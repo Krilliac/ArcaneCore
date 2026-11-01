@@ -50,4 +50,14 @@ internal enum GatewayWorkerFrameType : byte
     TransferCancel = 25,
     TransferCommit = 26,
     TransferAck = 27,
+
+    // Unified control channel (contract 5, design _wf/handoff-control-DESIGN.md section 2, ClusterControlWire): the gateway coordinates both the
+    // whole-World handoff and per-player transfers by sending ControlRequest to a worker, which answers ControlReply on the same link. A worker
+    // asks the gateway to start an operation with ControlSubmit (answered by ControlSubmitReply); the gateway tells a worker about an outcome with
+    // ControlNotice. Frames 24-27 stay as they are for the worker-hosted mode.
+    ControlRequest = 28,
+    ControlReply = 29,
+    ControlSubmit = 30,
+    ControlSubmitReply = 31,
+    ControlNotice = 32,
 }
