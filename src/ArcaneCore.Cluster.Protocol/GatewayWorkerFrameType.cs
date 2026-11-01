@@ -27,4 +27,8 @@ internal enum GatewayWorkerFrameType : byte
 
     // The gateway's Warden posture, sent once after admission and before any SessionOpen (gateway to worker only).
     WardenPosture = 19,
+
+    // The gateway's monotonic clock reading, sent once right after admission (gateway to worker only): the worker derives the clock offset
+    // it uses to translate the receive time stamped on every SessionClientPacket (docs/areas/anticheat.md).
+    LinkClock = 20,
 }
