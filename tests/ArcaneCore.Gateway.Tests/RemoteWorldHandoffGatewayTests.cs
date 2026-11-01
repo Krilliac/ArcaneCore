@@ -427,6 +427,7 @@ public sealed class RemoteWorldHandoffGatewayTests
 
         Assert.Equal(TimeSpan.FromSeconds(1), timeouts.For(ControlVerb.Describe));
         Assert.Equal(TimeSpan.FromSeconds(2), timeouts.For(ControlVerb.Freeze));
+        Assert.Equal(TimeSpan.FromSeconds(2), timeouts.For(ControlVerb.Suspend)); // Suspend has no key of its own: it uses Gateway:Control:Freeze
         Assert.Equal(TimeSpan.FromSeconds(3), timeouts.For(ControlVerb.Flush));
         Assert.Equal(TimeSpan.FromSeconds(4), timeouts.For(ControlVerb.Activate));
         Assert.Equal(TimeSpan.FromSeconds(5), timeouts.For(ControlVerb.Promote));

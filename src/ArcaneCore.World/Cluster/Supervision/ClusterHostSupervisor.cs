@@ -1311,6 +1311,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
                     && string.Equals(standbyEntry.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
                 {
                     SetStandbyUnderLock(standbyEntry, true);
+                    MoveRealmRoleUnderLock(standbyEntry);
                 }
             }
         }
@@ -1609,6 +1610,42 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         entry.Config.Arguments = WithStandbyArgument(entry.Config.Arguments, standby);
     }
 
+    /// <summary>
+    /// Blue/green swap of the realm role (Q3 of _wf/handoff-control-DESIGN.md): when <paramref name="demoted"/> becomes a standby while it holds the supervisor
+    /// <c>RealmId</c> (the lease-holder slot), the id moves to the slot's other worker, the process that is promoted to the active world in its place, so a lifecycle command
+    /// for the realm (<see cref="HandleLifecycleRequest"/> forwards by <c>Config.RealmId</c>) reaches the world that is serving. The slot's two children are the workers that
+    /// name the same shard (<c>Cluster:Fencing:Shard</c>, which <c>tools/ops/live/start-cluster.ps1 -Standby</c> gives both): the shard is the supervisor's only knowledge of
+    /// which standby stands behind which world. The moved-to child keeps the environment it was launched with (its own realm id stays 0 until its next launch); only the
+    /// supervisor's routing follows the swap, which is all a forwarded lifecycle line needs. No shard, or no peer without a realm id, leaves the id where it is. Call under <c>_gate</c>.
+    /// </summary>
+    private void MoveRealmRoleUnderLock(ManagedEntry demoted)
+    {
+        int realmId = demoted.Config.RealmId;
+        if (realmId <= 0 || !string.Equals(demoted.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        string shard = ShardOf(demoted.Config);
+        if (shard.Length == 0)
+            return;
+
+        ManagedEntry? peer = _entries.Values
+            .Where(e => !ReferenceEquals(e, demoted)
+                && e.Config.RealmId == 0
+                && string.Equals(e.Config.Role, SupervisedRoles.Worker, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(ShardOf(e.Config), shard, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(e => e.Config.Name, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+        if (peer is null)
+            return;
+
+        peer.Config.RealmId = realmId;
+        demoted.Config.RealmId = 0;
+        _logger.LogInformation("Supervisor moved realm {RealmId} from {Demoted} (now a standby) to {Promoted}", realmId, demoted.Config.Name, peer.Config.Name);
+    }
+
+    private static string ShardOf(SupervisedProcessConfig config)
+        => ClusterSupervisorConfigChecks.ParseArguments(config.Arguments ?? string.Empty).GetValueOrDefault("Cluster:Fencing:Shard")?.Trim() ?? string.Empty;
+
     /// <summary>The entry whose configured name is <paramref name="name"/>, or whose name reads as <paramref name="name"/> on the protocol line (<see cref="SupervisorProtocol.Sanitize"/>). Call under <c>_gate</c>.</summary>
     private ManagedEntry? FindEntryByNameUnderLock(string name)
     {
@@ -1646,7 +1683,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            SetStandbyUnderLock(_entries[configuredName], standby);
+            ManagedEntry restarted = _entries[configuredName];
+            SetStandbyUnderLock(restarted, standby);
+            if (standby)
+                MoveRealmRoleUnderLock(restarted);
+
             PersistChildStateUnderLock(); // the swapped role survives a supervisor restart even if the launch below is refused
         }
 

@@ -660,7 +660,7 @@ public sealed class LiveLaunchScriptTests : IDisposable
             Assert.Equal(node, ArgumentValue(arguments, "Cluster:Worker:NodeId"));
         }
 
-        // One standby per world: its own node id, owner node and ports, the shard of the world it stands behind, no hang watch, the gateway's start-order group.
+        // One standby per world: its own node id, owner node and ports, the shard of the world it stands behind, the worlds' hang timeout and capture (the promoted standby is the active world), the gateway's start-order group.
         Dictionary<string, string> standbys = ChildArguments(output, "standby-[A-Za-z0-9]+");
         Assert.Equal(new[] { "standby-EK", "standby-Kalimdor", "standby-instances" }.Order(StringComparer.Ordinal), standbys.Keys.Order(StringComparer.Ordinal));
         var ports = new HashSet<string>(StringComparer.Ordinal);
@@ -676,7 +676,8 @@ public sealed class LiveLaunchScriptTests : IDisposable
             Assert.Equal("true", ArgumentValue(arguments, "Database:Upgrade:ValidateOnly"));
             Assert.Equal(ArgumentValue(worlds["worker-" + slug], "Cluster:Worker:OwnedMaps"), ArgumentValue(arguments, "Cluster:Worker:OwnedMaps"));
             Assert.Contains("      Cluster__Supervisor__Processes__" + key + "__Name=standby:" + slug, output, StringComparison.Ordinal);
-            Assert.Contains("      Cluster__Supervisor__Processes__" + key + "__HangTimeoutSeconds=0", output, StringComparison.Ordinal);
+            Assert.Contains("      Cluster__Supervisor__Processes__" + key + "__HangTimeoutSeconds=120", output, StringComparison.Ordinal);
+            Assert.Contains("      Cluster__Supervisor__Processes__" + key + "__HangCapture=Dump", output, StringComparison.Ordinal);
             Assert.Contains("      Cluster__Supervisor__Processes__" + key + "__StartOrder=4", output, StringComparison.Ordinal);
             Assert.True(ports.Add(ArgumentValue(arguments, "Cluster:Worker:Port")), "a standby link port repeats");
             Assert.True(ports.Add(ArgumentValue(arguments, "World:Port")), "a standby client port repeats");
@@ -740,6 +741,86 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("--Gateway:Transfers:Enabled=true", gateway, StringComparison.Ordinal);
         // The supervisor children keep their keys as names without -Standby.
         Assert.Contains("      Cluster__Supervisor__Processes__worker-EK__Name=worker-EK", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void StartCluster_Plan_Split_Standby_EveryChildGetsTheHangTimeout_AndTheNoteNamesTheConfiguredName()
+    {
+        BuildBin(("ArcaneCore.Kernel.dll", 0x107, "Debug"));
+        (int code, string output, _) = RunLauncher("start-cluster.ps1", ["-Plan", "-Topology", "Split", "-Standby", "-HangTimeoutSeconds", "240", "-PgSecretFile", $"'{Q(WritePgSecretFile())}'"], Secret);
+
+        Assert.Equal(0, code);
+        // Every supervised child, the three standbys included, has the one -HangTimeoutSeconds: after a handoff the standby process is the active world.
+        System.Text.RegularExpressions.MatchCollection timeouts = System.Text.RegularExpressions.Regex.Matches(output, "^ {6}Cluster__Supervisor__Processes__[A-Za-z0-9_:-]+__HangTimeoutSeconds=(\\d+)\\r?$", System.Text.RegularExpressions.RegexOptions.Multiline);
+        Assert.Equal(8, timeouts.Count);
+        Assert.All(timeouts, match => Assert.Equal("240", match.Groups[1].Value));
+
+        // The supervisor sets ARCANECORE_SUPERVISED_CHILD to the child's configured Name (node id with -Standby), not to the settings key the plan shows next to it.
+        Assert.Contains("ARCANECORE_SUPERVISED_CHILD=worker:EK ", output, StringComparison.Ordinal);
+        Assert.Contains("ARCANECORE_SUPERVISED_CHILD=standby:Kalimdor ", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("ARCANECORE_SUPERVISED_CHILD=worker-EK", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("ARCANECORE_SUPERVISED_CHILD=standby-EK", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void TestLiveCommandLineHasToken_MatchesWholeWordsOnly()
+    {
+        string output = RunPwsh("""
+            $line = 'C:\bin\ArcaneCore.World.exe --World:Port=8085 --Cluster:Worker:NodeId=worker:EK2 --Cluster:Worker:Standby=true'
+            "ek: $(Test-LiveCommandLineHasToken -CommandLine $line -Token '--Cluster:Worker:NodeId=worker:EK')"
+            "ek2: $(Test-LiveCommandLineHasToken -CommandLine $line -Token '--Cluster:Worker:NodeId=worker:EK2')"
+            "first: $(Test-LiveCommandLineHasToken -CommandLine $line -Token 'C:\bin\ArcaneCore.World.exe')"
+            "last: $(Test-LiveCommandLineHasToken -CommandLine $line -Token '--Cluster:Worker:Standby=true')"
+            "null: $(Test-LiveCommandLineHasToken -CommandLine $null -Token 'x')"
+            """);
+
+        Assert.Contains("ek: False", output, StringComparison.Ordinal); // worker:EK must not match worker:EK2
+        Assert.Contains("ek2: True", output, StringComparison.Ordinal);
+        Assert.Contains("first: True", output, StringComparison.Ordinal);
+        Assert.Contains("last: True", output, StringComparison.Ordinal);
+        Assert.Contains("null: False", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void WaitLiveDaemonUp_PassesTheArgumentTokenOn_OnlyWhenGiven_SoTheStandbyWaitCannotPickAnotherWorld()
+    {
+        string output = RunPwsh("""
+            $hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} } # -WindowStyle is Windows-only
+            $long = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep 120' -PassThru @hide
+            $script:seen = @()
+            function Find-LiveChildProcess { param($ParentPid, $ImageName, $ArgumentToken) $script:seen += "[$ArgumentToken]"; return $long }
+            try {
+                $null = Wait-LiveDaemonUp -Label 'standby' -ParentPid $PID -ImageName 'x.exe' -TimeoutSec 30 -SettleSeconds 0 -ArgumentToken '--Cluster:Worker:NodeId=standby:EK' -FollowRelaunch
+                $null = Wait-LiveDaemonUp -Label 'realm' -ParentPid $PID -ImageName 'x.exe' -TimeoutSec 30 -SettleSeconds 0 -FollowRelaunch
+            } finally { $long.Kill() }
+            "calls: $($script:seen -join ',')"
+            """);
+
+        Assert.Contains("calls: [--Cluster:Worker:NodeId=standby:EK],[]", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void FindLiveChildProcess_WithAnArgumentToken_PicksTheChildWhoseCommandLineCarriesIt()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // Find-LiveChildProcess reads Win32_Process through CIM
+        }
+
+        string output = RunPwsh("""
+            $hide = @{ WindowStyle = 'Hidden' }
+            $a = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep','120','#','--Cluster:Worker:NodeId=worker:EK' -PassThru @hide
+            $b = Start-Process pwsh -ArgumentList '-NoProfile','-Command','Start-Sleep','120','#','--Cluster:Worker:NodeId=standby:EK' -PassThru @hide
+            try {
+                Start-Sleep -Seconds 2 # let both command lines settle in the process table
+                $foundB = Find-LiveChildProcess -ParentPid $PID -ImageName 'pwsh.exe' -ArgumentToken '--Cluster:Worker:NodeId=standby:EK'
+                $foundA = Find-LiveChildProcess -ParentPid $PID -ImageName 'pwsh.exe' -ArgumentToken '--Cluster:Worker:NodeId=worker:EK'
+                $none = Find-LiveChildProcess -ParentPid $PID -ImageName 'pwsh.exe' -ArgumentToken '--Cluster:Worker:NodeId=worker:EK2'
+                "b: $($foundB.Id -eq $b.Id) a: $($foundA.Id -eq $a.Id) none: $($null -eq $none)"
+            } finally { $a.Kill(); $b.Kill() }
+            """);
+
+        Assert.Contains("b: True a: True none: True", output, StringComparison.Ordinal);
     }
 
     [PwshFact]

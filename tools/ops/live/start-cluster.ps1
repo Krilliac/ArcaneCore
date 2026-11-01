@@ -105,8 +105,11 @@
                 Gateway:Workers:<i>:StandbyNodeId/StandbyAddress/StandbyPort. A standby is started with Cluster:Worker:Standby=true and the shard of the
                 world it stands behind (Cluster:Fencing:Shard=worker:<slug>, so its promotion takes over that world's durable scope; it has its own
                 OwnerNode and NodeId), claims and locks nothing, and is validate-only for the schema. Standbys start in the gateway's start-order group and run
-                without a hang watch. The supervisor children of the worlds are then named by node id (worker:EK, ...) instead of the key, because
-                the gateway asks the supervisor to relaunch a retired world as the slot's next standby ("restart by child name"). The gateway needs the
+                with the same -HangTimeoutSeconds and hang capture as the worlds (the promoted standby is the active world afterwards; the watch is armed by its first
+                world-tick beat, and a standby that never beats is not killed for silence). Their start is waited for by node id, not by image, so the wait cannot
+                pick another World child. The supervisor children of the worlds are then named by node id (worker:EK, ...) instead of the key, because
+                the gateway asks the supervisor to relaunch a retired world as the slot's next standby ("restart by child name"); when it does, the supervisor moves the
+                realm role (RealmId, the lifecycle-forwarding target) to the slot's other world, matched by the shared Cluster:Fencing:Shard. The gateway needs the
                 characters database (it already inherits the PostgreSQL environment; validate-only, a least-privilege role limited to cluster_world_handoff,
                 cluster_transfer_* and character_ownership is enough).
     -Transfers  Per-player transfers between workers (a teleport to a map another worker owns): every world gets Cluster:Worker:Transfers:Enabled=true
@@ -312,11 +315,11 @@ $debuggerScript = Join-Path $diagDir 'attach-debugger.ps1'
 # One entry per supervised child: key -> settings. Arguments are command-line tokens of that child (a daemon's command line beats its
 # environment, so each child gets its own log file and the World children switch the inherited Cluster:Supervisor:Enabled off).
 $children = [ordered]@{}
-function Add-Child([string]$Key, [string]$Role, [string]$Image, [int]$Order, [string[]]$ExtraArguments, [int]$ChildRealmId, [int]$Port = 0, [string]$Maps = '', [bool]$Capture = $false, [string]$DisplayName = '', [bool]$NoHangWatch = $false) {
+function Add-Child([string]$Key, [string]$Role, [string]$Image, [int]$Order, [string[]]$ExtraArguments, [int]$ChildRealmId, [int]$Port = 0, [string]$Maps = '', [bool]$Capture = $false, [string]$DisplayName = '', [string]$WaitToken = '') {
     $log = Get-LiveLogSettings -LiveHome $LiveHome -LiveProfile $LiveProfile -LogStem $Key
     $children[$Key] = [pscustomobject]@{
         Key = $Key; Role = $Role; Executable = (Join-Path $bin $Image); Order = $Order; RealmId = $ChildRealmId
-        Port = $Port; Maps = $Maps; Capture = ($Capture -or $ChildRealmId -gt 0); DisplayName = $DisplayName; NoHangWatch = $NoHangWatch
+        Port = $Port; Maps = $Maps; Capture = ($Capture -or $ChildRealmId -gt 0); DisplayName = $DisplayName; WaitToken = $WaitToken
         Arguments = ConvertTo-LiveArgumentString (@(ConvertTo-LiveConfigArguments $log) + @($ExtraArguments))
         LogFile = Join-Path (Join-Path $LiveHome 'logs') "$Key.console.log"
     }
@@ -361,7 +364,7 @@ if ($split) {
         }
         if ($Transfers) { $splitArgs += '--Cluster:Worker:Transfers:Enabled=true' }
         # With -Standby the supervisor child is named by node id: the gateway asks the supervisor to relaunch a retired world by that name.
-        Add-Child $world.Key 'worker' 'ArcaneCore.World.exe' $order $splitArgs $(if ($isLeaseHolder) { $RealmId } else { 0 }) $world.ClientPort ($world.Maps -join ',') $true $(if ($Standby) { $world.NodeId } else { '' })
+        Add-Child $world.Key 'worker' 'ArcaneCore.World.exe' $order $splitArgs $(if ($isLeaseHolder) { $RealmId } else { 0 }) $world.ClientPort ($world.Maps -join ',') $true $(if ($Standby) { $world.NodeId } else { '' }) "--Cluster:Worker:NodeId=$($world.NodeId)"
         $order++
     }
     if ($Standby) {
@@ -377,7 +380,9 @@ if ($split) {
                 "--Cluster:Worker:OwnedMaps=$($world.Maps -join ',')", "--Cluster:Worker:AllowInstanceMaps=$(([string]$world.AllowInstanceMaps).ToLowerInvariant())",
                 '--Cluster:Worker:Standby=true', '--Cluster:Worker:Handoff:Enabled=true', '--Database:Upgrade:ValidateOnly=true', '--Cluster:Node:Role=MapWorker')
             if ($Transfers) { $standbyArgs += '--Cluster:Worker:Transfers:Enabled=true' }
-            Add-Child $standbyWorld.Key 'worker' 'ArcaneCore.World.exe' $order $standbyArgs 0 0 '' $false $standbyWorld.NodeId $true
+            # A standby gets the normal hang timeout and hang capture: after a handoff the same process is the active world, and the supervisor's hang watch arms on its first
+            # world-tick beat (a standby that never beats is only warned about once, never killed for silence).
+            Add-Child $standbyWorld.Key 'worker' 'ArcaneCore.World.exe' $order $standbyArgs 0 0 '' $true $standbyWorld.NodeId "--Cluster:Worker:NodeId=$($standbyWorld.NodeId)"
         }
     }
     $loginNode = ($splitWorlds | Where-Object { $_.Slug -eq $LeaseHolder }).NodeId
@@ -415,7 +420,7 @@ foreach ($child in $children.Values) {
     $clusterEnvironment[$prefix + 'LogFilePath'] = $child.LogFile
     $clusterEnvironment[$prefix + 'Console'] = $ChildConsole
     $clusterEnvironment[$prefix + 'StartOrder'] = [string]$child.Order
-    $clusterEnvironment[$prefix + 'HangTimeoutSeconds'] = if ($child.NoHangWatch) { '0' } else { [string]$HangTimeoutSeconds }
+    $clusterEnvironment[$prefix + 'HangTimeoutSeconds'] = [string]$HangTimeoutSeconds
     if ($child.RealmId -gt 0) { $clusterEnvironment[$prefix + 'RealmId'] = [string]$child.RealmId }
     if ($child.Capture) { $clusterEnvironment[$prefix + 'HangCapture'] = $HangCapture }
     if ($child.Maps) { $clusterEnvironment[$prefix + 'Maps'] = $child.Maps }
@@ -455,7 +460,7 @@ function New-ChildStep($Child, [int]$Port) {
         Command     = $Child.Arguments
         Environment = $null
         Wait        = $(if ($Port -gt 0) { "$name alive as a child of the supervisor and listening on port $Port (timeout $StartTimeoutSec s), then AboveNormal priority" } else { "$name alive as a child of the supervisor for 3 s (a standby opens no client listener until it is promoted; timeout $StartTimeoutSec s), then AboveNormal priority" })
-        Note        = "working directory is the profile; the supervisor adds ARCANECORE_SUPERVISED_CHILD=$($Child.Key), ARCANECORE_SUPERVISOR_PROTOCOL=1, a per-run ARCANECORE_SUPERVISOR_TOKEN$(if ($Child.RealmId -gt 0) { ", ARCANECORE_SUPERVISED_REALM_ID=$($Child.RealmId)" }), and the child inherits the supervisor console's environment"
+        Note        = "working directory is the profile; the supervisor adds ARCANECORE_SUPERVISED_CHILD=$(if ($Child.DisplayName) { $Child.DisplayName } else { $Child.Key }) (the child's configured Name), ARCANECORE_SUPERVISOR_PROTOCOL=1, a per-run ARCANECORE_SUPERVISOR_TOKEN$(if ($Child.RealmId -gt 0) { ", ARCANECORE_SUPERVISED_REALM_ID=$($Child.RealmId)" }), and the child inherits the supervisor console's environment"
     }
 }
 
@@ -526,7 +531,7 @@ Write-Host "supervisor is up: pid $($supervisor.Id)"
 $running = @($supervisor)
 foreach ($child in $children.Values) {
     $port = $child.Port
-    $process = Wait-LiveDaemonUp -Label "child '$($child.Key)'" -ParentPid $supervisor.Id -ImageName ([IO.Path]::GetFileName($child.Executable)) -Port $port -TimeoutSec $StartTimeoutSec -WatchPid $supervisor.Id -FollowRelaunch
+    $process = Wait-LiveDaemonUp -Label "child '$($child.Key)'" -ParentPid $supervisor.Id -ImageName ([IO.Path]::GetFileName($child.Executable)) -Port $port -TimeoutSec $StartTimeoutSec -WatchPid $supervisor.Id -ArgumentToken $child.WaitToken -FollowRelaunch
     Write-Host "child '$($child.Key)' is up: pid $($process.Id), port $port"
     $running += $process
 }

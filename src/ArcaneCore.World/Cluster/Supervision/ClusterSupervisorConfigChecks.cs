@@ -69,6 +69,7 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
         var ownerNodes = new Dictionary<string, string>(StringComparer.Ordinal);
         var nodeIds = new Dictionary<string, string>(StringComparer.Ordinal);
         var shards = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var standbyShards = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach ((string key, SupervisedProcessConfig process) in worlds)
         {
             string path = $"{ClusterSupervisorOptions.SectionName}:Processes:{key}";
@@ -119,11 +120,25 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                 // A standby (--Cluster:Worker:Standby=true) deliberately names the shard of the active world it takes over from (Cluster:Fencing:Shard, so its promotion claims the same durable scope);
                 // it claims and locks nothing until then, so it is not a second claimant of that shard (tools/ops/live/start-cluster.ps1 -Standby).
                 bool isStandby = bool.TryParse(args.GetValueOrDefault("Cluster:Worker:Standby") ?? configuration["Cluster:Worker:Standby"], out bool standbyFlag) && standbyFlag;
-                if (Enum.TryParse(scopeText, ignoreCase: true, out CharacterFencingScope scopeValue) && Enum.IsDefined(scopeValue) && scopeValue == CharacterFencingScope.Worker && !isStandby) // names and numbers, as the options binder reads them
+                if (Enum.TryParse(scopeText, ignoreCase: true, out CharacterFencingScope scopeValue) && Enum.IsDefined(scopeValue) && scopeValue == CharacterFencingScope.Worker) // names and numbers, as the options binder reads them
                 {
                     string shardText = args.GetValueOrDefault("Cluster:Fencing:Shard") ?? configuration["Cluster:Fencing:Shard"] ?? string.Empty;
                     string shard = (string.IsNullOrWhiteSpace(shardText) ? nodeId : shardText).Trim();
-                    if (shards.TryGetValue(shard, out other))
+                    if (isStandby)
+                    {
+                        // Two standbys on one shard would both try to take over the same world; they are compared like active shards (ignoring case).
+                        if (standbyShards.TryGetValue(shard, out other))
+                        {
+                            yield return new ConfigIssue(ConfigSeverity.Error, $"{path}:Arguments",
+                                $"standby children '{other}' and '{key}' both stand behind the Cluster:Fencing:Scope=Worker shard '{shard}' (shard ids are compared ignoring case), so a handoff could not tell which one takes the world over.",
+                                "give each standby the shard of exactly one active world (--Cluster:Fencing:Shard=<that world's shard>)");
+                        }
+                        else
+                        {
+                            standbyShards[shard] = key;
+                        }
+                    }
+                    else if (shards.TryGetValue(shard, out other))
                     {
                         yield return new ConfigIssue(ConfigSeverity.Error, $"{path}:Arguments",
                             $"world children '{other}' and '{key}' share the Cluster:Fencing:Scope=Worker shard '{shard}' (shard ids are compared ignoring case), so they would claim the same durable scope and shard lock.",
@@ -136,12 +151,23 @@ public sealed class ClusterSupervisorConfigChecks : IConfigCheck
                 }
             }
         }
+
+        // A standby that names a shard no active world uses would promote into a durable scope nothing else holds (and nothing hands over to it).
+        foreach ((string standbyShard, string standbyKey) in standbyShards)
+        {
+            if (!shards.ContainsKey(standbyShard))
+            {
+                yield return new ConfigIssue(ConfigSeverity.Error, $"{ClusterSupervisorOptions.SectionName}:Processes:{standbyKey}:Arguments",
+                    $"standby child '{standbyKey}' names the shard '{standbyShard}', but no active world child uses that shard, so it has no world to stand behind.",
+                    "set the standby's --Cluster:Fencing:Shard to the shard (--Cluster:Fencing:Shard, else --Cluster:Worker:NodeId) of the active world it is to take over from");
+            }
+        }
     }
 
     private static readonly char[] WhitespaceSeparators = [' ', '\t', '\r', '\n'];
 
     /// <summary>The <c>--Key=value</c> tokens of a child's command line (whitespace separated, later tokens win, keys case-insensitive); other tokens are ignored.</summary>
-    private static Dictionary<string, string> ParseArguments(string arguments)
+    internal static Dictionary<string, string> ParseArguments(string arguments)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (string token in arguments.Split(WhitespaceSeparators, StringSplitOptions.RemoveEmptyEntries))
