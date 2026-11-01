@@ -30,6 +30,7 @@ public sealed class NecropolisTeardownTests
     private const uint NecropolisGuid = 9101;
     private const uint NearObjectGuid = 9500;
     private const uint FarObjectGuid = 9501;
+    private const int TanarisEvent = 91;
     private const long StartUnix = 1_800_000_000;
 
     private sealed class StateStore : IScourgeInvasionStateStore
@@ -55,9 +56,14 @@ public sealed class NecropolisTeardownTests
             => Task.FromResult(false);
     }
 
-    private sealed class EmptyEvents : IGameEventDataStore
+    /// <summary>Tanaris (zone 440, map 1, event 91): the Health spawn is bound to the zone's event, which is how the feature resolves its zone.</summary>
+    private sealed class ZoneEvents : IGameEventDataStore
     {
-        public Task<GameEventContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(GameEventContent.Empty);
+        public Task<GameEventContent> LoadAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new GameEventContent(
+                [new GameEventRecord(ScourgeInvasionCatalog.MainEvent, 0, 525600, 1, 0, 0, "Scourge Invasion"),
+                 .. Enumerable.Range(90, 10).Select(id => new GameEventRecord((uint)id, 0, 525600, 1, 0, 0, $"Scourge {id}"))],
+                [], [new GameEventSpawnRecord(HealthGuid, TanarisEvent)], [], [], [], []));
         public Task SetDisabledAsync(uint entry, bool disabled, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
@@ -94,7 +100,7 @@ public sealed class NecropolisTeardownTests
             var services = new ServiceCollection();
             services.AddSingleton(store);
             services.AddScoped<IScourgeInvasionStateStore>(sp => sp.GetRequiredService<StateStore>());
-            services.AddScoped<IGameEventDataStore, EmptyEvents>();
+            services.AddScoped<IGameEventDataStore, ZoneEvents>();
             services.AddSingleton(sp => new GameEventFeature(sp, NullLogger<GameEventFeature>.Instance));
             services.AddSingleton(sp => new ScourgeInvasionFeature(sp.GetRequiredService<IServiceScopeFactory>(),
                 sp.GetRequiredService<GameEventFeature>(), NullLogger<ScourgeInvasionFeature>.Instance));
@@ -133,6 +139,11 @@ public sealed class NecropolisTeardownTests
             invasion.StoreOffload = work => work(); // the fake store completes synchronously: apply in the same tick
             invasion.Attach(_world);
             Run(2); // the world tick installs the invasion AIs
+            // Two long ticks (as in ScourgeInvasionChoreographyTests): the first full refresh loads the state, starts the invasion events
+            // (the Tanaris event spawns the Health unit) and, after a restart, tears the saved destroyed Necropolises down again.
+            _world.RunTick(5_000);
+            _world.RunTick(5_000);
+            Run(2);
             var player = new Player(new CharacterRecord
             {
                 Id = 7, AccountId = 1, Name = "Watcher", Race = (byte)Race.Human, Class = (byte)Class.Warrior,

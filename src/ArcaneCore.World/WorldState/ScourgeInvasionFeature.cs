@@ -309,7 +309,9 @@ public sealed class ScourgeInvasionFeature(IServiceScopeFactory scopes, GameEven
         if (!_hasStore || creature.Entry != ScourgeInvasionCatalog.NecropolisHealth) return;
         // NecropolisHealthAI::JustDied (scourge_invasion.cpp:402-405, :449-457): the Necropolis (16401) and its objects are taken down and
         // the Health unit leaves the world; none of them comes back until the zone's next attack spawns them again. The delay lets this
-        // death hook finish before the unit's corpse goes.
+        // death hook finish before the unit's corpse goes. Order: the 10-year respawn row is stored here, the kill row only queued below;
+        // after a crash between the two the Health spawn stays dead without a recorded kill, which a zone restart repairs. Divergence:
+        // vmangos removes the Health unit only when a Necropolis is found in range (SpellHitTarget); the port always removes it.
         if (system is not null)
         {
             system.RemoveWithoutRespawn(creature, 1);
