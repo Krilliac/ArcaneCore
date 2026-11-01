@@ -41,6 +41,13 @@ public enum WardenCheckKind
 
     /// <summary>GET_LUA_VARIABLE: the Lua global <c>Path</c> reports <c>Expected</c> (empty: <c>Wanted</c> says whether it may exist).</summary>
     Lua,
+
+    /// <summary>
+    /// API_CHECK (vmangos WindowsHookScan): the export <c>Function</c> of the DLL <c>Module</c> is examined for a detour; <c>Expected</c>
+    /// is the 20-byte SHA-1 the client compares against <c>Length</c> bytes at <c>Address</c> past the jump target. A reply of 0x4A
+    /// (detoured) fails the scan.
+    /// </summary>
+    ApiHook,
 }
 
 /// <summary>One scan from <c>Warden:Checks</c>. Byte values are hex strings.</summary>
@@ -73,6 +80,18 @@ public sealed class WardenCheckOptions
 
     /// <summary>Page, driver, module and existence-only Lua checks: true when the pattern or driver must be present (a legitimate client), false when finding it is the failure (a cheat signature).</summary>
     public bool Wanted { get; set; }
+
+    /// <summary>ApiHook: the exported function (GetProcAddress name) inside <see cref="Module"/>.</summary>
+    public string Function { get; set; } = string.Empty;
+
+    /// <summary>ApiHook: the bytes the client reads at the jump target (0-255; vmangos warden_scans.length).</summary>
+    public int Length { get; set; }
+
+    /// <summary>
+    /// Run this scan once, right after the handshake, instead of in the recurring rotation (vmangos ScanFlags::InitialLogin, flag 0x08 of
+    /// warden_scans.flags).
+    /// </summary>
+    public bool InitialLogin { get; set; }
 
     /// <summary>A per-check action; null uses <see cref="WardenOptions.Action"/> (vmangos warden_scans.penalty).</summary>
     public WardenAction? Action { get; set; }
@@ -145,6 +164,22 @@ public sealed class WardenOptions
 
     /// <summary>Warden:LoadFromDatabase: also run the scans of the world table <c>warden_checks</c> for this build. Default true.</summary>
     public bool LoadFromDatabase { get; set; } = true;
+
+    /// <summary>
+    /// Warden:ScriptedScans: also run the vmangos scripted scans (WardenWin::LoadScriptedScans): at login the Warden module and the
+    /// client's SYSTEM_INFO are located and checked (x86, an i386/i486/Pentium processor type), and the Direct3D EndScene is located and
+    /// then checked in the rotation for an INT3 or JMP hook (a hook is logged, as vmangos does). Uses the build 5875 client offsets.
+    /// Default false (vmangos always runs them; they are not yet verified against a live 1.12.1 client).
+    /// </summary>
+    public bool ScriptedScans { get; set; }
+
+    /// <summary>
+    /// Warden:ConfirmFailedScans: the MaNGOS Zero evidence policy (WardenEvidence, WardenEnforcementPolicy). A failed memory, MPQ, Lua,
+    /// page, driver, module or API-hook scan is first sent again alone (an isolated confirmation rescan), and only a confirmed mismatch of
+    /// an actionable evidence class (integrity, threat signature) takes the scan's action. A confirmed unreadable result or a corroboration
+    /// (Lua, scripted) mismatch is logged once, and a failed timing scan is logged. Default false: a failed scan acts at once.
+    /// </summary>
+    public bool ConfirmFailedScans { get; set; }
 
     /// <summary>Warden:Checks: scans added to the table's (a configured id replaces the table row with that id). With neither, the timing scan runs alone.</summary>
     public List<WardenCheckOptions> Checks { get; set; } = [];
