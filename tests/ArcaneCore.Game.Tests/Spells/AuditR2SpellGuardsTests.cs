@@ -37,6 +37,7 @@ public sealed class AuditR2SpellGuardsTests
         using var kit = new SpellTestKit(spell);
         (Player player, _) = kit.AddPlayer(1);
         Assert.Equal(SpellCastResult.CastOk, kit.System.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: false));
+        kit.Advance(kit.System.SpellBatchWindowMs); // with spell batching on, the held go resolves at the next boundary (0: no-op)
         kit.Advance(100);
         InitialSpellCooldown active = Assert.Single(kit.System.GetActiveCooldowns(player));
         Assert.True(active.CooldownMs > 0 && active.CooldownMs <= SpellSystem.MaxReasonableCooldownMs);
