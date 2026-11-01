@@ -164,7 +164,7 @@ internal sealed class PlayerbotQaPublisher
 
     public PlayerbotQaPublisher(PlayerbotQaOptions options, string directory, IQaPublicationState state, PlayerbotQaRedactor redactor, ILogger logger,
         Func<string, string?>? getEnvironmentVariable = null, Func<string, IQaIssueTransport>? createClient = null, TimeProvider? time = null, string? build = null,
-        Func<string?, IQaIssueTransport?>? createGhClient = null, Func<TimeSpan, CancellationToken, Task>? delay = null)
+        Func<string?, IQaIssueTransport?>? createGhClient = null, Func<TimeSpan, CancellationToken, Task>? delay = null, DateTime? startedUtc = null)
     {
         _options = options;
         _directory = directory;
@@ -181,7 +181,8 @@ internal sealed class PlayerbotQaPublisher
         });
         _time = time ?? TimeProvider.System;
         _build = build ?? PlayerbotQaIssueComposer.BuildVersion();
-        _startedUtc = _time.GetUtcNow().UtcDateTime;
+        // The process's first attach when the feature passes it (an attach after a detach builds a new publisher, but findings seen since the first attach are still "since start-up").
+        _startedUtc = startedUtc ?? _time.GetUtcNow().UtcDateTime;
     }
 
     /// <summary>The most lookups outside the issue list (an issue by number, the REST search) one pass makes.</summary>
@@ -197,9 +198,13 @@ internal sealed class PlayerbotQaPublisher
     {
         PlayerbotQaGitHubOptions git = _options.GitHub;
         if (!git.Enabled) return;
-        QaFindingView[] eligible = [.. findings.Where(f => Eligible(f, findings))
-            .OrderBy(f => QaKinds.Of(f.Kind).ServerSide ? 0 : 1).ThenBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
         DateTime start = _time.GetUtcNow().UtcDateTime;
+        // A finding that may not open an issue (known only from history) and holds none can only be linked from an issue list some other finding of this pass has
+        // already read, so it goes last: whatever its kind, severity or state, the list is read by then if any finding needs it. This is the primary key (ahead of the
+        // server-side budget priority): a stale finding never creates an issue, so moving it back costs the server-side findings nothing.
+        QaFindingView[] eligible = [.. findings.Where(f => Eligible(f, findings))
+            .OrderBy(f => !f.Publication.HoldsIssue && !MayCreate(f, start) ? 1 : 0).ThenBy(f => QaKinds.Of(f.Kind).ServerSide ? 0 : 1)
+            .ThenBy(f => f.Publication.State == QaPublicationState.Failed ? 1 : 0).ThenByDescending(f => f.Severity).ThenBy(f => f.Id, StringComparer.Ordinal)];
         if (eligible.Length == 0 && _state.PendingDuplicates().Count == 0 && !findings.Any(f => QuietFor(f, start) is not null)) return;
         if (!git.Publish)
         {
@@ -301,7 +306,8 @@ internal sealed class PlayerbotQaPublisher
     /// A finding known only from history (loaded at start-up, even one last met on this same build before a restart) fails this; updating its existing issue is not affected.
     /// </summary>
     private bool MayCreate(QaFindingView f, DateTime now)
-        => (f.CountOnBuild(_build) > 0 && f.LastSeenUtc >= _startedUtc) || (_options.GitHub.CreateWithinHours > 0 && now - f.LastSeenUtc <= TimeSpan.FromHours(_options.GitHub.CreateWithinHours));
+        => f.LastSeenUtc <= now // dated in the future (a clock that stepped back): it cannot be vouched for, so it is not fresh through either clause
+            && ((f.CountOnBuild(_build) > 0 && f.LastSeenUtc >= _startedUtc) || (_options.GitHub.CreateWithinHours > 0 && now - f.LastSeenUtc <= TimeSpan.FromHours(_options.GitHub.CreateWithinHours)));
 
     private bool Eligible(QaFindingView f, IReadOnlyList<QaFindingView> all)
     {
@@ -318,8 +324,14 @@ internal sealed class PlayerbotQaPublisher
         if (f.Cause == QaCause.OutsideHome) return false; // expected for a homed bot (PlayerbotQaClassifier); the report lists it
         if (f.Kind == QaSignalKind.SharedSetAside && !f.Publication.HoldsIssue && CoveredByStall(f, all)) return false; // the stall finding carries the rich samples
         if (!f.BotIndependent && f.DistinctBots < git.MinDistinctBots) return false;
-        return !(f.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed && !IsRegression(f));
+        return !(f.Publication.State == QaPublicationState.KnownClosed && !MayReopen(f) && !IsRegression(f));
     }
+
+    /// <summary>
+    /// Whether <see cref="PlayerbotQaGitHubOptions.ReopenClosed"/> may reopen <paramref name="f"/>'s closed issue: only a finding seen since this publisher started. A stale one
+    /// (known only from history) is not recurring, so its closed issue stays closed.
+    /// </summary>
+    private bool MayReopen(QaFindingView f) => _options.GitHub.ReopenClosed && f.LastSeenUtc >= _startedUtc && f.LastSeenUtc <= _time.GetUtcNow().UtcDateTime; // a future-dated one is not trusted either
 
     private static bool CoveredByStall(QaFindingView setAside, IReadOnlyList<QaFindingView> all)
         => setAside.Quest != 0
@@ -360,7 +372,7 @@ internal sealed class PlayerbotQaPublisher
             DateTime now = _time.GetUtcNow().UtcDateTime;
             bool statusDue = StatusDue(current, now);
             if (current.Publication.State == QaPublicationState.Published && current.OccurrencesReported >= current.Count && !statusDue) return true;
-            if (current.Publication.State == QaPublicationState.KnownClosed && !git.ReopenClosed && !IsRegression(current)) return true;
+            if (current.Publication.State == QaPublicationState.KnownClosed && !MayReopen(current) && !IsRegression(current)) return true;
 
             long freshCount = current.Count - current.OccurrencesReported;
             bool commentDue = freshCount > 0 && (current.LastCommentUtc is not { } lastComment || now - lastComment >= TimeSpan.FromHours(git.CommentIntervalHours))
@@ -460,9 +472,9 @@ internal sealed class PlayerbotQaPublisher
             bool regressionComment = false;
             if (!found.Open)
             {
-                // An issue closed as not planned is a decision, not a fix: a newer build does not undo it (ReopenClosed, which reopens whatever its reason, still does).
+                // An issue closed as not planned is a decision, not a fix: a newer build does not undo it (ReopenClosed still does, for a finding seen since start-up).
                 bool regression = IsRegression(current) && !found.NotPlanned;
-                if (!git.ReopenClosed && !regression)
+                if (!MayReopen(current) && !regression)
                 {
                     _state.Apply(id, new QaPublicationUpdate(new QaPublication(QaPublicationState.KnownClosed, found.Number), null, current.Count, NotPlanned: found.NotPlanned));
                     _logger.LogInformation("Bot QA: finding {Id} has a closed issue (#{Number}); it is left closed", current.ShortId, found.Number);
@@ -471,7 +483,7 @@ internal sealed class PlayerbotQaPublisher
 
                 // A regression reopens only together with its one comment, so the hourly comment cap decides first; without budget the finding stays as it is and the next pass tries again.
                 regressionComment = regression && Ledger.CanComment(now, git.MaxCommentsPerHour);
-                if (!git.ReopenClosed && !regressionComment)
+                if (!MayReopen(current) && !regressionComment)
                 {
                     if (_cappedRegressions.TryAdd(id, 0)) // once per finding per process: the pass repeats every few minutes until the budget is back
                     {
