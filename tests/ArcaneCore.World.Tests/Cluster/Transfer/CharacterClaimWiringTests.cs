@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using ArcaneCore.Data;
 using ArcaneCore.Data.Characters;
 using ArcaneCore.Data.Characters.Ownership;
@@ -10,6 +12,7 @@ using ArcaneCore.Kernel.Cluster.Transfer;
 using ArcaneCore.Kernel.Honor;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.Cluster.Transfer;
 using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Honor;
 using ArcaneCore.World.Persistence;
@@ -526,6 +529,220 @@ public sealed class CharacterClaimWiringTests
         await queue.StopAsync().WaitAsync(TimeSpan.FromSeconds(30));
     }
 
+    /// <summary>
+    /// The previous owner's final save lands after this login read the character and before its claim is admitted (the owner releases its claim only once that save is durable).
+    /// The player must be built from the record read after the claim: the record read before it still has the old money and map, which would lose or duplicate copper and put the
+    /// character on the wrong map.
+    /// </summary>
+    [Fact]
+    public async Task ALogin_BuildsThePlayerFromTheRecordReadAfterItsClaim_WhenThePreviousOwnersFinalSaveLandsInBetween()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        StaleReadStore? reads = null;
+        await using WorldTestHost host = rig.StartWorld(a, configure: services =>
+        {
+            ICharacterStore inner = (ICharacterStore)services.Last(d => d.ServiceType == typeof(ICharacterStore)).ImplementationInstance!;
+            reads = StaleReadStore.Wrap(inner);
+            services.AddSingleton((ICharacterStore)(object)reads);
+        });
+        (WorldTestClient client, int id) = await ConnectWithCharacterAsync(host, "CLAIMWIRE9", "Latesave");
+        CharacterRecord record = (await host.Characters.GetByIdAsync(id))!;
+        Assert.Equal(0u, record.Money);
+        Assert.Equal(0u, record.MapId);
+
+        // The previous owner (b, another worker) holds the character while this login starts. Right after the login's second read (the one after its drain), b's final save
+        // lands (money and map change) and b releases its claim, so the login's claim is admitted with that read already in hand.
+        Assert.Equal(CharacterClaimOutcome.Claimed, (await rig.Store.TryClaimCharacterAsync((ulong)id, b)).Outcome);
+        reads!.Arm(id, readNumber: 2, async () =>
+        {
+            lock (record)
+            {
+                record.Money = 98765;
+                record.MapId = 1;
+                (record.X, record.Y, record.Z, record.Orientation) = (1629.36f, -4373.39f, 31.25f, 3.14f);
+            }
+
+            Assert.True(await rig.Store.ReleaseCharacterClaimAsync((ulong)id, b));
+        });
+
+        await client.LoginAsync((ulong)id);
+
+        Assert.True(reads.Fired);
+        ObjectGuid guid = ObjectGuid.Player((uint)id);
+        (uint money, uint map) = await host.World.InvokeAsync(() =>
+        {
+            ArcaneCore.Game.Entities.Player player = host.World.FindOnlinePlayer(guid) ?? throw new InvalidOperationException("the character is not online");
+            return (player.Money, player.MapId);
+        });
+        Assert.Equal(98765u, money);
+        Assert.Equal(1u, map);
+        Assert.Equal(a, rig.Store.GetActiveOwnership((ulong)id));
+    }
+
+    /// <summary>
+    /// The offline arrival of a committed transfer (the client is gone) writes through the real write fence like a save-queue write: it is claim-checked (a live worker that does
+    /// not hold the character's claim is refused), a token of another incarnation of the holder's scope is refused, and the holder's write moves only the position.
+    /// </summary>
+    [Fact]
+    public async Task TheOfflineArrival_IsClaimChecked_RefusesAnotherIncarnationsToken_AndWritesOnlyThePosition()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Arriver", money: 4321);
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a); // the commit gave the claim to a, the target
+        var arrival = new CharacterStoreOfflineArrival(rig.Services.GetRequiredService<IServiceScopeFactory>());
+        PlayerTransferBundle bundle = PlayerTransferValidatorTests.CreateSampleValidBundle(Guid.NewGuid(), ObjectGuid.Player((uint)character).Value, NodeA, NodeB) with
+        {
+            CharacterId = character,
+            AccountId = 1,
+            NotLeaveTransport = false,
+        };
+
+        // b is a live worker with a valid token of its own, but the claim is a's.
+        rig.Holder.Current = b;
+        await Assert.ThrowsAsync<CharacterClaimRejectedException>(() => arrival.CompleteAsync(bundle, b, 0, CancellationToken.None));
+
+        // a's scope under an incarnation that is not the live one (a restarted target's dead token, say).
+        var stale = new CharacterOwnershipToken(a.Scope, a.Epoch, Guid.NewGuid());
+        rig.Holder.Current = stale;
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => arrival.CompleteAsync(bundle, stale, 0, CancellationToken.None));
+        Assert.Equal(0u, (await rig.CharacterAsync(character))!.MapId);
+
+        rig.Holder.Current = a;
+        await arrival.CompleteAsync(bundle, a, 0, CancellationToken.None);
+        CharacterRecord stored = (await rig.CharacterAsync(character))!;
+        Assert.Equal(bundle.TargetMapId, stored.MapId);
+        Assert.Equal(bundle.TargetPosition.X, stored.X);
+        Assert.Equal(bundle.TargetPosition.Y, stored.Y);
+        Assert.Equal(4321u, stored.Money);
+        Assert.Equal(1, stored.Level);
+    }
+
+    /// <summary>
+    /// A claim that reached a worker through a committed transfer whose character nobody plays there is released once the transfer is marked completed (no logout would
+    /// release it), so another worker's login can claim the character; while the transfer is still in flight the release deletes nothing and waits.
+    /// </summary>
+    [Fact]
+    public async Task AReceivedClaimsRelease_WaitsForTheTransferToComplete_ThenAnotherWorkerCanClaim()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Received");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        Guid transfer = await rig.CommitClaimMoveAsync(character, a, b); // committed to b, not yet completed
+        using var claims = new CharacterClaimService(rig.Services) { TransferSettlePoll = TimeSpan.FromMilliseconds(50) };
+
+        claims.ScheduleReleaseOfReceivedClaim(character, b, () => false);
+        await Task.Delay(400);
+        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope); // still in flight: nothing deleted
+        Assert.Equal(CharacterClaimOutcome.RefusedTransferInFlight, (await rig.Store.TryClaimCharacterAsync((ulong)character, a)).Outcome);
+
+        await rig.Store.MarkCompletedAsync(transfer);
+        await WorldTestHost.WaitForAsync(() => rig.Store.GetActiveOwnership((ulong)character) is null, "the received claim is released once the transfer completed");
+        await claims.DrainAsync();
+        Assert.True((await rig.Store.TryClaimCharacterAsync((ulong)character, a)).IsClaimed);
+    }
+
+    [Fact]
+    public async Task AReceivedClaimsRelease_KeepsTheClaim_WhenTheCharacterIsOnlineByThen()
+    {
+        using var directory = new TempDirectory("arcanecore-claimwire-", sqlite: true);
+        await using Rig rig = await Rig.CreateAsync(directory);
+        int character = await rig.CreateCharacterAsync("Online");
+        CharacterOwnershipToken a = await rig.AcquireWorkerAsync("a", 1);
+        CharacterOwnershipToken b = await rig.AcquireWorkerAsync("b", 30);
+        await rig.Store.TryClaimCharacterAsync((ulong)character, a);
+        await rig.Store.MarkCompletedAsync(await rig.CommitClaimMoveAsync(character, a, b));
+        using var claims = new CharacterClaimService(rig.Services) { TransferSettlePoll = TimeSpan.FromMilliseconds(50) };
+
+        claims.ScheduleReleaseOfReceivedClaim(character, b, () => true);
+        await claims.DrainAsync();
+        Assert.Equal(b.Scope, rig.Store.GetActiveOwnership((ulong)character)?.Scope);
+    }
+
+    /// <summary>An <see cref="ICharacterStore"/> whose reads of one character return copies, and which runs a callback right after the Nth read of it (before returning it).</summary>
+    public class StaleReadStore : DispatchProxy
+    {
+        private ICharacterStore _inner = null!;
+        private int _armedId;
+        private int _fireAt;
+        private int _reads;
+        private Func<Task>? _onRead;
+
+        public bool Fired { get; private set; }
+
+        public static StaleReadStore Wrap(ICharacterStore inner)
+        {
+            object proxy = Create<ICharacterStore, StaleReadStore>();
+            var store = (StaleReadStore)proxy;
+            store._inner = inner;
+            return store;
+        }
+
+        public void Arm(int characterId, int readNumber, Func<Task> onRead)
+        {
+            _armedId = characterId;
+            _fireAt = readNumber;
+            _reads = 0;
+            _onRead = onRead;
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            ArgumentNullException.ThrowIfNull(targetMethod);
+            if (targetMethod.Name == nameof(ICharacterStore.GetByIdAsync) && args is [int id, CancellationToken ct] && _onRead is not null && id == _armedId)
+            {
+                return ReadAsync(id, ct);
+            }
+
+            try
+            {
+                return targetMethod.Invoke(_inner, args);
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException is not null)
+            {
+                ExceptionDispatchInfo.Throw(ex.InnerException);
+                throw;
+            }
+        }
+
+        private async Task<CharacterRecord?> ReadAsync(int id, CancellationToken ct)
+        {
+            CharacterRecord? record = await _inner.GetByIdAsync(id, ct);
+            CharacterRecord? copy = record is null ? null : Copy(record);
+            if (++_reads == _fireAt && _onRead is { } onRead)
+            {
+                _onRead = null;
+                await onRead();
+                Fired = true;
+            }
+
+            return copy;
+        }
+
+        private static CharacterRecord Copy(CharacterRecord source)
+        {
+            var copy = new CharacterRecord { Name = source.Name };
+            lock (source)
+            {
+                foreach (PropertyInfo property in typeof(CharacterRecord).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (property.CanRead && property.CanWrite && property.GetIndexParameters().Length == 0)
+                        property.SetValue(copy, property.GetValue(source));
+                }
+            }
+
+            return copy;
+        }
+    }
+
     private static CharacterState State(int id, uint map, CharacterOwnershipToken ownership)
         => new(id, map, 1, 1, 2, 3, 0, 1, 1, Ownership: ownership);
 
@@ -599,7 +816,7 @@ public sealed class CharacterClaimWiringTests
         /// A Worker-scope world on the in-memory harness: its ownership token is <paramref name="token"/>, and its claim service, persistence barrier and shard-lock guard run
         /// against this rig's database with <c>ReapDeadOwners</c> as given and the default <c>ReapAfterSeconds</c>.
         /// </summary>
-        public WorldTestHost StartWorld(CharacterOwnershipToken token, bool reapDeadOwners = true)
+        public WorldTestHost StartWorld(CharacterOwnershipToken token, bool reapDeadOwners = true, Action<IServiceCollection>? configure = null)
         {
             WorldTestHost host = WorldTestHost.Start(configureServices: services =>
             {
@@ -608,17 +825,18 @@ public sealed class CharacterClaimWiringTests
                 services.AddSingleton(new WorldWriterGuard(Options.Create(new DatabaseOptions { Provider = DatabaseProvider.Sqlite, ConnectionString = $"Data Source={_file}" })));
                 services.TryAddSingleton<CharacterPersistenceBarrier>();
                 services.TryAddSingleton<CharacterClaimService>();
+                configure?.Invoke(services);
             });
             host.World.CharacterOwnership = token;
             return host;
         }
 
-        public async Task<int> CreateCharacterAsync(string name)
+        public async Task<int> CreateCharacterAsync(string name, uint money = 0)
         {
             // Before any ownership row is active, so the tokenless write is allowed.
             await using AsyncServiceScope scope = _services.CreateAsyncScope();
             CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
-            return (await new EfCharacterStore(db).CreateAsync(new CharacterRecord { AccountId = 1, Name = name, Race = 1, Class = 1, Level = 1 })).Id;
+            return (await new EfCharacterStore(db).CreateAsync(new CharacterRecord { AccountId = 1, Name = name, Race = 1, Class = 1, Level = 1, Money = money })).Id;
         }
 
         public async Task<CharacterRecord?> CharacterAsync(int characterId)
@@ -669,6 +887,18 @@ public sealed class CharacterClaimWiringTests
             await Store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.StageWorldPort);
             await Store.CommitDecisionAsync(transfer, to.Incarnation, CancellationToken.None, to.Scope);
             await Store.MarkCompletedAsync(transfer);
+        }
+
+        /// <summary>Moves the claim of <paramref name="character"/> from <paramref name="from"/> to <paramref name="to"/> up to the commit, without marking the transfer completed; returns its id.</summary>
+        public async Task<Guid> CommitClaimMoveAsync(int character, CharacterOwnershipToken from, CharacterOwnershipToken to)
+        {
+            Guid transfer = Guid.NewGuid();
+            await Store.CreateReservationAsync(transfer, (ulong)character, 1, 1, NodeA, NodeB, 1, 0, 30, 0, from);
+            await Store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.SuspendAndCapture, PlayerTransferValidatorTests.CreateSampleValidBundle(transfer, (ulong)character, NodeA, NodeB, from));
+            await Store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.InstallPassive);
+            await Store.AdvancePreCommitStageAsync(transfer, PlayerTransferStage.StageWorldPort);
+            await Store.CommitDecisionAsync(transfer, to.Incarnation, CancellationToken.None, to.Scope);
+            return transfer;
         }
 
         public async ValueTask DisposeAsync() => await _services.DisposeAsync();

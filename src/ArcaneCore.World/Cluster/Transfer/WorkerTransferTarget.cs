@@ -2,6 +2,7 @@ using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
@@ -279,6 +280,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     private readonly ITransferInstanceAllocator? _instances;
     private readonly Func<PlayerTransferBundle, bool>? _sessionReady;
     private readonly ITransferOfflineArrival? _offline;
+    private readonly CharacterClaimService? _claims;
+    private readonly Dictionary<int, TaskCompletionSource> _sessionWaiters = [];
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, Slot> _slots = [];
     private readonly Dictionary<ulong, Guid> _byCharacter = [];
@@ -297,7 +300,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         Func<uint, ObjectGuid, uint>? allocateInstance = null,
         ITransferInstanceAllocator? instances = null,
         Func<PlayerTransferBundle, bool>? sessionReady = null,
-        ITransferOfflineArrival? offlineArrival = null)
+        ITransferOfflineArrival? offlineArrival = null,
+        CharacterClaimService? claims = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(loader);
@@ -314,7 +318,15 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         _instances = instances ?? (allocateInstance is null ? null : new DelegateTransferInstanceAllocator(allocateInstance));
         _sessionReady = sessionReady;
         _offline = offlineArrival;
+        _claims = claims;
     }
+
+    /// <summary>
+    /// How long an activation whose client session is not adopted here yet waits for it before taking the character offline. The worker's open reply reaches the gateway before
+    /// the accepted session is started and entered in the acceptor (GatewaySessionLinkHost.OpenAsync: LinkSession.Accept, then RemoteWorldSession.Start), so the gateway's
+    /// stage 4 ack, and the activation that follows it, can arrive while the session is still between the two. "Not adopted yet" lasts that long at most; "gone" lasts forever.
+    /// </summary>
+    internal TimeSpan SessionOpenGrace { get; init; } = TimeSpan.FromSeconds(2);
 
     public WorkerNodeId WorkerId => _workerId;
 
@@ -513,6 +525,11 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         lock (_gate)
         {
+            if (_sessionWaiters.Remove(accountId, out TaskCompletionSource? waiter))
+            {
+                waiter.TrySetResult(); // an activation waiting for this session (WaitForSessionAsync) goes on, on its own thread
+            }
+
             foreach (Slot slot in _slots.Values)
             {
                 if (slot.DeferredBundle is not { } bundle || bundle.AccountId != accountId || slot.Loading is not null || slot.Activating || !SessionReady(bundle))
@@ -636,7 +653,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         ArgumentNullException.ThrowIfNull(targetOwnershipToken);
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBundle(transferId, bundle);
-        if (_offline is not null && _sessionReady is not null && !SessionReady(bundle))
+        if (_offline is not null && _sessionReady is not null && !await WaitForSessionAsync(bundle, cancellationToken).ConfigureAwait(false))
         {
             // The commit is past and the client's session is not here (it closed, or this worker restarted): the player cannot be built, so the character arrives offline.
             await ActivateOfflineAsync(transferId, bundle, targetOwnershipToken, cancellationToken).ConfigureAwait(false);
@@ -708,10 +725,16 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                     $"transfer '{transferId}' committed character {bundle.CharacterGuid} to {token.Scope}/{token.Incarnation:D}, but worker '{_workerId}' writes as {_world.CharacterOwnership?.Scope}/{_world.CharacterOwnership?.Incarnation:D}");
             }
 
-            bool online = await _world.InvokeAsync(() => _world.FindOnlinePlayer(new ObjectGuid(bundle.CharacterGuid)) is not null, cancellationToken).ConfigureAwait(false);
+            var guid = new ObjectGuid(bundle.CharacterGuid);
+            (bool online, uint zoneId) = await _world.InvokeAsync(
+                () => (_world.FindOnlinePlayer(guid) is not null, TargetZone(bundle)), cancellationToken).ConfigureAwait(false);
             if (!online)
             {
-                await _offline!.CompleteAsync(bundle, playerToken, cancellationToken).ConfigureAwait(false);
+                await _offline!.CompleteAsync(bundle, playerToken, zoneId, cancellationToken).ConfigureAwait(false);
+
+                // Nobody plays the character here, so no logout will release the claim the commit gave this worker: release it once the transfer is marked completed,
+                // or every login of the character on another worker is refused as a live owner's.
+                _claims?.ScheduleReleaseOfReceivedClaim(checked((int)guid.Low), playerToken, () => _world.IsOnline(guid));
             }
 
             _logger.LogInformation(
@@ -742,6 +765,21 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         if (slot.Allocated)
         {
             await ReleaseInstanceAsync(slot.MapId, slot.InstanceId).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>World thread: the zone of the transfer's target position from the target map's terrain, or 0 when the terrain does not know it (no map data).</summary>
+    private uint TargetZone(PlayerTransferBundle bundle)
+    {
+        try
+        {
+            TransferPosition at = bundle.TargetPosition;
+            return WorldMaps.Of(_world).Terrain.For(bundle.TargetMapId).GetZoneAndAreaId(at.X, at.Y, at.Z).ZoneId;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target-zone", ex);
+            return 0;
         }
     }
 
@@ -984,6 +1022,53 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             load = slot.Loading ?? StartLoad(slot, bundle);
             return slot;
         }
+    }
+
+    /// <summary>
+    /// True when the bundle's client session is adopted here, waiting up to <see cref="SessionOpenGrace"/> for <see cref="OnSessionOpened"/> of its account when it is not yet.
+    /// False only when it is still missing after the grace (closed, or never opened here).
+    /// </summary>
+    private async Task<bool> WaitForSessionAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken)
+    {
+        if (SessionReady(bundle))
+        {
+            return true;
+        }
+
+        TaskCompletionSource waiter;
+        lock (_gate)
+        {
+            if (!_sessionWaiters.TryGetValue(bundle.AccountId, out TaskCompletionSource? existing))
+            {
+                _sessionWaiters[bundle.AccountId] = existing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            waiter = existing;
+        }
+
+        try
+        {
+            if (!SessionReady(bundle)) // the session may have opened between the first probe and the registration
+            {
+                await waiter.Task.WaitAsync(SessionOpenGrace, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (TimeoutException)
+        {
+            // the grace ran out: the probe below decides
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                if (_sessionWaiters.TryGetValue(bundle.AccountId, out TaskCompletionSource? current) && ReferenceEquals(current, waiter))
+                {
+                    _sessionWaiters.Remove(bundle.AccountId);
+                }
+            }
+        }
+
+        return SessionReady(bundle);
     }
 
     private bool SessionReady(PlayerTransferBundle bundle)

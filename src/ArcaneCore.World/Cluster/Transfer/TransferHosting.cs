@@ -94,7 +94,8 @@ public static class WorkerTransferHosting
                 MaxTargetReservations, host.Incarnation, loggers?.CreateLogger<WorkerTransferTarget>(),
                 instances: AllocateInstance(services),
                 sessionReady: bundle => AdoptedSession(services, bundle) is not null,
-                offlineArrival: new CharacterStoreOfflineArrival(services.GetRequiredService<IServiceScopeFactory>()));
+                offlineArrival: new CharacterStoreOfflineArrival(services.GetRequiredService<IServiceScopeFactory>(), services.GetService<CharacterRetirementRegistry>()),
+                claims: services.GetService<CharacterClaimService>());
             // Section 4.4: stage 3 installs before stage 4 opens the client's session here, so the shadow load starts when that session opens.
             // This hooks the acceptor that exists now: GatewayWorkerEndpoint.StartAsync sets Acceptor before it resolves this service, and nothing restarts the endpoint in-process.
             // A restarted endpoint would have a new acceptor whose SessionOpened is not hooked; the install after the commit then re-probes and loads at once, so a transfer still completes.

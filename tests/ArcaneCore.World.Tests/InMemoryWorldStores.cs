@@ -46,8 +46,12 @@ internal sealed class InMemoryCharacterStore : ICharacterStore, ICharacterLifeSt
         return Task.FromResult(false);
     }
 
+    /// <summary>The last state passed to <see cref="SaveStateAsync"/>, or null.</summary>
+    public CharacterState? LastState { get; private set; }
+
     public Task SaveStateAsync(CharacterState state, CancellationToken cancellationToken = default)
     {
+        LastState = state;
         if (SaveOverride is { } overrideSave)
             return overrideSave(state);
         if (_characters.TryGetValue(state.Id, out CharacterRecord? c))
