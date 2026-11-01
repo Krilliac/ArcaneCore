@@ -4,7 +4,7 @@ namespace ArcaneCore.World.Playerbots;
 /// <c>World:Playerbots:Recovery</c>: how a dead bot treats living enemy players near its body. A ghost is invisible to the living,
 /// so standing in reclaim range of the body is already out of their sight; the bot counts the enemy players who could attack it once
 /// revived (and the allied players beside it) and, when outnumbered by <see cref="PvpCampMargin"/>, stays a ghost and waits for the
-/// count to turn (cmangos/mangoszero ReviveFromCorpseAction weighs the same thing; the numbers here are ArcaneCore choices).
+/// count to turn (cmangos FindCorpseAction only moves away from aggroed units; counting players and waiting is an ArcaneCore choice, as are the numbers here).
 /// </summary>
 public sealed class PlayerbotRecoveryOptions
 {

@@ -92,7 +92,7 @@ public sealed class PlayerbotRecoveryPvpCampTests
 
     // --- ContestedNodeNear (pure) ---------------------------------------------------------------------------------------------
 
-    /// <summary>The real banner positions (vmangos BattleGroundAB.h BG_AB_NodePositions, as the AB tactics tests use them).</summary>
+    /// <summary>The banner positions the AB tactics tests use.</summary>
     private static readonly Vector3[] s_nodes =
     [
         new(1166.79f, 1200.13f, -56.70f),   // stables
