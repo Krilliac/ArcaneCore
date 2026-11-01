@@ -53,6 +53,12 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
 
     internal uint TargetEntry { get; private set; }
 
+    /// <summary>The bot's active home area; a bot with one may always ride the tram or a lift (<see cref="PlayerbotWorldDestinations.TransitAllowed"/>).</summary>
+    internal PlayerbotHomeArea? Home { get; set; }
+
+    /// <summary>Optional zone lookup for deterministic synthetic maps; live travel reads the map's area table (<see cref="PlayerbotTram.TryBegin"/>).</summary>
+    internal Func<Vector3, uint>? TramZoneAt { get; set; }
+
     /// <summary>Trainer quotes asked by <see cref="HasAffordableSpell"/>: the memo's test seam.</summary>
     internal int QuotesAsked { get; private set; }
 
@@ -155,7 +161,11 @@ internal sealed class PlayerbotTrainerDestinations(WorldSession session, Playerb
             if (!HasAffordableSpell(player, services, destination)) continue;
             Vector3 target = new(destination.Spawn.X, destination.Spawn.Y, destination.Spawn.Z);
             PlayerbotRoute? walk = null;
-            if (PlayerbotElevator.TryBegin(_session, player, target, _options, out walk))
+            // The Deeprun Tram and the lifts, as a quest destination takes them (PlayerbotWorldDestinations): the brain drives the trip
+            // from the next think and this trainer is planned to again from where the trip ends.
+            bool transit = PlayerbotWorldDestinations.TransitAllowed(Home, player.Level, _options.Population);
+            if (transit && (PlayerbotTram.TryBegin(_session, player, target, TramZoneAt)
+                || PlayerbotElevator.TryBegin(_session, player, target, _options, out walk)))
             {
                 ClearRoute();
                 TargetEntry = destination.Entry;

@@ -867,6 +867,25 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
         return best;
     }
 
+    /// <summary>The bot's active home area (the brain's SyncHomeFilters): a bot with one may always ride the tram or a lift on a vendor walk.</summary>
+    internal PlayerbotHomeArea? Home { get; set; }
+
+    /// <summary>Optional zone lookup for deterministic synthetic maps (<see cref="PlayerbotWorldDestinations.TramZoneAt"/>).</summary>
+    internal Func<Vector3, uint>? TramZoneAt { get; set; }
+
+    /// <summary>
+    /// The small hook of the vendor and repair walks onto the Deeprun Tram (<see cref="PlayerbotTram.TryBegin"/>) and the lifts
+    /// (<see cref="PlayerbotElevator.TryBegin"/>), as a quest destination begins them, behind <see cref="PlayerbotWorldDestinations.TransitAllowed"/>.
+    /// True when a trip is under way; <paramref name="walk"/> is a lift's own walk when it found one.
+    /// </summary>
+    private bool TryBeginTransit(Player player, Vector3 target, out PlayerbotRoute? walk)
+    {
+        walk = null;
+        if (!PlayerbotWorldDestinations.TransitAllowed(Home, player.Level, options.Population)) return false;
+        return PlayerbotTram.TryBegin(session, player, target, TramZoneAt)
+            || PlayerbotElevator.TryBegin(session, player, target, options, out walk);
+    }
+
     /// <summary>
     /// Walk toward the nearest repair NPC of the map (a creature_template with UNIT_NPC_FLAG_REPAIR that the bot's faction may approach,
     /// <see cref="PlayerbotTrainerDestinations.CanApproachTrainer"/>) while <see cref="TripWanted"/> names a trip (or toward the nearest vendor, for a sale); once it is in sight the
@@ -877,6 +896,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
     /// </summary>
     private bool TravelToRepair(Player player, QuestNpcServices services, uint elapsedMs)
     {
+        // The tram and lift rules (TransitAllowed) of this walk: see TryBeginTransit.
         NpcFlags service = TripWanted(player);
         if (service == NpcFlags.None || player.Map is not { } map)
         {
@@ -924,7 +944,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
                     || Vector3.Distance(here, _repairRoute.Points[^1]) < 1f)
                 {
                     PlayerbotRoute? walk = null;
-                    if (PlayerbotElevator.TryBegin(session, player, at, options, out walk))
+                    if (TryBeginTransit(player, at, out walk))
                     {
                         _repairRoute = null;
                         return true;
@@ -975,7 +995,7 @@ internal sealed partial class PlayerbotTownGoals(WorldSession session, Playerbot
             if (_repairPlansThisThink >= MaxRepairPlansPerThink || _repairPlansThisThink > 0 && (RepairQueryBudgetSpent() || PlayerbotThinkProbe.Active is { RunningMs: >= 20.0 })) return false;
             _repairPlansThisThink++;
             PlayerbotRoute? walk = null;
-            if (PlayerbotElevator.TryBegin(session, player, target, options, out walk))
+            if (TryBeginTransit(player, target, out walk))
             {
                 _repairEmptyRounds = 0;
                 _repairRoute = null;
