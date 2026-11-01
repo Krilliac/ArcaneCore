@@ -162,7 +162,8 @@ public sealed partial class LootService : IViewerFieldFilter
 
         var normal = new List<(RolledLoot Roll, ItemTemplate Template, List<Player>? Allowed)>();
         var quest = new List<(RolledLoot Roll, ItemTemplate Template, List<Player> Needing)>();
-        foreach (RolledLoot roll in Generator.Roll(table, entry))
+        Func<Player, uint, bool>? rowConditions = Conditions;
+        foreach (RolledLoot roll in Generator.Roll(table, entry, (row, inherited) => AnyRecipientMayTake(recipients, rowConditions, row, inherited)))
         {
             if (Items?.Find(roll.ItemId) is not { } template)
             {
@@ -225,6 +226,35 @@ public sealed partial class LootService : IViewerFieldFilter
         }
 
         return bag;
+    }
+
+    /// <summary>
+    /// Group pre-filter: whether at least one recipient satisfies the row's own condition and every condition inherited from the reference
+    /// rows (a row without conditions is open to all; with no evaluator a conditioned row is open to none, as in <see cref="Generate"/>).
+    /// A cross-faction group therefore allows a row when any recipient can take it; the per-viewer filter still applies afterwards.
+    /// </summary>
+    private static bool AnyRecipientMayTake(IReadOnlyList<Player> recipients, Func<Player, uint, bool>? evaluator, LootStoreRow row,
+        IReadOnlyList<uint> inherited)
+    {
+        if (row.ConditionId == 0 && inherited.Count == 0)
+        {
+            return true;
+        }
+
+        if (evaluator is null)
+        {
+            return false;
+        }
+
+        foreach (Player player in recipients)
+        {
+            if ((row.ConditionId == 0 || evaluator(player, row.ConditionId)) && inherited.All(id => evaluator(player, id)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
