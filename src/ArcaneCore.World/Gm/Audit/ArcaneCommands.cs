@@ -111,6 +111,7 @@ public sealed class ArcaneCommands : ICommandGroup
 
         if (account is null)
         {
+            context.Fail("no-such-account");
             context.Reply(string.Format(CultureInfo.InvariantCulture, "Account {0} does not exist.", characterAccount is null ? value.ToUpperInvariant() : "of that character"));
             return;
         }
