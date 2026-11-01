@@ -47,6 +47,8 @@ public sealed class CharacterWriteSweepTests
         // own transaction under CharacterWriteFence.Exempt; the journal's compare-and-swap on the ownership row is the handoff's own fence.
         ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::CreateReservationCoreAsync"] = "the claim CAS runs inside the store's InTransactionAsync lambda",
         ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::CommitRowAsync"] = "only called inside the store's InTransactionAsync (commit and epoch takeover)",
+        ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::RebindCommittedTargetAsync"] =
+            "the owner-row CAS runs inside the store's InTransactionAsync lambda (its own transaction under CharacterWriteFence.Exempt), as CommitRowAsync's; the compare-and-swap on scope, epoch, incarnation and active transfer is the journal's own fence",
         ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::ReleaseClaimAsync"] = "only called inside the store's InTransactionAsync (complete and abort)",
         ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::ClaimInTransactionAsync"] = "the claim and dead-owner reap run inside the store's InTransactionAsync lambda (the method only exists to pass that lambda)",
 

@@ -69,6 +69,7 @@ public sealed class DeferredShadowLoadTests
             Class = 1,
             Gender = 0,
             Level = 40,
+            Money = 4321,
             MapId = 0,
             ZoneId = 12,
             X = 100f,
@@ -117,13 +118,17 @@ public sealed class DeferredShadowLoadTests
     };
 
     /// <summary>The target as <c>WorkerTransferHosting</c> builds it: the production loader and entry, the session probe, and the acceptor's session-opened wiring.</summary>
-    private static (WorkerTransferTarget Target, CountingLoader Loader) NewTarget(Rig rig, bool deferred = true, int failFirstLoads = 0, bool offline = false)
+    private static (WorkerTransferTarget Target, CountingLoader Loader) NewTarget(
+        Rig rig, bool deferred = true, int failFirstLoads = 0, bool offline = false, TimeSpan? sessionOpenGrace = null)
     {
         Func<PlayerTransferBundle, WorldSession?> sessions = AdoptedSession(rig.Acceptor);
         var loader = new CountingLoader(new CharacterHooksShadowLoader(sessions), failFirstLoads);
         var target = new WorkerTransferTarget(
             Target, rig.Host.World, loader, new WorldSessionTransferEntry(), sessionReady: deferred ? bundle => sessions(bundle) is not null : null,
-            offlineArrival: offline ? new CharacterStoreOfflineArrival(rig.Host.WorldServices.GetRequiredService<IServiceScopeFactory>()) : null);
+            offlineArrival: offline ? new CharacterStoreOfflineArrival(rig.Host.WorldServices.GetRequiredService<IServiceScopeFactory>()) : null)
+        {
+            SessionOpenGrace = sessionOpenGrace ?? TimeSpan.FromMilliseconds(200),
+        };
         rig.Acceptor.SessionOpened += opened => target.OnSessionOpened(opened.AccountId);
         return (target, loader);
     }
@@ -286,8 +291,16 @@ public sealed class DeferredShadowLoadTests
         Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
         await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget);
 
-        // After the commit, without the session: install (a no-op) and activate both return.
+        // The worker writes as TargetToken. A commit that names another incarnation of its scope (a token this process does not hold) writes nothing and fails the activation.
+        rig.Host.World.CharacterOwnership = TargetToken;
         await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget);
+        var otherIncarnation = new CharacterOwnershipToken(TargetToken.Scope, TargetToken.Epoch, Guid.NewGuid());
+        await Assert.ThrowsAsync<InvalidOperationException>(() => target.ActivateTargetPlayerAsync(id, bundle, otherIncarnation).WaitAsync(Budget));
+        Assert.Equal(0, rig.Host.Characters.SaveCount);
+        Assert.False(target.WasActivated(id));
+        Assert.Equal(100f, (await rig.Host.Characters.GetByIdAsync(character.Id))!.X);
+
+        // After the commit, without the session: install (a no-op) and activate both return.
         await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(Budget);
 
         Assert.True(target.WasActivated(id));
@@ -300,11 +313,53 @@ public sealed class DeferredShadowLoadTests
         Assert.Equal(bundle.TargetPosition.Y, stored.Y);
         Assert.Equal(bundle.TargetPosition.Z, stored.Z);
         Assert.Equal(character.Level, stored.Level);
+        Assert.Equal(12u, stored.ZoneId); // no terrain here: the zone is unknown, so the stored one is kept (a login recomputes it)
+
+        // Only the position moved: the money is the stored money, and no inventory, action bar, bind point or life was written (null leaves the stored rows alone).
+        Assert.Equal(4321u, stored.Money);
+        CharacterState written = Assert.IsType<CharacterState>(rig.Host.Characters.LastState);
+        Assert.Equal(4321u, written.Money);
+        Assert.Null(written.Inventory);
+        Assert.Null(written.ActionButtons);
+        Assert.Null(written.Home);
+        Assert.Null(written.Life);
+        Assert.Equal(TargetToken, written.Ownership);
 
         // A repeat (recovery hears of the activation late) writes nothing more and does not throw.
         int saves = rig.Host.Characters.SaveCount;
         await target.ActivateTargetPlayerAsync(id, bundle, TargetToken).WaitAsync(Budget);
         Assert.Equal(saves, rig.Host.Characters.SaveCount);
+    }
+
+    /// <summary>
+    /// The worker's open reply reaches the gateway before the accepted session is started and entered in the acceptor, so the activation that follows the gateway's ack can
+    /// arrive while the session is not adopted yet. That is "not yet", not "gone": the activation waits for the session and activates the player online, it does not take the
+    /// character offline under a client that is about to play it.
+    /// </summary>
+    [Fact]
+    public async Task AnActivationThatArrivesBeforeTheSessionIsStarted_WaitsForIt_AndActivatesOnline()
+    {
+        await using Rig rig = NewRig();
+        (int accountId, string account, CharacterRecord character) = await NewCharacterAsync(rig.Host, "DEFERRED8", "Defereight");
+        (WorkerTransferTarget target, CountingLoader loader) = NewTarget(rig, offline: true, sessionOpenGrace: TimeSpan.FromSeconds(20));
+        Guid id = Guid.NewGuid();
+        PlayerTransferBundle bundle = NewBundle(id, accountId, character);
+        ObjectGuid guid = new(bundle.CharacterGuid);
+        Assert.True(await target.TryReserveSlotAsync(id, bundle.CharacterGuid, 0, 0));
+        await target.InstallPassiveShadowAsync(id, bundle).WaitAsync(Budget);
+
+        Task activation = target.ActivateTargetPlayerAsync(id, bundle, TargetToken);
+        await Task.Delay(300);
+        Assert.False(activation.IsCompleted, "the activation must wait for the session, not take the character offline");
+        Assert.Equal(0, rig.Host.Characters.SaveCount);
+
+        await OpenSessionAsync(rig, accountId, account);
+        await activation.WaitAsync(Budget);
+
+        Assert.True(target.WasActivated(id));
+        Assert.Equal(1, loader.Calls);
+        Assert.NotNull(await rig.Host.World.InvokeAsync(() => rig.Host.World.FindOnlinePlayer(guid)));
+        Assert.Equal(0, rig.Host.Characters.SaveCount); // nothing was written as an offline arrival
     }
 
     [Fact]

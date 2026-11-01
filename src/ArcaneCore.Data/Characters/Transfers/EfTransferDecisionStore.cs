@@ -243,6 +243,26 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         return deleted > 0;
     }
 
+    /// <summary>
+    /// True when the character's claim row is held by exactly <paramref name="token"/> and still names a transfer (<c>active_transfer</c> is set): a release of that claim would delete
+    /// nothing yet. False when the row holds no transfer, another holder has it, there is none, or the token is not a worker token (no SQL is issued then).
+    /// </summary>
+    public async Task<bool> IsCharacterClaimInTransferAsync(ulong characterGuid, CharacterOwnershipToken token, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ArgumentNullException.ThrowIfNull(token);
+        if (characterGuid == 0 || !CharacterOwnershipScopes.IsWorker(token.Scope))
+            return false;
+
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        long guid = (long)characterGuid;
+        string claimScope = token.Scope;
+        string incarnation = token.Incarnation.ToString("D");
+        return await db.Set<ClusterTransferOwnerRow>().AsNoTracking()
+            .AnyAsync(r => r.CharacterGuid == guid && r.Scope == claimScope && r.Incarnation == incarnation && r.ActiveTransfer != null, cancellationToken).ConfigureAwait(false);
+    }
+
     // ---------------------------------------------------------------- ITransferDecisionStore
 
     /// <inheritdoc />
