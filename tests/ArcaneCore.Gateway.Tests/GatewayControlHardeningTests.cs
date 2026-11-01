@@ -270,7 +270,8 @@ public sealed class GatewayControlHardeningTests
         Assert.False(timedOut.Accepted);
         Assert.Equal(Guid.Empty, timedOut.OperationId);
         Assert.Contains("did not answer within 0.5 s", timedOut.Reason);
-        Assert.Contains("Gateway:Handoff:Enabled", timedOut.Reason);
+        Assert.Contains("NotHosted", timedOut.Reason);
+        Assert.Contains(".cluster handoff status", timedOut.Reason);
     }
 
     [Fact]
