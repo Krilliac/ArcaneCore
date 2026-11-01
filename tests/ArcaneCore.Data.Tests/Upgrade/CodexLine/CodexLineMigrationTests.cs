@@ -9,7 +9,6 @@ using ArcaneCore.Data.World.Creatures;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.TestSupport;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging;
 using Xunit;
 using Codex = ArcaneCore.Data.Schema.Upgrade.CodexLine;
 
@@ -102,9 +101,9 @@ public sealed class CodexLineMigrationTests : IDisposable
         }
 
         Assert.Equal(CharacterDbContext.Schema.CurrentVersion, await VersionAsync(path, "characters"));
-        Assert.Contains(logger.Lines, l => l.Contains("created by the Codex (0e07c29b) line (schema version 25)", StringComparison.Ordinal)
+        Assert.Contains(logger.Messages, l => l.Contains("created by the Codex (0e07c29b) line (schema version 25)", StringComparison.Ordinal)
                                           && l.Contains("schema version 33", StringComparison.Ordinal));
-        Assert.Contains(logger.Lines, l => l.StartsWith("Migrated the characters database from Codex (0e07c29b) schema version 25 to schema version 33", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, l => l.StartsWith("Migrated the characters database from Codex (0e07c29b) schema version 25 to schema version 33", StringComparison.Ordinal));
         await AssertSeededCharacterRowsAsync(path);
 
         // Through this build's stores: the managed bots, ready for the world to load.
@@ -692,22 +691,5 @@ public sealed class CodexLineMigrationTests : IDisposable
     private sealed class SyncProgress(Action<SchemaStepProgress> report) : IProgress<SchemaStepProgress>
     {
         public void Report(SchemaStepProgress value) => report(value);
-    }
-
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Lines { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            lock (Lines)
-            {
-                Lines.Add(formatter(state, exception));
-            }
-        }
     }
 }

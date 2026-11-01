@@ -9,6 +9,7 @@ using ArcaneCore.Kernel.Logging;
 using ArcaneCore.Kernel.Realms;
 using ArcaneCore.Realm.Net;
 using ArcaneCore.Realm.Protocol;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -193,23 +194,6 @@ public sealed class LogonHardeningTests
         catch (OperationCanceledException)
         {
             return false;
-        }
-    }
-
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Messages { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-        {
-            lock (Messages)
-            {
-                Messages.Add(formatter(state, exception));
-            }
         }
     }
 }

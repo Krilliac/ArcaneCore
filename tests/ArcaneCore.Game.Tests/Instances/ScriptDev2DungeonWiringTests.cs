@@ -15,6 +15,7 @@ using ArcaneCore.Game.Tests.CreatureAi;
 using ArcaneCore.Game.Tests.GameObjects;
 using ArcaneCore.Game.Tests.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using ArcaneCore.TestSupport;
 using Microsoft.Extensions.Logging;
 using Xunit;
 using static ArcaneCore.Game.Tests.CreatureTestKit;
@@ -37,18 +38,6 @@ public sealed partial class ScriptDev2DungeonTests
             Used.Add(go.Entry);
             return takeUse;
         }
-    }
-
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Lines { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Lines.Add(formatter(state, exception));
     }
 
     [Fact]
@@ -103,7 +92,7 @@ public sealed partial class ScriptDev2DungeonTests
         world.RunTick(0);
 
         Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true));
-        Assert.Contains(logger.Lines, line => line.Contains("send event 4242", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, line => line.Contains("send event 4242", StringComparison.Ordinal));
     }
 
     [Theory]

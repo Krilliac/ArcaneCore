@@ -243,7 +243,7 @@ public sealed class QualityScriptTests
     {
         // A pwsh that starts a sleeping pwsh and then sleeps itself: at -TimeoutSec 3 it is stopped and so is its child. A second parent
         // that exits at once leaves its sleeping child behind (an orphan); that one is stopped too.
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-quality-");
         JsonElement r = Eval($$"""
             . '{{Path.Combine(Quality, "QualityLib.ps1").Replace("'", "''")}}'
             . '{{Path.Combine(Quality, "MutateAllLib.ps1").Replace("'", "''")}}'
@@ -329,7 +329,7 @@ public sealed class QualityScriptTests
     [PwshFact]
     public void InvokeProcess_PassesTheExitCodeAndBothStreamsToTheFiles()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-quality-");
         JsonElement r = Eval($$"""
             $log = Join-Path '{{temp.Path.Replace("'", "''")}}' 'run.log'
             $run = Invoke-QualityProcess -FilePath pwsh -Arguments @('-NoProfile', '-Command', 'Write-Output "out line"; [Console]::Error.WriteLine("err line"); exit 7') -LogFile $log -TimeoutSec 60
@@ -400,7 +400,7 @@ public sealed class QualityScriptTests
     [PwshFact]
     public void Mutate_RefusesAProjectWithoutItsOwnTargetFramework_WithExitCode2()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-quality-");
         string csproj = Path.Combine(temp.Path, "Lib.csproj");
         File.WriteAllText(csproj, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
         (int code, string output) = RunScript("mutate.ps1", "-Project", csproj, "-TestProject", csproj, "-Files", "**/X.cs");
@@ -411,7 +411,7 @@ public sealed class QualityScriptTests
     [PwshFact]
     public void Mutate_RefusesACommentedOutTargetFramework_AndOneThatDiffersFromTheCentralValue()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-quality-");
         string commented = Path.Combine(temp.Path, "Commented.csproj");
         File.WriteAllText(commented, "<Project Sdk=\"Microsoft.NET.Sdk\"><!-- <TargetFramework>net11.0</TargetFramework> --></Project>");
         (int code, string output) = RunScript("mutate.ps1", "-Project", commented, "-TestProject", commented, "-Files", "**/X.cs");
@@ -490,7 +490,7 @@ public sealed class QualityScriptTests
     [PwshFact]
     public void MutateAllPlan_SplitsBatches_ExcludesGeneratedFiles_AndScopesTestFilters()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-quality-");
         JsonElement r = Eval($$"""
             $root = '{{temp.Path.Replace("'", "''")}}'
             New-Item -ItemType Directory -Force "$root/src/ArcaneCore.World/Handlers", "$root/tests/ArcaneCore.World.Tests/Handlers" | Out-Null
@@ -538,7 +538,7 @@ public sealed class QualityScriptTests
     [PwshFact]
     public void MutateReport_PreservesJudgedRootRows_WhenSubdirectoryBatchVisitsRootWithZeroJudged()
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-quality-");
         JsonElement r = Eval($$"""
             $runDir = '{{temp.Path.Replace("'", "''")}}'
             $b1Sum = Join-Path $runDir 'b1-summary.json'
@@ -602,7 +602,7 @@ public sealed class QualityScriptTests
             Assert.DoesNotContain("ArcaneCore-lanes", text, StringComparison.OrdinalIgnoreCase);
         }
 
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-quality-");
         (int codeAll, string outAll) = RunScript("mutate-all.ps1", "-Resume", "-OutputRoot", temp.Path);
         Assert.Equal(2, codeAll);
         Assert.Contains("no run with a state.json", outAll);
@@ -614,7 +614,7 @@ public sealed class QualityScriptTests
 
     private static JsonElement Eval(string body)
     {
-        using var temp = new TempDirectory();
+        using var temp = new TempDirectory("arcane-quality-");
         string script = Path.Combine(temp.Path, "run.ps1");
         File.WriteAllText(script, $$"""
             $ErrorActionPreference = 'Stop'
@@ -655,15 +655,6 @@ public sealed class QualityScriptTests
         }
 
         return (process.ExitCode, stdout.Result + stderr.Result);
-    }
-
-    private sealed class TempDirectory : IDisposable
-    {
-        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "arcane-quality-" + Guid.NewGuid().ToString("N"));
-
-        public TempDirectory() => Directory.CreateDirectory(Path);
-
-        public void Dispose() => Directory.Delete(Path, recursive: true);
     }
 
     /// <summary>Runs only where PowerShell 7 (<c>pwsh</c>) is on PATH; CI (ubuntu-latest) has it.</summary>

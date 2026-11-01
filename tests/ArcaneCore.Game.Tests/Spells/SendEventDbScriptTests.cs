@@ -3,7 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData.Creatures;
-using Microsoft.Extensions.Logging;
+using ArcaneCore.TestSupport;
 using Xunit;
 
 namespace ArcaneCore.Game.Tests.Spells;
@@ -72,21 +72,9 @@ public sealed class SendEventDbScriptTests
         Assert.Equal(1, creatures.PendingDbScriptSteps);
         Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, spellId, SpellCastTargets.ForSelf(), triggered: true));
         Assert.Equal(1, creatures.PendingDbScriptSteps); // the second start was declined: the event is still running
-        Assert.DoesNotContain(logger.Lines, l => l.Contains("is not implemented yet", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Messages, l => l.Contains("is not implemented yet", StringComparison.Ordinal));
 
         Assert.Equal(SpellCastResult.CastOk, spells.CastSpell(player, missingSpellId, SpellCastTargets.ForSelf(), triggered: true));
-        Assert.Contains(logger.Lines, l => l.Contains($"send event {missingEventId} is not implemented yet", StringComparison.Ordinal));
-    }
-
-    private sealed class CapturingLogger : ILogger
-    {
-        public List<string> Lines { get; } = [];
-
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-
-        public bool IsEnabled(LogLevel logLevel) => true;
-
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
-            => Lines.Add(formatter(state, exception));
+        Assert.Contains(logger.Messages, l => l.Contains($"send event {missingEventId} is not implemented yet", StringComparison.Ordinal));
     }
 }
