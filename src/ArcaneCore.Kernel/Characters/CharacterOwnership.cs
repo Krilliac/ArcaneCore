@@ -18,6 +18,36 @@ public interface ICharacterOwnershipStore
 
     Task<CharacterOwnershipToken?> TryTakeoverAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, CancellationToken cancellationToken = default);
 
+    // The members below are the per-worker writer lock's (design _wf/writer-lock-DESIGN.md, step C3). They are default interface members so a
+    // store that only knows the realm-wide 'world' row (the test fakes) keeps compiling and behaving as before; EfCharacterOwnershipStore overrides all of them.
+
+    /// <summary>
+    /// True when any ownership row is active: the combined World or at least one worker shard. The claim watch of an unfenced world uses it. The default
+    /// answers for the 'world' row only, which is identical while no worker row exists.
+    /// </summary>
+    Task<bool> IsAnyOwnedAsync(CancellationToken cancellationToken = default) => IsOwnedAsync("world", cancellationToken);
+
+    /// <summary>
+    /// Claims a worker scope (<c>worker:&lt;shard&gt;</c>) owning <paramref name="ownedMaps"/> (null owns every map); the realm-wide 'world' scope takes only null.
+    /// The default supports only a null map set (it is <see cref="TryAcquireAsync(string, string, Guid, CancellationToken)"/>).
+    /// </summary>
+    Task<CharacterOwnershipToken?> TryAcquireAsync(string scope, string ownerNode, Guid incarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+        => ownedMaps is null
+            ? TryAcquireAsync(scope, ownerNode, incarnation, cancellationToken)
+            : throw new NotSupportedException("this ownership store has no per-worker owned map sets");
+
+    /// <summary>Crash recovery of a worker shard: CAS the observed epoch and incarnation to the next epoch under <paramref name="newIncarnation"/>. The caller must hold the shard's advisory lock. Null when the row moved or the gate refuses.</summary>
+    Task<CharacterOwnershipToken?> TryReclaimAsync(CharacterOwnershipToken observed, string ownerNode, Guid newIncarnation, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("this ownership store has no per-worker scopes");
+
+    /// <summary>Deactivates a worker shard whose heartbeat is at least <paramref name="minHeartbeatAgeMs"/> old; false when the row moved or is too fresh.</summary>
+    Task<bool> ReapAsync(CharacterOwnershipToken observed, long nowUnixMs, long minHeartbeatAgeMs, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("this ownership store has no per-worker scopes");
+
+    /// <summary>Records that a worker shard's owner is alive; false when the token no longer owns the shard.</summary>
+    Task<bool> HeartbeatAsync(CharacterOwnershipToken token, long nowUnixMs, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("this ownership store has no per-worker scopes");
+
     Task ReleaseAsync(CharacterOwnershipToken token, CancellationToken cancellationToken = default);
 }
 

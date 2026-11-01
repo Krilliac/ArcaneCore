@@ -9,6 +9,8 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Cluster.Gateway;
+using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Clustering;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Persistence;
@@ -34,6 +36,8 @@ namespace ArcaneCore.World.Tests.Cluster;
 /// <item>A save by the old owner after the takeover is refused and writes nothing.</item>
 /// <item><c>realm_authority_lease</c> contends correctly across the two hosts' connections.</item>
 /// <item>The advisory writer lock refuses an unfenced third host, and the durable claim refuses it once the lock is gone.</item>
+/// <item>Worker scope (<c>Cluster:Fencing:Scope=Worker</c>): two shards start, the same shard is refused by the shard advisory lock, the realm-lock probe makes a worker
+/// back out of an unfenced Combined world, and a restarted shard reclaims its dead incarnation so the old token is refused.</item>
 /// </list>
 /// They run on MariaDB and PostgreSQL where <c>ARCANECORE_TEST_MARIADB</c> / <c>ARCANECORE_TEST_POSTGRES</c> name a server (a server connection string
 /// without a database); without either they are reported as Skipped with that reason, never silently passed.
@@ -242,6 +246,82 @@ public sealed class TwoWorldFencingProviderTests
         Assert.Equal(owned, await CurrentClaimAsync(first));
     }
 
+    [TwoWorldTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task WorkerScope_TwoShardsStart_AndTheSameShardIsRefusedByTheShardLock(DatabaseProvider provider)
+    {
+        await using ScratchCluster cluster = await ScratchCluster.CreateAsync(provider);
+        await using HostKit a = cluster.NewWorker("shard-a", "0,1");
+        await using HostKit b = cluster.NewWorker("shard-b", "30,31");
+        await a.Host.StartAsync(CancellationToken.None);
+        await b.Host.StartAsync(CancellationToken.None);
+
+        Assert.Equal("worker:shard-a", a.World.CharacterOwnership!.Scope);
+        Assert.Equal("worker:shard-b", b.World.CharacterOwnership!.Scope);
+        Assert.Equal(a.World.CharacterOwnership, await CurrentClaimAsync(a, "worker:shard-a"));
+        Assert.Equal(b.World.CharacterOwnership, await CurrentClaimAsync(b, "worker:shard-b"));
+        Assert.Null(await CurrentClaimAsync(a, "world")); // the realm row stays inactive
+
+        await using HostKit duplicate = cluster.NewWorker("shard-a", "0,1");
+        CharacterDatabaseAlreadyOwnedException refused = await Assert.ThrowsAsync<CharacterDatabaseAlreadyOwnedException>(
+            () => duplicate.Host.StartAsync(CancellationToken.None));
+        Assert.Contains("already owned by another world process", refused.Message);
+        Assert.False(duplicate.Feature.Attached);
+        Assert.Null(duplicate.Guard.LockPath); // the refused start holds nothing
+        Assert.Equal(a.World.CharacterOwnership, await CurrentClaimAsync(a, "worker:shard-a")); // the live worker's claim is untouched
+    }
+
+    [TwoWorldTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task WorkerScope_BacksOut_WhenAnUnfencedCombinedWorldHoldsTheRealmLock(DatabaseProvider provider)
+    {
+        await using ScratchCluster cluster = await ScratchCluster.CreateAsync(provider);
+        await using HostKit combined = cluster.NewHost("node-c", fenced: false);
+        await combined.Host.StartAsync(CancellationToken.None); // takes the realm advisory lock and no durable claim
+
+        await using HostKit worker = cluster.NewWorker("shard-a", "0,1");
+        InvalidOperationException refused = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => worker.Host.StartAsync(CancellationToken.None));
+
+        Assert.Contains("realm writer lock", refused.Message);
+        Assert.False(worker.Feature.Attached);
+        Assert.Null(await CurrentClaimAsync(combined, "worker:shard-a")); // the claim written before the probe was released again
+    }
+
+    [TwoWorldTheory]
+    [MemberData(nameof(ServerProviders))]
+    public async Task WorkerScope_ARestartedShardReclaimsItsDeadIncarnation_AndTheOldTokenIsRefused(DatabaseProvider provider)
+    {
+        await using ScratchCluster cluster = await ScratchCluster.CreateAsync(provider);
+        int id = await cluster.CreateCharacterAsync("WorkerReclaim");
+        await using HostKit old = cluster.NewWorker("shard-a", "0,1");
+        await old.Host.StartAsync(CancellationToken.None);
+        CharacterOwnershipToken oldToken = old.World.CharacterOwnership!;
+        await SaveAsync(old, State(id, 5, oldToken));
+        Assert.Equal(5u, await cluster.MapOfAsync(id));
+
+        // A hard kill: the shard lock session ends, the row stays active. The old host object remains alive here as the zombie.
+        old.Guard.Dispose();
+
+        await using HostKit restarted = cluster.NewWorker("shard-a", "0,1");
+        await restarted.Host.StartAsync(CancellationToken.None);
+        CharacterOwnershipToken newToken = restarted.World.CharacterOwnership!;
+        Assert.Equal(oldToken.Scope, newToken.Scope);
+        Assert.Equal(oldToken.Epoch + 1, newToken.Epoch);
+        Assert.NotEqual(oldToken.Incarnation, newToken.Incarnation);
+        Assert.Equal(newToken, await CurrentClaimAsync(restarted, newToken.Scope));
+
+        await AssertRejectedAsync(() => SaveAsync(old, State(id, 6, oldToken)));
+        Assert.Equal(5u, await cluster.MapOfAsync(id));
+        await SaveAsync(restarted, State(id, 7, newToken));
+        Assert.Equal(7u, await cluster.MapOfAsync(id));
+    }
+
+    private static async Task<CharacterOwnershipToken?> CurrentClaimAsync(HostKit host, string scopeName)
+    {
+        await using AsyncServiceScope scope = host.Scopes.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().GetCurrentAsync(scopeName);
+    }
+
     private static async Task<CharacterOwnershipToken?> CurrentClaimAsync(HostKit host)
     {
         await using AsyncServiceScope scope = host.Scopes.CreateAsyncScope();
@@ -316,6 +396,10 @@ public sealed class TwoWorldFencingProviderTests
 
         public HostKit NewHost(string ownerNode, bool fenced, CharacterOwnershipToken? takeover = null)
             => HostKit.Create(BuildServices(_database, fenced), ownerNode, fenced, takeover);
+
+        /// <summary>A Worker-scope host for one shard that owns the given maps (a test host, not a cluster process).</summary>
+        public HostKit NewWorker(string shard, string ownedMaps)
+            => HostKit.Create(BuildServices(_database, fenced: true), "node-" + shard, fenced: true, takeover: null, shard, ownedMaps);
 
         /// <summary>
         /// Host A starts and claims the database; its lock session then ends (the process is gone) and host B starts with an explicit takeover of A's claim.
@@ -449,12 +533,11 @@ public sealed class TwoWorldFencingProviderTests
         public Feature Feature { get; }
         public IServiceScopeFactory Scopes { get; }
 
-        public static HostKit Create(ServiceProvider services, string ownerNode, bool fenced, CharacterOwnershipToken? takeover)
+        public static HostKit Create(ServiceProvider services, string ownerNode, bool fenced, CharacterOwnershipToken? takeover, string? workerShard = null, string? ownedMaps = null)
         {
             IServiceScopeFactory scopes = services.GetRequiredService<IServiceScopeFactory>();
             var saveQueue = new CharacterSaveQueue(scopes, NullLogger<CharacterSaveQueue>.Instance);
             var world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, saveQueue, NullLogger<WorldRuntime>.Instance);
-            var guard = new WorldWriterGuard(services.GetRequiredService<IOptions<DatabaseOptions>>());
             var ownership = services.GetRequiredService<CharacterOwnershipContext>();
             var fencing = new CharacterFencingOptions
             {
@@ -463,8 +546,26 @@ public sealed class TwoWorldFencingProviderTests
                 TakeoverEpoch = takeover?.Epoch,
                 TakeoverIncarnation = takeover?.Incarnation,
             };
-            var host = new WorldHost(world, saveQueue, new CharacterDirectory(), scopes, NullLogger<WorldHost>.Instance, Options.Create(fencing),
-                ownershipContext: ownership, writerGuard: guard) { ListenerExpected = false };
+            WorldHost host;
+            WorldWriterGuard guard;
+            if (workerShard is null)
+            {
+                guard = new WorldWriterGuard(services.GetRequiredService<IOptions<DatabaseOptions>>());
+                host = new WorldHost(world, saveQueue, new CharacterDirectory(), scopes, NullLogger<WorldHost>.Instance, Options.Create(fencing),
+                    ownershipContext: ownership, writerGuard: guard) { ListenerExpected = false };
+            }
+            else
+            {
+                fencing.Scope = CharacterFencingScope.Worker;
+                fencing.Shard = workerShard;
+                IOptions<CharacterFencingOptions> fencingOptions = Options.Create(fencing);
+                IOptions<GatewayWorkerOptions> workerOptions = Options.Create(new GatewayWorkerOptions { Enabled = true, NodeId = ownerNode, OwnedMaps = ownedMaps ?? string.Empty });
+                guard = new WorldWriterGuard(services.GetRequiredService<IOptions<DatabaseOptions>>(), fencingOptions: fencingOptions, workerOptions: workerOptions);
+                host = new WorldHost(world, saveQueue, new CharacterDirectory(), scopes, NullLogger<WorldHost>.Instance, fencingOptions,
+                    ownershipContext: ownership, writerGuard: guard, workerOptions: workerOptions,
+                    nodeOptions: Options.Create(new ClusterNodeOptions { Role = ClusterNodeRole.MapWorker })) { ListenerExpected = false };
+            }
+
             return new HostKit(services, world, host, guard, ownership, (Feature)services.GetServices<IWorldFeature>().Single());
         }
 
