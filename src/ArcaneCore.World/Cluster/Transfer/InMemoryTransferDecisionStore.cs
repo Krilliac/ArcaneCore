@@ -286,6 +286,39 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
     }
 
     /// <inheritdoc />
+    /// <remarks>Without ownership rows the store cannot ask which incarnation owns the scope, so it trusts the caller (the coordinator reads it from the target)
+    /// and moves the token to the next epoch under <paramref name="targetIncarnation"/>, fencing the committed token out.</remarks>
+    public Task<TransferDecisionRecord> RebindCommittedTargetAsync(
+        Guid transferId,
+        Guid targetIncarnation,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (targetIncarnation == Guid.Empty)
+            throw new ArgumentException("Target incarnation must be non-empty.", nameof(targetIncarnation));
+
+        lock (_sync)
+        {
+            TransferDecisionRecord current = GetRequiredLocked(transferId);
+            if (current.DecisionState != PlayerTransferDecisionState.Committed || current.TargetOwnershipToken is not { } committedToken)
+            {
+                throw new InvalidOperationException(
+                    $"Transfer '{transferId}' cannot rebind its target from state {current.DecisionState}; only a committed transfer may.");
+            }
+
+            if (committedToken.Incarnation == targetIncarnation)
+                return Task.FromResult(current);
+
+            EnsureOwnershipMatchesLocked(current.CharacterGuid, committedToken);
+            var rebound = new CharacterOwnershipToken(committedToken.Scope, checked(committedToken.Epoch + 1), targetIncarnation);
+            _activeOwnership[current.CharacterGuid] = rebound;
+            TransferDecisionRecord updated = current with { TargetOwnershipToken = rebound, UpdatedAtUtcMs = _clockUtcMs() };
+            _decisions[transferId] = updated;
+            return Task.FromResult(updated);
+        }
+    }
+
+    /// <inheritdoc />
     public Task<TransferDecisionRecord> MarkCompletedAsync(
         Guid transferId,
         CancellationToken cancellationToken = default)

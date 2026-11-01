@@ -92,6 +92,11 @@ public sealed class RemoteTransferTargetWorker : ITransferTargetWorker
     }
 
     /// <inheritdoc />
+    /// <remarks>Describes the target again (<see cref="RefreshAsync"/>), so a restart the cached answer has not seen yet is found.</remarks>
+    public async Task<Guid> CurrentIncarnationAsync(CancellationToken cancellationToken = default)
+        => (await RefreshAsync(cancellationToken).ConfigureAwait(false)).Incarnation;
+
+    /// <inheritdoc />
     public async Task<bool> TryReserveSlotAsync(
         Guid transferId, ulong characterGuid, uint targetMapId, uint targetInstanceId, CancellationToken cancellationToken = default) =>
         (await ReserveSlotAsync(transferId, characterGuid, targetMapId, targetInstanceId, cancellationToken).ConfigureAwait(false)).Reserved;

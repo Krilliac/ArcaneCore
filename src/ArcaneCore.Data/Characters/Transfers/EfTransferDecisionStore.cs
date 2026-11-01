@@ -483,6 +483,56 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Only a transfer committed into a worker scope can rebind: that scope's <c>character_ownership</c> row names the one live incarnation, so the new token is
+    /// exactly the restarted target's scope token (the one its write fence checks), and the dead incarnation it replaces can no longer write. A transfer committed
+    /// within the realm-wide 'world' scope has no such row to prove the new incarnation is the scope's owner, so it is refused with <see cref="NotSupportedException"/>.
+    /// </remarks>
+    public async Task<TransferDecisionRecord> RebindCommittedTargetAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (targetIncarnation == Guid.Empty)
+            throw new ArgumentException("Target incarnation must be non-empty.", nameof(targetIncarnation));
+
+        return await InTransactionAsync(async (db, ct) =>
+        {
+            ClusterTransferDecisionRow row = await RequireDecisionAsync(db, transferId, ct).ConfigureAwait(false);
+            string target = targetIncarnation.ToString("D");
+            if (row.State != (int)PlayerTransferDecisionState.Committed || row.TargetEpoch is not { } oldEpoch || row.TargetIncarnation is not { } oldIncarnation)
+                throw new InvalidOperationException($"Transfer '{transferId}' cannot rebind its target from state {(PlayerTransferDecisionState)row.State}; only a committed transfer may.");
+            if (oldIncarnation == target)
+                return ToRecord(row);
+            if (row.TargetScope is not { } scope || !CharacterOwnershipScopes.IsWorker(scope))
+                throw new NotSupportedException($"Transfer '{transferId}' was committed within scope '{row.TargetScope ?? row.SourceScope}', not into a worker scope; it cannot rebind to another incarnation.");
+
+            long newEpoch = await db.Set<CharacterOwnershipRow>().AsNoTracking()
+                .Where(o => o.Scope == scope && o.Active && o.OwnerIncarnation == target)
+                .Select(o => (long?)o.Epoch)
+                .SingleOrDefaultAsync(ct).ConfigureAwait(false)
+                ?? throw new CharacterOwnershipRejectedException(scope, 0);
+
+            long now = _clock();
+            string id = row.TransferId;
+            int swapped = await db.Set<ClusterTransferOwnerRow>()
+                .Where(r => r.CharacterGuid == row.CharacterGuid && r.ActiveTransfer == id && r.Scope == scope
+                    && r.Epoch == oldEpoch && r.Incarnation == oldIncarnation)
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(r => r.Epoch, newEpoch)
+                    .SetProperty(r => r.Incarnation, target)
+                    .SetProperty(r => r.UpdatedAtUtcMs, now), ct)
+                .ConfigureAwait(false);
+            if (swapped == 0)
+                throw new CharacterOwnershipRejectedException(scope, oldEpoch);
+
+            row.TargetEpoch = newEpoch;
+            row.TargetIncarnation = target;
+            row.UpdatedAtUtcMs = now;
+            await db.SaveChangesAsync(ct).ConfigureAwait(false);
+            return ToRecord(row);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public async Task<TransferDecisionRecord> MarkCompletedAsync(Guid transferId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -889,6 +939,9 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
 
         public Task<TransferDecisionRecord> CommitDecisionAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default, string? targetScope = null)
             => inner.CommitDecisionAsync(transferId, targetIncarnation, cancellationToken, targetScope); // refused for a handoff transfer unless already committed by the takeover
+
+        public Task<TransferDecisionRecord> RebindCommittedTargetAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default)
+            => inner.RebindCommittedTargetAsync(transferId, targetIncarnation, cancellationToken);
 
         public Task<TransferDecisionRecord> MarkCompletedAsync(Guid transferId, CancellationToken cancellationToken = default)
             => inner.MarkCompletedAsync(transferId, cancellationToken);

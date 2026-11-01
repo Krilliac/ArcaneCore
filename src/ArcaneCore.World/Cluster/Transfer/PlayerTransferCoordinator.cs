@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters.Ownership;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
 
@@ -49,6 +50,12 @@ public interface ITransferTargetWorker
     /// character's claim to (design _wf/writer-lock-DESIGN.md section 1b). Null (the default) keeps the source token's scope: the realm-wide 'world' scope.
     /// </summary>
     string? OwnershipScope => null;
+
+    /// <summary>
+    /// The incarnation the target runs under right now, asked of the target itself when it can be (a remote target describes itself again); the default is the cached <see cref="Incarnation"/>.
+    /// Roll-forward compares it with a committed token's incarnation to find a target that restarted after the commit (design _wf/handoff-control-DESIGN.md, follow-up C18).
+    /// </summary>
+    Task<Guid> CurrentIncarnationAsync(CancellationToken cancellationToken = default) => Task.FromResult(Incarnation);
 
     /// <summary>Stage 1: reserves a target slot on the destination worker for `(targetMapId, targetInstanceId)`.</summary>
     Task<bool> TryReserveSlotAsync(
@@ -557,16 +564,24 @@ public sealed class PlayerTransferCoordinator
         // Stage 6 is only half done here: the source is retired, the target is not yet active.
         await TransferStageProbe.ReachedAsync(PlayerTransferStage.ActivateAndRetire, cancellationToken);
 
+        // A target that restarted after the commit runs under a new incarnation, and the committed token still names the dead one, which the
+        // restarted target refuses (it only hands out tokens of its own incarnation). Move the commit to the live incarnation of the same worker
+        // scope first (design _wf/handoff-control-DESIGN.md, follow-up C18); the store proves that incarnation owns the scope.
+        PlayerTransferBundle bundle = record.CapturedBundle;
+        record = await RebindToRestartedTargetAsync(record, targetWorker, cancellationToken);
+        CharacterOwnershipToken targetToken = record.TargetOwnershipToken
+            ?? throw new InvalidOperationException($"Transfer '{transferId}' lost its target token while rebinding.");
+
         // 2. Ensure target passive state exists (in case target worker restarted after CommitDecision) and activate it.
         await targetWorker.InstallPassiveShadowAsync(
             record.TransferId,
-            record.CapturedBundle,
+            bundle,
             cancellationToken);
 
         await targetWorker.ActivateTargetPlayerAsync(
             record.TransferId,
-            record.CapturedBundle,
-            record.TargetOwnershipToken,
+            bundle,
+            targetToken,
             cancellationToken);
 
         // 3. Switch gateway routing to the target worker under the new ownership token.
@@ -575,11 +590,33 @@ public sealed class PlayerTransferCoordinator
             record.CharacterGuid,
             record.SessionGeneration,
             record.TargetWorkerId,
-            record.TargetOwnershipToken,
+            targetToken,
             cancellationToken);
 
         // 4. Mark durable decision Completed.
         return await _decisionStore.MarkCompletedAsync(record.TransferId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Rebinds a committed transfer to its target's live incarnation when the target restarted after the commit. Only a token in the target's own worker
+    /// scope is rebound (a realm-wide token is not tied to one process); a target that does not know its incarnation yet (<see cref="Guid.Empty"/>) is left
+    /// alone, and activation then fails and is retried by recovery.
+    /// </summary>
+    private async Task<TransferDecisionRecord> RebindToRestartedTargetAsync(TransferDecisionRecord record, ITransferTargetWorker targetWorker, CancellationToken cancellationToken)
+    {
+        CharacterOwnershipToken committed = record.TargetOwnershipToken!;
+        if (targetWorker.OwnershipScope is not { } scope ||
+            !CharacterOwnershipScopes.IsWorker(scope) ||
+            !string.Equals(committed.Scope, scope, StringComparison.Ordinal))
+        {
+            return record;
+        }
+
+        Guid live = await targetWorker.CurrentIncarnationAsync(cancellationToken);
+        if (live == Guid.Empty || live == committed.Incarnation)
+            return record;
+
+        return await _decisionStore.RebindCommittedTargetAsync(record.TransferId, live, cancellationToken);
     }
 
     /// <summary>

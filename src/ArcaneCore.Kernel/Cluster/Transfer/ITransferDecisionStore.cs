@@ -91,6 +91,19 @@ public interface ITransferDecisionStore
         CancellationToken cancellationToken = default,
         string? targetScope = null);
 
+    /// <summary>
+    /// Roll-forward after the target worker restarted (design _wf/handoff-control-DESIGN.md, follow-up C18): moves a <see cref="PlayerTransferDecisionState.Committed"/> transfer's target token, and the character's claim
+    /// with it, from the dead incarnation it was committed under to <paramref name="targetIncarnation"/>, the live incarnation of the same worker scope. Only the scope's active owner may be named: a store with
+    /// ownership rows requires an active row of the committed scope under <paramref name="targetIncarnation"/> (the old incarnation is then fenced out) and takes its epoch; the claim moves by compare-and-swap
+    /// from the committed token. The same incarnation again returns the record unchanged; any other state throws <see cref="InvalidOperationException"/>. A store that cannot rebind throws
+    /// <see cref="NotSupportedException"/> (the default), which leaves the transfer journalled for recovery to retry.
+    /// </summary>
+    Task<TransferDecisionRecord> RebindCommittedTargetAsync(
+        Guid transferId,
+        Guid targetIncarnation,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException($"{GetType().Name} cannot rebind a committed transfer to a restarted target.");
+
     /// <summary>Stage 6: marks a committed transfer as completed once target activation and source retirement finish.</summary>
     Task<TransferDecisionRecord> MarkCompletedAsync(
         Guid transferId,
