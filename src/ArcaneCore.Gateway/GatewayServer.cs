@@ -1021,8 +1021,12 @@ public sealed class GatewayWorkerLink
 
             if (retarget.Task.IsCompleted && Volatile.Read(ref _migrate) is not null)
             {
-                Volatile.Write(ref _draining, link); // kept open: the next registration moves its sessions, then closes it
-                continue;
+                if (Interlocked.Exchange(ref _draining, link) is { } superseded && !ReferenceEquals(superseded, link))
+                {
+                    await superseded.DisposeAsync().ConfigureAwait(false); // an earlier kept link nobody moved: never leaked
+                }
+
+                continue; // the link is kept open: the next registration moves its sessions, then closes it
             }
 
             await link.DisposeAsync().ConfigureAwait(false);

@@ -20,7 +20,7 @@ namespace ArcaneCore.Gateway.Tests;
 /// <summary>
 /// Cross-process handoff control channel, commit C13: the handoff hold survives the loss of the source's link once the handoff reached Flushed (the source's saves are
 /// durable, so the promoted world can adopt the character). Same layout as <see cref="WorldHandoffTests"/>: two worlds on one set of databases (A active, B standby), a real
-/// gateway, the mock client, the durable handoff journal. A's link "dies" by closing the gateway's end of it, which is what the gateway sees when the source process is gone:
+/// gateway, the mock client, the durable handoff journal. A's process death is simulated by stopping A's link host and listener (the gateway sees LinkLost and its reconnect is refused):
 /// every session on the link closes with LinkLost. Before Flushed that disconnects the client (its state is not safe); after Flushed the client stays and lands on B.
 /// </summary>
 public sealed class HandoffHoldLinkLossTests
@@ -58,7 +58,7 @@ public sealed class HandoffHoldLinkLossTests
                     {
                         // The handoff reached Flushed (what the gateway's handoff service signals after the Flush reply), then A's link is lost.
                         marked = gateway.MarkHandoffFlushed();
-                        await KillLinkAsync(gateway, ct);
+                        await KillSourceAsync(linked, ct);
                         await Task.Delay(500, ct); // time for the gateway to act on the loss: a connection that was going to be kicked is gone by now
                         connectionsDuringOutage = gateway.ConnectionCount;
                         kickedDuringOutage = AllConnections(gateway).Any(c => c.KickReason is not null);
@@ -124,7 +124,7 @@ public sealed class HandoffHoldLinkLossTests
                     if (stage == WorldHandoffStage.Frozen)
                     {
                         // The hold is in place but the handoff is not flushed: the loss of the link ends the session.
-                        await KillLinkAsync(gateway, ct);
+                        await KillSourceAsync(linked, ct);
                         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
                         bounded.CancelAfter(TimeSpan.FromSeconds(20));
                         await WaitUntilAsync(() => Task.FromResult(gateway.ConnectionCount == 0), bounded.Token);
@@ -199,12 +199,14 @@ public sealed class HandoffHoldLinkLossTests
         }
     }
 
-    /// <summary>The gateway's end of the first worker's link closes, as when the worker process dies: every session on it closes with LinkLost, the gateway reconnects or backs off.</summary>
-    private static async Task KillLinkAsync(GatewayServer gateway, CancellationToken token)
+    /// <summary>
+    /// A's process dies: its link host and listener stop (design section 8: process death is disposing that end), so the gateway's link is lost and its reconnect is refused.
+    /// Returns once the gateway has no link to A, so the reroute takes the dead-source path (no link, flushed holds only).
+    /// </summary>
+    private static async Task KillSourceAsync(Linked linked, CancellationToken token)
     {
-        GatewaySessionLinkClient dead = gateway.Workers[0].Link ?? throw new InvalidOperationException("the worker link is not up");
-        await dead.DisposeAsync();
-        while (ReferenceEquals(gateway.Workers[0].Link, dead))
+        await linked.Endpoint.StopAsync(CancellationToken.None);
+        while (linked.Gateway.Workers[0].Link is not null)
         {
             await Task.Delay(20, token);
         }

@@ -605,7 +605,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
 
     /// <summary>
     /// Whole-World handoff, after Flushed: the source's saves are durable, so this connection's hold now survives the loss of the source's link (the session on the source
-    /// closing with LinkLost no longer disconnects the client; the handoff's reroute moves it to the promoted world, or the abort ends it). True when the connection holds
+    /// closing with LinkLost no longer disconnects the client; the handoff's reroute moves it to the promoted world, or an abort kicks it when the link is gone). True when the connection holds
     /// for the handoff asked for by <paramref name="owner"/> (the worker slot) and is marked now.
     /// </summary>
     internal bool MarkHandoffFlushed(object owner)
@@ -642,6 +642,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
     internal void EndHandoffHold(GatewaySessionLinkClient? holdLink = null, object? holdOwner = null)
     {
         bool delivered = true;
+        bool wasFlushed = false;
         lock (_redirectGate)
         {
             if (!_handoffHolding)
@@ -656,6 +657,7 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                 return;
             }
 
+            wasFlushed = _handoffFlushed;
             _handoffHolding = false;
             _handoffFlushed = false;
             _handoffHoldLink = null;
@@ -673,6 +675,11 @@ public sealed class GatewayClientConnection : IGatewaySessionSink, IGatewayTrans
                         break;
                     }
                 }
+            }
+
+            if (wasFlushed && _state == ConnectionState.Forwarding && _link is not { IsConnected: true })
+            {
+                delivered = false; // a flushed hold survived the loss of its link; the abort leaves nothing to forward to
             }
         }
 
