@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>ArcaneCore.Cluster.E2E.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The mock client drives the scenario (its ScenarioConnection and ScenarioWire are internal; InternalsVisibleTo is declared in its project). -->
+    <ProjectReference Include="../../tools/ArcaneCore.MockClient/ArcaneCore.MockClient.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The three daemons the fixture launches as subprocesses. Built first (ReferenceOutputAssembly=false: they are executables, never loaded
+         into the test process); CopyDaemonOutputs below puts each one's whole output folder under daemons/ in this project's output. The
+         Playerbots pack the world loads from beside its executable is built by the MockClient project reference above, before this copy runs. -->
+    <ProjectReference Include="../../src/ArcaneCore.Gateway/ArcaneCore.Gateway.csproj" ReferenceOutputAssembly="false" OutputItemType="GatewayDaemonOutput" />
+    <ProjectReference Include="../../src/ArcaneCore.Realm/ArcaneCore.Realm.csproj" ReferenceOutputAssembly="false" OutputItemType="RealmDaemonOutput" />
+    <ProjectReference Include="../../src/ArcaneCore.World/ArcaneCore.World.csproj" ReferenceOutputAssembly="false" OutputItemType="WorldDaemonOutput" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="CopyDaemonOutputs" AfterTargets="Build">
+    <PropertyGroup>
+      <_GatewayDaemonDir>@(GatewayDaemonOutput->'%(RootDir)%(Directory)')</_GatewayDaemonDir>
+      <_RealmDaemonDir>@(RealmDaemonOutput->'%(RootDir)%(Directory)')</_RealmDaemonDir>
+      <_WorldDaemonDir>@(WorldDaemonOutput->'%(RootDir)%(Directory)')</_WorldDaemonDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_GatewayDaemonFiles Include="$(_GatewayDaemonDir)**/*" />
+      <_RealmDaemonFiles Include="$(_RealmDaemonDir)**/*" />
+      <_WorldDaemonFiles Include="$(_WorldDaemonDir)**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_GatewayDaemonFiles)" DestinationFiles="@(_GatewayDaemonFiles->'$(OutDir)daemons/gateway/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_RealmDaemonFiles)" DestinationFiles="@(_RealmDaemonFiles->'$(OutDir)daemons/realm/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_WorldDaemonFiles)" DestinationFiles="@(_WorldDaemonFiles->'$(OutDir)daemons/world/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+</Project>
