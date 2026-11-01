@@ -851,6 +851,81 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
+    /// Starts the named processes in the order given (the order <see cref="PlanStartAll"/> returns) and, when <see cref="ClusterSupervisorOptions.StartGroupReadySeconds"/> is set, waits
+    /// for each <see cref="SupervisedProcessConfig.StartOrder"/> group to send its first <c>alive</c> heartbeat before it launches the next group (see <see cref="WaitForGroupReadyAsync"/>).
+    /// <paramref name="onStarted"/> runs after each launch.
+    /// </summary>
+    public async Task StartInGroupsAsync(IReadOnlyList<string> names, Action<SupervisedProcessSnapshot>? onStarted = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        int[] orders;
+        lock (_gate)
+        {
+            orders = [.. names.Select(n => _entries.TryGetValue(n, out ManagedEntry? e) ? e.Config.StartOrder : 0)];
+        }
+
+        var group = new List<string>();
+        for (int i = 0; i < names.Count; i++)
+        {
+            SupervisedProcessSnapshot snapshot = await StartProcessAsync(names[i], ct).ConfigureAwait(false);
+            onStarted?.Invoke(snapshot);
+            group.Add(names[i]);
+            if (i + 1 < names.Count && orders[i + 1] != orders[i])
+            {
+                await WaitForGroupReadyAsync(group, ct).ConfigureAwait(false);
+                group.Clear();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Waits until every named child that is running has sent its first <c>alive</c> heartbeat (the world sends it once it ticks, after its schema work), has exited, or
+    /// <see cref="ClusterSupervisorOptions.StartGroupReadySeconds"/> has passed in total (then a warning goes to the console and the start goes on). Returns at once when that option is 0.
+    /// </summary>
+    public async Task WaitForGroupReadyAsync(IReadOnlyList<string> names, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        if (_options.StartGroupReadySeconds <= 0)
+            return;
+
+        var waits = new List<(ManagedEntry Entry, Task Ready, ISupervisedProcess Process)>();
+        lock (_gate)
+        {
+            foreach (string name in names)
+            {
+                if (_entries.TryGetValue(name, out ManagedEntry? entry) && entry.State == SupervisedProcessState.Running && !entry.Armed && entry.Process is { } process)
+                    waits.Add((entry, entry.ReadyTask, process));
+            }
+        }
+
+        if (waits.Count == 0)
+            return;
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        Task timeout = _delayAsync(TimeSpan.FromSeconds(_options.StartGroupReadySeconds), cts.Token);
+        try
+        {
+            foreach ((ManagedEntry entry, Task ready, ISupervisedProcess process) in waits)
+            {
+                Task finished = await Task.WhenAny(ready, process.WaitForExitAsync(cts.Token), timeout).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                if (ReferenceEquals(finished, timeout))
+                {
+                    _multiplexer.RouteLine(
+                        entry.Config,
+                        $"WARNING: Process '{entry.Config.Name}' sent no heartbeat within StartGroupReadySeconds ({_options.StartGroupReadySeconds} s); starting the next group anyway.",
+                        isStdErr: true);
+                    return;
+                }
+            }
+        }
+        finally
+        {
+            await cts.CancelAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// Simulates <see cref="StartAllAsync"/> without launching anything: walks the registered processes in configuration
     /// start order (<see cref="SupervisedProcessConfig.StartOrder"/>, then key) and applies the admission rules cumulatively (process count, total allocated memory, the free-memory reserve
     /// against one probe read, single-writer map ownership), so a caller can refuse a start that cannot reach its minimum
@@ -1363,6 +1438,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             if (beat == SupervisorHeartbeatState.Alive && !entry.Armed)
             {
                 entry.Armed = true; // the first world-tick beat arms the hang watch (ready is sent before the world ticks)
+                entry.MarkReady();
                 entry.WakeWatcher();
             }
         }
@@ -2189,6 +2265,9 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public string? HangCaptureNote { get; set; }
         public bool HangKillIssued { get; set; }
         public bool Armed { get; set; }
+
+        /// <summary>Completes at the current incarnation's first <c>alive</c> beat (<see cref="MarkReady"/>); replaced by each <see cref="BeginIncarnation"/>. Read under _gate.</summary>
+        public Task ReadyTask => _ready.Task;
         public bool GraceWarned { get; set; }
         public long? StopAnnouncedTimestamp { get; set; }
         public SupervisorStopIntent? AnnouncedIntent { get; set; }
@@ -2197,6 +2276,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         public Queue<long> FailureStamps { get; } = new();
 
         private TaskCompletionSource _wake = NewSignal();
+
+        private TaskCompletionSource _ready = NewSignal();
 
         private readonly TimeProvider _time;
 
@@ -2211,6 +2292,7 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
             DumpingTimestamp = null;
             DumpingGraceSeconds = 0;
             Armed = false;
+            _ready = NewSignal();
             GraceWarned = false;
             StopAnnouncedTimestamp = null;
             AnnouncedIntent = null;
@@ -2253,6 +2335,8 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
         }
 
         public void WakeWatcher() => _wake.TrySetResult();
+
+        public void MarkReady() => _ready.TrySetResult();
 
         public ManagedEntry(SupervisedProcessConfig config, string key, TimeProvider time)
         {

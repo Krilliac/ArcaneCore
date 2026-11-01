@@ -309,6 +309,13 @@ public sealed class ClusterSupervisorOptions
     /// </summary>
     public string ChildStateFile { get; set; } = "logs/supervisor-children.json";
 
+    /// <summary>
+    /// Seconds the supervisor waits, before it launches the next <see cref="SupervisedProcessConfig.StartOrder"/> group, for every child of the group it just launched to send its first
+    /// <c>alive</c> heartbeat (default 0: do not wait; 0 to 3600). A child that exits first, or a group still silent after this long, stops the wait with a warning and the start goes on. A split
+    /// topology sets it so the schema-DDL holder is up before the validate-only worlds check the schema. Needs children that heartbeat to the supervisor (<c>Ops:Watchdog</c> on).
+    /// </summary>
+    public int StartGroupReadySeconds { get; set; }
+
     /// <summary>The longest a hang capture may take before the supervisor drains and kills the child anyway, in seconds (default 300; 1 to 3600).</summary>
     public int HangCaptureTimeoutSeconds { get; set; } = 300;
 
@@ -400,6 +407,8 @@ public sealed class ClusterSupervisorOptions
             problems.Add($"{section}:RestartDelayMs must be 0 to {SupervisedProcessConfig.MaxDrainTimeoutMs} (was {RestartDelayMs}).");
         if (DumpGraceSeconds is < 1 or > 3600)
             problems.Add($"{section}:DumpGraceSeconds must be 1 to 3600 (was {DumpGraceSeconds}).");
+        if (StartGroupReadySeconds is < 0 or > 3600)
+            problems.Add($"{section}:StartGroupReadySeconds must be 0 to 3600 (was {StartGroupReadySeconds}).");
         if (HangCaptureTimeoutSeconds is < 1 or > 3600)
             problems.Add($"{section}:HangCaptureTimeoutSeconds must be 1 to 3600 (was {HangCaptureTimeoutSeconds}).");
         if (Processes.Values.Any(p => p.HangCapture != SupervisedHangCaptureMode.None) && string.IsNullOrWhiteSpace(HangCaptureDirectory))

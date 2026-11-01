@@ -136,6 +136,11 @@ public sealed class CharacterClaimService(
             _pendingReleases[characterId] = marker;
         }
 
+        StartRelease(store, characterId, token, marker, isOnline, ticket);
+    }
+
+    private void StartRelease(EfTransferDecisionStore store, int characterId, CharacterOwnershipToken token, object marker, Func<bool>? isOnline, long ticket)
+    {
         Task release = Task.Run(() => ReleaseAsync(store, characterId, token, marker, isOnline, ticket));
         _inFlight[release] = 0;
         _ = release.ContinueWith(done => _inFlight.TryRemove(done, out _), TaskScheduler.Default);
@@ -191,15 +196,25 @@ public sealed class CharacterClaimService(
     {
         if (ticket == 0)
             return;
-        bool lastLive;
+        EfTransferDecisionStore? store = null;
+        object? marker = null;
         lock (_pendingGate)
         {
             RemoveTicketLocked(characterId, ticket);
-            lastLive = !_liveTickets.ContainsKey(characterId);
+            // The ticket-0 release marker is registered in the same critical section that observed "no live ticket left": a login that issues its ticket
+            // right after this block clears the marker (IssueTicket), so the release finds itself superseded instead of deleting the new login's claim.
+            if (token is not null && !_liveTickets.ContainsKey(characterId)
+                && Volatile.Read(ref _disposed) == 0 && CharacterOwnershipScopes.IsWorker(token.Scope)
+                && services.GetService<EfTransferDecisionStore>() is { } found)
+            {
+                store = found;
+                marker = new object();
+                _pendingReleases[characterId] = marker;
+            }
         }
 
-        if (token is not null && lastLive)
-            ScheduleRelease(characterId, token, isOnline);
+        if (store is not null && marker is not null && token is not null)
+            StartRelease(store, characterId, token, marker, isOnline, 0);
     }
 
     /// <summary>Caller holds <c>_pendingGate</c>.</summary>
@@ -246,6 +261,12 @@ public sealed class CharacterClaimService(
                     {
                         _pendingReleases.Remove(characterId);
                         return; // a newer login holds a newer ticket: the claim is that login's
+                    }
+
+                    if (ticket == 0 && _liveTickets.ContainsKey(characterId))
+                    {
+                        _pendingReleases.Remove(characterId);
+                        return; // a release without a ticket (an abandoned login's) never deletes a claim a live login holds
                     }
 
                     _pendingReleases.Remove(characterId);

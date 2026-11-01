@@ -150,7 +150,7 @@ The source is never changed (SQLite is opened read-only). Run it once per realm 
 
 1. **Stop every daemon** (`authd`, `worldd`, tools). `copy` refuses a SQLite characters file that a world process owns (it takes the same
    `<database>.world.lock` sidecar for the length of the copy) and, on a server engine, other connected sessions (counted at the preflight and again right
-   before each component's first write). A SQLite **auth or world** file has no such lock: the realm and world daemons hold no lock or PID marker on it, so
+   before each component's first write). On the characters database it also refuses while an ownership row is active, while a worker shard lock is held (a SQLite worker's `<database>.world.<hash>.lock` sidecar), or when an ownership row names a worker scope that is not a valid shard id (that lock cannot be checked); the check creates no sidecar file. A SQLite **auth or world** file has no such lock: the realm and world daemons hold no lock or PID marker on it, so
    the tool cannot see a daemon that is using it. Stopping them is on you.
 2. **Back up the SQLite files** (`arcane-db backup-info`; with `--backup-dir` `upgrade` writes a verified copy). The copy does not modify them, but you
    will keep them until the new install has run for a while.
