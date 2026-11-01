@@ -62,6 +62,7 @@ internal static class WorldBossTestKit
         w.MinRaidSize = 5;
         w.DefaultRaidSize = 6;
         w.DeriveFromContent = false;
+        w.MusterRadiusYards = 1_000f; // the spares AddBotsAsync parks stand beyond it
         w.IncludedEntries = $"{BossEntry}@0";
         w.MusterWindowSeconds = 120;
         w.RallyYards = 20f;
@@ -90,15 +91,26 @@ internal static class WorldBossTestKit
         return world;
     }
 
-    /// <summary>Level-60 Alliance bots of the given roles: warriors (tanks), priests (healers) and mages (damage), at the start.</summary>
-    internal static async Task<List<(Guid Id, string Name)>> AddBotsAsync(GroupTestWorld world, string prefix, int tanks, int healers, int damage, byte level = 60)
+    /// <summary>
+    /// Level-60 Alliance bots of the given roles: warriors (tanks), priests (healers) and mages (damage), at the start. With <paramref name="parkSpares"/> the bots past a
+    /// core of two of each role stand <see cref="SpareYards"/> east of the start, outside <see cref="PlayerbotWorldBossOptions.MusterRadiusYards"/> (set in <see cref="Tune"/>):
+    /// they are never mustered and never reach the boss, so the raid is the only party at it. Without the park the spares are free bots that walk up to the boss on their own
+    /// (a level-60 bot judges a weakened rank-3 boss a fair fight) and tap it before the raid pulls, which holds the raid for a claim; the population pass used to send some
+    /// of them to other zones as out-levelled bots, which the zone value routing no longer does for a level-capped bot.
+    /// </summary>
+    internal static async Task<List<(Guid Id, string Name)>> AddBotsAsync(GroupTestWorld world, string prefix, int tanks, int healers, int damage, byte level = 60, bool parkSpares = false)
     {
+        const int Core = 2;
+        Vector3 spare = new(StartX + SpareYards, StartY, StartZ);
         var bots = new List<(Guid Id, string Name)>();
-        for (int i = 0; i < tanks; i++) bots.Add(await world.AddBotAsync($"{prefix}tank{Letters(i)}", Human, Warrior, level, [Taunt]));
-        for (int i = 0; i < healers; i++) bots.Add(await world.AddBotAsync($"{prefix}heal{Letters(i)}", Human, Priest, level, [LesserHeal, Resurrection]));
-        for (int i = 0; i < damage; i++) bots.Add(await world.AddBotAsync($"{prefix}mage{Letters(i)}", Human, Mage, level, [Fireball]));
+        for (int i = 0; i < tanks; i++) bots.Add(await world.AddBotAsync($"{prefix}tank{Letters(i)}", Human, Warrior, level, [Taunt], parkSpares && i >= Core ? spare : null));
+        for (int i = 0; i < healers; i++) bots.Add(await world.AddBotAsync($"{prefix}heal{Letters(i)}", Human, Priest, level, [LesserHeal, Resurrection], parkSpares && i >= Core ? spare : null));
+        for (int i = 0; i < damage; i++) bots.Add(await world.AddBotAsync($"{prefix}mage{Letters(i)}", Human, Mage, level, [Fireball], parkSpares && i >= Core ? spare : null));
         return bots;
     }
+
+    /// <summary>How far east of the start <see cref="AddBotsAsync"/> parks its spare bots: beyond the muster radius <see cref="Tune"/> sets, and 1,500 yards from the boss.</summary>
+    internal const float SpareYards = 1_650f;
 
     /// <summary>Character names take letters only: 0 is "a", 26 is "ba".</summary>
     private static string Letters(int index)
