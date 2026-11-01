@@ -124,7 +124,7 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
 - Three real craft rows (3275 Linen Bandage, 7421 Runed Copper Rod, 17187 Transmute: Arcanite with tool 9149 and the 172,800,000 ms category cooldown) run end to end
   (`RealCraftRowsTests`).
 
-## Limits (documented, not delivered)
+## Limits (documented; the shipped enchant data is listed first)
 
 - **Specialization unlearning and engineering switching**: the mangos-classic ScriptDev2 file displays blacksmith unlearn
   confirmations but does not implement their action cases, and its leatherworking unlearn spells (36328, 36433, 36434)
@@ -135,7 +135,7 @@ not be used) and no enchantment engine. All 1,159 tradeskill crafts reported "no
   system does not publish; `Player::CastItemCombatSpell` (`Player.cpp:7310-7355`) is not delivered. The enchantment is stored, shown and timed; it never procs.
 - **Rogue poisons**: the poison item spells (for example 2823) have enchant id 0 in both classic-db and the 1.12 `Spell.dbc`, so vmangos resolves them in spell scripts, which
   this lane does not have; poisons are not applied.
-- **`spell_enchant_charges`** (vmangos `SpellMgr.cpp:1889-1923`) is not in classic-db, so a classic-db import leaves the table as it is. `import` reads it from a vmangos dump (with `spell_proc_item_enchant`, which both dumps carry) and the catalog gives a held-item or temporary enchantment its charges. With no rows, an enchantment gets 0 charges (duration only).
+- **`spell_enchant_charges` and `spell_proc_item_enchant` are shipped** as content SQL (`sql/content/world/<provider>/0005_spell_enchant_charges.sql`, `0004_item_enchant_procs.sql`, [content SQL](../../sql/content/README.md)). The charges file carries the 19 vmangos rows (poisons, 2823 Deadly Poison 60 charges, and the other temporary weapon enchants), read as `SpellMgr.cpp:1889-1923`: the spell id keys the table, 0 means duration only. The proc file carries the PPM overrides mangos-classic ships (Frostbrand 9, Fiery Weapon 6, Lifestealing 6, Icy Chill 1.6); an enchant proc without a row uses weapon speed / 600 percent. Classic-db has neither table, so a classic-db import leaves them as they are; `import` also reads both from a vmangos dump. The poison items themselves still do not apply (next entry).
 - **Skill discovery and extra-item procs are not built because they are TBC features** (vmangos dropped both tables as empty, `sql/old_migrations/20181108192531_world.sql:12-14`; every classic-db
   `skill_discovery_template` row names a spell above 25000 that 1.12 lacks, and every `skill_extra_item_template` row needs an absent TBC specialisation spell). Retail behaviour is
   "no discovery".
