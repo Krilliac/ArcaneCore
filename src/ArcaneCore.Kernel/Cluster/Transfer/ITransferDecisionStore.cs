@@ -104,3 +104,13 @@ public interface ITransferDecisionStore
     /// <summary>Counts every transfer, across all characters, in <see cref="PlayerTransferDecisionState.PreCommit"/> or <see cref="PlayerTransferDecisionState.Committed"/>.</summary>
     Task<int> CountUnresolvedAsync(CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// The startup journal scan of a durable transfer store (S5e): lists every unresolved transfer so a restarted worker, gateway or coordinator can
+/// resolve each one by its stage. A separate contract so a store that cannot enumerate its journal does not pretend to (an empty answer would read as "nothing to recover").
+/// </summary>
+public interface ITransferJournalScan
+{
+    /// <summary>Every transfer, across all characters, in <see cref="PlayerTransferDecisionState.PreCommit"/> or <see cref="PlayerTransferDecisionState.Committed"/>, oldest update first.</summary>
+    Task<IReadOnlyList<TransferDecisionRecord>> ListUnresolvedAsync(CancellationToken cancellationToken = default);
+}

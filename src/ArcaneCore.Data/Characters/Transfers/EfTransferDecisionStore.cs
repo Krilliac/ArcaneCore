@@ -21,7 +21,7 @@ namespace ArcaneCore.Data.Characters.Transfers;
 /// ownership store it extends, so its writes are exempt from the characters write fence (<see cref="CharacterWriteFence.Exempt"/>).
 /// </para>
 /// </summary>
-public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<long>? clockUtcMs = null) : ITransferDecisionStore, IWorldHandoffStore
+public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<long>? clockUtcMs = null) : ITransferDecisionStore, ITransferJournalScan, IWorldHandoffStore
 {
     /// <summary>The characters ownership scope a whole-World handoff moves (<see cref="ICharacterOwnershipStore"/>).</summary>
     public const string WorldScope = "world";
@@ -324,6 +324,19 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         List<ClusterTransferDecisionRow> rows = await db.Set<ClusterTransferDecisionRow>().AsNoTracking()
             .Where(r => r.CharacterGuid == guid
                 && (r.State == (int)PlayerTransferDecisionState.PreCommit || r.State == (int)PlayerTransferDecisionState.Committed))
+            .ToListAsync(cancellationToken).ConfigureAwait(false);
+        return [.. rows.OrderBy(r => r.UpdatedAtUtcMs).Select(ToRecord)];
+    }
+
+    /// <inheritdoc />
+    /// <remarks>One query over the indexed <c>state</c> column (schema 65), so the cost follows the unresolved rows, not the ever-growing table. Each call reads committed rows only.</remarks>
+    public async Task<IReadOnlyList<TransferDecisionRecord>> ListUnresolvedAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+        CharacterDbContext db = scope.ServiceProvider.GetRequiredService<CharacterDbContext>();
+        List<ClusterTransferDecisionRow> rows = await db.Set<ClusterTransferDecisionRow>().AsNoTracking()
+            .Where(r => r.State == (int)PlayerTransferDecisionState.PreCommit || r.State == (int)PlayerTransferDecisionState.Committed)
             .ToListAsync(cancellationToken).ConfigureAwait(false);
         return [.. rows.OrderBy(r => r.UpdatedAtUtcMs).Select(ToRecord)];
     }
