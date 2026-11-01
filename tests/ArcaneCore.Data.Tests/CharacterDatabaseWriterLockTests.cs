@@ -283,6 +283,32 @@ public sealed class CharacterDatabaseWriterLockTests
     public void AShardId_MustMatchTheScopeAlphabet(string shard, bool valid)
         => Assert.Equal(valid, CharacterDatabaseWriterLock.IsValidShardId(shard));
 
+    [Theory]
+    [MemberData(nameof(Providers))]
+    public async Task TheShardProbe_SeesOnlyThatShardsHolder_AndNeverKeepsTheLock_OnEveryProvider(DatabaseProvider provider)
+    {
+        // The liveness proof of the login-time reap (design _wf/writer-lock-DESIGN.md section 5.4): a shard is dead only when its own lock can be taken.
+        await using var databases = new TestDatabases();
+        DatabaseConnectionOptions options = await databases.CreateAsync(provider);
+        Assert.True(CharacterDatabaseWriterLock.ProbeShardFree(options, "w1"));
+
+        using (CharacterDatabaseWriterLock w1 = CharacterDatabaseWriterLock.TryAcquireShard(options, "w1")!)
+        {
+            Assert.NotNull(w1);
+            Assert.False(CharacterDatabaseWriterLock.ProbeShardFree(options, "w1"));
+            Assert.True(CharacterDatabaseWriterLock.ProbeShardFree(options, "w2")); // another shard's lock is not w1's
+        }
+
+        Assert.True(CharacterDatabaseWriterLock.ProbeShardFree(options, "w1")); // released by Dispose
+        Assert.True(CharacterDatabaseWriterLock.ProbeShardFree(options, "w1")); // and the probe itself gave nothing back wrongly: it can run twice
+        using CharacterDatabaseWriterLock again = CharacterDatabaseWriterLock.TryAcquireShard(options, "w1")!; // a probe never keeps the lock
+        Assert.NotNull(again);
+    }
+
+    [Fact]
+    public void TheShardProbe_RefusesAnInvalidShardId()
+        => Assert.Throws<ArgumentException>(() => CharacterDatabaseWriterLock.ProbeShardFree(Sqlite("Data Source=:memory:"), "bad shard"));
+
     [Fact]
     public void AShardId_IsLimitedTo57Characters_AndAnInvalidOneIsRefusedBeforeAnyLockIsTaken()
     {

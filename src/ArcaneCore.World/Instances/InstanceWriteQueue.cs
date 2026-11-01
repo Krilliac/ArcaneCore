@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Game.Instances;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
@@ -969,13 +970,13 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                         await store.SaveResetTimeAsync(reset).ConfigureAwait(false);
                         break;
                     case KeyKind.PlayerBind when value.Bind is { } bind:
-                        await store.SaveBindAsync(bind).ConfigureAwait(false);
+                        await TryWriteClaimedAsync(bind.CharacterId, () => store.SaveBindAsync(bind)).ConfigureAwait(false);
                         break;
                     case KeyKind.PlayerBind:
                         await store.DeleteBindAsync(key.A, (uint)key.B).ConfigureAwait(false);
                         break;
                     case KeyKind.LastInstance when value.Last is { } last:
-                        await store.SaveLastInstanceAsync(last).ConfigureAwait(false);
+                        await TryWriteClaimedAsync(last.CharacterId, () => store.SaveLastInstanceAsync(last)).ConfigureAwait(false);
                         break;
                     case KeyKind.GroupBind when value.GroupBind is { } groupBind:
                         await store.SaveGroupBindAsync(groupBind).ConfigureAwait(false);
@@ -1017,6 +1018,27 @@ public sealed class InstanceWriteQueue(IServiceScopeFactory scopes, ILogger logg
                 FaultLedger.Shared.Record("writequeue.instance-failure", ex);
                 return ex;
             }
+        }
+    }
+
+    /// <summary>
+    /// Runs a write of one character's own instance row under <see cref="CharacterWriteClaim"/> (checked by the write fence in Worker scope only; design
+    /// _wf/writer-lock-DESIGN.md C5). A refused claim means another world holds the character now (or nobody does): the write is durably refused and
+    /// superseded, so it is dropped (false) rather than retained, which would fault every barrier of the character.
+    /// </summary>
+    private async Task<bool> TryWriteClaimedAsync(int characterId, Func<Task> write)
+    {
+        try
+        {
+            using CharacterWriteClaim.Scope claim = CharacterWriteClaim.Use(characterId);
+            await write().ConfigureAwait(false);
+            return true;
+        }
+        catch (CharacterClaimRejectedException ex)
+        {
+            FaultLedger.Shared.Record("writequeue.instance-claim", ex);
+            logger.LogWarning("instance write for character {Character} dropped: {Reason}", characterId, ex.Message);
+            return false;
         }
     }
 

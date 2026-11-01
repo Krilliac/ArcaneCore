@@ -71,11 +71,15 @@ public interface ITransferDecisionStore
     /// <summary>
     /// Stage 5 (Single Point of No Return): atomically commits the transfer decision and swaps active ownership
     /// from <see cref="TransferDecisionRecord.SourceOwnershipToken"/> (`Epoch = N`) to the new target token (`Epoch = N + 1`).
+    /// <paramref name="targetScope"/> is the ownership scope the target world claims under (per-worker writer lock, design _wf/writer-lock-DESIGN.md
+    /// section 1b): the character's claim moves to it, so the source's retained saves are refused. Null keeps the source token's scope (the realm-wide
+    /// 'world' scope, where source and target share one scope).
     /// </summary>
     Task<TransferDecisionRecord> CommitDecisionAsync(
         Guid transferId,
         Guid targetIncarnation,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? targetScope = null);
 
     /// <summary>Stage 6: marks a committed transfer as completed once target activation and source retirement finish.</summary>
     Task<TransferDecisionRecord> MarkCompletedAsync(

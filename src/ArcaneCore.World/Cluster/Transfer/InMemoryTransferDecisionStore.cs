@@ -201,7 +201,8 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
     public Task<TransferDecisionRecord> CommitDecisionAsync(
         Guid transferId,
         Guid targetIncarnation,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? targetScope = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (targetIncarnation == Guid.Empty)
@@ -236,7 +237,7 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITra
             EnsureOwnershipMatchesLocked(current.CharacterGuid, current.SourceOwnershipToken);
 
             var targetToken = new CharacterOwnershipToken(
-                Scope: current.SourceOwnershipToken.Scope,
+                Scope: targetScope ?? current.SourceOwnershipToken.Scope,
                 Epoch: checked(current.SourceOwnershipToken.Epoch + 1),
                 Incarnation: targetIncarnation);
 

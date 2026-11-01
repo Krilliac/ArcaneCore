@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Configuration;
@@ -762,7 +763,11 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                 using StopDrainBudget.Attempt progress = _drain.BeginAttempt();
                 await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
                 ICharacterStore store = scope.ServiceProvider.GetRequiredService<ICharacterStore>();
-                await store.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
+                using (CharacterWriteClaim.Use(state.Id)) // checked by the write fence in Worker scope only (design _wf/writer-lock-DESIGN.md C5)
+                {
+                    await store.SaveStateAsync(state, cancellationToken).ConfigureAwait(false);
+                }
+
                 progress.Succeeded();
                 int previousStreak;
                 lock (_gate)
@@ -794,6 +799,28 @@ public sealed class CharacterSaveQueue : ICharacterSaveQueue, IDisposable
                         $"character {state.Id}",
                         $"queue=CharacterSaveQueue character={state.Id} elapsedMs={(long)writeElapsed.TotalMilliseconds} thresholdMs={(long)SlowSaveThreshold.TotalMilliseconds}",
                         AnomalySeverity.Info);
+                }
+
+                return false;
+            }
+            catch (CharacterClaimRejectedException ex)
+            {
+                // Another world holds the character now, or nobody does (its claim moved with a transfer or was released): the snapshot is durably refused
+                // and superseded, so it is dropped rather than retained, which would retry it forever. Routine for one character, never a queue fault.
+                FaultLedger.Shared.Record("writequeue.character-claim", ex);
+                lock (_gate)
+                {
+                    if (_failed.TryGetValue(state.Id, out FailedSave? parked) && ReferenceEquals(parked.State, state))
+                    {
+                        _failed.Remove(state.Id);
+                        _exhaustedReported.Remove(state.Id);
+                    }
+                }
+
+                _logger.LogWarning("character {Id} snapshot dropped: {Reason}", state.Id, ex.Message);
+                if (trustedSettlement)
+                {
+                    throw; // a settlement is never told it was saved when nothing was written
                 }
 
                 return false;

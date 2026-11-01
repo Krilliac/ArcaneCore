@@ -254,8 +254,10 @@ public sealed class WorldHostWorkerScopeTests
 
         Assert.Throws<InvalidOperationException>(() => new CharacterFencingOptions { Scope = CharacterFencingScope.Worker }.Validate()); // needs fencing
         Assert.Throws<InvalidOperationException>(() => new CharacterFencingOptions { Enabled = true, Scope = CharacterFencingScope.Worker, Shard = "no good" }.Validate());
-        Assert.Throws<InvalidOperationException>(() => new CharacterFencingOptions { HeartbeatSeconds = 0 }.Validate());
-        Assert.Throws<InvalidOperationException>(() => new CharacterFencingOptions { HeartbeatSeconds = 20, ReapAfterSeconds = 60 }.Validate()); // not more than three heartbeats
+        Assert.Throws<InvalidOperationException>(() => new CharacterFencingOptions { Enabled = true, Scope = CharacterFencingScope.Worker, HeartbeatSeconds = 0 }.Validate());
+        Assert.Throws<InvalidOperationException>(() => new CharacterFencingOptions { Enabled = true, Scope = CharacterFencingScope.Worker, HeartbeatSeconds = 20, ReapAfterSeconds = 60 }.Validate()); // not more than three heartbeats
+        // The heartbeat and reap ranges only apply in Worker scope: a Realm-scope world with them out of range still validates.
+        new CharacterFencingOptions { HeartbeatSeconds = 0, ReapAfterSeconds = 1 }.Validate();
         Assert.Throws<WorkerScopeConfigurationException>(() => new CharacterFencingOptions { Enabled = true, Scope = CharacterFencingScope.Worker }.ResolveScope(new string('x', 58)));
 
         Assert.True(CharacterFencingOptions.TryGetOwnedMaps(new GatewayWorkerOptions { OwnedMaps = "1, 0-2 ,30" }, out IReadOnlyCollection<uint> maps, out _));

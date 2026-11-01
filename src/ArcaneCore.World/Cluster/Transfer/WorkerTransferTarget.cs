@@ -258,6 +258,12 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
     public Guid Incarnation { get; }
 
+    /// <summary>
+    /// The <c>worker:&lt;shard&gt;</c> scope this world claims under (its own ownership token), which a committed transfer moves the character's claim to, so the source's retained saves are
+    /// refused from the commit on (design _wf/writer-lock-DESIGN.md section 1b). Null in Realm scope (the realm-wide token is not a worker token): the claim keeps the source's scope.
+    /// </summary>
+    public string? OwnershipScope => _world.CharacterOwnership is { } token && ArcaneCore.Data.Characters.Ownership.CharacterOwnershipScopes.IsWorker(token.Scope) ? token.Scope : null;
+
     /// <summary>Transfers that hold a slot (reserved or shadowed, not yet activated or discarded).</summary>
     public int ReservedCount
     {
@@ -482,12 +488,19 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         TransferPosition at = bundle.TargetPosition;
         shadow.CharacterOwnership = token;
+        // The claim moved to this worker with the commit: the activated player gets its own claim ticket, so its logout release is invalidated by any newer login's claim
+        // (a quick relogin that claims before the posted release runs) exactly as for a character that logged in here.
+        CharacterClaimService? claims = (shadow.Session as WorldSession)?.Services.GetService<CharacterClaimService>();
+        int characterId = (int)shadow.Guid.Low;
+        long claimTicket = claims?.IssueTicketForReceivedClaim(characterId, token) ?? 0;
+        claims?.BindTicket(shadow, claimTicket);
         shadow.MapId = bundle.TargetMapId;
         shadow.Relocate(at.X, at.Y, at.Z, at.Orientation, _world.NowMs);
 
         if (!_entry.TryAttach(shadow))
         {
             _logger.LogInformation("Transfer {TransferId}: the client of character {Character} left before activation; nothing to add", slot.TransferId, bundle.CharacterGuid);
+            claims?.AbandonTicket(characterId, claimTicket);
             ReleaseShadow(shadow);
             Finish(slot);
             return false;
@@ -509,6 +522,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         {
             // Never leave a session "in world" with a player that is in the registry but will never reach a map: undo the registration and kick.
             FaultLedger.Shared.Record("cluster.transfer-target", ex);
+            claims?.AbandonTicket(characterId, claimTicket);
             teleports.Forget(shadow);
             _world.DetachPlayerForTransfer(shadow);
             shadow.Session.Kick("transfer target could not start the arrival");
