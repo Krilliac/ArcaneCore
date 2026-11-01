@@ -8,7 +8,6 @@
 #     dotnet test tests/ArcaneCore.World.Tests --filter "FullyQualifiedName~SpellContractSweepTests.Sweep_"
 # The same run rewrites spell-contract-coverage.txt (which checks ran per spell; a check that stops running also fails the sweep).
 # Then review both diffs: every removed line here should be a fix you expected, every added line a regression to explain.
-a.error-log	8324	ArcaneCore.World.Spells.TransformDisplayFeature:error-log
 a.unhandled-other	10254	dummy:Dummy
 a.unhandled-other	10347	dummy:Dummy
 a.unhandled-other	10848	no-consumer:Dummy
