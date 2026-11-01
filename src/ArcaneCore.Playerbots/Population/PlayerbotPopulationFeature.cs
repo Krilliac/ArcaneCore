@@ -485,7 +485,8 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
         if (_quiesced || Managed is { IsDetaching: true }) return _pass = Task.CompletedTask;
         // The pass's durable writes (membership rows, bot creation) belong to the maintenance lease holder (writer-lock design section 4, row 7): on a clustered node that does not
         // hold it the pass would create a bot and then be refused the membership row, leaving an orphan character per pass.
-        if (Managed is { HoldsMaintenanceLease: false })
+        // A shed-only pass (a rush's interval pass) only parks running bots for load: it creates nothing and writes no membership row, so it runs on a non-holder too.
+        if (!shedOnly && Managed is { HoldsMaintenanceLease: false })
         {
             Publish(PopulationStatus.Idle(true, "not-holder", "this node does not hold the maintenance lease; the population pass runs on the holder"));
             return _pass = Task.CompletedTask;
@@ -1073,12 +1074,14 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             IReadOnlyList<ManagedPlayerbot> registered = await scope.ServiceProvider.GetRequiredService<IManagedPlayerbotStore>()
                 .LoadAllAsync(ct).ConfigureAwait(false);
             var known = registered.ToDictionary(b => b.BotId);
+            // A shed-only pass can run on a node that does not hold the maintenance lease; the membership deletes and the home sweep below are the holder's to write.
+            bool maintenanceHolder = Managed is not { HoldsMaintenanceLease: false };
             var members = new Dictionary<Guid, PlayerbotPopulationMember>();
             foreach (PlayerbotPopulationMember member in await store.LoadAllAsync(ct).ConfigureAwait(false))
             {
                 // The bot or its character is gone (the character delete cleanup removes the row; a registry loss leaves it behind).
                 if (known.TryGetValue(member.BotId, out ManagedPlayerbot? bot) && bot.CharacterId == member.CharacterId) members[member.BotId] = member;
-                else await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
+                else if (maintenanceHolder) await store.DeleteAsync(member.BotId, ct).ConfigureAwait(false);
             }
 
             // Unplaced bots whose deletion has not finished are retried first; they are not members for any other purpose (not in
@@ -1090,7 +1093,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
                 pendingIds.Add(pending.BotId);
                 // A permanently refused deletion is retried on a growing interval (1, 2 ... 8 passes), not every pass.
                 if (_pendingRetryAt.TryGetValue(pending.BotId, out long retryAt) && Volatile.Read(ref _passes) < retryAt) continue;
-                await TryDeletePendingAsync(input.Managed, store, pending.BotId, null, ct).ConfigureAwait(false);
+                if (maintenanceHolder) await TryDeletePendingAsync(input.Managed, store, pending.BotId, null, ct).ConfigureAwait(false);
             }
 
             // Backoff state only for the pending rows that still exist (a character delete cleanup can remove one another way).
@@ -1160,7 +1163,7 @@ public sealed partial class PlayerbotPopulationFeature(IServiceProvider services
             int changed = 0;
             int homeChanges = 0;
             // Graduation: a start home follows its bot's level. Not in a rush batch pass (the interval passes that run beside a rush do it).
-            if (input.RushCount == 0 && pop.FreshLaunch && pop.FreshStartHome && input.Managed.HomesAvailable)
+            if (maintenanceHolder && input.RushCount == 0 && pop.FreshLaunch && pop.FreshStartHome && input.Managed.HomesAvailable)
             {
                 homeChanges = await SweepStartHomesAsync(ctx, ct).ConfigureAwait(false);
             }

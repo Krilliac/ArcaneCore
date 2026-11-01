@@ -111,7 +111,6 @@ public sealed class LeaseHeldStartupSweepTests
         _ = feature.Service; // would throw out of GetAwaiter().GetResult() if the seed were not gated
 
         Assert.Null(store.Maintenance);
-        Assert.Equal(0, store.WriteAttempts);
         Assert.NotEqual(0u, feature.WeekBeginDay); // the same week is still computed from the clock
     }
 

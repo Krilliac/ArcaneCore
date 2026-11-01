@@ -81,6 +81,10 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
         _store = store;
         _node = nodeOptions.Value;
         _nodeId = workerOptions.Value.NodeId;
+        // A malformed list never reaches here (the world refuses to start on it); fall back to every map, the unrestricted behaviour.
+        OwnedMaps = workerOptions.Value.TryGetOwnership(out ArcaneCore.Game.Maps.MapOwnership ownership, out _) && !ownership.OwnsEverything
+            ? new OwnedMapSet(ownership.Ranges.Select(r => (r.First, r.Last)), ownership.AllowInstanceMaps)
+            : OwnedMapSet.All;
         _logger = logger;
         _lifetime = lifetime;
         _time = time ?? TimeProvider.System;
@@ -92,6 +96,9 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
 
     /// <summary>The owner id this keeper leases under (<c>Cluster:Worker:NodeId</c>).</summary>
     public string NodeId => _nodeId;
+
+    /// <summary>The maps this worker owns (<c>Cluster:Worker:OwnedMaps</c>); every map when the list is empty. The stores limit their per-map sweeps to it.</summary>
+    public OwnedMapSet OwnedMaps { get; }
 
     /// <summary>The fencing token this node holds for <paramref name="scope"/>, or null when it does not hold the lease.</summary>
     public long? TokenFor(string scope)
