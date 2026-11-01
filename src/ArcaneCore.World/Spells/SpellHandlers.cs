@@ -1,3 +1,4 @@
+using ArcaneCore.Game.AntiCheat;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
@@ -39,6 +40,15 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
             || ((targets.Mask & SpellCastTargetFlags.SourceLocation) != 0
                 && (!float.IsFinite(targets.Source.X) || !float.IsFinite(targets.Source.Y) || !float.IsFinite(targets.Source.Z))))
         {
+            return;
+        }
+
+        if (!session.IsInChaosProbe && session.Services.GetService<AntiCheat.AntiCheatFeature>() is { } antiCheat
+            && CastSpellHoneypot.Evaluate(antiCheat.Options.SpellHoneypot, spellId, antiCheat.IsExempt(session, player)) is { } trap)
+        {
+            // Honeypot (AntiCheat:SpellHoneypot, off by default; a deviation): a spell no client can send is refused like an unknown one, silently,
+            // and recorded as a strong signal.
+            antiCheat.OnRejected(session, player, trap.Type, trap.Weight, trap.Detail);
             return;
         }
 
