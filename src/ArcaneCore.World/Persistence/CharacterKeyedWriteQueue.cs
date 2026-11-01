@@ -1,5 +1,6 @@
 using System.Threading.Channels;
 using ArcaneCore.Data.Resilience;
+using ArcaneCore.Data.Stores;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,7 +16,9 @@ namespace ArcaneCore.World.Persistence;
 /// <c>MaxAttempts</c> attempts is RETAINED, never dropped: the next change, <see cref="FlushCharacterAsync"/> (the login barrier,
 /// which faults while the character is still not durable), <see cref="RequestRetry"/> (logout) and <see cref="StopAsync"/> (a final
 /// retry that throws if storage is still failing) all carry it. <see cref="FlushAsync"/> is a pure ordered barrier that never
-/// retries and never throws. Retention is in process only. The derived sealed queues supply the store call, the names, the ledger
+/// retries and never throws. Retention is in process only. In Worker fencing scope every store call runs under <see cref="CharacterWriteClaim"/>, so the
+/// write fence proves in the same transaction that this worker still holds the character's claim: a snapshot retained past a transfer commit (or a
+/// release, or a takeover) is refused durably, and the queue then drops it, because a value superseded by another world's save must never be retried. The derived sealed queues supply the store call, the names, the ledger
 /// keys and the log lines; the public <see cref="KeyedStoreWriteQueue{TStore}"/> is deliberately not part of this.
 /// </summary>
 /// <typeparam name="TValue">The overlay value held per character.</typeparam>
@@ -587,9 +590,16 @@ public abstract class CharacterKeyedWriteQueue<TValue>
                 try
                 {
                     using StopDrainBudget.Attempt progress = _drain.BeginAttempt(); // the attempt is the store call: its verdict is in before the catch's backoff
+                    using CharacterWriteClaim.Scope claim = CharacterWriteClaim.Use(characterId); // checked by the write fence in Worker scope only
                     await SaveToStoreAsync(scope.ServiceProvider, characterId, value).ConfigureAwait(false);
                     progress.Succeeded();
                     failure = null;
+                    break;
+                }
+                catch (CharacterClaimRejectedException ex)
+                {
+                    failure = ex; // another world holds the character now (or nobody does): not a storage fault and never retried
+                    FaultLedger.Shared.Record($"{SitePrefix}-claim", ex);
                     break;
                 }
                 catch (CharacterOwnershipRejectedException ex)
@@ -622,6 +632,22 @@ public abstract class CharacterKeyedWriteQueue<TValue>
                         await Task.Delay(BackoffAfter(attempt)).ConfigureAwait(false);
                     }
                 }
+            }
+
+            if (failure is CharacterClaimRejectedException lostClaim)
+            {
+                // The snapshot is durably superseded: drop it (a newer write for this character would be refused the same way), so nothing retries it forever.
+                lock (_gate)
+                {
+                    _characters.Remove(characterId);
+                }
+
+                if (!sweep)
+                {
+                    LogAttemptFailed(Logger, lostClaim, characterId, attemptsMade, attempts);
+                }
+
+                return failure;
             }
 
             if (failure is not null && !sweep && !refused && TryAbandon(value, failure, out TValue? replacement))

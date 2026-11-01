@@ -88,12 +88,13 @@ public sealed class CharacterFencingOptions
             throw new InvalidOperationException("Cluster:Fencing takeover cannot be configured while fencing is disabled");
         if (!Enum.IsDefined(Scope))
             throw new InvalidOperationException($"Cluster:Fencing:Scope {(int)Scope} is not Realm or Worker");
-        if (HeartbeatSeconds is < 1 or > 60)
-            throw new InvalidOperationException("Cluster:Fencing:HeartbeatSeconds must be between 1 and 60");
-        if (ReapAfterSeconds is < 30 or > 3600 || ReapAfterSeconds <= HeartbeatSeconds * 3)
-            throw new InvalidOperationException("Cluster:Fencing:ReapAfterSeconds must be between 30 and 3600 and more than three heartbeats");
         if (Scope == CharacterFencingScope.Worker)
         {
+            // The heartbeat and reap settings only mean something in Worker scope, so a Realm-scope world with an out-of-range value still starts.
+            if (HeartbeatSeconds is < 1 or > 60)
+                throw new InvalidOperationException("Cluster:Fencing:HeartbeatSeconds must be between 1 and 60");
+            if (ReapAfterSeconds is < 30 or > 3600 || ReapAfterSeconds <= HeartbeatSeconds * 3)
+                throw new InvalidOperationException("Cluster:Fencing:ReapAfterSeconds must be between 30 and 3600 and more than three heartbeats");
             if (!Enabled)
                 throw new InvalidOperationException("Cluster:Fencing:Scope=Worker requires Cluster:Fencing:Enabled = true");
             if (!string.IsNullOrWhiteSpace(Shard) && !CharacterOwnershipScopes.IsValidShard(Shard.Trim()))

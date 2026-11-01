@@ -114,6 +114,11 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
                 .SingleOrDefaultAsync(r => r.CharacterGuid == guid, ct).ConfigureAwait(false);
             if (owned is null)
             {
+                // Worker scope: a claim row only exists after the login claim (TryClaimCharacterAsync), so a missing row means this worker never
+                // claimed the character and must not transfer it (design _wf/writer-lock-DESIGN.md section 1b). Seeding it here would mint a claim.
+                if (CharacterOwnershipScopes.IsWorker(sourceOwnershipToken.Scope))
+                    throw new CharacterClaimRejectedException(checked((int)characterGuid), sourceOwnershipToken.Scope);
+
                 db.Set<ClusterTransferOwnerRow>().Add(new ClusterTransferOwnerRow
                 {
                     CharacterGuid = guid,
@@ -206,14 +211,16 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     }
 
     /// <inheritdoc />
-    public Task<TransferDecisionRecord> CommitDecisionAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default)
-        => CommitDecisionCoreAsync(transferId, targetIncarnation, cancellationToken);
+    public Task<TransferDecisionRecord> CommitDecisionAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default, string? targetScope = null)
+        => CommitDecisionCoreAsync(transferId, targetIncarnation, targetScope, cancellationToken);
 
-    private async Task<TransferDecisionRecord> CommitDecisionCoreAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken)
+    private async Task<TransferDecisionRecord> CommitDecisionCoreAsync(Guid transferId, Guid targetIncarnation, string? targetScope, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (targetIncarnation == Guid.Empty)
             throw new ArgumentException("Target incarnation must be non-empty.", nameof(targetIncarnation));
+        if (targetScope is not null && !CharacterOwnershipScopes.IsValid(targetScope))
+            throw new ArgumentException($"'{targetScope}' is not a characters ownership scope.", nameof(targetScope));
 
         return await InTransactionAsync(async (db, ct) =>
         {
@@ -229,20 +236,26 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
             if (row.Bundle is null)
                 throw new InvalidOperationException($"Transfer '{transferId}' cannot commit without a captured PlayerTransferBundle.");
 
-            await CommitRowAsync(db, row, target, ct).ConfigureAwait(false);
+            await CommitRowAsync(db, row, target, targetScope, ct).ConfigureAwait(false);
             return ToRecord(row);
         }, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Moves one transfer to Committed: the per-character ownership compare-and-swap (epoch N to N + 1) and the decision row, in the caller's transaction.</summary>
-    private async Task CommitRowAsync(CharacterDbContext db, ClusterTransferDecisionRow row, string targetIncarnation, CancellationToken ct)
+    /// <summary>
+    /// Moves one transfer to Committed: the per-character ownership compare-and-swap (epoch N to N + 1) and the decision row, in the caller's transaction.
+    /// The character's claim moves to <paramref name="targetScope"/> (the source scope when null) and the target incarnation in the same statement, so from this
+    /// commit on the source's claim check (<see cref="CharacterWriteClaim"/>) refuses every save the source still holds: the refusal is durable, not in memory.
+    /// </summary>
+    private async Task CommitRowAsync(CharacterDbContext db, ClusterTransferDecisionRow row, string targetIncarnation, string? targetScope, CancellationToken ct)
     {
         long now = _clock();
         long targetEpoch = checked(row.SourceEpoch + 1);
+        string newScope = targetScope ?? row.SourceScope;
         int swapped = await db.Set<ClusterTransferOwnerRow>()
             .Where(r => r.CharacterGuid == row.CharacterGuid && r.ActiveTransfer == row.TransferId && r.Scope == row.SourceScope
                 && r.Epoch == row.SourceEpoch && r.Incarnation == row.SourceIncarnation)
             .ExecuteUpdateAsync(s => s
+                .SetProperty(r => r.Scope, newScope)
                 .SetProperty(r => r.Epoch, targetEpoch)
                 .SetProperty(r => r.Incarnation, targetIncarnation)
                 .SetProperty(r => r.UpdatedAtUtcMs, now), ct)
@@ -254,6 +267,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         row.State = (int)PlayerTransferDecisionState.Committed;
         row.TargetEpoch = targetEpoch;
         row.TargetIncarnation = targetIncarnation;
+        row.TargetScope = string.Equals(newScope, row.SourceScope, StringComparison.Ordinal) ? null : newScope;
         row.UpdatedAtUtcMs = now;
         await db.SaveChangesAsync(ct).ConfigureAwait(false);
     }
@@ -471,7 +485,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
             }
 
             foreach (ClusterTransferDecisionRow transfer in transfers)
-                await CommitRowAsync(db, transfer, target, ct).ConfigureAwait(false);
+                await CommitRowAsync(db, transfer, target, null, ct).ConfigureAwait(false); // a whole-World handoff keeps its own scope
 
             row.Stage = (int)WorldHandoffStage.EpochTakeover;
             row.State = (int)PlayerTransferDecisionState.Committed;
@@ -612,8 +626,8 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
         public Task<TransferDecisionRecord> AdvancePreCommitStageAsync(Guid transferId, PlayerTransferStage nextStage, PlayerTransferBundle? capturedBundle = null, CancellationToken cancellationToken = default)
             => inner.AdvancePreCommitStageAsync(transferId, nextStage, capturedBundle, cancellationToken);
 
-        public Task<TransferDecisionRecord> CommitDecisionAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default)
-            => inner.CommitDecisionAsync(transferId, targetIncarnation, cancellationToken); // refused for a handoff transfer unless already committed by the takeover
+        public Task<TransferDecisionRecord> CommitDecisionAsync(Guid transferId, Guid targetIncarnation, CancellationToken cancellationToken = default, string? targetScope = null)
+            => inner.CommitDecisionAsync(transferId, targetIncarnation, cancellationToken, targetScope); // refused for a handoff transfer unless already committed by the takeover
 
         public Task<TransferDecisionRecord> MarkCompletedAsync(Guid transferId, CancellationToken cancellationToken = default)
             => inner.MarkCompletedAsync(transferId, cancellationToken);
@@ -697,7 +711,7 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     private static CharacterOwnershipToken SourceToken(ClusterTransferDecisionRow row) => new(row.SourceScope, row.SourceEpoch, Guid.Parse(row.SourceIncarnation));
 
     private static CharacterOwnershipToken? TargetToken(ClusterTransferDecisionRow row)
-        => row.TargetEpoch is { } epoch && row.TargetIncarnation is { } incarnation ? new(row.SourceScope, epoch, Guid.Parse(incarnation)) : null;
+        => row.TargetEpoch is { } epoch && row.TargetIncarnation is { } incarnation ? new(row.TargetScope ?? row.SourceScope, epoch, Guid.Parse(incarnation)) : null;
 
     private static TransferDecisionRecord ToRecord(ClusterTransferDecisionRow row) => new(
         TransferId: Guid.Parse(row.TransferId),

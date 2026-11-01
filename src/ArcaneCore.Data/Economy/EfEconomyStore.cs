@@ -43,8 +43,23 @@ public sealed class EfEconomyStore(CharacterDbContext db, IRealmLeaseFenceSource
         EconomyRequestValidation.Validate(request);
         cancellationToken.ThrowIfCancellationRequested();
 
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
-            .ConfigureAwait(false);
+        // Worker fencing scope: as the transaction begins, the write fence also proves that every participant's per-character claim is held by a live worker
+        // (the Economy holder commits for characters other workers have claimed; a character nobody holds, one whose owner died or one mid-transfer is refused),
+        // design _wf/writer-lock-DESIGN.md section 1b and Q12. Realm scope and an unfenced context issue no claim SQL.
+        IDbContextTransaction began;
+        try
+        {
+            using (CharacterWriteClaim.Use([.. request.Participants.Select(p => p.Before.Id)], CharacterClaimRequirement.HeldByAnyLiveWorker))
+            {
+                began = await db.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (CharacterClaimRejectedException)
+        {
+            return EconomyCommitResult.Conflict; // the state the request was built from is no longer the live one; nothing was read or written
+        }
+
+        await using var transaction = began;
         try
         {
             // A clustered node that holds the economy lease proves, in this transaction, that nobody took the scope over; a former holder is refused before anything is read or written.

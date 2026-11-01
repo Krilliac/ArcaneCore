@@ -41,6 +41,12 @@ public interface ITransferTargetWorker
 
     Guid Incarnation { get; }
 
+    /// <summary>
+    /// The characters-ownership scope this worker claims under (<c>worker:&lt;shard&gt;</c> in Worker fencing scope), which the coordinator commits the
+    /// character's claim to (design _wf/writer-lock-DESIGN.md section 1b). Null (the default) keeps the source token's scope: the realm-wide 'world' scope.
+    /// </summary>
+    string? OwnershipScope => null;
+
     /// <summary>Stage 1: reserves a target slot on the destination worker for `(targetMapId, targetInstanceId)`.</summary>
     Task<bool> TryReserveSlotAsync(
         Guid transferId,
@@ -209,7 +215,8 @@ public sealed class PlayerTransferCoordinator
         TransferDecisionRecord record = await _decisionStore.CommitDecisionAsync(
             request.TransferId,
             targetWorker.Incarnation,
-            cancellationToken);
+            cancellationToken,
+            targetWorker.OwnershipScope);
 
         if (afterStageHook is not null)
         {
