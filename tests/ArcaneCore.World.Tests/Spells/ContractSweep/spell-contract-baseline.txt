@@ -32,7 +32,6 @@ a.unhandled-other	15064	no-consumer:Dummy
 a.unhandled-other	15713	dummy:Dummy
 a.unhandled-other	15782	dummy:Dummy
 a.unhandled-other	16051	no-consumer:Dummy
-a.unhandled-other	16053	no-consumer:Dummy
 a.unhandled-other	16378	dummy:Dummy
 a.unhandled-other	16468	no-consumer:Dummy
 a.unhandled-other	17163	dummy:Dummy
