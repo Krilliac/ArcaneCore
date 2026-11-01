@@ -55,7 +55,7 @@ unfinished parts documented as limits).
 
 [M1](M1_ACCEPTANCE.md), [M2](M2_ACCEPTANCE.md), [M3](M3_ACCEPTANCE.md), [M4](M4_ACCEPTANCE.md),
 [M5](M5_ACCEPTANCE.md), [M6](M6_ACCEPTANCE.md), [M13a](M13A_ACCEPTANCE.md), [M13b](M13B_ACCEPTANCE.md),
-[quest rewards](QUEST_REWARD_ACCEPTANCE.md) and the [mock client](MOCK_CLIENT_ACCEPTANCE.md). No area has a
+[quest rewards](QUEST_REWARD_ACCEPTANCE.md), the [mock client](MOCK_CLIENT_ACCEPTANCE.md) and the [real-client cluster run](CLUSTER_ACCEPTANCE.md). No area has a
 recorded real-client run unless its acceptance page says so.
 
 ## For developers: how to contribute
