@@ -83,6 +83,8 @@ internal static partial class PlayerbotMotion
         internal float MoveSpeedCap;
         /// <summary>The live options the bot follows its routes with (<c>.reload config</c> changes them in place).</summary>
         internal PlayerbotOptions? Options;
+        /// <summary>This bot's movement packet writer, reset before each use (<see cref="Send"/>); world thread only, like the rest of the state.</summary>
+        internal PacketWriter? Writer;
         internal uint LeaseMs;
         internal uint RenewedMs;
         /// <summary>Times a think started or kept this bot's route (<see cref="Follow"/>): a think that leaves it unchanged did not move the bot on.</summary>
@@ -1014,9 +1016,11 @@ internal static partial class PlayerbotMotion
         {
             if (packets)
             {
-                var writer = new PacketWriter(64);
+                // One writer per bot, reset each step; the session copies the span into its reused exact-length buffer (no array per step).
+                PacketWriter writer = state.Writer ??= new PacketWriter(64);
+                writer.Reset();
                 movement.Write(writer);
-                sent = session.TryManagedAction(opcode, writer.ToArray());
+                sent = session.TryManagedActionSpan(opcode, writer.AsSpan());
             }
             else
             {

@@ -165,6 +165,31 @@ public sealed partial class WorldSession
         return _state == SessionState.InWorld && IsCurrentSession;
     }
 
+    private byte[]? _managedScratch;
+    private bool _managedScratchBusy;
+
+    /// <summary>The buffer <see cref="TryManagedActionSpan"/> reuses (null until its first use); read by tests to prove the reuse.</summary>
+    internal byte[]? ManagedScratch => _managedScratch;
+
+    /// <summary>
+    /// <see cref="TryManagedAction"/> for a payload built in a reused buffer (a bot's movement packet, every step): the bytes
+    /// are copied into one exact-length array this session keeps, so a steady step allocates nothing. For opcodes whose world handler reads the
+    /// payload and does not keep it (the movement handlers). A fresh array is used instead whenever anything could keep the bytes: a packet
+    /// observer, tap or capture is attached, the call is a re-entrant dispatch from inside a handler on the same buffer, or the call is off the
+    /// world thread (the buffer is world-thread state). The bytes the handler sees are identical either way.
+    /// </summary>
+    internal bool TryManagedActionSpan(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+    {
+        if (payload.Length == 0) return TryManagedAction(opcode, Array.Empty<byte>());
+        if (!World.IsWorldThread || _managedScratchBusy || HasPacketObserver) return TryManagedAction(opcode, payload.ToArray());
+        byte[]? scratch = _managedScratch;
+        if (scratch is null || scratch.Length != payload.Length) _managedScratch = scratch = new byte[payload.Length];
+        payload.CopyTo(scratch);
+        _managedScratchBusy = true;
+        try { return TryManagedAction(opcode, scratch); }
+        finally { _managedScratchBusy = false; }
+    }
+
     /// <summary>
     /// A managed bot's own movement applied by the server (<c>World:Playerbots:MovementPackets</c> = false): the gate and budget of
     /// <see cref="TryManagedAction"/>, then <see cref="MovementHandlers.MoveManagedBot"/> instead of the opcode's handler.
