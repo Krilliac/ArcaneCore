@@ -360,7 +360,7 @@ public sealed class WorldHandoffHostingTests
     {
         var inFlight = new WorldHandoffInFlight();
         var gate = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-        inFlight.Track(gate.Task);
+        _ = inFlight.Track(gate.Task);
         var recovery = new WorldHandoffRecoveryService(new WorldHandoffCoordinatorProvider(new ServiceCollection().BuildServiceProvider()), inFlight);
 
         Task stopping = recovery.StopAsync(CancellationToken.None);
