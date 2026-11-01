@@ -9,6 +9,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Handoff;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Persistence;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -96,6 +97,12 @@ public sealed class WorldHandoffTests
             await selecting.SendAsync((ushort)WorldOpcode.CmsgCharEnum, ReadOnlyMemory<byte>.Empty, cts.Token);
             await selecting.ReadUntilAsync((ushort)WorldOpcode.SmsgCharEnum, cts.Token);
 
+            // Which world's session handler ran the input sent during the freeze (CMSG_QUERY_TIME is session-level, so the reply alone cannot tell A from B).
+            var tapA = new QueryTimeTap();
+            var tapB = new QueryTimeTap();
+            Tap(a, tapA);
+            Tap(b, tapB);
+
             var stages = new List<WorldHandoffStage>();
             WorldHandoffRecord done = await Coordinator(a, b, source, new GatewayWorldHandoffRouter(linked.Gateway, bEndpoint.Host!.BoundEndPoint))
                 .RunAsync(Guid.NewGuid(), async (stage, ct) =>
@@ -144,6 +151,16 @@ public sealed class WorldHandoffTests
             BinaryPrimitives.WriteUInt32LittleEndian(expectedPending, BinaryPrimitives.ReadUInt32LittleEndian(loginVerify));
             Assert.Equal(loginVerify, seen[newWorld].Payload);
             Assert.Equal(expectedPending, seen[pending].Payload);
+            // B-side evidence: B's session handler ran the freeze-time packet exactly once, and A's session never saw it (not before the hold, not replayed on
+            // the move). Counted before any post-handoff query is sent, so these counts are the freeze-time packet only.
+            using (var bounded = CancellationTokenSource.CreateLinkedTokenSource(cts.Token))
+            {
+                bounded.CancelAfter(TimeSpan.FromSeconds(20));
+                await WaitUntilAsync(() => Task.FromResult(tapB.Count >= 1), bounded.Token);
+            }
+
+            Assert.Equal(1, tapB.Count);
+            Assert.Equal(0, tapA.Count);
             Assert.Equal(2, linked.Gateway.ConnectionCount);
             await WaitUntilAsync(() => Task.FromResult(bEndpoint.Acceptor!.Sessions.Count == 2), cts.Token);
             Assert.Equal(2, bEndpoint.Acceptor!.Sessions.Count);
@@ -419,6 +436,32 @@ public sealed class WorldHandoffTests
         WorldFrame verify = await client.ReadUntilAsync((ushort)WorldOpcode.SmsgLoginVerifyWorld, token);
         await WaitUntilAsync(async () => await server.World.InvokeAsync(() => server.World.OnlinePlayerCount) == 1, token);
         return (guid, verify.Payload);
+    }
+
+    private sealed class QueryTimeTap
+    {
+        private int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public void Hit() => Interlocked.Increment(ref _count);
+    }
+
+    /// <summary>Wraps the CMSG_QUERY_TIME session handler of <paramref name="server"/>'s opcode table so every dispatch to one of its sessions is counted.</summary>
+    private static void Tap(SyntheticArcaneServer server, QueryTimeTap tap)
+    {
+        OpcodeTable table = server.Services.GetRequiredService<OpcodeTable>();
+        Assert.True(table.TryGet(WorldOpcode.CmsgQueryTime, out OpcodeHandler original));
+        SessionHandler inner = original.Session!;
+        var wrapper = new OpcodeTable();
+        wrapper.OnSession(WorldOpcode.CmsgQueryTime, original.AllowedStates, (session, payload) =>
+        {
+            tap.Hit();
+            return inner(session, payload);
+        });
+        OpcodeTable? swapped = table.TrySwap([WorldOpcode.CmsgQueryTime], wrapper, out string? error);
+        Assert.True(swapped is not null, error);
+        table.Replace(swapped!);
     }
 
     private static async Task WaitUntilAsync(Func<Task<bool>> condition, CancellationToken token)
