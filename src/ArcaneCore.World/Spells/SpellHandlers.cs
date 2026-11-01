@@ -3,6 +3,7 @@ using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Pets.Control;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Protocol;
+using ArcaneCore.World.Gm.FirstLogin;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,9 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
         table.OnWorld(WorldOpcode.CmsgCancelAura, HandleCancelAura);
         table.OnWorld(WorldOpcode.CmsgCancelChannelling, HandleCancelChannelling);
     }
+
+    /// <summary>The audited GM and developer tool spell ids: no player ever has these, so a cast of one is a honeypot trap.</summary>
+    private static readonly HashSet<uint> GmToolSpellIds = [.. GmFirstLoginToolCatalog.All.Select(spell => spell.Id)];
 
     private static SpellSystem Spells(WorldSession session) => session.Services.GetRequiredService<SpellFeature>().System;
 
@@ -44,10 +48,12 @@ public sealed class SpellHandlers : IOpcodeHandlerGroup
         }
 
         if (!session.IsInChaosProbe && session.Services.GetService<AntiCheat.AntiCheatFeature>() is { } antiCheat
-            && CastSpellHoneypot.Evaluate(antiCheat.Options.SpellHoneypot, spellId, antiCheat.IsExempt(session, player)) is { } trap)
+            && antiCheat.Options.SpellHoneypot.Enabled
+            && CastSpellHoneypot.Evaluate(antiCheat.Options.SpellHoneypot, spellId, antiCheat.IsExempt(session, player), GmToolSpellIds) is { } trap)
         {
             // Honeypot (AntiCheat:SpellHoneypot, off by default; a deviation): a spell no client can send is refused like an unknown one, silently,
-            // and recorded as a strong signal.
+            // and recorded as a strong signal. Trade-off: it fires even for a character a GM taught such a spell with .learn (the cast is dropped
+            // and scored); GMs and staff are exempt, and the operator can switch the option off.
             antiCheat.OnRejected(session, player, trap.Type, trap.Weight, trap.Detail);
             return;
         }

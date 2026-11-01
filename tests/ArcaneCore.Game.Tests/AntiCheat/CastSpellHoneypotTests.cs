@@ -12,7 +12,7 @@ public sealed class CastSpellHoneypotTests
     private const uint ToolSpell = 999_001;
 
     [Fact]
-    public void FlagOff_IsTheDefault_AndNeverProducesASignal()
+    public void FlagOff_IsTheDefault_AndNeverProducesAHoneypotSignal()
     {
         var options = new AntiCheatOptions();
         Assert.False(options.SpellHoneypot.Enabled);
@@ -43,6 +43,20 @@ public sealed class CastSpellHoneypotTests
         var options = new AntiCheatOptions();
         options.SpellHoneypot.Enabled = true;
         Assert.Null(CastSpellHoneypot.Evaluate(options.SpellHoneypot, NeverCastSpell, callerExempt: true));
+    }
+
+    [Fact]
+    public void FlagOn_ABuiltInToolId_IsATrapForANonGm_AndNotFlaggedForAnExemptCaller()
+    {
+        const uint qaDebugInstantCast = 27204; // GmFirstLoginToolCatalog: QADebug Instant Cast
+        var catalogIds = new HashSet<uint> { qaDebugInstantCast };
+        var options = new AntiCheatOptions();
+        options.SpellHoneypot.Enabled = true;
+        Assert.Null(CastSpellHoneypot.Evaluate(options.SpellHoneypot, qaDebugInstantCast, callerExempt: false));
+        AntiCheatFinding? finding = CastSpellHoneypot.Evaluate(options.SpellHoneypot, qaDebugInstantCast, callerExempt: false, catalogIds);
+        Assert.NotNull(finding);
+        Assert.Equal(AntiCheatViolation.Spell, finding.Value.Type);
+        Assert.Null(CastSpellHoneypot.Evaluate(options.SpellHoneypot, qaDebugInstantCast, callerExempt: true, catalogIds));
     }
 
     [Fact]

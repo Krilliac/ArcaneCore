@@ -46,8 +46,12 @@ public static class CastSpellHoneypot
     /// <summary>The fixed finding text (never client input).</summary>
     public const string Detail = "cast of a never-castable spell (honeypot)";
 
-    /// <summary>Whether <paramref name="spellId"/> is a trap: NeverCast, TestSpell or Deprecated in <see cref="DeliberatelyInertSpells"/>, or listed in <see cref="SpellHoneypotOptions.ToolSpellIds"/>.</summary>
-    public static bool IsTrap(SpellHoneypotOptions options, uint spellId)
+    /// <summary>
+    /// Whether <paramref name="spellId"/> is a trap: NeverCast, TestSpell or Deprecated in <see cref="DeliberatelyInertSpells"/>, listed in
+    /// <see cref="SpellHoneypotOptions.ToolSpellIds"/>, or one of <paramref name="builtInToolSpellIds"/> (the World layer passes the GM first-login
+    /// tool catalog, which lives above Game).
+    /// </summary>
+    public static bool IsTrap(SpellHoneypotOptions options, uint spellId, IReadOnlySet<uint>? builtInToolSpellIds = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (DeliberatelyInertSpells.TryGet(spellId, out InertSpell? entry)
@@ -56,14 +60,14 @@ public static class CastSpellHoneypot
             return true;
         }
 
-        return options.ToolSpellIds.Contains(spellId);
+        return (builtInToolSpellIds?.Contains(spellId) ?? false) || options.ToolSpellIds.Contains(spellId);
     }
 
     /// <summary>The finding to record for a cast request, or null (honeypot off, caller exempt, or not a trap).</summary>
-    public static AntiCheatFinding? Evaluate(SpellHoneypotOptions options, uint spellId, bool callerExempt)
+    public static AntiCheatFinding? Evaluate(SpellHoneypotOptions options, uint spellId, bool callerExempt, IReadOnlySet<uint>? builtInToolSpellIds = null)
     {
         ArgumentNullException.ThrowIfNull(options);
-        if (!options.Enabled || callerExempt || !IsTrap(options, spellId))
+        if (!options.Enabled || callerExempt || !IsTrap(options, spellId, builtInToolSpellIds))
         {
             return null;
         }
