@@ -8,6 +8,7 @@ using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Npc;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Battlegrounds;
+using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Persistence;
 using ArcaneCore.World.Spells;
@@ -98,6 +99,7 @@ public sealed class BattlegroundAfkTaxiTests
         {
             Player player = AddPlayer();
             Feature.Manager.BindPlayer(player.Guid, Battleground, Team.Alliance);
+            Feature.Manager.StateOf(player.Guid).AddSlot(Battleground.Template.QueueType);
             Feature.Manager.StateOf(player.Guid).SetInvite(Battleground.Template.QueueType, Battleground.InstanceId);
             Assert.True(Feature.Manager.EnterBattleground(player.Guid), "setup: the invitee enters the match");
             return player;
@@ -160,6 +162,49 @@ public sealed class BattlegroundAfkTaxiTests
         Assert.Null(rig.Feature.BattlegroundOf(player.Guid));
         Assert.Null(rig.Battleground.PlayerTeam(player.Guid));
         Assert.True(rig.Spells.System.HasAura(player, BattlegroundConstants.SpellDeserter), "vmangos Player::LeaveBattleground casts Deserter on a running match");
+    }
+
+    [Fact]
+    public void AfkChatMessage_InAMatch_UnbindsThePlayerWithDeserter()
+    {
+        using var rig = new Harness();
+        Player player = rig.AddParticipant();
+
+        ChatHandlers.ApplyAfkChat(player, string.Empty, rig.Feature);
+
+        Assert.True(player.IsAfk);
+        Assert.Null(rig.Feature.BattlegroundOf(player.Guid));
+        Assert.Null(rig.Battleground.PlayerTeam(player.Guid));
+        Assert.True(rig.Spells.System.HasAura(player, BattlegroundConstants.SpellDeserter));
+    }
+
+    [Fact]
+    public void AfkChatMessage_InCombat_DoesNotLeaveTheMatch()
+    {
+        using var rig = new Harness();
+        Player player = rig.AddParticipant();
+        player.UnitFlags |= UnitFlags.InCombat;
+
+        ChatHandlers.ApplyAfkChat(player, string.Empty, rig.Feature);
+
+        Assert.False(player.IsAfk);
+        Assert.NotNull(rig.Feature.BattlegroundOf(player.Guid));
+        Assert.False(rig.Spells.System.HasAura(player, BattlegroundConstants.SpellDeserter));
+    }
+
+    [Fact]
+    public void AfkChatMessage_WithTextWhileAlreadyAfk_DoesNotLeaveTheMatch()
+    {
+        using var rig = new Harness();
+        Player player = rig.AddParticipant();
+        Assert.True(player.ToggleAfk()); // already AFK, still bound (as if the leave had not run)
+
+        ChatHandlers.ApplyAfkChat(player, "brb", rig.Feature);
+
+        Assert.True(player.IsAfk);
+        Assert.Equal("brb", player.AfkMessage);
+        Assert.NotNull(rig.Feature.BattlegroundOf(player.Guid));
+        Assert.False(rig.Spells.System.HasAura(player, BattlegroundConstants.SpellDeserter));
     }
 
     [Fact]
