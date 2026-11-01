@@ -20,8 +20,8 @@ public sealed class SpellEffectsBatchTests
 {
     private const uint Stealth = 930_001;
     private const uint PickPocket = 930_002;
-    private const uint GrimoireOfSacrifice = 20270;
-    private const uint FirebluntPetSpell = 7799;
+    private const uint GrimoireOfSacrifice = 20270; // the id is vmangos' Firebolt (LEARN_SPELL 36 -> 7799); the name is kept for the call sites
+    private const uint FirebluntPetSpell = 7799; // Firebolt (Imp) rank taught by the learn effect
     private const uint BeastEntry = 5251;
 
     private static SpellInfo StealthSpell() => Spell(Stealth, Effect(SpellEffectName.ApplyAura, 0, SpellImplicitTarget.UnitCaster, AuraType.ModStealth)) with
@@ -163,7 +163,7 @@ public sealed class SpellEffectsBatchTests
     [InlineData(SpellEffectName.Dummy, true)]
     [InlineData(SpellEffectName.TriggerSpell, false)]
     [InlineData(SpellEffectName.SchoolDamage, false)]
-    public void OnlyScriptEffect_StartsTheSpellScripts(SpellEffectName effect, bool starts)
+    public void ScriptEffectAndDummy_StartTheSpellScripts_OtherEffectsDoNot(SpellEffectName effect, bool starts)
     {
         SpellInfo spell = Spell(930_020, Effect(effect, 0));
 
@@ -177,6 +177,17 @@ public sealed class SpellEffectsBatchTests
 
         Assert.False(SpellSystem.CanEffectStartDbScript(spell, 0));
         Assert.True(SpellSystem.CanEffectStartDbScript(spell, 1));
+    }
+
+    [Fact]
+    public void EveryScriptEffectEffect_StartsTheSpellScripts()
+    {
+        // vmangos runs the trailing DB-script block once per SCRIPT_EFFECT effect; the old cmangos priority rule only let the first one start it.
+        SpellInfo spell = Spell(930_023, Effect(SpellEffectName.ScriptEffect, 0), Effect(SpellEffectName.ScriptEffect, 0), Effect(SpellEffectName.ScriptEffect, 0));
+
+        Assert.True(SpellSystem.CanEffectStartDbScript(spell, 0));
+        Assert.True(SpellSystem.CanEffectStartDbScript(spell, 1));
+        Assert.True(SpellSystem.CanEffectStartDbScript(spell, 2));
     }
 
     [Fact]

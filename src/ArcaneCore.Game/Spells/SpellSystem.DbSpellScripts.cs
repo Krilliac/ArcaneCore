@@ -15,10 +15,13 @@ public sealed partial class SpellSystem
     /// <summary>
     /// vmangos starts the <c>spell_scripts</c> table from SPELL_EFFECT_SCRIPT_EFFECT: Spell::EffectScriptEffect's trailing "normal DB scripted
     /// effect" (SpellEffects.cpp:4565-4571), once per SCRIPT_EFFECT effect that hits a target. vmangos EffectDummy never does, because its
-    /// DUMMY spells are hard-coded in C++. ArcaneCore has not ported most of those cases, and the imported classic-db rows of DUMMY-only spells
-    /// (9096, 11365, 11885-11889, 16378, 19250, 21052, 21914, 21917, 23359, 25716) are the only implementation of their quest behaviour, so a
-    /// DUMMY effect is the documented fallback (cmangos starts the table from DUMMY as well, ScriptMgr.cpp:67-106): it starts the row from the
-    /// FIRST DUMMY effect of a spell that has no SCRIPT_EFFECT effect, and only when no code claims the spell (<see cref="IsClaimedByCode"/>).
+    /// DUMMY spells are hard-coded in C++. ArcaneCore has not ported every one of those cases, so a DUMMY effect is the documented fallback
+    /// (cmangos starts the table from DUMMY as well, ScriptMgr.cpp:67-106): it starts the row from the FIRST DUMMY effect of a spell that has no
+    /// SCRIPT_EFFECT effect, and only when no code claims the spell (<see cref="IsClaimedByCode"/>). Of the DUMMY-only ids with imported rows,
+    /// 11886-11889 (CaptureDespawnScript) and 25716 (ForceBowScript) are claimed by an <see cref="ISpellScript"/>, so their rows never run;
+    /// 9096, 11365, 11885, 16378, 19250, 21052, 21914, 21917 and 23359 have no code claim, so their rows are the only implementation. 29182 and
+    /// 29188 (AhnQirajTeleportScript) are claimed by code too. Every SCRIPT_EFFECT effect starts the row (vmangos runs the trailing block once
+    /// per effect); the cmangos priority rule let only the first of several SCRIPT_EFFECT effects start it.
     /// A spell with both a DUMMY and a SCRIPT_EFFECT effect starts its row from the SCRIPT_EFFECT only.
     /// </summary>
     internal static bool CanEffectStartDbScript(SpellInfo spell, int effectIndex)

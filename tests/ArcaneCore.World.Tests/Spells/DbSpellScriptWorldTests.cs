@@ -114,7 +114,13 @@ public sealed class DbSpellScriptWorldTests
         });
 
         await host.WaitForWorldAsync(() => handlerRuns > 0, "the coded handler should run");
-        await Task.Delay(500); // a row started by the same effect would have cast its marker by now
+        // A row started by the same effect would cast its marker through the executor on the world's update ticks: several round trips
+        // through the world thread stand in for a wall-clock wait.
+        for (int tick = 0; tick < 10; tick++)
+        {
+            await host.OnWorldAsync(() => { });
+        }
+
         Assert.Equal(1, await host.OnWorldAsync(() => handlerRuns));
         Assert.False(await host.OnWorldAsync(() => spells.HasAura(player, RiftSpawnBecomesVisible)));
     }
