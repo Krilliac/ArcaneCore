@@ -129,7 +129,7 @@ public sealed class RealmIpBanCache(TimeSpan refreshEvery, TimeProvider? clock =
             {
                 _failedAt = loadedAt;
                 FailedReloads++;
-                FaultLedger.Shared.Record("logon.ip-ban-cache", ex);
+                FaultLedger.Shared.Record(LogonFaults.IpBanCacheSite, ex);
                 AnomalyLedger.Shared.Report("logon", "ban-cache-refresh-failed", "ip-ban-cache", ex.Message, AnomalySeverity.Warning);
                 throw;
             }

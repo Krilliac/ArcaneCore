@@ -28,8 +28,9 @@ RUN dotnet restore src/ArcaneCore.World/ArcaneCore.World.csproj --locked-mode &&
  && dotnet restore tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj --locked-mode \
  && dotnet restore tools/ArcaneCore.AccountTool/ArcaneCore.AccountTool.csproj --locked-mode
 # The Playerbots pack (docs/design/hot-reload-tiers.md, 4.6) references World, so World cannot reference it: it is published on its
-# own and its assembly placed beside the world executable, where Program.cs loads it (its packages are all World's).
-RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATION --no-restore -o /out/world && dotnet publish src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj -c $CONFIGURATION --no-restore -o /out/playerbots && cp /out/playerbots/ArcaneCore.Playerbots.dll /out/playerbots/ArcaneCore.Playerbots.pdb /out/world/ \
+# own, and its PublishPackBesideWorldHost target (WorldHostPublishDir) places the assembly beside the world executable, where Program.cs
+# loads it (its packages are all World's).
+RUN dotnet publish src/ArcaneCore.World/ArcaneCore.World.csproj -c $CONFIGURATION --no-restore -o /out/world && dotnet publish src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj -c $CONFIGURATION --no-restore -o /out/playerbots -p:WorldHostPublishDir=/out/world/ \
  && dotnet publish src/ArcaneCore.Realm/ArcaneCore.Realm.csproj -c $CONFIGURATION --no-restore -o /out/realm \
  && dotnet publish tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj -c $CONFIGURATION --no-restore -o /out/tools \
  && dotnet publish tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj -c $CONFIGURATION --no-restore -o /out/dbupgrade \

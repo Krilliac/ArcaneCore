@@ -102,8 +102,8 @@ public sealed class LogonServer(
         }
         catch (Exception ex)
         {
-            FaultRecording recording = FaultLedger.Shared.Record("logon/listener", ex);
-            string stack = LogonSession.CondensedStack("logon/listener", ex);
+            FaultRecording recording = FaultLedger.Shared.Record(LogonFaults.ListenerSite, ex);
+            string stack = LogonSession.CondensedStack(LogonFaults.ListenerSite, ex);
             logger.LogError(
                 ex,
                 "Logon listener fault on {Address}:{Port} (category={Category}, faultId={FaultId}, stack={Stack})",
@@ -150,8 +150,8 @@ public sealed class LogonServer(
         }
         catch (Exception ex)
         {
-            FaultRecording recording = FaultLedger.Shared.Record("logon/admit", ex);
-            string stack = LogonSession.CondensedStack("logon/admit", ex);
+            FaultRecording recording = FaultLedger.Shared.Record(LogonFaults.AdmitSite, ex);
+            string stack = LogonSession.CondensedStack(LogonFaults.AdmitSite, ex);
             logger.LogError(
                 ex,
                 "Logon admission fault (category={Category}, faultId={FaultId}, stack={Stack})",
@@ -208,13 +208,13 @@ public sealed class LogonServer(
         }
         catch (Exception ex)
         {
-            string stage = ex.Data["arcanecore.logon.stage"] as string ?? "session-scope";
-            string opcode = ex.Data["arcanecore.logon.opcode"] as string ?? "none";
+            string stage = ex.Data[LogonFaults.StageKey] as string ?? "session-scope";
+            string opcode = ex.Data[LogonFaults.OpcodeKey] as string ?? "none";
             string category = LogonSession.ClassifyFaultCategory(ex);
-            string site = $"logon/{stage}/{category}";
-            string faultId = ex.Data["arcanecore.logon.recorded"] as string
+            string site = LogonFaults.SessionFaultSite(stage, category);
+            string faultId = ex.Data[LogonFaults.RecordedKey] as string
                 ?? FaultLedger.Shared.Record(site, ex).Id;
-            string stack = ex.Data["arcanecore.logon.stack"] as string
+            string stack = ex.Data[LogonFaults.StackKey] as string
                 ?? LogonSession.CondensedStack(site, ex);
             logger.LogError(
                 ex,
