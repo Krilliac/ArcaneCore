@@ -82,6 +82,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     private readonly CancellationTokenSource _stop = new();
     private readonly ConcurrentDictionary<int, Link> _links = new();
     private readonly GatewayWardenManifestVerifier? _wardenVerifier;
+    private readonly Action<long, ClusterWardenVerdict>? _wardenVerdictAccepted;
     private readonly Lock _sourceGate = new();
     private readonly Dictionary<ClusterWardenVerdictSource, int> _openLinksBySource = [];
     // Newest incarnation admitted per node id. A gateway process keeps one incarnation for life and reconnects with it, so
@@ -94,6 +95,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
     private Task? _acceptTask;
     private int _nextLinkId;
     private long _droppedClientPackets;
+    private long _acceptedWardenVerdicts;
+    private long _refusedWardenVerdicts;
+    private string? _lastWardenRefusal;
 
     public GatewaySessionLinkHost(
         ClusterNodeManifest workerManifest,
@@ -102,7 +106,8 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         string linkSecret,
         IPEndPoint bindEndPoint,
         ILogger? logger = null,
-        GatewayWardenManifestVerifier? wardenVerifier = null)
+        GatewayWardenManifestVerifier? wardenVerifier = null,
+        Action<long, ClusterWardenVerdict>? wardenVerdictAccepted = null)
     {
         ArgumentNullException.ThrowIfNull(workerManifest);
         ArgumentNullException.ThrowIfNull(acceptor);
@@ -118,6 +123,7 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         _logger = logger ?? NullLogger.Instance;
         _listener = new TcpListener(bindEndPoint);
         _wardenVerifier = wardenVerifier;
+        _wardenVerdictAccepted = wardenVerdictAccepted;
     }
 
     public IPEndPoint BoundEndPoint => (IPEndPoint)_listener.LocalEndpoint;
@@ -138,6 +144,15 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
     /// <summary>Client packets dropped by the envelope rules (stale sequence, wrong generation, account or epoch, unknown session).</summary>
     public long DroppedClientPackets => Interlocked.Read(ref _droppedClientPackets);
+
+    /// <summary>Warden verdict frames of a gateway that passed every check and were handed to the verdict callback.</summary>
+    public long AcceptedWardenVerdicts => Interlocked.Read(ref _acceptedWardenVerdicts);
+
+    /// <summary>Warden verdict frames refused (unknown session, mismatched posture, stale epoch or generation, replay, no verifier).</summary>
+    public long RefusedWardenVerdicts => Interlocked.Read(ref _refusedWardenVerdicts);
+
+    /// <summary>Why the newest refused Warden verdict was refused (null when none was).</summary>
+    public string? LastWardenRefusal => Volatile.Read(ref _lastWardenRefusal);
 
     /// <summary>Open sessions over every link.</summary>
     public int SessionCount => _links.Values.Sum(link => link.Sessions.Count);
@@ -274,11 +289,17 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
 
                 switch (type)
                 {
+                    case GatewayWorkerFrameType.WardenPosture:
+                        OnWardenPosture(link, body.Span);
+                        break;
                     case GatewayWorkerFrameType.SessionOpen:
                         OnOpen(link, body.Span, ct);
                         break;
                     case GatewayWorkerFrameType.SessionClientPacket:
                         OnClientPacket(link, body);
+                        break;
+                    case GatewayWorkerFrameType.WardenVerdict:
+                        OnWardenVerdict(link, body.Span);
                         break;
                     case GatewayWorkerFrameType.SessionClose:
                         (long generation, int accountId, ClusterSessionDetachReason reason) = GatewaySessionWire.DecodeClose(body.Span);
@@ -397,6 +418,78 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// A Warden verdict frame of an admitted gateway link. It must name an open session of this link (generation and account), carry the
+    /// gateway's Warden posture matching this worker's expected one, and pass the verifier's epoch, generation and replay rules, which
+    /// key it by the link's own peer identity. Only then is the verdict callback called (on the link's receive loop: it must not block).
+    /// </summary>
+    private void OnWardenVerdict(Link link, ReadOnlySpan<byte> body)
+    {
+        (ClusterWardenVerdict verdict, GatewayWardenPosture posture) = GatewaySessionWire.DecodeWardenVerdict(body);
+        if (!link.Sessions.TryGetValue(verdict.SessionGeneration, out LinkSession? session) || session.AccountId != verdict.AccountId)
+        {
+            RefuseWardenVerdict(link, verdict, "Warden verdict for a session that is not open on this link");
+            return;
+        }
+
+        if (_wardenVerifier is null)
+        {
+            RefuseWardenVerdict(link, verdict, "no Warden verdict verifier is attached to this link host");
+            return;
+        }
+
+        if (!_wardenVerifier.VerifyPeerPosture(posture, out string? mismatch))
+        {
+            RefuseWardenVerdict(link, verdict, mismatch ?? "Warden posture mismatch");
+            return;
+        }
+
+        if (!TryAcceptWardenVerdict(link.Id, verdict, session.Generation, _ownerEpoch(), out string? discard))
+        {
+            RefuseWardenVerdict(link, verdict, discard ?? "refused");
+            return;
+        }
+
+        Interlocked.Increment(ref _acceptedWardenVerdicts);
+        try
+        {
+            _wardenVerdictAccepted?.Invoke(session.Generation, verdict);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("cluster.warden-verdict", ex, "Applying the Warden verdict of generation {Generation} failed", verdict.SessionGeneration);
+        }
+    }
+
+    /// <summary>
+    /// The gateway's Warden posture. With a verifier attached it must match this worker's expected posture; a mismatch closes the link
+    /// (protocol break, logged) so the gateway cannot carry sessions. Without a verifier the frame is ignored.
+    /// </summary>
+    private void OnWardenPosture(Link link, ReadOnlySpan<byte> body)
+    {
+        GatewayWardenPosture posture = GatewaySessionWire.DecodeWardenPosture(body);
+        if (_wardenVerifier is null)
+        {
+            return;
+        }
+
+        if (!_wardenVerifier.VerifyPeerPosture(posture, out string? mismatch))
+        {
+            Volatile.Write(ref _lastWardenRefusal, mismatch);
+            throw new InvalidDataException("gateway Warden posture refused: " + (mismatch ?? "mismatch"));
+        }
+
+        link.PostureProven = true;
+    }
+
+    private void RefuseWardenVerdict(Link link, ClusterWardenVerdict verdict, string reason)
+    {
+        Interlocked.Increment(ref _refusedWardenVerdicts);
+        Volatile.Write(ref _lastWardenRefusal, reason);
+        _logger.LogWarning("Gateway link from {Remote}: refused a Warden verdict (generation {Generation}, account {Account}, check {Check}): {Reason}",
+            link.Remote, verdict.SessionGeneration, verdict.AccountId, verdict.CheckId, reason);
+    }
+
     private void OnOpen(Link link, ReadOnlySpan<byte> body, CancellationToken ct)
     {
         (long requestId, GatewaySessionOpenRequest request) = GatewaySessionWire.DecodeOpen(body);
@@ -404,6 +497,15 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         {
             link.Channel.TryEnqueue(GatewaySessionWire.EncodeOpenReply(requestId, GatewaySessionOpenReply.Refuse(
                 AuthResponseCode.Failed, $"stale or invalid session generation {request.SessionGeneration} (highest {link.HighestGeneration})")));
+            return;
+        }
+
+        if (_wardenVerifier is not null && !link.PostureProven)
+        {
+            // The world skips its own Warden for gateway-backed sessions, so no session may open on a link whose gateway has not proven
+            // the same Warden posture (enabled flag, module digest, options, revision).
+            link.Channel.TryEnqueue(GatewaySessionWire.EncodeOpenReply(requestId, GatewaySessionOpenReply.Refuse(
+                AuthResponseCode.Unavailable, "the gateway has not proven a matching Warden posture")));
             return;
         }
 
@@ -510,6 +612,9 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
         public string Remote { get; } = remote;
         public ConcurrentDictionary<long, LinkSession> Sessions { get; } = new();
         public volatile bool Admitted;
+
+        /// <summary>The gateway sent a WardenPosture frame that matched this worker's verifier. Receive loop only.</summary>
+        public bool PostureProven;
 
         /// <summary>Set under the host's source gate at admission, cleared by ReleaseSource; null before admission.</summary>
         public ClusterWardenVerdictSource? Source;

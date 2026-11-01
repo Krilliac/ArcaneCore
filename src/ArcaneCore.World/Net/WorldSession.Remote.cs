@@ -142,12 +142,19 @@ public sealed partial class WorldSession
 
     /// <summary>
     /// After the gateway has been told the session is open (so nothing this sends can overtake SMSG_AUTH_RESPONSE): start
-    /// Warden on this side exactly as <see cref="HandleAuthSessionAsync"/> does. Warden traffic is ordinary opcodes, so it is
-    /// forwarded through the gateway unchanged.
+    /// Warden on this side exactly as <see cref="HandleAuthSessionAsync"/> does, unless the gateway owns Warden. A worker that
+    /// registered a gateway verdict verifier (worker mode, <c>AddGatewayWorker</c>) leaves Warden to the gateway: it holds the
+    /// session key and the client stream, intercepts CMSG_WARDEN_DATA and reports verdicts over the link. Starting a second Warden
+    /// here would send the client a second handshake that the gateway swallows the replies to.
     /// </summary>
     internal void StartRemote()
     {
         Invariant.Assert(IsRemote, "StartRemote is for gateway-backed sessions");
+        if (Services.GetService<global::ArcaneCore.World.Cluster.Auxiliary.GatewayWardenManifestVerifier>() is not null)
+        {
+            return;
+        }
+
         if (_remoteSessionKey is { } key)
         {
             Services.GetService<Warden.WardenFeature>()?.OnAuthenticated(this, _remoteBuild, key);
