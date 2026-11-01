@@ -90,13 +90,12 @@ public sealed class CreatureSmartAI : AggressorAI
     public override void OnQuestRewarded(Player player, uint questId) => Script.ProcessEventsFor(SmartEvent.RewardQuest, player, questId);
 
     /// <summary>
-    /// AzerothCore SmartAI::MovementInform (SmartAI.cpp:707-714): waypoint motion raises the waypoint-reached event with the node id, then every
-    /// movement raises MOVEMENTINFORM with the AzerothCore motion type (<see cref="SmartMotionTypes"/>) and the point or node id.
+    /// AzerothCore SmartAI::MovementInform (SmartAI.cpp:707-714): every movement raises MOVEMENTINFORM with the AzerothCore motion type
+    /// (<see cref="SmartMotionTypes"/>) and the point or node id. The escort events (40 ESCORT_REACHED, 108 WAYPOINT_REACHED) are not raised.
     /// </summary>
     public override void OnMovementInform(MovementGeneratorType type, uint pointId)
     {
         base.OnMovementInform(type, pointId);
-        if (type == MovementGeneratorType.Waypoint) Script.ProcessEventsFor(SmartEvent.WaypointReached, null, pointId);
         if (SmartMotionTypes.ToSmart(type) is { } smartType) Script.ProcessEventsFor(SmartEvent.MovementInform, null, smartType, null, pointId);
     }
 

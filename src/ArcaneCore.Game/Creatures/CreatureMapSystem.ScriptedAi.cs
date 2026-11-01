@@ -174,6 +174,9 @@ public sealed partial class CreatureMapSystem
         }
     }
 
+    /// <summary>True when <paramref name="textId"/> is a known broadcast text or creature_ai_texts id (AzerothCore CreatureTextMgr::TextExist).</summary>
+    public bool TextExists(int textId) => _content.Ai.FindText(textId) is not null;
+
     /// <summary>
     /// ScriptDev GetCreatureListWithEntryInGrid: the creatures of <paramref name="entry"/> of this map within <paramref name="range"/> yards of
     /// <paramref name="center"/> (3D, the living and the dead that are still in the world), nearest first.

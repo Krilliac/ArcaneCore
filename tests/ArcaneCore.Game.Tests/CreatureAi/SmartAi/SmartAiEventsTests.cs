@@ -8,7 +8,7 @@ using static ArcaneCore.Game.Tests.CreatureTestKit;
 namespace ArcaneCore.Game.Tests.CreatureAi.SmartAi;
 
 /// <summary>
-/// SmartAI events DATA_SET (38), ESCORT_REACHED / WAYPOINT_REACHED (40), TEXT_OVER (52) and MOVEMENTINFORM (34). Rows use raw AzerothCore ids
+/// SmartAI events DATA_SET (38), ESCORT_REACHED (40, refused), TEXT_OVER (52) and MOVEMENTINFORM (34). Rows use raw AzerothCore ids
 /// (SmartScriptMgr.h); the observable effect is SET_EVENT_PHASE, read back from <see cref="SmartScript.Phase"/>.
 /// </summary>
 public sealed class SmartAiEventsTests
@@ -36,25 +36,6 @@ public sealed class SmartAiEventsTests
         rig.Script.OnUpdate(1);    // the next update reactivates the row
         rig.WolfAi.SetData(3, 7);
         Assert.Equal(4u, rig.Script.Phase);
-    }
-
-    [Fact]
-    public void WaypointReached_RunsForTheNodeOnWaypointMotionOnly()
-    {
-        using var rig = SmartRig.Start([Make(Wolf, 0, 0, 40, 22, 1, e1: 3, a1: 5)]);
-
-        // A point move to node 3 is not a waypoint arrival; neither is node 4.
-        rig.WolfAi.OnMovementInform(MovementGeneratorType.Point, 3);
-        rig.WolfAi.OnMovementInform(MovementGeneratorType.Waypoint, 4);
-        Assert.Equal(0u, rig.Script.Phase);
-
-        rig.WolfAi.OnMovementInform(MovementGeneratorType.Waypoint, 3);
-        Assert.Equal(5u, rig.Script.Phase);
-
-        // Param1 0 matches any node.
-        using var any = SmartRig.Start([Make(Wolf, 0, 0, 40, 22, 1, e1: 0, a1: 6)]);
-        any.WolfAi.OnMovementInform(MovementGeneratorType.Waypoint, 11);
-        Assert.Equal(6u, any.Script.Phase);
     }
 
     [Fact]
@@ -127,7 +108,7 @@ public sealed class SmartAiEventsTests
     }
 
     [Fact]
-    public void Catalog_AcceptsTheNewEvents_AndRefusesPathIdsAndABadCooldown()
+    public void Catalog_AcceptsTheNewEvents_AndRefusesEscortReachedPathIdsBadTypesAndABadCooldown()
     {
         var catalog = new SmartScriptCatalog(
         [
@@ -136,15 +117,16 @@ public sealed class SmartAiEventsTests
             Make(Wolf, 0, 2, 52, 22, 1, e1: 1, a1: 1),
             Make(Wolf, 0, 3, 34, 22, 1, e1: 8, e2: 1, a1: 1),
             Make(Wolf, 0, 4, 34, 22, 1, e1: 8, e2: 1, e3: 5, a1: 1),
-            Make(Wolf, 0, 5, 40, 22, 1, e1: 2, e2: 5, a1: 1),
+            Make(Wolf, 0, 5, 34, 22, 1, e1: 20, e2: 1, a1: 1),
             Make(Wolf, 0, 6, 38, 22, 1, e1: 1, e2: 1, e3: 9, e4: 2, a1: 1),
         ]);
 
-        Assert.Equal(4, catalog.For(WolfEntry, 0).Count);
+        Assert.Equal(3, catalog.For(WolfEntry, 0).Count);
         string[] reasons = [.. catalog.Rejected.OrderBy(r => r.Id).Select(r => r.Reason)];
-        Assert.Equal(3, reasons.Length);
-        Assert.Contains("MOVEMENTINFORM path id 5", reasons[0], StringComparison.Ordinal);
-        Assert.Contains("ESCORT_REACHED path id 5", reasons[1], StringComparison.Ordinal);
-        Assert.Contains("DATA_SET cooldown 9..2", reasons[2], StringComparison.Ordinal);
+        Assert.Equal(4, reasons.Length);
+        Assert.Contains("ESCORT_REACHED needs a SMART_ACTION_WP_START escort", reasons[0], StringComparison.Ordinal);
+        Assert.Contains("MOVEMENTINFORM path id 5", reasons[1], StringComparison.Ordinal);
+        Assert.Contains("MOVEMENTINFORM movement type 20", reasons[2], StringComparison.Ordinal);
+        Assert.Contains("DATA_SET cooldown 9..2", reasons[3], StringComparison.Ordinal);
     }
 }

@@ -59,6 +59,13 @@ public sealed class SmartScript
     private readonly List<SmartHolder> _timedList = [];
     private readonly List<string> _unsupported = [];
     private bool _processingTimedList;
+
+    // SMART_ACTION_TALK bookkeeping for SMART_EVENT_TEXT_OVER (SmartScript.cpp:259-262, 5322-5335): the last text group said, who said it, and the
+    // countdown of its duration.
+    private uint _textTimerMs;
+    private uint _lastTextGroup;
+    private uint _talkerEntry;
+    private bool _useTextTimer;
     private int _actionDepth;
 
     internal SmartScript(CreatureSmartAI ai, IReadOnlyList<SmartScriptRow> rows, SmartScriptCatalog? catalog = null)
@@ -87,13 +94,6 @@ public sealed class SmartScript
     private CreatureMapSystem? System => _owner.CreatureSystem;
 
     public uint Phase { get; private set; }
-
-    // SMART_ACTION_TALK bookkeeping for SMART_EVENT_TEXT_OVER (SmartScript.cpp:259-262, 5322-5335): the last text group said, who said it, and the
-    // countdown of its duration.
-    private uint _textTimerMs;
-    private uint _lastTextGroup;
-    private uint _talkerEntry;
-    private bool _useTextTimer;
     public IReadOnlyList<SmartHolder> Events => _events;
     public IReadOnlyList<SmartHolder> StoredEvents => _stored;
 
@@ -422,11 +422,6 @@ public sealed class SmartScript
                     RecalcTimer(e, r.EventParam3, r.EventParam4);
                     ProcessAction(e, invoker);
                     break;
-                case SmartEvent.WaypointReached:
-                    // SmartScript.cpp:5089-5096: `me` reached node param1 (0 any; var0). The path id (param2) is refused unless 0 at load.
-                    if (Me is null || (r.EventParam1 != 0 && var0 != r.EventParam1)) return;
-                    ProcessAction(e, invoker);
-                    break;
                 case SmartEvent.TextOver:
                     // SmartScript.cpp:4750-4756: param1 the text group said (var0), param2 the speaker's entry (0 any; var1).
                     if (var0 != r.EventParam1 || (r.EventParam2 != 0 && var1 != r.EventParam2)) return;
@@ -488,11 +483,14 @@ public sealed class SmartScript
                         Unit? talkTarget = targets.OfType<Unit>().FirstOrDefault() ?? invoker;
                         system.SayText(me, (int)r.ActionParam1, talkTarget);
 
-                        // SmartScript.cpp:259-262: remember the text for SMART_EVENT_TEXT_OVER; param2 is the duration in milliseconds.
-                        _talkerEntry = me.Entry;
-                        _lastTextGroup = r.ActionParam1;
-                        _textTimerMs = r.ActionParam2;
-                        _useTextTimer = true;
+                        // SmartScript.cpp:253-262: only an existing text arms SMART_EVENT_TEXT_OVER; param2 is the duration in milliseconds.
+                        if (system.TextExists((int)r.ActionParam1))
+                        {
+                            _talkerEntry = me.Entry;
+                            _lastTextGroup = r.ActionParam1;
+                            _textTimerMs = r.ActionParam2;
+                            _useTextTimer = true;
+                        }
                     }
                     else
                     {

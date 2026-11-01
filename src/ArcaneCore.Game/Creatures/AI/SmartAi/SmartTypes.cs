@@ -23,7 +23,6 @@ public enum SmartEvent : byte
     MovementInform = 34,
     AiInit = 37,
     DataSet = 38,
-    WaypointReached = 40,
     AreaTriggerOnTrigger = 46,
     TextOver = 52,
     TimedEventTriggered = 59,

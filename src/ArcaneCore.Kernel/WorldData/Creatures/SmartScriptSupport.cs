@@ -12,7 +12,7 @@ public static class SmartScriptSupport
 {
     // ---- events the engine runs ----
 
-    private static readonly FrozenSet<byte> CreatureEvents = new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 17, 20, 21, 22, 25, 34, 38, 40, 52, 59, 60, 61, 62, 64 }.ToFrozenSet();
+    private static readonly FrozenSet<byte> CreatureEvents = new byte[] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14, 17, 20, 21, 22, 25, 34, 38, 52, 59, 60, 61, 62, 64 }.ToFrozenSet();
 
     // GO: UPDATE_OOC, AI_INIT, TIMED_EVENT_TRIGGERED, UPDATE, LINK, JUST_CREATED, GOSSIP_HELLO (the ArcaneCore GO hooks: Update and OnUse).
     private static readonly FrozenSet<byte> GameObjectEvents = new byte[] { 1, 37, 59, 60, 61, 63, 64 }.ToFrozenSet();
@@ -104,7 +104,9 @@ public static class SmartScriptSupport
 
             if (!Events(source).Contains(row.EventType))
             {
-                return $"event {row.EventType} has no ArcaneCore hook for source type {row.SourceType}";
+                // SmartAI.cpp:706-720: ESCORT_REACHED is raised only while a WP_START (53) escort runs, which ArcaneCore does not run.
+                string why = row.EventType == 40 ? ": ESCORT_REACHED needs a SMART_ACTION_WP_START escort" : string.Empty;
+                return $"event {row.EventType} has no ArcaneCore hook for source type {row.SourceType}{why}";
             }
         }
 
@@ -197,19 +199,16 @@ public static class SmartScriptSupport
                 return row.EventParam5 > row.EventParam6
                     ? $"RANGE range {row.EventParam5}..{row.EventParam6} has min above max (SmartScriptMgr.cpp:1134-1145)" : null;
             case 34:
+                // SmartScriptMgr.cpp:1279-1286: the movement type is at most NULL_MOTION_TYPE (19).
+                if (row.EventParam1 > 19) return $"MOVEMENTINFORM movement type {row.EventParam1} is above 19 (SmartScriptMgr.cpp:1279-1286)";
                 // SMART_EVENT_MOVEMENTINFORM: type, point id, path id (SmartScriptMgr.h:133). AC compares the path id with the creature's current
                 // waypoint path (SmartScript.cpp:4685-4689); ArcaneCore's waypoint generator does not carry a path id, so only 0 (any) is accepted.
                 return row.EventParam3 != 0
                     ? $"MOVEMENTINFORM path id {row.EventParam3} cannot be matched: the waypoint path id of a creature is not tracked (use 0 for any)" : null;
             case 38:
-                // SMART_EVENT_DATA_SET: IsMinMaxValid on the cooldown (SmartScriptMgr.cpp event DATA_SET).
+                // SMART_EVENT_DATA_SET: IsMinMaxValid on the cooldown (SmartScriptMgr.cpp event DATA_SET). Limit: creatures only (AC also raises it
+                // for game objects, SmartAI.cpp:1537), and nothing calls CreatureSmartAI.SetData yet because SMART_ACTION_SET_DATA (45) is not wired.
                 return row.EventParam3 > row.EventParam4 ? $"DATA_SET cooldown {row.EventParam3}..{row.EventParam4} has min above max" : null;
-            case 40:
-                // SMART_EVENT_ESCORT_REACHED (SmartScriptMgr.h:140): point id, path id. Raised here when waypoint motion reaches a node (the 108
-                // WAYPOINT_REACHED trigger, SmartAI.cpp:711-712). A path id would need the path SMART_ACTION_WP_START (53) loaded, which ArcaneCore
-                // does not run, so only 0 (any) is accepted.
-                return row.EventParam2 != 0
-                    ? $"ESCORT_REACHED path id {row.EventParam2} needs a SMART_ACTION_WP_START escort: ArcaneCore matches waypoint arrivals of any path (use 0)" : null;
             case 14:
                 // SMART_EVENT_FRIENDLY_HEALTH: a radius, and a valid repeat (SmartScriptMgr.cpp:1190-1196).
                 if (row.EventParam2 == 0)
