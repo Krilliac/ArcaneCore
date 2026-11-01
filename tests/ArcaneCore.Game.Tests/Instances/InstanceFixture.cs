@@ -1,6 +1,7 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Instances;
+using ArcaneCore.Game.Instances.Scripts;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Maps.Templates;
 using ArcaneCore.Game.Social;
@@ -228,7 +229,24 @@ internal sealed class InstanceFixture : IDisposable
 
     public bool LeaveToContinent(Player player) => Teleport(player, 0, -11209.6f, 1666.54f, 24.69f);
 
+    /// <summary>Replace the script data of an instance map with one that always reports <see cref="InstanceData.IsEncounterInProgress"/>, whatever the real script of that dungeon says.</summary>
+    public static void ForceEncounterInProgress(Map map)
+    {
+        foreach (InstanceData existing in map.Updaters.OfType<InstanceData>().ToArray())
+        {
+            map.RemoveUpdater(existing);
+        }
+
+        map.AddUpdater(new EncounterInProgressData(map));
+    }
+
     public void Tick(uint diffMs = 50) => World.RunTick(diffMs);
 
     public void Dispose() => World.Dispose();
+}
+
+/// <summary>A state-only instance script whose encounter is always in progress.</summary>
+internal sealed class EncounterInProgressData(Map instance) : InstanceData(instance)
+{
+    public override bool IsEncounterInProgress => true;
 }

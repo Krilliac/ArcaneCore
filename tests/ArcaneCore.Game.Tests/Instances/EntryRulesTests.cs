@@ -191,6 +191,8 @@ public sealed class EntryRulesTests
         Player a = f.AddPlayer(1), b = f.AddPlayer(2);
         f.Party(a, b);
         Assert.True(f.EnterDungeon(a));
+        ForceEncounterInProgress(a.Map!); // so only the raid-only guard (template.IsRaid) can let b in
+        Assert.True(a.Map!.FindUpdater<InstanceData>()!.IsEncounterInProgress);
         a.UnitFlags |= UnitFlags.InCombat;
         Assert.True(f.EnterDungeon(b));
     }
