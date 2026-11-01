@@ -4,6 +4,7 @@ using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.World.Commands;
 using ArcaneCore.World.Gm.Args;
 using ArcaneCore.World.Gm.Character;
+using ArcaneCore.World.Gm.Core;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ArcaneCore.World.Gm.DebugTools;
@@ -34,7 +35,9 @@ public sealed class NameAuraCommand : ICommandGroup
         if (!PlayerTargetResolver.TryExtract(new CommandArgs(nameArg ?? string.Empty), name => context.World.FindOnlinePlayer(name),
                 context.SelectedPlayerOrSelf, out Player? target, out _) || target is null)
         {
-            return false;
+            // PlayerTargetResolver contract: the caller answers "Player not found!" and the command counts as handled.
+            context.Reply(GmStrings.PlayerNotFound);
+            return true;
         }
 
         // ExtractInt32 failing leaves the duration 0 (the spell's own), as the reference ignores its result.
@@ -59,12 +62,12 @@ public sealed class NameAuraCommand : ICommandGroup
 
         if (seconds > 0 && seconds <= int.MaxValue / 1000)
         {
-            // HandleAuraHelper: holder->SetAuraDuration(duration * IN_MILLISECONDS) after the holder is built.
+            // HandleAuraHelper: holder->SetAuraDuration(duration * IN_MILLISECONDS). The holder is already applied here, so
+            // GmSetAuraDuration also resends SMSG_UPDATE_AURA_DURATION and the target's client shows the overridden timer.
             SpellAuraHolder? holder = spells.GetAuras(target).LastOrDefault(h => h.Spell.Id == spellId && !h.IsPermanent);
             if (holder is not null)
             {
-                holder.MaxDuration = seconds * 1000;
-                holder.Duration = seconds * 1000;
+                spells.GmSetAuraDuration(holder, seconds * 1000);
             }
         }
 

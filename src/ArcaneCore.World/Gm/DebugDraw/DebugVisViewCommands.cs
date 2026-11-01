@@ -44,13 +44,12 @@ public sealed class DebugVisViewCommands : ICommandExtension
             return true;
         }
 
-        uint? mapId = context.Player.Map?.MapId;
         var entries = new List<BotStallEntry>();
         foreach (PlayerbotStatus status in service.Snapshot())
         {
-            // Only a bot standing on the invoker's map can be drawn for the invoker.
+            // Only a bot on the invoker's own map instance can be drawn for the invoker (another instance of the same map id is out of reach).
             Player? bot = context.World.FindOnlinePlayer(status.Name);
-            Vector3? at = bot is not null && bot.Map is { } map && map.MapId == mapId ? new Vector3(bot.X, bot.Y, bot.Z) : null;
+            Vector3? at = bot is not null && bot.Map is { } map && ReferenceEquals(map, context.Player.Map) ? new Vector3(bot.X, bot.Y, bot.Z) : null;
             entries.Add(new BotStallEntry(status.Name, status.State.ToString(), status.ErrorCode, at));
         }
 

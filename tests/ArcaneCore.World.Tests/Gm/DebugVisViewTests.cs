@@ -58,7 +58,7 @@ public sealed class DebugVisViewTests
         Assert.Equal(4, view.Lines.Count);
         Assert.Contains("economy: held by node-a (incarnation 11111111222233334444555555555555), fencing token 7, expires in 1m 30s", view.Lines);
         Assert.Contains("social: unheld, highest token 4", view.Lines);
-        Assert.Contains("instances: unheld (expired, last holder node-b), highest token 3", view.Lines);
+        Assert.Contains("instances: unheld, highest token 3", view.Lines);
         Assert.Equal(3, view.Markers.Count);
         Assert.Equal(DebugMarkerKind.PathCorner, view.Markers[0].Kind);
         Assert.Equal(DebugMarkerKind.PathCornerBad, view.Markers[1].Kind);
@@ -82,9 +82,13 @@ public sealed class DebugVisViewTests
         Assert.Contains("Tanaris (440): 2/3 necropolis(es) standing, next attack in 1m 40s", view.Lines);
         Assert.Contains("Blasted Lands (4): 0/2 necropolis(es) standing", view.Lines);
         Assert.Contains("Azshara (16): 0/2 necropolis(es) standing, next attack due", view.Lines);
-        Assert.Equal(2, view.Markers.Count);
-        Assert.Equal(DebugMarkerKind.PathCornerBad, view.Markers[0].Kind);
-        Assert.Equal(DebugMarkerKind.PathCorner, view.Markers[1].Kind);
+        // Only the attacked zone on map 1 gets a Mouth marker: Azshara has no necropolis left, Blasted Lands is on another map.
+        DebugVisMarker marker = Assert.Single(view.Markers);
+        Assert.Equal(DebugMarkerKind.PathCornerBad, marker.Kind);
+        Assert.Equal(new Vector3(1f, 1f, 1f), marker.Position);
+
+        var disabled = new InvasionSnapshot(false, 0, 0, snapshot.Zones);
+        Assert.Empty(DebugVisViews.Invasion(disabled, 1_000_000, mapId: 1).Markers);
     }
 
     [Fact]
@@ -124,6 +128,12 @@ public sealed class DebugVisViewTests
         await host.WaitForWorldAsync(() => system.HasAura(target, 991941), "named aura application");
         int duration = await host.OnWorldAsync(() => system.GetAuras(target).Single(h => h.Spell.Id == 991941).Duration);
         Assert.InRange(duration, 1, 30_000);
+
+        // The client must be told the overridden timer (SMSG_UPDATE_AURA_DURATION: slot byte, duration uint32), not the spell's own 60 s.
+        List<(WorldOpcode Opcode, byte[] Payload)> packets = await victim.CollectAsync();
+        Assert.Contains(packets, p => p.Opcode == WorldOpcode.SmsgUpdateAuraDuration
+            && p.Payload.Length >= 5
+            && BitConverter.ToUInt32(p.Payload, 1) is > 20_000u and <= 30_000u);
     }
 
     private static SpellInfo AuraSpell() => new()

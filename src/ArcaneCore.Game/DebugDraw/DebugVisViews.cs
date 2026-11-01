@@ -99,8 +99,8 @@ public static class DebugVisViews
             }
             else
             {
-                string last = lease.OwnerNodeId is null ? string.Empty : F($" (expired, last holder {lease.OwnerNodeId})");
-                text = F($"{lease.Scope}: unheld{last}, highest token {lease.HighWaterToken}");
+                // The lease store reports no holder once a lease expired, so the last holder is not known here.
+                text = F($"{lease.Scope}: unheld, highest token {lease.HighWaterToken}");
             }
 
             lines.Add(text);
@@ -116,7 +116,8 @@ public static class DebugVisViews
 
     /// <summary>
     /// The Scourge invasion: state and every zone with its necropolises left and next attack. A zone on <paramref name="mapId"/> with a
-    /// known Mouth position gets a marker there (red while it is still attacked, blue once its necropolises are down).
+    /// known Mouth position gets a red marker there while the invasion is enabled and the zone still has necropolises standing (the Mouth only
+    /// stands in an attacked zone).
     /// </summary>
     public static DebugVisView Invasion(InvasionSnapshot snapshot, long nowUnix, uint mapId)
     {
@@ -136,11 +137,10 @@ public static class DebugVisViews
 
             string line = text.ToString();
             lines.Add(line);
-            if (zone.MapId == mapId && zone.Mouth is { } mouth && markers.Count < MaxMarkers)
+            // The Mouth of Kel'Thuzad only stands in an attacked zone (necropolises left, invasion running; ScourgeInvasionCatalog).
+            if (snapshot.Enabled && zone.Remaining > 0 && zone.MapId == mapId && zone.Mouth is { } mouth && markers.Count < MaxMarkers)
             {
-                bool attacked = zone.Remaining > 0;
-                markers.Add(new DebugVisMarker(attacked ? DebugMarkerKind.PathCornerBad : DebugMarkerKind.PathCorner, mouth,
-                    line + " - Mouth of Kel'Thuzad", Emphasis: attacked));
+                markers.Add(new DebugVisMarker(DebugMarkerKind.PathCornerBad, mouth, line + " - Mouth of Kel'Thuzad", Emphasis: true));
             }
         }
 
