@@ -167,7 +167,7 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
 
         (int code, string output, string error) = await RunAsync(source, Args("auth", target), tamper);
 
-        Assert.Equal(DbUpgradeExitCodes.CopyVerifyFailed, code);
+        Assert.True(code == DbUpgradeExitCodes.CopyVerifyFailed, $"exit {code}\n{error}");
         Assert.Contains("CONTENT DIFFERS", output, StringComparison.Ordinal);
         Assert.Contains("rolled back", error, StringComparison.Ordinal);
         Assert.DoesNotContain("copy complete", output, StringComparison.Ordinal);
@@ -183,7 +183,7 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
 
         (int code, _, string error) = await RunAsync(source, Args("auth", target), fail);
 
-        Assert.Equal(DbUpgradeExitCodes.Failure, code);
+        Assert.True(code == DbUpgradeExitCodes.Failure, $"exit {code}\n{error}");
         Assert.Contains("forced failure", error, StringComparison.Ordinal);
         Assert.Equal(await DbCopyTestSupport.FreshCountsAsync(_databases, "auth"), await DbCopyTestSupport.CountsAsync("auth", target));
     }
@@ -198,7 +198,7 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
 
         (int code, _, string error) = await RunAsync(source, Args("auth", target));
 
-        Assert.Equal(DbUpgradeExitCodes.Failure, code);
+        Assert.True(code == DbUpgradeExitCodes.Failure, $"exit {code}\n{error}");
         Assert.Contains("realmlist", error, StringComparison.Ordinal);
         Assert.Contains("'Type'", error, StringComparison.Ordinal);
         Assert.Contains("[Id=", error, StringComparison.Ordinal);
@@ -217,7 +217,7 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
 
         (int code, _, string error) = await RunAsync(source, Args("auth", target));
 
-        Assert.Equal(DbUpgradeExitCodes.Failure, code);
+        Assert.True(code == DbUpgradeExitCodes.Failure, $"exit {code}\n{error}");
         Assert.Contains("NUL", error, StringComparison.Ordinal);
         Assert.Contains("'Name'", error, StringComparison.Ordinal);
         Assert.Contains("[Id=", error, StringComparison.Ordinal);
@@ -238,7 +238,7 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
         await using (DbConnection other = await DbCopyTestSupport.HoldSessionAsync(target))
         {
             (int code, _, string error) = await RunAsync(source, Args("auth", target, "--replace"));
-            Assert.Equal(DbUpgradeExitCodes.Refused, code);
+            Assert.True(code == DbUpgradeExitCodes.Refused, $"exit {code}\n{error}");
             Assert.Contains("other session", error, StringComparison.Ordinal);
             Assert.Contains("nothing was changed", error, StringComparison.Ordinal);
 
@@ -304,7 +304,7 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
 
         (int code, _, string error) = await RunAsync(source, args);
 
-        Assert.Equal(DbUpgradeExitCodes.Usage, code);
+        Assert.True(code == DbUpgradeExitCodes.Usage, $"exit {code}\n{error}");
         Assert.Contains("same database", error, StringComparison.Ordinal);
     }
 
@@ -416,7 +416,7 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
 
         (int code, _, string error) = await RunAllAsync(source, environment, ["copy", "--component", "all"], fail);
 
-        Assert.Equal(DbUpgradeExitCodes.Failure, code);
+        Assert.True(code == DbUpgradeExitCodes.Failure, $"exit {code}\n{error}");
         Assert.Contains("forced failure", error, StringComparison.Ordinal);
         string tail = error[error.IndexOf("already committed", StringComparison.Ordinal)..];
         Assert.Contains("auth", tail, StringComparison.Ordinal);
@@ -432,7 +432,7 @@ public sealed class DbCopyEdgeTests : IAsyncLifetime
 
         (int code, _, string error) = await RunAsync(source, Args("auth", target), TamperRealmlist());
 
-        Assert.Equal(DbUpgradeExitCodes.CopyVerifyFailed, code);
+        Assert.True(code == DbUpgradeExitCodes.CopyVerifyFailed, $"exit {code}\n{error}");
         Assert.DoesNotContain("already committed", error, StringComparison.Ordinal);
     }
 

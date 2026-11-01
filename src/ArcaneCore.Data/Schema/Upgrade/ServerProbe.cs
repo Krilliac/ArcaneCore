@@ -82,6 +82,9 @@ public static partial class ServerProbe
         }
     }
 
+    private const int ClosingSessionRecounts = 5;
+    private static readonly TimeSpan ClosingSessionRecountDelay = TimeSpan.FromMilliseconds(100);
+
     /// <summary>
     /// How many sessions other than this one are connected to the same database; null when the engine cannot
     /// say (SQLite) or the role may not see them. A tool run with pooling disabled counts only real other processes.
@@ -91,13 +94,27 @@ public static partial class ServerProbe
         ArgumentNullException.ThrowIfNull(db);
         string? sql = db.Database.ProviderName switch
         {
-            PomeloProvider => "SELECT COUNT(*) FROM information_schema.processlist WHERE db = DATABASE() AND id <> CONNECTION_ID()",
+            PomeloProvider => "SELECT COUNT(*) FROM information_schema.processlist WHERE db = DATABASE() AND id <> CONNECTION_ID() AND COMMAND NOT IN ('Killed', 'Quit')",
             NpgsqlProvider => "SELECT COUNT(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'",
             SqliteProvider => null,
             _ => throw SchemaCatalog.Unsupported(db),
         };
 
-        return sql is null ? null : (int)await SchemaCatalog.ScalarAsync(db, sql, cancellationToken).ConfigureAwait(false);
+        if (sql is null)
+        {
+            return null;
+        }
+
+        // A session this process just closed (unpooled, COM_QUIT sent without waiting) can linger in the server's list for a
+        // moment, so a nonzero count is re-read a few times before it is believed. A live session stays counted every time.
+        int count = (int)await SchemaCatalog.ScalarAsync(db, sql, cancellationToken).ConfigureAwait(false);
+        for (int attempt = 0; attempt < ClosingSessionRecounts && count > 0; attempt++)
+        {
+            await Task.Delay(ClosingSessionRecountDelay, cancellationToken).ConfigureAwait(false);
+            count = (int)await SchemaCatalog.ScalarAsync(db, sql, cancellationToken).ConfigureAwait(false);
+        }
+
+        return count;
     }
 
     /// <summary>
