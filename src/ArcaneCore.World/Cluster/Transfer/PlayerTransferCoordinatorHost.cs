@@ -164,7 +164,17 @@ public sealed class PlayerTransferCoordinatorHost
     }
 
     /// <summary>Transfers one player. Never throws for a transfer failure: the outcome says whether it stands, was aborted or still needs recovery.</summary>
-    public async Task<PlayerTransferOutcome> TransferAsync(PlayerTransferRequest request, CancellationToken cancellationToken = default)
+    public Task<PlayerTransferOutcome> TransferAsync(PlayerTransferRequest request, CancellationToken cancellationToken = default) =>
+        TransferAsync(request, afterStageHook: null, cancellationToken);
+
+    /// <summary>
+    /// <see cref="TransferAsync(PlayerTransferRequest, CancellationToken)"/> with the coordinator's per-stage hook (<see cref="PlayerTransferCoordinator.ExecuteTransferAsync"/>): the gateway's transfer service
+    /// uses it for the pre-commit check after stage 4 (is the target still the process the transfer reserved under?). A hook that aborts the transfer ends it as an aborted outcome; one that throws settles it like any failure.
+    /// </summary>
+    public async Task<PlayerTransferOutcome> TransferAsync(
+        PlayerTransferRequest request,
+        Func<PlayerTransferStage, TransferDecisionRecord, CancellationToken, Task>? afterStageHook,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         lock (_gate)
@@ -177,7 +187,7 @@ public sealed class PlayerTransferCoordinatorHost
 
         try
         {
-            return await _coordinator.ExecuteTransferAsync(request, afterStageHook: null, cancellationToken).ConfigureAwait(false);
+            return await _coordinator.ExecuteTransferAsync(request, afterStageHook, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

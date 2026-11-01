@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using ArcaneCore.Gateway.Transfers;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Net;
@@ -44,7 +45,8 @@ public sealed class GatewayServer : BackgroundService
         GatewayWarden? warden = null,
         GatewayRealmLiveness? realmLiveness = null,
         IOptions<GatewayHandoffOptions>? handoff = null,
-        IOptions<GatewayControlOptions>? control = null)
+        IOptions<GatewayControlOptions>? control = null,
+        IOptions<GatewayTransferOptions>? transfers = null)
     {
         ArgumentNullException.ThrowIfNull(scopes);
         ArgumentNullException.ThrowIfNull(options);
@@ -56,8 +58,8 @@ public sealed class GatewayServer : BackgroundService
         _protection = protection;
         Warden = warden;
         _realmLiveness = realmLiveness;
-        // Gateway:Handoff:Enabled turns the control channels on; Gateway:Control:* are their reply timeouts. Off (the default), no worker link gets a channel.
-        ControlTimeouts = handoff?.Value.Enabled == true ? (control?.Value ?? new GatewayControlOptions()).ToTimeouts() : null;
+        // Gateway:Handoff:Enabled or Gateway:Transfers:Enabled turns the control channels on; Gateway:Control:* are their reply timeouts. Both off (the default), no worker link gets a channel.
+        ControlTimeouts = handoff?.Value.Enabled == true || transfers?.Value.Enabled == true ? (control?.Value ?? new GatewayControlOptions()).ToTimeouts() : null;
         _logger = loggers.CreateLogger<GatewayServer>();
         Transfers = new GatewayTransferRouter(new GatewayServerTransferEnvironment(this));
     }
@@ -65,7 +67,7 @@ public sealed class GatewayServer : BackgroundService
     /// <summary>The gateway side of cross-worker player transfers: buffers, replays and re-points sessions on the worker coordinator's control frames.</summary>
     public GatewayTransferRouter Transfers { get; }
 
-    /// <summary>The reply timeouts of the control channels (<c>Gateway:Control:*</c>), or null when <c>Gateway:Handoff:Enabled</c> is off and the worker links carry no channel.</summary>
+    /// <summary>The reply timeouts of the control channels (<c>Gateway:Control:*</c>), or null when <c>Gateway:Handoff:Enabled</c> and <c>Gateway:Transfers:Enabled</c> are both off and the worker links carry no channel.</summary>
     internal ArcaneCore.World.Cluster.Control.LinkControlTimeouts? ControlTimeouts { get; }
 
     /// <summary>This gateway process's link incarnation (the manifest every link it opens advertises, so a worker counts all of them as one gateway).</summary>
@@ -691,6 +693,7 @@ public sealed class GatewayWorkerLink
     private volatile IPEndPoint? _connected;
     private volatile GatewaySessionLinkClient? _link;
     private volatile string? _lastError;
+    private volatile StatusBox? _lastReport;
     private int _status;
     private long _failures;
     private long _reconnects;
@@ -750,6 +753,11 @@ public sealed class GatewayWorkerLink
     /// One channel per link: a reconnect or a retarget builds a new one, and the old one fails its pending requests when its link ends.
     /// </summary>
     public ArcaneCore.World.Cluster.Control.LinkControlChannel? ControlChannel => _control is { IsConnected: true } channel ? channel : null;
+
+    /// <summary>The latest <c>WorkerStatus</c> report of the registered link, or null while the link is down or no report has arrived on it yet.</summary>
+    public WorkerStatusReport? LastStatus => _lastReport is { } box ? box.Report : null;
+
+    private sealed record StatusBox(WorkerStatusReport Report);
 
     /// <summary>Completes when this link is registered (the current registration, or the next).</summary>
     public Task WaitForLinkAsync(CancellationToken cancellationToken) => Volatile.Read(ref _linkUp).Task.WaitAsync(cancellationToken);
@@ -812,11 +820,13 @@ public sealed class GatewayWorkerLink
             IPEndPoint worker = _target;
             Volatile.Write(ref _status, (int)GatewayWorkerLinkStatus.Connecting);
             var link = new GatewaySessionLinkClient(_config.ToManifest(_incarnation), worker, _config.LinkSecret, _loggers.CreateLogger<GatewaySessionLinkClient>(), _warden?.Posture);
-            if (_realmLiveness is { } liveness)
+            string node = NodeId;
+            GatewayRealmLiveness? liveness = _realmLiveness;
+            link.WorkerStatusReceived = report =>
             {
-                string node = NodeId;
-                link.WorkerStatusReceived = report => liveness.OnWorkerStatus(node, report); // the realm-list row of the realm is written from these reports
-            }
+                _lastReport = new StatusBox(report); // the transfer map router reads readiness and load from the latest report
+                liveness?.OnWorkerStatus(node, report); // the realm-list row of the realm is written from these reports
+            };
 
             if (_transfers is { } transfers)
             {
@@ -916,6 +926,7 @@ public sealed class GatewayWorkerLink
             _link = null;
             _control = null;
             _connected = null;
+            _lastReport = null;
             _routes.LinkDown(NodeId);
             if (retarget.Task.IsCompleted)
             {
