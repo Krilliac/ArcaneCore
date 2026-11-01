@@ -149,13 +149,22 @@ public sealed class DungeonEventSpellTests
         CreatureMapSystem creatures = s.AddCreatureSystem((UnsummonMechanicalYetiScript.UmisMechanicalYeti, 3f));
         Creature yeti = Assert.Single(creatures.Creatures);
         Assert.Same(creatures, yeti.System);
-        creatures.MoveTo(yeti, 40f, 0f, yeti.Z, false, null);
+        // A wander generator relaunches movement by itself: only MoveIdle (not a bare StopMoving) keeps the yeti still during the despawn delay.
+        creatures.SetDefaultRandomMovement(yeti, 10f);
+        for (int i = 0; i < 200 && !yeti.IsMoving; i++)
+        {
+            s.Tick(1);
+        }
+
         Assert.True(yeti.IsMoving);
 
         Assert.Equal(SpellCastResult.CastOk, s.Cast(UnsummonYeti, yeti));
 
         Assert.False(yeti.IsMoving);
-        s.Tick(9); // 900 ms: the despawn is delayed by one second
+        s.Tick(5);
+        Assert.False(yeti.IsMoving);
+        Assert.True(yeti.IsAlive);
+        s.Tick(4); // 900 ms of the despawn delay of one second
         Assert.True(yeti.IsAlive);
         s.Tick(2);
         Assert.False(yeti.IsAlive);

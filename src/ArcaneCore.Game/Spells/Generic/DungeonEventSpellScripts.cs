@@ -72,7 +72,7 @@ public sealed class UnsummonMechanicalYetiScript : ISpellScript
             return;
         }
 
-        yeti.System?.StopMoving(yeti);
+        yeti.System?.MoveIdle(yeti); // vmangos winterspring.cpp:298 GetMotionMaster()->MoveIdle(): no generator may restart the yeti before it despawns
         WorldDummyCasts.Despawn(yeti, DespawnDelayMs);
     }
 }

@@ -25,7 +25,7 @@ internal static partial class QaSpellConsumers
             "Summon Hakkar: the instance casts it on the Shade of Hakkar and turns it into the Avatar itself (cmangos sunken_temple.h:74, SummonHakkar::OnEffectExecute)"),
         new(12948, K.UsePath, "ArcaneCore.Game/Instances/Scripts/SunkenTemple/SunkenTempleInstance.Events.cs", "HakkarSummoned (spell 12948",
             "Avatar of Hakkar is summoned: the instance removes the evil circles when the Avatar arrives instead of casting it (vmangos world DB generic_scripts 850219)"),
-        new(15064, K.AuraReader, "ArcaneCore.Game/Instances/Scripts/BlackrockDepths/BlackrockDepthsInstance.Events.cs", "HasAura(rocknot, 15064)",
+        new(15064, K.AuraReader, "ArcaneCore.Game/Instances/Scripts/BlackrockDepths/BlackrockDepthsInstance.Events.cs", "HasAura(rocknot, NagmaraAI.SpellNagmaraRocknot)",
             "Nagmara + Rocknot: Rocknot and Nagmara are not despawned when the bar turns hostile while the aura is on Rocknot (vmangos instance_blackrock_depths.cpp:575)"),
         DbScriptRow(9096, "cast Rift Spawn Becomes Visible 9738"),
         DbScriptRow(11365, "despawn self"),
