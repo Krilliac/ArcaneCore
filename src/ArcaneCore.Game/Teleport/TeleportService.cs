@@ -351,8 +351,9 @@ public sealed partial class TeleportService
         }
 
         // Cluster:Worker:OwnedMaps: a destination another worker owns is refused here, before TRANSFER_PENDING / NEW_WORLD reach the client
-        // (a loading screen for a map this worker cannot serve). A far transfer to the owner replaces this refusal later.
-        if (!_world.Owns(mapId, target.Instanceable ? 1u : 0u))
+        // (a loading screen for a map this worker cannot serve). With a ClusterFarRouter the transfer to the owner replaces the refusal.
+        bool remote = !_world.Owns(mapId, target.Instanceable ? 1u : 0u);
+        if (remote && ClusterFarRouter is null)
         {
             if (log)
             {
@@ -368,8 +369,10 @@ public sealed partial class TeleportService
         }
 
         // Player::TeleportTo (Player.cpp:1861-1864): "don't let enter battlegrounds without assigned battleground id" — only the
-        // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map.
-        if (target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
+        // battleground system, through BattlegroundEntryAllowed, lets a player onto a battleground map. A battleground map another worker
+        // owns is not judged here: this worker holds no match binding for it, so the router (the coordinator that placed the match) decides
+        // eligibility, and the owning worker's own arrival check applies on landing.
+        if (!remote && target.IsBattleground && !(BattlegroundEntryAllowed?.Invoke(player, mapId) ?? false))
         {
             return false;
         }
@@ -382,7 +385,8 @@ public sealed partial class TeleportService
 
         // vmangos TeleportTo → MapManager::CanPlayerEnter: the instance rules may refuse a far
         // teleport (raid group, full or resetting instance) before anything changes.
-        bool allowed = current.MapId == mapId || _world.MapResolver is not { } resolver || resolver.CanEnter(player, mapId);
+        // The instance rules of the owning worker judge a remote destination; this worker holds no instance state for it.
+        bool allowed = remote || current.MapId == mapId || _world.MapResolver is not { } resolver || resolver.CanEnter(player, mapId);
         if (!allowed && log)
         {
             ServerAnomalies.Report(
@@ -401,6 +405,12 @@ public sealed partial class TeleportService
     /// is bound to (vmangos <c>InBattleGround()</c>). Null (no battleground system) refuses every battleground map. World thread.
     /// </summary>
     public Func<Player, uint, bool>? BattlegroundEntryAllowed { get; set; }
+
+    /// <summary>
+    /// Hands a far teleport to a map another worker owns to the cluster transfer (<see cref="IClusterFarTeleportRouter"/>). Unset (the
+    /// single-process default) keeps the refusal of an unowned destination. Set by the World host of a cluster worker. World thread.
+    /// </summary>
+    public IClusterFarTeleportRouter? ClusterFarRouter { get; set; }
 
     /// <summary>
     /// Runs after a near teleport moved the player (vmangos Unit::TeleportPositionRelocation -> Player::SetPosition(..., teleport = true),
@@ -431,9 +441,15 @@ public sealed partial class TeleportService
             return false;
         }
 
+        WorldMaps maps = WorldMaps.Of(_world);
+        bool remote = maps.Registry.Find(mapId) is { } template && !_world.Owns(mapId, template.Instanceable ? 1u : 0u);
+        if (remote)
+        {
+            return TeleportToRemoteMap(player, new TeleportDestination(mapId, x, y, z, orientation), options);
+        }
+
         // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966; there before the entry check, here once it passed).
         current.Combat.ReviveForDungeonEntry(player, mapId);
-        WorldMaps maps = WorldMaps.Of(_world);
 
         // vmangos TeleportTo (Player.cpp:1868-1872): leave the ship unless told to stay on it.
         bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
@@ -496,6 +512,30 @@ public sealed partial class TeleportService
         };
         _pending[player.Guid] = pending;
         current.RunAfterUpdate(pending.ExecuteFar);
+        return true;
+    }
+
+    // A destination another worker owns: the transfer replaces the local map change. This worker sends no loading-screen packet; the target
+    // worker's BeginClusterArrival sends SMSG_TRANSFER_PENDING then SMSG_NEW_WORLD, and the arrival completes on MSG_MOVE_WORLDPORT_ACK.
+    private bool TeleportToRemoteMap(Player player, TeleportDestination destination, TeleportOptions options)
+    {
+        if (ClusterFarRouter is not { } router || !router.TryBeginTransfer(player, destination, options))
+        {
+            return false;
+        }
+
+        // vmangos revives a ghost that enters the map its corpse is in (Player.cpp:1953-1966), before the map change; done once the router
+        // accepted so a refused transfer changes nothing. The revive reads no map state of the destination.
+        player.Map?.Combat.ReviveForDungeonEntry(player, destination.MapId);
+
+        // The same preparation a local far teleport does before the player leaves (vmangos Player::TeleportTo, Player.cpp:1868-1872).
+        bool staysAboard = (options & TeleportOptions.NotLeaveTransport) != 0 && player.Transport is not null;
+        if (!staysAboard)
+        {
+            player.Transport?.RemovePassenger(player);
+        }
+
+        ResetMovementForTeleport(player, staysAboard);
         return true;
     }
 

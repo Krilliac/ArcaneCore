@@ -110,6 +110,47 @@ public sealed class WorkerOwnershipRefusalTests
         Assert.Same(world.FindMap(0), player.Map);
     }
 
+    private sealed class CountingRouter : IClusterFarTeleportRouter
+    {
+        public List<(Player Player, TeleportDestination Destination, TeleportOptions Options)> Calls { get; } = [];
+
+        public bool TryBeginTransfer(Player player, TeleportDestination destination, TeleportOptions options)
+        {
+            Calls.Add((player, destination, options));
+            return true;
+        }
+    }
+
+    [Fact]
+    public void AShipCrossingToAnUnownedMap_HandsEachPlayerPassengerToTheFarRouterOnce()
+    {
+        WorldRuntime world = ManualWorld();
+        Own(world, "0");
+        WorldMaps.Of(world).Load(Content);
+        var teleports = new TeleportService(world, _ => { }, _ => { });
+        world.PlayerLoggingOut += teleports.Forget;
+        var router = new CountingRouter();
+        teleports.ClusterFarRouter = router;
+        TransportSystem system = Install(world, Crossing);
+        system.TeleportPassengerToUnownedMap = (p, mapId, x, y, z, o)
+            => teleports.TeleportTo(p, mapId, x, y, z, o, TeleportOptions.NotLeaveTransport);
+        ShipTransport ship = system.FindByEntry(Crossing)!;
+
+        Player player = TestWorld.CreatePlayer(3, 100, 0, new FakeSession(3));
+        world.AddPlayer(player);
+        ClientMoves(world, player, Aboard(ship, 4f, 0f, 6f));
+        Assert.Same(ship, player.Transport);
+
+        Advance(world, 40000); // past the map change at 35 s
+        Advance(world, 8000);  // the held ship asks every tick; the accepted player is not handed over again
+
+        (Player who, TeleportDestination destination, TeleportOptions options) = Assert.Single(router.Calls);
+        Assert.Same(player, who);
+        Assert.Equal(1u, destination.MapId);
+        Assert.Equal(TeleportOptions.NotLeaveTransport, options);
+        Assert.Equal(0u, ship.MapId); // the ship itself is still held on its own worker
+    }
+
     private static void ClientMoves(WorldRuntime world, Player player, MovementInfo movement)
     {
         MovementInfo previous = player.Movement;
