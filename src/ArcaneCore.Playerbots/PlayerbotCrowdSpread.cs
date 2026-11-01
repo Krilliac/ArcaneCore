@@ -51,9 +51,9 @@ internal sealed class PlayerbotCrowdSpread(WorldSession session, PlayerbotOption
             }
         }
 
+        if (npc.IsGameObject || player.Map is not { } map) return false;
         uint now = session.World.NowMs;
         if (!ShouldSpread(_memo, npc.Guid, now, () => PlayerbotTownGoals.AnotherBotWithin(player, PlayerbotTownGoals.CrowdedYards))) return false;
-        if (npc.IsGameObject || player.Map is not { } map) return false;
         var at = new Vector3(npc.X, npc.Y, npc.Z);
         if (!at.IsFinite()) return false;
         Vector3? spot = PickSpot(player.Guid.Value, npc.Guid.Value, at, candidate =>
