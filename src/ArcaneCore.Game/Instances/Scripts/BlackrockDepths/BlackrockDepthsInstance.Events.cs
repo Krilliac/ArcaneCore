@@ -457,6 +457,8 @@ public sealed partial class BlackrockDepthsInstance
             if (Instance.FindUpdater<CreatureMapSystem>()?.FindCreature(guid) is { } patron) MakePatronHostile(patron);
         if (GetSingleCreatureFromStorage(NpcRocknot) is { } rocknot)
         {
+            // vmangos instance_blackrock_depths.cpp:575: Rocknot and Nagmara stay when they are kissing under the stairs (Nagmara + Rocknot 15064 on Rocknot).
+            if (Instance.FindUpdater<CreatureMapSystem>()?.HasAura(rocknot, 15064) == true) return;
             Instance.FindUpdater<CreatureMapSystem>()?.SayText(rocknot, -1230047);
             rocknot.System?.ForcedDespawn(rocknot, 0);
         }
