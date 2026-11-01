@@ -13,17 +13,17 @@ namespace ArcaneCore.World.Tests.Spells.ContractSweep;
 [Collection(SpellContractSweepCollection.Name)]
 public sealed class SweepCreatureContentTests(ITestOutputHelper output)
 {
-    // 118 Polymorph (creature 16479), 10795 a mount (Ivory Raptor), 8324 Perm. Illusion HE Hunter (creature 6029: no row in the retail world
-    // database, so the sweep fills it with a stand-in like every other entry a Transform aura names).
+    // 118 Polymorph (creature 16479), 10795 a mount (Ivory Raptor), 8324 Perm. Illusion HE Hunter (creature 6029, not in the retail world
+    // database: the live server logs it too, so the sweep keeps it).
     private const uint Polymorph = 118;
     private const uint Mount = 10795;
-    private const uint PermIllusion = 8324;
+    private const uint MissingInRetail = 8324;
 
     [RealClientDbcFact]
     public void TransformAndMountSpells_FindTheirCreature_InTheSweepWorld()
     {
         SpellSweepCatalog catalog = SpellSweepCatalog.Shared;
-        SpellInfo[] spells = [.. new[] { Polymorph, Mount, PermIllusion }.Select(id => catalog.Store.Get(id) ?? throw new InvalidOperationException($"Spell.dbc has no {id}"))];
+        SpellInfo[] spells = [.. new[] { Polymorph, Mount, MissingInRetail }.Select(id => catalog.Store.Get(id) ?? throw new InvalidOperationException($"Spell.dbc has no {id}"))];
         using var rig = new SpellSweepRig(new SpellStore([.. catalog.Spells, SweepHelperSpells.SelfDummySpell()], [], []), RealClientDbcFactAttribute.DbcDirectory);
         rig.TakeFaults();
         SweepResult result = new SpellSweepRunner(rig, catalog) { Contracts = "aj" }.Run(spells, spells.Length, full: false);
@@ -33,6 +33,6 @@ public sealed class SweepCreatureContentTests(ITestOutputHelper output)
 
         Assert.DoesNotContain(displayLogs, v => v.SpellId == Polymorph);
         Assert.DoesNotContain(displayLogs, v => v.SpellId == Mount);
-        Assert.DoesNotContain(displayLogs, v => v.SpellId == PermIllusion);
+        Assert.Contains(displayLogs, v => v.SpellId == MissingInRetail);
     }
 }

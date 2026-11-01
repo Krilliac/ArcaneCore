@@ -112,6 +112,12 @@ internal sealed class SpellSweepRig : IDisposable
         _services.GetRequiredService<CreatureWorldFeature>().Install(new CreatureContent(DisplayTemplates(store), [], [], [], []));
     }
 
+    /// <summary>
+    /// Creature entries a Transform or Mounted aura names that the retail world database (classic-db creature_template) has no row for, so
+    /// the live server logs them too (vmangos Aura::HandleAuraTransform / HandleAuraMounted: "not found in database"). 6029: spell 8324.
+    /// </summary>
+    private static readonly HashSet<uint> s_entriesMissingInRetail = [6029];
+
     /// <summary>The display every stand-in template carries: any real CreatureDisplayInfo model serves, the sweep checks no model.</summary>
     public const uint StandInDisplay = ProductionSweepActions.MountDisplay;
 
@@ -127,7 +133,7 @@ internal sealed class SpellSweepRig : IDisposable
         {
             foreach (SpellEffectInfo effect in spell.Effects)
             {
-                if (effect.AuraType is AuraType.Transform or AuraType.Mounted && effect.MiscValue > 0)
+                if (effect.AuraType is AuraType.Transform or AuraType.Mounted && effect.MiscValue > 0 && !s_entriesMissingInRetail.Contains((uint)effect.MiscValue))
                 {
                     entries.Add((uint)effect.MiscValue);
                 }
