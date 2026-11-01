@@ -34,6 +34,9 @@ public interface ITransferSourceWorker
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>The target's answer to stage 1: whether the slot is reserved, and the instance id the transfer enters (the requested one, or the one the target allocated for an instance-0 request).</summary>
+public readonly record struct TransferSlotReservation(bool Reserved, uint InstanceId);
+
 /// <summary>Target worker participant contract for cross-worker player handoff.</summary>
 public interface ITransferTargetWorker
 {
@@ -54,6 +57,22 @@ public interface ITransferTargetWorker
         uint targetMapId,
         uint targetInstanceId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Stage 1 with the instance the target bound (design _wf/handoff-control-DESIGN.md, orchestrator decision Q8): when the request names instance 0 for an instanced map, the target allocates and binds an
+    /// instance and answers its id; every other request is answered with the requested id unchanged. The default calls <see cref="TryReserveSlotAsync"/> and echoes the requested id, so a target that
+    /// allocates nothing needs no override.
+    /// </summary>
+    async Task<TransferSlotReservation> ReserveSlotAsync(
+        Guid transferId,
+        ulong characterGuid,
+        uint targetMapId,
+        uint targetInstanceId,
+        CancellationToken cancellationToken = default)
+    {
+        bool reserved = await TryReserveSlotAsync(transferId, characterGuid, targetMapId, targetInstanceId, cancellationToken).ConfigureAwait(false);
+        return new TransferSlotReservation(reserved, targetInstanceId);
+    }
 
     /// <summary>Stage 3: installs the passive shadow entity from the bundle without starting world ticks or durable writes.</summary>
     Task InstallPassiveShadowAsync(
@@ -315,14 +334,17 @@ public sealed class PlayerTransferCoordinator
             request.SourceOwnershipToken,
             cancellationToken);
 
-        bool reserved = await targetWorker.TryReserveSlotAsync(
+        TransferSlotReservation reservation = await targetWorker.ReserveSlotAsync(
             request.TransferId,
             request.CharacterGuid,
             request.TargetMapId,
             request.TargetInstanceId,
             cancellationToken);
 
-        if (!reserved)
+        // Q8: the instance the target bound is the one every later stage names; the captured bundle (journalled at stage 2) carries it.
+        uint targetInstanceId = reservation.InstanceId;
+
+        if (!reservation.Reserved)
         {
             TransferDecisionRecord aborted = await AbortInternalAsync(record, "target-reserve-rejected", cancellationToken);
             return new PlayerTransferOutcome(
@@ -348,7 +370,7 @@ public sealed class PlayerTransferCoordinator
             request.CharacterGuid,
             targetWorkerId,
             request.TargetMapId,
-            request.TargetInstanceId,
+            targetInstanceId,
             request.TargetPosition,
             cancellationToken);
 
@@ -407,7 +429,7 @@ public sealed class PlayerTransferCoordinator
             request.SourceWorkerId,
             targetWorkerId,
             request.TargetMapId,
-            request.TargetInstanceId,
+            targetInstanceId,
             request.TargetPosition,
             cancellationToken);
 

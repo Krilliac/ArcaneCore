@@ -279,6 +279,31 @@ public sealed partial class InstanceManager
         return false;
     }
 
+    /// <summary>
+    /// The instance a character entering <paramref name="mapId"/> from another worker is bound to (cluster transfer, orchestrator decision Q8; the target worker allocates ids). The save the
+    /// character or its group is already bound to wins (vmangos <c>Player::GetBoundInstanceSaveForSelfOrGroup</c>); otherwise a new save is created and bound to the character as a
+    /// non-permanent bind, as <c>DungeonMap::BindPlayerOrGroupOnEnter</c> does for a solo entrant, and its map is created managed so it unloads on its timer when nobody arrives. Returns 0 when
+    /// <paramref name="mapId"/> is not a dungeon (continents use instance 0; battleground instance ids are bound by the battleground holder). World thread.
+    /// </summary>
+    public uint ReserveEntryInstance(ObjectGuid player, uint mapId)
+    {
+        MapTemplate? template = Registry.Find(mapId);
+        if (template is null || !template.IsDungeon)
+        {
+            return 0;
+        }
+
+        InstanceSave? save = GetBoundSaveForSelfOrGroup(player, mapId);
+        if (save is null || save.IsDeleted)
+        {
+            save = CreateSave(template);
+            BindPlayer(player, save, permanent: false);
+        }
+
+        GetOrCreateInstanceMap(save);
+        return save.InstanceId;
+    }
+
     private InstanceSave CreateSave(MapTemplate template)
     {
         uint id = NextRawInstanceId();

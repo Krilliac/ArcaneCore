@@ -1,5 +1,6 @@
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Instances;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Characters;
@@ -224,6 +225,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     private readonly WorkerAdmission? _admission;
     private readonly int _maxReservations;
     private readonly ILogger _logger;
+    private readonly Func<uint, ObjectGuid, uint>? _allocateInstance;
     private readonly Lock _gate = new();
     private readonly Dictionary<Guid, Slot> _slots = [];
     private readonly Dictionary<ulong, Guid> _byCharacter = [];
@@ -238,7 +240,8 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         WorkerAdmission? admission = null,
         int maxReservations = 64,
         Guid? incarnation = null,
-        ILogger<WorkerTransferTarget>? logger = null)
+        ILogger<WorkerTransferTarget>? logger = null,
+        Func<uint, ObjectGuid, uint>? allocateInstance = null)
     {
         ArgumentNullException.ThrowIfNull(world);
         ArgumentNullException.ThrowIfNull(loader);
@@ -252,6 +255,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         _maxReservations = maxReservations;
         Incarnation = incarnation ?? Guid.NewGuid();
         _logger = logger ?? NullLogger<WorkerTransferTarget>.Instance;
+        _allocateInstance = allocateInstance;
     }
 
     public WorkerNodeId WorkerId => _workerId;
@@ -282,7 +286,20 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         lock (_gate) return _activated.Contains(transferId);
     }
 
-    public Task<bool> TryReserveSlotAsync(
+    public async Task<bool> TryReserveSlotAsync(
+        Guid transferId,
+        ulong characterGuid,
+        uint targetMapId,
+        uint targetInstanceId,
+        CancellationToken cancellationToken = default) =>
+        (await ReserveSlotAsync(transferId, characterGuid, targetMapId, targetInstanceId, cancellationToken).ConfigureAwait(false)).Reserved;
+
+    /// <summary>
+    /// Stage 1 with the instance binding of orchestrator decision Q8: when <paramref name="targetInstanceId"/> is 0 and the map is an instanced one (the instance allocator answers a
+    /// non-zero id), this worker allocates and binds an instance for the character and answers its id; every other request is answered with the requested id. The id is remembered with
+    /// the slot, so a repeat of the same transfer id answers the same instance.
+    /// </summary>
+    public async Task<TransferSlotReservation> ReserveSlotAsync(
         Guid transferId,
         ulong characterGuid,
         uint targetMapId,
@@ -290,40 +307,76 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (_admission is { IsOpen: false })
+        TransferSlotReservation refused = new(false, targetInstanceId);
+        if (_admission is { IsOpen: false } || _world.IsOnline(new ObjectGuid(characterGuid)))
         {
-            return Task.FromResult(false);
+            return refused;
         }
 
-        if (!_world.Owns(targetMapId, targetInstanceId) || _world.IsOnline(new ObjectGuid(characterGuid)))
+        bool allocate = targetInstanceId == 0 && _allocateInstance is not null;
+        // An instance-0 request for an instanced map names no copy yet: the worker must own instance copies of the map (any non-zero id probes that).
+        if (!_world.Owns(targetMapId, allocate ? InstanceManager.FirstInstanceId : targetInstanceId))
         {
-            return Task.FromResult(false);
+            return refused;
         }
 
         lock (_gate)
         {
             if (_discarded.Contains(transferId))
             {
-                return Task.FromResult(false);
+                return refused;
             }
 
             if (_activated.Contains(transferId))
             {
-                return Task.FromResult(true); // a repeated stage 1 of a transfer that already completed
+                return new TransferSlotReservation(true, targetInstanceId); // a repeated stage 1 of a transfer that already completed
             }
 
             if (_slots.TryGetValue(transferId, out Slot? existing))
             {
-                return Task.FromResult(existing.CharacterGuid == characterGuid);
+                return new TransferSlotReservation(existing.CharacterGuid == characterGuid, existing.InstanceId);
             }
 
             if (_byCharacter.ContainsKey(characterGuid) || _slots.Count >= _maxReservations)
             {
-                return Task.FromResult(false);
+                return refused;
             }
 
-            AddSlot(new Slot(transferId, characterGuid));
-            return Task.FromResult(true);
+            if (!allocate)
+            {
+                AddSlot(new Slot(transferId, characterGuid) { InstanceId = targetInstanceId });
+                return new TransferSlotReservation(true, targetInstanceId);
+            }
+        }
+
+        // The instance manager is world-thread state: allocate and bind there, outside the slot lock.
+        Func<uint, ObjectGuid, uint> allocator = _allocateInstance!;
+        var guid = new ObjectGuid(characterGuid);
+        uint allocated = await _world.InvokeAsync(() => allocator(targetMapId, guid), CancellationToken.None).ConfigureAwait(false);
+        if (allocated != 0 && !_world.Owns(targetMapId, allocated))
+        {
+            return refused;
+        }
+
+        lock (_gate)
+        {
+            if (_discarded.Contains(transferId))
+            {
+                return refused;
+            }
+
+            if (_slots.TryGetValue(transferId, out Slot? raced))
+            {
+                return new TransferSlotReservation(raced.CharacterGuid == characterGuid, raced.InstanceId);
+            }
+
+            if (_byCharacter.ContainsKey(characterGuid) || _slots.Count >= _maxReservations)
+            {
+                return refused;
+            }
+
+            AddSlot(new Slot(transferId, characterGuid) { InstanceId = allocated });
+            return new TransferSlotReservation(true, allocated);
         }
     }
 
@@ -661,6 +714,9 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     {
         public Guid TransferId { get; } = transferId;
         public ulong CharacterGuid { get; } = characterGuid;
+
+        /// <summary>The instance id the reservation answered (the requested one, or the one this worker allocated for an instance-0 request).</summary>
+        public uint InstanceId { get; init; }
 
         /// <summary>The shadow load (null until the first install; guarded by the target's gate).</summary>
         public Task<Player>? Loading { get; set; }

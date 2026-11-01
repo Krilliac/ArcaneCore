@@ -348,8 +348,9 @@ public sealed class WorkerControlService(
                     return Reply(request, ControlStatus.Refused, refusal);
                 }
 
-                bool reserved = await t.Target!.TryReserveSlotAsync(id, args.CharacterGuid, args.MapId, args.InstanceId, ct).ConfigureAwait(false);
-                return Reply(request, ControlStatus.Ok, string.Empty, new ControlReservePayload(reserved, args.InstanceId));
+                // Q8: the reply carries the instance the target bound (the requested id unless it allocated one for an instance-0 request).
+                TransferSlotReservation reservation = await t.Target!.ReserveSlotAsync(id, args.CharacterGuid, args.MapId, args.InstanceId, ct).ConfigureAwait(false);
+                return Reply(request, ControlStatus.Ok, string.Empty, new ControlReservePayload(reservation.Reserved, reservation.InstanceId));
             }
 
             case ControlVerb.Suspend:
