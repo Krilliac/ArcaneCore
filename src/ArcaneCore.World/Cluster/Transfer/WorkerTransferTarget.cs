@@ -363,6 +363,16 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
     {
         cancellationToken.ThrowIfCancellationRequested();
         TransferSlotReservation refused = new(false, targetInstanceId);
+        // A repeated stage 1 of a transfer that already completed here is answered with the instance it entered before anything else: the activated player is online now,
+        // which would refuse the replay below.
+        lock (_gate)
+        {
+            if (_activated.TryGetInstance(transferId, out uint completedInstance))
+            {
+                return new TransferSlotReservation(true, completedInstance);
+            }
+        }
+
         if (_admission is { IsOpen: false } || _world.IsOnline(new ObjectGuid(characterGuid)))
         {
             return refused;

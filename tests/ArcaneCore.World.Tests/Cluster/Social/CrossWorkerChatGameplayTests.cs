@@ -78,8 +78,9 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncLifetime
     {
         ulong guid = await host.PlayerStateAsync(name, p => p.Guid.Value);
         byte race = await host.PlayerStateAsync(name, p => (byte)p.Race);
+        int accountId = await host.PlayerStateAsync(name, p => p.AccountId); // the router checks the sender's presence against the session's real account id
         var entry = new RealmPresenceEntry(
-            guid, name, (int)guid + 1000, worker, GatewayId, 0, 12, 0, 10, 1, race, 0, guildId, 0, ++_version, 1, DateTimeOffset.UtcNow, Security: security, GmInvisible: gmInvisible);
+            guid, name, accountId, worker, GatewayId, 0, 12, 0, 10, 1, race, 0, guildId, 0, ++_version, 1, DateTimeOffset.UtcNow, Security: security, GmInvisible: gmInvisible);
         Assert.Equal(PresenceMutationResult.Applied, _directory.TryUpsert(entry, out _));
         return guid;
     }
@@ -379,7 +380,7 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncLifetime
         await _hostB.OnWorldAsync(() => { });
         await _routingB.FlushAsync();
 
-        Assert.Equal(1, _routingA.PumpOnce()); // Alice only; Bob's router subscription is gone
+        Assert.Equal(1, await PumpAsync(_routingA)); // Alice only; Bob's router subscription is gone (the line reaches the holder asynchronously, so wait for it)
     }
 
     [Fact]
@@ -431,6 +432,7 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncLifetime
         await _routingB.FlushAsync();
         await PumpAsync(_routingA);
         await bob.ReadUntilAsync(WorldOpcode.SmsgMessagechat);
+        await alice.ReadUntilAsync(WorldOpcode.SmsgMessagechat); // Carol's "hello": read it now, because waiting for the Muted notify below would skip past it
         Assert.True(_routingA.IsSpeakerBarred("Club", aliceGuid));
 
         await alice.SendChatAsync(ChatType.Channel, Language.Common, "let me talk", "Club");
@@ -439,7 +441,6 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncLifetime
         await _routingA.FlushAsync();
         Assert.Equal(0, _routingB.PumpOnce());
         await bob.SendChatAsync(ChatType.Channel, Language.Common, "ping", "Club");
-        await alice.ReadUntilAsync(WorldOpcode.SmsgMessagechat); // Carol's earlier "hello"
         byte[] next = await alice.ReadUntilAsync(WorldOpcode.SmsgMessagechat); // Bob's line comes next: Alice's own refused line was never sent
         Assert.Equal(ChannelPackets.BuildChannelMessage("Club", Language.Common, new ObjectGuid(bobGuid), "ping", ChatTag.None), next);
     }

@@ -398,7 +398,9 @@ public sealed class BattlegroundClusterQueueTests
         rig.Holder.Pump();
 
         Assert.Equal(3, rig.Holder.RemotePlayerCount);
-        Assert.Equal(1, rig.Manager.QueuedTeamCounts(BattlegroundType.WarsongGulch).Alliance);
+        // As in vmangos, a logout frees the player's queue slot and marks its queue entry offline; the entry itself stays until the offline timeout removes it.
+        Assert.False(rig.Manager.StateOf(Alliance[0]).InAnyQueue);
+        Assert.Equal(2, rig.Manager.QueuedTeamCounts(BattlegroundType.WarsongGulch).Alliance);
     }
 
     [Fact]

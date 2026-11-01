@@ -2523,6 +2523,43 @@ Cluster.Worker.VersionsFromDatabase = true
 #
 Cluster.Worker.WorldSchemaVersion = 67
 
+#----------------------------------------------------------------------------
+# Cluster:Worker:Handoff
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Worker.Handoff.Enabled
+#        Description: true lets an admitted gateway drive this worker's side of a whole-World
+#                     handoff over the gateway link (Describe, Warm, StopAdmissions, Freeze, Flush,
+#                     Resume, ReleaseWriterLock, Retire, Promote; needs Cluster:Worker:Enabled).
+#                     false, the default, answers every handoff request Disabled.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworkerhandoff
+#
+Cluster.Worker.Handoff.Enabled = false
+
+#----------------------------------------------------------------------------
+# Cluster:Worker:Transfers
+#----------------------------------------------------------------------------
+
+#
+#    Cluster.Worker.Transfers.Enabled
+#        Description: true builds this worker's production transfer source and target and lets an
+#                     admitted gateway drive them over the gateway link (TargetDescribe, Reserve,
+#                     Install, Activate, Discard, Suspend, ResumeSource, RetireSource; needs
+#                     Cluster:Worker:Enabled). false, the default, answers every transfer request
+#                     Disabled.
+#        Type: bool
+#        Default: false
+#        Allowed: true | false
+#        Reload: Start-up (read once when the daemon starts)
+#        Docs: docs/reference/configuration.md#clusterworkertransfers
+#
+Cluster.Worker.Transfers.Enabled = false
+
 ###############################################################################
 # COMBAT
 ###############################################################################
