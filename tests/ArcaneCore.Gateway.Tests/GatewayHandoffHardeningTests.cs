@@ -108,6 +108,37 @@ public sealed class GatewayHandoffHardeningTests
     }
 
     [Fact]
+    public async Task AStandbyLinkRetargetedWhileItsConnectionToTheOldEndpointIsBeingEstablished_NeverPublishesThatConnection()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token);
+        GatewayStandbyLink link = rig.Service.StandbyLink(NodeA)!;
+        using var proxy = new StallingProxy(rig.AEndpoint.Host!.BoundEndPoint);
+
+        // Point the link at the proxy: it connects the socket but the handshake stalls, so the connection attempt to the old endpoint stays in flight.
+        link.Retarget(proxy.EndPoint);
+        await proxy.Accepted.WaitAsync(cts.Token);
+        int ups = 0;
+        link.Up += () => Interlocked.Increment(ref ups);
+
+        // Retarget while that attempt is held, then let the old connection complete its handshake.
+        link.Retarget(new IPEndPoint(IPAddress.Loopback, FreePort()));
+        proxy.Release();
+        for (int i = 0; i < 30; i++)
+        {
+            Assert.Null(link.Channel); // a connection made to the old endpoint is never published
+            await Task.Delay(50, cts.Token);
+        }
+
+        Assert.Null(rig.Service.StandbyChannel(NodeA));
+        Assert.Equal(0, Volatile.Read(ref ups));
+
+        link.Retarget(rig.BEndpoint.Host!.BoundEndPoint);
+        LinkControlChannel channel = await link.WaitForChannelAsync(cts.Token);
+        Assert.Equal(NodeB, (await DescribeAsync(channel, cts.Token)).WorkerId);
+    }
+
+    [Fact]
     public async Task RecoveryRunsWhenASlotsLinkComesUp_NotOnlyOnItsInterval()
     {
         using var cts = new CancellationTokenSource(Deadline);
@@ -263,7 +294,7 @@ public sealed class GatewayHandoffHardeningTests
     }
 
     [Fact]
-    public async Task HandoffAndControlOptions_AreValidatedAtStart_OnlyWhileTheHandoffIsEnabled()
+    public void HandoffAndControlOptions_AreValidatedAtStart_OnlyWhileTheHandoffIsEnabled()
     {
         var bad = new Dictionary<string, string?>
         {
@@ -272,18 +303,18 @@ public sealed class GatewayHandoffHardeningTests
         };
 
         // On: both bad values stop the start.
-        using (ServiceProvider on = Provider(With(bad, ("Gateway:Handoff:Enabled", "true")), out IServiceCollection onServices))
+        using (ServiceProvider on = Provider(With(bad, ("Gateway:Handoff:Enabled", "true"))))
         {
-            string failure = await StartValidationAsync(on, onServices);
+            string failure = StartValidation(on);
             Assert.Contains("Gateway:Handoff:RecoveryInterval", failure, StringComparison.Ordinal);
             Assert.Contains("Gateway:Control:Flush", failure, StringComparison.Ordinal);
             Assert.NotEmpty(on.GetServices<IValidateOptions<GatewayHandoffOptions>>());
         }
 
         // Off: the same values are never looked at.
-        using (ServiceProvider off = Provider(With(bad, ("Gateway:Handoff:Enabled", "false")), out IServiceCollection offServices))
+        using (ServiceProvider off = Provider(With(bad, ("Gateway:Handoff:Enabled", "false"))))
         {
-            string failure = await StartValidationAsync(off, offServices);
+            string failure = StartValidation(off);
             Assert.DoesNotContain("Gateway:Handoff", failure, StringComparison.Ordinal);
             Assert.DoesNotContain("Gateway:Control", failure, StringComparison.Ordinal);
             Assert.Empty(off.GetServices<IValidateOptions<GatewayHandoffOptions>>());
@@ -292,8 +323,8 @@ public sealed class GatewayHandoffHardeningTests
         }
 
         // The control timeouts also serve the transfer hosting, so they are validated when only that is on.
-        using ServiceProvider transfers = Provider(With(bad, ("Gateway:Transfers:Enabled", "true")), out IServiceCollection transferServices);
-        string transferFailure = await StartValidationAsync(transfers, transferServices);
+        using ServiceProvider transfers = Provider(With(bad, ("Gateway:Transfers:Enabled", "true")));
+        string transferFailure = StartValidation(transfers);
         Assert.Contains("Gateway:Control:Flush", transferFailure, StringComparison.Ordinal);
         Assert.DoesNotContain("Gateway:Handoff:RecoveryInterval", transferFailure, StringComparison.Ordinal);
     }
@@ -323,15 +354,16 @@ public sealed class GatewayHandoffHardeningTests
         return services.BuildServiceProvider();
     }
 
-    /// <summary>Runs the host's options-validation start step and returns everything it reported ("" when it passed).</summary>
-    private static async Task<string> StartValidationAsync(IServiceProvider provider, IServiceCollection services)
+    /// <summary>Runs the host's options-validation start step (the IStartupValidator that ValidateOnStart registers; Host.StartAsync calls it) and returns everything it reported ("" when it passed or nothing is registered).</summary>
+    private static string StartValidation(IServiceProvider provider)
     {
-        // Only the validation step is built: resolving every hosted service would construct the gateway server, whose options reads validate lazily and would fail first.
-        Type type = services.Where(d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService) && d.ImplementationType is { } t && t.Name.Contains("Validat", StringComparison.Ordinal))
-                .Select(d => d.ImplementationType!).FirstOrDefault()
-            ?? throw new InvalidOperationException("no options-validation hosted service is registered (ValidateOnStart was not used by anything)");
-        var validation = (Microsoft.Extensions.Hosting.IHostedService)ActivatorUtilities.CreateInstance(provider, type);
-        Exception? failure = await Record.ExceptionAsync(() => validation.StartAsync(CancellationToken.None));
+        IStartupValidator? validator = provider.GetService<IStartupValidator>();
+        if (validator is null)
+        {
+            return string.Empty;
+        }
+
+        Exception? failure = Record.Exception(validator.Validate);
         return failure?.ToString() ?? string.Empty;
     }
 
@@ -339,6 +371,74 @@ public sealed class GatewayHandoffHardeningTests
     {
         ControlReply reply = await channel.CallAsync(ControlKind.WorldHandoff, Guid.NewGuid(), ControlVerb.Describe, ControlNoArguments.Instance, token);
         return Assert.IsType<ControlDescribePayload>(reply.Payload);
+    }
+
+    /// <summary>A loopback TCP forwarder to <c>upstream</c> that forwards nothing from the client until <see cref="Release"/>, so a handshake through it can be held open.</summary>
+    private sealed class StallingProxy : IDisposable
+    {
+        private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
+        private readonly IPEndPoint _upstream;
+        private readonly CancellationTokenSource _stop = new();
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _accepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public StallingProxy(IPEndPoint upstream)
+        {
+            _upstream = upstream;
+            _listener.Start();
+            _ = Task.Run(AcceptAsync);
+        }
+
+        public IPEndPoint EndPoint => (IPEndPoint)_listener.LocalEndpoint;
+
+        /// <summary>Completes when a client has connected to the proxy.</summary>
+        public Task Accepted => _accepted.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        private async Task AcceptAsync()
+        {
+            try
+            {
+                while (!_stop.IsCancellationRequested)
+                {
+                    TcpClient client = await _listener.AcceptTcpClientAsync(_stop.Token);
+                    _accepted.TrySetResult();
+                    _ = Task.Run(() => PumpAsync(client));
+                }
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException or SocketException)
+            {
+                // Stopped.
+            }
+        }
+
+        private async Task PumpAsync(TcpClient client)
+        {
+            using (client)
+            using (var upstream = new TcpClient())
+            {
+                try
+                {
+                    await upstream.ConnectAsync(_upstream, _stop.Token);
+                    await _release.Task.WaitAsync(_stop.Token);
+                    NetworkStream down = client.GetStream();
+                    NetworkStream up = upstream.GetStream();
+                    await Task.WhenAny(down.CopyToAsync(up, _stop.Token), up.CopyToAsync(down, _stop.Token));
+                }
+                catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException or SocketException)
+                {
+                    // The link or the proxy went away.
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            _stop.Cancel();
+            _listener.Stop();
+            _stop.Dispose();
+        }
     }
 
     private static int FreePort()
