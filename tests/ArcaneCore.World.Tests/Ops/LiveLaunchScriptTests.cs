@@ -644,62 +644,65 @@ public sealed class LiveLaunchScriptTests : IDisposable
     // ---- same-name Add-Type guards --------------------------------------------------------------------------------------------------
 
     [PwshFact]
-    public void LaunchDaemon_ConsoleModeHelper_AddsTheSameNamedTypeTwiceInOneSession_WithoutAnError()
+    public void LaunchDaemon_ConsoleModeHelper_AnOlderSessionsTypeWithADifferentBody_IsLeftAloneWithoutAnError()
     {
         if (!OperatingSystem.IsWindows())
         {
             return; // kernel32 console APIs
         }
 
-        // launch-daemon.ps1 can run again in a 'pwsh -NoExit' window: the second Add-Type of the same -Name/-Namespace must be silent
-        // (-ErrorAction SilentlyContinue) and leave the first type usable. The statement is cut out of the script, not copied.
+        // launch-daemon.ps1 can run again in a 'pwsh -NoExit' window whose session already holds Win32.ConsoleModeHelper from an older body.
+        // Add-Type of that name with a different member list is an error that -ErrorAction does not silence, so the script must skip the
+        // Add-Type when the type exists. The older type is defined first; the guarded statement is cut out of the script, not copied.
         string source = File.ReadAllText(Path.Combine(LiveDir, "launch-daemon.ps1")).Replace("\r\n", "\n", StringComparison.Ordinal);
-        int begin = source.IndexOf("Add-Type -Name ConsoleModeHelper", StringComparison.Ordinal);
-        Assert.True(begin >= 0);
-        const string Terminator = "'@ -ErrorAction SilentlyContinue";
+        int begin = source.IndexOf("if (-not ('Win32.ConsoleModeHelper' -as [type])) {", StringComparison.Ordinal);
+        Assert.True(begin >= 0, "the Add-Type must sit behind the type-name guard");
+        const string Terminator = "'@\n}";
         int end = source.IndexOf(Terminator, begin, StringComparison.Ordinal);
         Assert.True(end > begin);
         string statement = source[begin..(end + Terminator.Length)];
         string probe = Path.Combine(_root, "console-helper-probe.ps1");
-        File.WriteAllText(probe, "$ErrorActionPreference = 'Stop'\n" + statement + "\n" + statement + "\n" + """
-            $null = [Win32.ConsoleModeHelper]::GetStdHandle(-10)
-            'twice: ok'
+        File.WriteAllText(probe, "Add-Type -Name ConsoleModeHelper -Namespace Win32 -MemberDefinition 'public static int Older() { return 1; }'\n$Error.Clear()\n" + statement + "\n" + """
+            "errors: $($Error.Count)"
+            "older: $([Win32.ConsoleModeHelper]::Older())"
             """, new UTF8Encoding(false));
         var start = NewPwsh();
         start.ArgumentList.Add("-File");
         start.ArgumentList.Add(probe);
         (int code, string output) = Execute(start);
         Assert.True(code == 0, $"pwsh exited {code}: {output}");
-        Assert.Contains("twice: ok", output, StringComparison.Ordinal);
+        Assert.Contains("errors: 0", output, StringComparison.Ordinal);
+        Assert.Contains("older: 1", output, StringComparison.Ordinal);
     }
 
     [PwshFact]
-    public void RedeployPlan_InitializePipeInterop_IsIdempotent_AndGuardsOnTheTypeName()
+    public void RedeployPlan_InitializePipeInterop_AnOlderSessionsTypeWithADifferentBody_ReturnsWithoutThrowing()
     {
         if (!OperatingSystem.IsWindows())
         {
             return; // kernel32 pipe API
         }
 
+        // The session already holds ArcaneCoreOps.PipeInterop from an older body (no GetNamedPipeServerProcessId). Initialize-PipeInterop
+        // must return on the type-name guard instead of running Add-Type, which would throw 'type name already exists'.
         string library = Path.Combine(LiveDir, "RedeployPlan.ps1");
         string probe = Path.Combine(_root, "pipe-interop-probe.ps1");
         File.WriteAllText(probe, $$"""
             $ErrorActionPreference = 'Stop'
+            Add-Type -Namespace ArcaneCoreOps -Name PipeInterop -MemberDefinition 'public static int Older() { return 1; }'
             . '{{Q(library)}}'
             Initialize-PipeInterop
             Initialize-PipeInterop
-            if (-not ('ArcaneCoreOps.PipeInterop' -as [type])) { 'type missing'; exit 1 }
-            $method = [ArcaneCoreOps.PipeInterop].GetMethod('GetNamedPipeServerProcessId')
-            "method: $($null -ne $method)"
-            'idempotent: ok'
+            "older: $([ArcaneCoreOps.PipeInterop]::Older())"
+            'guard: ok'
             """, new UTF8Encoding(false));
         var start = NewPwsh();
         start.ArgumentList.Add("-File");
         start.ArgumentList.Add(probe);
         (int code, string output) = Execute(start);
         Assert.True(code == 0, $"pwsh exited {code}: {output}");
-        Assert.Contains("method: True", output, StringComparison.Ordinal);
-        Assert.Contains("idempotent: ok", output, StringComparison.Ordinal);
+        Assert.Contains("older: 1", output, StringComparison.Ordinal);
+        Assert.Contains("guard: ok", output, StringComparison.Ordinal);
     }
 
     [Fact]
