@@ -158,6 +158,13 @@ public sealed class PeerLinkHost : IAsyncDisposable
     /// <summary>Test seam: when it returns true for a request id the Ping is executed but its Pong is withheld (an unanswered request).</summary>
     internal Func<long, bool>? SuppressReplyForTests { get; set; }
 
+    /// <summary>
+    /// What answers a request: given the request payload, returns the answer payload (the presence protocol's <c>PresenceHolderService.Handle</c>). Null (the default) echoes the
+    /// payload. Set before <see cref="Start"/>; called on the link's receive task, so it must be thread-safe and must not throw for bad input. The answer is cached per
+    /// (peer incarnation, idempotency id) like an echo, so a retried request is not executed twice.
+    /// </summary>
+    public Func<ReadOnlyMemory<byte>, byte[]>? PayloadHandler { get; set; }
+
     /// <summary>Binds the port and starts accepting. Call once.</summary>
     public void Start()
     {
@@ -351,7 +358,7 @@ public sealed class PeerLinkHost : IAsyncDisposable
             }
             else
             {
-                answer = payload;
+                answer = PayloadHandler is { } handler ? handler(payload) : payload;
                 _answers[key] = answer;
                 _answerOrder.Enqueue(key);
                 while (_answerOrder.Count > IdempotencyCacheSize)
