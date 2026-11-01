@@ -400,7 +400,7 @@ public sealed class InstanceFeature(IServiceProvider services, IServiceScopeFact
         try
         {
             int characterId = (int)player.Guid.Low;
-            if (_writes is { } writes && writes.HasRetainedFailure(characterId))
+            if (_world is not { IsRetiringTransferredPlayer: true } && _writes is { } writes && writes.HasRetainedFailure(characterId))
             {
                 writes.RequestRetry(characterId);
             }

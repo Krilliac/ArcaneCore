@@ -138,7 +138,7 @@ public sealed class WorkerTransferSourceFeatureWritesTests : IDisposable
         await _source.RetireSourcePlayerAsync(id, _player.Guid.Value, Token);
         await _explored.Writes.FlushAsync();
 
-        Assert.Equal([true], _retireFlagSeen); // forgetting subscribers ran exactly once, and saw the flag
+        Assert.Equal(new[] { true }, _retireFlagSeen); // forgetting subscribers ran exactly once, and saw the flag
         Assert.False(_world.IsRetiringTransferredPlayer); // scoped to the retire
         Assert.Equal(writesAtCommit, _exploredWrites.Count);
         Assert.DoesNotContain(_exploredWrites, words => words[0] == 0x22u);
@@ -155,7 +155,7 @@ public sealed class WorkerTransferSourceFeatureWritesTests : IDisposable
         });
         await _explored.Writes.FlushAsync();
 
-        Assert.Equal([false], _retireFlagSeen);
+        Assert.Equal(new[] { false }, _retireFlagSeen);
         Assert.Contains(_exploredWrites, words => words[0] == 0x33u);
     }
 

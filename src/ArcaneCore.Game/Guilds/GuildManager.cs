@@ -653,9 +653,16 @@ public sealed partial class GuildManager(SocialContext context)
     /// level, zone and logout time are stored and GE_SIGNED_OFF goes to the guild; a pending
     /// invite is dropped.
     /// </summary>
-    public void OnLoggingOut(Player player)
+    /// <param name="transferredAway">The character left through a committed cluster transfer and is still online elsewhere: only the pending invite
+    /// is forgotten; the member row is not updated or saved and no SignedOff is sent.</param>
+    public void OnLoggingOut(Player player, bool transferredAway = false)
     {
         _invites.Remove(player.Guid);
+        if (transferredAway)
+        {
+            return;
+        }
+
         if (GetGuildOf(player) is not { } guild || guild.Find(player.Guid.Low) is not { } member)
         {
             return;

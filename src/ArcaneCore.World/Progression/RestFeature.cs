@@ -233,7 +233,7 @@ public sealed class RestFeature : IWorldFeature, ICharacterHooks, IAreaTriggerLi
         }
 
         Rest.Forget(player);
-        if (Writes.HasRetainedFailure(characterId))
+        if (!world.IsRetiringTransferredPlayer && Writes.HasRetainedFailure(characterId))
         {
             Writes.RequestRetry(characterId);
         }
