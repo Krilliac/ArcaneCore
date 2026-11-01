@@ -34,13 +34,16 @@ public sealed class GatewayWorkerOptions
     /// <summary>Realm id both ends of the link must agree on.</summary>
     public int RealmId { get; set; } = 1;
 
-    /// <summary>Content revision both ends of the link must agree on (an operator label; nothing reads it from the data).</summary>
+    /// <summary>`true` advertises the versions the databases record (characters and world schema version rows, and a content revision derived from the world schema version; an unreadable version refuses to link) instead of the three labels below, so a worker and gateway on mixed versions are refused at admission. `false`, the default, advertises the labels (the explicit override; tests and operators who pin them). The gateway has no database access: its Gateway:* labels must be set to the values the worker reads.</summary>
+    public bool VersionsFromDatabase { get; set; }
+
+    /// <summary>Content revision label both ends of the link must agree on; an override, used only while <see cref="VersionsFromDatabase"/> is false.</summary>
     public string ContentRevision { get; set; } = "dev";
 
-    /// <summary>Characters schema version both ends must agree on (an operator label, not read from the database).</summary>
+    /// <summary>Characters schema version both ends must agree on (an override label, used only while <see cref="VersionsFromDatabase"/> is false).</summary>
     public int CharactersSchemaVersion { get; set; } = 1;
 
-    /// <summary>World schema version both ends must agree on (an operator label, not read from the database).</summary>
+    /// <summary>World schema version both ends must agree on (an override label, used only while <see cref="VersionsFromDatabase"/> is false).</summary>
     public int WorldSchemaVersion { get; set; } = 1;
 
     /// <summary>The maps this worker owns, as a list of ids and inclusive ranges (<c>0,1,30-40</c>; separators comma, semicolon or space). Empty, the default, owns every map, which keeps the combined behaviour. With a list, the world never creates or enters a map outside it (login, teleport, spawn, bot travel refuse cleanly until redirects and far transfers to the owning worker exist), and the list is announced in the link manifest. Lists of different workers must not overlap (the supervisor's Processes:*:Maps check).</summary>
@@ -49,9 +52,13 @@ public sealed class GatewayWorkerOptions
     /// <summary>With an OwnedMaps list: whether instance copies (dungeons, raids, battlegrounds) of maps outside the list also run on this worker. `true`, the default, lets a continent worker host the instances it hands out; `false` refuses them. Ignored while OwnedMaps is empty.</summary>
     public bool AllowInstanceMaps { get; set; } = true;
 
-    /// <summary>The manifest this worker admits gateways against.</summary>
-    public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
-        ClusterRole.Worker, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion,
+    /// <summary>The manifest this worker admits gateways against, advertising the option labels.</summary>
+    public ClusterNodeManifest ToManifest(Guid incarnation)
+        => ToManifest(incarnation, new GatewayManifestVersions(CharactersSchemaVersion, WorldSchemaVersion, ContentRevision));
+
+    /// <summary>The manifest this worker admits gateways against, advertising <paramref name="versions"/> (see <see cref="GatewayManifestVersions"/>).</summary>
+    public ClusterNodeManifest ToManifest(Guid incarnation, GatewayManifestVersions versions) => GatewayLinkManifest.Create(
+        ClusterRole.Worker, NodeId, incarnation, RealmId, versions.ContentRevision, versions.CharactersSchemaVersion, versions.WorldSchemaVersion,
         TryGetOwnership(out MapOwnership ownership, out _) ? ownership.ToListText() : OwnedMaps.Trim(), AllowInstanceMaps);
 
     /// <summary>Parses <see cref="OwnedMaps"/> and <see cref="AllowInstanceMaps"/>; false with <paramref name="error"/> when the list is malformed.</summary>
