@@ -755,10 +755,15 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         Chat.HttpBotChatClient? client = Interlocked.Exchange(ref _chatClient, null);
         if (Interlocked.Exchange(ref _policy, null) is { } policy) await policy.DisposeAsync().ConfigureAwait(false);
         if (Interlocked.Exchange(ref _navigationExecutor, null) is { } navigationExecutor) await navigationExecutor.DisposeAsync().ConfigureAwait(false);
+        // Stands in for the chat's DisposeAsync waiting on its workers: the window in which a rollback attach can run.
+        if (StopHoldForTests is { } hold) await hold().ConfigureAwait(false);
         if (chat is not null) await chat.DisposeAsync().ConfigureAwait(false);
         inProcess?.Dispose();
         client?.Dispose();
     }
+
+    /// <summary>Test seam: awaited by <c>StopServicesAsync</c> after it took the chat fields and before it disposes them (null in production).</summary>
+    internal Func<Task>? StopHoldForTests { get; set; }
 
     /// <summary>
     /// Dispose a chat provider chain that was left behind, off the calling (world) thread: <see cref="Chat.Inference.InProcessBotChatClient.Dispose"/> blocks

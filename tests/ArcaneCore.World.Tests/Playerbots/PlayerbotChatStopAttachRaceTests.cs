@@ -40,14 +40,27 @@ public sealed class PlayerbotChatStopAttachRaceTests
         Assert.NotNull(oldChat);
         Assert.NotNull(oldInProcess);
 
-        // The stop starts (it runs on to its first incomplete await, having taken the three chat fields), then the rollback attaches again on the world thread.
+        // The stop is held where the chat's DisposeAsync would wait on its workers: after it took the chat fields, before it disposes anything.
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        feature.StopHoldForTests = () =>
+        {
+            reached.SetResult();
+            return release.Task;
+        };
         Task stop = (Task)typeof(ManagedPlayerbotFeature).GetMethod("StopServicesAsync", Private)!.Invoke(feature, null)!;
+        await reached.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.False(stop.IsCompleted, "the stop must be held part way");
+
+        // The rollback attaches again on the world thread while the stop is still inside its await.
         await host.World.InvokeAsync(() =>
         {
             feature.AttachFrom(host.World, null, new FeatureSubscriptions("chat-stop-attach-race"));
             return true;
         });
+        release.SetResult();
         await stop.WaitAsync(TimeSpan.FromSeconds(60));
+        feature.StopHoldForTests = null;
 
         PlayerbotChat? chat = feature.Chat;
         InProcessBotChatClient? inProcess = feature.ChatInProcess;

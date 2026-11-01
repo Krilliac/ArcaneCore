@@ -5,7 +5,9 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Playerbots;
 using ArcaneCore.World.Playerbots.BotSocial;
 using ArcaneCore.World.Playerbots.Combat;
+using ArcaneCore.World.Teleport;
 using ArcaneCore.World.Tests.Playerbots.Chat;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Playerbots.Social;
@@ -98,6 +100,40 @@ public sealed class PlayerbotDefenseCallWorldTests
         (DefenseReportRefusal refusal, DefenseReport report, int open) = await ReportAsync(world, brain, "Dfrefused", "Dfenemyr", variation);
 
         Assert.Equal(expected, refusal.ToString());
+        Assert.Equal(default, report);
+        Assert.Equal(0, open);
+    }
+
+    /// <summary>
+    /// The map check of the report itself: a bot standing inside an instance (the Deadmines, map 36, which the test map data marks Instanceable) is refused
+    /// with NotOpenWorld and no call opens, while the same bot on the open continent reported in the test above.
+    /// </summary>
+    [Fact]
+    public async Task ABotInsideAnInstance_IsRefusedAsNotOpenWorld_AndNoCallOpens()
+    {
+        await using SocialWorld world = await StartAsync();
+        Guid bot = await world.AddBotAsync("Dfinstance");
+        await using WorldTestClient foe = await world.AddPlayerAsync("Dfenemyi", RivalryKit.Undead);
+        PlayerbotBrain brain = HelpTestKit.BrainOf(world, bot);
+
+        Assert.True(await world.Host.OnWorldAsync(() =>
+            world.Host.WorldServices.GetRequiredService<TeleportFeature>().Teleports.TeleportTo(RivalryKit.Online(world, "Dfinstance"), 36, -16.4f, -383.07f, 61.78f, 0f)),
+            "teleport into the Deadmines refused");
+        await world.Host.WaitForWorldAsync(() => RivalryKit.Online(world, "Dfinstance") is { IsInWorld: true, MapId: 36 }, "the bot to stand in the Deadmines");
+
+        (DefenseReportRefusal refusal, DefenseReport report, int open) = await world.Host.OnWorldAsync(() =>
+        {
+            Player self = RivalryKit.Online(world, "Dfinstance"), enemy = RivalryKit.Online(world, "Dfenemyi");
+            Assert.True(self.Map!.Template is { Instanceable: true });
+            PvpAreaState.SetWarModeExempt(self, false);
+            PvpAreaState.SetWarModeExempt(enemy, false);
+            DefenseReportRefusal result = brain.TryReportDefense(self, enemy, out DefenseReport made);
+            var calls = new List<DefenseCall>();
+            brain.DefenseCalls!.OpenCalls(calls);
+            return (result, made, calls.Count);
+        });
+
+        Assert.Equal(DefenseReportRefusal.NotOpenWorld, refusal);
         Assert.Equal(default, report);
         Assert.Equal(0, open);
     }
