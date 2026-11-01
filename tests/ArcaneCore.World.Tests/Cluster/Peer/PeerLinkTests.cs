@@ -194,6 +194,7 @@ public sealed class PeerLinkTests : IAsyncLifetime
 
         await Assert.ThrowsAsync<TimeoutException>(() => client.EchoAsync(new byte[] { 1 }, timeout: TimeSpan.FromMilliseconds(150)));
         Assert.Equal(0, client.PendingRequestCount);
+        await WaitUntilAsync(() => host.EchoExecutions >= 1, "host recorded the execution");
         Assert.Equal(1, host.EchoExecutions);
     }
 
