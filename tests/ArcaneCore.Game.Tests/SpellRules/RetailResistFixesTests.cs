@@ -131,7 +131,7 @@ public sealed class RetailResistFixesTests
 
         Assert.Equal(75, rules.RollResist(kit.System, warlock, victim, RuleTestKit.Magic(11682, SpellSchool.Fire), 100, periodic: false)); // Hellfire Effect on a victim
         Assert.Equal(75, rules.RollResist(kit.System, warlock, victim, AsHellfire(RuleTestKit.Magic(1949, SpellSchool.Fire)), 100, periodic: false)); // the tick on another unit
-        Assert.Equal(75, rules.RollResist(kit.System, warlock, warlock, RuleTestKit.Magic(5857, SpellSchool.Fire), 100, periodic: false)); // any other spell on self
+        Assert.Equal(75, rules.RollResist(kit.System, warlock, warlock, RuleTestKit.Magic(900_399, SpellSchool.Fire), 100, periodic: false)); // any other fire spell on self (5857 is Hellfire Effect itself, not a neutral id)
     }
 
     [Fact]

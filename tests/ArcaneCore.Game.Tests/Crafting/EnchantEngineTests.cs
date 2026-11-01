@@ -31,10 +31,12 @@ public sealed class EnchantEngineTests
     private const uint Rockbiter = 705;           // TOTEM, amount 6 per second of weapon delay
     private const uint HealthMana = 706;          // STAT +50 health (1) and STAT +30 mana (0)
     private const uint Crusader = 707;            // COMBAT_SPELL: inert
+    private const uint HolyResist = 708;          // RESISTANCE, +5, school 1 (holy): the holy field is never written
     private const uint AuraSpell = 95201;
 
     private static EnchantCatalog Catalog() => new(
     [
+        Row(HolyResist, (EnchantEffectType.Resistance, 5, 1)),
         Row(StrengthRing, (EnchantEffectType.Stat, 4, (uint)ItemStatType.Strength)),
         Row(FireResist, (EnchantEffectType.Resistance, 5, 2)),
         Row(Damage3, (EnchantEffectType.Damage, 3, 0)),
@@ -215,6 +217,29 @@ public sealed class EnchantEngineTests
 
         rig.Inventory.SwapItem(InventorySlots.Bag0, InventorySlots.Finger1, InventorySlots.Bag0, InventorySlots.ItemStart + 5);
         Assert.Equal(before, rig.Player.GetUInt32(fire));
+    }
+
+    [Fact]
+    public void AHolyResistanceEnchantment_LeavesTheHolyFieldAtZero_WhileTheSameAmountOnFireMovesTheFireField()
+    {
+        // Holy (school 1) has no resistance field; vmangos Player::UpdateResistances (StatSystem.cpp:117-126).
+        using var rig = new Rig();
+        Item holyRing = rig.Give(Ring);
+        Rig.Enchant(holyRing, HolyResist);
+        int holy = UpdateFields.UnitFieldResistances + 1;
+        int fire = UpdateFields.UnitFieldResistances + 2;
+        uint fireBefore = rig.Player.GetUInt32(fire);
+
+        rig.Inventory.SwapItem(holyRing.BagSlot, holyRing.Slot, InventorySlots.Bag0, InventorySlots.Finger1);
+        Assert.True(rig.Enchantments.IsApplied(holyRing, EnchantSlots.Permanent));
+        Assert.Equal(0u, rig.Player.GetUInt32(holy));
+        Assert.Equal(fireBefore, rig.Player.GetUInt32(fire));
+
+        Item fireRing = rig.Give(Ring);
+        Rig.Enchant(fireRing, FireResist);
+        rig.Inventory.SwapItem(fireRing.BagSlot, fireRing.Slot, InventorySlots.Bag0, InventorySlots.Finger2);
+        Assert.Equal(fireBefore + 5, rig.Player.GetUInt32(fire));
+        Assert.Equal(0u, rig.Player.GetUInt32(holy));
     }
 
     [Fact]
