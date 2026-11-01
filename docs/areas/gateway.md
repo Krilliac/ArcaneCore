@@ -247,13 +247,16 @@ recovery).
 - The link protocol lives in `ArcaneCore.World`, so the gateway references the whole World assembly; a shared protocol
   assembly is still to be split out.
 - **Cluster roles beyond combined and worker are not hosted.** The World daemon runs either combined or as a gateway worker
-  (Cluster:Worker). No daemon runs a social, economy or coordinator role, and nothing reads a node role. So the M15.2 pieces
-  that only matter in that topology are tested library code, not live:
-  - `ClusterRoleFeatureFilter` (keeps realm-singleton timers such as AutoBroadcast and the auction bot on one node) is never
-    constructed. Every feature attaches on every World process, which is correct for the single combined or worker process
-    that exists today.
-  - `IRealmAuthorityLeaseStore` has only an in-memory implementation and no DI registration. The `.cluster leases` summary
-    therefore always shows the fallback owner (combined, or the character ownership epoch), never a realm lease token.
+  (Cluster:Worker). `ClusterNodeOptions.Validate` refuses the Social, Economy and Gateway roles on a World process, so the
+  only cluster role a World process takes is MapWorker. The role pieces that exist are registered and used, but only in that
+  one shape:
+  - `ClusterNodeHosting.AddClusterNodeRole` registers `ClusterRoleFeatureFilter`, `RealmAuthorityLeaseKeeper` and the
+    database-backed `EfRealmAuthorityLeaseStore` (as `IRealmAuthorityLeaseStore`) whenever `Cluster:Node:Role` is not
+    Combined. `WorldHost` takes the leases it can get at start and attaches a feature only when the filter admits it, so
+    the auction bot and AutoBroadcast run only under a lease the node holds. The Instances lease scope is never taken.
+  - What is still missing is what those pieces serve: cross-process realm services on the link at the lease holder
+    (S2/S3) and map routing (S4). Decision D3 means there will be no dedicated social or economy process. The staged plan is in the
+    [design](../CLUSTERING_DESIGN.md#decisions-and-staged-plan-2026-10-30) (S0-S7).
 - **The M15.4 host supervisor is hosted as an opt-in mode, with gaps.** `Cluster:Supervisor:Enabled` runs `ArcaneCore.World` as the
   supervisor only (see "Running under the host supervisor" above and the
   [design](../CLUSTERING_DESIGN.md#host-supervisor-and-console-layout-m154)); the `Cluster:Supervisor` keys are in the conf
