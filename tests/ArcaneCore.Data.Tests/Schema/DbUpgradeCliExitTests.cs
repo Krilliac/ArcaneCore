@@ -25,6 +25,15 @@ public sealed class DbUpgradeCliExitTests
         => DbUpgradeCli.ClassifyFailure(
             new DatabaseOptions { Provider = DatabaseProvider.PostgreSql, ConnectionString = ConnectionString }, "world", exception);
 
+    // MySqlException has no public constructor (MySqlConnector 2.4.0), so the internal (MySqlErrorCode, string) one is reached by reflection.
+    private static MySqlConnector.MySqlException MySqlError(MySqlConnector.MySqlErrorCode errorCode, string message)
+        => (MySqlConnector.MySqlException)(System.Activator.CreateInstance(
+            typeof(MySqlConnector.MySqlException),
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public,
+            binder: null,
+            args: [errorCode, message],
+            culture: null)!);
+
     [Theory]
     [InlineData("40001")]
     [InlineData("40P01")]
@@ -56,6 +65,7 @@ public sealed class DbUpgradeCliExitTests
     [Theory]
     [InlineData("28000")]
     [InlineData("28P01")]
+    [InlineData("28001")]
     [InlineData("3D000")]
     public void ACredentialOrDatabaseNameRefusal_IsUsage_NotUnreachable(string sqlState)
     {
@@ -63,6 +73,25 @@ public sealed class DbUpgradeCliExitTests
 
         Assert.Equal(DbUpgradeExitCodes.Usage, code);
         Assert.DoesNotContain(Password, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AMySqlLockWaitTimeout_IsLockTimeout_EvenThoughTheDriverCallsItTransient()
+    {
+        (int code, string message) = Classify(MySqlError(
+            MySqlConnector.MySqlErrorCode.LockWaitTimeout, "Lock wait timeout exceeded; try restarting transaction"));
+
+        Assert.Equal(DbUpgradeExitCodes.LockTimeout, code);
+        Assert.DoesNotContain("could not be reached", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AMySqlUnknownDatabase_IsUsage()
+    {
+        (int code, _) = Classify(MySqlError(
+            MySqlConnector.MySqlErrorCode.UnknownDatabase, "Unknown database 'w'"));
+
+        Assert.Equal(DbUpgradeExitCodes.Usage, code);
     }
 
     [Fact]

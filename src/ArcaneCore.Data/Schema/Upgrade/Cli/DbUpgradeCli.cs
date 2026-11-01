@@ -778,6 +778,24 @@ public static partial class DbUpgradeCli
             return false;
         }
 
+        // MySQL/MariaDB server error numbers (MySqlException.ErrorCode): 1205 lock wait timeout (SQLSTATE HY000, so SQLSTATE alone cannot see it),
+        // 1049 unknown database (SQLSTATE 42000, shared with syntax errors, so it is matched by number).
+        private const int MySqlLockWaitTimeout = 1205;
+        private const int MySqlUnknownDatabase = 1049;
+
+        private static bool HasMySqlError(Exception exception, int number)
+        {
+            for (Exception? current = exception; current is not null; current = current.InnerException)
+            {
+                if (current is MySqlException mysql && (int)mysql.ErrorCode == number)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         internal ComponentFailure Classify(string component, Exception ex)
         {
             string message = Scrub(ex.Message);
@@ -789,14 +807,14 @@ public static partial class DbUpgradeCli
 
             // A lock wait the database itself gave up on (deadlock, lock_not_available, SQLite BUSY/LOCKED) is a wait that ran out, not an unreachable
             // server: supervisors restart on exit 6 but the operator must see 7 and retry once the other process is done.
-            if (Resilience.DatabaseTransience.IsBusy(ex) || HasSqlState(ex, LockWaitSqlStates))
+            if (Resilience.DatabaseTransience.IsBusy(ex) || HasSqlState(ex, LockWaitSqlStates) || HasMySqlError(ex, MySqlLockWaitTimeout))
             {
-                return new ComponentFailure(DbUpgradeExitCodes.LockTimeout, $"{component}: waiting for a database lock ran out: {message}");
+                return new ComponentFailure(DbUpgradeExitCodes.LockTimeout, $"{component}: the wait for a database lock ended (lock wait timeout, deadlock or busy database): {message}");
             }
 
             // A connection the server answered and refused for good (bad credentials, no such database) is configuration: restarting never helps,
             // so it must not map to 6 (supervisors restart on it) nor to the catch-all 1.
-            if (HasSqlState(ex, ConnectionRefusedSqlStates))
+            if (HasSqlState(ex, ConnectionRefusedSqlStates) || HasMySqlError(ex, MySqlUnknownDatabase))
             {
                 return new ComponentFailure(DbUpgradeExitCodes.Usage, $"{component}: the database refused the credentials or the database name: {message}");
             }
