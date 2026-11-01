@@ -186,6 +186,22 @@ public sealed class LeaseRoutedPresence(PresenceHolderService local, Func<bool> 
 
     public int Count => Directory.Count;
 
+    /// <summary>
+    /// The directory size when this node holds the Social lease (an in-memory read, never blocks); false on a node that does not, where <see cref="Count"/> would be a blocking
+    /// round trip to the holder. Safe on the world thread.
+    /// </summary>
+    public bool TryGetLocalCount(out int count)
+    {
+        if (holdsSocial())
+        {
+            count = local.Directory.Count;
+            return true;
+        }
+
+        count = 0;
+        return false;
+    }
+
     public PresenceMutationResult TryUpsert(RealmPresenceEntry entry, out RealmPresenceEntry? current) => Directory.TryUpsert(entry, out current);
 
     public PresenceMutationResult TryRemove(ulong characterGuid, long expectedPresenceVersion, long expectedSessionGeneration, string? expectedWorkerId = null)

@@ -191,7 +191,7 @@ public sealed class PresenceHolderService(IRealmPresenceDirectory directory, ICl
                 ? reply
                 : PresenceWireCodec.EncodeError($"reply of {reply.Length} B exceeds {Peer.PeerLinkWire.MaxPayloadBytes} B");
         }
-        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException or ArgumentException or FormatException or OverflowException)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             return PresenceWireCodec.EncodeError(ex.Message);
         }
