@@ -132,7 +132,9 @@ public sealed class BattlegroundClusterQueueTests
             World = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0, CommandTimeBudgetMs = 0 },
                 new CharacterSaveQueue(_services.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance),
                 NullLogger<WorldRuntime>.Instance);
-            Assert.True(MapOwnership.TryParse("0", allowInstanceMaps: true, out MapOwnership ownership, out string? error), error);
+            Assert.True(MapOwnership.TryParse("0", allowInstanceMaps: false, out MapOwnership ownership, out string? error), error);
+            // A worker with AllowInstanceMaps=true would own the match map and never far-transfer a holder-placed match.
+            Assert.False(ownership.Owns(WsgMap, 1));
             World.Ownership = ownership;
             var teleport = _services.GetRequiredService<TeleportFeature>();
             teleport.Attach(World);
@@ -319,7 +321,7 @@ public sealed class BattlegroundClusterQueueTests
         Assert.True(worker.World.RetireDetachedPlayer(player));
         rig.Holder.Pump();
 
-        Assert.Equal(4, rig.Holder.RemotePlayerCount);
+        Assert.Equal(3, rig.Holder.RemotePlayerCount);
         Assert.True(rig.Manager.EnterBattleground(Alliance[0]));
     }
 
