@@ -153,6 +153,15 @@ public static partial class DbUpgradeCli
         }
     }
 
+    /// <summary>Test seam: the exit code and scrubbed message <paramref name="exception"/> from <paramref name="component"/> maps to (the private classifier of a run over <paramref name="database"/>).</summary>
+    internal static (int ExitCode, string Message) ClassifyFailure(DatabaseOptions database, string component, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(exception);
+        ComponentFailure failure = new Run(database, TextWriter.Null, TextWriter.Null).Classify(component, exception);
+        return (failure.ExitCode, failure.Message);
+    }
+
     /// <summary>A failure already phrased for the operator with the exit code it maps to.</summary>
     private sealed class ComponentFailure(int exitCode, string message) : Exception(message)
     {
@@ -750,13 +759,46 @@ public static partial class DbUpgradeCli
             }
         }
 
-        private ComponentFailure Classify(string component, Exception ex)
+        // SQLSTATE values (DbException.SqlState): 40001 serialization failure/deadlock, 40P01 PostgreSQL deadlock, 55P03 PostgreSQL lock_not_available.
+        private static readonly string[] LockWaitSqlStates = ["40001", "40P01", "55P03"];
+
+        // 28xxx invalid authorization (MySQL/MariaDB access denied 28000, PostgreSQL 28P01 bad password), 3D000 PostgreSQL invalid_catalog_name.
+        private static readonly string[] ConnectionRefusedSqlStates = ["28000", "28P01", "28001", "3D000"];
+
+        private static bool HasSqlState(Exception exception, string[] states)
+        {
+            for (Exception? current = exception; current is not null; current = current.InnerException)
+            {
+                if (current is DbException { SqlState: { } state } && Array.IndexOf(states, state) >= 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        internal ComponentFailure Classify(string component, Exception ex)
         {
             string message = Scrub(ex.Message);
             if (ex is SchemaMismatchException mismatch)
             {
                 int code = mismatch.Reason == SchemaMismatchReason.LockTimeout ? DbUpgradeExitCodes.LockTimeout : DbUpgradeExitCodes.Refused;
                 return new ComponentFailure(code, $"{component}: {message}");
+            }
+
+            // A lock wait the database itself gave up on (deadlock, lock_not_available, SQLite BUSY/LOCKED) is a wait that ran out, not an unreachable
+            // server: supervisors restart on exit 6 but the operator must see 7 and retry once the other process is done.
+            if (Resilience.DatabaseTransience.IsBusy(ex) || HasSqlState(ex, LockWaitSqlStates))
+            {
+                return new ComponentFailure(DbUpgradeExitCodes.LockTimeout, $"{component}: waiting for a database lock ran out: {message}");
+            }
+
+            // A connection the server answered and refused for good (bad credentials, no such database) is configuration: restarting never helps,
+            // so it must not map to 6 (supervisors restart on it) nor to the catch-all 1.
+            if (HasSqlState(ex, ConnectionRefusedSqlStates))
+            {
+                return new ComponentFailure(DbUpgradeExitCodes.Usage, $"{component}: the database refused the credentials or the database name: {message}");
             }
 
             for (Exception? inner = ex; inner is not null; inner = inner.InnerException)
