@@ -91,8 +91,7 @@ public sealed class ClusterCommands : ICommandGroup
                 new ChatCommand(
                     "restart",
                     AccountSecurity.Administrator,
-                    "Syntax: .cluster restart $worker
-Drain the named cluster worker through the seamless whole-World handoff (its players keep their sessions), then ask the cluster host supervisor to restart its process. An aborted or failed handoff restarts nothing.",
+                    "Syntax: .cluster restart $worker\nDrain the named cluster worker through the seamless whole-World handoff (its players keep their sessions), then ask the cluster host supervisor to restart its process. An aborted or failed handoff restarts nothing.",
                     Restart),
             ]),
     ];

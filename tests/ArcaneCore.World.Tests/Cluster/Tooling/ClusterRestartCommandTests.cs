@@ -18,8 +18,11 @@ public sealed class ClusterRestartCommandTests
 
     private sealed class FakeDriver(Func<WorkerNodeId, WorldHandoffRecord> run, List<string> log) : IWorkerHandoffDriver
     {
-        /// <summary>Sessions on the worker; a finished or aborted handoff never drops them (the real handoff reroutes them to the standby).</summary>
-        public int Sessions { get; } = 3;
+        /// <summary>Sessions still on the worker. A completed handoff reroutes them to the standby; an aborted or failed one leaves them here.</summary>
+        public int Sessions { get; private set; } = 3;
+
+        /// <summary>Sessions that were moved to the standby by a completed handoff.</summary>
+        public int StandbySessions { get; private set; }
 
         public Task<WorldHandoffRecord> HandoffAsync(WorkerNodeId worker, CancellationToken cancellationToken)
         {
@@ -28,17 +31,28 @@ public sealed class ClusterRestartCommandTests
                 log.Add("handoff:" + worker.Value);
             }
 
-            return Task.FromResult(run(worker));
+            WorldHandoffRecord record = run(worker);
+            if (record.Stage == WorldHandoffStage.Retired)
+            {
+                StandbySessions += Sessions;
+                Sessions = 0;
+            }
+
+            return Task.FromResult(record);
         }
     }
 
-    private sealed class FakeRestarter(List<string> log, bool accept = true) : IWorkerRestartRequester
+    private sealed class FakeRestarter(List<string> log, FakeDriver? driver = null, bool accept = true) : IWorkerRestartRequester
     {
+        /// <summary>Sessions still on the worker at the moment each restart was requested.</summary>
+        public List<int> SessionsAtRestart { get; } = [];
+
         public Task<bool> RequestRestartAsync(WorkerNodeId worker, string requestedBy, CancellationToken cancellationToken)
         {
             lock (log)
             {
                 log.Add("restart:" + worker.Value + ":" + requestedBy);
+                SessionsAtRestart.Add(driver?.Sessions ?? -1);
             }
 
             return Task.FromResult(accept);
@@ -89,13 +103,17 @@ public sealed class ClusterRestartCommandTests
     {
         var log = new List<string>();
         var driver = new FakeDriver(_ => Record(WorldHandoffStage.Retired), log);
-        var orchestration = new ClusterRestartOrchestration(driver, new FakeRestarter(log), Placement());
+        var restarter = new FakeRestarter(log, driver);
+        var orchestration = new ClusterRestartOrchestration(driver, restarter, Placement());
 
         ClusterRestartResult result = await orchestration.RunAsync(AccountSecurity.Administrator, "Admiral", Worker.Value);
 
         Assert.Equal(ClusterRestartOutcome.Restarted, result.Outcome);
         Assert.Equal(new[] { "handoff:worker:EK", "restart:worker:EK:Admiral" }, log);
-        Assert.Equal(3, driver.Sessions);
+        // Every session was rerouted to the standby before the restart was requested, so the restart drops none.
+        Assert.Equal(new[] { 0 }, restarter.SessionsAtRestart);
+        Assert.Equal(0, driver.Sessions);
+        Assert.Equal(3, driver.StandbySessions);
         Assert.Equal(WorldHandoffStage.Retired, result.Handoff!.Stage);
     }
 
@@ -104,13 +122,16 @@ public sealed class ClusterRestartCommandTests
     {
         var log = new List<string>();
         var driver = new FakeDriver(_ => throw new WorldHandoffAbortedException(Record(WorldHandoffStage.Aborted, "frozen refused"), null), log);
-        var orchestration = new ClusterRestartOrchestration(driver, new FakeRestarter(log), Placement());
+        var restarter = new FakeRestarter(log, driver);
+        var orchestration = new ClusterRestartOrchestration(driver, restarter, Placement());
 
         ClusterRestartResult result = await orchestration.RunAsync(AccountSecurity.Administrator, "Admiral", Worker.Value);
 
         Assert.Equal(ClusterRestartOutcome.HandoffAborted, result.Outcome);
         Assert.Equal(new[] { "handoff:worker:EK" }, log);
+        Assert.Empty(restarter.SessionsAtRestart);
         Assert.Equal(3, driver.Sessions);
+        Assert.Equal(0, driver.StandbySessions);
     }
 
     [Fact]
@@ -154,7 +175,9 @@ public sealed class ClusterRestartCommandTests
     public async Task TheCommand_RefusesAGameMaster_AndRunsHandoffThenRestartForAnAdministrator()
     {
         var log = new List<string>();
-        var orchestration = new ClusterRestartOrchestration(new FakeDriver(_ => Record(WorldHandoffStage.Retired), log), new FakeRestarter(log), Placement());
+        var driver = new FakeDriver(_ => Record(WorldHandoffStage.Retired), log);
+        var restarter = new FakeRestarter(log, driver);
+        var orchestration = new ClusterRestartOrchestration(driver, restarter, Placement());
         await using WorldTestHost host = WorldTestHost.Start(configureServices: services => services.AddSingleton(orchestration));
         await using WorldTestClient gm = await host.EnterWorldAsync("GMR", "Gmrestart", AccountSecurity.GameMaster);
         await using WorldTestClient admin = await host.EnterWorldAsync("ADR", "Admrestart", AccountSecurity.Administrator);
@@ -168,6 +191,7 @@ public sealed class ClusterRestartCommandTests
         string[] reply = await LinesAsync(admin, ".cluster restart worker:EK");
         Assert.Contains("handed off (sessions kept)", reply[0], StringComparison.Ordinal);
         Assert.Equal(new[] { "handoff:worker:EK", "restart:worker:EK:Admrestart" }, log);
+        Assert.Equal(new[] { 0 }, restarter.SessionsAtRestart);
     }
 
     [Fact]
