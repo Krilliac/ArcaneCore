@@ -19,9 +19,10 @@ public sealed class ConfDistTests : IDisposable
     private const string CatalogFile = "src/ArcaneCore.Kernel/Configuration/Conf/conf-catalog.json";
     private const string WorldDist = "src/ArcaneCore.World/world.conf.dist";
     private const string RealmDist = "src/ArcaneCore.Realm/realm.conf.dist";
+    private const string GatewayDist = "src/ArcaneCore.Gateway/gateway.conf.dist";
     private const string Guide = "docs/guide/configuration.md";
 
-    private static readonly ConfigDaemon[] Daemons = [ConfigDaemon.World, ConfigDaemon.Realm];
+    private static readonly ConfigDaemon[] Daemons = [ConfigDaemon.World, ConfigDaemon.Realm, ConfigDaemon.Gateway];
 
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "arcane-confdist-" + Guid.NewGuid().ToString("N")[..8]);
 
@@ -44,7 +45,12 @@ public sealed class ConfDistTests : IDisposable
 
     private static ConfCatalog Generated => ConfCatalogGenerator.Build(ConfigProduction.Catalog.Entries, ConfigExceptionTable.AdHocKeys);
 
-    private static string DistPath(ConfigDaemon daemon) => daemon == ConfigDaemon.Realm ? RealmDist : WorldDist;
+    private static string DistPath(ConfigDaemon daemon) => daemon switch
+    {
+        ConfigDaemon.Realm => RealmDist,
+        ConfigDaemon.Gateway => GatewayDist,
+        _ => WorldDist,
+    };
 
     private static string Committed(string relativePath) => DocsGolden.Normalize(RepoRoot.ReadText(relativePath));
 
@@ -70,13 +76,40 @@ public sealed class ConfDistTests : IDisposable
         => DocsGolden.Verify(RealmDist, ConfWriter.WriteDefaults(Generated, ConfigDaemon.Realm));
 
     [Fact]
+    public void GatewayConfDist_MatchesTheCommittedFile()
+        => DocsGolden.Verify(GatewayDist, ConfWriter.WriteDefaults(Generated, ConfigDaemon.Gateway));
+
+    [Fact]
+    public void GatewayKeys_AreReadOnlyByTheGateway_AndListedInItsDist()
+    {
+        ConfCatalog generated = Generated;
+        ConfKey[] gatewayKeys = [.. generated.Keys.Where(k => k.Path.StartsWith("Gateway:", StringComparison.Ordinal))];
+        Assert.True(gatewayKeys.Length >= 15, "the catalog must carry every GatewayOptions key; it has " + gatewayKeys.Length);
+        Assert.All(gatewayKeys, k => Assert.Equal(ConfigDaemon.Gateway, k.Daemons));
+        Assert.Contains(gatewayKeys, k => k.Path == "Gateway:Port" && k.Default == "8086");
+
+        string dist = Committed(GatewayDist);
+        foreach (ConfKey key in gatewayKeys)
+        {
+            Assert.Matches(@"(?m)^#    " + Regex.Escape(ConfCatalog.Display(key.Path)) + "$", dist);
+        }
+
+        // The control: the world and realm daemons do not read them, so the same key check warns when one lands in their .conf.
+        string path = Path.Combine(_dir, "world.conf");
+        File.WriteAllText(path, "Gateway.Port = 8086\n");
+        Assert.NotEmpty(new ConfKeyCheck(generated, ConfigDaemon.World).Check(LoadConf(path)));
+        Assert.Empty(new ConfKeyCheck(generated, ConfigDaemon.Gateway).Check(LoadConf(path)));
+        Assert.Equal(ConfKeyStatus.OtherDaemon, generated.Classify("World:Port", ConfigDaemon.Gateway).Status);
+    }
+
+    [Fact]
     public void EveryCatalogKey_AppearsInExactlyTheDistsOfItsDaemons()
     {
         var headers = new Dictionary<ConfigDaemon, HashSet<string>>();
         foreach (ConfigDaemon daemon in Daemons)
         {
             headers[daemon] = [.. Regex.Matches(Committed(DistPath(daemon)), @"^#    (\S+)$", RegexOptions.Multiline).Select(m => m.Groups[1].Value)];
-            Assert.True(headers[daemon].Count > 50, DistPath(daemon) + " lists only " + headers[daemon].Count + " keys");
+            Assert.True(headers[daemon].Count > (daemon == ConfigDaemon.Gateway ? 10 : 50), DistPath(daemon) + " lists only " + headers[daemon].Count + " keys");
         }
 
         var problems = new List<string>();
@@ -174,7 +207,7 @@ public sealed class ConfDistTests : IDisposable
         {
             IConfigurationRoot root = LoadConf(Path.Combine(RepoRoot.Find(), DistPath(daemon).Replace('/', Path.DirectorySeparatorChar)));
             ConfigSection[] sections = [.. ConfigExceptionTable.Sections().Where(s => (DaemonsOf(s.Type) & daemon) != 0)];
-            Assert.True(sections.Length > 5, "the " + daemon + " must bind several options sections; found " + sections.Length);
+            Assert.True(sections.Length > (daemon == ConfigDaemon.Gateway ? 3 : 5), "the " + daemon + " must bind several options sections; found " + sections.Length);
             foreach (ConfigSection section in sections)
             {
                 Exception? failure = Record.Exception(() => root.GetSection(section.Path).Get(section.Type));
@@ -243,7 +276,7 @@ public sealed class ConfDistTests : IDisposable
             }
 
             // The world daemon reads several hundred defaults; the realm binds only auth, logon, console, net protection, watchdog, database, logging and diagnostics.
-            int minimum = daemon == ConfigDaemon.World ? 200 : 50;
+            int minimum = daemon switch { ConfigDaemon.World => 200, ConfigDaemon.Gateway => 10, _ => 50 };
             Assert.True(expected.Count > minimum, $"expected the defaults of every {daemon} key; found {expected.Count}");
             IConfigurationRoot current = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
             string file = Path.Combine(_dir, "current-" + ConfCatalog.FileName(daemon));
