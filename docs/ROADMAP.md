@@ -102,7 +102,7 @@ Every row is implemented on `main`. No area is client-accepted: each root `MILES
 | Instances and scripts | `src/ArcaneCore.Game/Instances/Scripts`, `src/ArcaneCore.World/Scripting` | Dungeon and raid scripts; script hooks including addon chat. |
 | Battlegrounds | `src/ArcaneCore.Game/Battlegrounds` | Battlegrounds with spirit guides. |
 | Honor | `src/ArcaneCore.Game/Honor` | Honor ranking. |
-| LFG | `src/ArcaneCore.Game/Lfg` | LFG queue. |
+| LFG | `src/ArcaneCore.Game/Lfg` | Meeting stone queue (`LfgQueue`, `MeetingStoneFeature`, `MeetingStoneHandlers`). 1.12.1 has no LFG/LFM listing protocol: MSG_LOOKING_FOR_GROUP is answered with u32 0 as vmangos `HandleLFGOpcode` does (`src/game/Handlers/MiscHandler.cpp:277-282` at vmangos 0e3ff01), and CMSG_SET_LOOKING_FOR_GROUP is unhandled upstream (vmangos `src/game/Server/Protocol/Opcodes.cpp:603`; cmangos mangos-classic `src/game/Server/Opcodes.cpp:540`). The slot-based listing layout exists only for 2.4.3 (wow_messages `cmsg_set_looking_for_group.wowm`). |
 | Outdoor PvP | `src/ArcaneCore.Game/OutdoorPvP` | World PvP objectives. |
 | World events | `src/ArcaneCore.Game/WorldState`, `src/ArcaneCore.Game/Holidays` | Scheduled world events and holidays. |
 | Transports | `src/ArcaneCore.Game/Transports` | Boats, zeppelins, the tram, elevators. |
