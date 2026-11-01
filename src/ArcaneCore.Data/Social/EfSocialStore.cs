@@ -1,11 +1,13 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Social;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Social;
 
 /// <summary>EF Core implementation of <see cref="ISocialStore"/> over the characters database.</summary>
-public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
+public sealed class EfSocialStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : ISocialStore
 {
     public async Task<IReadOnlyList<SocialEntry>> GetSocialAsync(int characterId, CancellationToken cancellationToken = default)
     {
@@ -40,7 +42,7 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
             row.Flags = (byte)flags;
         }
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
 
@@ -67,7 +69,7 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
     {
         ArgumentNullException.ThrowIfNull(guild);
         await StageGuildAsync(db, guild, cancellationToken).ConfigureAwait(false);
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
 
@@ -147,7 +149,7 @@ public sealed class EfSocialStore(CharacterDbContext db) : ISocialStore
             db.Set<GuildRow>().Remove(row);
         }
 
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Social, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
 

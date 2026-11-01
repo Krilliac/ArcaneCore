@@ -1,16 +1,18 @@
 using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Data.Characters.Life;
 using ArcaneCore.Data.Creatures;
 using ArcaneCore.Data.GameObjects;
 using ArcaneCore.Data.Loot;
 using ArcaneCore.Data.Stores;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Instances;
 using Microsoft.EntityFrameworkCore;
 
 namespace ArcaneCore.Data.Instances;
 
 /// <summary>EF Core implementation of <see cref="IInstanceStore"/> over the characters database.</summary>
-public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
+public sealed class EfInstanceStore(CharacterDbContext db, IRealmLeaseFenceSource? leaseFences = null) : IInstanceStore
 {
     public async Task<InstanceStoreSnapshot> LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -71,7 +73,7 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         // vmangos InstanceData::SaveToDB updates only an existing instance row. A delayed write
         // after reset must not recreate the deleted instance.
         await CharacterWrites.InTransactionAsync(
-            db, () => db.Set<InstanceRow>().Where(i => i.Id == (int)instanceId).ExecuteUpdateAsync(s => s.SetProperty(i => i.Data, data), cancellationToken),
+            db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Instances, () => db.Set<InstanceRow>().Where(i => i.Id == (int)instanceId).ExecuteUpdateAsync(s => s.SetProperty(i => i.Data, data), cancellationToken), cancellationToken),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -79,6 +81,7 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     {
         int id = (int)instanceId;
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await FenceAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterInstanceRow>().Where(b => b.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<GroupInstanceRow>().Where(b => b.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         await db.Set<CharacterLastInstanceRow>().Where(l => l.InstanceId == id).ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
@@ -126,7 +129,7 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     {
         int id = (int)instanceId;
         await CharacterWrites.InTransactionAsync(
-            db, () => db.Set<CharacterInstanceRow>().Where(b => b.CharacterId == characterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken),
+            db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Instances, () => db.Set<CharacterInstanceRow>().Where(b => b.CharacterId == characterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken), cancellationToken),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -152,7 +155,7 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     {
         int id = (int)instanceId;
         await CharacterWrites.InTransactionAsync(
-            db, () => db.Set<GroupInstanceRow>().Where(b => b.LeaderCharacterId == leaderCharacterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken),
+            db, () => LeaseFencedWrite.InTransactionAsync<int>(db, leaseFences, RealmAuthorityScopes.Instances, () => db.Set<GroupInstanceRow>().Where(b => b.LeaderCharacterId == leaderCharacterId && b.InstanceId == id).ExecuteDeleteAsync(cancellationToken), cancellationToken),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -190,6 +193,7 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
     public async Task DeleteCharacterAsync(int characterId, CancellationToken cancellationToken = default)
     {
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await FenceAsync(cancellationToken).ConfigureAwait(false);
         // Only for a character id that has no characters row: the queued removal after a deletion
         // must not wipe a character recreated with the same id (docs/integration/character-delete.md).
         await db.Set<CharacterInstanceRow>().Where(b => b.CharacterId == characterId && !db.Characters.Any(c => c.Id == characterId))
@@ -201,9 +205,17 @@ public sealed class EfInstanceStore(CharacterDbContext db) : IInstanceStore
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private async Task FenceAsync(CancellationToken cancellationToken)
+    {
+        if (leaseFences?.FenceFor(RealmAuthorityScopes.Instances) is { } fence)
+        {
+            await LeaseFencedWrite.EnsureHeldAsync(db, fence, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     private async Task SaveAsync(CancellationToken cancellationToken)
     {
-        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await LeaseFencedWrite.SaveChangesAsync(db, leaseFences, RealmAuthorityScopes.Instances, cancellationToken).ConfigureAwait(false);
         db.ChangeTracker.Clear();
     }
 }
