@@ -103,6 +103,26 @@ public sealed class TaxiFlightWriteQueueTests
     }
 
     [Fact]
+    public async Task AFallbackThatThrows_StillDeletesTheRow_AndTheRetainedCharactersAreListedAscending()
+    {
+        await using var fixture = Fixture.Create();
+        fixture.Store.FailWrites = true;
+        fixture.Queue.Save(9, Route);
+        fixture.Queue.Save(7, Route, () => throw new InvalidOperationException("fallback failed"));
+        await fixture.Queue.FlushAsync().WaitAsync(Budget);
+
+        Assert.Equal([7, 9], fixture.Queue.RetainedCharacters);
+
+        fixture.Store.FailWrites = false;
+        await fixture.Queue.FlushCharacterAsync(7);
+        await fixture.Queue.FlushCharacterAsync(9);
+
+        Assert.Empty(fixture.Queue.RetainedCharacters);
+        Assert.Null(fixture.Store.Saved(7));
+        Assert.Equal(Route, fixture.Store.Saved(9));
+    }
+
+    [Fact]
     public async Task AbandonFallback_IsNotRunWhenTheStopDrainRefusesTheWrite()
     {
         await using var fixture = Fixture.Create(drain: new StopDrainBudget { StallBudget = TimeSpan.Zero });
