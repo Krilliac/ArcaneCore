@@ -69,6 +69,8 @@ public abstract class PlayerbotSiegeWorldTestBase
         await world.RunAsync(2_000); // the bots are in the world and the coordinator has seen them
         await world.OnWorldAsync(() =>
         {
+            // The bots explore on their own while they are logged in and idle (they walk on the order of ten yards in these two seconds): back to the layout origin the way and its creatures are measured from.
+            foreach ((Guid id, _) in bots) world.Player(id).Relocate(Origin.X, Origin.Y, Origin.Z, 0, world.World.Host.World.NowMs);
             foreach (float dx in waypoints) Assert.Null(world.Coordinator.AddSiegeWaypoint(0, At(dx)));
             return true;
         });
