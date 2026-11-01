@@ -103,11 +103,7 @@ public sealed class InsigniaLoot(LootService loot, Random? random = null)
         return bag;
     }
 
-    private static float Distance(WorldObject a, WorldObject b)
-    {
-        float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-        return MathF.Sqrt(dx * dx + dy * dy + dz * dz);
-    }
+    private static float Distance(WorldObject a, WorldObject b) => WorldGeometry.CenterDistance3D(a, b);
 
     /// <summary>vmangos DoLootRelease for bones: once looted out, the loot is cleared and the bones lose CORPSE_DYNFLAG_LOOTABLE.</summary>
     private sealed class BonesRelease(LootService loot, Corpse bones) : ILootReleaseHandler

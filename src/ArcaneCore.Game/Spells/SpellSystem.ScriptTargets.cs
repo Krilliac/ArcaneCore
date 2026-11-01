@@ -110,11 +110,7 @@ public sealed partial class SpellSystem
         if (radius >= 50_000f) radius = 200f; // CheckScriptTargeting bounds the "anywhere" range of an entry search
         if (radius <= 0) return [];
 
-        float DistanceSquared(WorldObject target)
-        {
-            float dx = target.X - caster.X, dy = target.Y - caster.Y, dz = target.Z - caster.Z;
-            return dx * dx + dy * dy + dz * dz;
-        }
+        float DistanceSquared(WorldObject target) => WorldGeometry.DistanceSq3D(target, caster);
 
         bool UnitListed(Unit unit) => rows.Any(row => row.Type switch
         {
