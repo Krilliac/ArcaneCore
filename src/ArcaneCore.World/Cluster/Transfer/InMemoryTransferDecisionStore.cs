@@ -8,7 +8,7 @@ namespace ArcaneCore.World.Cluster.Transfer;
 /// atomic single-owner epoch handoff at <see cref="PlayerTransferStage.CommitDecision"/> and forbids
 /// post-commit aborts.
 /// </summary>
-public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
+public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore, ITransferJournalScan
 {
     private readonly object _sync = new();
     private readonly Dictionary<Guid, TransferDecisionRecord> _decisions = [];
@@ -355,6 +355,22 @@ public sealed class InMemoryTransferDecisionStore : ITransferDecisionStore
                 .Where(d =>
                     d.CharacterGuid == characterGuid &&
                     d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed)
+                .OrderBy(d => d.UpdatedAtUtcMs)
+                .ToArray();
+
+            return Task.FromResult(list);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<TransferDecisionRecord>> ListUnresolvedAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        lock (_sync)
+        {
+            IReadOnlyList<TransferDecisionRecord> list = _decisions.Values
+                .Where(d => d.DecisionState is PlayerTransferDecisionState.PreCommit or PlayerTransferDecisionState.Committed)
                 .OrderBy(d => d.UpdatedAtUtcMs)
                 .ToArray();
 
