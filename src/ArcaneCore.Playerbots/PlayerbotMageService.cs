@@ -780,7 +780,8 @@ internal static class PlayerbotMageService
 
         if (!leg.FeeSeen) leg.MoneyBefore = player.Money; // re-based until the fee's own window has been seen open: another driver's spending is never this fee
 
-        if (feeCompleted && leg.MoneyBefore >= player.Money && leg.MoneyBefore - player.Money >= request.FeeCopper)
+        // The completed window's own gold side is the proof: a balance read would call a fee unpaid when money arrived between the settlement and this think, and pay the mage twice.
+        if (feeCompleted && leg.FeeTrade is { } feeTrade && feeTrade.SideOf(player).Gold == request.FeeCopper)
         {
             request.Paid = true;
             leg.PaidCopper = request.FeeCopper;
