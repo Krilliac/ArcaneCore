@@ -48,6 +48,13 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
     private PlayerbotQaAnomalyFeed? _anomalyFeed;
     private PlayerbotQaFirstChanceWatch? _firstChance;
     private System.Diagnostics.Metrics.Meter? _findingsMeter;
+    private readonly object _healthGate = new();
+    private Func<(long Overruns, long Hangs)?>? _tickHealth;
+    private bool _healthSeen;
+    private long _seenOverruns;
+    private long _seenHangs;
+    private DateTime _starvedUntilUtc = DateTime.MinValue;
+    private long _discountedStalls;
 
     /// <summary>Test seam: reads the token variable (default: the process environment).</summary>
     internal Func<string, string?>? EnvironmentReader { get; init; }
@@ -63,6 +70,12 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
 
     /// <summary>Test seam: the invariant failure source the server-fault feed polls (default: <see cref="Invariant.Failures"/> when using the host's fault ledger).</summary>
     internal Func<IReadOnlyList<InvariantFailure>>? InvariantSource { get; init; }
+
+    /// <summary>Test seam: the tick monitor's running counts of overruns and completed hangs, null while it is not ticking (default: the container's <see cref="ArcaneCore.Kernel.Ops.Watchdog.TickMonitor"/>, when enabled).</summary>
+    internal Func<(long Overruns, long Hangs)?>? TickHealthSource { get; init; }
+
+    /// <summary>Stall and set-aside signals dropped because the host was starved when they were folded (<see cref="PlayerbotQaOptions.StallStarvationSeconds"/>).</summary>
+    internal long DiscountedStalls => Interlocked.Read(ref _discountedStalls);
 
     /// <summary>Test seam: the clock of the passes, the age-out and the publisher (default: the system clock).</summary>
     internal TimeProvider Time { get; init; } = TimeProvider.System;
@@ -166,6 +179,13 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
 
         if (!options.Enabled) return;
         _options = options;
+        lock (_healthGate)
+        {
+            _tickHealth = TickHealthSource ?? MonitorHealth(services.GetService<ArcaneCore.Kernel.Ops.Watchdog.TickMonitor>());
+            _healthSeen = false;
+            _starvedUntilUtc = DateTime.MinValue;
+        }
+
         if (StartedUtc == DateTime.MaxValue) StartedUtc = Now; // an attach after a detach keeps the process's first
         _directory = Path.GetFullPath(Path.Combine(services.GetService<IHostEnvironment>()?.ContentRootPath ?? AppContext.BaseDirectory, options.Directory));
         _store = new PlayerbotQaStore(_directory, _log);
@@ -315,10 +335,18 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
             batch.Clear();
             moved = _bus.Drain(batch, Math.Min(4096, max - total));
             DateTime now = Now;
+            bool starved = batch.Count > 0 && HostStarved(now);
             foreach (QaSignal signal in batch)
             {
                 try
                 {
+                    // A stall is judged by the world time that passed, and a starved host gives each bot few ticks in it: that is the host, not the bot.
+                    if (starved && signal.Kind is QaSignalKind.Stall or QaSignalKind.SharedSetAside)
+                    {
+                        Interlocked.Increment(ref _discountedStalls);
+                        continue;
+                    }
+
                     if (Aggregator.Ingest(signal, _facts, now) is not null && !signal.FromCoverage) PlayerbotQaMeters.CountOccurrences(signal.Kind, signal.Occurrences);
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -333,6 +361,39 @@ public sealed class PlayerbotQaFeature(IServiceProvider services) : IDetachableW
         }
         while (moved > 0);
         return total;
+    }
+
+    /// <summary>The counts of the world tick monitor, or null (no monitor, a disabled one, or one that has not started ticking).</summary>
+    private static Func<(long Overruns, long Hangs)?>? MonitorHealth(ArcaneCore.Kernel.Ops.Watchdog.TickMonitor? monitor)
+    {
+        if (monitor is not { Enabled: true }) return null;
+        return () =>
+        {
+            if (monitor.BudgetMicros >= long.MaxValue) return null;
+            return (monitor.Overruns, monitor.HangsCompleted);
+        };
+    }
+
+    /// <summary>
+    /// Whether the tick monitor counted an overrun or a completed hang since the previous look, or did within the last
+    /// <see cref="PlayerbotQaOptions.StallStarvationSeconds"/>. The first look only takes the baseline. Safe to call from any thread.
+    /// </summary>
+    private bool HostStarved(DateTime now)
+    {
+        int window = _options.StallStarvationSeconds;
+        lock (_healthGate)
+        {
+            if (window <= 0 || _tickHealth is null) return false;
+            if (_tickHealth() is { } reading)
+            {
+                if (_healthSeen && (reading.Overruns > _seenOverruns || reading.Hangs > _seenHangs)) _starvedUntilUtc = now.AddSeconds(window);
+                _seenOverruns = reading.Overruns;
+                _seenHangs = reading.Hangs;
+                _healthSeen = true;
+            }
+
+            return now <= _starvedUntilUtc;
+        }
     }
 
     /// <summary>

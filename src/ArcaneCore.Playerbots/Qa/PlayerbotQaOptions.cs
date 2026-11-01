@@ -32,6 +32,9 @@ public sealed class PlayerbotQaOptions
     /// <summary>Minutes after the world starts ticking during which a tick hang is not reported to QA (start-up: cold grids, JIT, loading). 0 reports from the first tick (0..1440, default 5).</summary>
     public int TickHangWarmupMinutes { get; set; } = 5;
 
+    /// <summary>Seconds after the tick monitor last counted an overrun or a completed hang during which stall and set-aside signals are not filed (a starved host slows every bot's simulated ticks, so a bot that merely got few of them reads as stalled). 0 files them always (0..3600, default 120).</summary>
+    public int StallStarvationSeconds { get; set; } = 120;
+
     /// <summary>The newest evidence samples kept per finding (1..20).</summary>
     public int MaxSamples { get; set; } = 5;
 
@@ -82,6 +85,7 @@ public sealed class PlayerbotQaOptions
         if (StaleHours is < 0 or > 8760) problems.Add("StaleHours must be 0..8760");
         if (AutoPruneHours is < 0 or > 8760) problems.Add("AutoPruneHours must be 0..8760");
         if (TickHangWarmupMinutes is < 0 or > 1440) problems.Add("TickHangWarmupMinutes must be 0..1440");
+        if (StallStarvationSeconds is < 0 or > 3600) problems.Add("StallStarvationSeconds must be 0..3600");
         if (MaxSamples is < 1 or > 20) problems.Add("MaxSamples must be 1..20");
         if (SignalQueueCapacity is < 64 or > 1_000_000) problems.Add("SignalQueueCapacity must be 64..1000000");
         if (Faults is null) problems.Add("Faults is missing");
