@@ -54,6 +54,11 @@ public static class CastSpellHoneypot
     public static bool IsTrap(SpellHoneypotOptions options, uint spellId, IReadOnlySet<uint>? builtInToolSpellIds = null)
     {
         ArgumentNullException.ThrowIfNull(options);
+        if (Spells.Gm.CustomSpellRegistry.Contains(spellId))
+        {
+            return true; // a staff-only repurposed spell: no player's client sends it (GmSpellbook refuses the cast)
+        }
+
         if (DeliberatelyInertSpells.TryGet(spellId, out InertSpell? entry)
             && entry.Reason is InertSpellReason.NeverCast or InertSpellReason.TestSpell or InertSpellReason.Deprecated)
         {
