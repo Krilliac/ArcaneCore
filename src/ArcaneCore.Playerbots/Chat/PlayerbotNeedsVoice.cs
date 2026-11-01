@@ -922,7 +922,9 @@ internal sealed class PlayerbotNeedsVoice(IServiceProvider services, ILogger log
         if (best is not { } chosen) return null;
         ItemTemplate t = chosen.Item.Template;
         bool stack = chosen.Offer == PlayerbotVoiceFacts.TradeOffer.Stack;
-        string price = PlayerbotVoiceFacts.Price(PlayerbotVoiceFacts.AskingPrice(t.SellPrice, t.Quality, options.PriceMultiplier));
+        // The post asks what the desk will quote: the price book's price (the reference price below the seller minimum), not the vendor multiple.
+        uint reference = services.GetService<ManagedPlayerbotFeature>()?.DealPrices.ReferencePerUnit(t) ?? PlayerbotReferenceDealPrices.Instance.ReferencePerUnit(t);
+        string price = PlayerbotVoiceFacts.Price(PlayerbotVoiceFacts.DealAsk(reference, t.SellPrice, t.Quality, options.PriceMultiplier));
         return (t.Name, t.Entry, price, stack ? (int)chosen.Item.Count : 1);
     }
 
