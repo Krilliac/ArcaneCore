@@ -1,6 +1,6 @@
 # Gateway passthrough (Tier 3a)
 
-Status: **built, mock-client tested, not yet accepted with a real 1.12.1 client.** This is phase 3a of
+Status: **built, mock-client tested, not yet accepted with a real 1.12.1 client** (checklist: [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md)). This is phase 3a of
 [Hot reload tiers](../design/hot-reload-tiers.md#53-phases): a separate `ArcaneCore.Gateway` process owns the client
 socket and forwards plaintext opcodes to a World running in worker mode. There is no handoff yet: a gateway restart drops
 its clients, and a World restart drops them too. With the default configuration nothing here is active and the World
@@ -341,7 +341,7 @@ stage 4 (the target session opens at stage 4, after the passive shadow install).
 
 ## Not done yet (rest of 3a and beyond)
 
-- **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only.
+- **Real-client acceptance** (the 3a exit criterion in the design) has not been run; everything above is mock-client only. The checklist and log-capture procedure for that run, with an empty results table, is [CLUSTER_ACCEPTANCE.md](../CLUSTER_ACCEPTANCE.md).
 - Warden runs on the worker, not the gateway.
 - The movement anticheat's receive time is stamped on the worker, so link jitter is added to the times it compares.
 - The manifest's schema and content versions are operator labels, not read from the databases.
