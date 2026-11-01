@@ -64,6 +64,13 @@ public sealed class ClusterOptions
     public bool Transfers { get; init; }
 
     /// <summary>
+    /// With more than one worker: when set, every other worker is started with <c>Cluster:Worker:AllowInstanceMaps=false</c>, so it never hosts instance copies
+    /// of maps outside its list. This does not make the gateway route an instanceable map: the gateway resolves a far teleport (target instance 0) only through
+    /// the listed maps, so the instance worker must also list the dungeon map in <see cref="WorkerMaps"/>. Null leaves the default (every worker hosts instances).
+    /// </summary>
+    public int? InstanceWorkerIndex { get; init; }
+
+    /// <summary>
     /// With more than one worker: the index of the worker that gets a standby process (a second world started with <c>Cluster:Worker:Standby=true</c> that shares the worker's shard) and the whole-World
     /// handoff hosting (<c>Cluster:Worker:Handoff:Enabled</c> on every worker and the standby, <c>Gateway:Handoff:Enabled</c> and the slot's standby entry on the gateway). Null, the default, starts no standby.
     /// There is no supervisor in this fixture, so a retired source is not relaunched.
@@ -170,6 +177,28 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Runs a read-only multi-row query on the cluster's characters database and maps each row with <paramref name="read"/> (for a scenario that asserts on text columns the scalar form cannot return).
+    /// The statement is the test's own text, never player input; the connection is unpooled so the fixture can drop the database.
+    /// </summary>
+    public async Task<IReadOnlyList<T>> CharactersRowsAsync<T>(string sql, Func<NpgsqlDataReader, T> read, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sql);
+        ArgumentNullException.ThrowIfNull(read);
+        var builder = new NpgsqlConnectionStringBuilder(_charactersConnection) { Pooling = false };
+        await using var connection = new NpgsqlConnection(builder.ConnectionString);
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = new NpgsqlCommand(sql, connection);
+        await using NpgsqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var rows = new List<T>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(read(reader));
+        }
+
+        return rows;
+    }
+
     /// <summary>Launch the cluster. Throws <see cref="InvalidOperationException"/> when <see cref="SkipReason"/> is set; a failed start disposes what it launched.</summary>
     public static async Task<ClusterProcessFixture> StartAsync(ClusterOptions? options = null, CancellationToken cancellationToken = default)
     {
@@ -213,6 +242,11 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         if (options.WorkerCount < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "WorkerCount must be at least 1.");
+        }
+
+        if (options.InstanceWorkerIndex is { } instanceWorker && (options.WorkerCount < 2 || instanceWorker < 0 || instanceWorker >= options.WorkerCount))
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "InstanceWorkerIndex needs more than one worker and must name one.");
         }
 
         if (options.WorkerCount > 1)
@@ -411,6 +445,11 @@ public sealed class ClusterProcessFixture : IAsyncDisposable
         if (_options.WorkerCount > 1)
         {
             env["Cluster__Worker__OwnedMaps"] = string.Join(',', worker.OwnedMaps);
+            if (_options.InstanceWorkerIndex is { } instanceWorker && instanceWorker != worker.Index)
+            {
+                env["Cluster__Worker__AllowInstanceMaps"] = "false";
+            }
+
             // Several workers write one characters database: each takes its own shard lock and ownership scope (design _wf/writer-lock-DESIGN.md, C8), as start-cluster -Topology Split runs them.
             env["Cluster__Fencing__Scope"] = "Worker";
             env["Cluster__Node__Role"] = "MapWorker";
