@@ -118,6 +118,9 @@ internal sealed class PlayerbotSocialPass(
     /// <summary>The world's festival board (the events lane and the event remark); null without one.</summary>
     internal PlayerbotWorldEventBoard? Events { get; init; }
 
+    /// <summary>The call board of defense calls (the "defense" lane); null without one.</summary>
+    internal ArcaneCore.World.Playerbots.Combat.PlayerbotDefenseBoard? DefenseCalls { get; init; }
+
     /// <summary>The bots' social memory seam (friend and ignore lists, guild invitations by affinity); null without one.</summary>
     internal PlayerbotSocialRecorder? Recorder { get; init; }
 
@@ -239,6 +242,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private readonly PlayerbotGuildChat _chat = new(logger);
     private readonly PlayerbotSocialEmotes _emotes = new();
     private readonly PlayerbotRivalryLane _rivalry = new(new PlayerbotRivalryOptOut());
+    private readonly PlayerbotDefenseLane _defense = new();
     private readonly PlayerbotInviteOptOut _inviteOptOut = new();
     private readonly PlayerbotHelpLane _help = new();
     private readonly PlayerbotGratitudeLane _gratitude = new();
@@ -302,6 +306,9 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
 
     /// <summary>The cross-faction rivalry lane (tests and status).</summary>
     internal PlayerbotRivalryLane Rivalry => _rivalry;
+
+    /// <summary>The defense call announce lane (tests, status).</summary>
+    internal PlayerbotDefenseLane Defense => _defense;
 
     /// <summary>The one server-wide store of "rivals off" choices, read by the lane and by every bot's party AI.</summary>
     internal PlayerbotRivalryOptOut RivalryOptOut => _rivalry.OptOut;
@@ -545,6 +552,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
             Coordinator = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>(),
             Recorder = bots?.Social,
             Events = bots?.EventBoard,
+            DefenseCalls = bots?.DefenseCalls,
         };
     }
 
@@ -659,6 +667,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
         {
             Coordinator = _groupCoordinator ??= services.GetService<PlayerbotGroupCoordinator>(),
             Recorder = bots?.Social,
+            DefenseCalls = bots?.DefenseCalls,
             Whole = whole,
         };
     }
@@ -795,7 +804,7 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
     private static readonly string[] LaneNames =
     [
         "answer-invites", "founding", "motds", "recruit", "invite-by-affinity", "promote", "lists", "help", "mood", "gratitude", "initiative",
-        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "events", "rivalry", "prune",
+        "chat", "emotes", "channels", "conversations", "world-chatter", "voice", "events", "defense", "rivalry", "prune",
     ];
 
     /// <summary>Extra lanes run before the built-in ones, each isolated like them (a test seam: a lane that throws must not stop the others).</summary>
@@ -828,7 +837,8 @@ public sealed class PlayerbotSocialFeature(IServiceProvider services, ILogger<Pl
                 case 15: _worldChatter.Run(pass); break;
                 case 16: _voice.Run(pass); break;
                 case 17: Events.Run(pass); break;
-                case 18: _rivalry.Run(pass); break;
+                case 18: _defense.Run(pass); break;
+                case 19: _rivalry.Run(pass); break;
                 default: _membership.Prune(pass); break;
             }
         }

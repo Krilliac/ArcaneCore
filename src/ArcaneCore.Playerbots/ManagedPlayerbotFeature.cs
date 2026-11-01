@@ -312,6 +312,24 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal Events.PlayerbotWorldEventBoard EventBoard => _eventBoard ??= new Events.PlayerbotWorldEventBoard(
         services, _options, EventClockMs, () => _setAsideTime.GetUtcNow().ToUnixTimeSeconds(), ZoneAt, () => _holidayFlavours);
 
+    private Combat.PlayerbotDefenseBoard? _defenseBoard;
+
+    /// <summary>
+    /// The call board of defense calls (<c>World:Playerbots:Pvp:Defense</c>, docs/areas/playbots-combat.md): the brains report to it from their thinks and the
+    /// social pass's "defense" lane reads it. World thread only, memory only, on the social feature's clock like <see cref="EventBoard"/>; dropped at a detach
+    /// (the next attach makes a new one) so no call outlives the brains that made it.
+    /// </summary>
+    internal Combat.PlayerbotDefenseBoard DefenseCalls
+    {
+        get
+        {
+            // A bot start builds its brain off the world thread, so the first use may race: one board wins and every caller gets it.
+            if (_defenseBoard is { } board) return board;
+            var created = new Combat.PlayerbotDefenseBoard(EventClockMs, () => _options.Pvp.Defense);
+            return Interlocked.CompareExchange(ref _defenseBoard, created, null) ?? created;
+        }
+    }
+
     private long EventClockMs() => (_socialFeature ??= services.GetService<BotSocial.PlayerbotSocialFeature>()) is { } social ? social.ClockMs : _world?.NowMs ?? 0;
 
     // The persisted home areas (managed_playerbot_home), by bot id: loaded at startup, written by .playerbot home.
@@ -481,11 +499,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (_options.Policy.Enabled && _policy is null) StartPolicy();
         if (_chat is null)
         {
-            // A chat service whose stop was interrupted part way leaves its provider behind: it goes, and the chain is built afresh.
-            _chatInProcess?.Dispose();
-            _chatInProcess = null;
-            _chatClient?.Dispose();
-            _chatClient = null;
+            // A chat service whose stop was interrupted part way leaves its provider behind (StopServicesAsync takes all three chat fields before
+            // it awaits anything, so this is only a fallback): the stale objects are taken out of the fields here, on the world thread, and disposed
+            // on the thread pool, because InProcessBotChatClient.Dispose waits for a running model load and for the engine's workers (tens of seconds).
+            // A stop still running then finds the fields empty or holding the new chain, never the stale one it would dispose a second time.
+            DisposeStaleChat(Interlocked.Exchange(ref _chatInProcess, null), Interlocked.Exchange(ref _chatClient, null));
             // The in-process model provider (Chat:InProcess) sits in front of the transport; every other provider kind passes through.
             _chatInProcess = new Chat.Inference.InProcessBotChatClient(
                 services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()), _options,
@@ -687,6 +705,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         // The festival board stops hearing game events and drops every place (the bots they belonged to are gone with their brains).
         Interlocked.Exchange(ref _eventBoard, null)?.Dispose();
+        Interlocked.Exchange(ref _defenseBoard, null);
         _subscriptions = null;
         _world = null;
     }
@@ -735,14 +754,48 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Stop the policy engine, the navigation executor and the chat services (a detach; the next attach starts them again).</summary>
     private async Task StopServicesAsync()
     {
-        // Each field is taken before its service is stopped, so an attach running meanwhile (a quiesce the host gave up on while this
-        // ran) never ends up with two of a service. It can end up with none of one (it kept a service this then stopped) until the
+        // The three chat fields are taken together, before any await: a quiesce the host gave up on rolls back with AttachFrom on the world
+        // thread while this still runs, and an attach that finds _chat empty builds a fresh chain. Taking the provider fields only after the
+        // chat's DisposeAsync (which waits up to 5 s for its workers) let this method dispose that new chain's provider and client under the live
+        // chat, so every later in-process request answered "disposed". Taken first, what is disposed here is exactly the chain this stop began with.
+        // The policy engine and the navigation executor are taken as before: an attach in between can end up with none of those until the
         // next attach; the bot code treats a missing chat, policy or navigation worker as off.
+        Chat.PlayerbotChat? chat = Interlocked.Exchange(ref _chat, null);
+        Chat.Inference.InProcessBotChatClient? inProcess = Interlocked.Exchange(ref _chatInProcess, null);
+        Chat.HttpBotChatClient? client = Interlocked.Exchange(ref _chatClient, null);
         if (Interlocked.Exchange(ref _policy, null) is { } policy) await policy.DisposeAsync().ConfigureAwait(false);
         if (Interlocked.Exchange(ref _navigationExecutor, null) is { } navigationExecutor) await navigationExecutor.DisposeAsync().ConfigureAwait(false);
-        if (Interlocked.Exchange(ref _chat, null) is { } chat) await chat.DisposeAsync().ConfigureAwait(false);
-        Interlocked.Exchange(ref _chatInProcess, null)?.Dispose();
-        Interlocked.Exchange(ref _chatClient, null)?.Dispose();
+        // Stands in for the chat's DisposeAsync waiting on its workers: the window in which a rollback attach can run.
+        if (StopHoldForTests is { } hold) await hold().ConfigureAwait(false);
+        if (chat is not null) await chat.DisposeAsync().ConfigureAwait(false);
+        inProcess?.Dispose();
+        client?.Dispose();
+    }
+
+    /// <summary>Test seam: awaited by <c>StopServicesAsync</c> after it took the chat fields and before it disposes them (null in production).</summary>
+    internal Func<Task>? StopHoldForTests { get; set; }
+
+    /// <summary>
+    /// Dispose a chat provider chain that was left behind, off the calling (world) thread: <see cref="Chat.Inference.InProcessBotChatClient.Dispose"/> blocks
+    /// while a model load runs (up to 30 s) and then on the engine's workers. A fault is recorded, never thrown: the chain is already out of the fields.
+    /// </summary>
+    private void DisposeStaleChat(Chat.Inference.InProcessBotChatClient? inProcess, Chat.HttpBotChatClient? client)
+    {
+        if (inProcess is null && client is null) return;
+        _ = Task.Run(() =>
+        {
+            try { inProcess?.Dispose(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault(LogLevel.Warning, "playerbot.feature", ex, "Stale in-process chat client dispose failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
+
+            try { client?.Dispose(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault(LogLevel.Warning, "playerbot.feature", ex, "Stale chat HTTP client dispose failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
+        });
     }
 
     /// <summary>Test seam: hold the operation lock (as a long fleet reset, start or checkpoint does) until the result is disposed.</summary>
@@ -2119,7 +2172,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // registered anywhere below.
         var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor)
         {
-            SharedPins = _sharedPins, Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, BotId = botId,
+            SharedPins = _sharedPins, Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, DefenseCalls = DefenseCalls, BotId = botId,
         };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
         if (_policy?.Telemetry is { } telemetry)
