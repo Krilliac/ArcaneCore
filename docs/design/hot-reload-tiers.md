@@ -654,7 +654,7 @@ the real gateway, the mock client). Four steps: fencing, the decision store, sta
 `GatewayServer.RetargetWorkerSeamlessAsync`: B adopts each in-world character, the client sees a synthesized
 `SMSG_TRANSFER_PENDING` / `SMSG_NEW_WORLD`, the held input follows; a client whose move fails is disconnected). Abort before the takeover resumes A first and
   then journals the abort, so a failed journal write leaves A running and the handoff open (pre-commit) for
-  `RecoverAsync` to abort; after the takeover, roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (10).
+  `RecoverAsync` to abort; after the takeover, roll forward only (`RecoverAsync`). Tests: `WorldHandoffTests` (11).
 
 Known limits of what is built (from the review of the groundwork; none is fixed yet):
 

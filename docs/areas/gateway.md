@@ -276,7 +276,7 @@ database. A dedicated `Social` or `Economy` process is not built.
 Tier 3b groundwork: `StandbyWorkerTests` (8: standby registration, standby without worker mode refused, a closed
 worker refuses opens, a standby owns and admits nothing, refused and retried promotion, a refused promotion of a
 released ownership claims nothing, a promoted standby takes a session and writes while the old world is fenced) and
-`WorldHandoffTests` (10: a full handoff with a player in the world through the gateway and the re-login landing on B;
+`WorldHandoffTests` (11: a full handoff with a player in the world through the gateway, B answering the input held during the freeze;
 an abort injected after each of the five pre-commit stages; a source that lost its ownership; a failed abort journal
 write that still resumes A; a crash after the takeover rolled forward by recovery; a crash before it aborted by
 recovery).

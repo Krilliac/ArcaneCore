@@ -121,24 +121,21 @@ public sealed class WorldHandoffTests
             Assert.Equal(LocalWorldHandoffSource.RetiredReason, a.Services.GetRequiredService<WorkerAdmission>().ClosedReason);
             Assert.Equal(bEndpoint.Host.BoundEndPoint, linked.Gateway.WorkerEndPoint);
 
-            // The client on A was not disconnected: it got one TRANSFER_PENDING + NEW_WORLD (the same map and position as its save), then B answered the input
-            // it sent during the freeze.
+            // The client on A was not disconnected: it got one TRANSFER_PENDING + NEW_WORLD (the same map and position as its save), and B answered the input
+            // it sent during the freeze. B's reply can reach the client before or after the synthesized world port (B answers CMSG_QUERY_TIME while its login
+            // is still queued for the next tick), so the order against the reply is not asserted: read until both have been seen.
             var seen = new List<WorldFrame>();
-            while (true)
+            while (!(seen.Exists(f => f.Opcode == (ushort)WorldOpcode.SmsgNewWorld)
+                     && seen.Exists(f => f.Opcode == (ushort)WorldOpcode.SmsgQueryTimeResponse)))
             {
-                WorldFrame frame = await first.ReadAsync(cts.Token);
-                seen.Add(frame);
-                if (frame.Opcode == (ushort)WorldOpcode.SmsgQueryTimeResponse)
-                {
-                    break;
-                }
+                seen.Add(await first.ReadAsync(cts.Token));
             }
 
             int newWorld = seen.FindIndex(f => f.Opcode == (ushort)WorldOpcode.SmsgNewWorld);
-            Assert.True(newWorld > 0, "no SMSG_NEW_WORLD reached the client");
+            int pending = seen.FindIndex(f => f.Opcode == (ushort)WorldOpcode.SmsgTransferPending);
             Assert.Single(seen, f => f.Opcode == (ushort)WorldOpcode.SmsgNewWorld);
             Assert.Single(seen, f => f.Opcode == (ushort)WorldOpcode.SmsgTransferPending);
-            Assert.Equal((ushort)WorldOpcode.SmsgTransferPending, seen[newWorld - 1].Opcode);
+            Assert.True(pending >= 0 && pending < newWorld, "SMSG_TRANSFER_PENDING must precede SMSG_NEW_WORLD");
 
             // Golden bytes: SMSG_NEW_WORLD is exactly the character's SMSG_LOGIN_VERIFY_WORLD from A (u32 map, x, y, z, o: the same map and position), and
             // SMSG_TRANSFER_PENDING is exactly the u32 map, little endian.
@@ -146,9 +143,7 @@ public sealed class WorldHandoffTests
             byte[] expectedPending = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(expectedPending, BinaryPrimitives.ReadUInt32LittleEndian(loginVerify));
             Assert.Equal(loginVerify, seen[newWorld].Payload);
-            Assert.Equal(expectedPending, seen[newWorld - 1].Payload);
-            Assert.Equal((ushort)WorldOpcode.SmsgQueryTimeResponse, seen[^1].Opcode);
-            Assert.True(newWorld < seen.Count - 1, "the held input was answered before the world port reached the client");
+            Assert.Equal(expectedPending, seen[pending].Payload);
             Assert.Equal(2, linked.Gateway.ConnectionCount);
             await WaitUntilAsync(() => Task.FromResult(bEndpoint.Acceptor!.Sessions.Count == 2), cts.Token);
             Assert.Equal(2, bEndpoint.Acceptor!.Sessions.Count);
