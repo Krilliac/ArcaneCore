@@ -1,4 +1,6 @@
 using System.Net;
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Configuration;
 using ArcaneCore.World.Cluster.Gateway;
@@ -68,14 +70,14 @@ public sealed class GatewayOptions
     /// <summary>Must equal the worker's Cluster:Worker:RealmId.</summary>
     public int RealmId { get; set; } = 1;
 
-    /// <summary>Must equal the worker's Cluster:Worker:ContentRevision.</summary>
-    public string ContentRevision { get; set; } = "dev";
+    /// <summary>The content revision this gateway advertises; must equal the worker's. Defaults to the revision derived from the world schema version this build targets (<see cref="GatewayManifestVersions.ContentRevisionFor"/>), which is what a default worker (Cluster:Worker:VersionsFromDatabase on) advertises once its database is at that version. Set it only to pin an explicit override (then set the worker's labels and Cluster:Worker:VersionsFromDatabase=false to match).</summary>
+    public string ContentRevision { get; set; } = GatewayManifestVersions.ContentRevisionFor(WorldDbContext.Schema.CurrentVersion);
 
-    /// <summary>Must equal the worker's Cluster:Worker:CharactersSchemaVersion.</summary>
-    public int CharactersSchemaVersion { get; set; } = 1;
+    /// <summary>The characters schema version this gateway advertises; defaults to the version this build targets. Explicit override only.</summary>
+    public int CharactersSchemaVersion { get; set; } = CharacterDbContext.Schema.CurrentVersion;
 
-    /// <summary>Must equal the worker's Cluster:Worker:WorldSchemaVersion.</summary>
-    public int WorldSchemaVersion { get; set; } = 1;
+    /// <summary>The world schema version this gateway advertises; defaults to the version this build targets. Explicit override only.</summary>
+    public int WorldSchemaVersion { get; set; } = WorldDbContext.Schema.CurrentVersion;
 
     public ClusterNodeManifest ToManifest(Guid incarnation) => GatewayLinkManifest.Create(
         ClusterRole.Gateway, NodeId, incarnation, RealmId, ContentRevision, CharactersSchemaVersion, WorldSchemaVersion);

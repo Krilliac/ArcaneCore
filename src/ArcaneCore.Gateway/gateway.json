@@ -7,7 +7,6 @@
     "Workers": [],
     "LinkSecret": "",
     "NodeId": "gateway",
-    "RealmId": 1,
-    "ContentRevision": "dev"
+    "RealmId": 1
   }
 }

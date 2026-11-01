@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
+using ArcaneCore.Data.Characters;
+using ArcaneCore.Data.Content;
 using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Cluster.Auxiliary;
@@ -55,15 +57,29 @@ public sealed class GatewayWorkerEndpoint(
     /// <summary>The running link host (null before start).</summary>
     public GatewaySessionLinkHost? Host => _host;
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
         GatewayWorkerOptions config = options.Value;
+        GatewayManifestVersions versions;
+        if (config.VersionsFromDatabase)
+        {
+            // Fail closed: an unreadable or in-progress version throws here and the host does not start a link it cannot vouch for.
+            await using AsyncServiceScope scope = scopes.CreateAsyncScope();
+            versions = await GatewayManifestVersions.ReadAsync(
+                config, scope.ServiceProvider.GetRequiredService<CharacterDbContext>(), scope.ServiceProvider.GetRequiredService<WorldDbContext>(),
+                cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            versions = GatewayManifestVersions.Resolve(config, null, null);
+        }
+
         ILogger logger = loggers.CreateLogger<GatewayWorkerEndpoint>();
         Acceptor = new WorldGatewaySessionAcceptor(scopes, opcodes, world, registry, sessionOptions.Value, loggers, admission);
         // Owner epoch: the fenced ownership token's epoch when fencing holds one, else 1 (unfenced single node), as the
         // readiness probe reports it. A change after a takeover makes every older packet stale.
         _host = new GatewaySessionLinkHost(
-            config.ToManifest(world.CharacterOwnership?.Incarnation ?? Guid.NewGuid()),
+            config.ToManifest(world.CharacterOwnership?.Incarnation ?? Guid.NewGuid(), versions),
             Acceptor,
             () => world.CharacterOwnership is { Epoch: > 0 } token ? token.Epoch : 1,
             config.LinkSecret,
@@ -73,7 +89,9 @@ public sealed class GatewayWorkerEndpoint(
             wardenVerifier is null ? null : ApplyWardenVerdict);
         _host.Start();
         logger.LogInformation("Worker mode: gateway link listening on {Endpoint}", _host.BoundEndPoint);
-        return Task.CompletedTask;
+        logger.LogInformation(
+            "Worker mode: advertising characters schema {CharactersSchema}, world schema {WorldSchema}, content revision {ContentRevision} (from {Source}); the gateway's Gateway:* labels must equal them",
+            versions.CharactersSchemaVersion, versions.WorldSchemaVersion, versions.ContentRevision, config.VersionsFromDatabase ? "the databases" : "the Cluster:Worker labels");
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
