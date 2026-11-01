@@ -38,6 +38,7 @@ public sealed class SlowCommandInterceptorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // wall-bound: a real SQLite lock is held ~1.5 s and the durations are measured by the interceptor on the real clock
     public async Task ASlowAutocommitSaveChanges_IsReportedByTheCommandInterceptor_AndNeverByTheTransactionInterceptorAlone()
     {
         // Same lock window twice: once with only the pre-existing transaction interceptor armed (the old behaviour), once with the command interceptor too.
@@ -71,6 +72,7 @@ public sealed class SlowCommandInterceptorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // wall-bound: a real SQLite lock is held ~1.5 s and the durations are measured by the interceptor on the real clock
     public async Task ASlowAutocommitExecuteUpdate_IsReportedAsAWrite()
     {
         (string Connection, int Id) setup = await NewDatabaseAsync();
@@ -252,6 +254,7 @@ public sealed class SlowCommandInterceptorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // wall-bound: SlowTransactionInterceptor measures with Stopwatch (no injectable clock), so the held time is a real delay
     public async Task ATransactionLogsItsHeldTimeAndItsCommitTimeSeparately()
     {
         var logs = new CaptureProvider();
@@ -278,6 +281,7 @@ public sealed class SlowCommandInterceptorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // wall-bound: SlowTransactionInterceptor measures with Stopwatch (no injectable clock), so the held time is a real delay
     public async Task ATransactionDisposedWithoutCommit_IsReported_Sync_AndAsync_AndOnlyOnce()
     {
         var logs = new CaptureProvider();
@@ -313,6 +317,7 @@ public sealed class SlowCommandInterceptorTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Timing")] // wall-bound: SlowTransactionInterceptor measures with Stopwatch (no injectable clock), so the held time is a real delay
     public async Task ACommittedOrRolledBackTransaction_IsNeverReportedAsAbandoned()
     {
         var logs = new CaptureProvider();

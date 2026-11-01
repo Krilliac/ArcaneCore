@@ -46,7 +46,8 @@ public sealed class AcceptLoopLogThrottleTests
             return new ValueTask<TcpClient>(pending.Task);
         }
 
-        Task loop = AcceptLoop.RunAsync(Accept, _ => { }, log, stop.Token, backoff: TimeSpan.FromMilliseconds(1));
+        Task loop = AcceptLoop.RunAsync(Accept, _ => { }, log, stop.Token, backoff: TimeSpan.FromMilliseconds(1),
+            logClock: static () => 0); // frozen: all three errors fall in one interval however slow the runner is
         // Generous budgets: a loaded CI runner can delay pool threads by seconds; a hang still fails, it just takes longer.
         await done.Task.WaitAsync(TimeSpan.FromSeconds(30));
         stop.Cancel();
