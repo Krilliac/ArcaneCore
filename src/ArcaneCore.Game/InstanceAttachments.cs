@@ -20,6 +20,9 @@ internal sealed class InstanceAttachments<TKey, TValue>
     /// <summary>Set the value of <paramref name="key"/>, replacing an earlier one.</summary>
     public void Attach(TKey key, TValue value) => _table.AddOrUpdate(key, value);
 
+    /// <summary>Attach <paramref name="value"/> only when <paramref name="key"/> has none yet; false when one is already attached.</summary>
+    public bool TryAttach(TKey key, TValue value) => _table.TryAdd(key, value);
+
     /// <summary>The value of <paramref name="key"/>, or null when none is attached.</summary>
     public TValue? Find(TKey key) => _table.TryGetValue(key, out TValue? value) ? value : null;
 
