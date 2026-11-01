@@ -233,7 +233,7 @@ public sealed class WorkerTransferSourceTests : IDisposable
     public async Task Abort_KeepsThePlayedTimeBuiltUpThisSession_AndTheSameMap()
     {
         await _world.AdvanceClockAsync(120_000);
-        uint before = await _world.InvokeAsync(() => (_player.PlayedTimeAt(_world.NowMs) << 0) + 0u);
+        uint before = await _world.InvokeAsync(() => _player.PlayedTimeAt(_world.NowMs));
         Assert.True(before >= 120);
         Map? map = _player.Map;
 
