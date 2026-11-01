@@ -1,6 +1,6 @@
 using System.Globalization;
 using ArcaneCore.Game;
-using ArcaneCore.Game.Creatures.AI;
+using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.WorldState;
 using ArcaneCore.Game.WorldState.Events;
