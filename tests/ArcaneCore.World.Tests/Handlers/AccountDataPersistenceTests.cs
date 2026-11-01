@@ -267,7 +267,7 @@ public sealed class AccountDataPersistenceTests
         await a.DisposeAsync();
         await db.WaitForBlobAsync(accountId, 0, "A 2");
         await WorldTestHost.WaitForAsync(() => feature.TrackedAccounts == 0, "A's state to be released");
-        Assert.Equal(1, clock.PendingTimers); // A's timer is still armed, due at t0 + interval
+        // Other features (the ban recheck) also arm timers on this clock, so the test does not count pending timers.
 
         // Session B starts half an interval later: its own flush timer is due at t(B) + interval, after A's stale one.
         clock.Advance(TimeSpan.FromMilliseconds(interval / 2));
@@ -279,14 +279,13 @@ public sealed class AccountDataPersistenceTests
         await b.SendAsync(WorldOpcode.CmsgRequestAccountData, BitConverter.GetBytes(1u));
         await b.ReadUntilAsync(WorldOpcode.SmsgUpdateAccountData);
         await db.WaitForBlobAsync(accountId, 0, "B 1");
-        Assert.Equal(2, clock.PendingTimers); // A's stale timer and B's own
 
         // Past A's timer (due at t0 + interval) but before B's (due at t0 + 1.5 interval).
         clock.Advance(TimeSpan.FromMilliseconds(interval / 2));
         await WorldTestHost.WaitForAsync(() => feature.TimersFired == 1, "A's stale flush timer to run");
 
         Assert.Equal(1, feature.TrackedAccounts); // A's timer must not have forgotten B's state
-        Assert.Equal(1, clock.PendingTimers);     // B's own timer has not fired yet
+        Assert.Equal(1, feature.TimersFired);     // B's own timer (due later) has not fired yet
 
         await feature.StopAsync().WaitAsync(Budget); // queues what is held in the accounts still tracked
         await db.WaitForBlobAsync(accountId, 0, "B 2");

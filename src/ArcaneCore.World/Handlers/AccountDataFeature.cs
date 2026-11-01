@@ -296,23 +296,29 @@ public sealed class AccountDataFeature : IWorldFeature
         try
         {
             await Task.Delay(TimeSpan.FromMilliseconds(delayMs), _time, _stopping.Token).ConfigureAwait(false);
-            Interlocked.Increment(ref _timersFired);
             KeyedStoreWriteQueue<IAccountDataStore>? writes = Writes;
-            lock (_gate)
+            try
             {
-                if (!_accounts.TryGetValue(accountId, out AccountState? current) || !ReferenceEquals(current, state))
+                lock (_gate)
                 {
-                    return; // a newer session's state replaced this one; its own flush owns the account
-                }
+                    if (!_accounts.TryGetValue(accountId, out AccountState? current) || !ReferenceEquals(current, state))
+                    {
+                        return; // a newer session's state replaced this one; its own flush owns the account
+                    }
 
-                state.FlushScheduled = false;
-                state.LastWriteMs = NowMs();
-                if (writes is not null)
-                {
-                    PushHeld(writes, accountId, state);
-                }
+                    state.FlushScheduled = false;
+                    state.LastWriteMs = NowMs();
+                    if (writes is not null)
+                    {
+                        PushHeld(writes, accountId, state);
+                    }
 
-                RemoveIfIdle(accountId, state);
+                    RemoveIfIdle(accountId, state);
+                }
+            }
+            finally
+            {
+                Interlocked.Increment(ref _timersFired); // counted once the body has finished, so a test can treat it as "the timer has run"
             }
         }
         catch (Exception ex) when (ex is OperationCanceledException or ObjectDisposedException)
