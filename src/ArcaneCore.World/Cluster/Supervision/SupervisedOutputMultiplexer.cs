@@ -29,7 +29,20 @@ public sealed class SupervisedOutputMultiplexer : IDisposable
     private readonly Lock _gate = new();
     private readonly Action<string> _mergedConsoleSink;
     private readonly Dictionary<string, StreamWriter> _logWriters = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> _failedAt = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
+
+    /// <summary>The default for <see cref="LogRetryBackoff"/>.</summary>
+    public static readonly TimeSpan DefaultLogRetryBackoff = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// After a log path fails (open or write), it is not touched again, and no further fault is recorded for it, until this long has passed;
+    /// its lines go only to the console meanwhile. One child line would otherwise cost one failing open and one fault record, under the gate.
+    /// </summary>
+    public TimeSpan LogRetryBackoff { get; init; } = DefaultLogRetryBackoff;
+
+    /// <summary>The clock for <see cref="LogRetryBackoff"/>.</summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
     /// <summary>Where a failed child-log write is logged (through <see cref="FaultLedgerLogging.LogFault(ILogger, string, Exception, string, object?[])"/>); without one the fault is only recorded in the ledger.</summary>
     public ILogger? Logger { get; init; }
@@ -97,17 +110,29 @@ public sealed class SupervisedOutputMultiplexer : IDisposable
 
             if (!string.IsNullOrWhiteSpace(config.LogFilePath))
             {
-                // A log file that cannot be opened or written (disk full, sharing violation, read-only directory) must not unwind the caller:
-                // that is the child's stdout pump, and a pump that stops leaves the child blocked on a full pipe. Record it and keep going to the console.
-                try
+                string logPath = config.LogFilePath;
+                if (_failedAt.TryGetValue(logPath, out long failedAt) && TimeProvider.GetElapsedTime(failedAt) < LogRetryBackoff)
                 {
-                    StreamWriter writer = GetOrCreateLogWriter(config.LogFilePath);
-                    writer.WriteLine(formatted);
-                    writer.Flush();
+                    // In its backoff window: the fault was recorded when it began; the line goes to the console only (when it is routed there).
                 }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or NotSupportedException or ArgumentException)
+                else
                 {
-                    RecordLogFault(config, ex);
+                    // A log file that cannot be opened or written (disk full, sharing violation, read-only directory) must not unwind the caller:
+                    // that is the child's stdout pump, and a pump that stops leaves the child blocked on a full pipe. Record it once per backoff window,
+                    // drop the writer so the next window reopens the file, and keep going to the console.
+                    try
+                    {
+                        StreamWriter writer = GetOrCreateLogWriter(logPath);
+                        writer.WriteLine(formatted);
+                        writer.Flush();
+                        _failedAt.Remove(logPath);
+                    }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or NotSupportedException or ArgumentException)
+                    {
+                        _failedAt[logPath] = TimeProvider.GetTimestamp();
+                        DiscardLogWriter(logPath);
+                        RecordLogFault(config, ex);
+                    }
                 }
             }
 
@@ -124,13 +149,29 @@ public sealed class SupervisedOutputMultiplexer : IDisposable
         try
         {
             if (Logger is { } logger)
-                logger.LogFault(site, ex, "Supervised process {Process} log file {Path} cannot be written; its output continues on the console only ({Type})", config.Name, config.LogFilePath, ex.GetType().Name);
+                logger.LogFault(site, ex, "Supervised process {Process} log file {Path} cannot be written; its lines are not kept in the file until the next retry, in {RetrySeconds} s ({Type})", config.Name, config.LogFilePath, LogRetryBackoff.TotalSeconds, ex.GetType().Name);
             else
                 FaultLedger.Shared.Record(site, ex);
         }
         catch (Exception sinkEx) when (sinkEx is not OutOfMemoryException)
         {
-            // A broken log sink must not stop the pump either; the fault is already in the ledger.
+            // A broken log sink must not stop the pump either. Both branches above record into the ledger before they log or throw, so the fault is
+            // already counted; only its log line (or the ledger itself failing, which Record swallows) can be lost here.
+        }
+    }
+
+    /// <summary>Closes and forgets the writer for <paramref name="logFilePath"/> (after a failed write). Call under <c>_gate</c>; never throws.</summary>
+    private void DiscardLogWriter(string logFilePath)
+    {
+        try
+        {
+            string fullPath = Path.GetFullPath(logFilePath);
+            if (_logWriters.Remove(fullPath, out StreamWriter? writer))
+                writer.Dispose();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or NotSupportedException or ArgumentException)
+        {
+            // Disposing flushes into the same broken file, or the path is unusable; either way the writer is out of the map or was never in it.
         }
     }
 
@@ -177,6 +218,7 @@ public sealed class SupervisedOutputMultiplexer : IDisposable
             }
 
             _logWriters.Clear();
+            _failedAt.Clear();
         }
     }
 }

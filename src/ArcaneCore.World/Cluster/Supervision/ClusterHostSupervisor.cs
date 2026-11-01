@@ -1065,6 +1065,11 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
     /// <summary>
     /// Drains and stops all active supervised processes in reverse launch order (workers first, then gateway/social/coordinator/realm).
     /// </summary>
+    /// <remarks>
+    /// The drains run one after another, each bounded by its own <see cref="SupervisedProcessConfig.DrainTimeoutMs"/> (default 180 s, sized for one world's
+    /// stop sequence), so the worst case for the whole stop is the sum over the children, not 180 s: a stuck world and a stuck realm cost 360 s. A caller
+    /// with a hard shutdown deadline (a service manager's stop timeout) must be sized for that sum or cancel through <paramref name="ct"/>.
+    /// </remarks>
     public async Task DrainAndStopAsync(CancellationToken ct = default)
     {
         string[] names;
@@ -1831,16 +1836,32 @@ public sealed class ClusterHostSupervisor : IAsyncDisposable, IDisposable
 
                 bool notify = false;
                 SupervisorChildExit? crashExit = null; // an unexpected nonzero exit the supervisor did not cause: offered to the crash dialog after the lock
+                bool ignoreExit;
+                long exitIncarnation;
+                SupervisedProcessState stateAtExit;
                 lock (_gate)
                 {
                     entry.LastExitCode = exitCode;
+                    exitIncarnation = entry.Incarnation;
+                    stateAtExit = entry.State;
+                    ignoreExit = entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped or SupervisedProcessState.Faulted
+                        || ct.IsCancellationRequested;
+                }
+
+                // Logged outside _gate (a logger sink can block), and for every exit, including one in a state the monitor leaves alone (Draining, Faulted, ...).
+                _logger.LogInformation("Supervised process {Process} (pid {ProcessId}, incarnation {Incarnation}) exited with code {ExitCode} (state {State})", entry.Config.Name, currentProcess.ProcessId, exitIncarnation, exitCode, stateAtExit);
+                if (ignoreExit)
+                    return;
+
+                lock (_gate)
+                {
+                    // The state can have moved between the two lock sections (a drain or a stop began): re-check before acting on the exit.
                     if (entry.State is SupervisedProcessState.Draining or SupervisedProcessState.Drained or SupervisedProcessState.Stopped or SupervisedProcessState.Faulted
                         || ct.IsCancellationRequested)
                     {
                         return;
                     }
 
-                    _logger.LogInformation("Supervised process {Process} (pid {ProcessId}, incarnation {Incarnation}) exited with code {ExitCode}", entry.Config.Name, currentProcess.ProcessId, entry.Incarnation, exitCode);
                     long now = _time.GetTimestamp();
                     bool healthy = _time.GetElapsedTime(entry.LaunchTimestamp, now) >= TimeSpan.FromSeconds(_options.HealthyUptimeSeconds);
                     SupervisedExitDisposition disposition = SupervisedExitClassifier.Classify(exitCode, entry.KillKind, entry.AnnouncedIntent);
