@@ -5,7 +5,7 @@ namespace ArcaneCore.World.Playerbots.BotSocial;
 /// The keys are live (a change applies without a restart). The trade desk (<c>PlayerbotTradeDesk</c>) reads <see cref="Enabled"/>, <see cref="LowTrustPermille"/>,
 /// <see cref="TradeTimeoutSeconds"/> and every key of <see cref="Deals"/> (the price book keys through the price book the desk, the WTS posts and the whisper quotes share) and <see cref="Limits"/>;
 /// <see cref="ScamMemoryDays"/> and <see cref="NinjaMemoryDays"/> are read by the trade ledger. The gift keys (<see cref="AnswerTrades"/>, <see cref="AcceptGifts"/>, <see cref="GiftMinValueCopper"/>,
-/// <see cref="MaxGiftsReceivedPerHour"/>) are read by the party AI through <c>PlayerbotTradeGifts</c>; <see cref="Gifts"/> is read by nothing yet. The desk runs only while <c>World:Playerbots:Enabled</c> is on; the deal talk
+/// <see cref="MaxGiftsReceivedPerHour"/>) are read by the party AI through <c>PlayerbotTradeGifts</c>; <see cref="Gifts"/> is read by the party AI through <c>PlayerbotGroupGifts</c>. The hourly trade counts, the daily outflow totals and the hourly received-gift counts are saved to the characters database and survive a restart. The desk runs only while <c>World:Playerbots:Enabled</c> is on; the deal talk
 /// also needs <c>World:Playerbots:Chat:Enabled</c> and the bot voice. The scam and ninja memory of a partner is kept in the bot's trade ledger (counts and times only).
 /// </summary>
 public sealed class PlayerbotSocialTradingOptions
@@ -34,7 +34,7 @@ public sealed class PlayerbotSocialTradingOptions
     /// <summary>The vendor value in copper below which a received gift earns no affinity (0..1000000, default 100).</summary>
     public int GiftMinValueCopper { get; set; } = 100;
 
-    /// <summary>The gifts one bot accepts from one partner in an hour (0..120, default 10; 0 accepts none). The count is kept in memory and resets with the bot's session.</summary>
+    /// <summary>The gifts one bot accepts from one partner in an hour (0..120, default 10; 0 accepts none). The count is saved to the characters database and survives a restart.</summary>
     public int MaxGiftsReceivedPerHour { get; set; } = 10;
 
     /// <summary>Fixed-price deals (<c>World:Playerbots:Social:Trading:Deals</c>).</summary>
@@ -118,13 +118,13 @@ public sealed class PlayerbotSocialTradingDealsOptions
 /// <summary><c>World:Playerbots:Social:Trading:Gifts</c>: a bot hands an item it cannot use to a groupmate it is an upgrade for.</summary>
 public sealed class PlayerbotSocialTradingGiftsOptions
 {
-    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. Group gifts after a run (on by default).</summary>
+    /// <summary>Group gifts after a fight (on by default): off stops the bots offering equipment they cannot use to their group.</summary>
     public bool Enabled { get; set; } = true;
 
-    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15).</summary>
+    /// <summary>The seconds a bot listens for an answer to its "anyone need" line (5..120, default 15).</summary>
     public int GiftClaimSeconds { get; set; } = 15;
 
-    /// <summary>Not yet implemented: no code reads this key, so changing it has no effect. The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts).</summary>
+    /// <summary>The most a gift may be worth in copper at level 60, scaled down by the bot's level (0..1000000, default 5000; 0 means no gifts).</summary>
     public int MaxGiftValueCopper { get; set; } = 5000;
 
     public void Validate()

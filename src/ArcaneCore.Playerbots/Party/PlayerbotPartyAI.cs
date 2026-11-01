@@ -60,7 +60,7 @@ namespace ArcaneCore.World.Playerbots.Party;
 /// <see cref="PlayerbotPartyOptions.MasterTimeoutSeconds"/> the bot leaves the group and the brain takes over again.
 /// </para>
 /// </summary>
-internal sealed class PlayerbotPartyAI
+internal sealed partial class PlayerbotPartyAI
 {
     /// <summary>The only packets the party AI takes from the bot's capture queue (never an unfiltered drain).</summary>
     internal static readonly WorldOpcode[] IntakeOpcodes =
@@ -338,6 +338,7 @@ internal sealed class PlayerbotPartyAI
         // A bot with a trade deal is driven on every tick, ahead of the idle-intake throttle below (the global fast path is one volatile read).
         if (TradeDesk is { Count: > 0 } desk && desk.HasDeal(_botId)) DriveDeal(player, desk);
         if (_chat is { IsActive: true }) _chatEvents.Observe(player, Now);
+        if (GroupGiftActive) TickGroupGifts(player); // a gift under way runs on every tick, even for a bot the throttle below would skip
         // A bot outside any group only needs invitations and strangers' whispers answered: once per think interval is soon enough,
         // and it keeps a large fleet of solo bots from draining their queues every tick (the invitation itself is read from the
         // group state below, so a dropped SMSG_GROUP_INVITE costs nothing). A grouped bot reads every tick: its master's orders.
@@ -349,6 +350,7 @@ internal sealed class PlayerbotPartyAI
             _idleIntakeAtMs = nowMs;
         }
 
+        if (!GroupGiftActive) TickGroupGifts(player);
         IReadOnlyList<ManagedSessionPacket> packets = _session.DrainManagedPackets(IntakeOpcodes);
         foreach (ManagedSessionPacket packet in packets)
         {
@@ -447,6 +449,8 @@ internal sealed class PlayerbotPartyAI
             return;
         }
 
+        // A groupmate's "me" to the bot's "anyone need {item}?" is the claim: taken before the chat service hears the line.
+        if (TryClaimGroupGift(player, line, sender)) return;
         // A player on the bot's ignore list is not heard at all, as a client hides an ignored player's chat: no reply, no listener (so no
         // affinity from the talk). The master and a game master are never dropped.
         if (sender is not null && sender.Guid != player.Guid && sender.Guid != master && !isGm
@@ -1053,6 +1057,9 @@ internal sealed class PlayerbotPartyAI
                     case BotSocial.PlayerbotTradeAnswer.Ignore:
                         return;
                     case BotSocial.PlayerbotTradeAnswer.Busy:
+                        // Busy closes the unopened trade, so it is sent only when no other driver may answer that request: a Fee/Tip/Desk owner of the slot, or a mage serve
+                        // (its WaitPaid answers the requester's request with CMSG_BEGIN_TRADE on its own tick) keeps the request pending, as a stranger's always was.
+                        if (PlayerbotMageService.IsServing(player) || (owners is not null && owners.Of(player, LiveTrade(player)).Owner != BotSocial.PlayerbotTradeOwner.None)) return;
                         Act(WorldOpcode.CmsgBusyTrade, [], budgeted: false);
                         return;
                 }
@@ -1065,12 +1072,13 @@ internal sealed class PlayerbotPartyAI
                 break;
             }
             case 2 or 7:
-                // The window opened (2) or changed (7, not a terminal status): a desk window reacts at once.
+                // The window opened (2) or changed (7, not a terminal status): a desk window reacts at once; the gift this bot hands out gets its item put in.
+                if (AdvanceGiftOut(player)) break;
                 if (OwnsLiveTrade(player)) DriveDeal(player, TradeDesk!);
                 break;
             case 4:
                 if (OwnsLiveTrade(player)) DriveDeal(player, TradeDesk!);
-                else AnswerPartnerAccept(player);
+                else if (!AnswerGiftOut(player)) AnswerPartnerAccept(player);
                 UpdateEquipment(player);
                 break;
             case 8:
@@ -1079,6 +1087,7 @@ internal sealed class PlayerbotPartyAI
                 BotSocial.PlayerbotDealOutcome deskOutcome = TradeDesk?.WindowClosed(_botId, completed: true) ?? default;
                 if (deskOutcome.Kind == BotSocial.PlayerbotDealOutcomeKind.None) Social?.NoteTradeDone(_botId);
                 if (!_tradePartner.IsEmpty && _tradeGift) Gifts.NoteReceived(_tradePartner.Value);
+                FinishGroupGift();
                 if (!_tradePartner.IsEmpty && _tradeCounts) Social?.NoteById(_botId, player.Guid, _tradePartner, BotSocial.PlayerbotSocialEvent.TradeCompleted,
                     _session.World.FindOnlinePlayer(_tradePartner) is { } partner && partner.Team != player.Team);
                 _tradePartner = ObjectGuid.Empty;
@@ -1098,6 +1107,7 @@ internal sealed class PlayerbotPartyAI
                     break;
                 }
 
+                FinishGroupGift();
                 _tradePartner = ObjectGuid.Empty;
                 _tradeCounts = false; _tradeGift = false;
                 // CLOSE_WINDOW (12) carries an inventory error and a flag that it is the partner's bags: an error without the flag is the bot's own full bags.

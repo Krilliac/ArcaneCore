@@ -41,25 +41,22 @@ internal readonly record struct PlayerbotStackSplit(byte SrcBag, byte SrcSlot, b
 /// accepts none). <see cref="NoteReceived"/> counts a gift when its window completed.</item>
 /// <item><see cref="Counts"/>: <c>Social:Trading:GiftMinValueCopper</c>, the vendor value from which a received gift counts as a trade for the bot's memory.</item>
 /// </list>
-/// The hourly counts live in memory (they reset with the bot's session); persisting them needs a characters-schema table (the persisted-counters step is not in this type).
+/// The hourly counts live in a <see cref="PlayerbotGiftBook"/> (shared per feature, saved to the characters database so they survive a restart; a bot built without a book counts in a private one).
 /// Options are read live from <see cref="PlayerbotOptions"/> on every call. Thread affinity: the world thread of the bot (the instance takes a lock anyway, so a test may read it from anywhere).
 /// Memory is bounded: at most <see cref="MapCap"/> partners and <see cref="PerPartnerCap"/> stamps each.
 /// </summary>
-internal sealed class PlayerbotTradeGifts(PlayerbotOptions options, Func<long> clockUnixMs)
+internal sealed class PlayerbotTradeGifts(PlayerbotOptions options, Func<long> clockUnixMs, PlayerbotGiftBook? book = null, Guid botId = default)
 {
-    /// <summary>Partners the hourly counter remembers before the one written longest ago is dropped.</summary>
-    internal const int MapCap = 256;
+    /// <summary>Pairs the hourly counter remembers before the one written longest ago is dropped (<see cref="PlayerbotGiftBook.MapCap"/>).</summary>
+    internal const int MapCap = PlayerbotGiftBook.MapCap;
 
     /// <summary>Stamps kept per partner (the hourly limit's maximum is 120).</summary>
-    internal const int PerPartnerCap = 128;
+    internal const int PerPartnerCap = PlayerbotGiftBook.PerPartnerCap;
 
     /// <summary>Stacks the split planner may hand to one trade (the window has six traded slots).</summary>
     internal const int TradedSlots = 6;
 
-    private const long HourMs = 3_600_000;
-
-    private readonly object _gate = new();
-    private readonly Dictionary<ulong, Queue<long>> _received = [];
+    private readonly PlayerbotGiftBook _book = book ?? new PlayerbotGiftBook();
     private readonly Func<long> _clock = clockUnixMs ?? throw new ArgumentNullException(nameof(clockUnixMs));
 
     private PlayerbotSocialTradingOptions Trading => options.Social.Trading;
@@ -86,54 +83,10 @@ internal sealed class PlayerbotTradeGifts(PlayerbotOptions options, Func<long> c
     internal bool Counts(bool gave, long receivedValue) => gave || receivedValue >= Trading.GiftMinValueCopper;
 
     /// <summary>The gifts <paramref name="partner"/> gave the bot inside the last hour.</summary>
-    internal int ReceivedWithinHour(ulong partner)
-    {
-        long now = _clock();
-        lock (_gate)
-        {
-            if (!_received.TryGetValue(partner, out Queue<long>? stamps)) return 0;
-            while (stamps.Count > 0 && now - stamps.Peek() >= HourMs) stamps.Dequeue();
-            if (stamps.Count != 0) return stamps.Count;
-            _received.Remove(partner);
-            return 0;
-        }
-    }
+    internal int ReceivedWithinHour(ulong partner) => _book.Within(botId, partner, _clock());
 
     /// <summary>One more gift from <paramref name="partner"/> (its window completed with items on the partner's side and none on the bot's).</summary>
-    internal void NoteReceived(ulong partner)
-    {
-        long now = _clock();
-        lock (_gate)
-        {
-            if (!_received.TryGetValue(partner, out Queue<long>? stamps))
-            {
-                if (_received.Count >= MapCap) DropStalest(now);
-                _received[partner] = stamps = new Queue<long>();
-            }
-
-            stamps.Enqueue(now);
-            while (stamps.Count > PerPartnerCap) stamps.Dequeue();
-        }
-    }
-
-    // The partner whose newest stamp is the oldest goes (an expired one first); the others keep their counts.
-    private void DropStalest(long now)
-    {
-        ulong victim = 0;
-        long victimAt = long.MaxValue;
-        bool found = false;
-        foreach ((ulong partner, Queue<long> stamps) in _received)
-        {
-            long newest = stamps.Count == 0 ? long.MinValue : stamps.Last();
-            if (now - newest >= HourMs) newest = long.MinValue;
-            if (newest >= victimAt && found) continue;
-            victim = partner;
-            victimAt = newest;
-            found = true;
-        }
-
-        if (found) _received.Remove(victim);
-    }
+    internal void NoteReceived(ulong partner) => _book.Note(botId, partner, _clock());
 
     // --- stack splitting -------------------------------------------------------------------------------------------------
 
