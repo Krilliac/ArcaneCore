@@ -1,3 +1,4 @@
+using System.Numerics;
 using ArcaneCore.Game;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Data.Content.Maps;
@@ -40,7 +41,7 @@ internal sealed class PlayerbotDefenseLane
     internal const string Topic = "defense-call";
 
     private readonly Dictionary<(uint Map, uint Zone, Team Team), long> _zoneAnnouncedAt = [];
-    private readonly HashSet<int> _announced = [];
+    private readonly Dictionary<int, AnnounceMark> _announced = [];
     private readonly HashSet<int> _openIds = [];
     private readonly List<DefenseCall> _calls = [];
     private readonly List<(ulong Guid, long LastMs)> _callers = [];
@@ -49,6 +50,7 @@ internal sealed class PlayerbotDefenseLane
     private readonly int[] _attackerMin = new int[CallsPerPass];
     private readonly int[] _attackerMax = new int[CallsPerPass];
     private int _cursor;
+    private long _respondNow;
     private IReadOnlyDictionary<uint, WorldMapAreaBounds>? _bounds;
     private string? _boundsPath;
 
@@ -75,7 +77,11 @@ internal sealed class PlayerbotDefenseLane
         {
             board.OpenCalls(_calls);
             foreach (DefenseCall call in _calls) _openIds.Add(call.Id);
-            _announced.RemoveWhere(id => !_openIds.Contains(id));
+            foreach (int id in _announced.Keys)
+            {
+                if (!_openIds.Contains(id)) _announced.Remove(id);
+            }
+
             long window = options.ZoneAnnounceSeconds * 1000L;
             foreach (var (key, at) in _zoneAnnouncedAt)
             {
@@ -99,12 +105,18 @@ internal sealed class PlayerbotDefenseLane
         int looked = 0;
         foreach (DefenseCall call in _calls)
         {
-            if (_announced.Contains(call.Id)) continue;
+            bool again = false;
+            if (_announced.TryGetValue(call.Id, out AnnounceMark mark))
+            {
+                if (!ShouldReannounce(call, mark, options)) continue;
+                again = true;
+            }
+
             if (++looked > CallsPerPass) break;
 
             if (areas.GetById(call.ZoneId) is not { } zone || string.IsNullOrWhiteSpace(zone.Name))
             {
-                _announced.Add(call.Id); // a zone with no name never gets one: no line for this call
+                _announced[call.Id] = new AnnounceMark(call.Centre, true); // a zone with no name never gets one: no line for this call
                 continue;
             }
 
@@ -116,15 +128,30 @@ internal sealed class PlayerbotDefenseLane
             switch (TrySay(pass, chat, call, channelName, text))
             {
                 case Said.Yes:
-                    _announced.Add(call.Id);
+                    _announced[call.Id] = new AnnounceMark(call.Centre, again);
                     _zoneAnnouncedAt[key] = now;
                     Announced++;
                     break;
                 case Said.Never:
-                    _announced.Add(call.Id);
+                    _announced[call.Id] = new AnnounceMark(call.Centre, true);
                     break;
             }
         }
+    }
+
+    /// <summary>Where a call was last announced, and whether its one allowed re-announcement is spent (a call that will never get a line is marked spent).</summary>
+    private readonly record struct AnnounceMark(Vector3 At, bool Repeated);
+
+    /// <summary>
+    /// A merged or moving call is announced again at most once, and only when its centre is now farther than the merge radius (ground plane) from where the line was said;
+    /// with merging off (radius 0) never. The zone cooldown still applies at the caller.
+    /// </summary>
+    private static bool ShouldReannounce(DefenseCall call, AnnounceMark mark, PlayerbotPvpDefenseOptions options)
+    {
+        if (mark.Repeated || options.MergeRadiusYards <= 0) return false;
+        float dx = call.Centre.X - mark.At.X, dy = call.Centre.Y - mark.At.Y;
+        float radius = options.MergeRadiusYards;
+        return (dx * dx) + (dy * dy) > radius * radius;
     }
 
     private readonly record struct Pick(int Call, int Tier, float Yards, ulong Guid, PlayerbotSocialBot Bot, DefenseSide Side);
@@ -156,6 +183,7 @@ internal sealed class PlayerbotDefenseLane
         bool warMode = pass.Options.WarMode.Enabled;
         bool joiners = warMode || options.BothSides;
         long now = board.NowMs;
+        _respondNow = now;
         for (int c = 0; c < calls; c++)
         {
             DefenseCall call = _calls[c];
@@ -238,6 +266,7 @@ internal sealed class PlayerbotDefenseLane
     {
         side = DefenseSide.Defender;
         yards = 0f;
+        if (!call.AcceptsResponders(_respondNow)) return false; // no live report for a minute: only the responders already on the way finish it
         if (player.Map is not { } map || player.MapId != call.MapId || map.InstanceId != call.InstanceId) return false;
         float dx = player.X - call.Centre.X, dy = player.Y - call.Centre.Y;
         yards = MathF.Sqrt((dx * dx) + (dy * dy));

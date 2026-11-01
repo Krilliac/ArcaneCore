@@ -191,6 +191,34 @@ It then takes the target on (`PlayerbotEngageReason.Initiate`) and fights it as 
 area or gets past the radius. The War Mode grudge hunt runs first and keeps priority. The help lane covers these fights like any other: a
 flagged same-faction bot, or any bot while War Mode is on, joins when the initiator is attacked back and in trouble. All five keys are live.
 
+## Defense calls (`World:Playerbots:Pvp:Defense`)
+
+Not retail, off by default: with `World:Playerbots:Pvp:Defense:Enabled` false there are no calls, no channel lines and no responders, whatever War Mode says. Retail has
+no call for help; its "is under attack" line is a zone packet the client formats, so the line here is a bot chat message added behind the option.
+
+A bot that an enemy player or bot attacks (in the open world, outside the exempt areas, not in a duel, on no defend post or stay) reports to the call board
+(`PlayerbotDefenseBoard`, world thread only, guids and positions only). One report per bot every few seconds; a bot opens a new call at most once per
+`CallerCooldownSeconds`, one attacker raises a call at most once per `ProvokeThrottleSeconds`, and a zone and a map hold at most `MaxActiveCallsPerZone` and
+`MaxOpenCallsPerMap` open calls.
+
+- **Announce.** When a call opens, the freshest live caller in the zone's "LocalDefense - zone" channel says "place is under attack!" (with map coordinates when
+  `WorldMapAreaDbcPath` is set; `ClientData:DbcDirectory` fills it). One line per call, at most one per zone and team per `ZoneAnnounceSeconds`, and
+  `Announce` false silences the line without touching the coordination. A call whose centre later moves more than `MergeRadiusYards` from where it was announced is
+  announced once more, never again.
+- **Responders.** Each pass the defense lane takes free bots (not helping, no post, no real player in the group) within `RespondRadiusYards` of the call's
+  centre on the same map instance, no water between, inside the level window (`MaxLevelBelow`, `MaxLevelAbove`). Same team as the caller: a defender, up to
+  `MaxRespondersPerSide`. Other team: a joiner, only with War Mode on or `BothSides`, capped at defenders that arrived plus live callers plus one. The order is deterministic (activity,
+  distance, guid). A responder walks (never teleports, no taxi) to the centre, takes on the nearest attacker in sight within 40 yd of it, and after 15 seconds with nobody left drops
+  the call.
+- **Grace.** A caller counts as live for 10 seconds after its report. A call stays open `GraceSeconds` after its last live report (default 120), so responders already
+  walking still arrive when the caller died or left, and closes `MaxOpenSeconds` after it opened however live it is. The call's centre is the centroid of its live callers, within 150 yd
+  of where it opened, and it holds still during grace. A call with no live report for 60 seconds takes no new responders.
+- **Merging.** A report within `MergeRadiusYards` of an open call of the same team on the same map instance joins it, and the sweep at the start of each pass folds two such
+  calls into the lower id (callers, attackers and responders are united, caps re-applied, nobody evicted). The absorbed id redirects to the survivor, over several hops, and a responder
+  follows it, planning its walk again only when the centre moved more than 15 yd. `MergeRadiusYards` 0 turns merging off.
+
+Every key above is live except `WorldMapAreaDbcPath`, which is read when the bot feature attaches. The deviation is registered with `World:Playerbots:Pvp:Defense:Enabled`.
+
 ## Tests
 
 - `Playerbots/Combat/PlayerbotClassRotationTests.cs`: per class, a synthetic book and a state give the expected next action.
@@ -201,6 +229,7 @@ flagged same-faction bot, or any bot while War Mode is on, joins when the initia
 - `Playerbots/Social/PlayerbotPvpInitiateWorldTests.cs`: an idle bot starts on a flagged enemy bot and player; it does not with the rule off, an unflagged target, a level outside the window, outnumbered, under `MinHealthPct`, in combat, a target in an exempt area or outside the radius; a same-faction helper joins when the target fights the initiator back.
 - `Playerbots/PlayerbotCombatSpellsTests.cs`: the spell data rebuild on SMSG_LEARNED_SPELL and the role change; the stance taken
   through the ordinary cast handler.
+- `Playerbots/Combat/PlayerbotDefenseBoardTests.cs`: the call board on a manual clock with no world: open, refresh, cooldown, throttle and caps; the live window, the grace boundary (119999 ms open, 120000 closed, with the no-grace RED), the maximum age; merge on report at the radius boundary and with merging off; the sweep merge, lower id surviving, multi-hop redirects, nothing evicted; the centroid holding through grace; no fresh responder after 60 seconds without a report.
 - `Playerbots/Combat/PlayerbotKiteModelTests.cs`: the kite decision (no slow, slow ready, half-speed or rooted pursuer, health over the
   line, three pursuers, a caster, the step cooldown, the step, time and failed-spot caps) and the step geometry.
 - `Playerbots/Combat/PlayerbotRangedWeaponRotationTests.cs`: the warrior and rogue shots (out of melee, in melee, moving, order, not at a Gouged target, not while the kite is not holding), the warrior's Intercept and Berserker Stance switch held back while it

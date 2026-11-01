@@ -120,6 +120,18 @@ public sealed class PlayerbotPvpDefenseOptions
     /// <summary>Highest <see cref="ProvokeThrottleSeconds"/>.</summary>
     public const int MaxProvokeThrottleSeconds = 3600;
 
+    /// <summary>Highest <see cref="GraceSeconds"/>.</summary>
+    public const int MaxGraceSeconds = 900;
+
+    /// <summary>Highest <see cref="MergeRadiusYards"/>.</summary>
+    public const int MaxMergeRadiusYards = 300;
+
+    /// <summary>Lowest <see cref="MaxOpenSeconds"/>.</summary>
+    public const int MinMaxOpenSeconds = 60;
+
+    /// <summary>Highest <see cref="MaxOpenSeconds"/>.</summary>
+    public const int MaxMaxOpenSeconds = 3600;
+
     /// <summary>Master switch for defense: attacked bots call for help, announce it and get responders only while this is true (off by default: not retail behaviour). War Mode does not turn the calls on.</summary>
     public bool Enabled { get; set; }
 
@@ -165,6 +177,21 @@ public sealed class PlayerbotPvpDefenseOptions
     [ConfigAllowed("1 to 3600")]
     public int ProvokeThrottleSeconds { get; set; } = 30;
 
+    /// <summary>A call stays open this many seconds after its last live report, so responders already on the way still arrive after the caller died or left (0 to 900; 0 closes a call as soon as no caller is live).</summary>
+    [ConfigAllowed("0 to 900")]
+    public int GraceSeconds { get; set; } = 120;
+
+    /// <summary>
+    /// A report within this many yards of an open call of the same team on the same map instance joins that call, and two open calls whose centres come this close are merged
+    /// (the lower id survives). 0 turns merging off (0 to 300).
+    /// </summary>
+    [ConfigAllowed("0 to 300")]
+    public int MergeRadiusYards { get; set; } = 80;
+
+    /// <summary>A call closes this many seconds after it opened, however live it is (60 to 3600).</summary>
+    [ConfigAllowed("60 to 3600")]
+    public int MaxOpenSeconds { get; set; } = 600;
+
     /// <summary>
     /// Path of WorldMapArea.dbc (<c>ClientData:DbcDirectory</c> fills it when unset). Without it a call line names the place and no coordinates. Read once
     /// when the bot feature attaches, so a change takes a restart.
@@ -192,6 +219,15 @@ public sealed class PlayerbotPvpDefenseOptions
     /// <summary>The reason a provoke throttle <paramref name="seconds"/> is refused, or null.</summary>
     public static string? CheckProvokeThrottle(int seconds) => seconds is >= MinProvokeThrottleSeconds and <= MaxProvokeThrottleSeconds ? null : $"must be {MinProvokeThrottleSeconds}..{MaxProvokeThrottleSeconds}";
 
+    /// <summary>The reason a grace <paramref name="seconds"/> is refused, or null.</summary>
+    public static string? CheckGrace(int seconds) => seconds is >= 0 and <= MaxGraceSeconds ? null : $"must be 0..{MaxGraceSeconds}";
+
+    /// <summary>The reason a merge radius <paramref name="yards"/> is refused, or null.</summary>
+    public static string? CheckMergeRadius(int yards) => yards is >= 0 and <= MaxMergeRadiusYards ? null : $"must be 0..{MaxMergeRadiusYards}";
+
+    /// <summary>The reason a maximum call age <paramref name="seconds"/> is refused, or null.</summary>
+    public static string? CheckMaxOpen(int seconds) => seconds is >= MinMaxOpenSeconds and <= MaxMaxOpenSeconds ? null : $"must be {MinMaxOpenSeconds}..{MaxMaxOpenSeconds}";
+
     internal void Validate(string section)
     {
         if (CheckRespondRadius(RespondRadiusYards) is { } radius) throw new InvalidOperationException($"{section}: RespondRadiusYards {radius}.");
@@ -203,6 +239,9 @@ public sealed class PlayerbotPvpDefenseOptions
         if (CheckCallsPerZone(MaxActiveCallsPerZone) is { } perZone) throw new InvalidOperationException($"{section}: MaxActiveCallsPerZone {perZone}.");
         if (CheckCallsPerMap(MaxOpenCallsPerMap) is { } perMap) throw new InvalidOperationException($"{section}: MaxOpenCallsPerMap {perMap}.");
         if (CheckProvokeThrottle(ProvokeThrottleSeconds) is { } throttle) throw new InvalidOperationException($"{section}: ProvokeThrottleSeconds {throttle}.");
+        if (CheckGrace(GraceSeconds) is { } grace) throw new InvalidOperationException($"{section}: GraceSeconds {grace}.");
+        if (CheckMergeRadius(MergeRadiusYards) is { } merge) throw new InvalidOperationException($"{section}: MergeRadiusYards {merge}.");
+        if (CheckMaxOpen(MaxOpenSeconds) is { } maxOpen) throw new InvalidOperationException($"{section}: MaxOpenSeconds {maxOpen}.");
         if (WorldMapAreaDbcPath is null) throw new InvalidOperationException($"{section}: WorldMapAreaDbcPath is missing.");
     }
 }
