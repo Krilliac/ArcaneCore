@@ -42,7 +42,7 @@ public sealed class SpellHoneypotWorldTests
     /// <summary>A world host whose spell store holds the three ids used here (none in the character's spellbook), so an unlearned cast reaches the spell system's NotKnown refusal.</summary>
     private static WorldTestHost StartHost() => WorldTestHost.Start(configureServices: services =>
         services.AddSingleton<ISpellContentStore>(new InMemorySpellContentStore(new SpellContent(
-            [NeverCastSpell, GmToolSpell, WarlockDetectInvisibility].Select(id => new SpellTemplateRow { Id = id, SpellName = "Honeypot test " + id, RangeIndex = 1 }).ToList(),
+            new[] { NeverCastSpell, GmToolSpell, WarlockDetectInvisibility }.Select(id => new SpellTemplateRow { Id = id, SpellName = "Honeypot test " + id, RangeIndex = 1 }).ToList(),
             [], [], [new SpellRangeRow { Id = 1 }], [], [], []))));
 
     private static byte[] CastPayload(uint spellId)

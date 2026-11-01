@@ -78,7 +78,7 @@ public sealed class GatewayWardenTests
     [Fact]
     public void WardenVerdict_ClampsAnOverlongReason_AndRefusesEveryTruncationAndABadAction()
     {
-        string longReason = new('x', 1000) + "é";
+        string longReason = new string('x', 1000) + "é";
         byte[] frame = GatewaySessionWire.EncodeWardenVerdict(Verdict(reason: longReason), Posture);
         string decodedReason = GatewaySessionWire.DecodeWardenVerdict(frame.AsSpan(1)).Verdict.Reason;
         Assert.Equal(GatewaySessionWire.MaxTextBytes, decodedReason.Length);

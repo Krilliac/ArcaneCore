@@ -469,7 +469,7 @@ public sealed class LiveLaunchScriptTests : IDisposable
         Assert.Contains("      Cluster__Supervisor__MinClusterProcesses=5", output, StringComparison.Ordinal);
         Assert.Contains("topology:   split: realm + gateway + 3 workers", output, StringComparison.Ordinal);
 
-        Assert.Equal(1, System.Text.RegularExpressions.Regex.Matches(output, "^ {6}Cluster__Supervisor__Processes__gateway__Role=gateway\\r?$", System.Text.RegularExpressions.RegexOptions.Multiline).Count);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(output, "^ {6}Cluster__Supervisor__Processes__gateway__Role=gateway\\r?$", System.Text.RegularExpressions.RegexOptions.Multiline));
         Dictionary<string, string> worlds = SplitWorldArguments(output);
         Assert.Equal(3, worlds.Count);
         Assert.True(worlds.ContainsKey("worker-EK") && worlds.ContainsKey("worker-Kalimdor") && worlds.ContainsKey("worker-instances"));

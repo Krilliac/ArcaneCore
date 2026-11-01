@@ -11,6 +11,7 @@ using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Social;
 using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
+using ArcaneCore.World.Cluster.Social;
 using ArcaneCore.World.Features;
 using ArcaneCore.World.Handlers;
 using ArcaneCore.World.Net;
@@ -62,6 +63,8 @@ public sealed class SocialFeature(
     private readonly HashSet<Task> _loginReads = [];
     private volatile bool _stopping;
     private Task? _stopped;
+    private ClusterPresencePublisher? _presence;
+    private readonly Dictionary<ulong, PresenceSnapshot> _presenceSent = [];
 
     /// <summary>The social state (world thread only).</summary>
     public SocialContext Context => _context ?? throw new InvalidOperationException("social feature not attached");
@@ -175,6 +178,8 @@ public sealed class SocialFeature(
         }
 
         _writes.Start();
+        // Realm presence (M15.2): registered only when the node wires a publisher (cluster hosting, or Combined with the in-process authority).
+        _presence = services?.GetService<ClusterPresencePublisher>();
         world.PlayerLoggedIn += OnLoggedIn;
         world.PlayerLoggingOut += OnLoggingOut;
         _guildsLoaded = Task.Run(LoadGuildsAsync);
@@ -191,6 +196,7 @@ public sealed class SocialFeature(
     /// <summary>The timer's pass, on the world thread.</summary>
     internal void RunPeriodicStatsPass()
     {
+        RefreshPresence();
         if (!PeriodicStatsPass)
         {
             return;
@@ -322,6 +328,7 @@ public sealed class SocialFeature(
     /// </summary>
     private void OnLoggedIn(Player player)
     {
+        PublishPresenceLogin(player);
         lock (_lifecycleLock)
         {
             if (_stopping)
@@ -337,6 +344,77 @@ public sealed class SocialFeature(
                     _loginReads.Remove(completed);
                 }
             }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>The fields realm presence mirrors for <paramref name="player"/> (world thread). Null for a session without a claimed generation (synthetic or bot sessions).</summary>
+    private PresenceSnapshot? BuildPresence(Player player)
+    {
+        long generation = player.Session.SessionGeneration;
+        if (generation <= 0 || player.AccountId == 0)
+        {
+            return null;
+        }
+
+        Guild? guild = Context.Guilds.GetGuildOf(player);
+        ArcaneCore.Game.Groups.Group? group = Context.Groups.GetGroup(player.Guid);
+        return new PresenceSnapshot(
+            player.Guid.Low, player.Name, player.AccountId, generation, player.MapId, player.ZoneId, 0, player.Level,
+            (byte)player.Class, (byte)player.Race, (byte)player.Gender,
+            guild?.Id ?? 0, guild?.Name, group is null ? 0 : (int)group.Id, player.IsAfk, player.IsDnd);
+    }
+
+    private void PublishPresenceLogin(Player player)
+    {
+        if (_presence is not { } presence || BuildPresence(player) is not { } snapshot)
+        {
+            return;
+        }
+
+        _presenceSent[snapshot.CharacterGuid] = snapshot;
+        presence.PublishLogin(snapshot);
+    }
+
+    private void PublishPresenceLogout(Player player)
+    {
+        if (_presence is not { } presence)
+        {
+            return;
+        }
+
+        if (_presenceSent.Remove(player.Guid.Low))
+        {
+            presence.PublishLogout(player.Guid.Low);
+        }
+    }
+
+    /// <summary>
+    /// Once a second on the world thread: publish an update for every online character whose mirrored fields (map, zone, level, guild, group, away/busy) changed since the
+    /// last one sent. A map change, a zone change and a level-up all reach realm presence within one interval this way; nothing is sent while nothing changed.
+    /// </summary>
+    private void RefreshPresence()
+    {
+        if (_presence is not { } presence || _world is not { } world)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (Player player in world.OnlinePlayers)
+            {
+                if (!_presenceSent.TryGetValue(player.Guid.Low, out PresenceSnapshot last) || BuildPresence(player) is not { } now || now == last)
+                {
+                    continue;
+                }
+
+                _presenceSent[now.CharacterGuid] = now;
+                presence.PublishUpdate(now);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            _logger.LogFault("social.presence-refresh", ex, "Realm presence refresh pass failed.");
         }
     }
 
@@ -500,6 +578,7 @@ public sealed class SocialFeature(
     /// </summary>
     private void OnLoggingOut(Player player)
     {
+        PublishPresenceLogout(player);
         _pendingCommands.Remove(player);
         _rejectedCommands.Remove(player);
         SocialContext context = Context;

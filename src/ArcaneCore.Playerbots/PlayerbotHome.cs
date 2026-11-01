@@ -478,6 +478,12 @@ internal sealed partial class PlayerbotHomeReturn
 
     internal PlayerbotHomeState State { get; private set; }
 
+    /// <summary>
+    /// A walk-only return (the defense responders' private walker): <see cref="Update"/> never starts a tram, lift or taxi ride, and the owner never calls
+    /// <see cref="Judge"/> or <see cref="TryTeleport"/>, so a responder only ever walks.
+    /// </summary>
+    internal bool WalkOnly { get; init; }
+
     /// <summary>The two-dimensional distance to the centre at the last <see cref="Evaluate"/> (NaN off the home map).</summary>
     internal float Distance { get; private set; } = float.NaN;
 
@@ -917,8 +923,9 @@ internal sealed partial class PlayerbotHomeReturn
         if (_route is null)
         {
             PlayerbotRoute? walk = null;
-            if (PlayerbotTram.TryBegin(session, player, area.Centre)
-                || PlayerbotElevator.TryBegin(session, player, area.Centre, options, out walk))
+            if (!WalkOnly
+                && (PlayerbotTram.TryBegin(session, player, area.Centre)
+                    || PlayerbotElevator.TryBegin(session, player, area.Centre, options, out walk)))
             {
                 _routeStartDistance = MathF.Min(distance, _bestDistance);
                 _routePlannedDistance = walk?.Distance ?? 0f;
@@ -935,9 +942,9 @@ internal sealed partial class PlayerbotHomeReturn
             {
                 _route = null;
                 PlayerbotMovementControl.Stop(session, player);
-                if (PlayerbotElevator.IsHeldOff(session, player, area.Centre) || PlayerbotTram.IsHeldOff(session, player, area.Centre))
+                if (!WalkOnly && (PlayerbotElevator.IsHeldOff(session, player, area.Centre) || PlayerbotTram.IsHeldOff(session, player, area.Centre)))
                     return false;
-                if (player.Map is { } map && PlayerbotTaxi.TryTravelByTaxi(session, player, map.MapId, area.Centre, options) == TaxiTravel.Traveling)
+                if (!WalkOnly && player.Map is { } map && PlayerbotTaxi.TryTravelByTaxi(session, player, map.MapId, area.Centre, options) == TaxiTravel.Traveling)
                 {
                     _failures = 0;
                     _legProgressed = true;

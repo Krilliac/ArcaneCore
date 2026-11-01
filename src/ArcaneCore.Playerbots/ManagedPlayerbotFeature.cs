@@ -682,6 +682,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         handover.Set(HandoverLoadedSetAsides, new Dictionary<Guid, PlayerbotSetAside[]>(_loadedSetAsides));
         handover.Set(HandoverRelations, Social.Memory.SnapshotAll());
         handover.Set(HandoverTradeRecords, Social.Ledger?.SnapshotAll() ?? []);
+        handover.Set(HandoverTradeCounters, ExportTradeCounters());
         handover.Set(HandoverHomes, _homes.Values.ToArray());
         handover.Set(HandoverHomeStore, _homeStore);
         handover.Set(HandoverClock, ClockMs);
@@ -729,6 +730,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         RestoreMainPass(handover);
         if (handover.TryGet<PlayerbotRelation[]>(HandoverRelations, out var relations)) Social.Memory.Load(relations);
         if (Social.Ledger is { } ledger && handover.TryGet<PlayerbotTradeRecord[]>(HandoverTradeRecords, out var tradeRecords)) ledger.Load(tradeRecords);
+        if (handover.TryGet<PlayerbotTradeCounter[]>(HandoverTradeCounters, out var tradeCounters)) ImportTradeCounters(tradeCounters);
         if (handover.TryGet<PlayerbotHome[]>(HandoverHomes, out var homes))
             foreach (PlayerbotHome home in homes) _homes[home.BotId] = home;
         if (handover.TryGet(HandoverHomeStore, out bool homeStore)) _homeStore = homeStore;
@@ -846,6 +848,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         };
         party.Social = Social;
         party.TradeDesk = TradeDesk;
+        party.Gifts = new BotSocial.PlayerbotTradeGifts(_options, static () => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), GiftBook, entry.BotId);
         Social.Track(entry.BotId, entry.Record.CharacterId);
         var active = new ActiveBot(entry, brain, party) { SavedRelationVersion = Social.Memory.Version(entry.BotId), SavedTradeVersion = Social.Ledger?.Version(entry.BotId) ?? 0 };
         active.Fight = new BotSocial.PlayerbotFightSocial(entry.BotId, _options.Social.Memory)
@@ -922,6 +925,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
         await LoadTradeLedgerAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
+        await LoadTradeCountersAsync(scope.ServiceProvider, cancellationToken).ConfigureAwait(false);
         if (scope.ServiceProvider.GetService<ArcaneCore.Kernel.WorldData.WorldState.IHolidayFlavourStore>() is { } flavourStore)
         {
             try
@@ -4000,6 +4004,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     {
         Guid botId = active.Record.BotId;
         await SaveBotTradeLedgerAsync(active).ConfigureAwait(false); // the trade ledger rides every relation save (stop, pause, checkpoint)
+        await SaveTradeCountersAsync().ConfigureAwait(false); // so do the desk's hourly and daily counters and the gift counts (one write for all bots, skipped when unchanged)
         try
         {
             BotSocial.PlayerbotSocialMemory memory = Social.Memory;

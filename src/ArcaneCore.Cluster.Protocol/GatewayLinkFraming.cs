@@ -30,7 +30,10 @@ internal static class GatewayLinkFraming
         await stream.FlushAsync(ct).ConfigureAwait(false);
     }
 
-    public static async ValueTask<byte[]?> ReadFrameAsync(NetworkStream stream, CancellationToken ct)
+    /// <param name="stream">The link's stream.</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <param name="maxBytes">Largest length prefix accepted: <see cref="MaxFrameBytes"/>, plus the MAC tag once a link is secured.</param>
+    public static async ValueTask<byte[]?> ReadFrameAsync(NetworkStream stream, CancellationToken ct, int maxBytes = MaxFrameBytes)
     {
         byte[] header = new byte[4];
         int read = await ReadExactlyOrEofAsync(stream, header, ct).ConfigureAwait(false);
@@ -40,7 +43,7 @@ internal static class GatewayLinkFraming
         }
 
         int length = BinaryPrimitives.ReadInt32LittleEndian(header);
-        if (length <= 0 || length > MaxFrameBytes)
+        if (length <= 0 || length > maxBytes)
         {
             throw new InvalidOperationException($"invalid gateway–worker frame length: {length}");
         }

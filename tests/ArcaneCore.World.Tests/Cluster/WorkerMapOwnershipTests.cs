@@ -2,6 +2,7 @@ using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster;
 using ArcaneCore.Kernel.Configuration.Validation;
 using ArcaneCore.TestSupport;
+using ArcaneCore.World.Cluster;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Supervision;
 using Microsoft.Extensions.Configuration;

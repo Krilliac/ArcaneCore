@@ -96,7 +96,7 @@ public sealed class NpcVendorServiceTests
         {
             dead.Player.Money = 1000;
             dead.Player.Health = 0;
-            dead.Player.Combat.DeathState = Combat.DeathState.Dead;
+            dead.Player.Combat.DeathState = ArcaneCore.Game.Combat.DeathState.Dead;
             dead.Services.BuyItem(dead.Player, dead.Npc.Guid, Bread, 1);
             dead.Services.ListInventory(dead.Player, dead.Npc.Guid);
             Assert.Empty(dead.Drain());

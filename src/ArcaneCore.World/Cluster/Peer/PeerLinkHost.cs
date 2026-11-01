@@ -158,6 +158,13 @@ public sealed class PeerLinkHost : IAsyncDisposable
     /// <summary>Test seam: when it returns true for a request id the Ping is executed but its Pong is withheld (an unanswered request).</summary>
     internal Func<long, bool>? SuppressReplyForTests { get; set; }
 
+    /// <summary>
+    /// What answers a request: given the request payload, returns the answer payload (the presence protocol's <c>PresenceHolderService.Handle</c>). Null (the default) echoes the
+    /// payload. Set before <see cref="Start"/>; called on the link's receive task, so it must be thread-safe and must not throw for bad input. The answer is cached per
+    /// (peer incarnation, idempotency id) like an echo, so a retried request is not executed twice.
+    /// </summary>
+    public Func<ReadOnlyMemory<byte>, byte[]>? PayloadHandler { get; set; }
+
     /// <summary>Binds the port and starts accepting. Call once.</summary>
     public void Start()
     {
@@ -225,6 +232,15 @@ public sealed class PeerLinkHost : IAsyncDisposable
         Volatile.Write(ref _lastRefusal, reason);
     }
 
+    /// <summary>Refuses a link at a handshake step before the peer is authenticated: counts it, answers with a plain HelloAck refusal and closes.</summary>
+    private async Task RefuseLinkAsync(Link link, string reason)
+    {
+        Refuse(reason);
+        _logger.LogWarning("Peer link from {Remote} refused: {Reason}", link.Remote, reason);
+        link.Channel.TryEnqueue(PeerLinkWire.EncodeHelloAck(false, Clamp(reason), null));
+        await link.Channel.FlushAndCloseAsync(RejectFlushBound).ConfigureAwait(false);
+    }
+
     private async Task RunLinkAsync(Link link, CancellationToken ct)
     {
         byte[] nonce = RandomNumberGenerator.GetBytes(GatewaySessionWire.NonceBytes);
@@ -256,8 +272,34 @@ public sealed class PeerLinkHost : IAsyncDisposable
                     switch (type)
                     {
                         case RealmServiceFrameType.Proof:
-                            byte[] proof = PeerLinkWire.DecodeNonce(body.Span, "Proof");
-                            proven = CryptographicOperations.FixedTimeEquals(proof, GatewaySessionWire.ComputeProof(_secret, nonce));
+                            if (proven)
+                            {
+                                throw new InvalidDataException("a second Proof frame");
+                            }
+
+                            if (!LinkAuth.TrySplitClientProof(body.Span, out byte[] proof, out byte[] connectorNonce, out bool legacyProof))
+                            {
+                                if (legacyProof)
+                                {
+                                    await RefuseLinkAsync(link, $"peer link protocol is older than local v{RealmServiceProtocol.Version} (it lacks mutual proof and frame MACs)").ConfigureAwait(false);
+                                    return;
+                                }
+
+                                throw new InvalidDataException($"Proof frame of {body.Length} B (expected {LinkAuth.ClientProofBodyBytes})");
+                            }
+
+                            if (!CryptographicOperations.FixedTimeEquals(proof, GatewaySessionWire.ComputeProof(_secret, nonce)))
+                            {
+                                await RefuseLinkAsync(link, "peer link proof missing or wrong (the peer link secret differs)").ConfigureAwait(false);
+                                return;
+                            }
+
+                            proven = true;
+                            // The holder proves itself back, then both directions carry a frame MAC (the proof frame is the last one in the clear).
+                            LinkKeys keys = LinkAuth.DeriveKeys(_secret, nonce, connectorNonce);
+                            link.Channel.TryEnqueue(PeerLinkWire.EncodeNonce(RealmServiceFrameType.Proof, LinkAuth.ComputeServerProof(_secret, nonce, connectorNonce)));
+                            link.Channel.EnqueueSendKey(keys.ServerToClient);
+                            link.Channel.ActivateReceiveKey(keys.ClientToServer);
                             continue;
                         case RealmServiceFrameType.Hello:
                             if (!await AdmitAsync(link, body, proven).ConfigureAwait(false))
@@ -351,7 +393,7 @@ public sealed class PeerLinkHost : IAsyncDisposable
             }
             else
             {
-                answer = payload;
+                answer = PayloadHandler is { } handler ? handler(payload) : payload;
                 _answers[key] = answer;
                 _answerOrder.Enqueue(key);
                 while (_answerOrder.Count > IdempotencyCacheSize)

@@ -539,7 +539,7 @@ public sealed class ClusterCommands : ICommandGroup
 
         context.Reply(string.Create(
             c,
-            $"Realm presence: online={online.Length} ({online.Length - botNames.Count} human, {botNames.Count} bots) | knownCharacters={charDir?.Count ?? 0} | directoryEntries={directory?.Count ?? online.Length}"));
+            $"Realm presence: online={online.Length} ({online.Length - botNames.Count} human, {botNames.Count} bots) | knownCharacters={charDir?.Count ?? 0} | directoryEntries={DirectoryEntryCount(directory, online.Length)}"));
         context.Reply(string.Create(
             c,
             $"Worker presence breakdown: {DefaultWorkerEasternKingdoms}={ek} | {DefaultWorkerKalimdor}={kal} | {DefaultWorkerInstances}={inst}"));
@@ -547,6 +547,20 @@ public sealed class ClusterCommands : ICommandGroup
             c,
             $"Social authority: router={(router is not null ? router.GetType().Name : "local-world")} | pendingSocialWrites={socialFeature?.PendingWrites ?? 0}"));
         return true;
+    }
+
+    /// <summary>
+    /// The realm directory size for the world thread without blocking: a <see cref="LeaseRoutedPresence"/> that does not hold the Social lease would make a network round trip
+    /// to the holder, so it reports <paramref name="fallback"/> (this node's online count) instead.
+    /// </summary>
+    internal static int DirectoryEntryCount(IRealmPresenceDirectory? directory, int fallback)
+    {
+        if (directory is LeaseRoutedPresence routed)
+        {
+            return routed.TryGetLocalCount(out int count) ? count : fallback;
+        }
+
+        return directory?.Count ?? fallback;
     }
 
     internal static bool Diag(CommandContext context, string args)

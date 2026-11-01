@@ -157,6 +157,21 @@ public sealed class SessionRegistry : ISessionClaims, IDisposable
 
     public long Invalidate(int accountId) => Store.Invalidate(accountId);
 
+    /// <summary>
+    /// The realm presence authority saw a newer login of <paramref name="accountId"/> on another worker (<see cref="Cluster.Social.PresenceKick"/>): disconnect the session
+    /// this node holds for it. True when a session was found and kicked. Thread-safe (the kick only cancels the session's token).
+    /// </summary>
+    public bool KickSuperseded(int accountId)
+    {
+        if (_byAccount.TryGetValue(accountId, out WorldSession? existing))
+        {
+            existing.Kick("the account logged in on another world worker");
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>A point-in-time snapshot of the registered sessions (live ban enforcement and the periodic re-check).</summary>
     public IReadOnlyList<WorldSession> Sessions => [.. _byAccount.Values];
 

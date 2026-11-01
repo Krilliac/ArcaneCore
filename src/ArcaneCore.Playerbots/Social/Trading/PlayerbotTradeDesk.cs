@@ -97,6 +97,9 @@ internal enum PlayerbotDealStepKind : byte
 
     /// <summary>CMSG_CANCEL_TRADE.</summary>
     Cancel,
+
+    /// <summary>CMSG_SPLIT_ITEM: <see cref="PlayerbotDealStep.Amount"/> units of the stack at (<see cref="PlayerbotDealStep.Bag"/>, <see cref="PlayerbotDealStep.Slot"/>) into the empty slot (<see cref="PlayerbotDealStep.DstBag"/>, <see cref="PlayerbotDealStep.DstSlot"/>).</summary>
+    Split,
 }
 
 /// <summary>One step of <see cref="PlayerbotTradeDesk.Drive"/>.</summary>
@@ -108,7 +111,10 @@ internal readonly record struct PlayerbotDealStep(
     byte Slot = 0,
     uint Gold = 0,
     string? SayKey = null,
-    string? PartnerName = null);
+    string? PartnerName = null,
+    byte DstBag = 0,
+    byte DstSlot = 0,
+    byte Amount = 0);
 
 /// <summary>How a desk window ended (<see cref="PlayerbotTradeDesk.WindowClosed"/>); <see cref="PlayerbotDealOutcome.Entry"/> and <see cref="PlayerbotDealOutcome.Role"/> name the deal's goods, to spend the bot's board post.</summary>
 internal enum PlayerbotDealOutcomeKind : byte
@@ -142,8 +148,8 @@ internal readonly record struct PlayerbotDealOutcome(PlayerbotDealOutcomeKind Ki
 /// the partner side differs from what it accepted. A second such change cancels the deal and counts as a scam attempt.
 /// </para>
 /// <para>
-/// Limits (documented in the area doc): the desk never splits a stack (a seller whose stacks cannot sum exactly to the count cancels), and the hourly trade counts
-/// and daily outflow counters live in memory only (they reset on a restart). Prices come from <see cref="IPlayerbotDealPriceSource"/> (the reference price until the
+/// Limits (documented in the area doc): a seller whose stacks cannot sum exactly to the count splits the shortfall off a larger stack first (<see cref="PlayerbotTradeGifts.PlanSplit"/>), and the hourly trade counts
+/// and daily outflow counters are saved to the characters database (<see cref="ExportCounters"/>, <see cref="ImportCounters"/>) and survive a restart. Prices come from <see cref="IPlayerbotDealPriceSource"/> (the reference price until the
 /// price book lands). Options are read live on every call; the desk caches none. The desk owns its clock (a Unix-millisecond function, the same base as the chat
 /// service's clock): callers never pass a time. World thread; every public member also takes one lock, so a test may read it from anywhere.
 /// Memory is bounded: at most <see cref="MaxQuotedPerBot"/> quoted deals per bot, <see cref="MaxDeals"/> deals in all, <see cref="MapCap"/> entries per counter map.
@@ -169,6 +175,12 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     /// <summary>Quoted deals one bot keeps (the oldest is dropped for a new one).</summary>
     internal const int MaxQuotedPerBot = 4;
 
+    /// <summary>The splits one seller deal may ask for (a split the server refused is retried, then the deal fails without blame).</summary>
+    internal const int MaxSplits = 3;
+
+    /// <summary>The least gap between two splits of one deal (the first one's packet must have been processed).</summary>
+    internal const long SplitGapMs = 1000;
+
     /// <summary>Deals the desk holds at all.</summary>
     internal const int MaxDeals = 1024;
 
@@ -192,6 +204,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     private readonly DailyTotals<int> _accountOutflow = new();
     private long _serverDay = -1;
     private long _serverOutflow;
+    private long _counterVersion;
     private long _prunedMs;
     private int _count;
     private Func<long> _clock = clockUnixMs ?? throw new ArgumentNullException(nameof(clockUnixMs));
@@ -209,6 +222,73 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     /// Read live: switching it off cancels every window the desk drives at its next <see cref="Drive"/>.
     /// </summary>
     internal bool Enabled => options.Enabled && Trading.Enabled && Trading.Deals.Enabled && Trading.Deals.MaxDealCopper > 0;
+
+    /// <summary>Changes every time a settled deal moves the hourly trade counts or the daily outflow totals (the saver skips an unchanged desk).</summary>
+    internal long CounterVersion
+    {
+        get
+        {
+            lock (_gate) return _counterVersion;
+        }
+    }
+
+    /// <summary>
+    /// The hourly trade counts and the daily outflow totals as rows, what the saver writes and <see cref="ImportCounters"/> reads back: the unexpired stamps of the sliding
+    /// hour and the totals of the current UTC day only (older ones no longer count against any limit).
+    /// </summary>
+    internal IReadOnlyList<PlayerbotTradeCounter> ExportCounters()
+    {
+        long now = _clock();
+        long day = now / DayMs;
+        List<PlayerbotTradeCounter> rows = [];
+        lock (_gate)
+        {
+            _botTrades.Export(now, (key, stamp, amount) => rows.Add(new PlayerbotTradeCounter(PlayerbotTradeCounterKind.BotTrades, key, 0, stamp, amount)));
+            _accountTrades.Export(now, (key, stamp, amount) => rows.Add(new PlayerbotTradeCounter(PlayerbotTradeCounterKind.AccountTrades, Guid.Empty, (ulong)key, stamp, amount)));
+            _botOutflow.Export(day, (key, amount) => rows.Add(new PlayerbotTradeCounter(PlayerbotTradeCounterKind.BotOutflow, key, 0, day, amount)));
+            _accountOutflow.Export(day, (key, amount) => rows.Add(new PlayerbotTradeCounter(PlayerbotTradeCounterKind.AccountOutflow, Guid.Empty, (ulong)key, day, amount)));
+            if (_serverDay == day && _serverOutflow > 0) rows.Add(new PlayerbotTradeCounter(PlayerbotTradeCounterKind.ServerOutflow, Guid.Empty, 0, day, _serverOutflow));
+        }
+
+        return rows;
+    }
+
+    /// <summary>Replace the counters with stored rows (startup or a feature handover; loading twice is harmless): expired stamps, other days and the rows of the gift book's kind are skipped. Does not move <see cref="CounterVersion"/>.</summary>
+    internal void ImportCounters(IEnumerable<PlayerbotTradeCounter> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        long now = _clock();
+        long day = now / DayMs;
+        lock (_gate)
+        {
+            _botTrades.Clear();
+            _accountTrades.Clear();
+            _botOutflow.Clear();
+            _accountOutflow.Clear();
+            _serverDay = -1;
+            _serverOutflow = 0;
+            foreach (PlayerbotTradeCounter row in rows.Where(row => row is not null && row.Amount > 0).OrderBy(row => row.Stamp))
+                switch (row.Kind)
+                {
+                    case PlayerbotTradeCounterKind.BotTrades when now - row.Stamp < HourMs:
+                        _botTrades.Import(row.BotId, row.Stamp, row.Amount);
+                        break;
+                    case PlayerbotTradeCounterKind.AccountTrades when now - row.Stamp < HourMs:
+                        _accountTrades.Import((int)row.Key, row.Stamp, row.Amount);
+                        break;
+                    case PlayerbotTradeCounterKind.BotOutflow when row.Stamp == day:
+                        _botOutflow.Add(row.BotId, day, row.Amount);
+                        break;
+                    case PlayerbotTradeCounterKind.AccountOutflow when row.Stamp == day:
+                        _accountOutflow.Add((int)row.Key, day, row.Amount);
+                        break;
+                    case PlayerbotTradeCounterKind.ServerOutflow when row.Stamp == day:
+                        _serverDay = day;
+                        _serverOutflow += row.Amount;
+                        break;
+                }
+        }
+    }
 
     /// <summary>Deals held (any state). Reads without the lock: the fast path of the party AI's intake costs nothing when there are none.</summary>
     internal int Count => Volatile.Read(ref _count);
@@ -604,7 +684,22 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         if (deal.Role == PlayerbotDealRole.Seller)
         {
             List<Item>? plan = PlanStacks(bot, deal.Entry, deal.Count);
-            if (plan is null) return FailDeal(deal, cancel: true, say: true, blame: false, now); // the bot cannot make the count: no blame on the partner
+            if (plan is null)
+            {
+                // The stacks cannot sum to the count: split the shortfall off a larger stack (only while the bot has put nothing in), else the bot cannot make the count: no blame on the partner.
+                if (botGoods.Count == 0 && mine.Gold == 0 && deal.Splits < MaxSplits)
+                {
+                    if (deal.LastSplitMs != 0 && now - deal.LastSplitMs < SplitGapMs) return default;
+                    if (PlayerbotTradeGifts.PlanSplit(bot, deal.Entry, deal.Count) is { } split)
+                    {
+                        deal.Splits++;
+                        deal.LastSplitMs = now;
+                        return new PlayerbotDealStep(PlayerbotDealStepKind.Split, deal.Partner, Bag: split.SrcBag, Slot: split.SrcSlot, DstBag: split.DstBag, DstSlot: split.DstSlot, Amount: split.Amount);
+                    }
+                }
+
+                return FailDeal(deal, cancel: true, say: true, blame: false, now);
+            }
             if (mine.Gold > 0)
             {
                 deal.LastPutMs = now;
@@ -670,8 +765,8 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
     }
 
     /// <summary>
-    /// The stacks a seller puts in: one stack of exactly <paramref name="count"/>, else the largest stacks first (a stack larger than what remains is skipped; the desk
-    /// never splits one) within the six traded slots; null when the count cannot be made exactly. Only tradeable bag items count (not soulbound, equipped or banked).
+    /// The stacks a seller puts in: one stack of exactly <paramref name="count"/>, else the largest stacks first (a stack larger than what remains is skipped; the plan
+    /// never splits one; <see cref="PlayerbotTradeGifts.PlanSplit"/> asks the split) within the six traded slots; null when the count cannot be made exactly. Only tradeable bag items count (not soulbound, equipped or banked).
     /// </summary>
     internal static List<Item>? PlanStacks(Player bot, uint entry, uint count)
     {
@@ -727,6 +822,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
                 recorder.NoteById(deal.BotId, deal.BotGuid, deal.Partner, PlayerbotSocialEvent.FairDeal, deal.CrossFaction);
                 _botTrades.Add(deal.BotId, now);
                 _accountTrades.Add(deal.PartnerAccount, now);
+                _counterVersion++;
                 if (deal.OutflowCopper > 0)
                 {
                     long day = now / DayMs;
@@ -950,6 +1046,8 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         public long LastAcceptMs;
         public long GoneSinceMs;
         public int Resets;
+        public int Splits;
+        public long LastSplitMs;
     }
 
     /// <summary>Counts events per key inside a sliding hour (bounded: trimmed past <see cref="MapCap"/> keys).</summary>
@@ -970,7 +1068,25 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
             return queue.Count;
         }
 
-        public void Add(TKey key, long now)
+        /// <summary>Calls <paramref name="write"/> once per distinct unexpired stamp of each key (key, stamp, events at that stamp).</summary>
+        public void Export(long now, Action<TKey, long, long> write)
+        {
+            foreach ((TKey key, Queue<long> queue) in _map)
+                foreach (IGrouping<long, long> group in queue.Where(stamp => now - stamp < HourMs).GroupBy(stamp => stamp))
+                    write(key, group.Key, group.Count());
+        }
+
+        public void Clear() => _map.Clear();
+
+        /// <summary>Adds <paramref name="amount"/> events at <paramref name="stamp"/> (stamps arrive in ascending order).</summary>
+        public void Import(TKey key, long stamp, long amount)
+        {
+            for (long i = 0; i < Math.Min(amount, 256); i++) AddAt(key, stamp, stamp);
+        }
+
+        public void Add(TKey key, long now) => AddAt(key, now, now);
+
+        private void AddAt(TKey key, long stamp, long now)
         {
             if (!_map.TryGetValue(key, out Queue<long>? queue))
             {
@@ -978,7 +1094,7 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
                 _map[key] = queue = new Queue<long>();
             }
 
-            queue.Enqueue(now);
+            queue.Enqueue(stamp);
             while (queue.Count > 256) queue.Dequeue();
         }
 
@@ -1005,6 +1121,15 @@ internal sealed class PlayerbotTradeDesk(PlayerbotOptions options, PlayerbotSoci
         private readonly Dictionary<TKey, (long Day, long Amount)> _map = [];
 
         public long Get(TKey key, long day) => _map.TryGetValue(key, out (long Day, long Amount) entry) && entry.Day == day ? entry.Amount : 0;
+
+        public void Clear() => _map.Clear();
+
+        /// <summary>Calls <paramref name="write"/> once per key whose total is for <paramref name="day"/>.</summary>
+        public void Export(long day, Action<TKey, long> write)
+        {
+            foreach ((TKey key, (long Day, long Amount) entry) in _map)
+                if (entry.Day == day && entry.Amount > 0) write(key, entry.Amount);
+        }
 
         public void Add(TKey key, long day, long amount)
         {

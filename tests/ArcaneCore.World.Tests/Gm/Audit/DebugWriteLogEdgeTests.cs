@@ -99,7 +99,7 @@ public sealed class DebugWriteLogEdgeTests
     public void ConcurrentWriters_LoseNoCount_AndNeverExceedTheCapacity()
     {
         var log = new DebugWriteLog(100);
-        Parallel.For(0, 8, w =>
+        System.Threading.Tasks.Parallel.For(0, 8, w =>
         {
             for (int i = 0; i < 500; i++) log.Record(w, "G" + w, "cmd", "t", "f", i.ToString(), "", DebugWriteScope.Live);
         });

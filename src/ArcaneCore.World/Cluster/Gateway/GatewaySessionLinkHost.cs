@@ -207,6 +207,14 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
             _logger,
             ct);
 
+    /// <summary>Answers a failed handshake step with a plain HelloAck refusal (the peer is not authenticated, so nothing secret goes in it) and closes the link.</summary>
+    private async Task RefuseLinkAsync(Link link, string reason)
+    {
+        _logger.LogWarning("Gateway link from {Remote} refused: {Reason}", link.Remote, reason);
+        link.Channel.TryEnqueue(LoopbackGatewayWorkerHost.BuildHelloAckFrame(false, reason, _workerManifest.OwnedMaps, _workerManifest.AllowInstanceMaps));
+        await link.Channel.FlushAndCloseAsync(RejectFlushBound).ConfigureAwait(false);
+    }
+
     private async Task RunLinkAsync(Link link, CancellationToken ct)
     {
         byte[] nonce = RandomNumberGenerator.GetBytes(GatewaySessionWire.NonceBytes);
@@ -238,8 +246,37 @@ public sealed class GatewaySessionLinkHost : IAsyncDisposable
                     switch (type)
                     {
                         case GatewayWorkerFrameType.LinkProof:
-                            byte[] proof = GatewaySessionWire.DecodeNonceFrame(body.Span, "LinkProof");
-                            proven = CryptographicOperations.FixedTimeEquals(proof, GatewaySessionWire.ComputeProof(_linkSecret, nonce));
+                            if (proven)
+                            {
+                                throw new InvalidDataException("a second LinkProof frame");
+                            }
+
+                            if (!LinkAuth.TrySplitClientProof(body.Span, out byte[] proof, out byte[] connectorNonce, out bool legacyProof))
+                            {
+                                if (legacyProof)
+                                {
+                                    // A pre-v3 gateway sends the bare 32-byte proof: it can neither verify this worker nor MAC its frames.
+                                    await RefuseLinkAsync(link, "gateway link protocol is older than this worker (v3 adds mutual proof and frame MACs); run the same build on both ends").ConfigureAwait(false);
+                                    return;
+                                }
+
+                                throw new InvalidDataException($"LinkProof frame of {body.Length} B (expected {LinkAuth.ClientProofBodyBytes})");
+                            }
+
+                            if (!CryptographicOperations.FixedTimeEquals(proof, GatewaySessionWire.ComputeProof(_linkSecret, nonce)))
+                            {
+                                await RefuseLinkAsync(link, "link proof missing or wrong (Cluster:Worker:LinkSecret)").ConfigureAwait(false);
+                                return;
+                            }
+
+                            proven = true;
+                            // The worker proves itself back (bound to both nonces), then both directions switch to MAC-protected frames:
+                            // the proof frame is the last one sent in the clear, and everything the gateway sends from now on must carry a tag.
+                            LinkKeys keys = LinkAuth.DeriveKeys(_linkSecret, nonce, connectorNonce);
+                            link.Channel.TryEnqueue(GatewaySessionWire.EncodeNonceFrame(
+                                GatewayWorkerFrameType.LinkProof, LinkAuth.ComputeServerProof(_linkSecret, nonce, connectorNonce)));
+                            link.Channel.EnqueueSendKey(keys.ServerToClient);
+                            link.Channel.ActivateReceiveKey(keys.ClientToServer);
                             continue;
                         case GatewayWorkerFrameType.HelloRegister:
                             ClusterNodeManifest peer;

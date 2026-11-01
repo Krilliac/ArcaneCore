@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ArcaneCore.World.Cluster.Supervision;
+using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Supervision;
 

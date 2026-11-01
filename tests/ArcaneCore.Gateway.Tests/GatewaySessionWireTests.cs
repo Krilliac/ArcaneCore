@@ -183,12 +183,12 @@ public sealed class GatewaySessionWireTests
     }
 
     [Fact]
-    public void GatewayLinkContractVersion_RefusesAVersion1Peer()
+    public void GatewayLinkContractVersion_RefusesAVersion1Peer_AndTheV2PeerWithoutLinkAuth()
     {
         var worker = GatewayLinkManifest.Create(ArcaneCore.Kernel.Cluster.ClusterRole.Worker, "worker", Guid.NewGuid(), 1, "dev", 1, 1);
         var current = GatewayLinkManifest.Create(ArcaneCore.Kernel.Cluster.ClusterRole.Gateway, "gw", Guid.NewGuid(), 1, "dev", 1, 1);
         var old = current with { ContractVersion = 1 };
-        Assert.Equal(2, GatewayLinkManifest.ContractVersion);
+        Assert.Equal(3, GatewayLinkManifest.ContractVersion);
         Assert.Equal(GatewayLinkManifest.ContractVersion, current.ContractVersion);
         Assert.True(worker.TryAdmit(current, out _));
         Assert.False(worker.TryAdmit(old, out string? reason));
