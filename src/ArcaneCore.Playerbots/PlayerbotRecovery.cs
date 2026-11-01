@@ -717,8 +717,10 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
         bool enemyPlayersCamp = false;
         if (options.Recovery.PvpCampWait && ghost && atCorpse && wait <= 0 && !stalled && !_preferSpiritHealer && corpse is { } campBody)
         {
-            if (JudgePvpCampAtBody(player, campBody, now) == PlayerbotPvpCampVerdict.Wait) enemyPlayersCamp = true;
-            else if (PvpCampGaveUp)
+            // The fallback is taken on this think's GiveUp verdict only (spec section 3): a Clear after an earlier give-up reclaims.
+            PlayerbotPvpCampVerdict campVerdict = JudgePvpCampAtBody(player, campBody, now);
+            if (campVerdict == PlayerbotPvpCampVerdict.Wait) enemyPlayersCamp = true;
+            else if (campVerdict == PlayerbotPvpCampVerdict.GiveUp)
             {
                 if (BattlegroundBodyRun)
                 {
@@ -728,7 +730,8 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
                     return false;
                 }
 
-                _preferSpiritHealer = true;
+                // Not once the fallback went back to this body (ResumeCorpseRun): the healer could not be had, as for the unsafe body above.
+                if (_corpseRunResumedFor != campBody.Guid && HealerOutcomeKnown(player, campBody)) _preferSpiritHealer = true;
             }
         }
 
