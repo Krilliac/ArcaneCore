@@ -156,5 +156,5 @@ internal sealed class CharmCastCheck(CharmService service) : ISpellCastCheck
     }
 
     /// <summary>vmangos Pet::Unsummon(PET_SAVE_NOT_IN_SLOT) of the caster's pet before the charm (SPELL_ATTR_EX_DISMISS_PET_FIRST).</summary>
-    private void DismissPet(Creature pet) => service.Summons?.Unsummon(pet);
+    private void DismissPet(Creature pet) => service.Summons?.Unsummon(pet, PetUnsummonReason.Dismissed);
 }

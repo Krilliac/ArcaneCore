@@ -382,6 +382,8 @@ internal sealed class PlayerbotCombatSpells(WorldSession session)
     private void CommandCompanionPet(Player player, SpellFeature feature, PlayerbotClassRotation rotation, RotationState view, RotationAction? chosen)
     {
         if (rotation.PetCompanion(view, chosen) is { } pet) Execute(player, feature, pet);
+        // Growl, Claw, Firebolt: a pet's spells start with autocast off. After the command, so the action budget goes to the command first.
+        PlayerbotPetControl.EnableHarmfulAutocast(session, player, feature.System);
     }
 
     /// <summary>Where the bot fights from: melee distance, or a caster's or hunter's range (yards).</summary>

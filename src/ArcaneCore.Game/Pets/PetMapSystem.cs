@@ -327,7 +327,7 @@ public sealed class PetMapSystem : IMapUpdater
         // the new map (PetTeleportFollow, vmangos UnsummonPetTemporaryIfAny); guardians and mini pets stay gone.
         foreach (Creature creature in SummonsOf(player).ToArray())
         {
-            _service?.Unsummon(creature);
+            _service?.Unsummon(creature, PetUnsummonReason.OwnerLeft);
         }
     }
 
@@ -375,7 +375,7 @@ public sealed class PetMapSystem : IMapUpdater
                 // TEMPSUMMON_TIMED_COMBAT_OR_DEAD_DESPAWN: unsummoned once out of combat; a dead one is left to its corpse.
                 if (wild.IsAlive && !wild.Combat.IsInCombat)
                 {
-                    _service?.Unsummon(wild);
+                    _service?.Unsummon(wild, PetUnsummonReason.Expired);
                 }
 
                 return;
@@ -418,7 +418,7 @@ public sealed class PetMapSystem : IMapUpdater
 
         if (links.Kind == SummonKind.Pet && owner.PetGuid != pet.Guid)
         {
-            _service?.Unsummon(pet); // replaced by another pet: not the owner's current one, so not saved
+            _service?.Unsummon(pet, PetUnsummonReason.Replaced); // replaced by another pet: not the owner's current one, so not saved
             return;
         }
 
@@ -433,7 +433,7 @@ public sealed class PetMapSystem : IMapUpdater
             }
             else
             {
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, PetUnsummonReason.OwnerDied);
             }
 
             return;
@@ -449,7 +449,7 @@ public sealed class PetMapSystem : IMapUpdater
                 {
                     _service?.QueueCurrentPetSave(player);
                 }
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, PetUnsummonReason.CorpseDecayed);
             }
 
             return;
@@ -462,7 +462,7 @@ public sealed class PetMapSystem : IMapUpdater
             {
                 _service?.QueueCurrentPetSave(player);
             }
-            _service?.Unsummon(pet);
+            _service?.Unsummon(pet, PetUnsummonReason.OwnerDied);
             return;
         }
 
@@ -481,7 +481,7 @@ public sealed class PetMapSystem : IMapUpdater
             }
             else
             {
-                _service?.Unsummon(pet);
+                _service?.Unsummon(pet, PetUnsummonReason.Expired);
             }
         }
     }

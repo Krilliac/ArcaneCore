@@ -80,7 +80,7 @@ public sealed partial class SummonService : ISpellSummonSink
                 && (!DetachedPersistenceConfigured || DetachedPersistenceSupported))
             {
                 QueueDetachedPetSave(player);
-                Unsummon(pet);
+                Unsummon(pet, PetUnsummonReason.Dismissed);
             }
         });
     }
@@ -124,12 +124,24 @@ public sealed partial class SummonService : ISpellSummonSink
     /// Remove a summon from the world: the owner's pet link for a pet (vmangos Pet::Unsummon),
     /// then the creature itself.
     /// </summary>
-    public void Unsummon(Creature creature)
+    public void Unsummon(Creature creature) => Unsummon(creature, PetUnsummonReason.Unspecified);
+
+    /// <summary>
+    /// <see cref="Unsummon(Creature)"/> with the cause. The departure is logged at Debug (<see cref="PetUnsummonReasons.LevelOf"/>), except a pet that
+    /// ran away, so the routine unsummons of a busy world stay out of the normal log.
+    /// </summary>
+    public void Unsummon(Creature creature, PetUnsummonReason reason)
     {
         ArgumentNullException.ThrowIfNull(creature);
         if (creature.Summon is not { } links)
         {
             return;
+        }
+
+        LogLevel level = PetUnsummonReasons.LevelOf(reason);
+        if (_logger.IsEnabled(level))
+        {
+            _logger.Log(level, "unsummon {Kind} {Pet} (owner {Owner}): {Reason}", links.Kind, creature.Guid, creature.OwnerGuid, reason);
         }
 
         Unit? owner = creature.GetOwner();
