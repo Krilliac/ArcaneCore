@@ -83,7 +83,14 @@ public static class WorkerTransferHosting
             var target = new WorkerTransferTarget(
                 nodeId, world, new CharacterHooksShadowLoader(bundle => AdoptedSession(services, bundle)), new WorldSessionTransferEntry(), admission,
                 MaxTargetReservations, host.Incarnation, loggers?.CreateLogger<WorkerTransferTarget>(),
-                instances: AllocateInstance(services));
+                instances: AllocateInstance(services),
+                sessionReady: bundle => AdoptedSession(services, bundle) is not null);
+            // Section 4.4: stage 3 installs before stage 4 opens the client's session here, so the shadow load starts when that session opens.
+            if (services.GetService<GatewayWorkerEndpoint>()?.Acceptor is { } sessionAcceptor)
+            {
+                sessionAcceptor.SessionOpened += opened => target.OnSessionOpened(opened.AccountId);
+            }
+
             transfer = new WorkerControlTransfer(transferJournal, source, target, () => admission.IsOpen, () => MaxTargetReservations - target.ReservedCount);
         }
 
