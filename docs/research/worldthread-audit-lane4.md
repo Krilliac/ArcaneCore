@@ -10,10 +10,11 @@ every leg length twice per call (one pass for the total, one to find the leg), f
   `SplineLengths` object by `Interlocked.CompareExchange`. `Path` and the start point are init-only, so two threads that
   race to build it (the ungated wander pass and the gated stages both read splines) compute the same values and either
   result is valid. No cursor state is mutated, so the single-writer-per-map invariant is untouched.
-- The leg is found by binary search over the cumulative lengths: the first leg whose cumulative length reaches the target,
-  otherwise the last, which is the pick the old in-order walk made.
+- The leg is still found by the in-order walk that subtracts one cached leg length at a time (no `Distance` recomputation).
+  A binary search over cumulative lengths was tried first and rejected: float rounding in the old running subtraction
+  can pick the trailing zero-length leg where the search picks the one before, changing heading and `RemainingPoints`.
 - `RemainingPoints` copies the tail into a right-sized array instead of `Skip` + collection expression (no LINQ enumerator).
-- No packet bytes change: positions, leg index and blended heading are the same up to float rounding (< 1e-4).
+- No packet bytes change: positions, leg index and blended heading are identical to the uncached code (same float operations in the same order).
 
 ## Tests
 

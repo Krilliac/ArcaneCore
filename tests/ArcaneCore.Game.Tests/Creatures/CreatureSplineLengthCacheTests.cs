@@ -14,7 +14,7 @@ public sealed class CreatureSplineLengthCacheTests
     /// <summary>A path that counts element reads, to show a second locate no longer walks every leg.</summary>
     private sealed class CountingPath(Vector3[] points) : IReadOnlyList<Vector3>
     {
-        public int Reads { get; private set; }
+        public int Reads { get; set; }
 
         public int Count => points.Length;
 

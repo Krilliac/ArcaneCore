@@ -787,26 +787,18 @@ public sealed record CreatureSpline(
         SplineLengths lengths = LengthsOf(start, points);
         float target = lengths.Cumulative[^1] * t;
 
-        // First segment whose cumulative length reaches the target, else the last (same pick as walking the legs in order).
+        // Walk the cached leg lengths in order, subtracting one leg at a time exactly as the uncached code did, so the float
+        // remainder (and therefore the leg picked at leg boundaries and zero-length trailing legs) is bit-identical.
         int lo = 0;
-        int hi = points.Count - 1;
-        while (lo < hi)
+        while (lo < points.Count - 1 && target > lengths.Segment[lo])
         {
-            int mid = (lo + hi) >> 1;
-            if (target <= lengths.Cumulative[mid])
-            {
-                hi = mid;
-            }
-            else
-            {
-                lo = mid + 1;
-            }
+            target -= lengths.Segment[lo];
+            lo++;
         }
 
         Vector3 previous = lo == 0 ? start : points[lo - 1];
         float segment = lengths.Segment[lo];
-        float consumed = lo == 0 ? 0f : lengths.Cumulative[lo - 1];
-        float f = segment <= 0 ? 1f : Math.Clamp((target - consumed) / segment, 0f, 1f);
+        float f = segment <= 0 ? 1f : Math.Clamp(target / segment, 0f, 1f);
         float segHeading = HeadingBetween(previous, points[lo], fallbackOrientation);
         float blended = BlendCornerHeading(start, points, lo, segment, f, segHeading);
         return (Vector3.Lerp(previous, points[lo], f), lo, blended);
@@ -820,6 +812,7 @@ public sealed record CreatureSpline(
         public float[] Cumulative { get; } = cumulative;
     }
 
+    // Not part of the spline's value: Path and Start are init-only, so do not use `with` to change them after a locate (the copy would keep this cache).
     private SplineLengths? _lengths;
 
     // Splines are read from the ungated wander pass and from gated stages: two threads may both build the cache from the same
