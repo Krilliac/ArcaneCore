@@ -1038,6 +1038,22 @@ public sealed partial class WorldSession : IPlayerSession
             return false;
         }
 
+        // .server plimit: a realm lock above the account's security level, or a full world for a plain player, is refused before the
+        // account data is read (vmangos WorldSocket.cpp:349-358 AUTH_UNAVAILABLE; World.cpp:316 queue, which ArcaneCore answers the same way).
+        // A reconnect of an account that already has a session replaces it, so that account is not counted against the limit.
+        // Managed sessions (playerbots, console) are not clients waiting for a slot, so they are left out: ArcaneCore has no login queue,
+        // and counting bots would refuse every real player once enough bots are online.
+        if (Services.GetService<WorldLoginAdmission>() is { } admission)
+        {
+            int others = admission.AmountLimit > 0 ? WorldLoginAdmission.CountOtherSessions(_registry.Sessions, stored.Id) : 0;
+            if (admission.Check(stored.Security, others) is { } refusal)
+            {
+                _logger.LogInformation("[{Endpoint}] refused world login for '{Account}': the realm is locked or full (limit {Limit})", RemoteEndpoint, account, admission.Limit);
+                SendAuthResponse(refusal);
+                return false;
+            }
+        }
+
         // An earlier session of the account may hold values not yet written (throttled or queued): take them before the read and lay
         // them over the loaded settings, so this session serves the newest blob. Nothing here waits for the account data queue.
         AccountDataFeature? accountData = Services.GetService<AccountDataFeature>() is { IsAttached: true } attached ? attached : null;
