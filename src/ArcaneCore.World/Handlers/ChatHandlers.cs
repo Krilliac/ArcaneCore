@@ -403,6 +403,13 @@ public sealed class ChatHandlers : IOpcodeHandlerGroup
     /// </summary>
     private static bool OfferAndForward(WorldSession session, Player player, ChatFeature chat, ClientChatMessage message)
     {
+        if (message.Type == ChatType.Channel && chat.Cluster is { } holderView && holderView.IsSpeakerBarred(message.Target, player.Guid.Value))
+        {
+            // Muted (or banned) at the holder: not heard locally either, with the retail muted notice (the router refuses the cross-worker leg).
+            session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.Muted, message.Target));
+            return true;
+        }
+
         if (!OfferToFeatures(session, player, message))
         {
             return false;

@@ -377,11 +377,27 @@ public sealed class ClusterChatRouting : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(frame);
         ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
         long generation = _registeredGeneration(sender.Guid);
-        Enqueue(() => RouteFrame(SocialRouteChannel.CustomChannel, sender, generation, frame, channelName: channelName));
+        Enqueue(() =>
+        {
+            RouteFrame(SocialRouteChannel.CustomChannel, sender, generation, frame, channelName: channelName);
+            Dictionary<string, ChannelModerationState?>? passStates = null;
+            RefreshChannelState(channelName, ref passStates); // keeps IsSpeakerBarred current for the speaker's next local line
+        });
     }
 
-    /// <summary>The character joined <paramref name="channelName"/> on this worker: subscribe it at the router so other workers' lines reach it.</summary>
-    public void JoinChannel(ClusterChatSender member, string channelName)
+    /// <summary>
+    /// True when the holder's moderation state, as last read for <paramref name="channelName"/>, bans <paramref name="characterGuid"/>. Never blocks (same cache as
+    /// <see cref="IsSpeakerBarred"/>, refreshed by every join this worker routes and every delivery the pump handles), so the world thread may call it before a local join.
+    /// </summary>
+    public bool IsBannedAtHolder(string channelName, ulong characterGuid)
+        => !string.IsNullOrEmpty(channelName) && _moderation.TryGetValue(channelName, out ChannelModerationState? state) && state.Banned.Contains(characterGuid);
+
+    /// <summary>
+    /// The character joined <paramref name="channelName"/> on this worker: subscribe it at the router so other workers' lines reach it. The holder's moderation state is read
+    /// afterwards and cached. When the holder refused because the character is banned there, <paramref name="onBanned"/> runs on the sender task (not the world thread), so the
+    /// caller can undo the local join that was made before the holder's answer was known.
+    /// </summary>
+    public void JoinChannel(ClusterChatSender member, string channelName, Action? onBanned = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(channelName);
         long generation = _registeredGeneration(member.Guid);
@@ -390,7 +406,16 @@ public sealed class ClusterChatRouting : IAsyncDisposable
             return;
         }
 
-        Enqueue(() => _router.JoinChannel(channelName, member.Guid, generation));
+        Enqueue(() =>
+        {
+            bool joined = _router.JoinChannel(channelName, member.Guid, generation);
+            Dictionary<string, ChannelModerationState?>? passStates = null;
+            ChannelModerationState? state = RefreshChannelState(channelName, ref passStates);
+            if (!joined && onBanned is not null && state is not null && state.Banned.Contains(member.Guid))
+            {
+                onBanned();
+            }
+        });
     }
 
     /// <summary>The character left <paramref name="channelName"/> on this worker.</summary>

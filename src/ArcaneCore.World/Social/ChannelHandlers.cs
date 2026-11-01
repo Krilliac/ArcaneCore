@@ -53,11 +53,26 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
         var reader = new PacketReader(payload);
         string name = reader.ReadCString();
         string password = reader.ReadCString();
-        Channels(session).Join(player, name, password);
-        if (ClusterOf(session) is { } cluster
-            && Channels(session).Find(player.Team, name) is { } channel && channel.IsOn(player.Guid))
+        ClusterChatRouting? cluster = ClusterOf(session);
+        if (cluster is not null && cluster.IsBannedAtHolder(name, player.Guid.Value))
         {
-            cluster.JoinChannel(SenderOf(player), channel.Name);
+            // Moderation lives at the holder: a character banned there is refused from every worker (vmangos Channel::Join, the banned notice).
+            session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.Banned, name));
+            return;
+        }
+
+        Channels(session).Join(player, name, password);
+        if (cluster is not null && Channels(session).Find(player.Team, name) is { } channel && channel.IsOn(player.Guid))
+        {
+            // When the holder turns out to have the character banned (its state was not cached yet), the local join is undone on the world thread.
+            cluster.JoinChannel(SenderOf(player), channel.Name, onBanned: () => session.World.Post(() =>
+            {
+                if (channel.IsOn(player.Guid))
+                {
+                    session.Send(WorldOpcode.SmsgChannelNotify, ChannelPackets.BuildNotify(ChatNotify.Banned, channel.Name));
+                    Channels(session).Leave(player, channel.Name);
+                }
+            }));
             if (!channel.IsConstant && channel.Owner == player.Guid)
             {
                 // The first joiner of a custom channel owns it locally; the holder grants the claim only while no other worker's member owns it already.
@@ -137,7 +152,9 @@ public sealed class ChannelHandlers : IOpcodeHandlerGroup
             return;
         }
 
-        // The holder decides: a local owner or moderator that holds no right there removes the target from this worker's channel object only.
+        // The target is gone from this worker's channel object, so its router subscription goes too (mirrors local membership whatever the holder decides about the actor's right);
+        // the Kick or Ban then gives the realm-wide effect when the actor holds the right there.
+        cluster.LeaveChannel(SenderOf(target), channel.Name);
         cluster.ModerateChannel(channel.Name, ban ? ChannelModerationAction.Ban : ChannelModerationAction.Kick, player.Guid.Value, target.Guid.Value);
 
         ClaimLocalOwner(cluster, channel);

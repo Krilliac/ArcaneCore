@@ -340,4 +340,107 @@ public sealed class CrossWorkerChatGameplayTests : IAsyncLifetime
         await _routingB.FlushAsync();
         Assert.Equal(0, _routingB.PumpOnce());
     }
+
+    private async Task<bool> IsOnLocalChannelAsync(WorldTestHost host, string name, string channel)
+        => await host.PlayerStateAsync(name, p => host.WorldServices.GetRequiredService<SocialFeature>().Context.Channels.Find(p.Team, channel)?.IsOn(p.Guid) ?? false);
+
+    private async Task JoinClubAsync(WorldTestHost host, ClusterChatRouting routing, WorldTestClient client)
+    {
+        await client.SendAsync(WorldOpcode.CmsgJoinChannel, [.. CString("Club"), .. CString(string.Empty)]);
+        await ReadNotifyAsync(client, ChatNotify.YouJoined);
+        await host.OnWorldAsync(() => { });
+        await routing.FlushAsync();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ChannelKickOrBan_ByAMemberWithoutTheRightAtTheHolder_StillUnsubscribesTheTargetThere(bool ban)
+    {
+        // Carol (worker B) owns Club at the holder; Alice owns it only on worker A's local object. Alice's kick or ban of Bob removes him locally but the holder refuses
+        // the action (Alice holds no right there), so only the handler's LeaveChannel can take Bob's router subscription away.
+        WorldTestClient alice = await EnterAsync(_hostA, "ALICE", "Alice");
+        WorldTestClient bob = await EnterAsync(_hostA, "BOB", "Bob");
+        await SkipGuidsOnBAsync(2);
+        WorldTestClient carol = await EnterAsync(_hostB, "CAROL", "Carol");
+        await PublishAsync(_hostA, WorkerA, "Alice");
+        await PublishAsync(_hostA, WorkerA, "Bob");
+        await PublishAsync(_hostB, WorkerB, "Carol");
+        await JoinClubAsync(_hostB, _routingB, carol);
+        await JoinClubAsync(_hostA, _routingA, alice);
+        await JoinClubAsync(_hostA, _routingA, bob);
+
+        await alice.SendAsync(ban ? WorldOpcode.CmsgChannelBan : WorldOpcode.CmsgChannelKick, [.. CString("Club"), .. CString("Bob")]);
+        await _hostA.OnWorldAsync(() => { });
+        await _routingA.FlushAsync();
+        Assert.False(await IsOnLocalChannelAsync(_hostA, "Bob", "Club"));
+
+        await carol.SendChatAsync(ChatType.Channel, Language.Common, "anyone?", "Club");
+        await _hostB.OnWorldAsync(() => { });
+        await _routingB.FlushAsync();
+
+        Assert.Equal(1, _routingA.PumpOnce()); // Alice only; Bob's router subscription is gone
+    }
+
+    [Fact]
+    public async Task ChannelJoin_OfACharacterBannedAtTheHolder_IsRefusedLocally_ColdAndWarm()
+    {
+        WorldTestClient dave = await EnterAsync(_hostA, "DAVE", "Dave");
+        await SkipGuidsOnBAsync(1);
+        WorldTestClient carol = await EnterAsync(_hostB, "CAROL", "Carol");
+        ulong daveGuid = await PublishAsync(_hostA, WorkerA, "Dave");
+        ulong carolGuid = await PublishAsync(_hostB, WorkerB, "Carol");
+        await JoinClubAsync(_hostB, _routingB, carol);
+        Assert.True(_router.ModerateChannel("Club", ChannelModerationAction.Ban, carolGuid, daveGuid));
+        await dave.CollectAsync();
+
+        // Cold: worker A has not read the holder's state, so the join is undone once the holder's refusal arrives.
+        await dave.SendAsync(WorldOpcode.CmsgJoinChannel, [.. CString("Club"), .. CString(string.Empty)]);
+        await ReadNotifyAsync(dave, ChatNotify.Banned);
+        await _hostA.OnWorldAsync(() => { });
+        Assert.False(await IsOnLocalChannelAsync(_hostA, "Dave", "Club"));
+
+        // Warm: the state is cached now, so the join is refused before any local join.
+        await dave.SendAsync(WorldOpcode.CmsgJoinChannel, [.. CString("Club"), .. CString(string.Empty)]);
+        await ReadNotifyAsync(dave, ChatNotify.Banned);
+        await _hostA.OnWorldAsync(() => { });
+        Assert.False(await IsOnLocalChannelAsync(_hostA, "Dave", "Club"));
+        Assert.True(_routingA.IsBannedAtHolder("Club", daveGuid));
+    }
+
+    [Fact]
+    public async Task ChannelSay_OfAHolderMutedSpeaker_IsNotHeardLocallyOrSentOn()
+    {
+        WorldTestClient alice = await EnterAsync(_hostA, "ALICE", "Alice");
+        WorldTestClient bob = await EnterAsync(_hostA, "BOB", "Bob");
+        await SkipGuidsOnBAsync(2);
+        WorldTestClient carol = await EnterAsync(_hostB, "CAROL", "Carol");
+        ulong aliceGuid = await PublishAsync(_hostA, WorkerA, "Alice");
+        ulong bobGuid = await PublishAsync(_hostA, WorkerA, "Bob");
+        ulong carolGuid = await PublishAsync(_hostB, WorkerB, "Carol");
+        await JoinClubAsync(_hostB, _routingB, carol);
+        await JoinClubAsync(_hostA, _routingA, alice);
+        await JoinClubAsync(_hostA, _routingA, bob);
+        Assert.True(_router.ModerateChannel("Club", ChannelModerationAction.Mute, carolGuid, aliceGuid));
+        await alice.CollectAsync();
+        await bob.CollectAsync();
+
+        // Worker A learns the holder's state when it handles a delivery for the channel.
+        await carol.SendChatAsync(ChatType.Channel, Language.Common, "hello", "Club");
+        await _hostB.OnWorldAsync(() => { });
+        await _routingB.FlushAsync();
+        await PumpAsync(_routingA);
+        await bob.ReadUntilAsync(WorldOpcode.SmsgMessagechat);
+        Assert.True(_routingA.IsSpeakerBarred("Club", aliceGuid));
+
+        await alice.SendChatAsync(ChatType.Channel, Language.Common, "let me talk", "Club");
+        await ReadNotifyAsync(alice, ChatNotify.Muted);
+        await _hostA.OnWorldAsync(() => { });
+        await _routingA.FlushAsync();
+        Assert.Equal(0, _routingB.PumpOnce());
+        await bob.SendChatAsync(ChatType.Channel, Language.Common, "ping", "Club");
+        await alice.ReadUntilAsync(WorldOpcode.SmsgMessagechat); // Carol's earlier "hello"
+        byte[] next = await alice.ReadUntilAsync(WorldOpcode.SmsgMessagechat); // Bob's line comes next: Alice's own refused line was never sent
+        Assert.Equal(ChannelPackets.BuildChannelMessage("Club", Language.Common, new ObjectGuid(bobGuid), "ping", ChatTag.None), next);
+    }
 }
