@@ -65,6 +65,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
         public LoopbackGatewayWorkerClient? Client { get; set; }
         public volatile bool IsConnected;
         public long WorkerOwnerEpoch;
+        public volatile string? AnnouncedMaps;
         public long RpcHeartbeats;
         public DateTimeOffset? ConnectedAtUtc;
         public int FailedConnects;
@@ -421,6 +422,7 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
                 cancellationToken: connectCts.Token).ConfigureAwait(false);
 
             node.Client = client;
+            node.AnnouncedMaps = client.AnnouncedOwnedMaps;
             node.IsConnected = true;
             node.ConnectedAtUtc = DateTimeOffset.UtcNow;
             node.FailedConnects = 0;
@@ -503,7 +505,12 @@ public sealed class ClusterNodeBridgeFeature(IServiceProvider services, ILogger<
             activePlayerCount: 0,
             maxInstanceCapacity: maxInstances);
 
-        if (isReady)
+        if (isReady && !string.IsNullOrWhiteSpace(node.AnnouncedMaps))
+        {
+            // The worker said which maps it owns in its HelloAck (Cluster:Worker:OwnedMaps): that list replaces the endpoint spec's.
+            Placement.ApplyAnnouncedOwnership(workerId, node.AnnouncedMaps);
+        }
+        else if (isReady)
         {
             foreach (uint mapId in node.AssignedMaps)
             {

@@ -1,3 +1,4 @@
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Kernel.Cluster.Transfer;
 
 namespace ArcaneCore.World.Cluster.Transfer;
@@ -71,6 +72,60 @@ public sealed class ClusterMapPlacementTable : IClusterMapRouter
         {
             _staticMaps[mapId] = workerId;
         }
+    }
+
+    /// <summary>Highest map id an announced list may name; ids above it in a range are ignored (the client's Map.dbc ids are far below).</summary>
+    public const uint MaxAnnouncedMapId = 65535;
+
+    /// <summary>
+    /// Replaces the static maps of <paramref name="workerId"/> with the list the worker announced in its link handshake (<c>Cluster:Worker:OwnedMaps</c> text such as
+    /// <c>0,1,30-40</c>). Every map the worker held before is released first, so a worker that restarts with a smaller list does not keep stale maps; a map another
+    /// worker holds moves to this one (the announcement is the newest word). An empty or malformed list names no maps (an empty list means the worker owns every map,
+    /// which is not a static assignment) and only releases. Returns the number of maps assigned.
+    /// </summary>
+    public int ApplyAnnouncedOwnership(WorkerNodeId workerId, string? ownedMaps)
+    {
+        if (workerId.IsEmpty)
+            throw new ArgumentException("WorkerId must not be empty.", nameof(workerId));
+
+        bool parsed = MapOwnership.TryParseRanges(ownedMaps, out IReadOnlyList<MapOwnership.Range> ranges, out _);
+        lock (_sync)
+        {
+            ReleaseStaticMapsLocked(workerId);
+            if (!parsed)
+                return 0;
+
+            int assigned = 0;
+            foreach (MapOwnership.Range range in ranges)
+            {
+                uint last = Math.Min(range.Last, MaxAnnouncedMapId);
+                for (uint mapId = range.First; mapId <= last; mapId++)
+                {
+                    _staticMaps[mapId] = workerId;
+                    assigned++;
+                }
+            }
+
+            return assigned;
+        }
+    }
+
+    /// <summary>Releases every static map held by <paramref name="workerId"/>; returns how many were released.</summary>
+    public int ReleaseStaticMaps(WorkerNodeId workerId)
+    {
+        lock (_sync)
+        {
+            return ReleaseStaticMapsLocked(workerId);
+        }
+    }
+
+    private int ReleaseStaticMapsLocked(WorkerNodeId workerId)
+    {
+        List<uint> held = [.. _staticMaps.Where(kv => kv.Value == workerId).Select(kv => kv.Key)];
+        foreach (uint mapId in held)
+            _staticMaps.Remove(mapId);
+
+        return held.Count;
     }
 
     /// <summary>Updates worker readiness without altering capacity counters.</summary>
