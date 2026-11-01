@@ -439,7 +439,24 @@ internal sealed class SpellSweepRunner
             return;
         }
 
+        if (CreatureCasterAuras.Contains(spell.Id))
+        {
+            // The aura's tick ends it when its caster is not a creature (the mount it leashes); the sweep casts from a player.
+            Checked('b', "not-run:creature-caster-aura");
+            return;
+        }
+
         SpellAuraHolder holder = holders[0];
+
+        // A crowd control longer than 10 s (Polymorph, Hibernate, Shackle Undead, Freezing Trap, stuns) rolls a random break against a creature
+        // target every 5 s (vmangos CalculateHeartBeat / SpellAuraHolder::Update, SpellAuras.cpp:7252-7295). That break is the retail rule, not a
+        // lifetime bug, and it would read as removed-early on the seeds it fires on, so the sweep takes the roll away for this check.
+        foreach (SpellAuraHolder rolled in holders)
+        {
+            rolled.HeartbeatRandValue = 0f;
+            rolled.PveHeartbeatTimer = -1;
+        }
+
         int baseMs = spell.Duration.Base;
         int maxMs = spell.Duration.Maximum;
         if (spell.Duration == default)
@@ -494,13 +511,16 @@ internal sealed class SpellSweepRunner
         }
     }
 
+    /// <summary>Frostwolf Aura DND 21827 and Alterac Ram Aura DND 21863: their tick (GenericDummyAuraCases.TickMountAura, vmangos SpellAuras.cpp:6475-6512) ends the aura when the caster is not the mount creature, which the sweep's player caster never is.</summary>
+    private static readonly HashSet<uint> CreatureCasterAuras = [21827, 21863];
+
+    /// <summary>Spells a DUMMY aura casts when it ends (vmangos HandleAuraDummy): Hex of Jammal'an (12479) casts the Hex Reward transform 12480 and charm 12483 at its end, auras with a lifetime of their own that are taken off before the swept spell's restore is judged.</summary>
+    private static readonly Dictionary<uint, uint[]> DummyFollowUps = new() { [12479] = [12480, 12483] };
+
     /// <summary>
     /// After expiry the unit's stat block must equal a fresh, identical unit's: a second scene casts nothing, so its caster/target is
     /// the "before" picture (stat changes of the spell's non-aura effects are rare and land in the baseline).
     /// </summary>
-    /// <summary>Spells a DUMMY aura casts when it ends (vmangos HandleAuraDummy): Hex of Jammal'an (12479) casts the Hex Reward transform 12480 and charm 12483 at its end, auras with a lifetime of their own that are taken off before the swept spell's restore is judged.</summary>
-    private static readonly Dictionary<uint, uint[]> DummyFollowUps = new() { [12479] = [12480, 12483] };
-
     private void CheckRestored(SweepScene scene, SpellInfo spell, Unit unit)
     {
         // An aura of a spell this one triggers (Food's Well Fed, a growth stack) has a lifetime of its own and rightly outlives the

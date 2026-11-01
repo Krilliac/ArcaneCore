@@ -245,6 +245,8 @@ public sealed class GenericDummyAuraModule : ISpellHandlerModule
     /// Periodic trigger of a spell that triggers itself (Spell.dbc 1010 effect 3 and 29851 effect 1 name their own id). vmangos Aura::TriggerSpell casts the
     /// trigger from the aura's caster; for 1010 mangos-classic stops once the stacked loss is 90 or more. The remaining time of the holder is kept across the cast,
     /// so the retrigger neither refreshes the duration nor extends it: the aura ends when its own Spell.dbc duration is over (1010 after 120 s, 29851 after 2 s).
+    /// This clamp is a deliberate deviation: vmangos and mangos-classic have no such rule (the self-cast refreshes the holder there); it follows the 120 s / 2 s
+    /// durations of the Spell.dbc rows. The skip of a trigger cast by the target itself (mangos-classic SpellAuras.cpp:1182-1184) is kept too.
     /// </summary>
     private static void TickSelfRetrigger(SpellSystem spells, SpellAuraHolder holder, SpellAura aura)
     {
@@ -259,8 +261,13 @@ public sealed class GenericDummyAuraModule : ISpellHandlerModule
             return;
         }
 
-        int remaining = holder.Duration;
         Unit target = holder.Target;
+        if (holder.CasterGuid == target.Guid && holder.Spell.Id == CurseOfIdiocy)
+        {
+            return; // mangos-classic SpellAuras.cpp:1182-1184: "prevent cast by triggered auras" on the caster itself
+        }
+
+        int remaining = holder.Duration;
         Unit caster = AuraEvents.CasterOf(holder) ?? target;
         spells.CastSpellTriggeredByAura(caster, trigger, SpellCastTargets.ForUnit(target.Guid), holder.Spell);
         if (remaining < 0)
@@ -268,11 +275,13 @@ public sealed class GenericDummyAuraModule : ISpellHandlerModule
             return;
         }
 
+        // Only this caster's holder: the retrigger stacks or refreshes into it, while another caster's holder of the same spell keeps its own time.
         foreach (SpellAuraHolder held in spells.GetAuras(target))
         {
-            if (held.Spell.Id == trigger && !held.IsRemoved && !held.IsPermanent && held.Duration > remaining)
+            if (held.Spell.Id == trigger && held.CasterGuid == holder.CasterGuid && !held.IsRemoved && !held.IsPermanent && held.Duration > remaining)
             {
-                held.Duration = remaining;
+                // The refresh path just told the client the full duration: send the clamped one.
+                spells.GmSetAuraDuration(held, remaining);
             }
         }
     }
@@ -280,7 +289,7 @@ public sealed class GenericDummyAuraModule : ISpellHandlerModule
     private static bool CurseLossReached(SpellAuraHolder holder)
     {
         int intellect = 0, spirit = 0;
-        foreach (SpellAura? stat in holder.Auras)
+        foreach (SpellAura? stat in holder.AuraSpan)
         {
             if (stat is { Type: AuraType.ModStat })
             {
