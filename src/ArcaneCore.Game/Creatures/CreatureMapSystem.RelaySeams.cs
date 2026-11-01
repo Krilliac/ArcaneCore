@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Kernel.WorldData.Creatures;
+using Microsoft.Extensions.Logging;
 
 namespace ArcaneCore.Game.Creatures;
 

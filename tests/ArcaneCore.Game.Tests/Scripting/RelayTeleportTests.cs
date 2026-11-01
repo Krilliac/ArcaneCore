@@ -1,5 +1,6 @@
 using ArcaneCore.Game.Creatures;
 using ArcaneCore.Game.Entities;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Spells;
 using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Kernel.WorldData.Creatures;
