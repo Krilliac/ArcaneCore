@@ -366,9 +366,43 @@ public sealed class RemoteWorldHandoffGatewayTests
         await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token); // B is the active world now, A the retired one
 
         // The roles swapped: the standby link now points at A, which is not a standby (it is retired), so the next handoff of the slot is refused before it journals.
-        await Assert.ThrowsAnyAsync<Exception>(() => rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token));
+        // The standby link first has to reconnect to A (until then the refusal is WorldHandoffUnavailableException), so retry until the pre-flight itself answers.
+        InvalidOperationException refusal;
+        while (true)
+        {
+            try
+            {
+                await rig.Service.HandoffAsync(NodeA, cancellationToken: cts.Token);
+                throw new Xunit.Sdk.XunitException("the handoff to a retired world must be refused");
+            }
+            catch (WorldHandoffUnavailableException)
+            {
+                await Task.Delay(50, cts.Token);
+            }
+            catch (InvalidOperationException ex)
+            {
+                refusal = ex;
+                break;
+            }
+        }
 
+        Assert.Contains("is not a standby", refusal.Message, StringComparison.Ordinal);
         Assert.Empty(await rig.Store.GetUnresolvedAsync(cts.Token));
+    }
+
+    [Fact]
+    public async Task ARetargetedStandbyLink_NeverHandsOutTheChannelOfTheProcessItLeft()
+    {
+        using var cts = new CancellationTokenSource(Deadline);
+        await using Rig rig = await Rig.StartAsync(cts.Token);
+        GatewayStandbyLink link = rig.Service.StandbyLink(NodeA)!;
+        Assert.NotNull(link.Channel);
+
+        // Role swap: the link is retargeted to A's endpoint. At that instant the channel to B must be gone, so a verb meant for A cannot be sent to B.
+        link.Retarget(rig.AEndpoint.Host!.BoundEndPoint);
+
+        Assert.Null(link.Channel);
+        Assert.Null(rig.Service.StandbyChannel(NodeA));
     }
 
     // ------------------------------------------------------------------ options and registration (no worlds)

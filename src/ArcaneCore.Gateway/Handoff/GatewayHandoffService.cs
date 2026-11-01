@@ -73,6 +73,9 @@ internal sealed class GatewayStandbyLink
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         _target = endpoint;
+        // Drop the channel synchronously: the run loop clears it only after several thread-pool hops, and until then a verb meant for the
+        // process that just became the other role would be sent over the old connection to the wrong process.
+        _channel = null;
         Volatile.Read(ref _retarget)?.TrySetResult();
     }
 
@@ -126,7 +129,8 @@ internal sealed class GatewayStandbyLink
                 _logger.LogInformation("Standby link of slot {Slot} registered with {Endpoint}", _slotNode, endpoint);
                 if (!Equals(_target, endpoint))
                 {
-                    retarget.TrySetResult(); // retargeted while this attempt was connecting
+                    _channel = null; // retargeted while this attempt was connecting
+                    retarget.TrySetResult();
                 }
 
                 try
@@ -299,6 +303,9 @@ public sealed class GatewayHandoffService : IHostedService, IAsyncDisposable
 
     /// <summary>The control channel of the slot's standby, or null while that link is down or the slot is unknown.</summary>
     public LinkControlChannel? StandbyChannel(string slotNode) => _slots.TryGetValue(slotNode, out GatewayHandoffSlot? slot) ? slot.Standby.Channel : null;
+
+    /// <summary>The slot's standby link object, or null for an unknown slot.</summary>
+    internal GatewayStandbyLink? StandbyLink(string slotNode) => _slots.TryGetValue(slotNode, out GatewayHandoffSlot? slot) ? slot.Standby : null;
 
     /// <summary>The endpoint the slot's standby link points at (the standby process; after a handoff, the old active's), or null for an unknown slot.</summary>
     public IPEndPoint? StandbyEndPoint(string slotNode) => _slots.TryGetValue(slotNode, out GatewayHandoffSlot? slot) ? slot.Standby.EndPoint : null;
