@@ -12,7 +12,7 @@ public static class LootPackets
     /// <summary>
     /// SMSG_LOOT_RESPONSE: u64 guid, u8 loot type, u32 gold, u8 item count, then per visible item
     /// u8 slot, u32 item id, u32 count, u32 display id, u32 random suffix (0 in 1.12),
-    /// u32 random property id, u8 slot type.
+    /// u32 random property id (<see cref="LootItem.RandomPropertyId"/>), u8 slot type.
     /// </summary>
     public static byte[] LootResponse(LootBag bag, Player viewer, Func<uint, uint>? displayIdOf = null)
     {
@@ -38,7 +38,7 @@ public static class LootPackets
             writer.WriteUInt32(item.Count);
             writer.WriteUInt32(displayIdOf?.Invoke(item.ItemId) ?? item.DisplayId);
             writer.WriteUInt32(0);
-            writer.WriteUInt32(0);
+            writer.WriteUInt32(unchecked((uint)item.RandomPropertyId));
             writer.WriteByte((byte)slotType);
             count++;
         }

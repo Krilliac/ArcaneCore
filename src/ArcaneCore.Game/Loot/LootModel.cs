@@ -105,6 +105,12 @@ public sealed class LootItem
 
     public uint DisplayId { get; }
 
+    /// <summary>
+    /// The ItemRandomProperties.dbc id rolled when the item was generated (vmangos LootItem::randomPropertyId, LootMgr.cpp:343-344, set from
+    /// Item::GenerateItemRandomPropertyId); 0 for none. Sent in the loot window and the roll packets and handed to the bag item so it keeps it.
+    /// </summary>
+    public int RandomPropertyId { get; init; }
+
     /// <summary>Quest drop (negative chance): only players who need it see it (vmangos QuestItem).</summary>
     public bool IsQuestItem { get; }
 
