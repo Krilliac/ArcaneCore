@@ -209,6 +209,9 @@ public sealed class StandbyWorldHandoffTarget(WorkerNodeId workerId, WorldHost h
 
     public Guid Incarnation => host.Incarnation;
 
+    /// <summary>Worker scope: the standby's configured maps, written by the epoch takeover; null in Realm scope.</summary>
+    public IReadOnlyCollection<uint>? WorkerOwnedMaps => host.WorkerOwnedMaps;
+
     public Task WarmAsync(CancellationToken cancellationToken)
     {
         if (!host.IsStandby)

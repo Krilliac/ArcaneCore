@@ -52,6 +52,12 @@ public interface IWorldHandoffTarget
     /// <summary>B's ownership incarnation: the epoch takeover hands the ownership to it.</summary>
     Guid Incarnation { get; }
 
+    /// <summary>
+    /// Worker scope: the maps B serves (its configured Cluster:Worker:OwnedMaps), written to the shard's ownership row by the epoch takeover so the handed-over shard
+    /// does not keep the old owner's map set. Null (the default, and the Realm-mode answer) leaves the row's maps untouched.
+    /// </summary>
+    IReadOnlyCollection<uint>? WorkerOwnedMaps => null;
+
     /// <summary>Check that B is warm and still a standby (throws otherwise). Idempotent.</summary>
     Task WarmAsync(CancellationToken cancellationToken);
 
@@ -86,7 +92,7 @@ public sealed class WorldHandoffAbortedException(WorldHandoffRecord record, Exce
 /// </list>
 /// Any failure before the takeover aborts: the journal records it and A resumes under its unchanged ownership. After the takeover the handoff
 /// only rolls forward; a failure leaves it committed for <see cref="RecoverAsync"/> (or a repeat of it) to finish. One coordinator drives one
-/// handoff at a time; the store refuses a second unresolved one.
+/// handoff at a time; the store refuses a second unresolved one of the same ownership scope (handoffs of different worker shards may be open at once).
 /// </summary>
 public sealed class WorldHandoffCoordinator(
     IWorldHandoffStore store,
@@ -134,8 +140,10 @@ public sealed class WorldHandoffCoordinator(
         WorldHandoffRecord? committed;
         try
         {
-            committed = await store.CommitEpochTakeoverAsync(handoffId, target.OwnerNode, target.Incarnation, cancellationToken)
-                .ConfigureAwait(false);
+            IReadOnlyCollection<uint>? targetMaps = target.WorkerOwnedMaps;
+            committed = targetMaps is null
+                ? await store.CommitEpochTakeoverAsync(handoffId, target.OwnerNode, target.Incarnation, cancellationToken).ConfigureAwait(false)
+                : await store.CommitEpochTakeoverAsync(handoffId, target.OwnerNode, target.Incarnation, targetMaps, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {

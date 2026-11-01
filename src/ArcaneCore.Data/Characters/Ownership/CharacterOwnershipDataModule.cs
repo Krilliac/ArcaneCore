@@ -227,8 +227,8 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         using IDisposable exempt = CharacterWriteFence.Exempt();
         await using var tx = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         if (writeMaps
-            && (!await LockGateAsync(cancellationToken).ConfigureAwait(false)
-                || await OverlapsOtherActiveWorkerAsync(observed.Scope, ownedMaps, cancellationToken).ConfigureAwait(false)))
+            && (!await LockGateAsync(db, cancellationToken).ConfigureAwait(false)
+                || await OverlapsOtherActiveWorkerAsync(db, observed.Scope, ownedMaps, cancellationToken).ConfigureAwait(false)))
         {
             await tx.RollbackAsync(cancellationToken).ConfigureAwait(false);
             return null;
@@ -289,8 +289,8 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         long now = NowUnixMs();
         using IDisposable exempt = CharacterWriteFence.Exempt();
         await using var tx = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        if (!await LockGateAsync(cancellationToken).ConfigureAwait(false)
-            || await OverlapsOtherActiveWorkerAsync(observed.Scope, ownedMaps, cancellationToken).ConfigureAwait(false))
+        if (!await LockGateAsync(db, cancellationToken).ConfigureAwait(false)
+            || await OverlapsOtherActiveWorkerAsync(db, observed.Scope, ownedMaps, cancellationToken).ConfigureAwait(false))
         {
             await tx.RollbackAsync(cancellationToken).ConfigureAwait(false);
             return null;
@@ -389,7 +389,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         await using var tx = await db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         // Gate: lock the realm row. A fenced Combined world holds it active, so this refuses; concurrent worker claims serialise here,
         // which is also why the insert below cannot lose a primary-key race to another claim.
-        if (!await LockGateAsync(cancellationToken).ConfigureAwait(false))
+        if (!await LockGateAsync(db, cancellationToken).ConfigureAwait(false))
         {
             await tx.RollbackAsync(cancellationToken).ConfigureAwait(false);
             return null;
@@ -416,7 +416,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
             return current.OwnerNode == ownerNode && Guid.TryParse(current.OwnerIncarnation, out Guid same) && same == incarnation ? Token(current) : null;
         }
 
-        if (await OverlapsOtherActiveWorkerAsync(scope, ownedMaps, cancellationToken).ConfigureAwait(false))
+        if (await OverlapsOtherActiveWorkerAsync(db, scope, ownedMaps, cancellationToken).ConfigureAwait(false))
         {
             await tx.RollbackAsync(cancellationToken).ConfigureAwait(false);
             return null;
@@ -448,7 +448,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
     /// Locks the 'world' row for the open transaction by bumping its write_sequence while it is inactive (an UPDATE takes the row lock on every
     /// provider, and conflicts with the tokenless FOR SHARE check). False when the row is active (a fenced Combined world) and so refuses worker claims.
     /// </summary>
-    private async Task<bool> LockGateAsync(CancellationToken cancellationToken)
+    internal static async Task<bool> LockGateAsync(CharacterDbContext db, CancellationToken cancellationToken)
     {
         int changed = await db.Set<CharacterOwnershipRow>()
             .Where(r => r.Scope == CharacterOwnershipScopes.World && !r.Active && r.WriteSequence < long.MaxValue)
@@ -462,7 +462,7 @@ public sealed class EfCharacterOwnershipStore(CharacterDbContext db) : ICharacte
         return false;
     }
 
-    private async Task<bool> OverlapsOtherActiveWorkerAsync(string scope, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken)
+    internal static async Task<bool> OverlapsOtherActiveWorkerAsync(CharacterDbContext db, string scope, IReadOnlyCollection<uint>? ownedMaps, CancellationToken cancellationToken)
     {
         List<string?> others = await db.Set<CharacterOwnershipRow>().AsNoTracking()
             .Where(r => r.Active && r.Scope != scope && r.Scope != CharacterOwnershipScopes.World)

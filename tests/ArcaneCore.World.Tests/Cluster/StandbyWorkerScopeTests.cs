@@ -47,8 +47,10 @@ public sealed class StandbyWorkerScopeTests
         Assert.Null(standby.Guard.LockPath); // a standby holds nothing until it is promoted
         CharacterOwnershipToken oldToken = active.World.CharacterOwnership!;
 
-        // The handoff's takeover hands the shard row to the standby's incarnation.
-        CharacterOwnershipToken takenOver = (await db.TakeoverAsync(standby, oldToken, standby.Host.Incarnation, [0u, 1u, 2u]))!;
+        Assert.Equal("0,1", (await db.RowAsync(oldToken.Scope)).OwnedMaps);
+
+        // The real handoff (journal, then IWorldHandoffStore.CommitEpochTakeoverAsync with the standby's configured maps, as WorldHandoffCoordinator calls it) hands the shard row to the standby's incarnation.
+        CharacterOwnershipToken takenOver = await db.HandoffAsync(active, standby);
         Assert.Equal(oldToken.Epoch + 1, takenOver.Epoch);
         Assert.Equal(oldToken.Scope, takenOver.Scope);
 
@@ -70,7 +72,7 @@ public sealed class StandbyWorkerScopeTests
         Assert.Equal(takenOver, await db.CurrentAsync(standby, takenOver.Scope));
         Assert.True(standby.Feature.Attached);
 
-        // The takeover wrote the new owner's maps: the handed-over shard does not keep the old owner's set.
+        // The handoff's takeover wrote the new owner's maps: the handed-over shard does not keep the old owner's set.
         CharacterOwnershipRow row = await db.RowAsync(takenOver.Scope);
         Assert.Equal("0,1,2", row.OwnedMaps);
         Assert.Equal(standby.Host.OwnerNode, row.OwnerNode);
@@ -89,6 +91,36 @@ public sealed class StandbyWorkerScopeTests
     }
 
     [Fact]
+    public async Task AHandoffTakeover_WhoseStandbyMapsOverlapAnotherActiveShard_IsRefused_AndChangesNothing()
+    {
+        using var directory = new TempDirectory("arcanecore-standbyscope-", sqlite: true);
+        await using Scratch db = await Scratch.CreateAsync(directory);
+
+        await using HostKit activeA = db.NewActive(ShardA, "0,1");
+        await using HostKit activeB = db.NewActive(ShardB, "30,31");
+        await activeA.Host.StartAsync(CancellationToken.None);
+        await activeB.Host.StartAsync(CancellationToken.None);
+        await using HostKit standby = db.NewStandby(ShardA, "0,1,30"); // map 30 belongs to the other active shard
+        await standby.Host.StartAsync(CancellationToken.None);
+        CharacterOwnershipToken before = activeA.World.CharacterOwnership!;
+
+        IWorldHandoffStore store = activeA.Services.GetRequiredService<IWorldHandoffStore>();
+        var id = Guid.NewGuid();
+        await store.BeginAsync(id, new WorkerNodeId("node-" + ShardA), new WorkerNodeId("standby-" + ShardA), before);
+        foreach (WorldHandoffStage stage in new[] { WorldHandoffStage.Warm, WorldHandoffStage.AdmissionsStopped, WorldHandoffStage.Frozen, WorldHandoffStage.Flushed })
+            await store.AdvancePreCommitAsync(id, stage);
+
+        Assert.Null(await store.CommitEpochTakeoverAsync(id, standby.Host.OwnerNode, standby.Host.Incarnation, standby.Host.WorkerOwnedMaps, CancellationToken.None));
+
+        CharacterOwnershipRow row = await db.RowAsync(before.Scope);
+        Assert.Equal("0,1", row.OwnedMaps);
+        Assert.Equal(before, await db.CurrentAsync(activeA, before.Scope));
+        WorldHandoffRecord record = (await store.GetAsync(id))!;
+        Assert.False(record.IsCommittedOrBeyond); // still abortable
+        await store.AbortAsync(id, "test");
+    }
+
+    [Fact]
     public async Task AWorkerStandby_IsRefused_WhileACombinedWorldHoldsTheRealmLock_AndPromotesOnceItIsFree()
     {
         using var directory = new TempDirectory("arcanecore-standbyscope-", sqlite: true);
@@ -98,7 +130,7 @@ public sealed class StandbyWorkerScopeTests
         await active.Host.StartAsync(CancellationToken.None);
         await using HostKit standby = db.NewStandby(ShardA, "0,1");
         await standby.Host.StartAsync(CancellationToken.None);
-        CharacterOwnershipToken takenOver = (await db.TakeoverAsync(standby, active.World.CharacterOwnership!, standby.Host.Incarnation, [0u, 1u]))!;
+        CharacterOwnershipToken takenOver = await db.HandoffAsync(active, standby);
         active.Guard.Dispose();
 
         // An unfenced Combined world takes the realm lock only; the shard lock is taken first and then the realm lock is probed, so the promotion backs out holding nothing.
@@ -188,7 +220,7 @@ public sealed class StandbyWorkerScopeTests
         }
 
         // Shard A commits to its standby; shard B's handoff is still open and its ownership untouched.
-        WorldHandoffRecord committed = (await store.CommitEpochTakeoverAsync(handoffA, standbyA.Host.OwnerNode, standbyA.Host.Incarnation))!;
+        WorldHandoffRecord committed = (await store.CommitEpochTakeoverAsync(handoffA, standbyA.Host.OwnerNode, standbyA.Host.Incarnation, standbyA.Host.WorkerOwnedMaps, CancellationToken.None))!;
         CharacterOwnershipToken takenOver = committed.TargetOwnershipToken!;
         Assert.Equal(tokenA.Scope, takenOver.Scope);
         Assert.Equal(tokenA.Epoch + 1, takenOver.Epoch);
@@ -265,11 +297,19 @@ public sealed class StandbyWorkerScopeTests
             return await serviceScope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().GetCurrentAsync(scope);
         }
 
-        /// <summary>The handoff's takeover of a shard row, written through <paramref name="through"/>'s container, with the new owner's maps.</summary>
-        public async Task<CharacterOwnershipToken?> TakeoverAsync(HostKit through, CharacterOwnershipToken observed, Guid newIncarnation, IReadOnlyCollection<uint> ownedMaps)
+        /// <summary>
+        /// The production handoff path up to the epoch takeover: journal a handoff of <paramref name="source"/>'s shard to <paramref name="standby"/>, advance it to Flushed, and commit
+        /// the takeover with the standby's configured maps (what <c>WorldHandoffCoordinator</c> does through <c>IWorldHandoffTarget.WorkerOwnedMaps</c>). Returns the taken-over token.
+        /// </summary>
+        public async Task<CharacterOwnershipToken> HandoffAsync(HostKit source, HostKit standby)
         {
-            await using AsyncServiceScope serviceScope = through.Scopes.CreateAsyncScope();
-            return await serviceScope.ServiceProvider.GetRequiredService<ICharacterOwnershipStore>().TryTakeoverAsync(observed, through.Host.OwnerNode, newIncarnation, ownedMaps);
+            IWorldHandoffStore store = source.Services.GetRequiredService<IWorldHandoffStore>();
+            var id = Guid.NewGuid();
+            await store.BeginAsync(id, new WorkerNodeId(source.Host.OwnerNode), new WorkerNodeId(standby.Host.OwnerNode), source.World.CharacterOwnership!);
+            foreach (WorldHandoffStage stage in new[] { WorldHandoffStage.Warm, WorldHandoffStage.AdmissionsStopped, WorldHandoffStage.Frozen, WorldHandoffStage.Flushed })
+                await store.AdvancePreCommitAsync(id, stage);
+            WorldHandoffRecord committed = (await store.CommitEpochTakeoverAsync(id, standby.Host.OwnerNode, standby.Host.Incarnation, standby.Host.WorkerOwnedMaps, CancellationToken.None))!;
+            return committed.TargetOwnershipToken!;
         }
 
         public HostKit NewActive(string shard, string ownedMaps)

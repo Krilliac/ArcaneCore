@@ -415,8 +415,17 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
     }
 
     /// <inheritdoc />
-    public async Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(
+    public Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(
         Guid handoffId, string targetOwnerNode, Guid targetIncarnation, CancellationToken cancellationToken = default)
+        => CommitEpochTakeoverCoreAsync(handoffId, targetOwnerNode, targetIncarnation, setMaps: false, targetOwnedMaps: null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<WorldHandoffRecord?> CommitEpochTakeoverAsync(
+        Guid handoffId, string targetOwnerNode, Guid targetIncarnation, IReadOnlyCollection<uint>? targetOwnedMaps, CancellationToken cancellationToken)
+        => CommitEpochTakeoverCoreAsync(handoffId, targetOwnerNode, targetIncarnation, setMaps: true, targetOwnedMaps, cancellationToken);
+
+    private async Task<WorldHandoffRecord?> CommitEpochTakeoverCoreAsync(
+        Guid handoffId, string targetOwnerNode, Guid targetIncarnation, bool setMaps, IReadOnlyCollection<uint>? targetOwnedMaps, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(targetOwnerNode) || targetOwnerNode.Length > 128)
@@ -453,6 +462,16 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
                 string sourceIncarnation = row.SourceIncarnation;
                 string sourceScope = row.SourceScope;
                 long sourceEpoch = row.SourceEpoch;
+                bool writeMaps = setMaps && CharacterOwnershipScopes.IsWorker(sourceScope);
+                if (setMaps && !writeMaps && targetOwnedMaps is not null)
+                    throw new ArgumentException("the world ownership scope owns every map and takes no owned map set", nameof(targetOwnedMaps));
+                string? storedMaps = writeMaps && targetOwnedMaps is not null ? EfCharacterOwnershipStore.FormatMaps(targetOwnedMaps) : null;
+                // Gated like a worker claim, before anything is written: the realm row must be inactive (this locks it for the transaction) and the new maps must not overlap
+                // another active worker. A refusal changes nothing and the handoff stays abortable.
+                if (writeMaps
+                    && (!await EfCharacterOwnershipStore.LockGateAsync(db, ct).ConfigureAwait(false)
+                        || await EfCharacterOwnershipStore.OverlapsOtherActiveWorkerAsync(db, sourceScope, targetOwnedMaps, ct).ConfigureAwait(false)))
+                    return null;
                 int swapped = await db.Set<CharacterOwnershipRow>()
                     .Where(o => o.Scope == sourceScope && o.Active && o.Epoch == sourceEpoch && o.OwnerIncarnation == sourceIncarnation
                         && o.Epoch < long.MaxValue && o.WriteSequence < long.MaxValue)
@@ -466,10 +485,21 @@ public sealed class EfTransferDecisionStore(IServiceScopeFactory scopes, Func<lo
                     return null; // the source no longer holds the ownership: nothing changes, the handoff stays abortable
                 if (CharacterOwnershipScopes.IsWorker(sourceScope))
                 {
-                    // The new owner of a live shard starts with a fresh heartbeat (as CharacterOwnershipDataModule's takeover gives it); its owned maps are the shard's, unchanged by this swap.
+                    // The new owner of a live shard starts with a fresh heartbeat (as CharacterOwnershipDataModule's takeover gives it) and, when the caller names them, its own
+                    // owned maps in this same transaction (a standby serves its configured maps, so the durable row must not keep the old owner's set).
                     long heartbeat = _clock();
-                    await db.Set<CharacterOwnershipRow>().Where(o => o.Scope == sourceScope)
-                        .ExecuteUpdateAsync(s => s.SetProperty(o => o.HeartbeatAtMs, (long?)heartbeat), ct).ConfigureAwait(false);
+                    if (writeMaps)
+                    {
+                        await db.Set<CharacterOwnershipRow>().Where(o => o.Scope == sourceScope)
+                            .ExecuteUpdateAsync(s => s
+                                .SetProperty(o => o.OwnedMaps, storedMaps)
+                                .SetProperty(o => o.HeartbeatAtMs, (long?)heartbeat), ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await db.Set<CharacterOwnershipRow>().Where(o => o.Scope == sourceScope)
+                            .ExecuteUpdateAsync(s => s.SetProperty(o => o.HeartbeatAtMs, (long?)heartbeat), ct).ConfigureAwait(false);
+                    }
                 }
             }
 

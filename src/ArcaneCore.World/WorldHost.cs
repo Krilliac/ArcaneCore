@@ -87,6 +87,13 @@ public sealed class WorldHost(
     /// <summary>This process's ownership incarnation: the one a handoff's epoch takeover hands the characters ownership to.</summary>
     public Guid Incarnation => _incarnation;
 
+    /// <summary>
+    /// Worker scope with a valid explicit Cluster:Worker:OwnedMaps: the maps this world serves, which a handoff's epoch takeover writes to the shard's ownership row
+    /// (the standby serves its configured maps, so the durable row must say the same). Null in Realm scope or when the list is not usable (StartAsync refuses that).
+    /// </summary>
+    public IReadOnlyCollection<uint>? WorkerOwnedMaps
+        => IsWorkerScope && _worker is not null && CharacterFencingOptions.TryGetOwnedMaps(_worker, out IReadOnlyCollection<uint> maps, out _) ? maps : null;
+
     /// <summary>The durable owner node name this world claims under (Cluster:Fencing:OwnerNode).</summary>
     public string OwnerNode => _fencing.OwnerNode;
 
