@@ -2,23 +2,25 @@ using System.Collections.Concurrent;
 using ArcaneCore.Game;
 using ArcaneCore.Game.Entities;
 using ArcaneCore.Game.Maps;
+using ArcaneCore.Game.Maps.Templates;
+using ArcaneCore.Game.Teleport;
 using ArcaneCore.Kernel.Accounts;
 using ArcaneCore.Kernel.Characters;
 using ArcaneCore.Kernel.Cluster.Transfer;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.Protocol;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Cluster.Transfer;
-using ArcaneCore.World.Persistence;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace ArcaneCore.World.Tests.Cluster.Transfer;
 
 /// <summary>
-/// The production target worker of a transfer over a real <see cref="WorldRuntime"/> and a real <see cref="CharacterSaveQueue"/>, with the
-/// shadow loader and the session entry replaced by recording doubles (the production ones need a gateway-backed <c>WorldSession</c>).
+/// The production target worker of a transfer over a real <see cref="WorldRuntime"/>, a real <see cref="TeleportService"/> and the world's own
+/// recording save queue, with the shadow loader and the session entry replaced by recording doubles. The production loader and entry run
+/// against a full test host in <see cref="WorkerTransferTargetProductionTests"/>.
 /// </summary>
 public sealed class WorkerTransferTargetTests : IDisposable
 {
@@ -27,40 +29,36 @@ public sealed class WorkerTransferTargetTests : IDisposable
     private static readonly WorkerNodeId Source = new("worker-a");
     private static readonly WorkerNodeId Target = new("worker-b");
 
+    private static readonly MapContent Content = new(
+        [
+            new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+            new MapTemplate(1, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Kalimdor", ""),
+        ],
+        [], [], [], []);
+
     private readonly WorldRuntime _world;
-    private readonly ServiceProvider _storeServices;
-    private readonly CharacterSaveQueue _queue;
-    private readonly ConcurrentQueue<CharacterState> _saved = new();
+    private readonly RecordingSaveQueue _saveQueue = new();
+    private readonly TeleportService _teleports;
+    private readonly ConcurrentQueue<string> _events = new();
     private readonly RecordingSession _session = new(5, 9);
     private readonly FakeLoader _loader;
-    private readonly FakeEntry _entry = new();
+    private readonly FakeEntry _entry;
 
     public WorkerTransferTargetTests()
     {
-        var store = new InMemoryCharacterStore
-        {
-            SaveOverride = state =>
-            {
-                _saved.Enqueue(state);
-                return Task.CompletedTask;
-            },
-        };
-        _storeServices = new ServiceCollection().AddSingleton<ICharacterStore>(store).BuildServiceProvider();
-        _queue = new CharacterSaveQueue(_storeServices.GetRequiredService<IServiceScopeFactory>(), NullLogger<CharacterSaveQueue>.Instance);
-        _world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, new RecordingSaveQueue(), NullLogger<WorldRuntime>.Instance)
+        _world = new WorldRuntime(new WorldRuntimeOptions { AutosaveIntervalMs = 0 }, _saveQueue, NullLogger<WorldRuntime>.Instance)
         {
             CharacterOwnership = TargetToken,
         };
+        WorldMaps.Of(_world).Load(Content);
+        _teleports = new TeleportService(_world, _ => _events.Enqueue("before"), _ => _events.Enqueue("after"));
+        _world.PlayerLoggingOut += _teleports.Forget;
         _world.Start();
         _loader = new FakeLoader(_session);
+        _entry = new FakeEntry(_events);
     }
 
-    public void Dispose()
-    {
-        _world.Stop();
-        _queue.Dispose();
-        _storeServices.Dispose();
-    }
+    public void Dispose() => _world.Stop();
 
     private WorkerTransferTarget NewTarget(WorkerAdmission? admission = null, int maxReservations = 64)
         => new(Target, _world, _loader, _entry, admission, maxReservations);
@@ -82,6 +80,25 @@ public sealed class WorkerTransferTargetTests : IDisposable
         Powers = [0, 0, 0, 0, 0],
         Level = 40,
     };
+
+    private Task<bool> OnWorldAsync(Func<bool> action) => _world.InvokeAsync(action);
+
+    private async Task WaitForAsync(Func<bool> condition, string what)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+        while (!await _world.InvokeAsync(condition))
+        {
+            Assert.True(DateTime.UtcNow < deadline, "timed out waiting for " + what);
+            await Task.Delay(10);
+        }
+    }
+
+    /// <summary>The client finishes its loading screen: MSG_MOVE_WORLDPORT_ACK reaches the teleport service, and the player enters its map.</summary>
+    private async Task AckWorldportAsync(ulong characterGuid)
+    {
+        Assert.True(await OnWorldAsync(() => _teleports.HandleWorldportAck(_world.FindOnlinePlayer(new ObjectGuid(characterGuid))!)));
+        await WaitForAsync(() => _world.FindOnlinePlayer(new ObjectGuid(characterGuid))?.Map is not null, "the player to enter its map");
+    }
 
     [Fact]
     public async Task Reserve_IsIdempotentPerTransfer_AndRefusesASecondTransferOfTheSameCharacter()
@@ -118,7 +135,7 @@ public sealed class WorkerTransferTargetTests : IDisposable
     }
 
     [Fact]
-    public async Task ShadowLoad_WritesNothing_AndLeavesThePlayerOutOfTheWorld()
+    public async Task ShadowLoad_LeavesThePlayerOutOfTheWorld_AndTheWorldsSaveQueueUntouched()
     {
         WorkerTransferTarget target = NewTarget();
         Guid id = Guid.NewGuid();
@@ -129,16 +146,17 @@ public sealed class WorkerTransferTargetTests : IDisposable
 
         Assert.True(target.HasShadow(id));
         Assert.Equal(1, _loader.Loads);
-        Assert.Empty(_saved);
-        Assert.False(_queue.IsHeld(7));
+        Assert.Empty(_saveQueue.Saved);
+        Assert.False(_saveQueue.IsPending(7));
         Assert.False(_world.IsOnline(new ObjectGuid(7)));
         Assert.Equal(0, _world.OnlinePlayerCount);
-        Assert.Equal(0, _entry.Attached);
+        Assert.Equal(0, _teleports.PendingCount);
+        Assert.Empty(_events);
         Assert.Empty(_session.Opcodes);
     }
 
     [Fact]
-    public async Task Activate_AfterCommit_PutsThePlayerInTheMap_AtTheTargetPosition_AndSendsNewWorld()
+    public async Task Activate_SendsTransferPendingAndNewWorld_AndAddsThePlayerOnlyWhenTheWorldportAckArrives()
     {
         WorkerTransferTarget target = NewTarget();
         Guid id = Guid.NewGuid();
@@ -147,16 +165,24 @@ public sealed class WorkerTransferTargetTests : IDisposable
 
         await target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken);
 
+        // Before the ack: the loading screen only. No create block, no login packets, no map.
         Player? player = _world.FindOnlinePlayer(new ObjectGuid(7));
         Assert.NotNull(player);
-        Assert.NotNull(player.Map);
-        Assert.Equal(1u, player.Map.MapId);
-        Assert.Equal((10f, 20f, 30f), (player.X, player.Y, player.Z));
-        Assert.Equal(TargetToken, player.CharacterOwnership);
-        Assert.Contains(WorldOpcode.SmsgNewWorld, _session.Opcodes);
-        Assert.Equal(new[] { "attach", "before", "after" }, _entry.Calls);
+        Assert.Null(player.Map);
+        Assert.Equal(new[] { WorldOpcode.SmsgTransferPending, WorldOpcode.SmsgNewWorld }, _session.Opcodes.ToArray());
+        Assert.Equal(new[] { "attach" }, _events.ToArray());
+        Assert.Equal(TeleportStage.Far, await _world.InvokeAsync(() => _teleports.StageOf(player)));
         Assert.True(target.WasActivated(id));
         Assert.Equal(0, target.ReservedCount);
+
+        await AckWorldportAsync(7);
+
+        Assert.Equal(1u, player.Map!.MapId);
+        Assert.Equal((10f, 20f, 30f), (player.X, player.Y, player.Z));
+        Assert.Equal(TargetToken, player.CharacterOwnership);
+        Assert.Equal(new[] { "attach", "before", "resume", "after" }, _events.ToArray());
+        Assert.Equal(0, await _world.InvokeAsync(() => _teleports.PendingCount));
+        Assert.Equal(1, _session.Opcodes.Count(op => op == WorldOpcode.SmsgNewWorld));
     }
 
     [Fact]
@@ -190,7 +216,26 @@ public sealed class WorkerTransferTargetTests : IDisposable
     }
 
     [Fact]
-    public async Task Discard_FreesTheSlot_DropsTheShadow_AndBlocksALaterActivate()
+    public async Task ConcurrentDuplicateActivates_AttachAndArriveOnce()
+    {
+        WorkerTransferTarget target = NewTarget();
+        Guid id = Guid.NewGuid();
+        await target.TryReserveSlotAsync(id, 7, 1, 0);
+
+        await Task.WhenAll(
+            target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken),
+            target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken),
+            target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken));
+
+        Assert.Equal(1, _loader.Loads);
+        Assert.Equal(1, _entry.Attached);
+        Assert.Equal(1, _session.Opcodes.Count(op => op == WorldOpcode.SmsgNewWorld));
+        Assert.Equal(1, _world.OnlinePlayerCount);
+        Assert.True(target.WasActivated(id));
+    }
+
+    [Fact]
+    public async Task Discard_FreesTheSlot_ReleasesTheShadow_AndBlocksALaterActivate()
     {
         WorkerTransferTarget target = NewTarget(maxReservations: 1);
         Guid id = Guid.NewGuid();
@@ -203,9 +248,47 @@ public sealed class WorkerTransferTargetTests : IDisposable
 
         Assert.Equal(0, target.ReservedCount);
         Assert.False(target.HasShadow(id));
+        Assert.Equal(1, _loader.Released);
         Assert.True(await target.TryReserveSlotAsync(Guid.NewGuid(), 8, 1, 0)); // the slot is free again
         await Assert.ThrowsAsync<InvalidOperationException>(() => target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken));
         Assert.False(_world.IsOnline(new ObjectGuid(7)));
+    }
+
+    [Fact]
+    public async Task Discard_WhileTheLoadIsStillRunning_ReleasesTheShadowWhenItFinishes()
+    {
+        WorkerTransferTarget target = NewTarget();
+        Guid id = Guid.NewGuid();
+        await target.TryReserveSlotAsync(id, 7, 1, 0);
+        TaskCompletionSource gate = _loader.HoldNextLoad();
+        Task install = target.InstallPassiveShadowAsync(id, NewBundle(id));
+
+        await target.DiscardPassiveShadowAsync(id, 7, "abort while loading");
+        Assert.Equal(0, _loader.Released); // nothing to release yet
+        gate.SetResult();
+        await install; // the load itself still completes for its own caller
+
+        await WaitForAsync(() => _loader.Released == 1, "the late shadow to be released");
+        Assert.False(_world.IsOnline(new ObjectGuid(7)));
+    }
+
+    [Fact]
+    public async Task ADiscardThatLandsBeforeTheActivationCommand_FailsTheActivation_AndAddsNothing()
+    {
+        WorkerTransferTarget target = NewTarget();
+        Guid id = Guid.NewGuid();
+        await target.TryReserveSlotAsync(id, 7, 1, 0);
+        TaskCompletionSource gate = _loader.HoldNextLoad();
+        Task activate = target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken);
+
+        await target.DiscardPassiveShadowAsync(id, 7, "abort racing the activation");
+        gate.SetResult();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => activate);
+        Assert.False(_world.IsOnline(new ObjectGuid(7)));
+        Assert.False(target.WasActivated(id));
+        Assert.Equal(0, _entry.Attached);
+        Assert.Empty(_session.Opcodes);
     }
 
     [Fact]
@@ -218,6 +301,68 @@ public sealed class WorkerTransferTargetTests : IDisposable
         await target.DiscardPassiveShadowAsync(id, 7, "late");
 
         Assert.True(_world.IsOnline(new ObjectGuid(7)));
+        Assert.Equal(0, _loader.Released);
+    }
+
+    [Fact]
+    public async Task Activate_WhenTheClientHasLeft_AddsNothing_AndSendsNothing()
+    {
+        WorkerTransferTarget target = NewTarget();
+        Guid id = Guid.NewGuid();
+        _entry.AttachResult = false;
+
+        await target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken);
+
+        Assert.False(_world.IsOnline(new ObjectGuid(7)));
+        Assert.Empty(_session.Opcodes);
+        Assert.Equal(0, await _world.InvokeAsync(() => _teleports.PendingCount));
+        Assert.Equal(1, _loader.Released); // the shadow is dropped
+        Assert.True(target.WasActivated(id)); // finished: a repeat is a no-op
+        Assert.Equal(0, target.ReservedCount);
+    }
+
+    [Fact]
+    public async Task Activate_WhenTheArrivalCannotStart_UndoesTheRegistration_KicksTheSession_AndALaterRetrySucceeds()
+    {
+        WorkerTransferTarget target = NewTarget();
+        Guid id = Guid.NewGuid();
+        await target.TryReserveSlotAsync(id, 7, 1, 0);
+        _session.ThrowOnSend = true;
+
+        await Assert.ThrowsAnyAsync<Exception>(() => target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken));
+
+        Assert.False(_world.IsOnline(new ObjectGuid(7)));
+        Assert.Equal(0, await _world.InvokeAsync(() => _teleports.PendingCount));
+        Assert.Equal(1, _session.Kicks);
+        Assert.False(target.WasActivated(id));
+        Assert.Equal(1, target.ReservedCount); // still the coordinator's to retry or discard
+
+        _session.ThrowOnSend = false;
+        await target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken);
+
+        Assert.True(_world.IsOnline(new ObjectGuid(7)));
+        Assert.True(target.WasActivated(id));
+    }
+
+    [Fact]
+    public async Task ADisconnectBeforeTheWorldportAck_ResumesTheHeldSaves_AndSavesThePlayerAtItsArrivalPosition()
+    {
+        WorkerTransferTarget target = NewTarget();
+        Guid id = Guid.NewGuid();
+        await target.ActivateTargetPlayerAsync(id, NewBundle(id), TargetToken);
+        Player player = _world.FindOnlinePlayer(new ObjectGuid(7))!;
+
+        await _world.InvokeAsync(() =>
+        {
+            _world.RemovePlayer(player); // the session closed while the client loaded
+            return true;
+        });
+
+        Assert.Contains("resume", _events);
+        Assert.Equal(0, await _world.InvokeAsync(() => _teleports.PendingCount));
+        Assert.False(_world.IsOnline(new ObjectGuid(7)));
+        CharacterState saved = Assert.Single(_saveQueue.Saved);
+        Assert.Equal((1u, 10f, 20f, 30f), (saved.MapId, saved.X, saved.Y, saved.Z));
     }
 
     [Fact]
@@ -249,14 +394,26 @@ public sealed class WorkerTransferTargetTests : IDisposable
     private sealed class FakeLoader(RecordingSession session) : ITransferShadowLoader
     {
         private int _loads;
+        private int _released;
         private volatile bool _failNext;
+        private TaskCompletionSource? _hold;
 
         public int Loads => Volatile.Read(ref _loads);
+
+        public int Released => Volatile.Read(ref _released);
 
         public bool FailNext
         {
             get => _failNext;
             set => _failNext = value;
+        }
+
+        /// <summary>The next load waits until the returned source is completed.</summary>
+        public TaskCompletionSource HoldNextLoad()
+        {
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _hold, gate);
+            return gate;
         }
 
         public Player NewPlayer(int id, IPlayerSession playerSession)
@@ -265,42 +422,53 @@ public sealed class WorkerTransferTargetTests : IDisposable
             return new Player(character, new PlayerAppearance(49, 1, PowerType.Rage, 60, 0, 60, 1000, 0, 400), playerSession);
         }
 
-        public Task<Player> LoadAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken)
+        public async Task<Player> LoadAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _loads);
+            if (Interlocked.Exchange(ref _hold, null) is { } gate)
+            {
+                await gate.Task.ConfigureAwait(false);
+            }
+
             if (_failNext)
             {
                 _failNext = false;
-                return Task.FromException<Player>(new InvalidOperationException("load failed"));
+                throw new InvalidOperationException("load failed");
             }
 
-            return Task.FromResult(NewPlayer(checked((int)bundle.CharacterGuid), session));
+            return NewPlayer(checked((int)bundle.CharacterGuid), session);
         }
+
+        public void Release(Player shadow) => Interlocked.Increment(ref _released);
     }
 
-    private sealed class FakeEntry : ITransferSessionEntry
+    private sealed class FakeEntry(ConcurrentQueue<string> events) : ITransferSessionEntry
     {
         private int _attached;
 
-        public List<string> Calls { get; } = [];
-
         public int Attached => Volatile.Read(ref _attached);
+
+        public bool AttachResult { get; set; } = true;
 
         public bool TryAttach(Player player)
         {
+            if (!AttachResult)
+            {
+                return false;
+            }
+
             Interlocked.Increment(ref _attached);
-            Calls.Add("attach");
+            events.Enqueue("attach");
             return true;
         }
 
-        public void SendInitialPacketsBeforeAddToMap(Player player) => Calls.Add("before");
-
-        public void SendInitialPacketsAfterAddToMap(Player player) => Calls.Add("after");
+        public void ResumeSaves(Player player) => events.Enqueue("resume");
     }
 
     private sealed class RecordingSession(int accountId, long generation) : IPlayerSession
     {
         private readonly ConcurrentQueue<WorldOpcode> _opcodes = new();
+        private int _kicks;
 
         public int AccountId { get; } = accountId;
 
@@ -310,11 +478,23 @@ public sealed class WorkerTransferTargetTests : IDisposable
 
         public IReadOnlyCollection<WorldOpcode> Opcodes => _opcodes;
 
-        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload) => _opcodes.Enqueue(opcode);
+        public volatile bool ThrowOnSend;
+
+        public int Kicks => Volatile.Read(ref _kicks);
+
+        public void Send(WorldOpcode opcode, ReadOnlySpan<byte> payload)
+        {
+            if (ThrowOnSend)
+            {
+                throw new InvalidOperationException("send failed");
+            }
+
+            _opcodes.Enqueue(opcode);
+        }
 
         public void ProcessWorldPackets(Player player) { }
 
-        public void Kick() { }
+        public void Kick() => Interlocked.Increment(ref _kicks);
 
         public void OnLoggedOut() { }
     }

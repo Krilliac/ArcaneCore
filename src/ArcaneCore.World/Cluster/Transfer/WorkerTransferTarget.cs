@@ -10,6 +10,7 @@ using ArcaneCore.Protocol;
 using ArcaneCore.World.Characters;
 using ArcaneCore.World.Cluster.Gateway;
 using ArcaneCore.World.Handlers;
+using ArcaneCore.World.Honor;
 using ArcaneCore.World.Net;
 using ArcaneCore.World.Npc;
 using ArcaneCore.World.Packets;
@@ -23,35 +24,73 @@ namespace ArcaneCore.World.Cluster.Transfer;
 /// <summary>
 /// Builds the passive shadow of a transferred character on the target worker: the <see cref="Player"/> object with everything the character
 /// screen login loads (inventory, spells, quests, vitals, pets), read from the characters database. The player is not added to any map,
-/// does not tick and the load performs no durable write. May run on any thread (it reads databases).
+/// does not tick and the load performs no new durable write and registers nothing shared (hooks marked <see cref="ISkippedOnTransferShadowLoad"/>
+/// do not run; the others only read, or drain writes that were already queued). May run on any thread (it reads databases).
 /// </summary>
 public interface ITransferShadowLoader
 {
     /// <summary>Loads the shadow of <paramref name="bundle"/>'s character. Throws when the character or its client session cannot be resolved here.</summary>
     Task<Player> LoadAsync(PlayerTransferBundle bundle, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Undoes what loading <paramref name="shadow"/> left in shared services (for example the honor service's tracking of the player), for a
+    /// shadow that is dropped without ever entering the world. Writes nothing durable. Any thread.
+    /// </summary>
+    void Release(Player shadow);
 }
 
 /// <summary>
-/// What activation needs from the adopted client session, in login order. All three run on the world thread. The session state machine of the
-/// adopted session (character screen to in world) lives behind this seam.
+/// Marks an <see cref="ICharacterHooks"/> implementation that must not run on a transfer's shadow load, because its loading phase writes
+/// durably or registers state a dropped shadow would leave behind (the battleground hook deletes the match binding of a character saved on
+/// a battleground map: a login is not in a match any more, but an aborted transfer must keep it).
+/// </summary>
+public interface ISkippedOnTransferShadowLoad
+{
+}
+
+/// <summary>The <see cref="ICharacterHooks"/> loading phases as the shadow load runs them: the login's two phases without the hooks marked <see cref="ISkippedOnTransferShadowLoad"/>.</summary>
+public static class TransferShadowHooks
+{
+    /// <summary>Runs <see cref="ICharacterHooks.OnPlayerLoadingAsync"/> of every hook, then <see cref="ICharacterHooks.OnPlayerLoadedAsync"/> of every hook, skipping the marked ones. Session task or pool thread.</summary>
+    public static async Task RunAsync(IEnumerable<ICharacterHooks> all, WorldSession session, CharacterRecord character, Player player)
+    {
+        ArgumentNullException.ThrowIfNull(all);
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(character);
+        ArgumentNullException.ThrowIfNull(player);
+        ICharacterHooks[] hooks = [.. all.Where(h => h is not ISkippedOnTransferShadowLoad)];
+        foreach (ICharacterHooks hook in hooks)
+        {
+            await hook.OnPlayerLoadingAsync(session, character, player).ConfigureAwait(false);
+        }
+
+        foreach (ICharacterHooks hook in hooks)
+        {
+            await hook.OnPlayerLoadedAsync(session, character, player).ConfigureAwait(false);
+        }
+    }
+}
+
+/// <summary>
+/// What activation needs from the adopted client session. Both run on the world thread. The session state machine of the adopted session
+/// (character screen to in world) lives behind this seam. The login packets themselves are the teleport service's arrival callbacks.
 /// </summary>
 public interface ITransferSessionEntry
 {
     /// <summary>Moves the adopted session into the in-world state with <paramref name="player"/>. False when the client is gone or superseded (nothing more is sent or added).</summary>
     bool TryAttach(Player player);
 
-    /// <summary>The login-style packets that precede the map add (<c>SendInitialPacketsBeforeAddToMap</c>).</summary>
-    void SendInitialPacketsBeforeAddToMap(Player player);
-
-    /// <summary>The login-style packets after the map add (resume of saves, zone update and world states).</summary>
-    void SendInitialPacketsAfterAddToMap(Player player);
+    /// <summary>The saves held for the character since the transfer's capture resume (as the login does once the player is in its map).</summary>
+    void ResumeSaves(Player player);
 }
 
 /// <summary>
-/// Production <see cref="ITransferShadowLoader"/>: the same <see cref="ICharacterHooks"/> loading phases as CMSG_PLAYER_LOGIN, on the adopted
-/// session's service scope. <paramref name="sessions"/> resolves the adopted <see cref="WorldSession"/> of a bundle (null while the gateway has not
-/// moved the client here); an unresolved session fails the load and the coordinator aborts or retries. The load itself saves nothing; a hook
-/// that writes would equally write on a normal login. Not thread-affine.
+/// Production <see cref="ITransferShadowLoader"/>: the <see cref="ICharacterHooks"/> loading phases of CMSG_PLAYER_LOGIN (through
+/// <see cref="TransferShadowHooks"/>, so hooks marked <see cref="ISkippedOnTransferShadowLoad"/> do not run) on the adopted session's service
+/// scope. <paramref name="sessions"/> resolves the adopted <see cref="WorldSession"/> of a bundle (null while the gateway has not moved the
+/// client here); an unresolved session fails the load and the coordinator aborts or retries. The load saves nothing and registers nothing
+/// shared that <see cref="Release"/> does not undo. It skips the login's settlement barriers and rename check: the source's settlement save
+/// is durable before the bundle exists. Not thread-affine.
 /// </summary>
 public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldSession?> sessions) : ITransferShadowLoader
 {
@@ -75,14 +114,25 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
             throw new InvalidOperationException($"character {characterId} is not owned by account {bundle.AccountId}");
         }
 
-        RaceInfo raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender).ConfigureAwait(false)
+        RaceInfo raceInfo = await worldData.GetRaceInfoAsync(character.Race, character.Gender, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"missing race data for character {characterId}");
-        ClassInfo classInfo = await worldData.GetClassInfoAsync(character.Class).ConfigureAwait(false)
+        ClassInfo classInfo = await worldData.GetClassInfoAsync(character.Class, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException($"missing class data for character {characterId}");
         HomeBind home = bundle.HomeBind;
         if (home.IsUnset)
         {
             home = new HomeBind(character.HomeMapId, character.HomeZoneId, character.HomeX, character.HomeY, character.HomeZ);
+        }
+
+        // As the login handler: a character that never set a bind point starts at its race and class start position.
+        if (home.IsUnset && await worldData.GetStartPositionAsync(character.Race, character.Class, cancellationToken).ConfigureAwait(false) is { } start)
+        {
+            home = new HomeBind(start.MapId, start.ZoneId, start.X, start.Y, start.Z);
+        }
+
+        if (home.IsUnset)
+        {
+            throw new InvalidOperationException($"character {characterId} has no bind point and its race and class have no start position");
         }
 
         IReadOnlyList<ActionButton> buttons = await characters.GetActionButtonsAsync(characterId, cancellationToken).ConfigureAwait(false);
@@ -92,25 +142,24 @@ public sealed class CharacterHooksShadowLoader(Func<PlayerTransferBundle, WorldS
             CharacterOwnership = session.World.CharacterOwnership,
         };
 
-        ICharacterHooks[] allHooks = [.. session.Services.GetServices<ICharacterHooks>()];
-        foreach (ICharacterHooks hooks in allHooks)
-        {
-            await hooks.OnPlayerLoadingAsync(session, character, player).ConfigureAwait(false);
-        }
-
-        foreach (ICharacterHooks hooks in allHooks)
-        {
-            await hooks.OnPlayerLoadedAsync(session, character, player).ConfigureAwait(false);
-        }
-
+        await TransferShadowHooks.RunAsync(session.Services.GetServices<ICharacterHooks>(), session, character, player).ConfigureAwait(false);
         return player;
+    }
+
+    public void Release(Player shadow)
+    {
+        ArgumentNullException.ThrowIfNull(shadow);
+        if (shadow.Session is WorldSession session)
+        {
+            // HonorFeature.OnPlayerLoadingAsync tracked the shadow in the shared honor service.
+            session.Services.GetService<HonorFeature>()?.ActiveService?.Untrack(shadow);
+        }
     }
 }
 
 /// <summary>
-/// Production <see cref="ITransferSessionEntry"/> over the adopted <see cref="WorldSession"/> of the player (the shadow was built with it). The
-/// session task does not read the account settings while the gateway buffers the client's packets for the commit window, so reading them on the
-/// world thread here does not race. World thread.
+/// Production <see cref="ITransferSessionEntry"/> over the adopted <see cref="WorldSession"/> of the player (the shadow was built with it).
+/// World thread. <see cref="TryAttach"/> needs the adopted session in <see cref="SessionState.CharacterSelect"/> (the same gate as a login).
 /// </summary>
 public sealed class WorldSessionTransferEntry : ITransferSessionEntry
 {
@@ -131,20 +180,18 @@ public sealed class WorldSessionTransferEntry : ITransferSessionEntry
         return true;
     }
 
-    public void SendInitialPacketsBeforeAddToMap(Player player)
+    public void ResumeSaves(Player player)
     {
-        var session = (WorldSession)player.Session;
-        LoginSequence.SendInitialPacketsBeforeAddToMap(session, player, LoginPackets.BuildTutorialFlags(session.Settings.Tutorials));
-    }
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.Session is not WorldSession session)
+        {
+            return;
+        }
 
-    public void SendInitialPacketsAfterAddToMap(Player player)
-    {
-        var session = (WorldSession)player.Session;
-        // As the login does: the player is in its map, so the saves held for the character since capture resume.
+        // As the login does once the player is in its map: the saves held for the character since capture resume.
         int id = checked((int)player.Guid.Low);
         session.Services.GetService<CharacterSaveQueue>()?.ResumeCharacter(id);
         session.Services.GetService<QuestNpcFeature>()?.Persistence.ResumeCharacter(id);
-        LoginSequence.SendInitialPacketsAfterAddToMap(session, player);
     }
 }
 
@@ -155,10 +202,12 @@ public sealed class WorldSessionTransferEntry : ITransferSessionEntry
 /// <item><description><see cref="TryReserveSlotAsync"/>: refuses when <see cref="WorkerAdmission"/> is closed, when this worker does not own the target map copy,
 /// when the character is already online here or reserved by another transfer, or when the slot limit is reached. Idempotent per transfer id.</description></item>
 /// <item><description><see cref="InstallPassiveShadowAsync"/>: loads the shadow through <see cref="ITransferShadowLoader"/> once per transfer (concurrent and repeated calls share the load; a failed load is retried by the next call).
-/// The shadow is in no map, is never ticked and nothing is written.</description></item>
+/// The shadow is in no map, is never ticked and nothing is written (see <see cref="ISkippedOnTransferShadowLoad"/>).</description></item>
 /// <item><description><see cref="ActivateTargetPlayerAsync"/> (after the coordinator committed the new epoch): one world-thread command that adopts the target ownership token, places the
-/// player at the target position, attaches the adopted session, sends SMSG_NEW_WORLD and the login-style initial packets and adds the player to the map. A repeat for the same transfer id is a no-op.</description></item>
-/// <item><description><see cref="DiscardPassiveShadowAsync"/>: drops the reservation and the shadow and frees the slot; a discarded transfer id can never be installed or activated afterwards. A discard after activation does nothing.</description></item>
+/// player at the target position, attaches the adopted session, registers the player online without a map and starts the retail far-teleport arrival
+/// (<see cref="TeleportService.BeginClusterArrival"/>): SMSG_TRANSFER_PENDING and SMSG_NEW_WORLD now, the login packets and the map add when the client's
+/// MSG_MOVE_WORLDPORT_ACK arrives. The activation completes once the arrival is registered, not when the client has finished loading. A repeat for the same transfer id is a no-op.</description></item>
+/// <item><description><see cref="DiscardPassiveShadowAsync"/>: drops the reservation and the shadow (undoing its shared registrations through <see cref="ITransferShadowLoader.Release"/>) and frees the slot; a discarded transfer id can never be installed or activated afterwards. A discard after or during activation does nothing.</description></item>
 /// </list>
 /// After a target restart the reservation is gone, so install and activate adopt the transfer from the bundle (the roll-forward of a committed transfer must complete).
 /// Thread affinity: the interface methods may be called from any thread; world mutation runs through <see cref="WorldRuntime.InvokeAsync{T}"/>; the slot table is guarded by a lock.
@@ -298,6 +347,12 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
                 return Task.CompletedTask;
             }
 
+            if (_slots.TryGetValue(transferId, out Slot? activating) && activating.Activating)
+            {
+                _logger.LogWarning("Transfer {TransferId} is activating here; its discard ({Reason}) is ignored", transferId, abortReason);
+                return Task.CompletedTask;
+            }
+
             removed = RemoveSlot(transferId);
             _discarded.Add(transferId);
         }
@@ -307,14 +362,50 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             _logger.LogInformation("Transfer {TransferId} discarded on {Worker}: {Reason}", transferId, _workerId, abortReason);
         }
 
-        // The shadow was never in a map or the online registry: dropping the reference is the whole teardown. A load still running finishes
-        // into a slot nobody reads.
-        if (removed?.Loading is { IsFaulted: true } faulted)
+        // The shadow was never in a map or the online registry: dropping the reference is the teardown, plus undoing what its load registered
+        // in shared services (the honor service's tracking). A load still running is released when it finishes.
+        if (removed?.Loading is { } loading)
         {
-            _ = faulted.Exception; // observed: a discarded load that failed is not an unobserved task exception
+            ReleaseWhenLoaded(loading);
         }
 
         return Task.CompletedTask;
+    }
+
+    private void ReleaseWhenLoaded(Task<Player> load)
+    {
+        if (load.IsCompleted)
+        {
+            ReleaseFinished(load);
+            return;
+        }
+
+        _ = load.ContinueWith(ReleaseFinished, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private void ReleaseFinished(Task<Player> load)
+    {
+        if (load.IsFaulted)
+        {
+            _ = load.Exception; // observed: a discarded load that failed is not an unobserved task exception
+        }
+        else if (load.IsCompletedSuccessfully)
+        {
+            ReleaseShadow(load.Result);
+        }
+    }
+
+    private void ReleaseShadow(Player shadow)
+    {
+        try
+        {
+            _loader.Release(shadow);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("cluster.transfer-target-release", ex);
+            _logger.LogError(ex, "Releasing the dropped shadow of character {Guid} failed", shadow.Guid.Value);
+        }
     }
 
     public async Task ActivateTargetPlayerAsync(
@@ -352,22 +443,41 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             {
                 throw new InvalidOperationException($"transfer '{slot.TransferId}' was discarded while it was activating");
             }
+
+            slot.Activating = true; // from here a discard of this transfer is ignored
         }
 
         if (_world.FindOnlinePlayer(shadow.Guid) is { } online)
         {
-            if (!ReferenceEquals(online, shadow))
+            if (ReferenceEquals(online, shadow))
             {
-                throw new InvalidOperationException($"character {bundle.CharacterGuid} is already online on worker '{_workerId}'");
+                Finish(slot); // a repeat after the arrival was registered but the caller did not hear of it
+                return false;
             }
 
-            Finish(slot); // a repeat after the add succeeded but the caller did not hear of it
-            return false;
+            if (online.CharacterOwnership == token)
+            {
+                // A very late duplicate of a transfer whose id is no longer remembered: its character is already here under this very token.
+                ReleaseShadow(shadow);
+                Finish(slot);
+                return false;
+            }
+
+            slot.Activating = false;
+            throw new InvalidOperationException($"character {bundle.CharacterGuid} is already online on worker '{_workerId}'");
         }
 
         if (_world.TryGetMap(bundle.TargetMapId, bundle.TargetInstanceId, out Map? map) != MapAccessResult.Granted || map is null)
         {
+            slot.Activating = false;
             throw new InvalidOperationException($"worker '{_workerId}' does not own map {bundle.TargetMapId} instance {bundle.TargetInstanceId}");
+        }
+
+        TeleportService? teleports = TeleportService.Of(_world);
+        if (teleports is null)
+        {
+            slot.Activating = false;
+            throw new InvalidOperationException($"worker '{_workerId}' has no teleport service attached");
         }
 
         TransferPosition at = bundle.TargetPosition;
@@ -378,29 +488,46 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
         if (!_entry.TryAttach(shadow))
         {
             _logger.LogInformation("Transfer {TransferId}: the client of character {Character} left before activation; nothing to add", slot.TransferId, bundle.CharacterGuid);
+            ReleaseShadow(shadow);
             Finish(slot);
             return false;
         }
 
-        // Login order (vmangos HandlePlayerLogin): the client is told the new map, then the initial packets, the map add, the packets after it.
-        shadow.Session.Send(WorldOpcode.SmsgNewWorld, TeleportPackets.BuildNewWorld(bundle.TargetMapId, at.X, at.Y, at.Z, at.Orientation));
-        _entry.SendInitialPacketsBeforeAddToMap(shadow);
+        // Retail far-teleport order: vmangos Player::ExecuteTeleportFar sends SMSG_TRANSFER_PENDING then SMSG_NEW_WORLD (Player.cpp:2068-2118),
+        // and the map add with both login packet groups runs only when MSG_MOVE_WORLDPORT_ACK arrives (HandleMoveWorldportAckOpcode,
+        // MovementHandler.cpp:112-146). ArcaneCore's own far teleport does the same; the transfer reuses it (TeleportService.BeginClusterArrival).
+        // vmangos has no cross-worker transfer, so the sequence is the far teleport's, not a login's.
         try
         {
-            _world.AddPlayer(shadow, map);
+            _world.RegisterPlayerForTransferArrival(shadow);
+            if (!teleports.BeginClusterArrival(shadow, map, new TeleportDestination(bundle.TargetMapId, at.X, at.Y, at.Z, at.Orientation), new Arrival(_entry, _world)))
+            {
+                throw new InvalidOperationException($"the arrival of character {bundle.CharacterGuid} could not be started");
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            // Never leave a session "in world" with a player that is not in a map.
+            // Never leave a session "in world" with a player that is in the registry but will never reach a map: undo the registration and kick.
             FaultLedger.Shared.Record("cluster.transfer-target", ex);
-            shadow.Session.Kick("transfer target could not add the player");
+            teleports.Forget(shadow);
+            _world.DetachPlayerForTransfer(shadow);
+            shadow.Session.Kick("transfer target could not start the arrival");
+            slot.Activating = false;
             throw;
         }
 
-        _entry.SendInitialPacketsAfterAddToMap(shadow);
-        _world.NotifyLoggedIn(shadow);
         Finish(slot);
         return true;
+    }
+
+    /// <summary>The arrival callbacks of the teleport service: the held saves resume once the player is in its map (and when the arrival is abandoned), then the login notification.</summary>
+    private sealed class Arrival(ITransferSessionEntry entry, WorldRuntime world) : ITransferArrivalObserver
+    {
+        public void MapAdded(Player player) => entry.ResumeSaves(player);
+
+        public void Entered(Player player) => world.NotifyLoggedIn(player);
+
+        public void Abandoned(Player player) => entry.ResumeSaves(player);
     }
 
     /// <summary>Finds or adopts the slot of a transfer and starts (or joins) its shadow load; null when the transfer is already activated.</summary>
@@ -441,7 +568,7 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
             }
 
             // One shared load per transfer; it does not take the first caller's cancellation, which only abandons its own wait.
-            slot.Loading ??= _loader.LoadAsync(bundle, CancellationToken.None);
+            slot.Loading ??= Task.Run(() => _loader.LoadAsync(bundle, CancellationToken.None)); // on the pool: the loader's synchronous prefix does not run under the gate
             load = slot.Loading;
             return slot;
         }
@@ -523,6 +650,15 @@ public sealed class WorkerTransferTarget : ITransferTargetWorker
 
         /// <summary>The shadow load (null until the first install; guarded by the target's gate).</summary>
         public Task<Player>? Loading { get; set; }
+
+        /// <summary>Set (under the target's gate) when the activation command began; a discard of the transfer is ignored from then on.</summary>
+        public bool Activating
+        {
+            get => _activating;
+            set => _activating = value;
+        }
+
+        private volatile bool _activating;
     }
 
     /// <summary>A bounded set of transfer ids, oldest forgotten first. Guarded by the target's gate.</summary>

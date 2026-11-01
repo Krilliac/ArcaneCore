@@ -488,6 +488,28 @@ public sealed partial class WorldRuntime : IDisposable
         map.AddPlayer(player);
     }
 
+    /// <summary>
+    /// Put a transferred player into the online registry without a map (world thread), as a player is while a far teleport loads: the
+    /// cluster transfer target registers the shadow here, sends the loading screen (<c>TeleportService.BeginClusterArrival</c>) and the map
+    /// add follows the client's MSG_MOVE_WORLDPORT_ACK. A disconnect in between takes the normal logout path (<see cref="RemovePlayer"/>
+    /// saves the player at its arrival position). Throws when the guid is already online.
+    /// </summary>
+    public void RegisterPlayerForTransferArrival(Player player)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        if (player.CharacterOwnership is null && CharacterOwnership is { } ownership)
+            player.CharacterOwnership = ownership;
+        if (!_online.TryAdd(player.Guid, player))
+        {
+            throw new InvalidOperationException($"{player.Name} ({player.Guid}) is already online");
+        }
+
+        _onlineByName[player.Name] = player;
+        _autosaveRescan = true;
+        player.StartPlayedTime(NowMs);
+        player.InitializeNativeDisplayModel(PlayerDisplayModelResolver);
+    }
+
     /// <summary>Take a player out of the world and queue its state for saving (world thread).</summary>
     public void RemovePlayer(Player player)
     {

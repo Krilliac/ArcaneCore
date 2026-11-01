@@ -46,7 +46,7 @@ namespace ArcaneCore.World.Battlegrounds;
 /// <para>Thread affinity: everything below runs on the world thread except <see cref="Attach"/> and the character hooks.</para>
 /// </summary>
 public sealed partial class BattlegroundFeature(IServiceProvider services, IServiceScopeFactory scopes, ILoggerFactory loggers)
-    : IWorldFeature, IAreaTriggerListener, ICharacterHooks
+    : IWorldFeature, IAreaTriggerListener, ICharacterHooks, ArcaneCore.World.Cluster.Transfer.ISkippedOnTransferShadowLoad
 {
     private readonly ILogger _logger = loggers.CreateLogger<BattlegroundFeature>();
     private readonly Dictionary<uint, MatchRuntime> _matches = [];
