@@ -1,5 +1,7 @@
 using ArcaneCore.Data.Characters.Items;
+using ArcaneCore.Data.Characters.Pets;
 using ArcaneCore.Data.Economy;
+using ArcaneCore.Data.Gm;
 using ArcaneCore.Data.Instances;
 using ArcaneCore.Data.Schema;
 using ArcaneCore.Data.Social;
@@ -192,6 +194,18 @@ public sealed class EfCharacterIdRangeStore(CharacterDbContext db) : IIdRangeRes
                 await MaxUintOrZeroAsync(db.Set<ItemTextRow>().AsNoTracking().Select(r => (uint?)r.Id), ct).ConfigureAwait(false),
                 await MaxUintOrZeroAsync(db.Set<MailRow>().AsNoTracking().Select(r => (uint?)r.ItemTextId), ct).ConfigureAwait(false),
                 await MaxUintOrZeroAsync(db.Set<ItemInstanceRow>().AsNoTracking().Select(r => (uint?)r.Text), ct).ConfigureAwait(false)),
+
+            // Realm-unique pet numbers: the persisted key is only (character, pet number), so the floor spans both pet tables.
+            IdRangeScopes.Pet => MaxOf(
+                await MaxUintOrZeroAsync(db.Set<PersistentPetRow>().AsNoTracking().Select(r => (uint?)r.PetNumber), ct).ConfigureAwait(false),
+                await MaxUintOrZeroAsync(db.Set<PetStableRow>().AsNoTracking().Select(r => (uint?)r.PetNumber), ct).ConfigureAwait(false)),
+
+            IdRangeScopes.GmTicket =>
+                await MaxIntOrZeroAsync(db.Set<GmTicketRow>().AsNoTracking().Select(r => (int?)r.Id), ct).ConfigureAwait(false),
+
+            IdRangeScopes.Petition => MaxOf(
+                await MaxIntOrZeroAsync(db.Set<PetitionRow>().AsNoTracking().Select(r => (int?)r.Id), ct).ConfigureAwait(false),
+                await MaxIntOrZeroAsync(db.Set<PetitionSignRow>().AsNoTracking().Select(r => (int?)r.PetitionId), ct).ConfigureAwait(false)),
 
             _ => 0UL,
         };
