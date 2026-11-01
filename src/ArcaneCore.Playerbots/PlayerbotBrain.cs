@@ -3587,7 +3587,7 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
     /// <summary>World time before which <see cref="TryWanderToMeshPoint"/> takes no samples (an empty run backed it off); 0: not backed off.</summary>
     private uint _wanderMeshBackoffUntilMs;
 
-    /// <summary>Empty mesh-point fallback runs in a row (a leg taken, or leaving the wander, resets it).</summary>
+    /// <summary>Empty mesh-point fallback runs in a row (a mesh leg taken resets it; the back-off times out by itself, also after a change of map).</summary>
     private int _wanderMeshEmpties;
 
     /// <summary>Mesh points sampled per think by the wander fallback.</summary>
@@ -3646,6 +3646,8 @@ internal sealed partial class PlayerbotBrain(WorldSession session, PlayerbotOpti
             {
                 _exploreRefusals = 0;
                 _exploreRefusalTraced = false;
+                _wanderMeshEmpties = 0;
+                _wanderMeshBackoffUntilMs = 0;
                 return true;
             }
             if (!PlayerbotNavigation.TryAdvance(_session, found, _options, elapsedMs, _session.World.NowMs))

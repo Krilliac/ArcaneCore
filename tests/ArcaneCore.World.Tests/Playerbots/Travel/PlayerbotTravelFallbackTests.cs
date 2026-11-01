@@ -1,5 +1,7 @@
 using System.Numerics;
+using ArcaneCore.Kernel.WorldData;
 using ArcaneCore.World.Playerbots;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -8,7 +10,8 @@ namespace ArcaneCore.World.Tests.Playerbots.Travel;
 /// <summary>
 /// The wander fallback of a bot that is boxed in (post-#1651 findings): the home limits the mesh-point fallback keeps to
 /// (<see cref="PlayerbotBrain.OutsideHomeLimits"/>: a pocket beyond the explore radius, a clipped home with no known zone), the back-off after
-/// an empty run (<see cref="PlayerbotBrain.WanderMeshBackoffMs"/>) and the zone-border deflect angles (45, 90, 135 degrees).
+/// an empty run (<see cref="PlayerbotBrain.WanderMeshBackoffMs"/>), the zone-border deflect angles (45, 90, 135 degrees) and the landing guard
+/// of a same-map portal beside where a bot arrived (<see cref="PlayerbotTriggerTracker.IsGuarded"/>).
 /// </summary>
 public sealed class PlayerbotTravelFallbackTests
 {
@@ -85,28 +88,127 @@ public sealed class PlayerbotTravelFallbackTests
         Assert.Equal(length * MathF.Cos(radians), leg.X, 0.01f);
         Assert.Equal(length * MathF.Sin(radians), leg.Y, 0.01f);
     }
+
+    // AreaTrigger.dbc / classic-db: 542 is Rut'theran's portal up (radius 10); trigger 527 in Darnassus lands the bot at (8785.79, 966.983, 30.1999).
+    private static readonly AreaTriggerTemplate PortalUp = new(542, 1, 8799.41f, 969.787f, 30.2409f, 10f, 0, 0, 0, 0, "Teddrassil - Darnassus");
+    private static readonly Vector3 PortalExit = new(8785.79f, 966.983f, 30.1999f);
+
+    [Fact]
+    public void TheDarnassusPortalExit_LiesOutsideTheReturnVolume_ByAboutFourYards()
+    {
+        float yardsFromCentre = Vector2.Distance(new(PortalExit.X, PortalExit.Y), new(PortalUp.X, PortalUp.Y));
+        Assert.InRange(yardsFromCentre - PortalUp.Radius, 3.8f, 4.0f);
+        Assert.False(PlayerbotTriggerTracker.Contains(PortalUp, 1, PortalExit));
+    }
+
+    [Fact]
+    public void ABotLandingBesideAPortal_HoldsItBack_UntilItIsWalkedClearOfIt()
+    {
+        var tracker = new PlayerbotTriggerTracker();
+        var map = new object();
+        AreaTriggerTemplate[] near = [PortalUp];
+        tracker.Observe(map, 1, PortalExit, near, fire: false);
+        Assert.True(tracker.IsGuarded(542), "the landing is 3.9 yd outside the volume");
+
+        // Walking into the volume still reports the entry: the Update filter holds the trigger back, not the tracker.
+        IReadOnlyList<uint> entered = tracker.Observe(map, 1, new Vector3(PortalUp.X - 5f, PortalUp.Y, PortalUp.Z), near, fire: true);
+        Assert.Equal(new uint[] { 542 }, entered);
+        Assert.True(tracker.IsGuarded(542));
+
+        // Still within the margin of the edge (10 + 8 yd of the centre): still held.
+        tracker.Observe(map, 1, new Vector3(PortalUp.X - 16f, PortalUp.Y, PortalUp.Z), near, fire: true);
+        Assert.True(tracker.IsGuarded(542));
+
+        // Clear of it: released, so walking back in is a deliberate trip through the portal.
+        tracker.Observe(map, 1, new Vector3(PortalUp.X - 19f, PortalUp.Y, PortalUp.Z), near, fire: true);
+        Assert.False(tracker.IsGuarded(542));
+    }
+
+    [Fact]
+    public void ABotInsideAVolumeWhereItLands_OrFarFromOne_GuardsNothing()
+    {
+        var inside = new PlayerbotTriggerTracker();
+        inside.Observe(new object(), 1, new Vector3(PortalUp.X, PortalUp.Y, PortalUp.Z), new[] { PortalUp }, fire: false);
+        Assert.False(inside.IsGuarded(542), "inside the volume it already counts as inside");
+
+        var far = new PlayerbotTriggerTracker();
+        far.Observe(new object(), 1, new Vector3(PortalUp.X - 60f, PortalUp.Y, PortalUp.Z), new[] { PortalUp }, fire: false);
+        Assert.False(far.IsGuarded(542));
+    }
+
+    [Fact]
+    public void AGuardedTrigger_IsWanted_OnlyWhileAWalkRenewsIt()
+    {
+        var tracker = new PlayerbotTriggerTracker { WantedTrigger = 542, WantedUntilMs = 6_000 };
+        Assert.True(tracker.IsWanted(542, 1_000));
+        Assert.False(tracker.IsWanted(527, 1_000), "another trigger is not the errand");
+        Assert.False(tracker.IsWanted(542, 6_000), "the want ran out");
+        Assert.False(tracker.IsWanted(542, 7_000));
+    }
 }
 
 /// <summary>
-/// The Rut'theran landing of trigger 527 (8786, 969, 30) lies 3.9 yd outside the volume of the return trigger 542: walking from it to the dock
-/// must not bounce the bot back up the tree. Needs the live terrain extraction; reported Skipped (with the reason) without it.
+/// The Rut'theran landing of trigger 527 (8785.79, 966.983, 30.2) lies 3.9 yd outside the volume of the return trigger 542 (8799.41, 969.787,
+/// radius 10): a bot that landed there and walked on past the portal used to be sent straight back up the tree to the Darnassus exit. The
+/// world here has triggers 527 and 542 and their teleport rows, as in <see cref="PlayerbotRuttheranRecoveryTerrainTests"/> (classic-db
+/// areatrigger_teleport), and the walk crosses the volume, where <see cref="PlayerbotMotion.Pump"/> reports the trigger as a client would.
+/// Needs the live terrain extraction; reported Skipped (with the reason) without it.
 /// </summary>
 public sealed class PlayerbotTravelFallbackRealTerrainTests : RealTerrainNavigationTestBase
 {
     private const uint Kalimdor = 1;
+    private static readonly AreaTriggerTemplate PortalUp = new(542, 1, 8799.41f, 969.787f, 30.2409f, 10f, 0, 0, 0, 0, "Teddrassil - Darnassus");
+    private static readonly AreaTriggerTemplate PortalDown = new(527, 1, 9947.48f, 2630.04f, 1318.6f, 10f, 0, 0, 0, 0, "Teddrassil - Ruth Theran");
+    private static readonly Vector3 DarnassusExit = new(9946.25f, 2612.97f, 1316.49f);
+    private static readonly Vector3 Landing = new(8785.79f, 966.983f, 30.1999f);
+
+    // Past the portal's centre (8799.41, 969.787), so the walk from the landing crosses its volume.
+    private static readonly Vector3 BeyondPortal = new(8808.5f, 971f, 30.2409f);
 
     public PlayerbotTravelFallbackRealTerrainTests(ITestOutputHelper output) : base(output) { }
 
-    [RealTerrainBotFact]
-    public async Task FromTheRuttheranLanding_TheBotWalksToTheDock_WithoutBeingBouncedUpTheTree()
+    private static void PortalWorld(IServiceCollection services) => services.AddSingleton<IMapDataStore>(new PortalMaps());
+
+    private sealed class PortalMaps : IMapDataStore
     {
-        var landing = new Vector3(8786f, 969f, 30f);
-        var dock = new Vector3(8600f, 800f, 0f);
-        await using Terrain terrain = await Terrain.StartAsync();
-        await terrain.PlaceAsync(landing, Kalimdor);
-        float left = await terrain.WalkAsync(dock, 120_000, output);
-        float fromLanding = await terrain.Host.OnWorldAsync(() => Vector2.Distance(new(terrain.Player.X, terrain.Player.Y), new(landing.X, landing.Y)));
-        output.WriteLine($"left {left:F1} yd; {fromLanding:F1} yd from the landing");
-        Assert.True(left <= 10f, $"stopped {left:F1} yards from the Rut'theran dock (a bounce through trigger 542 puts the bot on the tree, 1300 yards up)");
+        public Task<MapContent> LoadAsync(CancellationToken cancellationToken = default) => Task.FromResult(new MapContent(
+            [
+                new MapTemplate(0, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Eastern Kingdoms", ""),
+                new MapTemplate(1, 0, MapType.Common, 0, 0, 0, -1, 0, 0, "Kalimdor", ""),
+            ],
+            [],
+            [PortalUp, PortalDown],
+            [
+                new AreaTriggerTeleport(542, "Teddrassil - Darnassus", "", 0, 1, DarnassusExit.X, DarnassusExit.Y, DarnassusExit.Z, 4.71239f),
+                new AreaTriggerTeleport(527, "Teddrassil - Ruth Theran", "", 0, 1, Landing.X, Landing.Y, Landing.Z, 3.40339f),
+            ],
+            []));
+    }
+
+    [RealTerrainBotFact]
+    public async Task FromTheDarnassusPortalExit_WalkingPastThePortalVolume_DoesNotBounceTheBotUpTheTree()
+    {
+        await using Terrain terrain = await Terrain.StartAsync(services: PortalWorld);
+        await terrain.PlaceAsync(Landing, Kalimdor);
+        float left = await terrain.WalkAsync(BeyondPortal, 60_000, output);
+        Vector3 end = await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
+        output.WriteLine($"left {left:F1} yd; the bot ends at {end}");
+        Assert.True(end.Z < 500f && Vector3.Distance(end, DarnassusExit) > 100f,
+            $"the bot was sent through trigger 542 to the Darnassus exit (ends at {end}) by a walk past the portal from its own landing");
+        Assert.True(left <= 10f, $"stopped {left:F1} yards short of the point beyond the portal");
+    }
+
+    [RealTerrainBotFact]
+    public async Task WalkingIntoThePortalOnPurpose_StillTakesIt()
+    {
+        await using Terrain terrain = await Terrain.StartAsync(services: PortalWorld);
+        await terrain.PlaceAsync(Landing, Kalimdor);
+        // A short walk first reads the navigation tiles, so the want below does not run out while the plan waits for them.
+        await terrain.WalkAsync(new Vector3(Landing.X - 3f, Landing.Y, Landing.Z), 20_000, output);
+        await terrain.Host.OnWorldAsync(() => PlayerbotAreaTriggers.Want(terrain.Player, 542, terrain.Host.World.NowMs));
+        await terrain.WalkAsync(BeyondPortal, 60_000, output);
+        await terrain.WaitAsync(() => terrain.Player.MapId == Kalimdor && terrain.Player.Z > 1000f, "the climb through trigger 542");
+        Vector3 end = await terrain.Host.OnWorldAsync(() => new Vector3(terrain.Player.X, terrain.Player.Y, terrain.Player.Z));
+        Assert.True(Vector3.Distance(end, DarnassusExit) < 30f, $"a walk that asked for trigger 542 ended at {end}, not the Darnassus exit");
     }
 }

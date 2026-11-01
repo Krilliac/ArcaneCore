@@ -837,6 +837,8 @@ internal sealed partial class PlayerbotRecovery(WorldSession session, PlayerbotO
             return PortalWalk.Failed;
         }
 
+        // Walking into this volume is the errand: it is not held back as a portal beside the landing (PlayerbotAreaTriggers.Want).
+        PlayerbotAreaTriggers.Want(player, trigger.Id, session.World.NowMs);
         walked = Walk(player, new Vector3(trigger.X, trigger.Y, trigger.Z), trigger, elapsedMs, now);
         return PortalWalk.Walking;
     }

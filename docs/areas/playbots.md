@@ -1078,6 +1078,10 @@ through the real opcodes (movement heartbeats, CMSG_USE_ITEM, CMSG_CAST_SPELL, C
   (true), `MageServiceRadiusYards` (150, 10..1000), `MageServiceFeeCopper` (0, 0..100000), `MaxTravelSpendCopper` (10000, 0..10000000),
   `TransitBackoffSeconds` (60, 10..3600), `TransitBackoffMaxSeconds` (300, 10..86400, not below `TransitBackoffSeconds`). Flight paths:
   `World:Playerbots:Taxi:Enabled` (true).
+- **Landing guard.** A same-map portal whose volume lies within 8 yards of the edge of where a bot landed or logged in (Teldrassil: the exit of
+  trigger 527 at Rut'theran is 3.9 yards outside the volume of 542, the portal back up) is not taken by a walk that merely passes it
+  (`PlayerbotTriggerTracker.IsGuarded`), until the bot has walked more than 8 yards clear of it. A journey's trigger leg and a ghost's walk into a
+  portal ask for their trigger on purpose (`PlayerbotAreaTriggers.Want`, 5 s, renewed at each think) and take it at once.
 - **Anomaly codes.** `travel`: `leg-failed`, `overdue`. `ship`: `ship-missing`, `never-docked`, `board-refused`, `left-ship`, `wrong-map`,
   `ride-overdue`, `disembark-refused`, `dock-unreachable`, `route-bad-data`. `hearth`: `no-hearthstone`, `on-cooldown`, `use-refused`,
   `cast-interrupted`, `not-arrived`, `services-unavailable`. `mage`: `teleport-cast-refused`, `cast-interrupted`, `not-arrived`,
