@@ -154,8 +154,7 @@ public sealed class GothikCheckSideScript : ISpellScript
         foreach (Player player in map.Players)
         {
             if (!player.IsAlive || naxx.IsOnGothikLivingSide(player) != livingSide) continue;
-            float dx = player.X - add.X, dy = player.Y - add.Y, dz = player.Z - add.Z;
-            float distance = dx * dx + dy * dy + dz * dz;
+            float distance = WorldGeometry.DistanceSq3D(player, add);
             if (distance < best) { best = distance; nearest = player; }
         }
 

@@ -37,6 +37,8 @@ case "$config" in Debug | Release) ;; *) echo "configuration must be Debug or Re
 ext=""
 case "$rid" in win-*) ext=".exe" ;; esac
 
+# MSBuild resolves -p: paths against the project directory, not the caller's, so the output directory must be absolute.
+out=$(mkdir -p "$out" && cd "$out" && pwd)
 stage="$out/arcanecore-$rid"
 scratch="$out/.scratch-$rid"
 rm -rf "$stage" "$scratch"
@@ -46,7 +48,7 @@ mkdir -p "$stage" "$scratch"
 # (the assembly is architecture-neutral, as in the Dockerfile), and its two files are placed beside the world executable, where Program.cs
 # loads it (its packages are all World's). It goes first: the rid restores below rewrite the shared obj/project.assets.json of World.
 dotnet restore src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj --locked-mode
-dotnet publish src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj -c "$config" --no-restore -o "$scratch/playerbots"
+dotnet publish src/ArcaneCore.Playerbots/ArcaneCore.Playerbots.csproj -c "$config" --no-restore -o "$scratch/playerbots" -p:WorldHostPublishDir="$stage/world/"
 
 publish() { # <project> <output dir>: a self-contained publish for $rid from a locked restore
   local project="$1" dest="$2"
@@ -55,7 +57,6 @@ publish() { # <project> <output dir>: a self-contained publish for $rid from a l
 }
 
 publish src/ArcaneCore.World/ArcaneCore.World.csproj "$stage/world"
-cp "$scratch/playerbots/ArcaneCore.Playerbots.dll" "$scratch/playerbots/ArcaneCore.Playerbots.pdb" "$stage/world/"
 publish src/ArcaneCore.Realm/ArcaneCore.Realm.csproj "$stage/realm"
 publish tools/ArcaneCore.ContentImporter/ArcaneCore.ContentImporter.csproj "$stage/tools"
 publish tools/ArcaneCore.DbUpgrade/ArcaneCore.DbUpgrade.csproj "$stage/dbupgrade"

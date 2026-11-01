@@ -1,3 +1,4 @@
+using ArcaneCore.Data.Characters.Cluster;
 using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.Kernel.Diagnostics;
 using ArcaneCore.Kernel.Ops;
@@ -19,8 +20,9 @@ public interface IRealmSingletonHalt
 /// Holds this node's realm-singleton leases (the social, economy and instances scopes) for a <see cref="ClusterNodeRole.MapWorker"/>: takes them once at start,
 /// renews them on a timer, and gives them back at stop. The realm singletons (AutoBroadcast, the auction house bot, and the instance reset schedule, whose durable writes are made by the Instances holder only) cannot be detached from a running
 /// world, so losing a lease is fail-stop: the keeper logs it, records a fault, and asks the host to stop with exit code
-/// <see cref="ExitCodes.Failure"/>. The owner id is <c>Cluster:Worker:NodeId</c>. On loss every registered <see cref="IRealmSingletonHalt"/> is halted first (each guarded), so the singletons stop ticking while the host winds down. Open gap: storage writes are not checked against the fencing
-/// token at commit, so a partitioned former holder is bounded by this stop, not by the database.
+/// <see cref="ExitCodes.Failure"/>. The owner id is <c>Cluster:Worker:NodeId</c>. On loss every registered <see cref="IRealmSingletonHalt"/> is halted first (each guarded), so the singletons stop ticking while the host winds down. Storage writes are checked against the fencing
+/// token at commit as well: the keeper is the <see cref="IRealmLeaseFenceSource"/> of the economy, social and instance stores (<see cref="LeaseFencedWrite"/>), so a partitioned
+/// former holder whose lease was taken over is refused by the database even before this stop runs.
 /// <para>Renewal starts as soon as the first lease is granted (inside <see cref="AcquireAtStartAsync"/>), so a slow start cannot outlast a lease.
 /// Every timer tick also judges the deadline on its own, so a renewal call that hangs in the store cannot hide an expiring lease: the node stops
 /// when the next tick would fall in the last half renewal interval before the lease lapses.</para>
@@ -28,7 +30,7 @@ public interface IRealmSingletonHalt
 /// runs on the thread pool, and its ticks may overlap a still-running store call. The lease store is called synchronously off the world thread.
 /// All state is guarded by one lock.</para>
 /// </summary>
-public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
+public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFenceSource
 {
     private static readonly string[] Scopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy];
     private static readonly string[] MapWorkerScopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy, RealmAuthorityScopes.Instances];
@@ -90,6 +92,15 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable
         lock (_gate)
         {
             return _held.TryGetValue(scope, out Held? held) ? held.Token : null;
+        }
+    }
+
+    /// <summary>The lease this node holds for <paramref name="scope"/> as a commit fence, or null when it holds none (also after a graceful release). A lease lost to a takeover keeps its old token here, which is what makes the stores refuse the write.</summary>
+    public RealmLeaseFence? FenceFor(string scope)
+    {
+        lock (_gate)
+        {
+            return _held.TryGetValue(scope, out Held? held) ? new RealmLeaseFence(scope, _nodeId, _incarnation, held.Token) : null;
         }
     }
 

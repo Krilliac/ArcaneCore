@@ -19,8 +19,7 @@ public sealed class OuroSpawnerAI(Creature creature) : CreatureAI(creature)
     public override void MoveInLineOfSight(Unit who)
     {
         if (_summoned || who is not Player player || player.IsGameMaster || !player.IsAlive) return;
-        float dx = player.X - Me.X, dy = player.Y - Me.Y, dz = player.Z - Me.Z;
-        if (dx * dx + dy * dy + dz * dz <= 25f * 25f && DoCast(Me, 26061) == CreatureCastResult.Ok)
+        if (WorldGeometry.DistanceSq3D(player, Me) <= 25f * 25f && DoCast(Me, 26061) == CreatureCastResult.Ok)
             _summoned = true;
     }
 

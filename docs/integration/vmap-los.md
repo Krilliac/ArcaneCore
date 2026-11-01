@@ -100,9 +100,10 @@ the walkable climb). Queries:
 * funnel string-pulling into corners; heights from the detail mesh (or a fan over the polygon);
 * more than `MaxPoints` (256) corners → cut and flagged `Short`;
 * map without `.mmap`, or start or end on a tile that is not loaded → straight line
-  `Normal | NotUsingPath` (vmangos' `HaveTiles` shortcut); start or end on a loaded tile but outside
-  the search boxes →
-  `NoPath` with a two-point shortcut.
+  `Normal | NotUsingPath` (vmangos' `HaveTiles` shortcut); with `EndTolerance` 0, start or end on a loaded tile but outside
+  the two search boxes →
+  `NoPath` with a two-point shortcut. With `EndTolerance > 0` the single `FindWalkPoly` box and its 3 yd rule above decide instead
+  (and a flier or swimmer that fails it follows the rules in [collision-pathing](../areas/collision-pathing.md)).
 
 ## Provenance
 

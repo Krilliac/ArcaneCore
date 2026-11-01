@@ -31,7 +31,7 @@ tiles to a temporary directory; none touches a database.
 * GUID width of `SMSG_FORCE_MOVE_ROOT` and the other 1.12 movement SMSGs: packed (vmangos, mangos-classic, mangoszero, what the base sends) versus the full GUID that gtker lists
   for the root and spline-root packets. Packed is kept everywhere; every ack-bearing slice needs a real-client check.
 * Slime damage (`Locomotion:SlimeDamage`, off), breath and fatigue base duration (60 s) and the lava tick (605 to 610 every 2 s): reference defaults, not proven.
-* Knock back vertical speed: vmangos divides the effect value as an integer, mangos-classic as a float (57 gives 5 or 5.7).
+* Knock back vertical speed: vmangos divides the effect value as an integer, mangos-classic as a float (57 gives 5 or 5.7). This server follows mangos-classic and divides as a float (`KnockbackEffects.cs`: `Value / 10.0f`), so 57 gives 5.7; whether retail matches either core is not proven.
 * An environmental death marks the player as a PvP death in vmangos (a self kill is its own tap); retail behaviour of the corpse type and reclaim delay is unknown.
 * WMO liquid (lava and slime inside buildings, canals) and `LiquidType.dbc` remaps depend on collision/client data lanes.
 * Server-driven player movement: Charge, Blink (Leap) and the face-caster teleport are delivered by `ForcedMovement` without a stepped player spline (the charger is relocated at once and the spline is sent for the clients), see [transform-and-charge.md](transform-and-charge.md); a server-stepped player spline is still not designed.
@@ -353,8 +353,9 @@ the movement part is `Locomotion/Knockback/Knockback.cs` (vmangos `Unit::KnockBa
 * **Order**: a target that is stunned or rooted is left alone; its current non-melee cast is interrupted; a player in a map gets `SMSG_MOVE_KNOCK_BACK` =
   packed GUID, u32 counter, f32 vcos, f32 vsin, f32 horizontal speed, f32 vertical speed **negated** (gtker `smsg_move_knock_back.wowm`, vmangos
   `MovementPacketSender.cpp:241-278`) and a pending `KnockBack` change. The direction is the angle from the caster to the target in [0, 2 pi), or the target's
-  orientation plus pi when it knocks itself back. Horizontal speed is `misc value / 10`; vertical speed is `value / 10` **with vmangos' integer division** of
-  the effect value (57 gives 5; mangos-classic divides as a float and gets 5.7): vmangos is primary and is followed, the difference is an open question.
+  orientation plus pi when it knocks itself back. Horizontal speed is `misc value / 10`; vertical speed is `value / 10` as a **float division** of
+  the effect value (57 gives 5.7, as mangos-classic does; vmangos divides as an integer and gets 5): the float form is what the code does
+  (`KnockbackEffects.cs`), the difference from vmangos is an open question.
   A taxi passenger is skipped; the Dream Fog sleep (24778) is removed first. Only players are moved, as in every pre-WotLK core (mangos-classic
   `Unit.cpp:10816`: "Effect properly implemented only for players"); creatures are never knocked back, but their cast is still interrupted.
 * **Pull**: toward the caster by `min(2D distance, value)` as a negative horizontal speed, `misc value / 10` vertical (vmangos itself flags this as "very wrong").

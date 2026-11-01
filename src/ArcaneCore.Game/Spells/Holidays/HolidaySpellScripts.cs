@@ -136,8 +136,7 @@ public sealed class WinterWondervoltScript : ISpellScript
     {
         ArgumentNullException.ThrowIfNull(context);
         Unit target = context.Target;
-        float dx = context.Caster.X - target.X, dy = context.Caster.Y - target.Y, dz = context.Caster.Z - target.Z;
-        if (dx * dx + dy * dy + dz * dz > 1f) return;
+        if (WorldGeometry.DistanceSq3D(context.Caster, target) > 1f) return;
         foreach (uint form in Forms)
             if (context.System.HasAura(target, form)) context.System.RemoveAuras(target, form, AuraRemoveMode.Cancel);
         HolidayCasts.Self(context, target, Forms[context.System.Random.Next(Forms.Length)]);

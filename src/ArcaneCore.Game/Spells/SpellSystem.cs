@@ -167,6 +167,11 @@ public sealed partial class SpellSystem
             player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(spellId, SpellCastResult.BadTargets));
             return SpellCastResult.BadTargets;
         }
+        if (NamesUnallowedItemTarget(spell, targets))
+        {
+            player.Session.Send(WorldOpcode.SmsgCastResult, SpellPackets.BuildCastResult(spellId, SpellCastResult.BadTargets));
+            return SpellCastResult.BadTargets;
+        }
 
         // Casting spells interrupts looting, once the request passed the unknown/not-known/BAD_TARGETS refusals (HandleCastSpellOpcode,
         // vmangos@0e3ff01 SpellHandler.cpp:301-306): a window left open would also make the cast of a gather on the same node fail with CHEST_IN_USE against
@@ -185,6 +190,38 @@ public sealed partial class SpellSystem
         }
 
         return Prepare(player, spell, targets, triggered: false);
+    }
+
+    /// <summary>
+    /// vmangos Spell::ValidateExplicitTargetMask (Spell.cpp:6685-6711), asked for a client-started cast (:5346; Player::CastItemUseSpell sets
+    /// it for a use-item cast, Player.cpp:7390): a target flag the spell does not allow fails the cast with BAD_TARGETS. Only the item flags are
+    /// enforced: a bag item named as the target of a spell that takes none would otherwise satisfy the equipped-item requirement
+    /// (EquippedItemCastCheck skips a cast that names an item). Asked by the two client paths only, CMSG_CAST_SPELL
+    /// (<see cref="HandleCastRequest"/>) and CMSG_USE_ITEM (<see cref="HandleItemUse"/>); server, script and item-equip casts skip it.
+    /// </summary>
+    internal static bool NamesUnallowedItemTarget(SpellInfo spell, SpellCastTargets targets)
+        => (targets.Mask & (SpellCastTargetFlags.Item | SpellCastTargetFlags.TradeItem)) != 0 && !AllowsItemTarget(spell);
+
+    /// <summary>
+    /// Whether the spell may be aimed at an item: vmangos AllowedTargetMask (SpellMgr.cpp:3449-3477, SpellEntry.h:419-462), the item flag of
+    /// <see cref="SpellInfo.Targets"/> or of a TARGET_LOCKED effect target; LOCKED adds ITEM and GAMEOBJECT, ITEM adds TRADE_ITEM.
+    /// </summary>
+    private static bool AllowsItemTarget(SpellInfo spell)
+    {
+        if ((spell.Targets & (uint)(SpellCastTargetFlags.Item | SpellCastTargetFlags.Locked)) != 0)
+        {
+            return true;
+        }
+
+        foreach (SpellEffectInfo effect in spell.Effects)
+        {
+            if (effect.Effect != SpellEffectName.None && (effect.TargetA == SpellImplicitTarget.GameObjectItem || effect.TargetB == SpellImplicitTarget.GameObjectItem))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Cast a spell for the server (scripts, triggered spells, GM commands).</summary>
@@ -1574,6 +1611,12 @@ public sealed partial class SpellSystem
         if (items != SpellCastResult.CastOk)
         {
             return items;
+        }
+
+        SpellCastResult objectRange = CheckGameObjectTargetRange(caster, spell, targets, triggered, strict);
+        if (objectRange != SpellCastResult.CastOk)
+        {
+            return objectRange;
         }
 
         // TARGET_LOCATION_SCRIPT_NEAR_CASTER (46) with no spell_script_target row for the spell: vmangos Spell::CheckScriptTargeting answers

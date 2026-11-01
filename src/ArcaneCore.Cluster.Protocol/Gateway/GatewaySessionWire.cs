@@ -136,6 +136,79 @@ public static class GatewaySessionWire
         return buffer;
     }
 
+    /// <summary>Bytes the gateway receive time adds after the payload of a stamped SessionClientPacket frame.</summary>
+    public const int ReceiveStampBytes = 4;
+
+    /// <summary>
+    /// A SessionClientPacket frame (gateway to worker): the session envelope and payload exactly as <see cref="EncodePacket(GatewayWorkerFrameType, long, int, ulong, long, long, uint, ReadOnlySpan{byte})"/>
+    /// writes them, then the gateway's receive time of the client packet (uint32, the gateway's monotonic millisecond clock) appended
+    /// after the payload. The worker translates it with the offset of the <see cref="GatewayWorkerFrameType.LinkClock"/> frame. Gateway
+    /// and worker agree on this layout by the link contract version (<see cref="GatewayLinkManifest.ContractVersion"/>).
+    /// </summary>
+    internal static byte[] EncodeClientPacket(
+        long sessionGeneration, int accountId, ulong characterGuid, long ownerEpoch, long sequence, uint opcode, ReadOnlySpan<byte> payload,
+        uint gatewayReceivedMs)
+    {
+        byte[] buffer = new byte[1 + GatewayLinkFraming.SessionPacketHeaderBytes + payload.Length + ReceiveStampBytes];
+        Span<byte> span = buffer;
+        span[0] = (byte)GatewayWorkerFrameType.SessionClientPacket;
+        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(1, 8), sessionGeneration);
+        BinaryPrimitives.WriteInt32LittleEndian(span.Slice(9, 4), accountId);
+        BinaryPrimitives.WriteUInt64LittleEndian(span.Slice(13, 8), characterGuid);
+        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(21, 8), ownerEpoch);
+        BinaryPrimitives.WriteInt64LittleEndian(span.Slice(29, 8), sequence);
+        BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(37, 4), opcode);
+        BinaryPrimitives.WriteInt32LittleEndian(span.Slice(41, 4), payload.Length);
+        payload.CopyTo(span[45..]);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[(45 + payload.Length)..], gatewayReceivedMs);
+        return buffer;
+    }
+
+    /// <summary><see cref="EncodeClientPacket(long, int, ulong, long, long, uint, ReadOnlySpan{byte}, uint)"/> for an envelope already built (test seam and replays).</summary>
+    internal static byte[] EncodeClientPacket(ClusterSessionPacket packet, uint gatewayReceivedMs) =>
+        EncodeClientPacket(packet.SessionGeneration, packet.AccountId, packet.CharacterGuid, packet.OwnerEpoch, packet.Sequence, packet.Opcode,
+            packet.Payload.Span, gatewayReceivedMs);
+
+    /// <summary>
+    /// The envelope and the gateway receive time of a SessionClientPacket frame body (the frame without its type byte). The frame must
+    /// be exactly the envelope, its payload and the 4-byte stamp: anything shorter or longer is refused, which closes the link.
+    /// </summary>
+    internal static ClusterSessionPacket DecodeClientPacket(ReadOnlyMemory<byte> body, out uint gatewayReceivedMs)
+    {
+        ClusterSessionPacket packet = GatewayLinkFraming.DeserializeSessionPacket(body);
+        int expected = GatewayLinkFraming.SessionPacketHeaderBytes + packet.Payload.Length + ReceiveStampBytes;
+        if (body.Length != expected)
+        {
+            throw new InvalidDataException($"SessionClientPacket frame of {body.Length} B (expected {expected}: envelope, payload and the receive stamp)");
+        }
+
+        gatewayReceivedMs = BinaryPrimitives.ReadUInt32LittleEndian(body.Span[(expected - ReceiveStampBytes)..]);
+        return packet;
+    }
+
+    /// <summary>
+    /// The gateway's clock reading (gateway to worker), sent once right after the link is admitted and before any other frame. Body: the
+    /// gateway's monotonic millisecond clock as uint32. The worker pairs it with its own clock at arrival to get the offset it translates
+    /// every stamped client packet with.
+    /// </summary>
+    internal static byte[] EncodeLinkClock(uint gatewayMs)
+    {
+        byte[] buffer = new byte[1 + 4];
+        buffer[0] = (byte)GatewayWorkerFrameType.LinkClock;
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(1), gatewayMs);
+        return buffer;
+    }
+
+    internal static uint DecodeLinkClock(ReadOnlySpan<byte> body)
+    {
+        if (body.Length != 4)
+        {
+            throw new InvalidDataException($"LinkClock frame of {body.Length} B (expected 4)");
+        }
+
+        return BinaryPrimitives.ReadUInt32LittleEndian(body);
+    }
+
     /// <summary>The envelope of a packet frame body; the payload is a slice of <paramref name="body"/> (no copy).</summary>
     internal static ClusterSessionPacket DecodePacket(ReadOnlyMemory<byte> body) => GatewayLinkFraming.DeserializeSessionPacket(body);
 

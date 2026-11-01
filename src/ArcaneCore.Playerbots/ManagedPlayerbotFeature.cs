@@ -43,7 +43,7 @@ namespace ArcaneCore.World.Playerbots;
 /// (Dawnrover and Ironwander, 2026-10-07). The fault history lives in this process; a world restart restores every desired bot.
 /// </para>
 /// </summary>
-public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IDetachableWorldFeature, IPlayerbotService, IPlayerInspectReceiver
+public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, ILogger<ManagedPlayerbotFeature> logger) : IDetachableWorldFeature, IPlayerbotService, IMapBotThinker, IPlayerInspectReceiver
 {
     private readonly PlayerbotOptions _options = services.GetService<IOptions<PlayerbotOptions>>()?.Value ?? new();
     private IServiceScopeFactory scopes => services.GetRequiredService<IServiceScopeFactory>();
@@ -212,7 +212,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     internal (int Combat, int Main) LastLaneActions { get; private set; }
 
     /// <summary>The scale the last tick gave the first think lane's time share (tests).</summary>
-    internal double LastPriorityScale => _rotation.LastPriorityScale;
+    internal double LastPriorityScale => _mapThinkMode ? _mapPriorityScale : _rotation.LastPriorityScale;
 
     /// <summary>The inputs of the last tick's think budget: tick interval, smoothed non-bot tick time and the time the bots already used (tests).</summary>
     internal (double TickIntervalMs, double NonBotMs, double SpentMs) LastThinkBudgetInputs { get; private set; }
@@ -311,6 +311,24 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// </summary>
     internal Events.PlayerbotWorldEventBoard EventBoard => _eventBoard ??= new Events.PlayerbotWorldEventBoard(
         services, _options, EventClockMs, () => _setAsideTime.GetUtcNow().ToUnixTimeSeconds(), ZoneAt, () => _holidayFlavours);
+
+    private Combat.PlayerbotDefenseBoard? _defenseBoard;
+
+    /// <summary>
+    /// The call board of defense calls (<c>World:Playerbots:Pvp:Defense</c>, docs/areas/playbots-combat.md): the brains report to it from their thinks and the
+    /// social pass's "defense" lane reads it. World thread only, memory only, on the social feature's clock like <see cref="EventBoard"/>; dropped at a detach
+    /// (the next attach makes a new one) so no call outlives the brains that made it.
+    /// </summary>
+    internal Combat.PlayerbotDefenseBoard DefenseCalls
+    {
+        get
+        {
+            // A bot start builds its brain off the world thread, so the first use may race: one board wins and every caller gets it.
+            if (_defenseBoard is { } board) return board;
+            var created = new Combat.PlayerbotDefenseBoard(EventClockMs, () => _options.Pvp.Defense);
+            return Interlocked.CompareExchange(ref _defenseBoard, created, null) ?? created;
+        }
+    }
 
     private long EventClockMs() => (_socialFeature ??= services.GetService<BotSocial.PlayerbotSocialFeature>()) is { } social ? social.ClockMs : _world?.NowMs ?? 0;
 
@@ -481,11 +499,11 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         if (_options.Policy.Enabled && _policy is null) StartPolicy();
         if (_chat is null)
         {
-            // A chat service whose stop was interrupted part way leaves its provider behind: it goes, and the chain is built afresh.
-            _chatInProcess?.Dispose();
-            _chatInProcess = null;
-            _chatClient?.Dispose();
-            _chatClient = null;
+            // A chat service whose stop was interrupted part way leaves its provider behind (StopServicesAsync takes all three chat fields before
+            // it awaits anything, so this is only a fallback): the stale objects are taken out of the fields here, on the world thread, and disposed
+            // on the thread pool, because InProcessBotChatClient.Dispose waits for a running model load and for the engine's workers (tens of seconds).
+            // A stop still running then finds the fields empty or holding the new chain, never the stale one it would dispose a second time.
+            DisposeStaleChat(Interlocked.Exchange(ref _chatInProcess, null), Interlocked.Exchange(ref _chatClient, null));
             // The in-process model provider (Chat:InProcess) sits in front of the transport; every other provider kind passes through.
             _chatInProcess = new Chat.Inference.InProcessBotChatClient(
                 services.GetService<Chat.IBotChatClient>() ?? (_chatClient = new Chat.HttpBotChatClient()), _options,
@@ -539,6 +557,16 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 dataset => NavMeshPathfinder.CreateIndependent(dataset, ownerLogger));
         }
         if (handover is not null) RestoreHandover(handover, world);
+        _mapThinkMode = world.Options.Parallel.BotThinkPerMap;
+        if (_mapThinkMode)
+        {
+            // Bot think per map (World:Parallel:BotThinkPerMap): the prelude and the grouping before the maps, the thinks in each map's update
+            // (MapBotThinkStage), the close in Updated. The stages come off the maps when the subscriptions are undone.
+            subscriptions.Add(new MapStageRegistration(this));
+            subscriptions.OnMapUnloading(world, map => _mapStages.Remove(map));
+            subscriptions.OnWorldTick(world, BeginMapThinkTick);
+        }
+
         subscriptions.OnUpdated(world, Update);
         subscriptions.Add(BotRegistry.UseSessionPolicy(new SessionPolicy(_options)));
         subscriptions.Add(BotRegistry.UseRouteSource(new PlayerbotRouteSource())); // the map feed reads the route a bot walks (docs/areas/map-feed.md)
@@ -677,6 +705,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         // The festival board stops hearing game events and drops every place (the bots they belonged to are gone with their brains).
         Interlocked.Exchange(ref _eventBoard, null)?.Dispose();
+        Interlocked.Exchange(ref _defenseBoard, null);
         _subscriptions = null;
         _world = null;
     }
@@ -725,14 +754,48 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     /// <summary>Stop the policy engine, the navigation executor and the chat services (a detach; the next attach starts them again).</summary>
     private async Task StopServicesAsync()
     {
-        // Each field is taken before its service is stopped, so an attach running meanwhile (a quiesce the host gave up on while this
-        // ran) never ends up with two of a service. It can end up with none of one (it kept a service this then stopped) until the
+        // The three chat fields are taken together, before any await: a quiesce the host gave up on rolls back with AttachFrom on the world
+        // thread while this still runs, and an attach that finds _chat empty builds a fresh chain. Taking the provider fields only after the
+        // chat's DisposeAsync (which waits up to 5 s for its workers) let this method dispose that new chain's provider and client under the live
+        // chat, so every later in-process request answered "disposed". Taken first, what is disposed here is exactly the chain this stop began with.
+        // The policy engine and the navigation executor are taken as before: an attach in between can end up with none of those until the
         // next attach; the bot code treats a missing chat, policy or navigation worker as off.
+        Chat.PlayerbotChat? chat = Interlocked.Exchange(ref _chat, null);
+        Chat.Inference.InProcessBotChatClient? inProcess = Interlocked.Exchange(ref _chatInProcess, null);
+        Chat.HttpBotChatClient? client = Interlocked.Exchange(ref _chatClient, null);
         if (Interlocked.Exchange(ref _policy, null) is { } policy) await policy.DisposeAsync().ConfigureAwait(false);
         if (Interlocked.Exchange(ref _navigationExecutor, null) is { } navigationExecutor) await navigationExecutor.DisposeAsync().ConfigureAwait(false);
-        if (Interlocked.Exchange(ref _chat, null) is { } chat) await chat.DisposeAsync().ConfigureAwait(false);
-        Interlocked.Exchange(ref _chatInProcess, null)?.Dispose();
-        Interlocked.Exchange(ref _chatClient, null)?.Dispose();
+        // Stands in for the chat's DisposeAsync waiting on its workers: the window in which a rollback attach can run.
+        if (StopHoldForTests is { } hold) await hold().ConfigureAwait(false);
+        if (chat is not null) await chat.DisposeAsync().ConfigureAwait(false);
+        inProcess?.Dispose();
+        client?.Dispose();
+    }
+
+    /// <summary>Test seam: awaited by <c>StopServicesAsync</c> after it took the chat fields and before it disposes them (null in production).</summary>
+    internal Func<Task>? StopHoldForTests { get; set; }
+
+    /// <summary>
+    /// Dispose a chat provider chain that was left behind, off the calling (world) thread: <see cref="Chat.Inference.InProcessBotChatClient.Dispose"/> blocks
+    /// while a model load runs (up to 30 s) and then on the engine's workers. A fault is recorded, never thrown: the chain is already out of the fields.
+    /// </summary>
+    private void DisposeStaleChat(Chat.Inference.InProcessBotChatClient? inProcess, Chat.HttpBotChatClient? client)
+    {
+        if (inProcess is null && client is null) return;
+        _ = Task.Run(() =>
+        {
+            try { inProcess?.Dispose(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault(LogLevel.Warning, "playerbot.feature", ex, "Stale in-process chat client dispose failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
+
+            try { client?.Dispose(); }
+            catch (Exception ex) when (ex is not OutOfMemoryException)
+            {
+                logger.LogFault(LogLevel.Warning, "playerbot.feature", ex, "Stale chat HTTP client dispose failed ({Type}: {Message})", ex.GetType().Name, ex.Message);
+            }
+        });
     }
 
     /// <summary>Test seam: hold the operation lock (as a long fleet reset, start or checkpoint does) until the result is disposed.</summary>
@@ -2109,7 +2172,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         // registered anywhere below.
         var brain = new PlayerbotBrain(session, _options, _sharedSetAsides, _claims, _navigationExecutor)
         {
-            SharedPins = _sharedPins, Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, BotId = botId,
+            SharedPins = _sharedPins, Home = AreaOf(botId), PolicyEngine = _policy, Social = Social, EventBoard = EventBoard, DefenseCalls = DefenseCalls, BotId = botId,
         };
         // The combat telemetry hears the risk model from the brain's first think (its first pull).
         if (_policy?.Telemetry is { } telemetry)
@@ -2371,7 +2434,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         uint combatIntervalMs,
         int reserve,
         ManagedActionBudget combatBudget,
-        long thinkStarted) : PlayerbotThinkRotation.IThinkLaneDriver
+        long thinkStarted,
+        Map? onlyMap,
+        bool mapMode) : PlayerbotThinkRotation.IThinkLaneDriver
     {
         public ManagedActionBudget? MainBudget;
         public int MainActions = -1;
@@ -2389,6 +2454,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
         public bool Visit(int index, PlayerbotThinkRotation.ThinkLane lane)
         {
+            // A bot that left the map this pass was assigned to (a teleport since the grouping) is another map's to think for: its owner thread
+            // is not this one's. Skipped, not counted; the next tick groups it where it stands.
+            if (onlyMap is not null && !ReferenceEquals(bots[index].Session.Player?.Map, onlyMap)) return true;
             ManagedActionBudget budget = lane == PlayerbotThinkRotation.ThinkLane.Priority
                 ? combatBudget
                 : MainBudget ??= new ManagedActionBudget(MainActions = reserve + combatBudget.Remaining);
@@ -2402,7 +2470,7 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
 
             // The main lane's cost per visit feeds the budget's coverage floor (PlayerbotThinkBudget.CoverageMs).
             long visitStarted = Stopwatch.GetTimestamp();
-            feature.Think(bots[index], budget, index);
+            feature.Think(bots[index], budget, mapMode ? bots[index].Ordinal : index);
             double visitMs = Stopwatch.GetElapsedTime(visitStarted).TotalMilliseconds;
             if (lane == PlayerbotThinkRotation.ThinkLane.Normal) feature._thinkBudget.ObserveVisit(visitMs);
             else CombatMs += visitMs;
@@ -2421,9 +2489,44 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
         public double ElapsedMs() => Stopwatch.GetElapsedTime(thinkStarted).TotalMilliseconds;
     }
 
+    /// <summary>
+    /// The world tick's update of the bots (<see cref="WorldRuntime.Updated"/>, after the maps). With World:Parallel:BotThinkPerMap off, the whole
+    /// of it runs here, as ever: <see cref="BeginTick"/>, the serial two-lane think pass, <see cref="FinishTick"/>. With the option on, the
+    /// first part ran before the maps (<see cref="BeginMapThinkTick"/>), the thinks ran in the maps' own updates (<see cref="IMapBotThinker.ThinkBots"/>),
+    /// and this call only closes the tick (<see cref="FinishMapThinkTick"/>).
+    /// </summary>
     private void Update(uint elapsedMs)
     {
-        if (_stopping || _detaching || !_options.Enabled || _world is not { } world) return;
+        if (_mapThinkMode)
+        {
+            FinishMapThinkTick(elapsedMs);
+            return;
+        }
+
+        MapThinkFrame frame = _frame;
+        if (!BeginTick(elapsedMs, frame)) return;
+        PrepareThinkPass(frame);
+        ActiveBot[] bots = frame.Bots;
+        // Hard per-lane action budgets (PlayerbotThinkRotation.PriorityActions / ActionReserve): the combat lane draws from its own; the main
+        // lane's is the reserve plus what the combat lane left, created at its first visit, so no fight's think can empty it.
+        ManagedActionBudget combatBudget = frame.CombatActions > 0 ? new ManagedActionBudget(frame.CombatActions) : EmptyActionBudget;
+        // A fair rotation in two lanes (PlayerbotThinkRotation.TickLanes): bots in combat, dead or ghosts that are due are thought for first, then
+        // every bot from the main cursor, until the think time budget (PlayerbotThinkBudget; one think itself is bounded by MaxThinkSearchNodes).
+        _rotation.Track(bots, BotIdOf);
+        var laneDriver = new TickLaneDriver(this, bots, frame.Now, frame.CombatIntervalMs, frame.Reserve, combatBudget, frame.ThinkStarted, null, false);
+        _rotation.TickLanes(bots.Length, frame.BudgetMs, _options.CombatLaneShare, ref laneDriver,
+            PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, frame.StarvedBoundMs));
+        FinishTick(frame, elapsedMs, laneDriver.Thinks, _rotation.LastTickTimeLimited, laneDriver.ActionLimited, laneDriver.CombatMs,
+            (frame.CombatActions, laneDriver.MainActions >= 0 ? laneDriver.MainActions : frame.Reserve + combatBudget.Remaining), 0, frame.UpdateStarted);
+    }
+
+    /// <summary>
+    /// Everything of a tick before the think pass: the budget's observations, the movement pump, the party intake, the chat replies and the
+    /// group and battleground coordinators. Fills <paramref name="frame"/>; false when the feature does nothing this tick (world thread).
+    /// </summary>
+    private bool BeginTick(uint elapsedMs, MapThinkFrame frame)
+    {
+        if (_stopping || _detaching || !_options.Enabled || _world is not { } world) return false;
         long updateStarted = Stopwatch.GetTimestamp();
         // What the world spent on everything but the bots in the last tick, smoothed: the think budget is a share of what is left.
         TickPhases lastTick = world.LastTickPhases;
@@ -2536,29 +2639,50 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             }
         }
 
-        // Hard per-lane action budgets (PlayerbotThinkRotation.PriorityActions / ActionReserve): the combat lane draws from its own; the main
-        // lane's is the reserve plus what the combat lane left, created at its first visit, so no fight's think can empty it.
-        int reserve = PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare);
-        int combatActions = PlayerbotThinkRotation.PriorityActions(_options.MaxActionsPerTick, _options.CombatLaneShare);
-        ManagedActionBudget combatBudget = combatActions > 0 ? new ManagedActionBudget(combatActions) : EmptyActionBudget;
-        // A fair rotation in two lanes (PlayerbotThinkRotation.TickLanes): bots in combat, dead or ghosts that are due are thought for first, then
-        // every bot from the main cursor, until the think time budget (PlayerbotThinkBudget; one think itself is bounded by MaxThinkSearchNodes).
-        long thinkStarted = Stopwatch.GetTimestamp();
-        double spentMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
+        frame.World = world;
+        frame.Bots = bots;
+        frame.BotsVersion = botsVersion;
+        frame.Now = now;
+        frame.UpdateStarted = updateStarted;
+        return true;
+    }
+
+    /// <summary>
+    /// The numbers of this tick's think pass, from the state the prelude left: the two action budgets, the time budget and the starvation
+    /// bound (world thread). The think time measured by <see cref="MapThinkFrame.ThinkStarted"/> starts here.
+    /// </summary>
+    private void PrepareThinkPass(MapThinkFrame frame)
+    {
+        WorldRuntime world = frame.World!;
+        ActiveBot[] bots = frame.Bots;
+        frame.Reserve = PlayerbotThinkRotation.ActionReserve(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        frame.CombatActions = PlayerbotThinkRotation.PriorityActions(_options.MaxActionsPerTick, _options.CombatLaneShare);
+        frame.ThinkStarted = Stopwatch.GetTimestamp();
+        double spentMs = Stopwatch.GetElapsedTime(frame.UpdateStarted).TotalMilliseconds;
         LastThinkBudgetInputs = (world.Options.TickIntervalMs, _thinkBudget.NonBotMs, spentMs);
-        uint starvedBoundMs = PlayerbotThinkStarvation.EffectiveBoundMs((uint)_options.ThinkStarvedGapMs, bots.Length);
-        double budgetMs = ThinkBudgetMs ?? _thinkBudget.Budget(world.Options.TickIntervalMs, spentMs,
-            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare, bots.Length, starvedBoundMs);
-        _lastBudgetMs = budgetMs;
-        uint combatIntervalMs = (uint)_options.CombatThinkIntervalMs;
-        _rotation.Track(bots, BotIdOf);
-        var laneDriver = new TickLaneDriver(this, bots, now, combatIntervalMs, reserve, combatBudget, thinkStarted);
-        _rotation.TickLanes(bots.Length, budgetMs, _options.CombatLaneShare, ref laneDriver,
-            PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, starvedBoundMs));
-        _thinkBudget.ObservePriorityTick(laneDriver.CombatMs);
-        LastLaneActions = (combatActions, laneDriver.MainActions >= 0 ? laneDriver.MainActions : reserve + combatBudget.Remaining);
+        frame.StarvedBoundMs = PlayerbotThinkStarvation.EffectiveBoundMs((uint)_options.ThinkStarvedGapMs, bots.Length);
+        frame.BudgetMs = ThinkBudgetMs ?? _thinkBudget.Budget(world.Options.TickIntervalMs, spentMs,
+            _options.ThinkBudgetMinMs, _options.ThinkBudgetMaxMs, _options.ThinkBudgetTickShare, bots.Length, frame.StarvedBoundMs);
+        _lastBudgetMs = frame.BudgetMs;
+        frame.CombatIntervalMs = (uint)_options.CombatThinkIntervalMs;
+        frame.PriorityScale = PlayerbotThinkStarvation.PriorityScale(_oldestSilentMs, frame.StarvedBoundMs);
+    }
+
+    /// <summary>
+    /// What a tick does after its thinks, serial or per map: the budget's feedback, the cadence, the starvation reports, the policy, the
+    /// snapshot, the own-time measure and the checkpoint. <paramref name="carriedOwnMs"/> is the own time already spent outside
+    /// <paramref name="ownStarted"/>'s span (the part before the maps and the thinks inside them, with the option on; 0 serial).
+    /// </summary>
+    private void FinishTick(MapThinkFrame frame, uint elapsedMs, int thinks, bool timeLimited, bool actionLimited, double combatMs,
+        (int Combat, int Main) lanes, double carriedOwnMs, long ownStarted)
+    {
+        ActiveBot[] bots = frame.Bots;
+        uint now = frame.Now;
+        uint starvedBoundMs = frame.StarvedBoundMs;
+        _thinkBudget.ObservePriorityTick(combatMs);
+        LastLaneActions = lanes;
         // The cadence the bots get (PlayerbotCadenceStats): one Info line per minute, no bot named.
-        _cadence.EndTick(laneDriver.Thinks, _rotation.LastTickTimeLimited, laneDriver.ActionLimited, budgetMs);
+        _cadence.EndTick(thinks, timeLimited, actionLimited, frame.BudgetMs);
         ReportStarvedBots(bots, now, starvedBoundMs, PlayerbotThinkStarvation.ReportBoundMs(starvedBoundMs, _reportPass.Ms));
         if (_policy is { } policy) UpdatePolicy(policy);
         if (_cadence.TryReport(elapsedMs, bots.Length, out PlayerbotCadenceReport cadence) && cadence.Bots > 0)
@@ -2568,8 +2692,8 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
                 + "{ThinksPerTick:F1} thinks per tick over {Ticks} ticks, budget {AvgBudgetMs:F1} ms; ticks ended on the time budget {TimeLimitedPct:F1}%, on the action budget {ActionLimitedPct:F1}%",
                 cadence.Bots, cadence.GapP50Ms, cadence.GapP95Ms, cadence.GapP99Ms, cadence.GapMaxMs, cadence.CombatThinks, cadence.CombatGapP50Ms, cadence.CombatGapP95Ms,
                 cadence.ThinksPerTick, cadence.Ticks, cadence.AvgBudgetMs, cadence.TimeLimitedPct, cadence.ActionLimitedPct);
-        PublishSnapshot(bots, botsVersion, elapsedMs);
-        _lastOwnMs = Stopwatch.GetElapsedTime(updateStarted).TotalMilliseconds;
+        PublishSnapshot(bots, frame.BotsVersion, elapsedMs);
+        _lastOwnMs = carriedOwnMs + Stopwatch.GetElapsedTime(ownStarted).TotalMilliseconds;
         _checkpointMs += elapsedMs;
         if (_checkpointMs >= 5000 && _checkpoint.IsCompleted)
         {
@@ -2578,6 +2702,173 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
             _checkpointMs = 0;
             _checkpoint = Task.Run(CheckpointAsync);
         }
+    }
+
+
+    // ---- Bot think per map (World:Parallel:BotThinkPerMap) -----------------------------------------------------------------------
+
+    private static readonly Func<ActiveBot, ulong> MapKeyOf = static bot => bot.Session.Player?.Map is { } map
+        ? PlayerbotThinkScheduler<ActiveBot>.MapKey(map.MapId, map.InstanceId)
+        : PlayerbotThinkScheduler<ActiveBot>.NoMapKey;
+
+    /// <summary>
+    /// The state of one tick that the pass before the maps (<see cref="BeginMapThinkTick"/>), the thinks in the maps
+    /// (<see cref="IMapBotThinker.ThinkBots"/>) and the close after them (<see cref="FinishMapThinkTick"/>) share. One instance, reused. The
+    /// inputs are written on the world thread before the maps phase and only read in it; the accumulators are written under
+    /// the feature's think gate.
+    /// </summary>
+    private sealed class MapThinkFrame
+    {
+        public WorldRuntime? World;
+        public ActiveBot[] Bots = [];
+        public int BotsVersion;
+        public uint Now;
+        public long UpdateStarted;
+        public long ThinkStarted;
+        public int Reserve;
+        public int CombatActions;
+        public double BudgetMs;
+        public uint StarvedBoundMs;
+        public uint CombatIntervalMs;
+        public double PriorityScale = 1;
+        public double PreMs;
+        public int Thinks;
+        public bool TimeLimited;
+        public bool ActionLimited;
+        public double CombatMs;
+        public double ThinkMs;
+        public int CombatAssigned;
+        public int MainAssigned;
+
+        public void ResetAccumulators()
+        {
+            Thinks = 0;
+            TimeLimited = false;
+            ActionLimited = false;
+            CombatMs = 0;
+            ThinkMs = 0;
+            CombatAssigned = 0;
+            MainAssigned = 0;
+        }
+    }
+
+    private readonly MapThinkFrame _frame = new();
+    private readonly PlayerbotThinkScheduler<ActiveBot> _mapScheduler = new(BotIdOf);
+    private readonly Dictionary<Map, MapBotThinkStage> _mapStages = [];
+    private readonly List<ulong> _unthoughtScratch = [];
+    private readonly object _mapThinkGate = new();
+    private bool _mapThinkMode;
+    private volatile bool _frameOpen;
+    private double _mapPriorityScale = 1;
+    private int _mapThinkVisits;
+    private int _fallbackThinkVisits;
+
+    /// <summary>Whether this attachment thinks per map (World:Parallel:BotThinkPerMap at attach; tests).</summary>
+    internal bool MapThinkMode => _mapThinkMode;
+
+    /// <summary>Thinks made inside a map's own update since attach (tests, metrics).</summary>
+    internal int MapThinkVisits => Volatile.Read(ref _mapThinkVisits);
+
+    /// <summary>Thinks made on the world thread after the maps for bots no map stage served (no map, a map without a stage; tests, metrics).</summary>
+    internal int FallbackThinkVisits => Volatile.Read(ref _fallbackThinkVisits);
+
+    /// <summary>
+    /// <see cref="WorldRuntime.WorldTick"/> with the option on (world thread, before the maps): the prelude of the tick, then the bots are
+    /// grouped by map for the stages that run in the maps phase.
+    /// </summary>
+    private void BeginMapThinkTick(uint elapsedMs)
+    {
+        _frameOpen = false;
+        MapThinkFrame frame = _frame;
+        if (!BeginTick(elapsedMs, frame) || frame.World is not { } world) return;
+        PrepareThinkPass(frame);
+        frame.ResetAccumulators();
+        _mapPriorityScale = frame.PriorityScale;
+        for (int i = 0; i < frame.Bots.Length; i++) frame.Bots[i].Ordinal = i;
+        EnsureMapStages(world);
+        _mapScheduler.Assign(frame.Bots, MapKeyOf);
+        frame.PreMs = Stopwatch.GetElapsedTime(frame.UpdateStarted).TotalMilliseconds;
+        _frameOpen = true;
+    }
+
+    /// <summary>
+    /// <see cref="WorldRuntime.Updated"/> with the option on (world thread, after the maps): thinks for the bots no stage served, so none is
+    /// left out, then closes the tick as the serial pass does.
+    /// </summary>
+    private void FinishMapThinkTick(uint elapsedMs)
+    {
+        if (!_frameOpen) return;
+        _frameOpen = false;
+        MapThinkFrame frame = _frame;
+        if (_stopping || _detaching || !_options.Enabled || frame.World is not { } world) return;
+        long finishStarted = Stopwatch.GetTimestamp();
+        _mapScheduler.CollectUnthought(_unthoughtScratch);
+        foreach (ulong key in _unthoughtScratch) RunMapThink(key, null, frame);
+        frame.Now = world.Clock.LiveNowMs; // the thinks stamped their own, later, times: the starvation reports compare against this one
+        FinishTick(frame, elapsedMs, frame.Thinks, frame.TimeLimited, frame.ActionLimited, frame.CombatMs,
+            (frame.CombatAssigned, frame.MainAssigned), frame.PreMs + frame.ThinkMs, finishStarted);
+    }
+
+    /// <summary>
+    /// <see cref="IMapBotThinker.ThinkBots"/>: the owner thread of <paramref name="map"/>, inside the map's update, thinks for the bots that
+    /// stand on it. A no-op outside an open tick (a stage left on a map by a detached feature).
+    /// </summary>
+    void IMapBotThinker.ThinkBots(Map map, uint diffMs)
+    {
+        if (!_frameOpen) return;
+        RunMapThink(PlayerbotThinkScheduler<ActiveBot>.MapKey(map.MapId, map.InstanceId), map, _frame);
+    }
+
+    /// <summary>
+    /// One map's think pass: its bots, its rotation (cursors kept across ticks and re-anchored by id), its head-count share of the time and
+    /// of the action budgets. <paramref name="map"/> is null for the world thread's pass over bots no stage served.
+    /// </summary>
+    private void RunMapThink(ulong key, Map? map, MapThinkFrame frame)
+    {
+        ActiveBot[] bots = _mapScheduler.BotsOf(key);
+        if (bots.Length == 0) return;
+        (int combat, int reserve) = PlayerbotThinkScheduler<ActiveBot>.ActionsShare(frame.CombatActions, frame.Reserve, bots.Length, _mapScheduler.TotalBots);
+        ManagedActionBudget combatBudget = combat > 0 ? new ManagedActionBudget(combat) : EmptyActionBudget;
+        long started = Stopwatch.GetTimestamp();
+        var driver = new TickLaneDriver(this, bots, frame.Now, frame.CombatIntervalMs, reserve, combatBudget, started, map, true);
+        _mapScheduler.ThinkMap(key, frame.BudgetMs, _options.CombatLaneShare, frame.PriorityScale, ref driver, out bool timeLimited);
+        double spentMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        lock (_mapThinkGate)
+        {
+            frame.Thinks += driver.Thinks;
+            frame.TimeLimited |= timeLimited;
+            frame.ActionLimited |= driver.ActionLimited;
+            frame.CombatMs += driver.CombatMs;
+            frame.ThinkMs += spentMs;
+            frame.CombatAssigned += combat;
+            frame.MainAssigned += driver.MainActions >= 0 ? driver.MainActions : reserve + combatBudget.Remaining;
+        }
+
+        if (map is null) Interlocked.Add(ref _fallbackThinkVisits, driver.Thinks);
+        else Interlocked.Add(ref _mapThinkVisits, driver.Thinks);
+    }
+
+    /// <summary>Attach a <see cref="MapBotThinkStage"/> to every map that has none (world thread, outside the maps phase: <see cref="Map.AddUpdater"/>).</summary>
+    private void EnsureMapStages(WorldRuntime world)
+    {
+        foreach (Map map in world.Maps)
+        {
+            if (_mapStages.ContainsKey(map)) continue;
+            if (MapBotThinkStage.AttachIfEnabled(map, world.Options.Parallel, this) is { } stage) _mapStages.Add(map, stage);
+        }
+    }
+
+    /// <summary>Take the stages off the maps (detach; world thread, outside the maps phase).</summary>
+    private void RemoveMapStages()
+    {
+        _frameOpen = false;
+        foreach (KeyValuePair<Map, MapBotThinkStage> pair in _mapStages) pair.Key.RemoveUpdater(pair.Value);
+        _mapStages.Clear();
+    }
+
+    private sealed class MapStageRegistration(ManagedPlayerbotFeature feature) : IDisposable
+    {
+        public void Dispose() => feature.RemoveMapStages();
     }
 
     /// <summary>Whether the bot is in the first think lane: alive and fighting, or dead or a ghost (world thread).</summary>
@@ -4103,6 +4394,9 @@ public sealed partial class ManagedPlayerbotFeature(IServiceProvider services, I
     private sealed class ActiveBot(ManagedBot entry, PlayerbotBrain brain, PlayerbotPartyAI party)
     {
         public ManagedBot Entry { get; } = entry;
+
+        /// <summary>The bot's index in the id-ordered active set of the current tick (the chaos engine's bot ordinal); written on the world thread before the maps phase.</summary>
+        public int Ordinal;
 
         public ManagedPlayerbot Record
         {

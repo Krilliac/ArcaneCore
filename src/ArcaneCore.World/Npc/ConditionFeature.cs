@@ -73,6 +73,25 @@ public sealed partial class ConditionFeature(IServiceProvider services, IService
         }
     }
 
+    /// <summary>
+    /// <see cref="ConditionEvaluator.IsSatisfiedWithSource"/> with the same fault containment as <see cref="IsSatisfied"/>: the loot target
+    /// (creature, game object or player) is the condition's source.
+    /// </summary>
+    public bool IsSatisfiedWithSource(uint conditionId, Player player, WorldObject? source)
+    {
+        ArgumentNullException.ThrowIfNull(player);
+        try
+        {
+            return Current.IsSatisfiedWithSource(conditionId, player, source);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            FaultLedger.Shared.Record("npc.conditions", ex);
+            _logger.LogFault("conditions.evaluate", ex, "Condition {ConditionId} evaluation failed for player {PlayerGuid}", conditionId, player.Guid);
+            return false;
+        }
+    }
+
     public void Attach(WorldRuntime world)
     {
         ArgumentNullException.ThrowIfNull(world);
