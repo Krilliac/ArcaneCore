@@ -202,7 +202,9 @@ public sealed class ClusterCommands : ICommandGroup
         AccountSecurity security = context.Security;
         string invoker = context.InvokerName;
         ILogger? logger = services.GetService<ILoggerFactory>()?.CreateLogger<ClusterCommands>();
-        CancellationToken lifetime = context.Lifetime;
+        // Host-stopping token, not context.Lifetime: that is the RA connection's lifetime, and a dropped connection after the epoch-takeover commit
+        // would cancel the roll-forward and leave the handoff committed but unfinished.
+        CancellationToken lifetime = services.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>()?.ApplicationStopping ?? CancellationToken.None;
         IDisposable hold = context.Defer();
         _ = Task.Run(async () =>
         {

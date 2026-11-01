@@ -81,9 +81,23 @@ public sealed class ClusterRestartOrchestration(
             return new ClusterRestartResult(ClusterRestartOutcome.UnknownWorker, "No worker was named.", null);
         }
 
-        if (placement is not null && !placement.TryGetWorker(worker, out _))
+        if (worker.Value.Any(char.IsWhiteSpace))
         {
-            return new ClusterRestartResult(ClusterRestartOutcome.UnknownWorker, $"Unknown worker '{worker}'; nothing was done.", null);
+            return new ClusterRestartResult(ClusterRestartOutcome.UnknownWorker, "A worker name has no whitespace; nothing was done.", null);
+        }
+
+        if (placement is not null && placement.SnapshotWorkers().Count > 0)
+        {
+            if (!placement.TryGetWorker(worker, out _))
+            {
+                return new ClusterRestartResult(ClusterRestartOutcome.UnknownWorker, $"Unknown worker '{worker}'; nothing was done.", null);
+            }
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Operator restart of {Worker} requested by {By}: no placement table with registered workers is available; the worker name was not checked against the cluster",
+                worker, invokerName);
         }
 
         WorldHandoffRecord record;
@@ -173,7 +187,7 @@ public static class ClusterRestartHosting
         services.TryAddSingleton(sp => new ClusterRestartOrchestration(
             sp.GetRequiredService<IWorkerHandoffDriver>(),
             sp.GetRequiredService<IWorkerRestartRequester>(),
-            sp.GetService<ClusterMapPlacementTable>(),
+            sp.GetService<ClusterMapPlacementTable>() ?? sp.GetService<ArcaneCore.World.Cluster.Tooling.ClusterNodeBridgeFeature>()?.Placement,
             sp.GetService<ILoggerFactory>()?.CreateLogger<ClusterRestartOrchestration>()));
         return services;
     }
