@@ -574,10 +574,162 @@ public sealed class LiveLaunchScriptTests : IDisposable
         // The only AttachAsync calls are the two daemon PIDs and the supervisor's children.
         Assert.DoesNotContain("AttachAsync($SupervisorPid", source, StringComparison.Ordinal);
         Assert.DoesNotContain("public static class", source, StringComparison.Ordinal); // per-run instance state, not statics that outlive the script
-        Assert.Contains("(Get-ProcessStartTime $supervisorProcess) -eq $supervisorStart", source, StringComparison.Ordinal);
+        Assert.Contains("$currentStart -eq $supervisorStart", source, StringComparison.Ordinal);
         Assert.DoesNotContain("-as [type]", source, StringComparison.Ordinal); // no guard: a changed body under the same type name must fail loudly
         Assert.Contains("$debugLog.ProcessExited($childPid)", source, StringComparison.Ordinal);
         Assert.Contains("if ($childPid -eq $SupervisorPid) { continue }", source, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void AttachDebugger_EveryWatchAndWaitLoop_RunsInsideATryWhoseFinallyIsTheOnlyShutdown()
+    {
+        // A throw or Ctrl-C inside the loops must still stop the writer threads and write the drop totals: Shutdown is called once, from a
+        // finally, and both the watch loop and the plain wait loop are inside that try. Read with the PowerShell parser, not by text.
+        string script = Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1");
+        string probe = Path.Combine(_root, "finally-probe.ps1");
+        File.WriteAllText(probe, $$"""
+            $errors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile('{{Q(script)}}', [ref]$null, [ref]$errors)
+            if ($errors.Count -gt 0) { "parse errors: $($errors.Count)"; exit 1 }
+            $isShutdown = { param($n) $n -is [System.Management.Automation.Language.InvokeMemberExpressionAst] -and $n.Member.Value -eq 'Shutdown' }
+            $isLoop = { param($n) $n -is [System.Management.Automation.Language.WhileStatementAst] }
+            $isGuard = { param($n) $n -is [System.Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and @($n.Finally.FindAll($isShutdown, $true)).Count -gt 0 }
+            "shutdown-calls: $(@($ast.FindAll($isShutdown, $true)).Count)"
+            $guarded = @($ast.FindAll($isGuard, $true))
+            "guarded-tries: $($guarded.Count)"
+            if ($guarded.Count -eq 1) {
+                "shutdown-in-finally: $(@($guarded[0].Finally.FindAll($isShutdown, $true)).Count)"
+                "loops-in-guarded-try: $(@($guarded[0].Body.FindAll($isLoop, $true)).Count)"
+                "loops-total: $(@($ast.FindAll($isLoop, $true)).Count)"
+            }
+            """, new UTF8Encoding(false));
+        var start = NewPwsh();
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(probe);
+        (int code, string output) = Execute(start);
+        Assert.True(code == 0, $"pwsh exited {code}: {output}");
+        Assert.Contains("shutdown-calls: 1", output, StringComparison.Ordinal);
+        Assert.Contains("guarded-tries: 1", output, StringComparison.Ordinal);
+        Assert.Contains("shutdown-in-finally: 1", output, StringComparison.Ordinal);
+        Assert.Contains("loops-in-guarded-try: 2", output, StringComparison.Ordinal);
+        Assert.Contains("loops-total: 2", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AttachDebugger_AStartTimeThatCannotBeRead_IsALiveSupervisor_NotAReusedPid()
+    {
+        string source = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1"));
+        // Unreadable now (an elevated or exiting process) or at the start proves nothing about PID reuse: only two readable, different
+        // start times end the watch.
+        Assert.Contains("$supervisorUp = $null -ne $supervisorProcess -and ($null -eq $supervisorStart -or $null -eq $currentStart -or $currentStart -eq $supervisorStart)", source, StringComparison.Ordinal);
+        Assert.Contains("function Get-ProcessStartTime($Process) { try { $Process.StartTime } catch { $null } }", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AttachDebugger_AReusedChildPid_StartsWithFreshRetries_BeforeTheRetryCapIsChecked()
+    {
+        // A relaunched child can get the PID of one that exited: the exit (or a vanished process) forgets its attempts, and that happens
+        // before $tries is read, so the new process is attached instead of being skipped for having used up the old one's three tries.
+        string source = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "tools", "ops", "diag", "attach-debugger.ps1"));
+        int exited = source.IndexOf("$debugLog.ProcessExited($childPid)", StringComparison.Ordinal);
+        int forget = source.IndexOf("$attached.Remove($childPid); $attempts.Remove($childPid); $known = $false", StringComparison.Ordinal);
+        int tries = source.IndexOf("$tries = if ($attempts.ContainsKey($childPid))", StringComparison.Ordinal);
+        int cap = source.IndexOf("if ($known -and $tries -ge 3) { continue }", StringComparison.Ordinal);
+        Assert.True(exited >= 0 && forget > exited, "the exit check must precede the reset");
+        Assert.True(tries > forget, "the retry count is read after the reset");
+        Assert.True(cap > tries, "the cap applies to the fresh count");
+        Assert.Contains("if ($known -and $attached[$childPid].IsAlive) { continue }", source, StringComparison.Ordinal);
+    }
+
+    // ---- same-name Add-Type guards --------------------------------------------------------------------------------------------------
+
+    [PwshFact]
+    public void LaunchDaemon_ConsoleModeHelper_AnOlderSessionsTypeWithADifferentBody_IsLeftAloneWithoutAnError()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // kernel32 console APIs
+        }
+
+        // launch-daemon.ps1 can run again in a 'pwsh -NoExit' window whose session already holds Win32.ConsoleModeHelper from an older body.
+        // Add-Type of that name with a different member list is an error that -ErrorAction does not silence, so the script must skip the
+        // Add-Type when the type exists. The older type is defined first; the guarded statement is cut out of the script, not copied.
+        string source = File.ReadAllText(Path.Combine(LiveDir, "launch-daemon.ps1")).Replace("\r\n", "\n", StringComparison.Ordinal);
+        int begin = source.IndexOf("if (-not ('Win32.ConsoleModeHelper' -as [type])) {", StringComparison.Ordinal);
+        Assert.True(begin >= 0, "the Add-Type must sit behind the type-name guard");
+        const string Terminator = "'@\n}";
+        int end = source.IndexOf(Terminator, begin, StringComparison.Ordinal);
+        Assert.True(end > begin);
+        string statement = source[begin..(end + Terminator.Length)];
+        string probe = Path.Combine(_root, "console-helper-probe.ps1");
+        File.WriteAllText(probe, "Add-Type -Name ConsoleModeHelper -Namespace Win32 -MemberDefinition 'public static int Older() { return 1; }'\n$Error.Clear()\n" + statement + "\n" + """
+            "errors: $($Error.Count)"
+            "older: $([Win32.ConsoleModeHelper]::Older())"
+            """, new UTF8Encoding(false));
+        var start = NewPwsh();
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(probe);
+        (int code, string output) = Execute(start);
+        Assert.True(code == 0, $"pwsh exited {code}: {output}");
+        Assert.Contains("errors: 0", output, StringComparison.Ordinal);
+        Assert.Contains("older: 1", output, StringComparison.Ordinal);
+    }
+
+    [PwshFact]
+    public void RedeployPlan_InitializePipeInterop_AnOlderSessionsTypeWithADifferentBody_ReturnsWithoutThrowing()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return; // kernel32 pipe API
+        }
+
+        // The session already holds ArcaneCoreOps.PipeInterop from an older body (no GetNamedPipeServerProcessId). Initialize-PipeInterop
+        // must return on the type-name guard instead of running Add-Type, which would throw 'type name already exists'.
+        string library = Path.Combine(LiveDir, "RedeployPlan.ps1");
+        string probe = Path.Combine(_root, "pipe-interop-probe.ps1");
+        File.WriteAllText(probe, $$"""
+            $ErrorActionPreference = 'Stop'
+            Add-Type -Namespace ArcaneCoreOps -Name PipeInterop -MemberDefinition 'public static int Older() { return 1; }'
+            . '{{Q(library)}}'
+            Initialize-PipeInterop
+            Initialize-PipeInterop
+            "older: $([ArcaneCoreOps.PipeInterop]::Older())"
+            'guard: ok'
+            """, new UTF8Encoding(false));
+        var start = NewPwsh();
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(probe);
+        (int code, string output) = Execute(start);
+        Assert.True(code == 0, $"pwsh exited {code}: {output}");
+        Assert.Contains("older: 1", output, StringComparison.Ordinal);
+        Assert.Contains("guard: ok", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryDaemonEntryPoint_InstallsTheCrashHandler_BeforeTheHostIsBuilt()
+    {
+        // The crash hooks (and with them the crash dialog) exist only where Program.cs calls the diagnostics wiring, and it must come
+        // before builder.Build() so a failure while the host is built is already reported. The World wraps the Kernel call in
+        // UseWorldDiagnostics, which is itself pinned to call UseArcaneDiagnostics (the Kernel's own tests pin that one to CrashHandler.Install).
+        (string Program, string Call)[] entries =
+        [
+            ("src/ArcaneCore.Realm/Program.cs", "UseArcaneDiagnostics(builder)"),
+            ("src/ArcaneCore.Gateway/Program.cs", "UseArcaneDiagnostics(builder)"),
+            ("src/ArcaneCore.World/Program.cs", "UseWorldDiagnostics(builder)"),
+        ];
+        foreach ((string program, string call) in entries)
+        {
+            string text = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), program.Replace('/', Path.DirectorySeparatorChar)));
+            int install = text.IndexOf(call, StringComparison.Ordinal);
+            int build = text.IndexOf("builder.Build()", StringComparison.Ordinal);
+            Assert.True(install >= 0, program + " must call " + call);
+            Assert.True(build > install, program + " must install diagnostics before builder.Build()");
+        }
+
+        string world = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "src", "ArcaneCore.World", "Ops", "Diagnostics", "WorldDiagnosticsExtensions.cs"));
+        Assert.Contains("builder.UseArcaneDiagnostics();", world, StringComparison.Ordinal);
+        string hosting = File.ReadAllText(Path.Combine(RepositorySource.RequireRoot(), "src", "ArcaneCore.Kernel", "Diagnostics", "DiagnosticsHostingExtensions.cs"));
+        Assert.Contains("CrashHandler.Install(options, StandardErrorCrashSink.Instance);", hosting, StringComparison.Ordinal);
     }
 
     [PwshFact]
