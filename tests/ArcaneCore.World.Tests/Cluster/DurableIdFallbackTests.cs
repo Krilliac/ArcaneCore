@@ -1,8 +1,10 @@
-using ArcaneCore.Data.Characters;
 using ArcaneCore.Game;
+using ArcaneCore.Game.Groups;
 using ArcaneCore.Game.Instances;
+using ArcaneCore.Game.Maps;
 using ArcaneCore.Game.Social;
 using ArcaneCore.Kernel.Characters;
+using ArcaneCore.Kernel.Cluster.Social;
 using ArcaneCore.TestSupport;
 using ArcaneCore.World.Economy;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,6 +70,45 @@ public sealed class DurableIdFallbackTests
         Assert.True(economy.NextAuctionId() > auction);
         Assert.True(economy.ReserveMailId(5) > 5u);
         Assert.True(economy.ReserveItemTextId(5) > 5u);
+    }
+
+    [Fact]
+    public void HolderGroupAuthority_InWorkerMode_UnprimedInviteThrowsGroupScope()
+    {
+        GroupAuthority authority = NewAuthority();
+        authority.RequireDurableIdsSource = () => true;
+        var ex = Assert.Throws<IdRangeExhaustedException>(() => authority.Execute("worker-a", NewInvite()));
+        Assert.Equal(IdRangeScopes.Group, ex.Scope);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HolderGroupAuthority_InRealmMode_KeepsCounting(bool sourceSet)
+    {
+        GroupAuthority authority = NewAuthority();
+        if (sourceSet)
+        {
+            authority.RequireDurableIdsSource = () => false;
+        }
+
+        authority.Execute("worker-a", NewInvite());
+    }
+
+    private static GroupCommand NewInvite() => new(GroupCommandKind.Invite, 1, "Alice", 0, true, TargetName: "Bob");
+
+    private static GroupAuthority NewAuthority()
+    {
+        var directory = new InMemoryRealmPresenceDirectory();
+        long version = 0;
+        foreach ((ulong guid, string name) in new[] { (1UL, "Alice"), (2UL, "Bob") })
+        {
+            var entry = new RealmPresenceEntry(
+                guid, name, (int)(100 + guid), "worker-a", "gateway", 0, 12, 0, 10, 1, 1, 0, 0, 0, ++version, 1, DateTimeOffset.UtcNow);
+            Assert.Equal(PresenceMutationResult.Applied, directory.TryUpsert(entry, out _));
+        }
+
+        return new GroupAuthority(directory);
     }
 
     private static EconomyFeature NewEconomy()

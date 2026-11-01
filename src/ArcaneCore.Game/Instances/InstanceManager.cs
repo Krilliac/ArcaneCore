@@ -103,7 +103,7 @@ public sealed partial class InstanceManager : IMapResolver
     /// </summary>
     public DurableIdBlockAllocator? IdBlockAllocator { get; set; }
 
-    /// <summary>When true (Worker mode) a instance id is never taken from the process counter; an unprimed allocator throws instead.</summary>
+    /// <summary>When true (Worker mode) an instance id is never taken from the process counter; an unprimed allocator throws instead.</summary>
     public bool RequireDurableIds { get; set; }
 
     private uint NextRawInstanceId()
