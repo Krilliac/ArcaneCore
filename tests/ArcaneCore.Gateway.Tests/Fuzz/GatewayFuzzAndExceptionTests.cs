@@ -1514,7 +1514,7 @@ public sealed class GatewayFuzzAndExceptionTests
 
         public WorkerRig()
         {
-            ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Worker, "worker-fuzz", Guid.NewGuid(), 1, "dev", 1, 1);
+            ClusterNodeManifest manifest = GatewayLinkManifest.Create(ClusterRole.Worker, "worker-fuzz", Guid.NewGuid(), 1, ArcaneCore.World.Cluster.Gateway.GatewayManifestVersions.ContentRevisionFor(ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion), ArcaneCore.Data.Characters.CharacterDbContext.Schema.CurrentVersion, ArcaneCore.Data.Content.WorldDbContext.Schema.CurrentVersion);
             Host = new GatewaySessionLinkHost(manifest, _acceptor, () => 1, ValidSecret, new IPEndPoint(IPAddress.Loopback, 0), NullLogger.Instance);
         }
 
