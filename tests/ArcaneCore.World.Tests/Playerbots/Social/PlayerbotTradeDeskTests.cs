@@ -442,7 +442,7 @@ public sealed class PlayerbotTradeDeskTests
             return true;
         });
 
-        // The window is nudged (a changed partner side wakes the bot's drive; the split gap is a second) until both stacks are in.
+        // The window is nudged (the customer's gold change shows the bot a changed window; the split gap is a second) until both stacks are in.
         for (uint nudge = 1; nudge <= 6 && (await scene.TradeAsync()).BotItems < 2; nudge++)
         {
             await Task.Delay(1100);
@@ -457,7 +457,7 @@ public sealed class PlayerbotTradeDeskTests
     /// <summary>
     /// A split that never makes the count (the stacks are put back as they were before each drive, as a refused split would leave them) is tried <see cref="PlayerbotTradeDesk.MaxSplits"/> times,
     /// each as a Split step naming the 20-stack as the source, the first empty slot as the destination and 3 as the amount, one split-gap apart; the next drive cancels the deal,
-    /// blaming nobody (the same pair can be quoted again at once). The desk's clock is the test's and every drive runs in one world-thread step, so the bot's own ticks cannot interleave.
+    /// blaming nobody (the same pair can be quoted again at once). The desk's clock is the test's, but the bot's own ticks still drive the deal (after the first split it may put the 5 and the 3 into the window before the test's step), so each iteration, in the same world-thread step as the drive, restores the bags and empties the bot's side of the window.
     /// </summary>
     [Fact]
     public async Task TradeDesk_Seller_SplitsAtMostMaxSplitsTimes_ThenFailsWithoutBlame()
@@ -470,7 +470,7 @@ public sealed class PlayerbotTradeDeskTests
         byte destination = await FirstEmptyBackpackSlotAsync(scene);
         Assert.True((await scene.QuoteAsync(PlayerbotDealRole.Seller, DealEntry, 8)).Ok);
         await scene.OpenWindowAsync(scene.Customer!);
-        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgSplitItem) == 1, "the bot's first split"); // the desk's clock stands still: the gap keeps it at one
+        await HelpTestKit.UntilAsync(() => scene.BotSent(WorldOpcode.CmsgSplitItem) == 1, "the bot's first split"); // the clock stands still, so no second split; the bot may still have put stacks in, which the step below clears
 
         List<PlayerbotDealStep> steps = await scene.World.Host.OnWorldAsync(() =>
         {
@@ -479,6 +479,9 @@ public sealed class PlayerbotTradeDeskTests
             for (int i = 0; i < PlayerbotTradeDesk.MaxSplits; i++)
             {
                 bot.Inventory.Load([]);
+                TradeSide botSide = scene.Economy.TradeOf(bot)!.SideOf(bot);
+                for (int slot = 0; slot < TradeRules.SlotCount; slot++) botSide[slot] = default; // trade-slot guids the bot's own drive may have set would dangle after the reload
+                botSide.Gold = 0;
                 Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(DealEntry, 20, out _));
                 Assert.Equal(InventoryResult.Ok, bot.Inventory.AddItem(DealEntry, 5, out _));
                 clock.Advance(PlayerbotTradeDesk.SplitGapMs + 100);
