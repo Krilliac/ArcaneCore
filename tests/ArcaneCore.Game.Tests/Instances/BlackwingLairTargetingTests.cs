@@ -85,7 +85,7 @@ public sealed class BlackwingLairTargetingTests
     [Fact]
     public void Orb_PossessLandsOnRazorgore_ThroughTheProductionPlayerCast()
     {
-        using var bwl = new Bwl([Possess()], [12435, 12557], [177808]);
+        using var bwl = new Bwl([Possess(), MindExhaustion()], [12435, 12557], [177808]);
         Creature razorgore = bwl.Spawn(12435, 20);
         GameObject orb = bwl.Objects.Summon(177808, 1, 0, Z, 0)!;
         Player player = bwl.AddPlayer(1, 0);
