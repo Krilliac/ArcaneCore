@@ -227,12 +227,14 @@ public sealed class PetitionManager
 
         // vmangos charges, then stores (PetitionsHandler.cpp:116-125). The charge can fail with money in hand (the
         // quest-NPC state is not Loaded yet), and then nothing is handed out.
+        // The id comes first: AllocatePetitionId can throw (unprimed Worker-mode allocator, drained block), and the copper
+        // taken by TryCharge is flushed, so a throw after the charge would cost the player money for nothing.
+        int id = AllocatePetitionId();
         if (!Npc.TryCharge(player, PetitionConstants.CharterCost))
         {
             return;
         }
 
-        int id = AllocatePetitionId();
         Item charter = player.Inventory.StoreNewItem(destination, template, template.BuyCount);
         charter.SetUInt32(UpdateFields.ItemFieldEnchantment + (PetitionConstants.EnchantmentSlot * 3), (uint)id);
 
