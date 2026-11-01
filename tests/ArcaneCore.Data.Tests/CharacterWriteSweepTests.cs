@@ -48,6 +48,7 @@ public sealed class CharacterWriteSweepTests
         ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::CreateReservationCoreAsync"] = "the claim CAS runs inside the store's InTransactionAsync lambda",
         ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::CommitRowAsync"] = "only called inside the store's InTransactionAsync (commit and epoch takeover)",
         ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::ReleaseClaimAsync"] = "only called inside the store's InTransactionAsync (complete and abort)",
+        ["ArcaneCore.Data/Characters/Transfers/EfTransferDecisionStore.cs::ClaimInTransactionAsync"] = "the claim and dead-owner reap run inside the store's InTransactionAsync lambda (the method only exists to pass that lambda)",
 
         // Not the characters database at all (the file also holds a characters store, which is why the file-level scan sees it).
         ["ArcaneCore.Data/Economy/AuctionBotDataModules.cs::DeleteAsync"] = "EfAuctionBotItemStore writes the world database (WorldDbContext)",

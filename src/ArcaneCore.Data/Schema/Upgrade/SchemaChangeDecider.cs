@@ -77,7 +77,7 @@ internal static class SchemaChangeDecider
         EnsureRowChange[] seeds = [.. definition.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>()
             .Concat(definition.ModelSeedDeclarations)
             .Where(seed => string.Equals(seed.Table, operation.Table, StringComparison.Ordinal))];
-        HashSet<(string Table, string Column)> addedColumns = [.. definition.Steps.SelectMany(s => s.Changes).OfType<AddColumnChange>().Select(c => (c.Table, c.Column))];
+        HashSet<(string Table, string Column)> addedColumns = [.. definition.Steps.SelectMany(s => s.Changes).OfType<AddColumnChange>().Concat(definition.ModelColumnDeclarations).Select(c => (c.Table, c.Column))];
         if (seeds.Length == 0 || !string.IsNullOrEmpty(operation.Schema) || operation.Columns.Length == 0 || operation.Values.GetLength(1) != operation.Columns.Length)
             return false;
 

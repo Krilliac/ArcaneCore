@@ -211,6 +211,7 @@ internal static class SchemaProbe
         Version1Tables = schema.Version1Tables,
         Steps = [.. schema.Steps.Where(s => s.Version <= version)],
         ModelSeedDeclarations = [.. schema.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>()],
+        ModelColumnDeclarations = [.. schema.Steps.SelectMany(s => s.Changes).OfType<AddColumnChange>()],
     };
 
     public static T CreateWith<T>(DatabaseConnectionOptions connection, params IInterceptor[] interceptors) where T : DbContext

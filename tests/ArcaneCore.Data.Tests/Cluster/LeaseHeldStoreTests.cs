@@ -234,7 +234,7 @@ public sealed class LeaseHeldStoreTests : IAsyncLifetime
                 (db, src) => new EfPlayerbotPopulationStore(db, src).UpsertAsync(new PlayerbotPopulationMember(Bot, leader, 12, 1, 1_000, 1_000)),
                 db => db.Set<PlayerbotPopulationMemberRow>().AnyAsync(r => r.BotId == Bot)),
             new("playerbots: population delete", false, false,
-                db => new EfPlayerbotPopulationStore(db).UpsertAsync(new PlayerbotPopulationMember(Bot, second, 12, 1, 1_000, 1_000)),
+                db => new EfPlayerbotPopulationStore(db).UpsertAsync(new PlayerbotPopulationMember(Bot, leader, 12, 1, 1_000, 1_000)),
                 (db, src) => new EfPlayerbotPopulationStore(db, src).DeleteAsync(Bot),
                 async db => !await db.Set<PlayerbotPopulationMemberRow>().AnyAsync(r => r.BotId == Bot)),
 

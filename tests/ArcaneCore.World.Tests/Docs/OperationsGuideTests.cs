@@ -134,7 +134,8 @@ public sealed class OperationsGuideTests
 
         // No option for it exists: if one is added, the guide must stop calling it a limit.
         string[] keys = [.. ConfigProduction.Catalog.Entries.Select(e => e.Path)];
-        Assert.DoesNotContain(keys, k => k.Contains("WrongPass", StringComparison.OrdinalIgnoreCase) || k.Contains("Throttle", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(keys, k => k.Contains("WrongPass", StringComparison.OrdinalIgnoreCase)
+            || (k.Contains("Throttle", StringComparison.OrdinalIgnoreCase) && !k.StartsWith("World:Playerbots:", StringComparison.Ordinal))); // playerbot PvP defense has its own, unrelated throttle
     }
 
     [Fact]

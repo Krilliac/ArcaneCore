@@ -96,8 +96,8 @@ Upgrading an existing database is described in the [database upgrade runbook](..
 | 67 | `Characters.Cluster.RealmAuthorityLeaseDataModule` | creates `realm_authority_lease` | yes |
 | 68 | `GameObjects.GameObjectRespawnDataModule` | creates `gameobject_respawn` | yes |
 | 69 | `Characters.CharacterAppearanceFlagsDataModule` | adds columns `characters.character_flags` | yes |
-| 70 | `Loot.LootStateRandomPropertyDataModule` | adds columns `loot_state_item.random_property_id`, `item_loot.random_property_id` | no |
-| 71 | `Characters.Playerbots.PlayerbotTradeCounterDataModule` | creates `playerbot_trade_counter` | no |
+| 70 | `Loot.LootStateRandomPropertyDataModule` | adds columns `loot_state_item.random_property_id`, `item_loot.random_property_id` | yes |
+| 71 | `Characters.Playerbots.PlayerbotTradeCounterDataModule` | creates `playerbot_trade_counter` | yes |
 | 72 | `Characters.Ownership.CharacterOwnershipShardDataModule` | adds columns `character_ownership.owned_maps`, `character_ownership.heartbeat_at_ms` | yes |
 | 73 | `Characters.Transfers.ClusterHandoffScopeDataModule` | adds columns `cluster_world_handoff.open_scope`; repairs the model's indexes of `cluster_world_handoff` | yes |
 | 74 | `Characters.Transfers.ClusterTransferTargetScopeDataModule` | adds columns `cluster_transfer_decision.target_scope` | yes |

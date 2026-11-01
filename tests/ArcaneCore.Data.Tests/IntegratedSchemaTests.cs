@@ -394,6 +394,7 @@ public sealed class IntegratedSchemaTests : IAsyncLifetime
         Version1Tables = schema.Version1Tables,
         Steps = [.. schema.Steps.Where(s => s.Version <= version)],
         ModelSeedDeclarations = [.. schema.Steps.SelectMany(s => s.Changes).OfType<EnsureRowChange>()],
+        ModelColumnDeclarations = [.. schema.Steps.SelectMany(s => s.Changes).OfType<AddColumnChange>()],
     };
 
     /// <summary>

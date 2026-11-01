@@ -32,7 +32,9 @@ internal enum RealmServiceFrameType : byte
 /// <summary>The version of the peer link frame set; raised whenever <see cref="RealmServiceFrameType"/> or a frame layout changes.</summary>
 internal static class RealmServiceProtocol
 {
-    /// <summary>Current peer link protocol version, carried in Hello and HelloAck; a peer with another version is refused.</summary>
-    /// <summary>2: mutual proof and a MAC tag on every frame after the handshake proofs; a version 1 peer is refused. 1 was the one-way proof without frame MACs.</summary>
+    /// <summary>
+    /// Current peer link protocol version, carried in Hello and HelloAck; a peer with another version is refused.
+    /// 2: mutual proof and a MAC tag on every frame after the handshake proofs; a version 1 peer is refused. 1 was the one-way proof without frame MACs.
+    /// </summary>
     public const ushort Version = 2;
 }
