@@ -33,6 +33,15 @@ public sealed class RealmLeaseFenceLostException(string scope, string ownerNodeI
 }
 
 /// <summary>
+/// A realm-singleton write was refused because this node does not hold the scope's lease at all (another node does, or none was ever taken, or it was released). Nothing was written.
+/// Unlike <see cref="RealmLeaseFenceLostException"/> it says the node was never the writer, so the caller skips or forwards the operation instead of treating it as a takeover.
+/// </summary>
+public sealed class RealmLeaseNotHeldException(string scope)
+    : CharacterOwnershipRejectedException(scope, 0, $"this node does not hold the realm authority lease '{scope}'; the realm-wide write was refused")
+{
+}
+
+/// <summary>
 /// Closes the gap between the lease keeper's fail-stop timer and the database: a realm-singleton write (economy, social, instances) verifies, inside the transaction
 /// that makes the write, that the <c>realm_authority_lease</c> row still carries the writer's fencing token, owner and incarnation, and holds that row against a takeover until the
 /// transaction ends (a row write on SQLite, whose single writer then excludes a takeover; a shared row lock on PostgreSQL and MariaDB, the way <c>CharacterOwnershipGuard</c> does).
@@ -66,6 +75,19 @@ public static class LeaseFencedWrite
 
         if (!held)
             throw new RealmLeaseFenceLostException(fence.Scope, fence.OwnerNodeId, fence.FencingToken);
+    }
+
+    /// <summary>
+    /// Refuses a realm-singleton write from a node that is not the scope's holder. With no <paramref name="source"/> (the Combined role, tests: nothing is clustered, so this process is
+    /// the only writer) it does nothing; with a source that reports no lease for <paramref name="scope"/> it throws <see cref="RealmLeaseNotHeldException"/>. This is the gap
+    /// <see cref="InTransactionAsync{T}"/> leaves on purpose (a non-holder's write goes through unchecked there). Call it before the write; the write itself is still verified against the lease row
+    /// by <see cref="InTransactionAsync{T}"/> or <see cref="EnsureHeldAsync"/>. Synchronous and cheap (one in-memory lookup).
+    /// </summary>
+    public static void RequireHeld(IRealmLeaseFenceSource? source, string scope)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(scope);
+        if (source is not null && source.FenceFor(scope) is null)
+            throw new RealmLeaseNotHeldException(scope);
     }
 
     /// <summary>

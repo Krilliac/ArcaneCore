@@ -17,7 +17,7 @@ public interface IRealmSingletonHalt
 }
 
 /// <summary>
-/// Holds this node's realm-singleton leases (the social, economy and instances scopes) for a <see cref="ClusterNodeRole.MapWorker"/>: takes them once at start,
+/// Holds this node's realm-singleton leases (the social, economy and instances scopes, plus the maintenance and worldstate scopes of the realm sweeps) for a <see cref="ClusterNodeRole.MapWorker"/>: takes them once at start,
 /// renews them on a timer, and gives them back at stop. The realm singletons (AutoBroadcast, the auction house bot, and the instance reset schedule, whose durable writes are made by the Instances holder only) cannot be detached from a running
 /// world, so losing a lease is fail-stop: the keeper logs it, records a fault, and asks the host to stop with exit code
 /// <see cref="ExitCodes.Failure"/>. The owner id is <c>Cluster:Worker:NodeId</c>. On loss every registered <see cref="IRealmSingletonHalt"/> is halted first (each guarded), so the singletons stop ticking while the host winds down. Storage writes are checked against the fencing
@@ -33,7 +33,14 @@ public interface IRealmSingletonHalt
 public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFenceSource
 {
     private static readonly string[] Scopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy];
-    private static readonly string[] MapWorkerScopes = [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy, RealmAuthorityScopes.Instances];
+    private static readonly string[] MapWorkerScopes =
+    [RealmAuthorityScopes.Social, RealmAuthorityScopes.Economy, RealmAuthorityScopes.Instances, RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState];
+
+    /// <summary>
+    /// The scopes added after the realm authority lease table was released (schema 72 seeds their rows through an EnsureRowChange, not HasData). A database made by
+    /// EnsureCreated has no row for them: the keeper then runs without that lease (this node is not the holder) instead of failing the start.
+    /// </summary>
+    private static readonly string[] OptionalScopes = [RealmAuthorityScopes.Maintenance, RealmAuthorityScopes.WorldState];
 
     /// <summary>The scopes this node competes for: the Instances lease only on a <see cref="ClusterNodeRole.MapWorker"/> (the only non-combined role that attaches the instance feature), so a Gateway, Social or Economy node never holds it and orphans the schedule.</summary>
     private string[] ScopesToTake => _node.Role == ClusterNodeRole.MapWorker ? MapWorkerScopes : Scopes;
@@ -95,6 +102,18 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
         }
     }
 
+    /// <summary>
+    /// Whether this node is the live holder of <paramref name="scope"/>: it took the lease at start, has not given it back, and has not lost it (a lost lease keeps its old token in
+    /// <see cref="TokenFor"/> so the stores refuse the write, but the node is no longer the holder). The check realm sweeps make before each run. Cheap; safe from any thread.
+    /// </summary>
+    public bool Holds(string scope)
+    {
+        lock (_gate)
+        {
+            return !_lost && !_released && _held.ContainsKey(scope);
+        }
+    }
+
     /// <summary>The lease this node holds for <paramref name="scope"/> as a commit fence, or null when it holds none (also after a graceful release). A lease lost to a takeover keeps its old token here, which is what makes the stores refuse the write.</summary>
     public RealmLeaseFence? FenceFor(string scope)
     {
@@ -113,7 +132,13 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
         _incarnation = incarnation;
         foreach (string scope in ScopesToTake)
         {
-            AuthorityLeaseResult result = await TryAcquireAsync(scope).ConfigureAwait(false);
+            AuthorityLeaseResult? first = await TryAcquireOrSkipAsync(scope).ConfigureAwait(false);
+            if (first is null)
+            {
+                continue;
+            }
+
+            AuthorityLeaseResult result = first;
             if (result.Outcome == AuthorityLeaseOutcome.RejectedHeldByOther
                 && result.Lease is { } holder
                 && string.Equals(holder.OwnerNodeId, _nodeId, StringComparison.Ordinal))
@@ -153,6 +178,20 @@ public sealed class RealmAuthorityLeaseKeeper : IAsyncDisposable, IRealmLeaseFen
                     "Not holding the {Scope} lease: held by {Holder} (fencing token {Token}); the matching realm singleton does not run on this node",
                     scope, result.Lease?.OwnerNodeId ?? "another node", result.Lease?.FencingToken ?? 0);
             }
+        }
+    }
+
+    // Null when an optional scope has no lease row (ArgumentException from the durable store, see OptionalScopes); every other failure propagates.
+    private async Task<AuthorityLeaseResult?> TryAcquireOrSkipAsync(string scope)
+    {
+        try
+        {
+            return await TryAcquireAsync(scope).ConfigureAwait(false);
+        }
+        catch (ArgumentException ex) when (Array.IndexOf(OptionalScopes, scope) >= 0)
+        {
+            _logger.LogWarning(ex, "The {Scope} lease row does not exist in the characters database (schema 72 not applied); this node does not hold it, so the matching realm sweeps do not run here", scope);
+            return null;
         }
     }
 

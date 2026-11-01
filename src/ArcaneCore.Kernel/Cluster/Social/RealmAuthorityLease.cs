@@ -11,6 +11,12 @@ public static class RealmAuthorityScopes
 
     /// <summary>Single realm-wide authority for durable instance ID allocation and group instance bindings.</summary>
     public const string Instances = "instances";
+
+    /// <summary>Single realm-wide authority for the realm sweeps that are not idempotent or must run once: the weekly honor calculation, the playerbot realm ledgers, and the orphaned-loot sweep (writer-lock design section 4).</summary>
+    public const string Maintenance = "maintenance";
+
+    /// <summary>Single realm-wide authority for the durable writes of world state: game events, war effort, invasions and the other world-state features (writer-lock design section 2b).</summary>
+    public const string WorldState = "worldstate";
 }
 
 /// <summary>

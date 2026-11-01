@@ -79,7 +79,8 @@ public sealed partial class EconomyFeature
 
     internal void RecoverAuctions()
     {
-        if (_stopping)
+        // The recovery timer is not the sweep: a node that is not the economy lease holder never settles a reserved auction either.
+        if (_stopping || !HoldsEconomyLease)
         {
             return;
         }
