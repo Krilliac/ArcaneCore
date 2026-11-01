@@ -12,7 +12,7 @@ namespace ArcaneCore.World.Tests.Cluster.Peer;
 /// The peer link over real loopback TCP with in-process hosts and clients (no processes): admission, refusal, holder change, reconnect, timeouts, idempotency.
 /// Every wait is a bounded poll on an observable condition, never a fixed sleep (the one exception proves a negative and is marked).
 /// </summary>
-public sealed class PeerLinkTests : IAsyncDisposable
+public sealed class PeerLinkTests : IAsyncLifetime
 {
     private const string Secret = "peer-secret-0123456789";
     private static readonly TimeSpan Hour = TimeSpan.FromHours(1);
@@ -21,7 +21,10 @@ public sealed class PeerLinkTests : IAsyncDisposable
     private readonly List<IAsyncDisposable> _disposables = [];
     private readonly Dictionary<string, string> _nodes = new(StringComparer.Ordinal);
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    // xunit 2.9.3 only honours IAsyncLifetime (it never calls IAsyncDisposable on a test class).
+    public async Task DisposeAsync()
     {
         for (int i = _disposables.Count - 1; i >= 0; i--)
         {
