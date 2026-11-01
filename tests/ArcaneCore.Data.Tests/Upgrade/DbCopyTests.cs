@@ -272,8 +272,7 @@ public sealed class DbCopyTests : IAsyncLifetime
         // A worker row left active (a running worker, or one that crashed): the copy would race its writes.
         await SetOwnershipAsync(source, "UPDATE \"character_ownership\" SET \"active\" = 1 WHERE \"scope\" IN (SELECT \"scope\" FROM \"character_ownership\" LIMIT 1)");
         (int active, _, string activeError) = await RunCopyAsync(source, "characters", target);
-        Assert.True(active == DbUpgradeExitCodes.Refused, $"exit {active}
-{activeError}");
+        Assert.True(active == DbUpgradeExitCodes.Refused, $"exit {active}\n{activeError}");
         Assert.Contains("ownership scope", activeError, StringComparison.Ordinal);
         Assert.False(File.Exists(UpgradeTestSupport.SqlitePath(target)));
 
@@ -282,8 +281,7 @@ public sealed class DbCopyTests : IAsyncLifetime
         await SetOwnershipAsync(source, "UPDATE \"character_ownership\" SET \"scope\" = 'worker:s1' WHERE \"scope\" IN (SELECT \"scope\" FROM \"character_ownership\" LIMIT 1)");
         using CharacterDatabaseWriterLock shard = CharacterDatabaseWriterLock.TryAcquireShard(source, "s1")!;
         (int held, _, string heldError) = await RunCopyAsync(source, "characters", target);
-        Assert.True(held == DbUpgradeExitCodes.Refused, $"exit {held}
-{heldError}");
+        Assert.True(held == DbUpgradeExitCodes.Refused, $"exit {held}\n{heldError}");
         Assert.Contains("shard lock", heldError, StringComparison.Ordinal);
         Assert.False(File.Exists(UpgradeTestSupport.SqlitePath(target)));
 

@@ -302,6 +302,7 @@ public sealed class WorldHostWorkerScopeTests
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IIdRangeReservationStore>(new CountingReservations());
+        services.AddSingleton<CharacterDirectory>(); // SocialFeature's constructor takes it, with no default
         services.AddSingleton<ArcaneCore.World.Social.SocialFeature>();
         services.AddSingleton<ArcaneCore.World.Instances.InstanceFeature>();
         services.AddSingleton<EconomyFeature>();
