@@ -88,14 +88,28 @@ public sealed class WorldTestHostSeamTests
         await using WorldTestHost host = WorldTestHost.Start(clock: TestClock.Manual());
         WorldRuntime world = host.World;
         await host.SettleAsync();
-        world.PendingWorkHangGuard = TimeSpan.FromMilliseconds(200);
+        TimeSpan guard = TimeSpan.FromSeconds(2); // long enough that the hold cannot trip before the setup below finishes on a loaded machine
+        world.PendingWorkHangGuard = guard;
         using IDisposable work = world.PendingWork.Begin("seam-hung");
 
         Task advance = world.AdvanceTicksAsync(1);
-        await world.AdvanceTicksAsync(0).WaitAsync(TimeSpan.FromSeconds(10)); // a barrier needs no pending work: not held, not failed
+        // Tick A runs the command that adds the advance; tick B (the next InvokeAsync) holds it and arms the hang guard.
+        await world.InvokeAsync(() => 0);
+        await world.InvokeAsync(() => 0);
 
+        // Force the trip-tick race. RunCommands drains only what was queued at tick entry, and a settle skips an advance added in its own tick:
+        // the barrier add and the sleep, both posted in tick B, run in tick B+1 (the barrier is skipped by that tick's settle, the sleep outlasts
+        // the guard), so tick B+2 trips the guard while the zero-length barrier still sits in the advance list. The old code failed it there.
+        Task? barrier = null;
+        await world.InvokeAsync(() =>
+        {
+            barrier = world.AdvanceTicksAsync(0);
+            world.Post(() => Thread.Sleep(guard + TimeSpan.FromMilliseconds(500)));
+            return 0;
+        });
+
+        await barrier!.WaitAsync(TimeSpan.FromSeconds(30)); // completes in the zero-diff tick; throws PendingWorkHangException on the old code
         PendingWorkHangException ex = await Assert.ThrowsAsync<PendingWorkHangException>(() => advance.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.Contains("seam-hung", ex.Message);
-        await world.AdvanceTicksAsync(0).WaitAsync(TimeSpan.FromSeconds(10));
     }
 }

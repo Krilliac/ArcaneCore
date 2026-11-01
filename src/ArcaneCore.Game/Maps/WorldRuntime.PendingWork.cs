@@ -80,7 +80,8 @@ public sealed partial class WorldRuntime
 
     /// <summary>
     /// Manual clock only: how long, in wall time, the world thread holds an advancing tick for pending work before it fails the
-    /// advances with a <see cref="PendingWorkHangException"/> naming the work. Default 60 s.
+    /// advances that want game time (those with game time remaining; a zero-length barrier is left to complete) with a
+    /// <see cref="PendingWorkHangException"/> naming the work. Default 60 s.
     /// </summary>
     public TimeSpan PendingWorkHangGuard { get; set; } = TimeSpan.FromSeconds(60);
 
